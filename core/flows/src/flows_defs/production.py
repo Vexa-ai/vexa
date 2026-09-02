@@ -24,6 +24,7 @@ is about, and the sign-in hop preserves it. What travels the wire is a NOTIFICAT
 Laws (from the live witness): steps never sleep · all state in refs/receipts · replies by thread."""
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -45,6 +46,8 @@ UPCOMING = EventType("meeting.upcoming")
 MAIL_REPLY = EventType("mail.reply")
 
 NUDGE_EVERY_S = 15 * 60
+
+logger = logging.getLogger("flows.production")
 
 def _repo_root() -> Path:
     # repo checkout: <root>/core/flows/src/flows_defs/production.py → parents[4];
@@ -77,11 +80,81 @@ def prompt_for(ctx, fname: str, default: str) -> str:
     over = (ctx.flow.param("prompts") or {}) if ctx.flow else {}
     return over.get(fname, default)
 
+
+def _mail_dir() -> Path:
+    """Where the founder-editable MAIL TEMPLATES live: ``deploy/dogfood/mail/``.
+
+    Resolved against the REPO, never a CWD — the flows worker's cwd is wherever the process was
+    started, and in the image it is not a checkout at all. Same candidate shape ``_SHOWCASE``
+    uses for behavior prompts: an env override first (a deployment that mounts the templates
+    elsewhere), then the repo checkout, then the image roots. Returns the first candidate that
+    EXISTS, else the first candidate regardless — so a fallback log names a path a human can go
+    and create rather than a path that happens to exist."""
+    import os
+    env = os.environ.get("VEXA_FLOWS_MAIL_DIR", "").strip()
+    cands = ([Path(env)] if env else []) + \
+        [c / "deploy" / "dogfood" / "mail" for c in (_repo_root(), Path("/app"), Path("/"))]
+    for c in cands:
+        if c.is_dir():
+            return c
+    return cands[0]
+
+
+def mail_template(ctx, name: str, default: str) -> tuple[str, str]:
+    """A mail template the FOUNDER edits, read AT SEND TIME. Returns ``(text, source)``.
+
+    Three layers, highest first — the same resolution shape as ``prompt_for``, which this is the
+    send-time twin of:
+
+      1. the flow param ``prompts[<name>]``   — a per-deployment override, no file needed
+      2. ``deploy/dogfood/mail/<name>``       — the founder's file, re-read on EVERY send
+      3. ``default``                          — the inline text at the call site
+
+    Layer 2 is why this is not simply ``prompt_for``: the ``_prompt`` constants are read ONCE at
+    import, so an edit to one needs a restart to land. The founder edits these between runs, so
+    the read happens here, per send.
+
+    A fallback is LOUD — logged with the exact path that was looked for, and the ``source`` string
+    is carried into the step's result. A founder editing a file nobody reads must be able to see
+    that from the receipt without reading a log."""
+    over = (ctx.flow.param("prompts") or {}) if (ctx is not None and ctx.flow) else {}
+    if name in over:
+        return str(over[name]), f"flow param prompts[{name}]"
+    f = _mail_dir() / name
+    text = None
+    try:
+        if f.is_file():
+            text = f.read_text()
+    except Exception:  # noqa: BLE001 — an unreadable template degrades, never blocks a send
+        text = None
+    if (text or "").strip():
+        return text, str(f)
+    logger.warning("mail template %r is missing or empty at %s — using the INLINE DEFAULT; "
+                   "edits to that file are NOT being read", name, f)
+    return default, f"inline default (no readable file at {f})"
+
+
+def _fill(text: str, **tokens) -> str:
+    """``{{token}}`` substitution — deliberately not ``str.format``: the founder's prose is free to
+    contain braces, and a template that raises KeyError on a stray ``{`` is a mail that never went."""
+    for k, v in tokens.items():
+        text = text.replace("{{" + k + "}}", str(v))
+    return text
+
 ONBOARD_KICKOFF = _prompt("onboard-person.md")
 
 GROUP_KICKOFF = _prompt("onboard-group.md")
 
 PROCESS_KICKOFF = _prompt("process-meeting.md")
+
+# The INLINE FALLBACK for the attendee mail's head — founder-approved wording, mirrored in
+# `deploy/dogfood/mail/attendee-head.md`, which is what actually ships when it is present.
+# Four substitution tokens and no others: {{company}} {{organizer}} {{meeting}} {{date}}.
+ATTENDEE_HEAD = (
+    "I'm Vexa, the meeting assistant at {{company}}. I sit in meetings you're invited to; "
+    "afterwards you get what came out of them and what they leave on your plate. "
+    "{{organizer}} had me in {{meeting}} on {{date}}."
+)
 
 
 def build(reg: Registry, db) -> None:
@@ -301,15 +374,38 @@ def build(reg: Registry, db) -> None:
             if _followup_mode(ctx) == "personal":
                 who = _attendees(ctx)
                 if who:
+                    # SILENCE HAS TO BE KNOWABLE. The old contract told the agent to write a
+                    # section for EVERY address and to substitute the meeting's single decision
+                    # when it held nothing for that person — so a person the meeting had nothing
+                    # for and a person it had the decision for produced byte-identical files, and
+                    # `email_attendees` could not tell them apart. It now asks for sections ONLY
+                    # where there is something, plus ONE `## _decision` section; a MISSING section
+                    # is the signal, and the mail step owns what a silent person receives
+                    # (attendee_silent_policy).
+                    big = len(who) > _personal_max(ctx)
                     kick += (
                         "\n\nALSO, in this same turn, write the file "
-                        f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md. For each address "
-                        f"below write a section `## <address>` followed by at most three lines "
-                        "addressed to that person: what THEY committed to, what was asked of "
-                        "them, or what they asked — from the transcript, in their words where "
-                        "possible. If the meeting held nothing for that person, write the "
-                        "meeting's single decision instead. No greeting, no sign-off, no "
-                        "meta-commentary.\n" + "\n".join(who))
+                        f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md.\n\n"
+                        "MEETING-CENTRIC, FROM THE TRANSCRIPT. Every line in that file is "
+                        "something that was said, decided, committed or asked IN THIS ROOM. Do "
+                        "not go looking for a person — their history, their other meetings, "
+                        "their workspace, anything outside this transcript. Anything "
+                        "person-centric happens when they click the link in the mail, not here.\n\n"
+                        "FIRST, exactly one section `## _decision` carrying the meeting's single "
+                        "decision, in one or two lines. Write it even if it is the only section "
+                        "in the file.\n\n"
+                        "THEN a section `## <address>` of at most three lines for "
+                        + ("ONLY the addresses below that SPOKE or were NAMED in the transcript — "
+                           "this is a large room, so skip every other address entirely."
+                           if big else
+                           "ONLY the addresses below that the meeting actually held something "
+                           "for: they committed to something, were asked something, asked "
+                           "something, or were named.")
+                        + " Address them directly, in their words where possible. No greeting, "
+                        "no sign-off, no meta-commentary.\n\n"
+                        "WRITE NO SECTION for an address the meeting held nothing for. A missing "
+                        "section is how this file says so — do not substitute the decision, do "
+                        "not write an empty section, do not invent a line.\n" + "\n".join(who))
             ctx.scratch["baseline"] = ag.dispatch_turn(
                 uid, f"meet-{ctx.refs['meeting_id']}", kick)
             return Wait(seconds=12)
@@ -528,6 +624,13 @@ def build(reg: Registry, db) -> None:
         The flow can, so the address travels in the artifact that knows it.
 
         PLACEHOLDER WORDING — the founder has not chosen these words.
+
+        CURRENTLY UNREFERENCED (2026-09-02). The attendee mail was its only caller, and its head
+        is now the founder's own file (`deploy/dogfood/mail/attendee-head.md`) — this sentence is
+        not in it. Kept, not deleted, because it is the only place the deployment's own mailbox
+        address is turned into prose: putting the offer back is one `{{mailbox}}` token in that
+        file plus one `_fill` argument, and deleting this would lose the env lookup that makes it
+        correct on a deployment that is not ours.
         """
         import os
         box = os.environ.get("VEXA_MAIL_ADDR", "").strip()
@@ -535,6 +638,72 @@ def build(reg: Registry, db) -> None:
             return ""
         return ("\nWant Vexa in a meeting of your own? Forward its calendar invite to "
                 f"{box}.\n")
+
+
+    def _company(uid) -> str:
+        """`{{company}}` — the FIRST line of the `_global` README.
+
+        `_global` is the platform-owned organisation tier, mounted read-only into every worker
+        (`core/agent/control_plane/system_mounts.py:70`), and the agent-api workspace reader takes
+        a `slug` — so this reads the ORG's README, never this person's own. A leading `#` and
+        surrounding whitespace come off, so a README opening `# Acme Bank` yields `Acme Bank`.
+
+        Unreadable degrades to **"your organisation"**: non-empty (the head must still read as a
+        sentence), and true of every reader by construction — it never claims a name we do not
+        have. It is also logged, because a head that silently loses the company name is exactly
+        the kind of defect that ships unnoticed."""
+        try:
+            readme = ws_file(uid, "README.md", slug="_global")
+        except Exception as e:  # noqa: BLE001 — the head is never the reason a mail does not go
+            logger.warning("could not read the _global README for {{company}}: %s: %s",
+                           type(e).__name__, e)
+            readme = None
+        for line in (readme or "").splitlines():
+            line = line.strip().lstrip("#").strip()
+            if line:
+                return line
+        logger.warning("the _global README gave no first line — {{company}} degrades to "
+                       "'your organisation'")
+        return "your organisation"
+
+
+    def _meeting_date(ctx, uid) -> str:
+        """`{{date}}` — the day the MEETING happened, in the organiser's zone.
+
+        Derived from `_meeting_stamp`, NOT `_their_clock`. `_their_clock` renders a clock time
+        ("14:30 CEST") from an epoch the caller must already hold, and it has no answer at all
+        when refs carry no `start`; the head needs a DATE and has to survive that case.
+        `_meeting_stamp` already owns exactly the rules this needs — refs.start, else the meeting
+        row's start_time, else its created_at; the organiser's timezone, else UTC, never the
+        server's clock — so this reuses it and only reshapes `%Y-%m-%d-%H%M` into prose.
+        Reimplementing that fallback chain here is how the two would drift apart."""
+        import datetime
+        stamp = _meeting_stamp(ctx, uid)
+        try:
+            return datetime.datetime.strptime(stamp[:10], "%Y-%m-%d").strftime("%-d %B %Y")
+        except Exception:  # noqa: BLE001
+            return stamp[:10]
+
+
+    def _attendee_head(ctx, uid) -> tuple:
+        """THE HEAD of every attendee mail — an INTRODUCTION, in the founder's own words.
+
+        It REPLACES the `_provenance(...)` + `_mailbox_line()` preamble this mail used to open
+        with (which was spliced in twice — the second splice slicing the first back off again).
+        Those lines said the same three things the head says — who I am, why this arrived, whose
+        meeting it was — worse, and in machinery prose.
+
+        The text lives in `deploy/dogfood/mail/attendee-head.md`, is re-read on EVERY send, and
+        substitutes exactly four tokens and no others:
+        `{{company}}` `{{organizer}}` `{{meeting}}` `{{date}}`.
+        Returns `(head, source)`; `source` goes into the step result so a fallback is visible."""
+        text, source = mail_template(ctx, "attendee-head.md", ATTENDEE_HEAD)
+        head = _fill(text.strip(),
+                     company=_company(uid),
+                     organizer=ctx.refs.get("organizer") or "the organiser",
+                     meeting=ctx.refs.get("title") or "your meeting",
+                     date=_meeting_date(ctx, uid))
+        return head, source
 
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
     def _followup_mode(ctx) -> str:
@@ -548,6 +717,39 @@ def build(reg: Registry, db) -> None:
         if ctx.refs.get("share") is False:
             return "off"
         return str((ctx.flow.param("attendee_followup") if ctx.flow else None) or "shared")
+
+    def _silent_policy(ctx) -> str:
+        """`attendee_silent_policy` — what an attendee the meeting held NOTHING for receives.
+
+        DEFAULT `decision`: they get the meeting's single decision (the `## _decision` section),
+        which is what everybody used to get by way of the old kick's "write the decision instead"
+        clause — except now we KNOW that is what happened, and can say so.
+        `none`: they get no mail at all, and the result counts them under `skipped_silent` rather
+        than pretending they were mailed.
+        An unrecognised value is the default, never an error: a typo in a flow param must not
+        stop a fan-out."""
+        v = str((ctx.flow.param("attendee_silent_policy") if ctx.flow else None)
+                or "decision").strip().lower()
+        if v not in ("decision", "none"):
+            logger.warning("attendee_silent_policy=%r is not decision|none — using 'decision'", v)
+            return "decision"
+        return v
+
+    def _personal_max(ctx) -> int:
+        """`attendee_personal_max` — DEFAULT 20. The room size above which personal sections stop
+        being written for everyone.
+
+        Above it, the kick asks for sections only for people who SPOKE or were NAMED, and anyone
+        without a section gets the SHARED note — not the decision, not nothing. A 60-person
+        all-hands is not sixty people each owed a personal paragraph, and asking one agent turn to
+        write sixty of them produces sixty bad ones.
+        A non-numeric or non-positive value is the default, never an error."""
+        raw = (ctx.flow.param("attendee_personal_max") if ctx.flow else None)
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return 20
+        return n if n > 0 else 20
 
     def _attendees(ctx) -> list:
         """Inside-domain attendees, minus the organizer. PRD §16.2: outside the domain, NEVER —
@@ -573,13 +775,25 @@ def build(reg: Registry, db) -> None:
         """Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click
         composes. Cannot run before the note: its input is process_meeting's receipt.
 
+        THE SHAPE, in order: HEAD → the person's section → one gap line → one button. Nothing
+        else. The head is the founder's introduction (`deploy/dogfood/mail/attendee-head.md`,
+        re-read every send); the gap line and the button are `notify.compose`'s, so the step never
+        writes the url itself.
+
         Two variants, both ONE agent turn per meeting:
           shared    the note's essentials, the same body to everyone (the cheap baseline)
           personal  the per-person block the same turn already wrote to
                     mail_outbox/attendees-<id>.md
 
+        WHO GETS WHAT, in `personal` (params: attendee_silent_policy, attendee_personal_max):
+          has a section                    → their section
+          no section, room ≤ max, policy `decision` (DEFAULT)  → the `## _decision` content
+          no section, room ≤ max, policy `none`                → NO MAIL, counted in skipped_silent
+          no section, room  > max                              → the shared note
+        `mode == "shared"` is unchanged: everybody gets the note.
+
         Reads: refs.{participants, organizer, title, meeting_id, share?} · Effect: N notifications
-        Result: {sent, mode, skipped}."""
+        Result: {sent, mode, skipped, skipped_silent, head, decision_missing}."""
         mode = _followup_mode(ctx)
         who = _attendees(ctx)
         if mode == "off" or not who:
@@ -588,12 +802,18 @@ def build(reg: Registry, db) -> None:
         p = ctx.prior["process_meeting"]
         note = _readable(ws_file(ctx.refs["uid"], p["note_path"])
                          or p["summary"] or "")
+        shared_note = note.strip()
         blocks = {}
+        decision = ""
         if mode == "personal":
             raw = ws_file(ctx.refs["uid"], f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md")
             for chunk in (raw or "").split("## ")[1:]:
-                head, _, rest = chunk.partition("\n")
-                blocks[head.strip().lower()] = rest.strip()
+                key, _, rest = chunk.partition("\n")
+                blocks[key.strip().lower()] = rest.strip()
+            # `_decision` can never collide with a person: `_attendees()` only ever yields strings
+            # containing '@', and this key does not. Popped, so it can never be handed to someone
+            # as "their" section either.
+            decision = blocks.pop("_decision", "").strip()
         subject = f"{ctx.refs['title']} — what it means for you"
         # The meeting belongs to the ORGANISER. Without a capability the attendee's link resolves
         # to "no such meeting" and the agent greets them as a new user instead of telling them
@@ -619,16 +839,48 @@ def build(reg: Registry, db) -> None:
                 f"cannot mail {len(who)} attendee(s): this meeting has no row id to mint a share "
                 f"against (got {mid!r} from the row and refs). Every attendee link would resolve "
                 "to a meeting the reader cannot see.", retryable=False)
+        # WHO GETS WHAT, decided BEFORE the mint loop — a person we are not going to mail must
+        # never have a share capability minted against their address.
+        big = len(who) > _personal_max(ctx)
+        policy = _silent_policy(ctx)
+        skipped_silent = list(ctx.scratch.setdefault("skipped_silent", []))
+        decision_missing = False
+        plan = []
+        for a in who:
+            section = blocks.get(a) if mode == "personal" else None
+            if section:
+                plan.append((a, section))
+            elif mode != "personal" or big:
+                # `shared` mode, or a room too big for personal sections: everybody gets the note.
+                plan.append((a, shared_note))
+            elif policy == "none":
+                if a not in skipped_silent:
+                    skipped_silent.append(a)
+            elif decision:
+                plan.append((a, decision))
+            else:
+                # The agent omitted `## _decision`. The shared note is the honest substitute — it
+                # is at least this meeting — and the result SAYS the decision was missing rather
+                # than letting a silently-degraded body look like a chosen one.
+                decision_missing = True
+                plan.append((a, shared_note))
+        ctx.scratch["skipped_silent"] = skipped_silent
+        if not plan:
+            return Done({"sent": 0, "mode": mode, "to": [], "meeting_id": mid,
+                         "skipped_silent": skipped_silent, "silent_policy": policy,
+                         "skipped": "every inside-domain attendee was silent and "
+                                    "attendee_silent_policy is 'none'"})
+        head, head_source = _attendee_head(ctx, ctx.refs["uid"])
         # Durable across retries: a StepError below re-runs this step, and an attendee already
         # mailed must not be mailed twice. ctx.scratch is persisted after every step.
         sent = list(ctx.scratch.setdefault("sent", []))
-        for a in who:
+        for a, section in plan:
             if a in sent:
                 continue
             try:
                 token = mt.mint_transcript_share(ctx.refs["uid"], mid, a)
             except mt.ShareMintError as e:
-                pending = [x for x in who if x not in sent]
+                pending = [x for x, _ in plan if x not in sent]
                 raise StepError(
                     f"HELD the attendee fan-out for meeting {mid}: no share capability could be "
                     f"minted for {a} (HTTP {e.status} — {e.detail}). "
@@ -650,21 +902,15 @@ def build(reg: Registry, db) -> None:
             # `mid`, not refs["meeting_id"]: the token was minted against the ROW, so the link
             # must name that same row. refs may still carry a native id from meeting_ref().
             link = ui_link(ask=ask, meeting=mid, tshare=token)
-            body = blocks.get(a) if mode == "personal" else None
-            if not body:
-                body = note.strip()
-            body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + body
-            # PLACEMENT, not prose. The mailbox line existed and was still not landing: at
-            # n=48 the top fixable blocker among people who CAN add the bot was `unclear_how` —
-            # "nobody told me how to set this up in my dailies or who does it, and I don't have
-            # time to figure it out before tomorrow" — from coordinators who had been sent the
-            # instruction. It sat below the whole note, past the separator, where somebody with
-            # two minutes between dailies never reaches. It now runs directly under the two
-            # provenance lines, above the note. Same sentence, same placeholder wording; only
-            # where it sits changed, and where it sits is mechanics.
-            body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + _mailbox_line().lstrip("\n") \
-                + "\n" + body[len(_provenance(ctx, ctx.refs["uid"], to_attendee=True)):]
-            body += "\n\n—\nOpen it and ask anything about the meeting:"
+            # THE WHOLE MAIL: template head, one blank line, this person's section. The gap line
+            # and the button after it are `notify.compose`'s ("body\n\n<url>\n") — the step does
+            # not write the url, which is why the link is asserted on the call, not on prose.
+            #
+            # What is GONE, deliberately: the `_provenance(...)` + `_mailbox_line()` preamble the
+            # head replaces (it was spliced in twice — the second splice sliced the first back
+            # off, which is how the double-splice went unnoticed), and the "—\nOpen it and ask
+            # anything about the meeting:" trailer. Four elements were approved; this is four.
+            body = head + "\n\n" + (section.strip() or shared_note)
             try:
                 notify(a, subject, body, link=link)
                 sent.append(a)
@@ -672,6 +918,10 @@ def build(reg: Registry, db) -> None:
             except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
                 ctx.scratch.setdefault("failed", []).append(f"{a}: {type(e).__name__}")
         return Done({"sent": len(sent), "mode": mode, "to": sent, "meeting_id": mid,
+                     "head": head_source,          # the file that was read, or the loud fallback
+                     "skipped_silent": skipped_silent,
+                     "silent_policy": policy, "personal_max": _personal_max(ctx),
+                     "decision_missing": decision_missing,
                      "failed": ctx.scratch.get("failed", [])})
 
     # ── before the meeting ────────────────────────────────────────────────────
