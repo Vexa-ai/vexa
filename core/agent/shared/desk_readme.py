@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from shared import desk_now
-from shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
+from shared.entities import _DATED_HEADING, ENTITIES_DIR, KINDS, split_frontmatter
 from shared.links import format_ref
 
 README = "README.md"
@@ -92,7 +92,11 @@ CARD_KINDS = {"people": "person", "companies": "company", "projects": "project"}
 # The one regex left in this module, and it is not about dates in prose: it finds the dated ENTRY
 # HEADINGS `entity_upsert` writes (`## 2026-09-02`), which is how "when was this page last written"
 # is answered for the usage ranking. Nothing here reads a date out of a sentence any more.
-_DATED_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$", re.M)
+# ⚠ THIS WAS A SECOND COPY of the same regex and it went stale the day the entity page grew a
+# `## Timeline` (decision 24.6): dated entries moved from `## 2026-09-02` to `### 2026-09-02`,
+# `entities.py` learned the new shape, and this file — which ranks the desk's cards on exactly
+# that answer — kept matching the old one and silently ranked every migrated page by its
+# creation date. Imported now, not re-declared. Same class as the scorer's duplicate name regex.
 
 
 def _marker(key: str, edge: str) -> str:

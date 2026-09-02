@@ -2375,11 +2375,13 @@ def create_app(
     def ws_entity_upsert(request: Request, body: dict = Body(...)):
         """UPSERT one knowledge-graph entity — PRD decision 24, the single call behind `entity_upsert`.
 
-        Creates `kg/entities/<kind>/<slug>.md` with frontmatter and a first dated entry, or appends a
-        dated entry to the page already there; refreshes `kg/INDEX.md`; commits both by pathspec with
-        the F31 subject shape. Authorization is `ws_file_write`'s, because it is the same act — a
-        write into a workspace — and two spellings of one authorization rule is how the second one
-        ends up weaker.
+        Creates or updates `kg/entities/<kind>/<slug>.md` AS A CARD (decision 24.6): a summary, the
+        kind's sections, `## Connected` chips both ways, `## Sources`, `## Open questions`, and the
+        dated log at the end under `## Timeline`. A page in the old flat shape is re-rendered into
+        the card on its next touch, entries preserved. Then it refreshes `kg/INDEX.md` and commits
+        both by pathspec with the F31 subject shape. Authorization is `ws_file_write`'s, because it
+        is the same act — a write into a workspace — and two spellings of one authorization rule is
+        how the second one ends up weaker.
 
         This endpoint exists so the MCP tool can be a THIN FORWARD (PRD §3.3: every host-reaching rig
         tool is a missing endpoint in an owning service wearing a shell command). `workspace_write`'s
@@ -2414,9 +2416,19 @@ def create_app(
             # `dates` (decision 31 §3): the whitelisted temporal frontmatter — `scheduled_at`,
             # `held_at`, `report_delivered_at`. Filtered and normalised in `upsert_entity`, so a
             # caller cannot write an arbitrary key by naming it here.
-            result = entities_mod.upsert_entity(target, kind, name, facts, source,
-                                                mounts=_entity_mounts(subject),
-                                                dates=body.get("dates"))
+            # THE CARD (decision 24.6). `summary`, `fields`, `section`, `connections` and
+            # `open_questions` are what turn an append into a page: a fact arrives knowing which
+            # section it belongs in, and a named company becomes an edge in both directions.
+            # Everything is optional — a caller that passes only `facts` still gets a card, with
+            # the facts in `## Timeline`, which is the shape the migration produces anyway.
+            result = entities_mod.upsert_entity(
+                target, kind, name, facts, source,
+                mounts=_entity_mounts(subject), dates=body.get("dates"),
+                summary=str(body.get("summary") or "").strip(),
+                fields=body.get("fields") if isinstance(body.get("fields"), dict) else None,
+                section=str(body.get("section") or "").strip(),
+                connections=body.get("connections") or (),
+                open_questions=body.get("open_questions") or ())
         except entities_mod.EntityRefused as e:
             # 422, not 400: the request is well-formed and the REFUSAL is the product — the agent is
             # meant to read the sentence and fix the fact, not to retry the call.
@@ -2425,7 +2437,7 @@ def create_app(
         sha = None
         if result.get("changed"):
             sha = entities_mod.commit_entity(
-                target, [result["path"], index_rel],
+                target, [result["path"], index_rel, *result.get("back_links", ())],
                 subject_path=result["path"], created=bool(result.get("created")),
                 author=(str(subject), f"{subject}@vexa.local"))
         return {**result, "index": index_rel, "commit": sha}

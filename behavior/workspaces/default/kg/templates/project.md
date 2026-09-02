@@ -2,29 +2,30 @@
 template: true                    # THE SHAPE OF an entity, never one:
                                   # hidden from every tree, never listed,
                                   # never cited, never a chip
-type: company                     # required
+type: project                     # required
 id: <slug>                        # required — kebab-case, matches the filename
-title: <Company Name>             # required
-description: <one line: what they do and what our relationship is>
-resource: <url>                   # optional — their site or the source you can cite
+title: <Project name>             # required
+description: <one line: what it is for and whether it is moving>
+resource: <url>                   # optional — the repo, the board, the doc you can cite
 tags: [<tag>, <tag>]              # optional
 ---
 
-# <Company Name>
+# <Project name>
 
-<One line: what they do. Facts, not speculation.>
+<One line: what this is for. Not the plan — the point.>
 
 ## What it is
 
-- <What they build or sell, how big, where. One fact per line.>
+- <Scope, and what is deliberately not in it.>
 
-## People
+## Who
 
-- [[<Person>]] — <their role here>
+- [[<Person>]] — <what they own here>
 
-## Our relationship
+## Status
 
-- <Customer, vendor, prospect, partner — and the commercial state, constraints and decisions taken.>
+- <Where it actually is, dated. "In progress" is not a status; "the migration is written, the
+  cutover is not scheduled" is.>
 
 ## Connected
 
