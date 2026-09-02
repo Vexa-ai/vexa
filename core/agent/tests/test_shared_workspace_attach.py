@@ -314,3 +314,23 @@ def test_a_private_repo_with_no_credential_answers_with_the_key_to_add(tmp_path,
     assert "deploy key with WRITE access" in detail
     assert "say `done` when added" in detail
     assert (tmp_path / "grp-r5" / "CLAUDE.md").exists(), "the group's tree must be untouched by a failed attach"
+
+
+def test_the_desk_lane_answers_the_same_way(tmp_path):
+    """The person's OWN workspace loads a repo through ``/api/workspace/swap``, and it must resolve the
+    same credential — otherwise an ssh:// repo works for a group and silently does not for a desk, and
+    the MCP verb (which carries no token, ever) could only load public repos onto a desk."""
+    c = _client(tmp_path)
+    repo = _existing_repo(tmp_path, "mine")
+
+    ok = c.post("/api/workspace/swap", json={"repo": repo, "ref": "main"}, headers={"X-User-Id": "u_solo"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["cloned"] is True
+    assert (tmp_path / "u_solo" / "README.md").exists()
+
+    refused = c.post("/api/workspace/swap",
+                     json={"repo": "ssh://git@github.com/acme/definitely-not-there.git"},
+                     headers={"X-User-Id": "u_solo2"})
+    assert refused.status_code == 502
+    assert "ssh-ed25519 " in refused.json()["detail"]
+    assert "say `done` when added" in refused.json()["detail"]

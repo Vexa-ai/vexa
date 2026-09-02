@@ -2361,17 +2361,21 @@ def create_app(
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
         subject = subject_of(request)
-        _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        key = deploy_keys_mod.workspace_key(subject=subject)
         try:
-            result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
-                                    slug=body.slug or None, fresh=body.fresh, token=_tok or None)
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=body.repo or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                        slug=body.slug or None, fresh=body.fresh, token=cred.token,
+                                        clone=_clone_fn(cred))
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:
-            # message is already token-redacted (P15); private repo without/with a bad token lands here.
-            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+            # Already token-redacted (P15). A private repo we hold no credential for lands here — and
+            # the answer is the workspace's public key to add, not a prompt for a secret.
+            raise _credential_refusal(f"git clone failed: {exc}", subject, None, body.repo or "")
         return {
             "subject": result.subject,
             "active": result.active_slug,
@@ -2419,16 +2423,19 @@ def create_app(
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
         subject = subject_of(request)
-        _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        key = deploy_keys_mod.workspace_key(subject=subject)
         try:
-            result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
-                                        slug=body.slug or None, token=_tok or None)
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=body.repo or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                            slug=body.slug or None, token=cred.token,
+                                            clone=_clone_fn(cred))
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:
-            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+            raise _credential_refusal(f"git clone failed: {exc}", subject, None, body.repo or "")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
                 "cloned": result.cloned, "nested": result.nested}
 
