@@ -123,6 +123,18 @@ class Settings(BaseSettings):
     dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
     # Internal-tier shared secret for the admin-api membership-index edge (Lane M).
     internal_api_secret: SecretStr = SecretStr("")
+    # admin-api's ADMIN token (``X-Admin-API-Key`` / its ``ADMIN_API_TOKEN``). Needed ONLY to resolve
+    # a meeting participant's ADDRESS to a subject for the post-meeting room, because the one route
+    # that answers that question — ``GET /admin/users/email/{email}`` — sits behind the admin token
+    # and NOT behind the internal-secret tier agent-api already holds.
+    #
+    # This is a BIG credential for a small question: the same token can create users, patch users and
+    # read the whole directory. It is therefore EMPTY BY DEFAULT and the feature degrades to an empty
+    # room without it (never to a guess). The narrow fix is an internal-tier
+    # ``GET /internal/users/by-email/{email}`` on admin-api returning only ``{id}``, at which point
+    # this field can be deleted — see ``control_plane.meeting_room`` and the room resolver in
+    # ``control_plane.api``. Until that route exists, an operator who wants the room opts in here.
+    admin_api_token: SecretStr = SecretStr("")
     # The symmetric key agent-api signs the worker's MCP DELEGATION token with, and the Vexa control
     # MCP verifies with (shared.delegation). Empty ⇒ the feature is OFF and no worker is given an MCP
     # credential at all: a delegation token signed with a zero-length key would verify for anyone who

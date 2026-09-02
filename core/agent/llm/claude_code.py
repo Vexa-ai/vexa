@@ -271,10 +271,17 @@ def _link_skills_into_workspace(work: Path) -> None:
     the link. Idempotent: create ``skills/`` if absent, then (re)point a stale/wrong symlink — but never
     clobber a real ``.claude/skills`` directory."""
     skills = work / "skills"
-    skills.mkdir(parents=True, exist_ok=True)
     link = work / ".claude" / "skills"
-    link.parent.mkdir(parents=True, exist_ok=True)
     try:
+        # The two mkdirs are INSIDE the guard on purpose. This function is documented best-effort —
+        # "the turn still works, just without workspace skills" — but the directory creation used to
+        # sit outside it, so a cwd bound READ-ONLY (the post-meeting room run, where the ruling is
+        # that the turn writes no desk) raised an uncaught OSError and killed the turn during
+        # PREPARE, before a single token. On a ro cwd whose seed already carries `skills/` both
+        # mkdirs are no-ops and the link is found already correct; on one that does not, we now skip
+        # exactly as the docstring always promised.
+        skills.mkdir(parents=True, exist_ok=True)
+        link.parent.mkdir(parents=True, exist_ok=True)
         if link.is_symlink():
             if os.readlink(link) == str(skills):
                 return
