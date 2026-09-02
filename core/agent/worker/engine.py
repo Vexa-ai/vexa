@@ -378,16 +378,24 @@ def _extra_mount_paths(work: Path) -> list[Path]:
 # (`mcp__vexa`), so the two must agree — hence one constant, not two string literals.
 VEXA_MCP_SERVER = "vexa"
 
-# THE ALLOW-SET IS NAMED, TOOL BY TOOL, AND THAT IS THE POINT.
+# THE ALLOW-SET IS NAMED, TOOL BY TOOL — AND THIS DID NOT DO WHAT IT WAS WRITTEN TO DO.
 #
-# The server prefix alone (`mcp__vexa`) permits every tool on it, so this list adds no access — it
-# changes how the tools ARRIVE. With only the prefix, the harness may hand them to the model as
-# DEFERRED tools: discoverable by a tool-search step, callable only after the model loads one.
-# Measured on Haiku over a ten-meeting replay, that round trip fails often enough to matter — about
-# one dispatch in four ends with the model saying, in its own words, "the tool appears in the
-# deferred MCP tools list, but I don't have a direct function invocation", writing nothing, and
-# leaving the step to time out fifteen minutes later. Naming the tools puts them in front of the
-# model directly, with no self-load to get wrong.
+# It was landed to stop the tools arriving DEFERRED: discoverable by a tool-search step, callable
+# only after the model loads one. That round trip is where the failures live — a measured 1 in 8
+# dispatches on Haiku never completes it, and the model says so in its own words ("the tool appears
+# in the deferred MCP tools list, but I don't have a direct function invocation"), then writes a
+# confident note from the title instead, or writes nothing and leaves the step waiting.
+#
+# MEASURED AFTER THE CHANGE: the tools are named in --allowedTools and ToolSearch STILL precedes
+# the first call. Deferral is the harness's own context management, not a permission gate, so the
+# allow-set cannot reach it. The stall is NOT fixed by this and remains open.
+#
+# The list is kept because it is right on its own terms — least privilege, and a worker offered
+# only the surface it uses — but it buys no reliability, and anyone reading this looking for the
+# fix to the deferred round trip should keep looking. The two things that DO hold the line are the
+# grounding gate in process_meeting (a note not in the transcript never ships) and its fail-fast
+# (a finished turn with no note fails in seconds, with the agent's own words, instead of after
+# fifteen minutes).
 #
 # The list is the MEASURED 21-tool union from deploy/dogfood/rig/TOOL-USAGE.md — every tool real
 # delegated workers called (14) or reached for by name without calling (7) across 45 sessions. It
