@@ -10,6 +10,7 @@ import sys
 import time
 
 import rig
+import simlane
 
 EMAIL = sys.argv[1] if len(sys.argv) > 1 else "sim-probe@rehearsal.test"
 
@@ -51,9 +52,7 @@ def main():
     refs = {"organizer": EMAIL, "url": "https://meet.google.com/sim-probe-aaa",
             "start": start, "ics_uid": f"sim-probe-{int(time.time())}",
             "title": "Payments platform weekly", "group": None}
-    print("invite:", json.dumps(me.call("fact_emit", event_type="invite.received",
-                                        source_event_id=refs["ics_uid"],
-                                        subject_refs=refs))[:400])
+    print("invite:", json.dumps(simlane.emit("invite.received", refs["ics_uid"], refs))[:400])
     time.sleep(45)
     for m in rig.messages_for(EMAIL):
         t = rig.full_touch(m)

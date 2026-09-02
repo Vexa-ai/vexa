@@ -7,6 +7,7 @@ import sys
 import time
 
 import rig
+import simlane
 from probe import login
 
 EMAIL = sys.argv[1] if len(sys.argv) > 1 else "sim-probe1@rehearsal.test"
@@ -26,9 +27,7 @@ refs = {"organizer": EMAIL, "url": f"https://meet.google.com/{native}",
         "title": "Payments platform weekly", "group": None,
         "meeting_id": seed["meeting_id"], "native": native,
         "transcript": seed["transcript"], "uid": uid}
-print("completed:", json.dumps(me.call("fact_emit", event_type="meeting.completed",
-                                       source_event_id=f"sim-done-{native}",
-                                       subject_refs=refs))[:300])
+print("completed:", json.dumps(simlane.emit("meeting.completed", f"sim-done-{native}", refs))[:300])
 t0 = time.time()
 while time.time() - t0 < 900:
     hit = [m for m in rig.messages_for(EMAIL) if (m.get("Subject") or "").startswith("Minutes:")]

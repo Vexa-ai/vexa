@@ -15,7 +15,24 @@ import urllib.error
 import urllib.request
 
 API = os.environ.get("SIM_FLOWS_API", "http://127.0.0.1:18201")
-KEY = os.environ.get("SIM_FLOWS_KEY", "simlane")
+def _key() -> str:
+    """The sim lane's flows-api operator key, from its own mode-600 file.
+
+    It was the literal "simlane", which was fine only because the real one was "changeme". Both
+    are gone: flows-api refuses to start without a key now, and a harness is a server-side
+    producer — it uses the lane's admin key against POST /events, never a person's identity
+    against the control MCP's fact_emit."""
+    v = (os.environ.get("SIM_FLOWS_KEY") or "").strip()
+    if v:
+        return v
+    f = os.path.expanduser("~/.storm/sim-flows-api-key")
+    if os.path.exists(f):
+        with open(f) as fh:
+            return fh.read().strip()
+    return ""
+
+
+KEY = _key()
 
 
 def _req(method: str, path: str, body=None, timeout=30):

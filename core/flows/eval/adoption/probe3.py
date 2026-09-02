@@ -10,6 +10,7 @@ import json
 import time
 
 import rig
+import simlane
 from probe import login
 
 ORG = "sim-org-a@rehearsal.test"
@@ -30,8 +31,7 @@ refs = {"organizer": ORG, "url": f"https://meet.google.com/{native}",
         # the most generous input the schema could carry — three ways of naming them
         "participants": ATTENDEES, "attendees": ATTENDEES,
         "ATTENDEE": ATTENDEES}
-print("invite:", json.dumps(me.call("fact_emit", event_type="invite.received",
-                                    source_event_id=refs["ics_uid"], subject_refs=refs)))
+print("invite:", json.dumps(simlane.emit("invite.received", refs["ics_uid"], refs)))
 time.sleep(60)
 for addr in [ORG] + ATTENDEES:
     subs = [m.get("Subject") for m in rig.messages_for(addr)]
