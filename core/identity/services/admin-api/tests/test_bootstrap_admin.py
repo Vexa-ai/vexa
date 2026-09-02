@@ -57,16 +57,19 @@ def test_first_claim_wins_then_idempotent(client):
     a = _mk_user(client, "first-test@vexa.ai")
     b = _mk_user(client, "second-test@vexa.ai")
 
-    # fresh instance: no admin
+    # fresh instance: no admin, and no company layer either
     r = client.get("/internal/instance", headers=_internal())
-    assert r.status_code == 200 and r.json() == {"admin_exists": False}
+    assert r.status_code == 200
+    assert r.json() == {"admin_exists": False, "global_setup": "missing", "company": None}
 
     # first sign-in claims
     r = client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": a})
     assert r.status_code == 200 and r.json() == {"claimed": True, "admin_exists": True}
 
-    # instance now has an admin
-    assert client.get("/internal/instance", headers=_internal()).json() == {"admin_exists": True}
+    # instance now has an admin. The company-layer gate is a SEPARATE fact and stays up:
+    # claiming the role is not setting the instance up.
+    assert client.get("/internal/instance", headers=_internal()).json() == {
+        "admin_exists": True, "global_setup": "missing", "company": None}
 
     # a later user never claims; the admin re-claiming is a harmless no-op
     assert client.post("/internal/bootstrap-admin", headers=_internal(),
@@ -104,3 +107,94 @@ def test_setup_settings_key(client):
     # partial clear semantics hold
     r = client.put("/internal/settings/setup", headers=_internal(), json={"transcription": ""})
     assert r.json()["value"] == {"models": "done", "completed": "true"}
+
+
+# ── the company-layer gate ──────────────────────────────────────────────────────────────────────
+# The instance state that decides whether this Vexa serves anyone. Read fail-closed by every
+# service that can SEND, so the tests below are mostly about what counts as "not completed".
+
+def test_gate_reads_fail_closed_on_anything_but_completed(client):
+    """Only the string "completed" opens the gate — surrounding whitespace trimmed, nothing else.
+
+    A typo, a half-written value, a cleared field and an absent row must all read the same way,
+    because the alternative is an instance that starts mailing strangers on behalf of a company
+    nobody has described — and that failure is not visible from any screen until it has happened.
+    Whitespace IS forgiven (a padded value is a copy-paste, not an attempt on the gate); a
+    different spelling, including a different case, is not."""
+    for value in ("", "missing", "complete", "COMPLETED", "completed ", "true", "yes"):
+        client.put("/internal/settings/global_setup", headers=_internal(),
+                   json={"state": value})
+        expected = "completed" if value.strip() == "completed" else "missing"
+        assert client.get("/internal/instance", headers=_internal()).json()["global_setup"] == expected, value
+    client.put("/internal/settings/global_setup", headers=_internal(),
+               json={"state": "completed", "company": "Acme GmbH"})
+    body = client.get("/internal/instance", headers=_internal()).json()
+    assert body["global_setup"] == "completed" and body["company"] == "Acme GmbH"
+
+
+def test_admin_door_returns_the_same_instance_state(client):
+    """The flows engine holds an admin key and no internal secret. Two transports, ONE computation
+    — a service that has to infer the gate from something else IS a second source of truth."""
+    client.put("/internal/settings/global_setup", headers=_internal(),
+               json={"state": "completed", "company": "Acme GmbH"})
+    assert client.get("/admin/instance", headers=_admin()).json() == \
+        client.get("/internal/instance", headers=_internal()).json()
+    assert client.get("/admin/instance").status_code in (401, 403)
+
+
+def test_signin_allowed_while_the_gate_is_up(client):
+    admin = _mk_user(client, "gate-admin@vexa.ai")
+    other = _mk_user(client, "gate-other@vexa.ai")
+
+    # A VIRGIN instance admits everybody: the next sign-in is the claim, so refusing here would
+    # make a fresh install unclaimable — a deadlock, not a gate.
+    r = client.post("/internal/signin-allowed", headers=_internal(), json={"email": "anyone@x.io"})
+    assert r.json()["allowed"] is True
+
+    client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": admin})
+
+    # Now exactly one person gets in.
+    assert client.post("/internal/signin-allowed", headers=_internal(),
+                       json={"email": "gate-admin@vexa.ai"}).json()["allowed"] is True
+    assert client.post("/internal/signin-allowed", headers=_internal(),
+                       json={"email": "GATE-ADMIN@VEXA.AI"}).json()["allowed"] is True
+    refused = client.post("/internal/signin-allowed", headers=_internal(),
+                          json={"email": "gate-other@vexa.ai"}).json()
+    assert refused["allowed"] is False
+    assert refused["reason"] == "This Vexa is being set up by its administrator."
+    # An address with no account at all is refused the same way — and note that ASKING must never
+    # create one, which is why this endpoint only ever reads.
+    assert client.post("/internal/signin-allowed", headers=_internal(),
+                       json={"email": "stranger@nowhere.io"}).json()["allowed"] is False
+    assert client.get(f"/admin/users/{other}", headers=_admin()).status_code == 200
+
+    # Once the layer is accepted the gate is a formality.
+    client.put("/internal/settings/global_setup", headers=_internal(), json={"state": "completed"})
+    assert client.post("/internal/signin-allowed", headers=_internal(),
+                       json={"email": "gate-other@vexa.ai"}).json()["allowed"] is True
+
+
+def test_release_admin_hands_the_instance_back_to_first_run(client):
+    """The rehearsal needs an instance that has never been claimed, and the account holding the
+    role is usually a leftover test identity sitting next to a real one. Role, and only role."""
+    uid = _mk_user(client, "release-me@vexa.ai")
+    client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": uid})
+    assert client.get(f"/internal/users/{uid}/is-admin", headers=_internal()).json()["is_admin"] is True
+
+    r = client.post("/internal/release-admin", headers=_internal(), json={"user_id": uid})
+    assert r.json()["released"] is True and r.json()["admin_exists"] is False
+    assert client.get(f"/internal/users/{uid}/is-admin", headers=_internal()).json()["is_admin"] is False
+    # The user itself is untouched — this is not a delete.
+    assert client.get(f"/admin/users/{uid}", headers=_admin()).status_code == 200
+    # Idempotent: releasing a role nobody holds is not an error.
+    assert client.post("/internal/release-admin", headers=_internal(),
+                       json={"user_id": uid}).json()["released"] is False
+    # ...and the next sign-in can claim again.
+    assert client.post("/internal/bootstrap-admin", headers=_internal(),
+                       json={"user_id": uid}).json()["claimed"] is True
+
+
+def test_gate_routes_are_internal_tier(client):
+    assert client.get("/internal/instance").status_code == 403
+    assert client.post("/internal/signin-allowed", json={"email": "x@y.z"}).status_code == 403
+    assert client.post("/internal/release-admin", json={"user_id": 1}).status_code == 403
