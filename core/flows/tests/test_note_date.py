@@ -1,11 +1,18 @@
 """Two occurrences of ONE recurring meeting, processed the same day, must be two notes.
 
-The note path is ``kg/entities/meeting/{date}-{native}.md`` and ``date`` used to be
+The note path is ``kg/entities/meeting/<stamp>-<title-slug>.md`` and ``stamp`` used to be
 ``time.strftime("%Y-%m-%d")`` — the PROCESSING day. A recurring meeting keeps one
-``native_meeting_id`` across occurrences, so two of them written on the same day landed on the
-same path: the second silently overwrote the first, or the agent refused the mismatched write
-and ``process_meeting`` timed out after 15 minutes. Replay makes this the normal case: ten
-recorded meetings replayed this afternoon are ten occurrences processed today.
+``native_meeting_id`` AND one title across occurrences, so two of them written on the same day
+landed on the same path: the second silently overwrote the first. Replay makes this the normal
+case: ten recorded meetings replayed this afternoon are ten occurrences processed today.
+
+WHAT THESE TESTS NOW CALL, and why it changed (2026-09-02). They used to dispatch a whole
+``process_meeting`` turn and fish the path back out of the PROMPT. That worked only while the
+kick named a path — and it meant the assertions pinned the KICK's spelling of it, which had
+silently drifted from the WRITER's: the kick said ``<stamp>-<native>.md``, ``drop_to_attendees``
+wrote ``<day>-<slug>.md``, and the terminal opened ``<native>.md``. Three spellings of one path,
+none of them agreeing, and every test green. They now call ``_note_path`` — the single recipe
+both the writer and the scaffold read — so a drift like that cannot be invisible again.
 """
 from __future__ import annotations
 
@@ -16,74 +23,34 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
-class _Flow:
-    def param(self, _k, _d=None):
-        return None
-
-
 class _Ctx:
     def __init__(self, refs):
         self.refs = refs
-        self.prior = {}
-        self.scratch = {}
-        self.flow = _Flow()
-        self.clock_now = time.time()
 
 
 def _stamp_for(refs, monkeypatch_setting=None):
-    """Build the registry and reach the stamp helper through a real process_meeting dispatch."""
-    from flows import Registry
+    """THE PATH the meeting's record lands on, through the one recipe the writer uses."""
     from flows_defs import production
-    from flows_steps import agent as ag
-    from flows_steps import common, meeting as mt
+    from flows_steps import meeting as mt
 
-    seen = {}
-
-    def fake_dispatch(uid, session, prompt, room=None):
-        seen["prompt"] = prompt
-        seen["room"] = room
-        return 0
-
-    # These are MODULE-LEVEL rebinds, not monkeypatch, so every one of them has to be put back:
-    # `production.setting` was, and the other three were not, which quietly replaced
-    # `agent.dispatch_turn` for every test file that ran after this one in the same process. A
-    # test that passes alone and fails in the suite is the visible half of that; a test that
-    # PASSES in the suite because somebody else's stub is still installed is the dangerous half.
-    saved = {"setting": common.setting, "dispatch_turn": ag.dispatch_turn,
-             "meeting_start": mt.meeting_start, "room_order": mt.room_order,
-             "meeting_row": mt.meeting_row}
-    production.setting = (monkeypatch_setting
-                          or (lambda uid, key: ""))   # no timezone -> UTC
-    ag.dispatch_turn = fake_dispatch
+    # MODULE-LEVEL rebinds, not monkeypatch, so every one of them has to be put back: a stub left
+    # installed silently replaces the real function for every test file that runs after this one
+    # in the same process. A test that passes alone and fails in the suite is the visible half of
+    # that; a test that PASSES in the suite because somebody else's stub is still there is the
+    # dangerous half.
+    saved = {"setting": production.setting, "meeting_start": mt.meeting_start}
+    production.setting = monkeypatch_setting or (lambda uid, key: "")   # no timezone -> UTC
     mt.meeting_start = lambda uid, mid, native=None: None
-    mt.room_order = lambda uid, mid, participants, names, cap=12: []  # no gateway read in a unit test
-    mt.meeting_row = lambda uid, mid, native=None: None
-
-    reg = Registry()
-
-    class _DB:
-        def execute(self, *a, **k):
-            return []
-
-    production.build(reg, _DB())
-    step = reg.steps["process_meeting"]
-    ctx = _Ctx(refs)
     try:
-        step(ctx)
+        return production._note_path(_Ctx(refs), refs["uid"], refs.get("title"))
     finally:
         production.setting = saved["setting"]
-        ag.dispatch_turn = saved["dispatch_turn"]
         mt.meeting_start = saved["meeting_start"]
-        mt.room_order = saved["room_order"]
-        mt.meeting_row = saved["meeting_row"]
-    return seen["prompt"]
 
 
-def _path_from(prompt: str) -> str:
-    for tok in prompt.split():
-        if tok.startswith("kg/entities/meeting/"):
-            return tok
-    raise AssertionError("no note path in prompt:\n" + prompt[:400])
+def _path_from(path: str) -> str:
+    assert path.startswith("kg/entities/meeting/"), path
+    return path
 
 
 def test_two_occurrences_same_day_same_native_are_two_notes():
@@ -97,8 +64,12 @@ def test_two_occurrences_same_day_same_native_are_two_notes():
     p1 = _path_from(_stamp_for(morning))
     p2 = _path_from(_stamp_for(afternoon))
 
-    assert p1 != p2, f"two occurrences collided on one path: {p1}"
-    assert native in p1 and native in p2
+    assert p1 != p2, (
+        f"two occurrences of one recurring meeting collided on one path: {p1}. This is F58: "
+        "`drop_to_attendees` sliced the stamp down to `%Y-%m-%d` before building the filename, "
+        "so the afternoon's record overwrote the morning's on every desk in the room.")
+    assert "dailies" in p1 and "dailies" in p2, (p1, p2)   # the TITLE is the identity, not the native
+    assert native not in p1, (p1, "the native is not part of the path any more")
     # and the date is the MEETING's, not today's
     assert "2026-09-02" in p1 and "2026-09-02" in p2, (p1, p2)
 
@@ -130,9 +101,10 @@ def test_seeded_row_with_no_start_falls_back_and_is_still_unique():
     b["meeting_id"] = 37
     pa = _path_from(_stamp_for(a))
     pb = _path_from(_stamp_for(b))
-    # both resolve, both carry the native, and neither carries a meeting date it cannot know
-    assert native in pa and native in pb
+    # both resolve, and neither carries a meeting date it cannot know
+    assert "dna-tsc" in pa and "dna-tsc" in pb, (pa, pb)
     assert pa.startswith("kg/entities/meeting/") and pb.startswith("kg/entities/meeting/")
+    assert native not in pa, (pa, "the native is not part of the path any more")
 
 
 def test_midnight_is_the_organizers_day_not_utcs():
@@ -199,5 +171,4 @@ if __name__ == "__main__":
     test_seeded_row_with_no_start_falls_back_and_is_still_unique()
     test_midnight_is_the_organizers_day_not_utcs()
     test_no_start_is_stamped_in_a_declared_zone_never_the_servers()
-    print("all note-date tests pass")
     print("note-date tests PASS")

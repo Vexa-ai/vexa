@@ -87,6 +87,91 @@ GROUP_KICKOFF = _prompt("onboard-group.md")
 
 PROCESS_KICKOFF = _prompt("process-meeting.md")
 
+# ── THE NOTE-PATH RECIPE ──────────────────────────────────────────────────────
+# These three are MODULE-LEVEL and not `build()` closures, for one reason: this is the only
+# description anywhere of where a meeting's record lives, and a recipe nothing can call directly
+# is a recipe nothing can test directly. Its tests used to reach it by dispatching a whole
+# `process_meeting` turn and reading the path back out of the PROMPT — which meant they were
+# pinning the kick's spelling of the path, not the writer's, and the two had drifted apart
+# without a single test going red (F55/F58, 2026-09-02).
+def _slug(text: str, cap: int = 60) -> str:
+    """A meeting title as a filename fragment. Lowercase, one `-` per run of anything that is
+    not a letter or a digit, capped, and never empty.
+
+    The character class is an ALLOW-list on purpose: a title is attacker-adjacent text (it
+    comes off a calendar invite anybody in the room can edit), so `/`, `..`, a leading dot, a
+    NUL and every other separator are gone by construction rather than by a blacklist somebody
+    has to keep complete. The cap keeps `<date>-<slug>.md` inside every filesystem's name
+    limit."""
+    import re as _re
+    out = _re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:cap].rstrip("-")
+    return out or "meeting"
+
+def _meeting_stamp(ctx, uid) -> str:
+    """The stamp that goes into the note's FILENAME — the meeting's own occurrence, never
+    the day a worker happened to process it.
+
+    `date=time.strftime("%Y-%m-%d")` was the processing date, and the note path is
+    `kg/entities/meeting/{date}-{native}.md`. A recurring meeting keeps ONE
+    native_meeting_id across its occurrences, so any two occurrences written on the same
+    day landed on the same path: the second silently overwrote the first, or the agent saw
+    the mismatch, refused to write, and process_meeting timed out after 15 minutes with
+    "agent produced no note". Replay makes this the normal case rather than the edge one —
+    ten recorded meetings replayed this afternoon are ten occurrences processed today.
+
+    THE RULE, stated because a filename that is wrong by one day collides with the next day's
+    occurrence exactly the way the processing-date bug did:
+
+      the instant   refs.start, else the meeting row's start_time, else its created_at
+      the clock     the ORGANIZER'S timezone when we know it, else UTC — never the server's
+      the shape     %Y-%m-%d-%H%M, so two occurrences on ONE day are still two files
+
+    The server's clock was the quiet defect. Every branch here rendered in UTC or the person's
+    zone except the no-start fallback, which used `time.strftime` — local time on whichever
+    machine happened to run the worker. A meeting near midnight then landed on a different day
+    depending on where the process was, which is the one thing a filename must never do.
+    """
+    import datetime
+    start = ctx.refs.get("start")
+    if not start:
+        start = mt.meeting_start(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+    zone = datetime.timezone.utc
+    tz = setting(uid, "timezone")
+    if tz:
+        try:
+            import zoneinfo
+            zone = zoneinfo.ZoneInfo(tz)
+        except Exception:  # noqa: BLE001 — an unknown zone name falls back to UTC, never local
+            zone = datetime.timezone.utc
+    if not start:
+        # Still deterministic and still not the server's clock: a meeting with no knowable
+        # start is stamped in the same zone as one that has it.
+        return datetime.datetime.now(zone).strftime("%Y-%m-%d-%H%M")
+    return datetime.datetime.fromtimestamp(float(start), zone).strftime("%Y-%m-%d-%H%M")
+
+def _note_path(ctx, uid, title) -> str:
+    """THE ONE RECIPE for where a meeting's record lands on a desk:
+    `kg/entities/meeting/<meeting-day>-<title-slug>.md`.
+
+    It exists because the recipe had TWO implementations in two languages. This one — inlined
+    in `drop_to_attendees`, which actually WRITES the file — and a second in the terminal's
+    `roomView.ts`, which pointed the Minutes tab at `kg/entities/meeting/<native>.md`. They
+    never agreed, so the tab resolved to a file nothing writes and every reader saw "No page
+    here yet" forever, on a meeting whose report had been written, mailed and dropped.
+
+    The client is now TOLD the path (`refs.note_path` on the scaffold) instead of deriving it.
+    A path is not a thing two services can each be trusted to spell — the day comes from the
+    organiser's zone and the slug from an allow-list, and neither is guessable from outside."""
+    # THE WHOLE STAMP, not its first ten characters. `_meeting_stamp` renders
+    # `%Y-%m-%d-%H%M` and says why in its own docstring: "so two occurrences on ONE day are
+    # still two files". `drop_to_attendees` was slicing that back down to `%Y-%m-%d` before
+    # building the filename, which re-created the exact collision the stamp was written to
+    # prevent — a recurring meeting keeps ONE title and ONE native across occurrences, so the
+    # afternoon's record silently overwrote the morning's on every desk in the room. Nothing
+    # failed; the morning simply stopped existing. (F58, 2026-09-02.)
+    return f"kg/entities/meeting/{_meeting_stamp(ctx, uid)}-{_slug(str(title or 'meeting'))}.md"
+
+
 def build(reg: Registry, db) -> None:
     # ── shared small steps ────────────────────────────────────────────────────
     @reg.step
@@ -134,6 +219,17 @@ def build(reg: Registry, db) -> None:
             try:
                 refs["when_text"] = _their_clock(uid, start)
             except Exception:  # noqa: BLE001 — a clock we cannot render is not a reason to fail a mint
+                pass
+        # WHERE THIS MEETING'S RECORD WILL LIVE ON THE READER'S DESK — carried, not derived. See
+        # `_note_path`. Computed even before `drop_to_attendees` has written it: the path is a
+        # function of the meeting's day and title, both known at mint, and a tab naming a file
+        # that does not exist yet is the documented, tested behaviour ("it appears when the
+        # conversation (or a meeting) writes one"). What was NOT survivable was naming a file
+        # nothing would ever write.
+        if ctx.refs.get("title"):
+            try:
+                refs["note_path"] = _note_path(ctx, uid, ctx.refs["title"])
+            except Exception:  # noqa: BLE001 — a path we cannot compute is not a reason to fail a mint
                 pass
         return refs
 
@@ -374,6 +470,10 @@ def build(reg: Registry, db) -> None:
                 room={"meeting_id": row_id, "read": room_read,
                       "names": ctx.refs.get("participant_names") or {},
                       "read_max": _room_read_max(ctx)} if row_id else None)
+            # THE BEFORE WITNESS for the no-desk-write detector below. Taken here, once, rather
+            # than at the check: the regrounding branch re-dispatches, and a witness re-read after
+            # a stray commit would have already absorbed it.
+            ctx.scratch["head_before"] = ag.head_sha(uid)
             return Wait(seconds=12)
         reply = ag.collect_reply(uid, session, ctx.scratch["baseline"])
         if reply is not None:
@@ -397,6 +497,33 @@ def build(reg: Registry, db) -> None:
                     "the report is not grounded in the transcript — the agent did not read the "
                     "meeting, twice. Refusing to mail a report that cannot be traced to it.",
                     retryable=False)
+            # THE NO-DESK-WRITE DETECTOR (decision 22). This step's contract is that it writes
+            # into NO desk, and until now NOTHING CHECKED. On 2026-09-02 the turn committed a
+            # 639-line raw transcript dump to the root of the organiser's desk, this step returned
+            # Done, the minutes mail went out, and it surfaced only because somebody read the git
+            # log by hand. The old completion test — a commit touching `kg/entities/meeting/` —
+            # was deleted when the contract inverted, and its replacement watches the REPLY. So
+            # the single most likely way for this turn to misbehave became the one unobserved
+            # thing, which is the same defect shape as every other silent success here.
+            #
+            # ONLY the organiser's desk. Room desks are mounted read-only by agent-api; the GROUP
+            # desk is the one place this turn is meant to write. Neither belongs in this check.
+            #
+            # LOUD, and NOT retryable: a retry re-runs the turn and the stray commit is still
+            # there. Failing costs one meeting its mail and names the commit to remove. Passing
+            # silently costs every meeting the desk it was supposed to land on — which is what
+            # happened, four times over, before anyone noticed.
+            before = ctx.scratch.get("head_before") or ""
+            after = ag.head_sha(uid)
+            if before and after and before != after:
+                raise StepError(
+                    "this turn committed to the organiser's desk, and it must not (decision 22): "
+                    f"HEAD moved {before[:9]} -> {after[:9]}. Landed: "
+                    f"{'; '.join(ag.head_subjects(uid)) or '(unreadable)'}. The report IS the "
+                    "reply; desks are written by drop_to_attendees. Remove the stray commit, then "
+                    "check the LIVE kick (`_global` override, else `behavior/prompts/"
+                    "process-meeting.md`) for a file-writing instruction that came back.",
+                    retryable=False)
             return Done({"report": reply[:6000], "group": group,
                          "room_read": ctx.scratch.get("room_read", [])})
         # Still running: the long wait stays, because a turn that is genuinely working is allowed
@@ -410,12 +537,17 @@ def build(reg: Registry, db) -> None:
     def _shared_report_rules(room_read: list, group: str) -> str:
         """What the post-meeting turn is told on top of the behavior-domain kick.
 
-        ⚠ IT SUPERSEDES PART OF THAT KICK, and cannot do so by editing it: the canonical text is
-        `behavior/prompts/process-meeting.md`, a BEHAVIOR-domain file (proprietary voice, private
-        mount) that this tier does not own and must not rewrite. That file still says "write the
-        meeting note at kg/entities/meeting/... update the index... update README.md" — the desk
-        writes decision 22 removed. So this block says so explicitly rather than hoping the model
-        resolves the contradiction, and whoever owns that file should delete those three clauses.
+    ⚠ IT ONCE CONTRADICTED THAT KICK, and the contradiction shipped. `behavior/prompts/
+        process-meeting.md` still said "write the meeting note at kg/entities/meeting/... update
+        the index... update README.md" — the desk writes decision 22 removed — while this block
+        said the opposite, and the model was left to resolve it. It resolved it by writing a raw
+        transcript dump to the organiser's desk root. That file has since been corrected (F54,
+        2026-09-02) and `process_meeting` now VERIFIES the desk did not move rather than trusting
+        either text.
+
+        The WRITE NO FILES clause below stays anyway, and deliberately: `prompt_for` reads a live
+        `_global` override before the baked file, so an admin can put the old instruction back
+        without touching this repo. Belt and braces, with the detector as the actual guarantee.
         """
         block = (
             "\n\nTHE REPORT IS SHARED, AND IT IS YOUR REPLY. One report for this meeting, the "
@@ -513,49 +645,6 @@ def build(reg: Registry, db) -> None:
                       lambda m: m.group(1) + ": " + UI_URL + m.group(2), body)
         body = re.sub(r"\[\[([^\]]+)\]\]", r"\1", body)
         return body.strip()
-
-
-    def _meeting_stamp(ctx, uid) -> str:
-        """The stamp that goes into the note's FILENAME — the meeting's own occurrence, never
-        the day a worker happened to process it.
-
-        `date=time.strftime("%Y-%m-%d")` was the processing date, and the note path is
-        `kg/entities/meeting/{date}-{native}.md`. A recurring meeting keeps ONE
-        native_meeting_id across its occurrences, so any two occurrences written on the same
-        day landed on the same path: the second silently overwrote the first, or the agent saw
-        the mismatch, refused to write, and process_meeting timed out after 15 minutes with
-        "agent produced no note". Replay makes this the normal case rather than the edge one —
-        ten recorded meetings replayed this afternoon are ten occurrences processed today.
-
-        THE RULE, stated because a filename that is wrong by one day collides with the next day's
-        occurrence exactly the way the processing-date bug did:
-
-          the instant   refs.start, else the meeting row's start_time, else its created_at
-          the clock     the ORGANIZER'S timezone when we know it, else UTC — never the server's
-          the shape     %Y-%m-%d-%H%M, so two occurrences on ONE day are still two files
-
-        The server's clock was the quiet defect. Every branch here rendered in UTC or the person's
-        zone except the no-start fallback, which used `time.strftime` — local time on whichever
-        machine happened to run the worker. A meeting near midnight then landed on a different day
-        depending on where the process was, which is the one thing a filename must never do.
-        """
-        import datetime
-        start = ctx.refs.get("start")
-        if not start:
-            start = mt.meeting_start(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
-        zone = datetime.timezone.utc
-        tz = setting(uid, "timezone")
-        if tz:
-            try:
-                import zoneinfo
-                zone = zoneinfo.ZoneInfo(tz)
-            except Exception:  # noqa: BLE001 — an unknown zone name falls back to UTC, never local
-                zone = datetime.timezone.utc
-        if not start:
-            # Still deterministic and still not the server's clock: a meeting with no knowable
-            # start is stamped in the same zone as one that has it.
-            return datetime.datetime.now(zone).strftime("%Y-%m-%d-%H%M")
-        return datetime.datetime.fromtimestamp(float(start), zone).strftime("%Y-%m-%d-%H%M")
 
 
     def _provenance(ctx, uid, to_attendee: bool) -> str:
@@ -890,26 +979,14 @@ def build(reg: Registry, db) -> None:
                      "failed": ctx.scratch.get("failed", [])})
 
     # ── the drop — one meeting entity into each attendee's own workspace (PRD decision 20) ──
-    def _slug(text: str, cap: int = 60) -> str:
-        """A meeting title as a filename fragment. Lowercase, one `-` per run of anything that is
-        not a letter or a digit, capped, and never empty.
-
-        The character class is an ALLOW-list on purpose: a title is attacker-adjacent text (it
-        comes off a calendar invite anybody in the room can edit), so `/`, `..`, a leading dot, a
-        NUL and every other separator are gone by construction rather than by a blacklist somebody
-        has to keep complete. The cap keeps `<date>-<slug>.md` inside every filesystem's name
-        limit."""
-        import re as _re
-        out = _re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:cap].rstrip("-")
-        return out or "meeting"
-
     def _yaml(value: str) -> str:
         """One frontmatter scalar, always double-quoted. A meeting title legitimately contains
         `:`, `#`, `[`, quotes and emoji; unquoted, any of them turns the entity's own frontmatter
         into something a parser reads differently from what we wrote."""
         return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    def _drop_entity(*, title, day, date_prose, organizer, participants, report, link) -> str:
+    def _drop_entity(*, title, day, entity_id, date_prose, organizer, participants, report,
+                     link) -> str:
         """THE ARTEFACT ITSELF, in the shape `kg/templates/meeting.md` defines — not a pointer to
         somebody else's copy of it (founder decision 22, 2026-09-02).
 
@@ -924,12 +1001,19 @@ def build(reg: Registry, db) -> None:
         nothing.
 
         `participants` is the meeting's own roster, so the frontmatter says who was in the room
-        rather than who this copy happens to belong to — which is also what keeps the bytes equal."""
+        rather than who this copy happens to belong to — which is also what keeps the bytes equal.
+
+        `entity_id` IS THE FILENAME'S STEM, passed in rather than rebuilt. It used to be composed
+        here as `f"{day}-{_slug(title)}"` — a fourth independent spelling of one identity, beside
+        the writer's path, the kick's, and the terminal's. It agreed with the filename only by
+        coincidence, and stopped agreeing the moment the filename gained the meeting's time
+        (F58). An id that does not match the file it is in is worse than no id: every consumer
+        that resolves one from the other silently misses."""
         roster = ", ".join(_yaml(a) for a in participants)
         return "\n".join([
             "---",
             "type: meeting",
-            f"id: {day}-{_slug(title)}",
+            f"id: {entity_id}",
             f"title: {_yaml(title)}",
             f"date: {day}",
             f"organizer: {_yaml(organizer)}",
@@ -1043,8 +1127,8 @@ def build(reg: Registry, db) -> None:
         organizer = ctx.refs.get("organizer") or "the organiser"
         day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
         date_prose = _meeting_date(ctx, uid)
-        filename = f"{day}-{_slug(title)}.md"
-        entity_path = f"kg/entities/meeting/{filename}"
+        entity_path = _note_path(ctx, uid, title)      # the one recipe — see `_note_path`
+        filename = entity_path.rsplit("/", 1)[-1]
         index_path = "kg/entities/meeting/index.md"
         att = ctx.prior.get("email_attendees") or {}
         roster = [str(a).strip().lower() for a in (ctx.refs.get("participants") or [])
@@ -1063,8 +1147,9 @@ def build(reg: Registry, db) -> None:
                                          "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                          "minted_by": str(uid)})
         room = [{"to": organizer, "link": organiser_link}] + list(att.get("drops") or [])
-        body = _drop_entity(title=title, day=day, date_prose=date_prose, organizer=organizer,
-                            participants=roster, report=report, link="")
+        entity_id = filename[:-3] if filename.endswith(".md") else filename
+        body = _drop_entity(title=title, day=day, entity_id=entity_id, date_prose=date_prose,
+                            organizer=organizer, participants=roster, report=report, link="")
         done = list(ctx.scratch.setdefault("dropped", []))
         failed = list(ctx.scratch.setdefault("drop_failed", []))
         for d in room:
@@ -1075,8 +1160,9 @@ def build(reg: Registry, db) -> None:
                 their_uid = ensure_platform_user(a)
                 ag.workspace_init(their_uid)
                 _write_if_changed(their_uid, entity_path, _drop_entity(
-                    title=title, day=day, date_prose=date_prose, organizer=organizer,
-                    participants=roster, report=report, link=d.get("link") or ""))
+                    title=title, day=day, entity_id=entity_id, date_prose=date_prose,
+                    organizer=organizer, participants=roster, report=report,
+                    link=d.get("link") or ""))
                 _write_if_changed(their_uid, index_path, _index_entry(
                     ws_file(their_uid, index_path), title, filename, day))
                 done.append(a)

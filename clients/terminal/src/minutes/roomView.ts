@@ -63,7 +63,9 @@ export function pageForMeetingRef(ref: string): Page {
  *
  *    `meeting:transcript`  the meeting canvas, bound to the ROW id (live segments, recording)
  *    `meeting:note`        the meeting's own document — "Brief" before it happened, "Minutes"
- *                          after, which is the same file under the name the reader needs today
+ *                          after, which is the same file under the name the reader needs today.
+ *                          Its PATH comes from the scaffold (`refs.note_path`), never from a
+ *                          shape assembled here; without one the token drops.
  *    `<workspace>/<path>`  workspace-qualified, e.g. `_global/PRINCIPLES.md`. The first segment is
  *                          a workspace ONLY when it is one this chat actually mounts — otherwise
  *                          `kg/entities/meeting/x.md` would resolve to a workspace called `kg`.
@@ -74,7 +76,10 @@ export function pageForMeetingRef(ref: string): Page {
  *  that can never load. */
 export function artifactFromToken(
   token: string,
-  ctx: { native?: string | null; meetingId?: string | null; phase?: MeetingPhase | null; mounts?: string[] },
+  ctx: {
+    native?: string | null; notePath?: string | null; meetingId?: string | null;
+    phase?: MeetingPhase | null; mounts?: string[];
+  },
 ): Artifact | null {
   const t = token.trim();
   if (!t || t.split("/").includes("..")) return null;
@@ -84,8 +89,14 @@ export function artifactFromToken(
     return ctx.meetingId ? { kind: "meeting", path: String(ctx.meetingId), label: "Transcript" } : null;
   }
   if (/^meeting:note$/i.test(t)) {
-    if (!ctx.native) return null;
-    return { path: `kg/entities/meeting/${ctx.native}.md`, label: ctx.phase === "post" ? "Minutes" : "Brief" };
+    // THE SERVER SAYS WHERE THE NOTE IS. This used to build `kg/entities/meeting/<native>.md`
+    // while `drop_to_attendees` wrote `kg/entities/meeting/<day>-<slug>.md` — one path, two
+    // spellings, in two languages, and they never matched: the Minutes tab pointed at a file
+    // nothing writes, so it read "No page here yet" on every meeting that HAD been written and
+    // mailed. The path now arrives on the scaffold (`refs.note_path`), computed once by the step
+    // that writes the file. No path → drop the token, per the rule above.
+    if (!ctx.notePath) return null;
+    return { path: ctx.notePath, label: ctx.phase === "post" ? "Minutes" : "Brief" };
   }
   const slash = t.indexOf("/");
   if (slash > 0) {
@@ -107,7 +118,10 @@ export function artifactFromToken(
  *  unresolvable tokens dropped. Order is the preset's: it is the author's reading order. */
 export function artifactsFromTokens(
   tokens: string[],
-  ctx: { native?: string | null; meetingId?: string | null; phase?: MeetingPhase | null; mounts?: string[] },
+  ctx: {
+    native?: string | null; notePath?: string | null; meetingId?: string | null;
+    phase?: MeetingPhase | null; mounts?: string[];
+  },
 ): Artifact[] {
   const out: Artifact[] = [];
   const seen = new Set<string>();

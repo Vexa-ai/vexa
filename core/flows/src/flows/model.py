@@ -77,6 +77,19 @@ class StepCtx:
     flow: Any = None                      # the governing Flow (params via ctx.flow.param(key))
 
     @property
+    def reaction_id(self) -> str:
+        """THE REACTION THIS STEP IS RUNNING FOR — read by every `mint_scaffold` call site to
+        stamp `provenance.reaction_id`, so a scaffold can be traced back to the run that minted
+        it.
+
+        It did not exist. All five call sites read it as `getattr(ctx, "reaction_id", "")`, and a
+        getattr WITH A DEFAULT cannot fail: every scaffold this system has ever minted carried an
+        empty provenance and nobody could see that from the code, because the expression looks
+        exactly like a correct one. `Reaction` spells the field `reaction_id` rather than `id`,
+        which is the near-miss the default was quietly absorbing."""
+        return str(getattr(self.reaction, "reaction_id", "") or "")
+
+    @property
     def refs(self) -> dict:
         return self.subject_refs
 

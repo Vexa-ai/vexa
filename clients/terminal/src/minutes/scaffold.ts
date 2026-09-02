@@ -33,6 +33,11 @@ export interface ScaffoldRefs {
   participantNames: Record<string, string>;
   /** coarse, deliberately: `desk` new|pile|warm · `group` absent|new|warm */
   state: { desk?: string; group?: string };
+  /** WHERE THE MEETING'S RECORD LIVES, said by the server that writes it — never constructed
+   *  here. `drop_to_attendees` writes `kg/entities/meeting/<meeting-day>-<title-slug>.md`; this
+   *  client used to point `meeting:note` at `kg/entities/meeting/<native>.md`, a second spelling
+   *  that matched nothing. Absent, the note token DROPS rather than guessing again. */
+  notePath?: string;
 }
 
 export interface Scaffold {
@@ -113,6 +118,7 @@ export function parseScaffold(raw: unknown): Scaffold | null {
       participants: strArr(refsRaw.participants),
       participantNames: names,
       state: { desk: str(stateRaw.desk) || undefined, group: str(stateRaw.group) || undefined },
+      notePath: str(refsRaw.note_path) || undefined,
     },
     openingPreset: str(r.opening_preset),
     openingText,
@@ -163,25 +169,49 @@ export async function fetchScaffold(
 }
 
 /** What the reader is told when a scaffold will not open. One sentence of state, one of what to do
- *  — never a blank chat, and never a stack trace. */
-export function refusalCopy(r: ScaffoldRefusal): { title: string; body: string } {
+ *  — never a blank chat, and never a stack trace.
+ *
+ *  NAME THE IDENTITY IT WAS JUDGED AGAINST (F48). "This link isn't open to you" answers a question
+ *  the reader did not ask — they know it is not opening — and withholds the one fact that explains
+ *  it: WHICH account the server just measured the link against. Nine of these in ten are a person
+ *  signed in with their second address, and they cannot see which one that is from anywhere in this
+ *  app. So the copy states the address, and `offerSwitch` tells the card to render the way out;
+ *  telling somebody they are on the wrong account without a door to the right one is half an
+ *  answer. `signedInAs` is optional because the identity probe can fail — the copy then degrades to
+ *  what it said before, never to "signed in as undefined". */
+export function refusalCopy(r: ScaffoldRefusal, signedInAs?: string | null): {
+  title: string; body: string; offerSwitch: boolean;
+} {
+  const who = (signedInAs || "").trim();
   switch (r.reason) {
     case "not-found":
       // 404 is also the answer for "not yours": the id IS the capability until redeem binds it, so a
       // 403 would confirm to a prober that a scaffold with that id exists. The copy therefore has to
       // cover both without asserting either — and must not claim the link was "used up", which it
       // is not: reading one redeems it and it keeps resolving for its recipient.
+      // The address is NAMED but nothing is asserted about the link: on a 404 we genuinely do not
+      // know whether it went elsewhere or is gone, and saying either would be the confirmation the
+      // 404 exists to withhold. "You are signed in as X" is ours to state — it is the reader's own
+      // session, not a fact about the link — and it is the half they cannot see for themselves.
       return { title: "This link isn't open to you.",
-               body: "It may have been meant for a different address, or it may no longer exist. If it was sent to you, sign in with that address; otherwise ask whoever sent it for a fresh one — links are minted per person and are not shared." };
+               body: (who ? `You are signed in as ${who}. ` : "")
+                 + "This link may have been meant for a different address, or it may no longer exist. Sign in with the address it was sent to, or ask whoever sent it for a fresh one — links are minted per person and are not shared.",
+               offerSwitch: true };
     case "forbidden":
+      // A 403 IS the verdict "not yours", so here the sentence can be flat.
       return { title: "This link belongs to someone else.",
-               body: "You are signed in as a different person. Sign in with the address the mail was sent to, and it will open." };
+               body: who
+                 ? `You are signed in as ${who}; this link was sent to another address. Sign in with that address and it will open.`
+                 : "You are signed in as a different person. Sign in with the address the mail was sent to, and it will open.",
+               offerSwitch: true };
     case "malformed":
       return { title: "This link is not readable.",
-               body: "Nothing was opened rather than opening the wrong thing. Ask for a fresh link." };
+               body: "Nothing was opened rather than opening the wrong thing. Ask for a fresh link.",
+               offerSwitch: false };
     default:
       return { title: "We could not reach the service that holds this link.",
-               body: "Nothing is lost — reload in a moment and it will open." };
+               body: "Nothing is lost — reload in a moment and it will open.",
+               offerSwitch: false };
   }
 }
 
@@ -202,16 +232,18 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
   id: string; label: string; meeting?: string; workspaces: string[];
   artifacts: Artifact[]; focus?: string; scaffold: { kind: string; id: string };
 } {
-  // `native` is an INPUT, not something this function can know. `meeting:note` resolves to
-  // `kg/entities/meeting/<native>.md`, and the scaffold carries the ROW id — the two are different
-  // identifiers and the row id is the one the canvas binds to. The caller reads the native off the
-  // meetings list it already holds. Absent, the note token resolves to nothing and the chat opens
-  // one document fewer, which is the honest degradation: a tab pointing at a guessed path would
-  // open a page that can never load.
+  // THE NOTE'S PATH IS AN INPUT TOO, and for the same reason `native` is: this function cannot
+  // know it. It is `kg/entities/meeting/<meeting-day>-<title-slug>.md`, where the day is rendered
+  // in the ORGANISER's timezone and the slug through a server-side allow-list — neither is
+  // derivable out here, and deriving it anyway is exactly the bug this replaces. The scaffold
+  // carries `refs.note_path` from the step that writes the file. Absent, the note token resolves
+  // to nothing and the chat opens one document fewer, which is the honest degradation: a tab
+  // pointing at a guessed path opens a page that can never load.
   const ctx = {
     // the record's own native is authoritative; `opts` remains only for a caller that resolved it
     // some other way (it no longer has to — see Scaffold.native).
     native: s.native ?? opts.native ?? null,
+    notePath: s.refs.notePath ?? null,
     meetingId: s.meeting,
     phase: s.phase,
     mounts: s.workspaces,
@@ -244,6 +276,13 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
 export function localScaffold(input: {
   preset: string; openingText: string; meeting: string | null; native?: string | null;
   phase: MeetingPhase | null; workspaces: string[]; tabs: string[]; focus: string; title?: string;
+  /** WHERE THE MEETING'S RECORD LIVES — the server's answer, passed through when the caller has
+   *  one. A hand link composed in the browser usually does NOT: the path's day is rendered in the
+   *  organiser's timezone and its slug through a server-side allow-list, so neither half is
+   *  derivable here. Without it `meeting:note` drops and the chat opens the transcript alone,
+   *  which is the honest degradation — the alternative was a tab pointing at a guess, and that
+   *  guess was wrong for every meeting (F55). */
+  notePath?: string | null;
 }): Scaffold {
   return {
     id: `local-${input.preset}`,
@@ -252,7 +291,10 @@ export function localScaffold(input: {
     native: input.native ?? null,
     phase: input.phase,
     workspaces: input.workspaces,
-    refs: { title: input.title, participants: [], participantNames: {}, state: {} },
+    refs: {
+      title: input.title, participants: [], participantNames: {}, state: {},
+      notePath: input.notePath ?? undefined,
+    },
     openingPreset: input.preset,
     openingText: input.openingText,
     tabs: input.tabs,
