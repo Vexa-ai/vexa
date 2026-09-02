@@ -2077,19 +2077,38 @@ def zoom_transcript_to_segments(name: str, path: str, token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
-def meeting_seed(native_id: str, title: str, video_id: str) -> str:
+def meeting_seed(native_id: str, title: str, video_id: str,
+                 occurred_at: str = "") -> str:
     """Create a completed meeting for a user and load a real transcript into it.
 
     This is the capture double: instead of driving a browser into a live call, it writes the
     segments a bot would have produced. Everything downstream — the post-meeting flow, the
     agent turn, the artifacts — then runs on genuinely messy multi-speaker material rather
-    than a hand-written fixture."""
+    than a hand-written fixture.
+
+    `occurred_at` is WHEN THE MEETING HAPPENED (ISO-8601, or epoch seconds). Pass it. It is
+    written as the row's `scheduled_at`, and a seeded row without one has a NULL start — which
+    is what `_meeting_stamp` falls back from when it names the note file, so several occurrences
+    of one recurring series collapse onto today's date and into a single file. A double that
+    cannot say when the meeting was is not a double of a meeting.
+
+    It does NOT return the transcript. The agent reads the words itself with
+    `meeting_transcript(meeting_id=<row>, tail=0)` — all of them, not a copy truncated to fit
+    inside an event."""
     uid = me()
     segs_path = HOME / ".storm/caps" / f"{video_id}.segments.json"
     if not segs_path.exists():
         return json.dumps({"error": "run captions_to_segments first"})
     segs = json.loads(segs_path.read_text())
-    st, m = _gw_http(uid, "POST", "/meetings", {"title": title, "scheduled_at": None})
+    when = None
+    if occurred_at:
+        try:
+            import datetime as _dt
+            when = (_dt.datetime.fromtimestamp(float(occurred_at), _dt.timezone.utc).isoformat()
+                    if str(occurred_at).replace(".", "", 1).isdigit() else str(occurred_at))
+        except Exception:  # noqa: BLE001 — a bad stamp must not lose the seed
+            when = None
+    st, m = _gw_http(uid, "POST", "/meetings", {"title": title, "scheduled_at": when})
     if st not in (200, 201):
         return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300]})
     mid = m["id"]
@@ -2120,13 +2139,13 @@ def meeting_seed(native_id: str, title: str, video_id: str) -> str:
         else:
             return json.dumps({"meeting_id": mid, "loaded": loaded,
                                "error": r.stderr[:300]})
-    # The same rendering run_meeting produces, so a fact emitted straight at
-    # meeting.completed carries what process_meeting reads (refs.transcript). Capped at the
-    # same 8000 chars the real step caps at.
-    transcript = "\n".join(f"{s['speaker']}: {s['text']}" for s in segs)[:8000]
+    # NO transcript body. It used to return the same 8,000-char copy the flows step made, so a
+    # fact emitted straight at meeting.completed could carry it — which is exactly the copy this
+    # slice removes. The caller gets the row id; the agent reads the words through the MCP.
     return json.dumps({"meeting_id": mid, "native_id": native_id, "title": title,
                        "segments_loaded": loaded, "uid": uid,
-                       "transcript": transcript})
+                       "scheduled_at": when,
+                       "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
 
 @mcp.tool()
