@@ -237,11 +237,12 @@ async function searchOrder(meta: DocMeta): Promise<(string | undefined)[]> {
  *  the right answer for something the reader deliberately clicked. It is the wrong answer for a
  *  guess made by a regex: `package.json` must stay plain monospace, not become a chip that lands
  *  on an empty page. Cheap — it reads the same cached trees resolveDocRef does. */
-export async function docPathExists(path: string, meta: DocMeta = {
-  // Entity SHAPES are not documents anyone links to: `kg/templates/` is skeletons.
-  if (/(?:^|\/)kg\/templates\//.test(root)) return false;}): Promise<boolean> {
+export async function docPathExists(path: string, meta: DocMeta = {}): Promise<boolean> {
   const worker = await fromWorkerPath(path);
   const root = worker ? worker.path : normalizeDocPath(path, meta.path);
+  // Entity SHAPES are not documents anyone links to: `kg/templates/` holds skeletons, and a
+  // skeleton must never become a live chip in a reply.
+  if (/(?:^|\/)kg\/templates\//.test(root)) return false;
   const sibling = !worker && meta.path ? normalizeDocPath(`./${path.replace(/^\.\//, "")}`, meta.path) : null;
   for (const ws of await searchOrder(meta)) {
     const tree = await workspaceTree(ws);
