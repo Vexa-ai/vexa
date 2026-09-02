@@ -564,7 +564,12 @@ export function touchHistory(list: Artifact[], art: Artifact, now: number, cap =
   const prev = list.find((a) => artifactKey(a) === key);
   // a pin that is navigated to STAYS pinned and stays at the left edge — its `at` still moves, so
   // unpinning it later drops it into history in the right place rather than at the far left.
-  const next: Artifact = { ...(prev ?? art), ...art, pinned: prev?.pinned, desk: prev?.desk, at: now };
+  // `prev?.pinned ?? art.pinned` — a page ALREADY in the strip keeps whatever pin state it has (so
+  // navigating to a pin does not unpin it, and navigating to an ordinary page does not pin it),
+  // and a page arriving for the FIRST TIME keeps the pin it arrived with. Taking it from `prev`
+  // alone silently dropped the pin on an entry that had never been touched — which is every
+  // artifact event carrying `pin: true`.
+  const next: Artifact = { ...(prev ?? art), ...art, pinned: prev?.pinned ?? art.pinned, desk: prev?.desk ?? art.desk, at: now };
   const kept = list.filter((a) => artifactKey(a) !== key);
   const out = orderHistory([...kept, next]);
   const unpinned = out.filter((a) => !a.pinned && !a.desk);

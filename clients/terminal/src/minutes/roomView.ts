@@ -146,6 +146,20 @@ export function artifactsFromTokens(
  *  what a path means is a contract with the server, and a contract is worth a test. */
 export function pageForArtifact(ev: { workspace?: string; path?: string }): Page | null {
   const path = (ev.path ?? "").trim();
+  // A MEETING, NOT A FILE. `meeting:<row id>` opens the meeting CANVAS — the live transcript that
+  // streams segments as they are captured — rather than a document at a path. It reuses the
+  // `meeting:` vocabulary the preset tokens already speak, so nothing new goes on the wire.
+  //
+  // Without this an artifact event could never reach the canvas at all: every event produced a
+  // plain doc page, so `openPage` set `docKind: "doc"` and PagesPanel's canvas branch never fired.
+  // A harness opening the transcript on bot admission would have rendered a document view of a
+  // path that is not a document.
+  // The PREFIX claims the ref, not the match: `meeting:` with nothing after it must open NOTHING,
+  // not fall through and render a document at the literal path "meeting:".
+  if (/^meeting:/.test(path)) {
+    const id = path.slice("meeting:".length).trim();
+    return id && !id.includes("/") ? { kind: "meeting", path: id, label: "Transcript" } : null;
+  }
   // A path that walks out of the mount is refused, as everywhere else here — a write we cannot
   // name honestly opens no tab rather than a tab pointing somewhere it should not.
   if (!path || path.split("/").includes("..")) return null;
@@ -170,13 +184,18 @@ export function pageForArtifact(ev: { workspace?: string; path?: string }): Page
  *  `readerChoseFocus` still wins over `focus: true`: a reader who has deliberately opened something
  *  during the turn is not interrupted by the agent's write. Their attention beats our suggestion. */
 export function artifactViewEffect(
-  ev: { workspace?: string; path?: string; focus?: boolean },
+  ev: { workspace?: string; path?: string; focus?: boolean; pin?: boolean },
   readerChoseFocus: boolean,
-): { view: Page } | null {
+): { view?: Page; pin?: Page } | null {
   const pg = pageForArtifact(ev);
   if (!pg) return null;
-  if (ev.focus !== true || readerChoseFocus) return null;
-  return { view: pg };
+  // TWO INDEPENDENT ASKS. `pin` is about what STAYS in the strip; `focus` is about what is IN
+  // FRONT. A turn may want either, both or neither, so they are decided separately rather than one
+  // implying the other — a page pinned without focus is the whole point of pinning without
+  // interrupting, and a page focused without a pin is an ordinary navigation.
+  const view = ev.focus === true && !readerChoseFocus ? pg : undefined;
+  const pin = ev.pin === true ? pg : undefined;
+  return view || pin ? { view, pin } : null;
 }
 
 /** Where App.tsx stashes a `?view=` spec — the URL is cleaned on landing, so the value travels here.

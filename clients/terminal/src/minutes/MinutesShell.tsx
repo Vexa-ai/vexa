@@ -783,8 +783,17 @@ export function MinutesShell() {
     const onArtifact = (e: Event) => {
       const detail = (e as CustomEvent<{ workspace?: string; path?: string; focus?: boolean }>).detail || {};
       const eff = artifactViewEffect(detail, readerChoseFocus.current);
-      if (!eff) return;              // `focus: false` is now NOTHING VISIBLE, not a quiet tab
-      openPage(eff.view);
+      if (!eff) return;              // neither pinned nor focused ⇒ NOTHING VISIBLE, not a quiet tab
+      // PIN FIRST, then focus. `touchHistory` (inside openPage) carries a prior entry's `pinned`
+      // forward, so pinning before navigating keeps the pin; the other order would move the page
+      // into the strip unpinned and then pin a second copy of the same identity.
+      if (eff.pin) {
+        const a = { kind: eff.pin.kind, path: eff.pin.path, slug: eff.pin.slug, label: eff.pin.label };
+        setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(a))
+          ? prev.map((x) => (artifactKey(x) === artifactKey(a) ? { ...x, pinned: true } : x))
+          : touchHistory(prev, { ...a, pinned: true }, Date.now()));
+      }
+      if (eff.view) openPage(eff.view);
     };
     window.addEventListener(ARTIFACT_EVENT, onArtifact);
     return () => window.removeEventListener(ARTIFACT_EVENT, onArtifact);

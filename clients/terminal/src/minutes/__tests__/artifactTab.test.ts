@@ -10,7 +10,8 @@
  *  does NOTHING VISIBLE when it does not — where it used to append a tab "quietly behind the
  *  reader". Seven quiet tabs are not quiet. */
 import { describe, expect, it } from "vitest";
-import { artifactViewEffect, pageForArtifact } from "../roomView";
+import { artifactFromToken, artifactViewEffect, pageForArtifact } from "../roomView";
+import { artifactKey, touchHistory } from "../chats";
 
 const ev = (over: Partial<{ workspace: string; path: string; focus: boolean }> = {}) =>
   ({ workspace: "daily", path: "README.md", focus: true, ...over });
@@ -60,5 +61,81 @@ describe("artifactViewEffect — the view moves, a tab is never minted", () => {
   it("an unresolvable write moves nothing", () => {
     expect(artifactViewEffect({ workspace: "daily", path: "../../etc/passwd", focus: true }, false)).toBeNull();
     expect(artifactViewEffect({ focus: true }, false)).toBeNull();
+  });
+});
+
+describe("`pin: true` — the write ENTERS the strip, pinned (coordinator, 2026-09-02)", () => {
+  const at = (over: Partial<{ workspace: string; path: string; focus: boolean; pin: boolean }> = {}) =>
+    ({ workspace: "daily", path: "README.md", ...over });
+
+  it("pin without focus: the page is kept, and NOTHING moves", () => {
+    // pinning and focusing are separate asks — a turn may want a page kept without interrupting
+    // what the reader is looking at
+    const eff = artifactViewEffect(at({ pin: true }), false)!;
+    expect(eff.pin).toEqual({ path: "README.md", slug: "daily", label: "README" });
+    expect(eff.view).toBeUndefined();
+  });
+
+  it("pin AND focus: kept and brought to the front", () => {
+    const eff = artifactViewEffect(at({ pin: true, focus: true }), false)!;
+    expect(eff.pin).toBeTruthy();
+    expect(eff.view).toEqual(eff.pin);
+  });
+
+  it("focus without pin: moves the view and keeps nothing — today's behaviour, unchanged", () => {
+    const eff = artifactViewEffect(at({ focus: true }), false)!;
+    expect(eff.view).toBeTruthy();
+    expect(eff.pin).toBeUndefined();
+  });
+
+  it("neither: still NOTHING VISIBLE", () => {
+    expect(artifactViewEffect(at({}), false)).toBeNull();
+    expect(artifactViewEffect(at({ focus: false, pin: false }), false)).toBeNull();
+  });
+
+  it("a reader's own focus is still never overridden — but the pin STILL lands", () => {
+    // their attention beats our suggestion; keeping a page does not interrupt them, so it is not
+    // suppressed by the same rule
+    const eff = artifactViewEffect(at({ pin: true, focus: true }), true)!;
+    expect(eff.view).toBeUndefined();
+    expect(eff.pin).toBeTruthy();
+  });
+
+  it("a pinned entry is the SAME kind of thing a scaffold pins — one identity, one strip entry", () => {
+    const eff = artifactViewEffect(at({ pin: true }), false)!;
+    const a = { path: eff.pin!.path, slug: eff.pin!.slug, label: eff.pin!.label, pinned: true };
+    // arriving twice in a turn is one entry, still pinned
+    const once = touchHistory([], a, 1);
+    const twice = touchHistory(once, a, 2);
+    expect(twice).toHaveLength(1);
+    expect(twice[0].pinned).toBe(true);
+  });
+});
+
+describe("a LIVE meeting's transcript, opened by an artifact event", () => {
+  it("`meeting:<row id>` resolves to the CANVAS, not a document at a path", () => {
+    // The canvas is what streams: it binds to the row id and renders segments as they are
+    // captured, with the Live header. A doc page cannot do that — and until this, EVERY artifact
+    // event produced a doc page, so the canvas was unreachable from a turn.
+    expect(pageForArtifact({ path: "meeting:97" }))
+      .toEqual({ kind: "meeting", path: "97", label: "Transcript" });
+  });
+
+  it("is the SAME slot the `meeting:transcript` preset token produces", () => {
+    // one identity for the transcript however it is reached — a preset-declared tab and a
+    // mid-turn artifact event must not become two entries for one meeting
+    const fromToken = artifactFromToken("meeting:transcript", { meetingId: "97" })!;
+    const fromEvent = pageForArtifact({ path: "meeting:97" })!;
+    expect(artifactKey(fromEvent)).toBe(artifactKey(fromToken));
+  });
+
+  it("refuses a malformed meeting ref rather than opening an empty canvas", () => {
+    expect(pageForArtifact({ path: "meeting:" })).toBeNull();
+    expect(pageForArtifact({ path: "meeting:a/b" })).toBeNull();
+  });
+
+  it("a path that merely CONTAINS the word meeting is still a document", () => {
+    expect(pageForArtifact({ path: "kg/entities/meeting/x.md" }))
+      .toEqual({ path: "kg/entities/meeting/x.md", slug: undefined, label: "x" });
   });
 });

@@ -35,6 +35,10 @@ export type ChatStreamEvent = {
   workspace?: string;
   path?: string;
   focus?: boolean;
+  /** `artifact` events only — KEEP this page in the chat's strip, as a pinned entry, exactly as a
+   *  scaffold-declared pinned tab does. Orthogonal to `focus`: pinning is about what stays,
+   *  focusing is about what is in front, and a turn may ask for either, both, or neither. */
+  pin?: boolean;
 };
 
 /** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
@@ -92,7 +96,7 @@ export type ChatStreamCallbacks = {
   /** A FILE THE TURN JUST WROTE (F41). Emitted after the matching `tool-result` and only on
    *  success — a failed write says nothing. Optional so existing callers/tests need not implement
    *  it. */
-  onArtifact?: (a: { workspace: string; path: string; focus: boolean }) => void;
+  onArtifact?: (a: { workspace: string; path: string; focus: boolean; pin: boolean }) => void;
 };
 
 export type ChatStreamRequest = {
@@ -303,7 +307,7 @@ export async function streamChatTurn(
           // advisory-only here: this reader forwards it and the shell decides, because the tab set
           // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
           case "artifact":
-            if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true });
+            if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
             break;
           case "commit":
             terminal = true; cb.onCommit(ev.sha);
