@@ -69,8 +69,29 @@ from llm.errors import LLMAuthError, LLMConfigError, LLMError
 # terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
 from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _short, _written_artifact)
-from llm.openai_compat import _parse_extra_body
 from llm.ports import harness_subprocess_env
+
+
+def _parse_extra_body(raw: object) -> dict:
+    """Parse ``VEXA_LLM_EXTRA_BODY``. A malformed value is a CONFIG error, never a silent no-op:
+    a deployment that believes it disabled thinking and did not would fail as bad output, far
+    from the cause.
+
+    It lived in ``llm/openai_compat.py`` until PRD decision 34 removed the completion pipeline and
+    that module with it. Nothing about parsing this variable was completion-specific — the harness
+    is now its only reader, so it lives here rather than in a module kept alive for one function."""
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        parsed = json.loads(str(raw))
+    except ValueError as exc:
+        raise LLMConfigError(f"VEXA_LLM_EXTRA_BODY is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise LLMConfigError("VEXA_LLM_EXTRA_BODY must be a JSON object")
+    return parsed
+
 
 log = logging.getLogger(__name__)
 

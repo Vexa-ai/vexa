@@ -243,8 +243,8 @@ class DockerBackend:
             host_config["Mounts"] = api_mounts
 
         # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
-        # API-style provider env (the VEXA_LLM_* completion dials + the claude-code runner's
-        # ANTHROPIC_*) is copied from the trusted runtime service into spawned workers.
+        # API-style provider env (the claude-code runner's ANTHROPIC_*) is copied from the trusted
+        # runtime service into spawned workers.
         creds = host_claude_credentials(os.environ)
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
@@ -267,19 +267,19 @@ class DockerBackend:
             # resolves /app/worker and silently runs stale code.
             spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
         for key in (
-            # llm-module dials (provider-agnostic): completion endpoint/credential/model + the
-            # harness runner selection. Dispatch-stamped values win (`key not in spawn_env`).
-            "VEXA_LLM_PROVIDER",
-            "VEXA_LLM_BASE_URL",
-            "VEXA_LLM_API_KEY",
+            # llm-module dials: the harness runner selection and its gate. Dispatch-stamped values
+            # win (`key not in spawn_env`). The completion dials that stood here went with the
+            # in-product inference pipeline (PRD decision 34); what remains is read by the
+            # openai-agent HARNESS inside the worker (decision 37), so it must still be forwarded.
             # THE WORKER'S MODEL (decision 36). `engine.py` reads VEXA_AGENT_MODEL and passes it to
             # every turn — the chat turn AND the write-back phase — so a deployment that wants
             # Sonnet sets one value. It has to be FORWARDED or it reaches the runtime and stops
             # there: the runtime spawns workers with this list, and a setting the worker never sees
             # is a setting that silently does nothing while reading as configured.
             "VEXA_AGENT_MODEL",
+            "VEXA_LLM_BASE_URL",
+            "VEXA_LLM_API_KEY",
             "VEXA_LLM_MODEL",
-            "VEXA_LLM_MAX_TOKENS",
             # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
             # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the
             # model reasons its whole budget away and returns nothing parseable — a failure that

@@ -9,7 +9,7 @@ control-plane background loops alongside the HTTP app via the FastAPI lifespan:
   * **db-writer** — the RESTORED parent flush loop (0.10 ``process_redis_to_postgres``): each tick
     moves immutable live segments from the redis hash ``meeting:{id}:segments`` into the
     ``transcriptions`` table (upsert on segment identity; redis trimmed only after the confirmed
-    write) and drains the copilot's ``proc:meeting:{id}`` notes into ``meeting.data`` JSONB.
+    write).
   * **webhook retry-drain** — one ``drain_retry_queue`` sweep per interval over the redis retry
     queue (failed ``meeting.status_change`` deliveries are retried with backoff).
 
@@ -383,7 +383,7 @@ def _attach_background_loops(
     async def _db_writer_loop() -> None:
         # The RESTORED parent db-writer (0.10 process_redis_to_postgres): each tick, flush every
         # active meeting's IMMUTABLE redis-hash segments into the transcriptions table (upsert on
-        # (meeting_id, segment_id)) and drain its processed-notes stream into meeting.data JSONB.
+        # (meeting_id, segment_id)).
         # Redis is trimmed only AFTER the confirmed durable write. Without this loop nothing ever
         # moved segments to Postgres — the transcriptions table stayed EMPTY and a redis eviction
         # was unrecoverable transcript loss (the 0.12 release blocker).

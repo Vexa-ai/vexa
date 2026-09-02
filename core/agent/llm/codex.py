@@ -165,7 +165,7 @@ class CodexHarness:
 
     def preflight(self) -> Optional[str]:
         if any((os.environ.get(key) or "").strip()
-               for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "VEXA_LLM_API_KEY")):
+               for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
             return None
         auth = Path(os.environ.get("HOME", "/root")) / ".codex" / "auth.json"
         try:
@@ -175,7 +175,7 @@ class CodexHarness:
             pass
         return ("Codex credentials are missing. Mount a subscription auth file with "
                 "HOST_CODEX_CREDENTIALS (normally ~/.codex/auth.json after `codex login`) "
-                "or provide OPENAI_API_KEY/VEXA_LLM_API_KEY.")
+                "or provide OPENAI_API_KEY.")
 
     def midturn_enabled(self) -> bool:
         return os.environ.get("VEXA_MIDTURN_INJECT", "") == "1"
@@ -236,8 +236,6 @@ class CodexHarness:
 
     def _spawn(self, work: Path) -> subprocess.Popen:
         env = harness_subprocess_env()
-        if not env.get("OPENAI_API_KEY") and env.get("VEXA_LLM_API_KEY"):
-            env["OPENAI_API_KEY"] = env["VEXA_LLM_API_KEY"]
         return self._process_factory(
             ["codex", "app-server", "--stdio"], cwd=str(work), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env,

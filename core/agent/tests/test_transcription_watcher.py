@@ -1,13 +1,16 @@
-"""The in-process transcription watcher (ARM-only): keep DISTINCT meetings SEPARATE, arm the copilot
-opt-in, and — crucially — NEVER write the transcript carrier.
+"""The in-process transcription watcher: keep DISTINCT meetings SEPARATE, register the live row, and
+— crucially — NEVER write the transcript carrier, and NEVER dispatch.
 
 Post-D7 (P23): meeting-api's collector is the SINGLE writer of ``tc:meeting:{native}`` (segments AND the
 session_end marker). The agent watcher only tails ``transcription_segments`` as a TRIGGER to do agent-domain
-jobs: freeze ONE native routing key per meeting, register the live row, re-arm the copilot while processing
-is enabled (resuming from the worker-advanced cursor — the ONE resume source, ADR 0027), and reap on
-session_end (live row, keymap, AND the desired-state flag). It writes nothing to the carrier —
-`meetings ⊥ agent` (P3). These tests assert that behaviour via keymap/live/dispatch, and
-that no ``tc:meeting:*`` write ever originates here.
+jobs: freeze ONE routing key per meeting, register the live row, and drop it on session_end. It writes
+nothing to the carrier — `meetings ⊥ agent` (P3).
+
+Half of this file used to be about the OTHER thing it did: arm and keep alive a per-meeting copilot
+while a ``proc:meeting:{row}:on`` flag was set, resuming from the worker-advanced cursor. PRD decision
+34 removed that pipeline; the watcher now dispatches nothing at all, and the tests below hold it to
+that. These tests assert the behaviour via keymap/live/dispatch, and that no ``tc:meeting:*`` write
+ever originates here.
 """
 from __future__ import annotations
 
@@ -74,7 +77,7 @@ def _payload(meeting_id):
 
 
 def _fresh_state():
-    return ({}, {}, {})  # last_arm, keymap, first_seen
+    return ({}, {})  # keymap, first_seen
 
 
 def _reset_module_caches():
@@ -100,7 +103,7 @@ def test_two_distinct_meetings_stay_separate(monkeypatch):
     }.get(mid))
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _, keymap, _ = state = _fresh_state()
+    keymap, _ = state = _fresh_state()
     for mid in ("42", "43", "42", "43"):
         w._handle(r, disp, live, "u_live", _payload(mid), *state)
 
@@ -127,7 +130,7 @@ def test_late_native_resolution_does_not_fork_or_collapse(monkeypatch):
     monkeypatch.setattr(w, "_resolve_native", resolve)
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _, keymap, _ = st = _fresh_state()
+    keymap, _ = st = _fresh_state()
 
     w._handle(r, disp, live, "u", _payload("42"), *st)
     w._handle(r, disp, live, "u", _payload("43"), *st)   # 43's native unresolved — still keyed on the ROW id
@@ -186,75 +189,28 @@ def test_resolve_native_requests_limit_within_gateway_cap(monkeypatch):
     assert requested <= 100, f"gateway caps limit at 100; requested {requested} → HTTP 422 every call"
 
 
-# ── copilot arming (opt-in) resumes from the ONE cursor — never the stream tail (ADR 0027) ──────────
+# ── the watcher dispatches NOTHING (PRD decision 34) ────────────────────────────────────────────────
 
-def test_arm_resumes_from_the_frozen_cursor(monkeypatch):
-    """The arm's transcript_start_id is the worker-advanced cursor (proc:meeting:{row}:cursor) — the
-    SAME resume source the /process toggle reports. Arming from the feed TAIL here used to race the
-    toggle's dispatch, and a tail-armed win silently skipped the backfill (run-46). Writes nothing."""
+def test_the_watcher_never_dispatches(monkeypatch):
+    """It used to arm a per-meeting copilot whenever ``proc:meeting:{row}:on`` was set, resuming from
+    ``proc:meeting:{row}:cursor``. That producer is gone: whatever a legacy deployment still has in
+    redis — the flag, the cursor, a half-drained proc stream — the watcher registers the live meeting
+    and dispatches nothing."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    # The collector has already written 2 entries onto the ROW-keyed feed (simulated here).
     r.streams["tc:meeting:42"] = [{"payload": "c-1"}, {"payload": "c-2"}]
-    r.set("proc:meeting:42:on", "1")        # processing is opt-in — enable it (ROW-keyed)
-    r.set("proc:meeting:42:cursor", "1-0")  # the worker cleaned up to 1-0 before it was reaped
+    r.set("proc:meeting:42:on", "1")        # a leftover opt-in flag from before the removal
+    r.set("proc:meeting:42:cursor", "1-0")  # …and its resume cursor
 
     w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
 
-    meeting = disp.dispatched[0]["context"]["meeting"]
-    assert meeting["transcript_start_id"] == "1-0"                # the frozen cursor — gap-fill, no skip
-    assert len(r.streams["tc:meeting:42"]) == 2                   # unchanged — the agent appended nothing
-
-
-def test_arm_refreshes_the_flag_rolling_ttl(monkeypatch):
-    """The flag's REAL end-of-life is its rolling TTL (verified on the eyeball: NO session_end frame
-    crosses the wire on the stop path, so the reap branch is belt-only). While segments flow, each
-    throttled arm refreshes proc:meeting:{row}:on to PROC_FLAG_ROLLING_TTL_SEC; when the flow stops,
-    the flag expires instead of persisting forever."""
-    _reset_module_caches()
-    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
-
-    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    r.set("proc:meeting:42:on", "1")
-
-    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
-
-    assert len(disp.dispatched) == 1
-    assert getattr(r, "expires", {}).get("proc:meeting:42:on") == w.PROC_FLAG_ROLLING_TTL_SEC
-
-
-def test_arm_without_cursor_backfills_full_history(monkeypatch):
-    """A never-processed meeting has no cursor ⇒ the arm starts from 0-0 (full-history backfill), even
-    when the transcript already has entries — the tail is NOT a resume source."""
-    _reset_module_caches()
-    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
-
-    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    r.streams["tc:meeting:42"] = [{"payload": "c-1"}, {"payload": "c-2"}]  # history exists
-    r.set("proc:meeting:42:on", "1")
-
-    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
-
-    assert disp.dispatched[0]["context"]["meeting"]["transcript_start_id"] == "0-0"
-
-
-def test_copilot_processing_is_opt_in(monkeypatch):
-    """Processing is OPT-IN: with no proc:meeting flag the copilot is NOT dispatched, yet the meeting still
-    registers. Flipping the flag arms it. The agent writes no transcript stream either way."""
-    _reset_module_caches()
-    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
-    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-
-    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
-    assert disp.dispatched == []                    # OFF → no copilot, no processing
-    assert "42" in live.by_uid                      # …but the meeting still registers (by ROW id)
-    assert _native_streams(r) == []                 # …and the agent writes no transcript carrier
-
-    r.set("proc:meeting:42:on", "1")                   # user enables processing (ROW-keyed) → now it arms
-    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
-    assert len(disp.dispatched) == 1
+    assert disp.dispatched == []                                  # nothing armed, flag or no flag
+    assert "42" in live.by_uid                                    # the meeting still registers
+    assert live.by_uid["42"]["native_id"] == "aaa-aaaa-aaa"
+    assert "unit_id" not in live.by_uid["42"]                     # no copilot unit to name
+    assert len(r.streams["tc:meeting:42"]) == 2                   # the agent appended nothing
 
 
 def test_unresolved_native_still_keys_on_row_id_immediately(monkeypatch):
@@ -266,7 +222,7 @@ def test_unresolved_native_still_keys_on_row_id_immediately(monkeypatch):
     monkeypatch.setattr(w.time, "monotonic", lambda: 1000.0)
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _, keymap, _ = st = _fresh_state()
+    keymap, _ = st = _fresh_state()
 
     w._handle(r, disp, live, "u", _payload("77"), *st)          # keyed IMMEDIATELY on the row id
     assert "77" in live.by_uid and keymap["77"] == "77"         # surfaced under the row id (not swallowed)
@@ -283,32 +239,33 @@ class _WrongTypeRedis(_FakeRedis):
         return self.kv.get(key)
 
 
-def test_proc_flag_get_never_hits_the_processed_stream(monkeypatch):
-    """With processing ON, the arm-loop GETs the :on flag, NOT the proc:meeting:{key} STREAM that coexists
-    — so a real redis WRONGTYPE never crashes the loop."""
+def test_a_legacy_proc_stream_is_never_read(monkeypatch):
+    """The loop must not touch ``proc:meeting:{key}`` at all any more. This redis raises WRONGTYPE on a
+    GET of a key that is really a STREAM — so a leftover proc stream from before the removal proves the
+    absence of the read rather than merely the absence of a crash."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-77", "google_meet"))
-    monkeypatch.setattr(w.time, "monotonic", lambda: 100000.0)   # > REARM_SEC since last_arm(0) → arms
+    monkeypatch.setattr(w.time, "monotonic", lambda: 100000.0)
 
     r, disp, live = _WrongTypeRedis(), _FakeDispatcher(), _FakeLive()
-    r.xadd("proc:meeting:77", {"payload": "{}"})               # the ROW-keyed processed-notes STREAM (collision bait)
-    r.set("proc:meeting:77:on", "1")                           # processing ENABLED via the ROW-keyed flag
+    r.xadd("proc:meeting:77", {"payload": "{}"})               # a legacy processed-notes STREAM
+    r.set("proc:meeting:77:on", "1")                           # …and its legacy opt-in flag
 
     w._handle(r, disp, live, "u", _payload("77"), *_fresh_state())  # must NOT raise WRONGTYPE
-    assert len(disp.dispatched) == 1                            # armed off the flag
+    assert disp.dispatched == []                                # and must NOT arm anything
 
 
 # ── session_end reap (agent-domain only — the collector emits the carrier marker) ───────────────────
 
-def test_session_end_reaps_copilot_without_writing_the_carrier(monkeypatch):
-    """On session_end the agent does ONLY its own reaping: drop the live row, clear the keymap, connect
-    the kg doc. It does NOT write the session_end marker onto tc:meeting:{native} — the collector owns
-    that carrier (P23)."""
+def test_session_end_drops_the_live_row_without_writing_the_carrier(monkeypatch):
+    """On session_end the agent does ONLY its own bookkeeping: drop the live row, clear the keymap,
+    connect the kg doc. It does NOT write the session_end marker onto tc:meeting:{native} — the
+    collector owns that carrier (P23)."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-9", "google_meet"))
     monkeypatch.delenv("VEXA_BOT_API_KEY", raising=False)   # _record_meeting_doc → no-op (no network)
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _, keymap, _ = st = _fresh_state()
+    keymap, _ = st = _fresh_state()
 
     w._handle(r, disp, live, "u", _payload("9"), *st)        # establish the meeting (keyed by row id 9)
     assert "9" in live.by_uid and keymap.get("9") == "9"
@@ -319,10 +276,10 @@ def test_session_end_reaps_copilot_without_writing_the_carrier(monkeypatch):
     assert _native_streams(r) == []                          # the agent wrote NO session_end marker
 
 
-def test_session_end_reaps_the_processing_flag(monkeypatch):
-    """session_end also deletes the desired-state flag (proc:meeting:{row}:on) — the meeting is over, so
-    a leftover flag must not survive to litter redis / re-arm a copilot for a dead meeting (ADR 0027:
-    this watcher is the flag's end-of-life owner). The frozen cursor is intentionally LEFT in place."""
+def test_session_end_leaves_legacy_proc_keys_alone(monkeypatch):
+    """session_end used to delete the copilot's desired-state flag — it was that flag's end-of-life
+    owner. With no producer and no reader, the watcher has no business writing those keys at all:
+    whatever a legacy deployment left in redis is simply not this loop's to touch."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-9", "google_meet"))
     monkeypatch.delenv("VEXA_BOT_API_KEY", raising=False)
@@ -334,8 +291,8 @@ def test_session_end_reaps_the_processing_flag(monkeypatch):
     w._handle(r, disp, live, "u", _payload("9"), *st)
     w._handle(r, disp, live, "u", {"type": "session_end", "meeting_id": "9"}, *st)
 
-    assert r.get("proc:meeting:9:on") is None                # desired state reaped with the meeting
-    assert r.get("proc:meeting:9:cursor") == "5-0"           # cursor frozen (audit / late gap-fill)
+    assert "9" not in live.by_uid
+    assert disp.dispatched == []
 
 
 # ── P18 (ADR 0010) — fail-loud regression gates: the 90-minute incident as a red-then-green test ──────
@@ -398,38 +355,31 @@ def test_native_resolve_recovers_clears_fault(monkeypatch):
     assert w.relay_health()["native_resolve"]["ok"] is True
 
 
-def test_arm_carries_numeric_meeting_id_for_durable_proc_doc(monkeypatch):
-    """The watcher knows the meetings-domain ROW id (the segments' numeric meeting_id) — the arm
-    dispatch must carry it (numeric_meeting_id) so the worker keys its processed-notes stream by it
-    (proc:meeting:{row_id}): unique per meeting run ⇒ a re-sent bot on the same native link never
-    mixes/clobbers a previous meeting's processed doc, and the meeting-api db-writer can persist the
-    stream into the meeting row's data JSONB. The live entry carries it too (for /api/meeting/process)."""
+def test_live_entry_carries_the_row_id(monkeypatch):
+    """The live registry entry carries the meetings-domain ROW id — the terminal's SSE and the by-id
+    REST reads both key on it. (Two tests here used to assert the same id reached an ARM dispatch's
+    ``numeric_meeting_id`` hint, so the copilot could key its processed-notes stream by it.)"""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    r.set("proc:meeting:42:on", "1")
 
     w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
 
-    meeting = disp.dispatched[0]["context"]["meeting"]
-    assert meeting["numeric_meeting_id"] == "42"
-    assert meeting["meeting_id"] == "42"                    # P0: routing keys by the ROW id
-    assert meeting["native_id"] == "aaa-aaaa-aaa"          # native carried SEPARATELY for display
     assert live.by_uid["42"]["numeric_meeting_id"] == "42"
+    assert live.by_uid["42"]["meeting_id"] == "42"
+    assert live.by_uid["42"]["native_id"] == "aaa-aaaa-aaa"
+    assert disp.dispatched == []
 
 
-def test_arm_omits_numeric_meeting_id_when_key_is_not_numeric(monkeypatch):
-    """A meeting that never resolved past its uid fallback has no row id to key the proc doc by —
-    the hint is omitted (the worker falls back to the native key), never a bogus value."""
+def test_live_entry_omits_the_row_id_when_the_key_is_not_numeric(monkeypatch):
+    """A meeting that never resolved past its uid fallback has no row id — the field is None, never a
+    bogus value."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    r.set("proc:meeting:sess-uid-fallback:on", "1")   # ROW-keyed flag; here the "row id" is the uid fallback
 
     payload = {**_payload("sess-uid-fallback"), "meeting_id": "sess-uid-fallback"}
     w._handle(r, disp, live, "u_live", payload, *_fresh_state())
 
-    meeting = disp.dispatched[0]["context"]["meeting"]
-    assert meeting["meeting_id"] == "sess-uid-fallback"    # keyed on the (non-numeric) uid fallback
-    assert "numeric_meeting_id" not in meeting            # no row id → the durable-proc hint is omitted
+    assert live.by_uid["sess-uid-fallback"]["meeting_id"] == "sess-uid-fallback"
     assert live.by_uid["sess-uid-fallback"]["numeric_meeting_id"] is None

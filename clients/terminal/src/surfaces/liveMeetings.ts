@@ -48,68 +48,15 @@ interface SegmentDTO {
   text?: string | null;
 }
 
-/** A persisted processed note from the durable store (`data.processed.views[].doc.notes[]`,
- *  written by meeting-api's db-writer from the copilot's proc stream). SAME producer and shape as
- *  the live SSE `note` event payload — {id, speaker, chapter, text, t?, pass, frozen}. */
-export interface ProcessedNoteDTO {
-  id: string;
-  speaker?: string;
-  chapter?: string;
-  text: string;
-  t?: number;
-  tsMs?: number;   // absent in the durable store (live-only anchor); optional so the merged union renders
-  pass?: number;
-  frozen?: boolean;
-}
-
-/** The copilot view id inside data.processed.views[] (mirrors meeting-api's PROC_VIEW_ID). */
-const COPILOT_NOTES_VIEW_ID = "copilot-notes";
-
-interface ProcessedViewDTO { id?: string; doc?: { notes?: unknown[] } | null }
 interface TranscriptResponseDTO {
   segments?: SegmentDTO[];
-  data?: { processed?: { views?: ProcessedViewDTO[] } | null } | null;
 }
 
-/** Both durable halves of a meeting's transcript response: the raw segments (mapped for the
- *  transcript pane) and the copilot's persisted processed notes. */
+/** The durable half of a meeting's transcript response: the raw recorded segments, mapped for the
+ *  transcript pane. There is no second, "processed" body — PRD decision 34 removed the in-product
+ *  inference pipeline that produced it, so `data.processed` has no producer and is not read. */
 export interface DurableTranscript {
   lines: TranscriptLine[];
-  notes: ProcessedNoteDTO[];
-}
-
-/** Pull the copilot-notes view's notes out of a transcript response body. Exported for tests. */
-export function processedNotesOf(body: TranscriptResponseDTO | null | undefined): ProcessedNoteDTO[] {
-  const views = body?.data?.processed?.views;
-  if (!Array.isArray(views)) return [];
-  const view = views.find((v) => v?.id === COPILOT_NOTES_VIEW_ID);
-  const raw = view?.doc?.notes;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
-    .map((n) => ({
-      id: String(n.id ?? "").trim(),
-      speaker: typeof n.speaker === "string" ? n.speaker : undefined,
-      chapter: typeof n.chapter === "string" ? n.chapter : undefined,
-      text: typeof n.text === "string" ? n.text : "",
-      t: typeof n.t === "number" && Number.isFinite(n.t) ? n.t : undefined,
-      pass: typeof n.pass === "number" ? n.pass : undefined,
-      frozen: typeof n.frozen === "boolean" ? n.frozen : undefined,
-    }))
-    .filter((n) => n.id && n.text.trim());
-}
-
-/** Merge live note deltas OVER a durable seed by note id (the backend's own merge rule — a live
- *  re-emit of a persisted note updates it in place, never duplicates). Seed order is preserved;
- *  notes only seen live append in arrival order. Exported for tests. */
-export function mergeNotesById<T extends { id: string }>(seed: T[], live: T[]): T[] {
-  if (!seed.length) return live;
-  if (!live.length) return seed;
-  const seedIds = new Set(seed.map((n) => n.id));
-  const liveById = new Map(live.map((n) => [n.id, n]));
-  const out: T[] = seed.map((n) => liveById.get(n.id) ?? n);
-  for (const n of live) if (!seedIds.has(n.id)) out.push(n);
-  return out;
 }
 
 function formatTranscriptTime(start?: number | null): string {
@@ -301,18 +248,17 @@ function ensureStarted() {
   });
 }
 
-const EMPTY_DURABLE: DurableTranscript = { lines: [], notes: [] };
+const EMPTY_DURABLE: DurableTranscript = { lines: [] };
 
 /** Fetch a meeting's DURABLE transcript over REST (gateway → meeting-api): the recorded segments
- *  for the transcript pane PLUS the copilot's persisted processed notes (data.processed.views —
- *  the copilot-notes view). For a past meeting this is THE source; for a live one it seeds
+ *  for the transcript pane. For a past meeting this is THE source; for a live one it seeds
  *  whatever was persisted before the client connected. Returns empties on error.
  *
  *  P0 (wrong-row hydration fix): fetch by the meetings-domain ROW id via
  *  `GET /api/transcripts/by-id/{meetingId}` (owner-scoped downstream). The native path
  *  (`/transcripts/{platform}/{native}`) resolves to the NEWEST row for that native, so a user with
- *  several rows on the same link always read the latest — the notes of an OLDER row vanished. Fetching
- *  by the exact row id returns THAT row's segments + processed notes, never a sibling's (and never
+ *  several rows on the same link always read the latest — an OLDER row's segments vanished. Fetching
+ *  by the exact row id returns THAT row's segments, never a sibling's (and never
  *  another tenant's). `meetingId` is the row id the mock now carries as `id`. */
 export async function fetchDurableTranscript(meetingId: string): Promise<DurableTranscript> {
   try {
@@ -323,14 +269,13 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
     const lines = list
       .filter((s) => (s.text ?? "").trim())
       .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
-    return { lines, notes: processedNotesOf(body) };
+    return { lines };
   } catch {
     return EMPTY_DURABLE;
   }
 }
 
-/** Fetch a PAST meeting's recorded transcript lines (segments only), by the ROW id. Kept for callers
- *  that don't need the processed notes. */
+/** Fetch a PAST meeting's recorded transcript lines by the ROW id. */
 export async function fetchTranscript(meetingId: string): Promise<TranscriptLine[]> {
   return (await fetchDurableTranscript(meetingId)).lines;
 }

@@ -68,19 +68,11 @@ class Settings(BaseSettings):
     # Comma-separated user ids whose workers mount _global READ-WRITE — the admin setup
     # conversation writes the org tier; everyone else stays ro. Empty = nobody writes.
     global_admin_subjects: str = ""
+    # The ONE model this product runs (PRD decision 34): the agent harness's. The fields that used
+    # to sit beside it — `meeting_model`, `llm_provider`, `llm_model`, `meeting_idle_timeout_sec`,
+    # `post_meeting_dev_email` — all configured the in-product inference pipeline, which is gone.
     agent_model: str = ""
-    meeting_model: str = ""
-    # ── llm module dials (provider-agnostic; see core/agent/llm/README.md) ────
-    # Non-secret operator config forwarded into workers by dispatch. The SECRETS
-    # (VEXA_LLM_API_KEY / VEXA_LLM_BASE_URL) deliberately have no Settings field — they travel by
-    # runtime credential brokering (docker_backend), same as ANTHROPIC_*.
-    llm_provider: str = ""      # CompletionPort adapter key (openai-compat | anthropic); empty = default
-    llm_model: str = ""         # deployment-default model (free string)
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
-    meeting_idle_timeout_sec: int = Field(default=4 * 60 * 60, ge=60)
-    # Development-only, schema-validated JSON for post-meeting delivery to an SMTP sink such as
-    # Mailpit. Empty keeps the adapter disabled. Production delivery uses a separate EmailSink.
-    post_meeting_dev_email: str = ""
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.

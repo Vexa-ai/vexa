@@ -15,8 +15,7 @@ personal + normal single-rank workspaces, the sharing model, and live in-meeting
 documented in **[`docs/docs/core/workspaces.mdx`](../../docs/docs/core/workspaces.mdx)**.
 
 ## Boundary (SoC)
-**This domain is about:** the copilot lifecycle, chat, the user's `workspace.v1`, notes/cards, and agent
-config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
+**This domain is about:** chat, the user's `workspace.v1`, agent turns and agent config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
 
 The agent **may hold, compose, and serve meeting data downstream** — *once it has acquired it legally*,
 through a **published contract**: the gateway's `/transcripts` API (e.g. the meeting-scoped read tool) or
@@ -60,7 +59,9 @@ Only `invoke.v1` + `workspace.v1` are pinned in `contracts.seal.json`; the rest 
 - ✅ delivered — chat dispatch, warm-session resume, workspace git commit (`workspace.v1`)
 - ✅ delivered — generic event ingress (`event.v1` → `unit.v1`) and tool mechanism (`tool.v1` → `--allowedTools` + injected MCP)
 - ✅ delivered — routines: `routine.v1` `kind:scheduled` compiles to a `schedule.v1` cron job
-- ✅ delivered — live in-meeting copilot: transcript stream → propose-only beats → `proactive-card.v1`
+- 🗑 removed (PRD decision 34) — the live in-meeting copilot (transcript stream → propose-only
+  beats → `proactive-card.v1`) and the `processed-notes.v1` stream it produced. The product runs no
+  model calls of its own beside the agent; a meeting reaches the agent over the MCP.
 - 🟡 partial — most owned contracts UNSEALED (sealed per-MVP); `invoke.v1` retired once the meetings path migrates
 - ⬜ planned — `routine.v1` gains a `target` (agent|meeting) so a routine can schedule a bot
 - ⬜ planned — `workspace.v1` meeting-entity convention (a meeting becomes `kg/entities/meeting/*`)

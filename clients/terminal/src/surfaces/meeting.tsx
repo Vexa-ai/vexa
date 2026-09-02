@@ -790,44 +790,9 @@ function MeetingsList() {
   );
 }
 
-// ── Meeting COPILOT tab (center) — meeting shell + canvas ──────────────────────────
-type ModelInfo = { chat_model?: string; streaming_model?: string; agent_model?: string; meeting_model?: string };
-
-function useModelInfo(): ModelInfo | null {
-  const [models, setModels] = useState<ModelInfo | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const r = await fetch(`/api/models`, { cache: "no-store" });
-        if (!alive || !r.ok) return;
-        setModels(await r.json() as ModelInfo);
-      } catch {
-        /* model labels are informational */
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-  return models;
-}
-
-function ModelChips() {
-  const models = useModelInfo();
-  const streaming = models?.streaming_model || models?.meeting_model || "streaming";
-  const chat = models?.chat_model || models?.agent_model || "chat";
-  const chip = (label: string, value: string) => (
-    <span title={`${label} model: ${value}`} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t2)", background: "var(--panel)", fontSize: 11.5, whiteSpace: "nowrap", minWidth: 0 }}>
-      <span style={{ color: "var(--t3)", fontFamily: "var(--mono)", flex: "none" }}>{label}</span>
-      <span style={{ color: "var(--t1)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{value}</span>
-    </span>
-  );
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "flex-end", minWidth: 0 }}>
-      {chip("stream", streaming)}
-      {chip("chat", chat)}
-    </div>
-  );
-}
+// ── Meeting tab (center) — meeting shell + the live transcript canvas ─────────────────────────
+// PRD decision 34: no model chips here. The product runs no model calls of its own beside the
+// agent, so which model is configured is not a fact about this meeting and has no place on it.
 
 /** Bot lifecycle controls on the meeting page header (owner ask 2026-07-09): Stop while the bot
  *  is in the call, Re-send once it stopped/completed/failed. Reuses the row-action map verbatim
@@ -965,7 +930,6 @@ function MeetingTab({ params }: TabProps) {
           <div style={{ flex: "1 0 0", minWidth: 0 }} />
           {m && <BotControls m={m} connected={connected} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
-          <ModelChips />
         </div>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>

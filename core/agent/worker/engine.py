@@ -13,8 +13,9 @@ The redis loop is factored into ``serve()`` with the turn-runner INJECTED, and t
 resolves through the ``worker.worker.harness_factory`` seam, so everything is offline-provable with
 a fake redis + a fake harness (no docker, no CLI, no provider).
 
-This module holds the GENERIC engine; the MEETING copilot lives in ``worker.meeting``. ``worker.worker``
-re-exports both so existing ``from worker.worker import X`` imports keep resolving.
+This module holds the ONE engine; ``worker.worker`` re-exports it so existing
+``from worker.worker import X`` imports keep resolving. (A second module, ``worker.meeting`` — the
+live meeting copilot — sat beside it until PRD decision 34 removed that pipeline.)
 """
 from __future__ import annotations
 
@@ -1103,8 +1104,8 @@ def run_turn_over_workspace(
     if session and session_continuity:
         _adopt_legacy_continuity(chat_root, work, session)  # migrate-on-read: pre-anchoring threads
     sess_file = _session_file(chat_root, session)
-    # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
-    # card-extraction beats must NOT pollute the user's chat conversation memory.
+    # session_continuity=False: never read/write the shared chat session — a machinery turn must NOT
+    # pollute the user's chat conversation memory.
     resume = _resume_id(chat_root, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
     # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
@@ -1122,8 +1123,7 @@ def run_turn_over_workspace(
     # reader must never have to find it again by parsing the composed prompt above. Recorded BEFORE
     # the harness runs, because a turn that dies mid-stream still leaves its user turn in the
     # transcript, and that turn is exactly the one that would render as the machinery prompt.
-    # `session_continuity=False` (the meeting copilot) writes nothing: its beats are not a
-    # conversation anybody reads back.
+    # `session_continuity=False` writes nothing: such a turn is not a conversation anybody reads back.
     if session and session_continuity:
         record_user_text(chat_root, session, turn_prompt, human_half(prompt))
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
@@ -1369,21 +1369,11 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
     import redis
 
-    # Meeting entry functions imported function-locally to avoid an import cycle at module load
-    # (worker.meeting imports the generic helpers from this module).
-    from worker.meeting import (
-        meeting_card_turn,
-        meeting_doc_turn,
-        serve_meeting,
-        upsert_meeting_transcript_file,
-    )
-    from shared.agent_config import load_meeting_config
-
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
     # Boot preflight (WS1b): if a credential prefix and its base-url host obviously disagree, log a
-    # loud warning NOW — before the first call — so a misconfigured provider pair is visible at
-    # container start, not only as a runtime 401. Judges the completion pair, then the harness pair.
+    # loud warning NOW — before the first call — so a misconfigured harness is visible at container
+    # start, not only as a runtime 401.
     _warn = preflight_provider_guard()
     if _warn:
         log.warning("agent-api worker: %s", _warn)
@@ -1391,166 +1381,50 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     out_topic = os.environ["VEXA_UNIT_OUT_TOPIC"]
     idle_ms = int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000
 
-    transcript_stream = os.environ.get("VEXA_TRANSCRIPT_STREAM")
-    if transcript_stream:  # a live meeting dispatch — consume the transcript, emit cards
-        # The GOVERNED, workspace-driven copilot config (agents/meeting.md) — loaded ONCE at meeting
-        # start from the mounted workspace; absent ⇒ all defaults. Env stays the ultimate model default.
-        cfg = load_meeting_config(work)
-        # P0 (cross-tenant leak fix): the transcript carrier is keyed by the meetings-domain ROW id
-        # (VEXA_MEETING_NUMERIC_ID) — the transcript_stream tail is now that row id, NOT the native id.
-        # The NATIVE id (human-readable, e.g. abc-defg-hij) is carried SEPARATELY in VEXA_MEETING_ID for
-        # display + the readable kg doc name (nuance #1: kg/entities/meeting/{native}.md must survive).
-        # Never derive `native` from the stream tail anymore (that is the row id); fall back to the tail
-        # only when VEXA_MEETING_ID is somehow unset (older dispatcher), which at worst degrades the
-        # display name, never the row-scoped isolation.
-        row_id = os.environ.get("VEXA_MEETING_NUMERIC_ID") or transcript_stream.rsplit(":", 1)[-1]
-        native = os.environ.get("VEXA_MEETING_ID") or row_id
-        session_uid = os.environ.get("VEXA_MEETING_SESSION_UID") or native
-        platform = os.environ.get("VEXA_MEETING_PLATFORM") or "google_meet"
-        import datetime as _dt
-        date = _dt.date.today().isoformat()
-        title = f"Meeting {native}"
-        # Auth-B/#3a: mirror each cleaned proc note into the per-meeting workspace file, incrementally,
-        # so a chat agent focused on the meeting can `Read kg/entities/meeting/<native>.md` mid-meeting.
-        meeting_file = work / "kg" / "entities" / "meeting" / f"{native}.md"
-        meeting_meta = {
-            "type": "meeting", "id": native, "title": title, "meeting_id": native,
-            "session_uid": session_uid, "platform": platform, "date": date,
-        }
-        on_proc_note = lambda note: upsert_meeting_transcript_file(meeting_file, meeting_meta, note)  # noqa: E731
-        # Deterministic dual-source render seam: persist the SAME notes/cards as the durable envelope
-        # alongside the markdown, so live (redis) and finished (file) render identically.
-        from worker.meeting import persist_envelope, _seed_dir, validate_envelope
-        meeting_envelope_file = work / "kg" / "entities" / "meeting" / f"{native}.envelope.json"
-
-        def on_envelope(envelope: dict) -> None:
-            errors = validate_envelope(envelope, _seed_dir())
-            if errors:
-                log.warning("agent-api worker: meeting envelope schema errors: %s", "; ".join(errors[:3]))
-            persist_envelope(meeting_envelope_file, envelope)
-        # write_meeting_doc=false ⇒ no doc_turn (independent of `enabled`, which gates the live beats).
-        doc_turn = None
-        if cfg.write_meeting_doc:
-            doc_turn = lambda cards: meeting_doc_turn(  # noqa: E731
-                work, cards, native=native, meeting_id=native, session_uid=session_uid,
-                platform=platform, date=date, title=title, model=cfg.model,
-            )
-        on_doc_committed = None
-        dev_email = (os.environ.get("VEXA_POST_MEETING_DEV_EMAIL") or "").strip()
-        if dev_email:
-            # Explicit development adapter only. The structured env is schema-validated at worker
-            # boot; a future production delivery service fills the same EmailSink port rather than
-            # teaching the meeting loop SMTP or recipient policy.
-            from worker.post_meeting import (
-                DevSmtpEmailSink,
-                MeetingCompletion,
-                PostMeetingFault,
-                PostMeetingNotifier,
-                WorkspaceArtifactReader,
-                parse_dev_notification_config,
-                require_personal_recipient,
-                require_personal_workspace,
-            )
-            notification = parse_dev_notification_config(dev_email)
-            if doc_turn is None:
-                raise PostMeetingFault(
-                    source="config", kind="meeting-doc-disabled",
-                    detail="VEXA_POST_MEETING_DEV_EMAIL requires agents/meeting.md write_meeting_doc=true",
-                )
-            require_personal_workspace(
-                work,
-                store_root=Path(os.environ.get("VEXA_WORKSPACE_MOUNT_TARGET", "/workspaces")),
-                subject=os.environ["VEXA_OWNER"],
-            )
-            require_personal_recipient(
-                notification.recipient,
-                principal_email=os.environ.get("VEXA_PRINCIPAL_EMAIL", ""),
-            )
-            notifier = PostMeetingNotifier(
-                WorkspaceArtifactReader(work),
-                DevSmtpEmailSink(notification.smtp, sender=notification.sender),
-                terminal_url=notification.terminal_url,
-            )
-
-            def on_doc_committed(commit: dict) -> None:
-                receipt = notifier.notify(MeetingCompletion(
-                    subject=os.environ["VEXA_OWNER"], meeting_id=row_id, native_id=native,
-                    platform=platform, title=title, recipient=notification.recipient,
-                    commit_sha=str(commit["commit_sha"]),
-                ))
-                log.info(
-                    "post-meeting notification sent subject=%s meeting=%s commit=%s artifact=%s",
-                    os.environ["VEXA_OWNER"], row_id, receipt.commit_sha, receipt.artifact_path,
-                )
-        serve_meeting(
-            client, transcript_stream=transcript_stream, out_topic=out_topic,
-            card_turn=lambda segs: meeting_card_turn(
-                work, segs, model=cfg.model, card_kinds=cfg.card_kinds, steering=cfg.steering,
-                polish_rules=cfg.polish_rules, tag_rules=cfg.tag_rules,
-            ),
-            idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
-            doc_turn=doc_turn, enabled=cfg.enabled,
-            start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
-            # P0 (cross-tenant leak fix): BOTH the processed-notes stream AND its cursor key on the
-            # meetings-domain ROW id (VEXA_MEETING_NUMERIC_ID) — unique per meeting run, so neither a
-            # re-sent bot on the same native link NOR a different tenant on the same link can ever
-            # mix/clobber/read another meeting's processed doc. The meeting-api db-writer (which knows
-            # its own row ids) drains proc:meeting:{row_id} into that meeting row's data JSONB (durable).
-            # The cursor is now a position in the ROW-KEYED transcript stream tc:meeting:{row_id} (each
-            # row has its own stream), so it too MUST be row-scoped — a shared native-keyed cursor would
-            # resume one row from another row's position (and leak progress across tenants).
-            proc_stream=f"proc:meeting:{row_id}",
-            cursor_key=f"proc:meeting:{row_id}:cursor",
-            on_proc_note=on_proc_note,
-            on_envelope=on_envelope,
-            on_doc_committed=on_doc_committed,
-            # Provenance stamped on every processed-notes entry: what pipeline/provider/model
-            # produced this cleaned view — persisted verbatim into the durable view's `params`
-            # (meeting.data processed views) by the meeting-api db-writer (reproducibility).
-            proc_params={
-                "pipeline": "meeting-copilot/proc-notes", "version": 1,
-                "provider": os.environ.get("VEXA_LLM_PROVIDER"),
-                "model": cfg.model or os.environ.get("VEXA_LLM_MODEL"),
-            },
-        )
-    else:  # chat / routine / event — run the entrypoint, then serve interactive messages
-        # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are committed by
-        # run_harness_turn. Override with VEXA_CHAT_TOOLS (comma-separated).
-        chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
-                      or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
-        session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION
-        # The delegated vexa MCP (meetings, transcripts, workspaces) — attached ONLY when the dispatcher
-        # minted a token for this dispatch. Attaching the server is not enough: `--strict-mcp-config`
-        # scopes WHICH servers exist, `--allowedTools` scopes what the model may CALL, so the server id
-        # must enter the allow-set too or every tool call would stall on a permission prompt that no
-        # human is there to answer.
-        mcp_cfg, mcp_tools = mcp_delegation_config(work)
-        if mcp_cfg:
-            chat_tools = chat_tools + mcp_tools
-            log.info("agent-api worker: vexa MCP attached for owner=%s (delegated, scoped, short-lived)",
-                     os.environ.get("VEXA_OWNER"))
-        # One harness instance owns the whole warm worker lifetime. That makes the steering handle
-        # instance-scoped (Codex JSON-RPC process / Claude stdin) instead of a vendor-global mailbox.
-        import worker.worker as _w
-        chat_harness: HarnessPort = getattr(_w, "harness_factory", harness_from_env)()
-        harness_warning = chat_harness.preflight()
-        if harness_warning:
-            log.warning("agent-api worker: %s", harness_warning)
-        serve(
-            client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
-                                                        allowed_tools=chat_tools, session=session,
-                                                        mcp_config=mcp_cfg, harness=chat_harness),
-            # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
-            # session would have to be told the whole conversation to ask one bookkeeping question.
-            # Small budget by TOOLSET rather than by a step cap the harness does not expose.
-            writeback=lambda candidates: run_turn_over_workspace(
-                work, writeback_prompt(candidates), model=model,
-                allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
-                mcp_config=mcp_cfg, harness=chat_harness),
-            start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
-            harness=chat_harness,
-            # What this session can actually call — the F70 detector's third condition, and the
-            # only one that makes acting on a refusal safe.
-            tools=chat_tools,
-        )
+    # There is ONE worker mode. A `VEXA_TRANSCRIPT_STREAM` dispatch used to take a second branch here
+    # — the live meeting COPILOT: tail `tc:meeting:{row}`, run a completion beat every N segments,
+    # XADD "cleaned" notes onto `proc:meeting:{row}`, and write a transcript file into the workspace.
+    # PRD decision 34 removed it: the product runs no model calls of its own beside the agent, and
+    # nothing dispatches this kind any more (transcription_watcher stopped arming it). What is left
+    # is the chat / routine / event turn: run the entrypoint, then serve interactive messages.
+    #
+    # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are committed by
+    # run_harness_turn. Override with VEXA_CHAT_TOOLS (comma-separated).
+    chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
+                  or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
+    session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION
+    # The delegated vexa MCP (meetings, transcripts, workspaces) — attached ONLY when the dispatcher
+    # minted a token for this dispatch. Attaching the server is not enough: `--strict-mcp-config`
+    # scopes WHICH servers exist, `--allowedTools` scopes what the model may CALL, so the server id
+    # must enter the allow-set too or every tool call would stall on a permission prompt that no
+    # human is there to answer.
+    mcp_cfg, mcp_tools = mcp_delegation_config(work)
+    if mcp_cfg:
+        chat_tools = chat_tools + mcp_tools
+        log.info("agent-api worker: vexa MCP attached for owner=%s (delegated, scoped, short-lived)",
+                 os.environ.get("VEXA_OWNER"))
+    # One harness instance owns the whole warm worker lifetime. That makes the steering handle
+    # instance-scoped (Codex JSON-RPC process / Claude stdin) instead of a vendor-global mailbox.
+    import worker.worker as _w
+    chat_harness: HarnessPort = getattr(_w, "harness_factory", harness_from_env)()
+    harness_warning = chat_harness.preflight()
+    if harness_warning:
+        log.warning("agent-api worker: %s", harness_warning)
+    serve(
+        client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
+        turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
+                                                    allowed_tools=chat_tools, session=session,
+                                                    mcp_config=mcp_cfg, harness=chat_harness),
+        # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
+        # session would have to be told the whole conversation to ask one bookkeeping question.
+        # Small budget by TOOLSET rather than by a step cap the harness does not expose.
+        writeback=lambda candidates: run_turn_over_workspace(
+            work, writeback_prompt(candidates), model=model,
+            allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
+            mcp_config=mcp_cfg, harness=chat_harness),
+        start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
+        harness=chat_harness,
+        # What this session can actually call — the F70 detector's third condition, and the
+        # only one that makes acting on a refusal safe.
+        tools=chat_tools,
+    )

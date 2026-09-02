@@ -148,7 +148,7 @@ def test_worker_credential_bind_falls_back_to_the_directory():
 
 def test_health_carries_capability_rows_additively(monkeypatch):
     for k in ("REDIS_URL", "BROWSER_IMAGE", "AGENT_IMAGE", "HOST_CLAUDE_CREDENTIALS",
-              "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "VEXA_LLM_API_KEY"):
+              "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     app = create_app(Runtime(profiles={"test": ["sleep", "30"]}))
     r = TestClient(app).get("/health")

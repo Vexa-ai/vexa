@@ -98,7 +98,6 @@ models:
   anthropicSonnetModel: ""
   anthropicHaikuModel: ""
   agentModel: ""        # VEXA_AGENT_MODEL
-  meetingModel: ""      # VEXA_MEETING_MODEL
 
 # ============ Components ============
 

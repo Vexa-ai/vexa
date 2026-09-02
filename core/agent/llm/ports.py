@@ -1,13 +1,15 @@
-"""ports.py — the two provider-agnostic ports of the llm module (mirrors runtime_kernel/backend.py).
+"""ports.py — the provider-agnostic port of the llm module (mirrors runtime_kernel/backend.py).
 
-Two call shapes, two ports:
+ONE call shape, one port:
 
-- ``CompletionPort`` — a plain LLM HTTP call, prompt→text. No tools, no subprocess, no workspace.
-  The meeting copilot's card beats run here (everything a beat needs is already in the prompt).
 - ``HarnessPort`` — a CLI coding agent driven over a mounted workspace: the tool loop, sessions,
-  streamed UnitEvents. Post-meeting docs, chat, and routines run here.
+  streamed UnitEvents. Chat, routines and every agent turn run here.
 
-Both are ``typing.Protocol`` — duck-typed like the runtime ``Backend`` port, so adapters need no
+There was a second, ``CompletionPort`` — a plain prompt→text HTTP call with no tools and no
+workspace — and its only caller was the live meeting copilot's card beats. PRD decision 34 removed
+that pipeline, and the port went with it.
+
+It is a ``typing.Protocol`` — duck-typed like the runtime ``Backend`` port, so adapters need no
 base class and tests inject trivial fakes. Adapter selection is env-driven in ``registry.py``.
 
 The UnitEvent stream contract every harness adapter must emit (shapes FROZEN — the terminal
@@ -22,7 +24,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
 
@@ -49,7 +50,7 @@ def scrubbed_git_env() -> dict[str, str]:
 # environment that Bash reaches the SHARED redis and can read/write ANOTHER tenant's ``tc:meeting:*`` /
 # ``unit:*:in`` keys — filesystem tenancy is mount-enforced, the data plane is not. The per-dispatch
 # identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
-# credentials (ANTHROPIC_*/VEXA_LLM_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
+# credentials (ANTHROPIC_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
 # deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
 _HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN")
 
@@ -84,24 +85,6 @@ def harness_subprocess_env() -> dict[str, str]:
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI
 # harness adapters so their parsers are offline-provable with a fake (no CLI, no network).
 HarnessExec = Callable[[list[str], str], Iterable[str]]
-
-
-@dataclass(frozen=True)
-class CompletionResult:
-    """One completion: the text and the model that produced it (for event attribution)."""
-
-    text: str
-    model: str = ""
-
-
-class CompletionPort(Protocol):
-    """A plain prompt→text LLM provider. Raises ``LLMAuthError`` on a rejected credential,
-    ``LLMConfigError`` on missing endpoint/model config, ``LLMError`` otherwise."""
-
-    name: str
-
-    def complete(self, prompt: str, *, system: Optional[str] = None,
-                 model: Optional[str] = None) -> CompletionResult: ...
 
 
 class HarnessPort(Protocol):

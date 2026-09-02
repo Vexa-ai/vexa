@@ -326,7 +326,7 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
 
 # ── model-auth passthrough (the k8s/helm credential seam) ────────────────────
 # The worker needs a MODEL credential, and delivery used to differ by substrate: the docker backend
-# brokers creds itself (the HOST_CLAUDE_CREDENTIALS bind-mount + copying ANTHROPIC_*/VEXA_LLM_* from
+# brokers creds itself (the HOST_CLAUDE_CREDENTIALS bind-mount + copying ANTHROPIC_* from
 # the runtime service env), but the k8s and process backends deliver ONLY this spec env — so a helm
 # worker booted with no credential at all (claude CLI: "Not logged in" → chat "Model inference
 # error"). agent-api therefore stamps an EXPLICIT allowlist from its own environment into every
@@ -334,15 +334,13 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
 # each entry is a var a core/agent/llm adapter (or the claude CLI itself) actually reads.
 MODEL_AUTH_ENV_ALLOWLIST = (
     "CLAUDE_CODE_OAUTH_TOKEN",  # claude CLI subscription OAuth — the env twin of the docker credentials mount
-    "ANTHROPIC_API_KEY",        # claude CLI + the llm/ completion adapters (last-resort fallback)
-    "ANTHROPIC_AUTH_TOKEN",     # claude CLI gateway/OpenRouter token; llm/ adapters fall back to it
-    "ANTHROPIC_BASE_URL",       # claude CLI gateway endpoint; openai_compat base-url fallback
-    "VEXA_LLM_API_KEY",         # llm/ completion adapters' first-class credential (deliberately no Settings field)
-    "VEXA_LLM_BASE_URL",        # llm/ completion adapters' first-class endpoint (pairs with the key above)
-    "VEXA_LLM_EXTRA_BODY",      # server-specific request fields the OpenAI dialect cannot express
-                                # (e.g. a self-hosted Qwen needs {"chat_template_kwargs":
-                                # {"enable_thinking": false}} or it returns no valid JSON at all)
+    "ANTHROPIC_API_KEY",        # claude CLI (last-resort fallback)
+    "ANTHROPIC_AUTH_TOKEN",     # claude CLI gateway/OpenRouter token
+    "ANTHROPIC_BASE_URL",       # claude CLI gateway endpoint
 )
+# The list used to carry three more — VEXA_LLM_API_KEY / _BASE_URL / _EXTRA_BODY — the completion
+# provider's credential, endpoint and dialect escape hatch. PRD decision 34 removed the pipeline
+# that called it, so a worker needs exactly one model credential: the agent harness's.
 
 
 def _allowlisted(model: str, allowlist: str) -> bool:
@@ -356,11 +354,9 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
 
-    ``mode: custom`` points BOTH call shapes at the supplied gateway (an Anthropic-/OpenAI-
-    compatible endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model): the
-    claude-code harness via ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN`` and the completion
-    adapters via ``VEXA_LLM_PROVIDER=openai-compat`` + ``VEXA_LLM_BASE_URL``/``VEXA_LLM_API_KEY``.
-    ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
+    ``mode: custom`` points the agent harness at the supplied gateway (an Anthropic-compatible
+    endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model) via
+    ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN``. ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
     Claude Code subscription / deployment key — and only the model names apply.
 
     Dispatch-stamped values WIN downstream (the runtime copies its own env only for keys absent
@@ -369,16 +365,9 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     a stale pref must not brick a turn."""
     model = (config.get("model") or "").strip()
     if model and _allowlisted(model, allowlist):
-        env["VEXA_AGENT_MODEL"] = model     # harness turns (chat/docs/routines)
-        env["VEXA_LLM_MODEL"] = model       # completion beats' default (meeting_model beats it)
+        env["VEXA_AGENT_MODEL"] = model     # harness turns — the ONE model this product runs
     elif model:
         logger.warning("model %r not in VEXA_MODEL_ALLOWLIST — using deployment default", model)
-    meeting_model = (config.get("meeting_model") or "").strip()
-    if meeting_model and _allowlisted(meeting_model, allowlist):
-        env["VEXA_MEETING_MODEL"] = meeting_model
-    elif meeting_model:
-        logger.warning("meeting model %r not in VEXA_MODEL_ALLOWLIST — using deployment default",
-                       meeting_model)
     # Reasoning-effort pin for the claude-code harness (Settings → Models "effort"). Empty ⇒ unset ⇒
     # the CLI's own default (no flag on the argv); an explicit value reaches the worker env and the
     # harness passes it through as --effort. Backends that validate the OpenAI-compatible
@@ -394,16 +383,8 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     if not base_url:
         return  # custom mode without an endpoint is inert — deployment credentials still apply
     env["ANTHROPIC_BASE_URL"] = base_url
-    env["VEXA_LLM_PROVIDER"] = "openai-compat"
-    env["VEXA_LLM_BASE_URL"] = base_url
     if api_key:
         env["ANTHROPIC_AUTH_TOKEN"] = api_key
-        env["VEXA_LLM_API_KEY"] = api_key
-    extra_body = (config.get("extra_body") or "").strip()
-    if extra_body:
-        # Passed through verbatim; the adapter parses it and fails loudly on malformed JSON rather
-        # than silently dropping a setting the deployment depends on.
-        env["VEXA_LLM_EXTRA_BODY"] = extra_body
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
@@ -532,16 +513,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env[_var] = os.environ[_var]
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
-    if settings.meeting_model:
-        env["VEXA_MEETING_MODEL"] = settings.meeting_model
-    if settings.post_meeting_dev_email:
-        env["VEXA_POST_MEETING_DEV_EMAIL"] = settings.post_meeting_dev_email
-    # llm-module dials (non-secret): completion provider + deployment-default model + the optional
-    # operator model gate. The SECRETS (VEXA_LLM_API_KEY/BASE_URL) are brokered by the runtime.
-    if settings.llm_provider:
-        env["VEXA_LLM_PROVIDER"] = settings.llm_provider
-    if settings.llm_model:
-        env["VEXA_LLM_MODEL"] = settings.llm_model
+    # The optional operator model gate.
     if settings.model_allowlist:
         env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist
     # Settings → Models (per-user/platform config from admin-api) beats the deployment env
@@ -556,48 +528,17 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         # The engine's own default is a tight 120s; chat stamps the (longer) configured window so a
         # follow-up message lands on the WARM worker (no container/CLI cold start).
         env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.chat_idle_timeout_sec)
-    # A live meeting dispatch consumes the meeting's transcript.v1 Stream (the meetings⊥agent seam).
+    # Chat GROUNDED in a live meeting (cookbook #1): the meeting-scoped tool needs the native id +
+    # platform to target meetings' published /transcripts.
+    #
+    # A `meeting` context carrying a `meeting_id` used to take a FIRST branch here and build a whole
+    # second dispatch shape: VEXA_TRANSCRIPT_STREAM + the meeting facts, for a worker that tailed the
+    # transcript and ran completion beats over it. PRD decision 34 removed that worker, and
+    # transcription_watcher no longer mints the dispatch, so the branch had no producer and no
+    # consumer left.
     ctx = invocation.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
-    if meeting and meeting.get("meeting_id"):
-        # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
-        # (``numeric_meeting_id`` — unique per meeting run), NOT the native meeting id. The native id
-        # is NOT unique: it collides across DIFFERENT users of the same meeting link (a shared
-        # ``tc:meeting:{native}`` LEAKED one tenant's transcript to another) AND across ONE user's
-        # repeated rows (wrong-row hydration). ``meeting['meeting_id']`` is the routing key the watcher
-        # froze (the native id today); the row id rides SEPARATELY as ``numeric_meeting_id``. Key the
-        # carrier by the row id when known, falling back to the routing key only for a meeting that
-        # never resolved a row id (surfaced under its own key, still isolated per that key).
-        row_id = meeting.get("numeric_meeting_id") or meeting["meeting_id"]
-        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{row_id}"
-        env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.meeting_idle_timeout_sec)
-        # Carry the meeting facts the post-meeting WRITE turn stamps into the kg entity frontmatter.
-        # VEXA_MEETING_ID is the human-readable NATIVE id (nuance #1: the readable kg doc name
-        # ``kg/entities/meeting/{native}.md`` must survive even though the carriers key by row id).
-        # The watcher now routes by the ROW id (``meeting_id`` == row id) and carries the native
-        # SEPARATELY as ``native_id`` for display; older callers (``/api/meeting/start|process``) still
-        # pass the native as ``meeting_id``. Prefer the explicit ``native_id`` hint, falling back to
-        # ``meeting_id`` (native there) — never the numeric row id, which is unreadable.
-        display_native = meeting.get("native_id") or meeting["meeting_id"]
-        env["VEXA_MEETING_ID"] = str(display_native)
-        if meeting.get("session_uid"):
-            env["VEXA_MEETING_SESSION_UID"] = str(meeting["session_uid"])
-        if meeting.get("platform"):
-            env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
-        if meeting.get("transcript_start_id"):
-            env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
-        if meeting.get("numeric_meeting_id"):
-            # The meetings-domain ROW id (unique per meeting run). The worker keys its
-            # processed-notes stream AND its transcript-consume stream by it
-            # (tc:/proc:meeting:{numeric}) so a re-sent bot on the same native link — or a DIFFERENT
-            # tenant on the same link — can never mix/clobber/read another meeting's data. The
-            # meeting-api db-writer (which knows its own row ids) drains proc:meeting:{numeric} into the
-            # meeting row's data JSONB for durability.
-            env["VEXA_MEETING_NUMERIC_ID"] = str(meeting["numeric_meeting_id"])
-    elif meeting and meeting.get("native_id"):
-        # Chat GROUNDED in a live meeting (cookbook #1): no numeric meeting_id, but the meeting-scoped
-        # tool needs the native id + platform to target meetings' published /transcripts. (The
-        # serve_meeting path keys on meeting_id above; this is the chat-grounding seam.)
+    if meeting and meeting.get("native_id"):
         env["VEXA_MEETING_NATIVE_ID"] = str(meeting["native_id"])
         if meeting.get("platform"):
             env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])

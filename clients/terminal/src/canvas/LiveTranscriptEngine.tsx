@@ -145,7 +145,7 @@ function BlockText({ text, entities, actions, renderText }: { text: string; enti
 
 export function LiveTranscriptEngine({
   segments,
-  emptyLabel = "Waiting for transcript…",
+  emptyLabel = "Nothing said yet\u2026",
   entities,
   signals,
   actions,

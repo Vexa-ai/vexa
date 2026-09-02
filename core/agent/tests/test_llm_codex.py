@@ -139,7 +139,7 @@ def test_codex_preflight_accepts_subscription_auth(tmp_path: Path, monkeypatch):
     auth.parent.mkdir(parents=True)
     auth.write_text('{"tokens":{"access_token":"redacted"}}')
     monkeypatch.setenv("HOME", str(home))
-    for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "VEXA_LLM_API_KEY"):
+    for key in ("OPENAI_API_KEY", "CODEX_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     assert CodexHarness().preflight() is None
 

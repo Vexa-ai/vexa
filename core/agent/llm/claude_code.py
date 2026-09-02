@@ -267,7 +267,7 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                 done["reply"] = (
                     "Model credentials are missing or expired for this deployment. "
                     "Set or refresh one of HOST_CLAUDE_CREDENTIALS, ANTHROPIC_API_KEY, "
-                    "ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN or VEXA_LLM_API_KEY, "
+                    "ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, "
                     "or configure a model under Settings → Models."
                 )
             yield done

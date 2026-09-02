@@ -1,27 +1,27 @@
 # llm — the detached LLM + agent-harness module
 
-Everything vexa knows about model providers and coding-agent CLIs lives HERE, behind two
-provider-agnostic ports. Product code (the meeting copilot, chat, routines) imports only the
-front door (`llm/__init__.py`) and never names a vendor.
+Everything vexa knows about coding-agent CLIs lives HERE, behind one provider-agnostic port.
+Product code (chat, routines) imports only the front door (`llm/__init__.py`) and never names a
+vendor.
 
-## The two ports (two call shapes)
+## The port (one call shape)
 
 | Port | Call shape | Used by | Selected by |
 |---|---|---|---|
-| `CompletionPort` | plain prompt→text HTTP call — no tools, no subprocess | meeting card beats | `VEXA_LLM_PROVIDER` |
-| `HarnessPort` | a CLI coding agent over the mounted workspace — tool loop, sessions, streamed UnitEvents | post-meeting doc, chat, routines | `VEXA_RUNNER` |
+| `HarnessPort` | a CLI coding agent over the mounted workspace — tool loop, sessions, streamed UnitEvents | every agent turn: chat, routines, flows | `VEXA_RUNNER` |
 
-Both are `typing.Protocol` (duck-typed, mirroring `core/runtime`'s `Backend` port); adapters are
-selected env-driven in `registry.py` and constructor-injected everywhere, so tests use trivial
-fakes.
+There was a second, `CompletionPort` — a plain prompt→text HTTP call selected by
+`VEXA_LLM_PROVIDER` — whose only caller was the live meeting copilot's card beats. **PRD decision
+34 removed that pipeline**, and the port, its three adapters (`openai_compat.py`,
+`anthropic_api.py`, `claude_cli.py`) and every `VEXA_LLM_*` variable went with it. The product runs
+no model calls of its own beside the agent.
+
+`HarnessPort` is a `typing.Protocol` (duck-typed, mirroring `core/runtime`'s `Backend` port);
+adapters are selected env-driven in `registry.py` and constructor-injected everywhere, so tests use
+trivial fakes.
 
 ## Adapters
 
-- **Completions**: `openai_compat.py` (DEFAULT — OpenRouter, Ollama, vLLM, LM Studio, OpenAI, any
-  gateway speaking `POST {base}/chat/completions`) · `anthropic_api.py` (the Messages dialect —
-  api.anthropic.com, LiteLLM proxies, DeepSeek/GLM Anthropic-compatible endpoints) ·
-  `claude_cli.py` (beats via the claude CLI on mounted SUBSCRIPTION credentials — no API key;
-  slower per beat; for subscription-only deployments).
 - **Harnesses**: `claude_code.py` (the `claude` CLI — stream-json + open-stdin steering) · `codex.py`
   (Codex app-server JSON-RPC — durable threads + `turn/steer`) · `openai_agent.py` (**ours** — an
   agent loop over any OpenAI-compatible `chat/completions` with function calling, no CLI and no
@@ -50,13 +50,11 @@ supply-chain surface than the dialect itself.
 
 | Env var | Meaning | Default |
 |---|---|---|
-| `VEXA_LLM_PROVIDER` | completion adapter: `openai-compat` \| `anthropic` | `openai-compat` |
-| `VEXA_LLM_BASE_URL` | provider endpoint | anthropic: `https://api.anthropic.com`; openai-compat: **required** (falls back to `ANTHROPIC_BASE_URL`) |
-| `VEXA_LLM_API_KEY` | credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
-| `VEXA_LLM_MODEL` | deployment-default model (free string) | empty → fail-loud at completion call |
-| `VEXA_LLM_MAX_TOKENS` | Messages-API max_tokens | 4096 |
 | `VEXA_RUNNER` | harness adapter key: `claude-code` \| `codex` \| `openai-agent` | `claude-code` |
-| `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY request (openai-compat + openai-agent) | `{}` |
+| `VEXA_LLM_BASE_URL` | openai-agent endpoint | **required** for `openai-agent` (falls back to `ANTHROPIC_BASE_URL`) |
+| `VEXA_LLM_API_KEY` | openai-agent credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
+| `VEXA_LLM_MODEL` | openai-agent model (free string) | empty → fail-loud at the first request |
+| `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY openai-agent request | `{}` |
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
 | `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
 | `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
@@ -67,20 +65,20 @@ supply-chain surface than the dialect itself.
 
 - **This module imports NOTHING from product code** (`shared/`, `contracts`, `worker/`,
   `control_plane/`) — it must stay liftable into a standalone brick.
-- Vendor names appear only in adapter files (`claude_code.py`, `anthropic_api.py`), never in
+- Vendor names appear only in adapter files (`claude_code.py`, `codex.py`), never in
   `ports.py`/`registry.py` beyond registry keys.
 - UnitEvent shapes (`message-delta` / `tool-call` / `tool-result` / `done{reply,sessionId,ok}` /
   `commit` and the `model-error` / `auth-error` builders in `errors.py`) are FROZEN — the terminal
-  reducer and SSE relay consume them field-for-field.
+  reducer and SSE relay consume them field-for-field. They describe the AGENT harness; a meeting's
+  feed carries the transcript and nothing else.
 - Session ids are OPAQUE per-harness tokens; an alien/stale id must yield `done.ok=False` (the
   engine's stale-resume retry heals it).
 
-## Adding a provider / runner
+## Adding a runner
 
 1. New adapter file implementing the port (copy the closest existing one).
 2. One line in `registry.py`'s table.
-3. Unit test with a fake transport (`httpx.MockTransport`) or fake `exec_fn` — see
-   `tests/test_llm_openai_compat.py` / `tests/test_llm_claude_code.py`.
+3. Unit test with a fake `exec_fn` — see `tests/test_llm_claude_code.py`.
 
 ## Codex subscription authentication (compose)
 

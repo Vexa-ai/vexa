@@ -47,12 +47,10 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   contract task.v1
   contract tool.v1
   contract unit.v1
-  contract processed-notes.v1
   contract workspace.v1
   service agent-worker
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in
-  data-asset proc-stream [writers: agent-worker]
   data-asset va-chat
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
@@ -97,7 +95,6 @@ edges:
   agent-api -read-> tc-stream
   gateway -read-> tc-mutable
   terminal -read-> tc-stream
-  terminal -read-> proc-stream
   terminal -read-> out-stream
   bot -write-> recording-blob
   bot -read-write-> userdata-blob  # restore session before launch (read) + write rotated session back on clean teardown (write)
@@ -120,7 +117,6 @@ edges:
   agent-api -read-> out-stream  # SSE relay (/api/chat, /api/meeting/stream)
   agent-worker -read-> tc-stream  # copilot tails transcript
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
-  agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync
@@ -142,5 +138,5 @@ edges:
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 
 flows:
-  live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative -> aw-proc -> terminal-reads-processed
+  live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative
   dispatch-flow: aa-runtime -> workers-deployed -> aw-unitout -> aa-unitout

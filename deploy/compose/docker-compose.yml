@@ -283,7 +283,6 @@ services:
       # agent-api and X-User-Id is always present — then a missing header fails closed (401).
       - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
-      - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
       # `environment:` entry interpolates the AMBIENT SHELL first, so a host `export ANTHROPIC_BASE_URL`
