@@ -100,7 +100,14 @@ MACHINERY_NOTE = (
     # Reading is how the job is done, not part of the job; announcing it teaches the reader only
     # that they are waiting.
     "Read whatever you need silently: the FIRST sentence you emit is addressed to the person, and "
-    "you never narrate your own tool use.")
+    "you never narrate your own tool use. "
+    # TEMPLATES ARE SHAPES. An agent read `kg/templates/person.md` as if it described somebody and
+    # created a real entity from the example inside it; a person was then shown a template rendered
+    # as their own document. Both are the same mistake — a shape treated as a fact — and it is worth
+    # one sentence on every turn rather than a rule in one preset.
+    "Anything marked `template: true`, and anything under `kg/templates/`, is a SHAPE and never a "
+    "fact: copy it to make a new record, never cite it, never name it to a person, and never treat "
+    "the example inside it as somebody real.")
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
 

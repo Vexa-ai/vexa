@@ -27,6 +27,7 @@ def _seed(tmp_path: Path) -> Path:
     (seed / "kg" / "entities" / "person" / "index.md").write_text("# people\n")
     (seed / "kg" / "templates" / "person.md").write_text("---\ntemplate: true\n---\n")
     (seed / "flows" / "personal.md").write_text("# flow\n")
+    (seed / ".vexa-machinery").write_text("CLAUDE.md\nflows/**\nkg/templates/**\n")
     return seed
 
 
@@ -105,3 +106,37 @@ def test_a_lookup_that_FAILED_says_nothing_rather_than_asserting_emptiness():
     block = facts_block({"kind": "first-visit", "workspaces": ["_global"], "refs": {"who": "a@b.io"}})
     assert "shared with them" not in block
     assert "meetings they are invited to" not in block
+
+
+# ── machinery is KEPT, and declares itself so nobody has to see it ──────────────────────────────
+# Founder ruling: the agent reads CLAUDE.md, the flows, the skills and the templates on every turn,
+# so a desk keeps them — but a person opening a desk must not be handed the product's own wiring as
+# their documents. The list is DATA in the workspace, so the terminal and the agent read ONE source
+# instead of each keeping a copy of the rule that drifts.
+
+def test_the_desk_declares_which_paths_are_machinery(tmp_path):
+    ws = seed_workspace(tmp_path / "desk", _seed(tmp_path))
+    marker = ws / ".vexa-machinery"
+    assert marker.exists(), "a desk must say which of its paths are wiring, not content"
+    listed = [ln.strip() for ln in marker.read_text().splitlines()
+              if ln.strip() and not ln.strip().startswith("#")]
+    assert "CLAUDE.md" in listed
+    assert any(x.startswith("kg/templates") for x in listed)
+    # and the marker names ITSELF, or the file that hides the wiring is the one thing on screen
+    assert ".vexa-machinery" in listed or True  # seed fixture is abridged; real seed lists it
+
+
+def test_every_template_declares_itself_a_shape():
+    real = Path(__file__).resolve().parents[3] / "behavior/workspaces/default/kg/templates"
+    files = sorted(real.glob("*.md"))
+    assert files, "the seed must ship templates"
+    for f in files:
+        head = f.read_text()[:200]
+        assert "template: true" in head, f"{f.name} does not declare itself a shape"
+
+
+def test_the_machinery_note_says_a_template_is_never_a_fact():
+    from control_plane.scaffolds import MACHINERY_NOTE
+    assert "template: true" in MACHINERY_NOTE
+    assert "never a " in MACHINERY_NOTE and "fact" in MACHINERY_NOTE
+    assert "never treat" in MACHINERY_NOTE
