@@ -123,6 +123,17 @@ DEFAULTS: dict[str, str] = {
 }
 
 
+def mailbox_address() -> str:
+    """THE address a person adds to their meetings, from the deployment that actually watches it.
+
+    A DEPLOYMENT FACT, never a guess and never the address a mail was sent FROM — on this stack
+    those differ, and the send-from box is not watched. It is read from the same `VEXA_MAIL_ADDR`
+    the inbound poller answers as, so the sentence we tell people to use and the mailbox we read
+    cannot drift apart: there is one value and both sides take it from there."""
+    import os
+    return (os.environ.get("VEXA_MAIL_ADDR") or "").strip() or "the Vexa mailbox for this deployment"
+
+
 def company_name(uid: str) -> str:
     """WHO THIS VEXA BELONGS TO, read from the company layer the admin wrote.
 
@@ -170,7 +181,8 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
     subject, body = _split(raw)
     fill = {"company": company_name(uid), "service": SERVICE_SENTENCE,
-            "visibility": VISIBILITY_SENTENCE, "workspace": WORKSPACE_WORD, **(values or {})}
+            "visibility": VISIBILITY_SENTENCE, "workspace": WORKSPACE_WORD,
+            "mailbox": mailbox_address(), **(values or {})}
     for key, val in fill.items():
         token = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")
         subject = token.sub(str(val), subject)
