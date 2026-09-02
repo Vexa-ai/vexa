@@ -96,6 +96,14 @@ class TranscriptStore(Protocol):
         Returns {id, token, ...} once, or ``None`` when the user owns no such meeting."""
         ...
 
+    async def mint_transcript_share_by_id(
+        self, user_id: int, meeting_id: int, *,
+        mode: str = "open", allowed_emails: "Optional[list]" = None, expires_in_sec: int = 86400,
+    ) -> "Optional[dict]":
+        """OWNER-scoped mint addressed by the ROW id — the identity a meeting always has. Same grant and
+        same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
+        ...
+
     async def redeem_transcript_share(
         self, user_id: int, user_email: "Optional[str]", token: str
     ) -> "Optional[dict]":

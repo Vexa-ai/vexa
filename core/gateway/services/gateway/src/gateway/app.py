@@ -114,6 +114,9 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("DELETE", "/meetings/{platform}/{native_meeting_id}"): TX,
     ("PUT", "/meetings/{platform}/{native_meeting_id}/intent"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/annotate"): TX,
+    # Minting a share is the same power on either address shape — the row id and the (platform,
+    # native) pair name the same meeting; only the pair cannot name all of them.
+    ("POST", "/meetings/{meeting_id}/share"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/workspace"): TX,
     # A participants read is meeting DATA, not bot control — same plane as the transcript it is
@@ -123,6 +126,7 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/transcripts/by-id/{meeting_id}"): TX,
     ("GET", "/transcripts/search"): TX,
     ("GET", "/transcripts/{platform}/{native_meeting_id}"): TX,
+    ("POST", "/transcripts/by-id/{meeting_id}/share"): TX,
     ("POST", "/transcripts/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/transcripts/share/accept"): TX,
     # --- recordings (unchanged: the sealed table already accepted either domain) ---
@@ -565,6 +569,13 @@ def create_app(
     # shape ({id, token, mode, expires_at}), NOT the sealed TranscriptShareResponse public-URL shape
     # ({share_id, url, expires_at, expires_in_seconds}) — the public-URL-share backend is gone; only
     # the capability-token share exists. See the PR's "signed gaps" section.
+    # by-ROW-id share alias, mirroring the `transcripts/by-id` read above so a client that knows a
+    # meeting only as a row id has one path shape for both. Declared BEFORE the {platform}/{native}
+    # form so `by-id` is not captured as a platform name.
+    @app.post("/transcripts/by-id/{meeting_id}/share")
+    async def mint_transcript_share_by_id_alias(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+
     @app.post("/transcripts/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
@@ -646,6 +657,16 @@ def create_app(
         return await _forward(
             "POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/annotate"), request
         )
+
+    # Mint by ROW id — the identity a meeting always has. The (platform, native) pair is not one: a
+    # row planned from an invite whose url matched no platform is platform='unknown' with an empty
+    # native, so the pair route below 404s on it and the caller (the attendee-mail fan-out) shipped
+    # links with no capability. Three segments against the pair route's four, so on segment count
+    # alone neither shadows the other — the same property the by-ROW-id notes above rely on. Same
+    # _forward, so the same auth/identity header prep (X-User-Id, X-User-Email, X-User-Workspaces).
+    @app.post("/meetings/{meeting_id}/share")
+    async def mint_transcript_share_by_id(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
 
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):

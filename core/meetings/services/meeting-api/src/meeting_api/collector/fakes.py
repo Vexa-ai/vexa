@@ -318,22 +318,34 @@ class InMemoryTranscriptStore:
         self._meetings[mid]["data"]["workspace_id"] = workspace_id
         return workspace_id
 
+    def _mint_share_on(self, mid, mode, allowed_emails, expires_in_sec):
+        """The grant, once, for both address shapes — mirrors the SqlAlchemy store's ``_mint_share_on``."""
+        from .adapters import _build_share_grant
+
+        if mid is None or mid not in self._meetings:
+            return None
+        grant, secret = _build_share_grant(mode, allowed_emails, expires_in_sec)
+        self._meetings[mid]["data"].setdefault("share_grants", []).append(grant)
+        return {"id": grant["id"], "token": f"{mid}.{secret}",
+                "mode": mode, "expires_at": grant["expires_at"]}
+
     async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
                                     mode="open", allowed_emails=None, expires_in_sec=86400):
-        from datetime import timedelta
+        return self._mint_share_on(self._find(user_id, platform, native_meeting_id),
+                                   mode, allowed_emails, expires_in_sec)
 
-        from .adapters import _now, _sha
-        mid = self._find(user_id, platform, native_meeting_id)
-        if mid is None:
+    async def mint_transcript_share_by_id(self, user_id, meeting_id, *,
+                                          mode="open", allowed_emails=None, expires_in_sec=86400):
+        """Owner-scoped by primary key. A row that is not this caller's reads exactly like one that
+        does not exist — the store never tells a non-owner that an id is taken."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
             return None
-        import secrets
-        secret = secrets.token_urlsafe(24)
-        gid = secrets.token_hex(8)
-        expires_at = (_now() + timedelta(seconds=int(expires_in_sec))).isoformat()
-        grant = {"id": gid, "secret_hash": _sha(secret), "mode": mode,
-                 "allowed_emails": list(allowed_emails or []), "expires_at": expires_at, "revoked": False}
-        self._meetings[mid]["data"].setdefault("share_grants", []).append(grant)
-        return {"id": gid, "token": f"{mid}.{secret}", "mode": mode, "expires_at": expires_at}
+        row = self._meetings.get(mid)
+        if row is None or row.get("user_id") != user_id:
+            return None
+        return self._mint_share_on(mid, mode, allowed_emails, expires_in_sec)
 
     async def redeem_transcript_share(self, user_id, user_email, token):
         from .adapters import _sha, validate_transcript_grant

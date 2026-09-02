@@ -59,6 +59,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _build_share_grant(mode: str, allowed_emails, expires_in_sec: int) -> "tuple[dict, str]":
+    """The share-grant record and its one-time secret. ONE definition, because there are now two
+    ways to address the meeting it is minted on — the (platform, native) pair and the ROW id — and
+    two copies of the hash-at-rest shape would be two places to get the hashing wrong."""
+    from datetime import timedelta
+
+    secret = secrets.token_urlsafe(24)
+    grant = {
+        "id": secrets.token_hex(8),
+        "secret_hash": _sha(secret),
+        "mode": mode,
+        "allowed_emails": list(allowed_emails or []),
+        "expires_at": (_now() + timedelta(seconds=int(expires_in_sec))).isoformat(),
+        "revoked": False,
+    }
+    return grant, secret
+
+
 def _iso_utc(dt) -> Optional[str]:
     """UTC ISO-8601 (``…Z``) for a naive-or-aware datetime. The meeting time columns are naive but
     hold UTC (the DB session is UTC); a bare ``isoformat()`` is zone-less, so a browser's ``new Date()``
@@ -716,38 +734,69 @@ class SqlAlchemyTranscriptStore:
             await db.commit()
             return workspace_id
 
-    async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
-                                    mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
-        """OWNER-scoped: mint an INDEPENDENT transcript share grant (no workspace needed). Stored in
-        ``data.share_grants[]`` as {id, secret_hash, mode, allowed_emails, expires_at, revoked} — only the
-        HASH, never the token. Returns {id, token, ...} ONCE (token = ``<meeting_id>.<secret>`` so redeem
-        resolves the meeting). None if the caller owns no such meeting."""
-        from datetime import timedelta
-
-        from sqlalchemy import select
+    async def _mint_share_on(self, stmt, *, mode, allowed_emails, expires_in_sec) -> "Optional[dict]":
+        """Mint a grant onto whichever ONE row ``stmt`` selects. The two public mints differ only in
+        how they address the meeting; everything after the row is identical."""
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .models import Meeting
-
         async with self._session_factory() as db:
-            stmt = (select(Meeting).where(
-                Meeting.user_id == user_id, Meeting.platform == platform,
-                Meeting.platform_specific_id == native_meeting_id,
-            ).order_by(Meeting.created_at.desc()).limit(1).with_for_update())
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
-            secret = secrets.token_urlsafe(24)
-            gid = secrets.token_hex(8)
-            expires_at = (_now() + timedelta(seconds=int(expires_in_sec))).isoformat()
-            grant = {"id": gid, "secret_hash": _sha(secret), "mode": mode,
-                     "allowed_emails": list(allowed_emails or []), "expires_at": expires_at, "revoked": False}
+            grant, secret = _build_share_grant(mode, allowed_emails, expires_in_sec)
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             data["share_grants"] = list(data.get("share_grants", [])) + [grant]
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
-            return {"id": gid, "token": f"{meeting.id}.{secret}", "mode": mode, "expires_at": expires_at}
+            return {"id": grant["id"], "token": f"{meeting.id}.{secret}",
+                    "mode": mode, "expires_at": grant["expires_at"]}
+
+    async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
+                                    mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
+        """OWNER-scoped: mint an INDEPENDENT transcript share grant (no workspace needed). Stored in
+        ``data.share_grants[]`` as {id, secret_hash, mode, allowed_emails, expires_at, revoked} — only the
+        HASH, never the token. Returns {id, token, ...} ONCE (token = ``<meeting_id>.<secret>`` so redeem
+        resolves the meeting). None if the caller owns no such meeting.
+
+        Addressed by the (platform, native) PAIR, which is not a reliable identity: a row planned from
+        an invite whose url no platform matched carries ``platform='unknown'`` and an EMPTY
+        ``platform_specific_id``, so no pair addresses it at all (meeting 97, 2026-09-02 — every
+        attendee mail for it shipped with no token). Prefer ``mint_transcript_share_by_id``; this one
+        stays because 0.10 clients and the ``/transcripts/{platform}/{native}/share`` alias call it."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        return await self._mint_share_on(
+            select(Meeting).where(
+                Meeting.user_id == user_id, Meeting.platform == platform,
+                Meeting.platform_specific_id == native_meeting_id,
+            ).order_by(Meeting.created_at.desc()).limit(1).with_for_update(),
+            mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
+
+    async def mint_transcript_share_by_id(self, user_id, meeting_id, *,
+                                          mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
+        """OWNER-scoped mint addressed by the ROW's primary key — the identity that always exists.
+
+        Same grant, same hash-at-rest, same one-time token shape as the pair-keyed mint above; the
+        only difference is the WHERE. Scoped to ``user_id`` so a row the caller does not own is
+        indistinguishable from one that does not exist (404 either way) — minting a capability is an
+        owner act, and a share route that leaked existence would be worse than one that leaked
+        nothing. No ``order_by``: a primary key selects exactly one row or none."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        return await self._mint_share_on(
+            select(Meeting).where(
+                Meeting.id == mid, Meeting.user_id == user_id,
+            ).limit(1).with_for_update(),
+            mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
 
     async def redeem_transcript_share(self, user_id, user_email, token) -> "Optional[dict]":
         """Redeem a transcript share token (any authenticated user) → grants THIS user subscribe access to
