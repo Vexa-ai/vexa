@@ -21,7 +21,7 @@ Five properties:
      first `cap` addresses in invite order. An empty room from a matcher that could not do its job
      is a silent loss of the whole feature and looks exactly like a meeting where nobody spoke.
   4. THE CAP is `room_read_max`, default 12.
-  5. THE DISPATCH carries `room_meeting_id` (the ROW id), `room_read`, `participant_names` and
+  5. THE DISPATCH carries `room_meeting_id` (the ROW id), `room_participants`, `room_participant_names` and
      `room_read_max`, plus `X-Internal-Secret` — and none of them on any other turn.
 """
 from __future__ import annotations
@@ -240,8 +240,13 @@ def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(mon
     assert seen["body"] == {
         "prompt": "hi", "session": "meet-97",
         "room_meeting_id": "97",                     # the ROW id, as a string
-        "room_read": ["anna.smith@bank.test"],       # ADDRESSES — agent-api resolves identity
-        "participant_names": NAMES,
+        # THE WIRE NAMES ARE agent-api's, not ours. ChatBody is `extra="forbid"`, so a field this
+        # side invents does not degrade to an empty room — it 422s the whole dispatch. These two
+        # were `room_read` / `participant_names` here and `room_participants` /
+        # `room_participant_names` there, written by two workers the same afternoon, and every
+        # post-meeting turn would have failed. Pinned against the receiving contract, not ours.
+        "room_participants": ["anna.smith@bank.test"],   # ADDRESSES — agent-api resolves identity
+        "room_participant_names": NAMES,
         "room_read_max": 12}
     assert seen["headers"]["X-Internal-Secret"] == "s3cr3t"
     assert seen["headers"]["X-User-Id"] == "7"
@@ -307,3 +312,54 @@ def test_the_kick_names_the_desks_it_may_read(monkeypatch):
     assert "anna.smith@bank.test, ben@bank.test" in seen["prompt"]
     assert "READ-ONLY access to the desks" in seen["prompt"]
     assert "never copy a line, a note or a phrase out of one into this report" in seen["prompt"]
+
+# ── the CROSS-SERVICE contract, read off the other service's source ────────────────────────────
+
+def test_every_room_field_flows_sends_is_declared_in_agent_apis_ChatBody():
+    """The bug this exists to prevent actually happened, on 2026-09-02, between two workers.
+
+    flows sent `room_read` + `participant_names`; agent-api's `ChatBody` declared
+    `room_participants` + `room_participant_names`. Both sides had tests. Both suites were green.
+    `ChatBody` is `extra="forbid"`, so the mismatch would not have degraded to an empty room — it
+    would have 422'd EVERY post-meeting dispatch, and the first sign of it would have been the
+    founder's meeting producing nothing.
+
+    A test that pins our own dict against our own constant cannot catch that: it is true no matter
+    what the other service calls things. So this one reads the RECEIVING contract off agent-api's
+    source and asserts we are a subset of it. It is deliberately crude — a regex over a file — and
+    crude is the point: it needs no import of core.agent, no running service, and it fails the
+    moment either side renames a field without the other.
+    """
+    import pathlib
+    import re
+
+    here = pathlib.Path(__file__).resolve()
+    root = next(p for p in here.parents if (p / "core" / "agent").is_dir())
+    api = root / "core" / "agent" / "control_plane" / "api.py"
+    assert api.is_file(), f"agent-api source not found at {api}"
+
+    src = api.read_text()
+    m = re.search(r"class ChatBody\(BaseModel\):(.*?)(?=\nclass )", src, re.S)
+    assert m, "could not find ChatBody in agent-api's api.py"
+    declared = set(re.findall(r"^\s{4}([a-z_][a-z0-9_]*)\s*:", m.group(1), re.M))
+    assert "room_meeting_id" in declared, (
+        "agent-api no longer declares room_meeting_id — the room contract moved; "
+        f"fields now: {sorted(declared)}")
+
+    seen = {}
+    _post = lambda body, headers: seen.update(body=body)  # noqa: E731
+    sent = _room_body_keys()
+    unknown = sent - declared
+    assert not unknown, (
+        f"flows sends room fields agent-api's ChatBody does not declare: {sorted(unknown)}. "
+        f"ChatBody is extra=forbid, so this 422s every post-meeting dispatch rather than "
+        f"degrading. agent-api declares: {sorted(f for f in declared if f.startswith('room'))}")
+
+
+def _room_body_keys() -> set:
+    """The room keys `dispatch_turn` puts on the wire, read off OUR source for the same reason the
+    test above reads theirs — asserting against a hand-copied literal would drift with the code."""
+    import pathlib
+    import re
+    agent_py = pathlib.Path(__file__).resolve().parents[1] / "src" / "flows_steps" / "agent.py"
+    return set(re.findall(r'body\["(room_[a-z_]+)"\]\s*=', agent_py.read_text()))

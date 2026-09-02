@@ -31,12 +31,12 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
       ``meeting_id``      -> ``room_meeting_id``. The caller names ONLY THE MEETING, never a
                              workspace — a caller who could name workspaces could read anybody's
                              desk by naming it. Must be the meetings-domain ROW id.
-      ``read``            -> ``room_read``: the invite's ADDRESSES, in priority order. agent-api
+      ``read``            -> ``room_participants``: the invite's ADDRESSES, in priority order. agent-api
                              resolves each through admin-api and mounts only those that already
                              have a subject AND a desk. **Addresses, not subject ids**: this side
                              deliberately does not resolve identity, so it cannot mint a ghost
                              account, and a person who is not a user is simply skipped there.
-      ``names``           -> ``participant_names``: address -> the invite's ``CN=`` display name,
+      ``names``           -> ``room_participant_names``: address -> the invite's ``CN=`` display name,
                              so the far side never has to guess a person from an email local part.
       ``read_max``        -> ``room_read_max``: the flow's cap, clamped to a server ceiling.
 
@@ -55,9 +55,9 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
         headers["X-Internal-Secret"] = require_internal_secret()
         body["room_meeting_id"] = str(room["meeting_id"])
         if room.get("read"):
-            body["room_read"] = [str(x) for x in room["read"]]
+            body["room_participants"] = [str(x) for x in room["read"]]
         if room.get("names"):
-            body["participant_names"] = dict(room["names"])
+            body["room_participant_names"] = dict(room["names"])
         if room.get("read_max"):
             body["room_read_max"] = int(room["read_max"])
     try:
