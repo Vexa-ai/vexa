@@ -2676,9 +2676,20 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
-def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
-                       token: str = "") -> str:
+def meeting_transcript(meeting_url: str = "", tail: int = 80, since: str = "",
+                       meeting_id: str = "", token: str = "") -> str:
     """The words of a meeting, live while it runs or complete after it ends.
+
+    Address it EITHER by a pasted link (meeting_url) OR by its row id (meeting_id) — the same
+    pair meeting_info / meeting_update / meeting_delete already take, resolved the same way.
+    The row id is the one that matters in practice: every deeplink this product mints speaks row
+    ids (`?meeting=<row>`), the `{{meeting}}` an ask-preset substitutes IS a row id, and a
+    captured meeting with no platform/native pair — a seeded or imported one — had no address
+    at all here. An agent told "you have the meeting" could not read it, because this was the
+    one verb in the family that would not accept what it had been handed.
+
+    TO READ A WHOLE MEETING, pass tail=0: you get every segment. That is what a write-up needs,
+    and the alternative was paging a finished meeting as though it were still running.
 
     TO FOLLOW A LIVE CALL, pass back the `cursor` from your last call as since=<cursor>: you
     get only what has been said since, and the next cursor. Nothing to remember, nothing to
@@ -2689,10 +2700,19 @@ def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
     means the room is quiet; an `error` key means your reader failed. They are opposite facts
     and your person needs to know which."""
     uid = me()
-    platform, mid = _meeting_ref(meeting_url)
-    if not platform:
-        return json.dumps({"error": mid})
-    st, r = _gw_http(uid, "GET", f"/transcripts/{platform}/{mid}")
+    platform = None
+    if meeting_id or not meeting_url:
+        row, err = _resolve_meeting(uid, meeting_url, meeting_id)
+        if not row:
+            return json.dumps({"error": err or "give meeting_url=<link> or meeting_id=<row id>"})
+        mid = row
+        # The gateway already serves this shape; it was simply unreachable from a tool.
+        st, r = _gw_http(uid, "GET", f"/transcripts/by-id/{row}")
+    else:
+        platform, mid = _meeting_ref(meeting_url)
+        if not platform:
+            return json.dumps({"error": mid})
+        st, r = _gw_http(uid, "GET", f"/transcripts/{platform}/{mid}")
     if st != 200:
         return json.dumps({"error": "could not read the transcript", "read_ok": False,
                            "status": st,
@@ -2710,6 +2730,8 @@ def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
         # everything strictly after the cursor. String compare is right for ISO timestamps and
         # for the float-seconds the gateway also emits, as long as both sides come from _at.
         fresh = [g for g in segs if str(_at(g) or "") > str(since)]
+    elif int(tail) <= 0:
+        fresh = segs                      # tail=0 — the WHOLE meeting, for a write-up
     else:
         fresh = segs[-max(1, min(int(tail), 400)):]
 
@@ -2719,7 +2741,12 @@ def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
              for g in fresh if (g.get("text") or "").strip()]
     live = str((r or {}).get("status", "")).lower() in ("active", "requested", "awaiting_admission")
     cursor = str(_at(segs[-1])) if segs else (since or "")
-    return json.dumps({"ui_url": _ui_meeting_url(platform, mid), "meeting": mid,
+    # Addressed by row id there is no platform/native pair to build a UI link from unless the
+    # row carries one — an empty string beats a well-formed link to nothing.
+    _plat = platform or (r or {}).get("platform")
+    _nat = (r or {}).get("native_meeting_id") if platform is None else mid
+    return json.dumps({"ui_url": (_ui_meeting_url(_plat, _nat) if _plat and _nat else ""),
+                       "meeting": mid,
                        "status": (r or {}).get("status"),
                        "read_ok": True,
                        "cursor": cursor,
