@@ -130,20 +130,20 @@ const check = (name: string, cond: boolean, detail?: string) => {
     resolveCsrcInactiveMs('1200', (m) => quiet.push(m));
     check('window: no override and a good override are both silent — only a REJECTION warns',
       quiet.length === 0, JSON.stringify(quiet));
-    // An empty override is what a half-rendered deploy template looks like. Treating it as "not
-    // set" is how a knob gets ignored in silence — the exact failure the warning exists to prevent.
+    // Empty and blank are how compose, helm and lite render an UNSET knob (`${VAR:-}`), and how
+    // every other bot tuning knob reads them: no override, silent — never a false alarm on boot.
     const blank: string[] = [];
-    check('window: an override SET to empty or blank warns too — it is an intent, not an absence',
+    check('window: empty or blank is "unset" — the default, silently (deploy templates render unset knobs as empty)',
       resolveCsrcInactiveMs('', (m) => blank.push(m)) === 800
       && resolveCsrcInactiveMs('   ', (m) => blank.push(m)) === 800
-      && blank.length === 2, JSON.stringify(blank));
+      && blank.length === 0, JSON.stringify(blank));
   }
 }
 
 // ── The real bundle (built by build-browser-utils.mjs — turbo test depends on build) ─────────────
 const BUNDLE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'browser-utils.global.js');
 if (!existsSync(BUNDLE)) {
-  console.error(`❌ missing ${BUNDLE} — build the capture bricks first (pnpm --filter @vexa/mixed-capture-core --filter @vexa/bot build).`);
+  console.error(`❌ missing ${BUNDLE} — build it first (pnpm --filter @vexa/bot build — its bundler names any capture brick still unbuilt).`);
   process.exit(1);
 }
 

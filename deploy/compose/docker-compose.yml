@@ -148,6 +148,9 @@ services:
       - BOT_SPEAKER_CONFIRM_THRESHOLD=${BOT_SPEAKER_CONFIRM_THRESHOLD:-}
       - BOT_SPEAKER_MAX_BUFFER_SEC=${BOT_SPEAKER_MAX_BUFFER_SEC:-}
       - BOT_SPEAKER_IDLE_TIMEOUT_SEC=${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}
+      # Teams CSRC transport-sensor inactivity window (ms). Empty keeps the bot's measured 800 ms;
+      # runtime forwards a set value to spawned bots (see docs/configuration).
+      - VEXA_CSRC_INACTIVE_MS=${VEXA_CSRC_INACTIVE_MS:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be

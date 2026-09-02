@@ -131,6 +131,32 @@ const receiver = (sources: () => ContributingSourceLike[]) => ({
   poll.destroy();
 }
 
+// ── an unusable window never reaches the comparisons ────────────────────────────────────────
+// NaN makes both liveness comparisons false: every source would re-activate and re-deactivate on
+// every poll. The sensor is the point of introduction, so it is the sensor that refuses it.
+{
+  for (const bad of [Number.NaN, 50, Number.POSITIVE_INFINITY]) {
+    let t = 1_900_000_000_000;
+    const out: CsrcTransition[] = [];
+    const logs: string[] = [];
+    const poll = createCsrcPoll({
+      onTransition: (x) => out.push(x),
+      now: () => t,
+      timeOrigin: () => 0,
+      inactiveMs: bad,
+      log: (m) => logs.push(m),
+      // always 200 ms stale: inside the 400 ms default, so a healthy sensor holds ONE activation
+      receivers: () => [receiver(() => [{ source: 11, timestamp: t - 200, audioLevel: 0.4 }])],
+    });
+    poll.poll(); t += 100; poll.poll(); t += 100; poll.poll();
+    check(`unusable inactiveMs=${String(bad)}: falls back to the default — one activation, no flip-flop`,
+      out.length === 1 && out[0].active === true, JSON.stringify(out));
+    check(`unusable inactiveMs=${String(bad)}: is said through log`,
+      logs.some((m) => m.includes('not a usable window')), JSON.stringify(logs));
+    poll.destroy();
+  }
+}
+
 // ── two concurrent sources ──────────────────────────────────────────────────────────────────────
 {
   let t = 1_900_000_000_000;

@@ -393,24 +393,26 @@ const CSRC_MAX_INACTIVE_MS = 10_000;
  * observed contribution. One name, so the fallback, the message and the default cannot drift.
  *
  * The sensor's own default is 400 ms (`CSRC_INACTIVE_MS` in @vexa/mixed-capture-core) — a value
- * sized to span a packet gap. A speech PAUSE is longer: entry-timestamp staleness during natural
- * pauses measures p50 550 ms, so at 400 ms the MEDIAN pause trips a synthesized deactivation and
- * one speech phase fragments into splinters. Against the current channelizer (5 × 30 min seeded
- * tapes): 400 ms yields 1.67 lane activations per real turn (67 % over-splitting), 800 ms yields
- * 1.13 — the knee — for 1.8 pp more contamination; 1600 ms starts merging distinct turns. So the
+ * sized to span a packet gap. A speech PAUSE is longer. Measured in a downstream deployment on
+ * real Teams sessions and replayed through the Teams CSRC channelizer (#1383 carries the
+ * measurement; it is not reproduced in this tree): entry-timestamp staleness during natural
+ * pauses is p50 550 ms, so at 400 ms the MEDIAN pause trips a synthesized deactivation and one
+ * speech phase fragments; 400 ms yields 1.67 lane activations per real turn, 800 ms yields 1.13 —
+ * the knee — for 1.8 pp more contamination; 1600 ms starts merging distinct turns. So the
  * production window is 800 ms.
  *
  * The number lives HERE, at the composition root; the sensor owns the `inactiveMs` seam and its
- * packet-gap default, nothing more. Overridable via VEXA_CSRC_INACTIVE_MS where the bot process
- * env is operator-controlled: the runtime kernel forwards it to spawned bots (profiles.py's
- * tuning allowlist), and the lite/process backend inherits the host env directly.
+ * packet-gap default, nothing more. Overridable via VEXA_CSRC_INACTIVE_MS: the deployment renders
+ * it onto the runtime (compose, helm `runtime.csrcInactiveMs`, lite — see docs/configuration),
+ * the runtime kernel forwards it to spawned bots through profiles.py's tuning allowlist, and the
+ * lite/process backend inherits the host env directly.
  */
 const CSRC_DEFAULT_INACTIVE_MS = 800;
 export function resolveCsrcInactiveMs(raw: string | undefined, warn: (m: string) => void = () => { /* silent */ }): number {
-  // `undefined` is "no override", which is the normal case and silent. An override that was SET —
-  // including an empty or blank one, which is what a half-finished deploy template looks like — is
-  // an intent that could not be honoured, and gets said out loud.
-  if (raw === undefined) return CSRC_DEFAULT_INACTIVE_MS;
+  // Unset and blank are both "no override": compose, helm and lite render an UNSET knob as an
+  // empty string (`${VAR:-}`), and every other bot tuning knob reads it that way. A NON-blank value
+  // is an intent — usable ⇒ honoured; unusable ⇒ said out loud and replaced by the measured default.
+  if (raw === undefined || raw.trim() === '') return CSRC_DEFAULT_INACTIVE_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < CSRC_MIN_INACTIVE_MS || n > CSRC_MAX_INACTIVE_MS) {
     warn(`[bot] VEXA_CSRC_INACTIVE_MS=${JSON.stringify(raw)} is not a usable window (finite, ${CSRC_MIN_INACTIVE_MS}..${CSRC_MAX_INACTIVE_MS}ms) — using the measured ${CSRC_DEFAULT_INACTIVE_MS}ms`);

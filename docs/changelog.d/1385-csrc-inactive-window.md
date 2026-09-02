@@ -1,7 +1,8 @@
-- **Teams CSRC lanes stop fragmenting on natural speech pauses (#1383).** The transport sensor's
-  400 ms inactivity window spans a packet gap, not a speech pause — the median pause (p50 ≈ 550 ms)
-  already tripped a synthesized deactivation, splitting one speaker turn into ~1.7 lane activations.
-  The composition root now passes the measured 800 ms window (the knee: 1.13 activations/turn),
-  overridable via `VEXA_CSRC_INACTIVE_MS` where the bot process env is operator-controlled; an
-  unusable override (empty, NaN, below one 100 ms poll, above 10 s) warns and falls back to the
-  measured default instead of silently poisoning the sensor.
+- **Teams CSRC: the bot now composes an 800 ms transport-sensor inactivity window (#1383).** The
+  sensor's built-in 400 ms spans a packet gap, not a speech pause; the composition root now passes
+  a measured 800 ms window through the sensor's own `inactiveMs` seam. Overridable per deployment
+  via `VEXA_CSRC_INACTIVE_MS` (compose, helm `runtime.csrcInactiveMs`, lite; forwarded to spawned
+  bots — see [Configuration](/configuration)); a non-blank unusable value (NaN, below one 100 ms
+  poll, above 10 s) warns and falls back to 800 ms, and the sensor itself now refuses an unusable
+  window from any caller. The fragmentation reduction (≈1.7 → ≈1.1 lane activations per turn) is a
+  downstream measurement; the upstream live leg stays open on #1383.
