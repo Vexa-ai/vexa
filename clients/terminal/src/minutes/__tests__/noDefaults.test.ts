@@ -99,3 +99,50 @@ describe("F36/F37 — and so are the mechanisms that carried them", () => {
     expect(hits).toEqual([]);
   });
 });
+
+/** F97 — A URL MUST NOT BE ABLE TO DRIVE THE AGENT'S FIRST TURN (decisions 13 / 18).
+ *
+ *  The `?s=` scaffold path obeyed this; the surviving `?ask=` hand link did not. The terminal read
+ *  the preset itself and substituted `?meeting=` and `?ws=` straight into the composed opening
+ *  (`MinutesShell.tsx:1012, 1039, 1042`), so a crafted `/?ask=prep&meeting=<payload>` put
+ *  attacker-chosen words into the first thing the model was asked.
+ *
+ *  READ THE SOURCE, for the same reason the file above does: the ruling is that client-side
+ *  composition is DELETED, not merely unreachable. A behavioural test proves one route is clean
+ *  today; it says nothing about a substitution sitting in a branch waiting for the next refactor.
+ */
+describe("F97 — the client composes no prompt text", () => {
+  const src = sourceFiles(join(__dirname, "..", ".."));
+  const shell = readFileSync(join(__dirname, "..", "MinutesShell.tsx"), "utf8");
+
+  it("the shell substitutes NOTHING into an opening — no `{{token}}` replacement anywhere in it", () => {
+    // the whole `.replace(/\{\{\s*meeting\s*\}\}/g, ref)` family is gone
+    expect(shell).not.toMatch(/\{\{\s*\\s\*/);
+    expect(shell).not.toMatch(/replace\(\s*\/\\\{\\\{/);
+    for (const token of ["meeting", "ws", "title", "when", "state", "today", "workspace"]) {
+      expect(shell).not.toContain(`{{${token}}}`);
+    }
+  });
+
+  it("no source file builds an opening out of the URL's `?meeting=` or `?ws=`", () => {
+    // `intent.ws` was forwarded into the mount set and `intent.meeting` into the text; neither may
+    // reach a prompt. The hand link now sends two NAMES to the server and takes back an id.
+    for (const f of src) {
+      const body = readFileSync(f, "utf8");
+      expect(body, `${f} substitutes a {{token}} client-side`).not.toMatch(/replace\([^)]*\{\{/);
+    }
+  });
+
+  it("the hand link MINTS instead — it posts names, never text", () => {
+    expect(shell).toContain("/api/scaffolds/hand");
+    // exactly two fields go up, and both are names
+    expect(shell).toMatch(/JSON\.stringify\(\{\s*preset:[^}]*meeting:[^}]*\}\)/);
+    // and it hands off to the one composition path rather than opening a chat itself
+    expect(shell).toMatch(/window\.location\.replace\(`\/\?s=/);
+  });
+
+  it("`localScaffold` — the client-side scaffold constructor — is gone from the shell", () => {
+    // it existed only to let the hand link compose a record in the browser
+    expect(shell).not.toContain("localScaffold");
+  });
+});

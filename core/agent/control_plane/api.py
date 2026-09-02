@@ -411,6 +411,21 @@ class ScaffoldMintBody(BaseModel):
     provenance: Optional[dict] = None          # flow, reaction/run id, minted_by (the fact's admitted_by)
 
 
+class ScaffoldHandBody(BaseModel):
+    """`POST /api/scaffolds/hand` — a HAND LINK (`/?ask=<preset>&meeting=<row>`) turned into a record.
+
+    Two fields, both NAMES, neither prompt text — the same rule as the internal mint and for the same
+    reason (PRD 6, decisions 13/18): a URL must never be able to drive somebody's agent. What made
+    this route necessary is that the terminal used to substitute `?meeting=`/`?ws=` straight into the
+    composed opening, so a crafted link put attacker-chosen text into the first turn.
+
+    There is deliberately NO `who`: the recipient is the SIGNED-IN CALLER, taken from the session.
+    A field would let anyone who can reach this route mint a first turn for somebody else."""
+    model_config = {"extra": "forbid"}
+    preset: str                                # a preset NAME in _global/asks/, never text
+    meeting: Optional[str] = None              # a meetings-domain ROW id the CALLER can see, or None
+
+
 class ResetBody(BaseModel):
     """Body for POST /api/chat/reset — the docs (api/agent.mdx) say it's just ``{session?}``. reset only
     needs the session; ``prompt``/``subject``/``active`` are accepted-and-ignored so a client reusing the
@@ -1964,6 +1979,38 @@ def create_app(
             return True
         return bool(global_layer.is_admin(settings, str(subject)))
 
+    def _compose_and_mint(*, who: str, subject: str, kind: str, opening: str, fm: dict,
+                          mid: str, mounts: list, group, refs_in, tabs, focus, provenance) -> dict:
+        """Build the record and mint it. ONE composition, both mint routes.
+
+        Factored when the hand-link route landed: two routes composing the same record from the same
+        helpers is how the halves of one contract drift, and the fields that would drift here are
+        the ones that decide what an agent is told about a person."""
+        refs = dict(refs_in or {})
+        # THE RECIPIENT'S OWN ADDRESS IS A FACT OF THE TURN, and the derived domain is the only
+        # anchor a first setup conversation has. Both are computed HERE, from `who`, rather than
+        # asked of the caller: the mint already knows the address (it is the record's identity), and
+        # a caller that had to pass them could pass a different pair than the one the record is
+        # bound to. `domain` is "" for a placeholder like `.test` — see scaffolds.company_domain —
+        # which the preset reads as "no signal", so it asks cold instead of naming a fake company.
+        refs.setdefault("who", who)
+        domain = scaffolds_mod.company_domain(who)
+        if domain:
+            refs.setdefault("domain", domain)
+        refs["state"] = {"desk": scaffolds_mod.desk_state(wsr.root, subject) if subject else "new",
+                         "group": scaffolds_mod.group_state(wsr.root, group)}
+        return scaffolds.mint({
+            "who": who,
+            "kind": kind,
+            "meeting": mid or None,
+            "workspaces": mounts,
+            "refs": refs,
+            "opening": opening,
+            "tabs": tabs if tabs is not None else scaffolds_mod.frontmatter_list(fm, "tabs"),
+            "focus": focus if focus is not None else (fm.get("focus") or ""),
+            "provenance": dict(provenance or {}),
+        })
+
     @app.post("/internal/scaffolds", status_code=201)
     def mint_scaffold(body: ScaffoldMintBody, request: Request):
         """Mint one scaffold and return `{id, url}` — the INTERNAL tier only (flows and the rig).
@@ -2050,30 +2097,11 @@ def create_app(
                             existing["id"], who)
                 return {"id": existing["id"], "url": f"{ui}/?s={existing['id']}"}
 
-        refs = dict(body.refs or {})
-        # THE RECIPIENT'S OWN ADDRESS IS A FACT OF THE TURN, and the derived domain is the only
-        # anchor a first setup conversation has. Both are computed HERE, from `who`, rather than
-        # asked of the caller: the mint already knows the address (it is the record's identity), and
-        # a caller that had to pass them could pass a different pair than the one the record is
-        # bound to. `domain` is "" for a placeholder like `.test` — see scaffolds.company_domain —
-        # which the preset reads as "no signal", so it asks cold instead of naming a fake company.
-        refs.setdefault("who", who)
-        domain = scaffolds_mod.company_domain(who)
-        if domain:
-            refs.setdefault("domain", domain)
-        refs["state"] = {"desk": scaffolds_mod.desk_state(wsr.root, subject) if subject else "new",
-                         "group": scaffolds_mod.group_state(wsr.root, group)}
-        rec = scaffolds.mint({
-            "who": who,
-            "kind": body.kind,
-            "meeting": mid or None,
-            "workspaces": mounts,
-            "refs": refs,
-            "opening": str(body.opening),
-            "tabs": body.tabs if body.tabs is not None else scaffolds_mod.frontmatter_list(fm, "tabs"),
-            "focus": body.focus if body.focus is not None else (fm.get("focus") or ""),
-            "provenance": dict(body.provenance or {}),
-        })
+        rec = _compose_and_mint(
+            who=who, subject=subject, kind=body.kind, opening=str(body.opening), fm=fm,
+            mid=mid, mounts=mounts, group=group, refs_in=body.refs,
+            tabs=body.tabs, focus=body.focus, provenance=body.provenance,
+        )
         # The link carries the ID and, when the meeting is not the recipient's own, the capability
         # that makes it visible. NOTHING ELSE: no preset name, no mount list, no prompt text. What a
         # person forwards is an id bound to their address and a share bound to theirs.
@@ -2086,6 +2114,80 @@ def create_app(
                     rec["id"], rec["kind"], who, rec.get("meeting"), mounts, rec["opening"],
                     bool(body.share_token))
         return {"id": rec["id"], "url": url}
+
+    @app.post("/api/scaffolds/hand", status_code=201)
+    def mint_hand_scaffold(body: ScaffoldHandBody, request: Request):
+        """A hand link becomes a record, minted FOR THE CALLER, and the client composes nothing.
+
+        `/?ask=<preset>&meeting=<row>` is the one composition path the scaffold work left standing,
+        and it was still being composed in the browser: the terminal read the preset and substituted
+        `?meeting=` and `?ws=` into the opening text. A URL that reaches the model is the thing
+        decision 13 forbids — the URL carries NAMES, never prompt text — and the `?s=` path obeyed
+        it while this one did not. So the hand link mints here and redirects to `/?s=<id>`, and the
+        substitution happens where every other scaffold's does: server-side, at turn time, out of
+        the RECORD (`scaffolds.turn_prompt`), never out of the address bar.
+
+        THREE THINGS THIS ROUTE REFUSES, and each is the whole point of it existing:
+
+          · a preset that is not a NAME in `_global/asks/` — `read_preset` decides, exactly as the
+            internal mint does, so there is one definition of what an opening may be;
+          · a `who` other than the caller — there is no such field. The recipient is the session's
+            own subject and address, so a link cannot mint a first turn for somebody else;
+          · a meeting the caller cannot see. `_meeting_owner_lookup` is owner-only and fail-closed,
+            so a crafted `?meeting=<someone else's row>` mints NOTHING rather than a record carrying
+            another meeting's title and attendees into this person's opening.
+
+        The last one is the subtle half. Even with no text in the URL, an unchecked row id would let
+        a crafted link decide WHICH FACTS the agent is handed — which is the same attack one level
+        down. A hand link may name only a meeting you own; an attendee reaches theirs through the
+        emailed scaffold, which carries its own share."""
+        subject = subject_of(request)
+        if not subject:
+            raise HTTPException(status_code=401, detail="sign in first")
+        # The caller's ADDRESS, gateway-injected and trusted — the same header the chat turn already
+        # attributes commits by, and the gateway strips any client-supplied spelling of it before it
+        # gets here (see the TOPOLOGY BOUNDARY note). A record is bound to an address, so a session
+        # that carries none cannot mint: refusing is honest, guessing one would bind the record to a
+        # person who may not be the caller.
+        who = (request.headers.get("x-user-email") or "").strip()
+        if not who or "@" not in who:
+            raise HTTPException(status_code=409,
+                                detail="this session carries no address, and a scaffold is bound to "
+                                       "one — sign in again")
+        preset = str(body.preset or "").strip()
+        if not scaffolds_mod.NAME_RE.match(preset):
+            raise HTTPException(status_code=400, detail="`preset` must be a preset name")
+        try:
+            fm, _text = scaffolds_mod.read_preset(_global_root(), preset)
+        except scaffolds_mod.ScaffoldError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        ui = (settings.ui_url if settings is not None else "").rstrip("/")
+        if not ui:
+            raise HTTPException(status_code=503, detail="VEXA_UI_URL is not set on agent-api")
+
+        mid = str(body.meeting or "").strip()
+        row = None
+        if mid:
+            row = _meeting_owner_lookup(subject, mid) if mid.isdigit() else None
+            if not isinstance(row, dict):
+                # fail CLOSED and say so: a link naming a meeting this person cannot open is a
+                # broken link, and minting a record without it would answer about the wrong thing.
+                raise HTTPException(status_code=404,
+                                    detail="no such meeting for this account — a hand link may only "
+                                           "name a meeting you can open")
+        group = scaffolds_mod.group_workspace_of(row)
+        mounts = [system_mounts.GLOBAL_SLUG, subject] + ([group] if group else [])
+
+        rec = _compose_and_mint(
+            who=who, subject=subject, kind="hand-link", opening=preset, fm=fm,
+            mid=mid, mounts=mounts, group=group, refs_in=None,
+            tabs=None, focus=None,
+            provenance={"flow": "hand-link", "minted_by": subject},
+        )
+        logger.info("scaffold MINTED (hand) id=%s who=%s meeting=%s opening=%s",
+                    rec["id"], who, rec.get("meeting"), rec["opening"])
+        return {"id": rec["id"], "url": f"{ui}/?s={rec['id']}"}
 
     @app.get("/api/scaffolds/{scaffold_id}")
     def read_scaffold(scaffold_id: str, request: Request):
