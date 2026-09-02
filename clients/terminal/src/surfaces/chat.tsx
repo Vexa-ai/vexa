@@ -712,16 +712,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
-        const loaded: Turn[] = (data.turns ?? [])
+        // COMPACT FIRST, then decide. A stored user turn does not begin with what the reader saw:
+        // agent-api prepends its own grounding, so the raw text opens with "## Referencing
+        // knowledge (always)…" and the person's (or the product's) words start further down.
+        // compactStoredUserText is what strips that — so any test on the SHAPE of an opening has to
+        // run on the compacted form or it silently never matches. It cost this fix one round.
+        const compacted = (data.turns ?? []).map((t) =>
+          t.role === "user" ? { ...t, text: compactStoredUserText(t.text), raw: t.text } : { ...t, raw: t.text });
+        const loaded: Turn[] = compacted
           // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
           // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.
-          .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK) && !t.text.includes(ONBOARDING_REPLY_SEP)))
+          .filter((t) => !(t.role === "user" && t.raw.includes(ONBOARDING_KICKOFF_MARK) && !t.raw.includes(ONBOARDING_REPLY_SEP)))
           // MACHINERY IS NEVER THE PERSON'S SPEECH. A turn the product composed (a `?ask=` preset
           // from an emailed link, a proposal chip's hidden kick) was hidden when it was sent and
           // must stay hidden when it is read back — the founder saw his own prepare kick returned
           // to him as a grey user bubble because nothing marked it. Unconditional, unlike the
           // onboarding filter above: a kick has no "and then the human replied" form.
-          .filter((t) => !(t.role === "user" && t.text.includes(MACHINERY_MARK)))
+          .filter((t) => !(t.role === "user" && t.raw.includes(MACHINERY_MARK)))
           // LEGACY, and dated: every composed opening sent BEFORE the mark existed (2026-09-02) is
           // already in a transcript and would keep surfacing. Those sessions cannot be rewritten —
           // they are the users' own records — so they are recognised by their shape instead, and
@@ -736,10 +743,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             && /^\s*\[[a-z][a-z0-9_-]{0,63}\]\s/.test(t.text)
             // an onboarding reply also opens with a bracketed tag and is long — it is the HUMAN's
             // words wrapped in grounding, and the filter above already decided its fate.
-            && !t.text.includes(ONBOARDING_KICKOFF_MARK)))
+            && !t.raw.includes(ONBOARDING_KICKOFF_MARK)))
           .map((t, i) =>
             t.role === "user"
-              ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
+              ? { id: `h-u-${i}`, role: "user", text: t.text }
               : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
         updateChatState(key, (s) => {
           if (s.loaded || s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
