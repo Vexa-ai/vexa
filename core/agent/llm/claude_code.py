@@ -23,6 +23,39 @@ from llm.errors import looks_like_auth_failure, preflight_provider_guard
 from llm.ports import HarnessExec, harness_subprocess_env
 
 
+# Tools whose SUCCESS means a document now exists that the person should be looking at. The
+# vocabulary is explicit rather than a prefix match: "a tool whose name contains write" would catch
+# a future `workspace_write_policy` or a `write_transcript` and open tabs nobody asked for.
+_WRITER_TOOLS = frozenset({
+    "mcp__vexa__workspace_write",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+})
+
+
+def _written_artifact(tool: str, args: dict) -> "tuple[str, str] | None":
+    """`(workspace, path)` the call is about to write, or None. Read off the ARGUMENTS, at tool-use
+    time, because the result carries only a summary string.
+
+    Two dialects, because two kinds of tool write workspace files:
+      * the MCP verb takes `path` (workspace-relative) and `slug` (empty = the caller's own desk);
+      * the harness tools take an absolute container path under `/workspaces/<slug>/<rel>`.
+    Anything else — a write outside the store, a shape we do not recognise — returns None and no
+    tab is opened. A tab pointing at a path we guessed is worse than no tab: it opens a page that
+    can never load, which is the failure the scaffold's `meeting:note` rule already names."""
+    if tool == "mcp__vexa__workspace_write":
+        rel = str(args.get("path") or "").strip().lstrip("/")
+        slug = str(args.get("slug") or "").strip()
+        return (slug, rel) if rel else None
+    raw = str(args.get("file_path") or args.get("notebook_path") or "").strip()
+    if not raw.startswith("/workspaces/"):
+        return None
+    rest = raw[len("/workspaces/"):]
+    slug, _, rel = rest.partition("/")
+    return (slug, rel) if slug and rel else None
+
+
 def _short(content: object, n: int = 80) -> str:
     s = content if isinstance(content, str) else json.dumps(content, default=str)
     s = " ".join(s.split())
@@ -43,6 +76,9 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     (else the prose doubles). The ``result`` event still carries the full ``reply``.
     """
     streamed_partial = False  # saw any text_delta → don't re-emit the consolidated assistant text
+    # callId -> (workspace, path) for writes still in flight. Per-stream, so a call id can never
+    # collide across turns, and popped on the matching result so nothing accumulates.
+    pending_writes: dict[str, tuple[str, str]] = {}
     for raw in lines:
         raw = raw.strip()
         if not raw:
@@ -66,21 +102,49 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     if not streamed_partial:  # no partials → emit the whole block (back-compat)
                         yield {"type": "message-delta", "text": block["text"]}
                 elif bt == "tool_use":
+                    tool_name = block.get("name", "")
+                    call_id = block.get("id", "")
+                    # THE PANEL FOLLOWS THE WRITE, and the record is what makes it follow (decision
+                    # 18: layout is a function of the chat's state, never of the client's guess).
+                    # The founder watched the agent create a shared workspace and write its README
+                    # while the panel sat on `_global/README.md` — the document it had just made was
+                    # the one thing not on screen. The argument names the file; remember it now,
+                    # because the tool RESULT carries only a summary string and by then the path is
+                    # gone.
+                    if tool_name in _WRITER_TOOLS:
+                        target = _written_artifact(tool_name, block.get("input", {}) or {})
+                        if target:
+                            pending_writes[call_id] = target
                     yield {
                         "type": "tool-call",
-                        "tool": block.get("name", ""),
+                        "tool": tool_name,
                         "args": block.get("input", {}),
-                        "callId": block.get("id", ""),
+                        "callId": call_id,
                     }
         elif t == "user":
             for block in obj.get("message", {}).get("content", []) or []:
                 if block.get("type") == "tool_result":
+                    call_id = block.get("tool_use_id", "")
+                    ok = not block.get("is_error", False)
                     yield {
                         "type": "tool-result",
-                        "callId": block.get("tool_use_id", ""),
-                        "ok": not block.get("is_error", False),
+                        "callId": call_id,
+                        "ok": ok,
                         "summary": _short(block.get("content")),
                     }
+                    # ONLY ON SUCCESS. A failed write must not open a tab: the file is not there,
+                    # and a tab on a path that does not exist is exactly the "page that can never
+                    # load" this stream is careful about elsewhere. `pop` either way, so a failed
+                    # call cannot leave an entry that a later, unrelated result matches.
+                    target = pending_writes.pop(call_id, None)
+                    if target and ok:
+                        workspace, path = target
+                        yield {
+                            "type": "artifact",
+                            "workspace": workspace,
+                            "path": path,
+                            "focus": True,
+                        }
         elif t == "result":
             reply = obj.get("result", "")
             done = {

@@ -161,6 +161,32 @@ def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
             continue
 
 
+def voice_preamble() -> str:
+    """READ SILENTLY. Ships on EVERY turn, for the same reason kg_links does — it is a rule about how
+    the agent speaks, not about what this particular turn is.
+
+    ⚠ It was first written into the composed-opening machinery note (scaffolds.MACHINERY_NOTE), which
+    covers only turns a link composed. The founder then watched a `+` chat narrate its way through
+    the middle of a conversation — "Let me research…", "Let me dig at the source…", "Let me read the
+    actual repo" — because a chat he opened himself is not a composed opening and never saw the rule.
+    A rule about voice that only reaches some turns is a rule about nothing: the person cannot tell
+    which kind of turn they are in, and neither should they have to.
+
+    The step line under the composer already shows the tool and the count. Announcing the same thing
+    in prose is the product saying twice, worse, what it has already said once."""
+    return (
+        "## How you speak\n\n"
+        "Read, search and open whatever you need SILENTLY. Every sentence you emit is addressed to "
+        "the person: never narrate your own tool use — no \"Let me read…\", \"Let me look at…\", "
+        "\"I'll start by…\", \"I've got what I need\". The client already shows which tool is "
+        "running and how many steps have passed, so prose about it is the same fact told twice and "
+        "worse.\n\n"
+        "Keep anything you do say between steps to a minimum, and make it something the person "
+        "gains by reading — a finding, a decision, a question. If the only content is that you are "
+        "still working, say nothing: the step line is saying it already.\n\n"
+    )
+
+
 def kg_links_preamble() -> str:
     """Entity references must be ACTIONABLE in the client. Chat replies and workspace docs render
     ``[[Title]]`` as a clickable entity chip and workspace file paths as links (the terminal resolves
@@ -506,7 +532,8 @@ def run_turn_over_workspace(
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + global_context_preamble(mounts) + prompt
+    turn_prompt = (voice_preamble() + kg_links_preamble() + mounts_preamble(mounts)
+                   + global_context_preamble(mounts) + prompt)
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)
