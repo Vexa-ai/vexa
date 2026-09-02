@@ -11,6 +11,7 @@ import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { ReportTurn } from "./ReportThis";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
@@ -22,6 +23,7 @@ import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingMode
 import { presentError } from "./apiClient";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import type { ChatIntent } from "./chatIntent";
+import { surfaceOf, type FrictionSurface } from "./frictionApi";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -421,13 +423,19 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
   );
 }
 
-function ChatConversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
+function ChatConversation({ turns, busy, empty, surface }: { turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface }) {
   if (turns.length === 0 && empty) return <>{empty}</>;
   return (
     <>
       {turns.map((t, i) => t.role === "user"
         ? <div key={t.id} style={{ marginBottom: 16 }}><div style={userBubble}><ReferenceText text={t.text} /></div></div>
-        : <Conversation key={t.id} turns={[t]} busy={!!busy && i === turns.length - 1} />)}
+        // "REPORT THIS" ON A TURN (PRD decision 33 §2). Only the AGENT's turns carry it: the person
+        // reporting their own sentence is not a rough edge, and an action on every bubble is twice
+        // the chrome for half the meaning. The surface travels with the report — chat, kind, the open
+        // page — so nobody is asked to describe where they were.
+        : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
+            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} />
+          </ReportTurn>)}
     </>
   );
 }
@@ -1332,7 +1340,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           it in a chat he never made — *"I explain this as stale code."*
           What is left renders the meeting greeting when there IS a meeting, and otherwise renders
           nothing but whatever the host put in `emptyExtra`. */}
-      <ChatConversation turns={turns} busy={busy || loading} empty={
+      <ChatConversation turns={turns} busy={busy || loading} surface={surfaceOf(session, activeTab)} empty={
         <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
               ? minutesEmptyGreeting(session)

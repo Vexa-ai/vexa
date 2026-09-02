@@ -50,6 +50,7 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
 # Whoever composes that block appends what this returns.
 from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
+from worker.friction import friction_preamble, report as report_friction, scan_turn, spawn_gap
 
 log = logging.getLogger("agent_api.worker")
 
@@ -970,6 +971,22 @@ def _delegation_dir(work: Path) -> "Path | None":
     return None
 
 
+def _file_spawn_gap(url: str, token: str) -> None:
+    """A toolbelt the dispatch INTENDED and did not get, filed at spawn (ledger F70).
+
+    It is filed here, and not left to the model, for the reason F70 exists: a session with no tools
+    cannot call `report_friction`, so the one failure that silences the reporting channel is the one
+    it can never report. `spawn_gap` returns None for a turn that was never meant to have a toolbelt,
+    so the ordinary un-delegated dispatch files nothing."""
+    try:
+        rec = spawn_gap(url=url, token=token, config_written=False,
+                        subject=os.environ.get("VEXA_OWNER", ""))
+        if rec:
+            report_friction(rec, subject=os.environ.get("VEXA_OWNER", ""))
+    except Exception as e:  # noqa: BLE001 — never worth a turn
+        log.warning("friction: could not file the spawn gap (%s)", e)
+
+
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
 
@@ -997,6 +1014,7 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     url = (os.environ.get("VEXA_MCP_URL") or "").strip()
     token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     if not url or not token:
+        _file_spawn_gap(url, token)
         return None, []
     cfg = {"mcpServers": {VEXA_MCP_SERVER: {
         "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
@@ -1005,6 +1023,7 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     if d is None:
         log.warning("no writable directory for the vexa MCP delegation config — running this turn "
                     "WITHOUT the toolbelt rather than not at all")
+        _file_spawn_gap(url, token)
         return None, []
     path = d / "mcp.json"
     path.write_text(json.dumps(cfg))
@@ -1049,7 +1068,8 @@ def run_turn_over_workspace(
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = (voice_preamble() + kg_links_preamble(mounts) + mounts_preamble(mounts)
+    turn_prompt = (voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
+                   + mounts_preamble(mounts)
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
                    + prompt)
@@ -1071,10 +1091,23 @@ def run_turn_over_workspace(
                                commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
         first = next(gen, None)
     captured: str | None = None
+    # THE TURN'S OWN ROUGH EDGES (PRD decision 33 §1). Only the two event types the scan reads are
+    # kept — a turn's full stream is unbounded and this is a footnote, not a recorder.
+    tool_events: list[dict] = []
     for ev in (gen if first is None else itertools.chain([first], gen)):
+        if ev.get("type") in ("tool-call", "tool-result"):
+            tool_events.append(ev)
         if ev.get("type") == "done" and ev.get("sessionId"):
             captured = ev["sessionId"]
         yield ev
+    # AFTER the stream, never inside it: a report is a footnote to a turn, and a turn must not
+    # stall on one. `report` never raises (see worker/friction.py) — this try is the belt.
+    try:
+        for rec in scan_turn(tool_events, session=session,
+                             subject=os.environ.get("VEXA_OWNER", ""), workspace=work.name):
+            report_friction(rec, subject=os.environ.get("VEXA_OWNER", ""))
+    except Exception as e:  # noqa: BLE001 — a friction report is never worth a turn
+        log.warning("friction: the auto-file scan failed (%s)", e)
     if captured and session_continuity:
         sess_file.parent.mkdir(parents=True, exist_ok=True)
         sess_file.write_text(captured)

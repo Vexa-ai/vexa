@@ -33,6 +33,7 @@ import { isMachineryEntry } from "./machinery";
 import { loadNavOpen, saveNavOpen } from "./navigatorApi";
 import { CreatePageButton, ExtendButton, SelectionExtend, useIntentLanding } from "./ExtendAction";
 import { registry } from "../contributions";
+import { ReportPageButton } from "../surfaces/ReportThis";
 import { header, surface, type as ty } from "./tokens";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
@@ -224,6 +225,11 @@ export function PagesPanel(p: {
                 {/* PRD decision 32.1 — the open page, whole. `docSlug`/`docPath` are the RESOLVED
                     view slot, never the tab label or the crumb (F63). */}
                 <ExtendButton workspace={p.docSlug} path={p.docPath} />
+                {/* PRD decision 33 §2 — this page is wrong, or is not the page I asked for. Same
+                    resolved view slot as Extend, for the same reason (F63): a tab label and a
+                    breadcrumb are display strings, and a report built from one names a file
+                    nobody opened. */}
+                <ReportPageButton workspace={p.docSlug} path={p.docPath} />
                 <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}
                   title="Edit" aria-label="Edit"
                   style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>

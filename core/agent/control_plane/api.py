@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
@@ -78,6 +78,8 @@ from control_plane import workspace_credentials as wcreds
 from control_plane import global_layer
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
+from control_plane import friction as friction_store_mod
+from shared import friction as friction_mod
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
@@ -1139,6 +1141,17 @@ def create_app(
         scaffolds = scaffolds_mod.ScaffoldStore(_redis_for_scaffolds.from_url(redis_url, decode_responses=True))
     else:
         scaffolds = scaffolds_mod.ScaffoldStore()
+    # THE FRICTION STORE (PRD decision 33). Same redis client, same in-memory fallback, and for
+    # the same reasons as the scaffold store — plus one of its own: `shared/friction.py` states why
+    # this record does NOT live in the flows `friction` table the rig has been writing (the people
+    # half posts HERE, and this service cannot reach the flows lane).
+    if redis_url:
+        import redis as _redis_for_friction
+
+        friction = friction_store_mod.FrictionStore(
+            _redis_for_friction.from_url(redis_url, decode_responses=True))
+    else:
+        friction = friction_store_mod.FrictionStore()
     wsr = reader or WorkspaceReader("/workspaces")
     mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     # THE WORKSPACE REGISTRY (PRD decision 26.1) — id → where that workspace is NOW. Same redis
@@ -2256,6 +2269,68 @@ def create_app(
                 # One scaffold whose preset an admin deleted must not empty the whole list.
                 logger.warning("scaffold %s is unrenderable (its preset is gone) — omitted", r.get("id"))
         return {"scaffolds": out}
+
+    # ── ROUGH EDGES (PRD decision 33) ───────────────────────────────────────────────────────────
+    def _friction_subject(request: Request) -> str:
+        """Who filed it, BEST-EFFORT — never a refusal.
+
+        Every other read on this service fails closed without `X-User-Id`, and this one must not.
+        The rig's `report_friction` has always been documented NO ACCOUNT NEEDED, the worker that
+        auto-files may have no principal, and the single most valuable report available is the one
+        from a session so broken it has no identity left. **A friction report we cannot attribute is
+        worth more than one that was never filed**, and refusing it would silence exactly the class
+        of failure this loop exists to catch (ledger F70).
+
+        The exposure is a write with no caller. It is bounded by the record itself: every field is
+        length-capped in `shared/friction.py`, and the dedup key folds a flood of identical reports
+        into ONE row with a counter."""
+        return (request.headers.get("x-user-id") or "").strip()
+
+    @app.post("/api/friction", status_code=201)
+    def file_friction(body: dict, request: Request):
+        """File one rough edge — from an agent (`report_friction`), the harness, or a person's
+        "Report this" (decision 33 §§1–2). Returns the stored record; `recurrence > 1` means this
+        edge was already known and this report is another occurrence of it."""
+        rec = friction.file({**(body or {}), "subject": (body or {}).get("subject")
+                             or _friction_subject(request)})
+        logger.info("friction filed id=%s kind=%s status=%s recurrence=%s tool=%s",
+                    rec.get("id"), rec.get("kind"), rec.get("status"), rec.get("recurrence"),
+                    (rec.get("context") or {}).get("tool") or "-")
+        return {"id": rec["id"], "status": rec["status"], "recurrence": rec["recurrence"],
+                "kind": rec["kind"], "known": rec["recurrence"] > 1}
+
+    @app.get("/api/friction/dump")
+    def dump_friction(request: Request, since: str = "", status: str = "open",
+                      format: str = "md"):
+        """THE DUMP (decision 33 §3) — the open rough edges as a brief a fixing agent works off.
+
+        `format=md` (default) returns the markdown; `format=json` returns the same grouping as data,
+        which is what the rig's `friction_so_far` renders. Both come from ONE renderer in
+        `shared/friction.py`: a dump and a tool that disagree about what is open is the two-renderers
+        failure this codebase has already paid for twice."""
+        subject_of(request)          # a read: identified callers only, like every other read here
+        ts = friction_store_mod.parse_since(since)
+        rows = friction.since(ts, status=status)
+        if format == "json":
+            return {"since": since, "status": status, "count": len(rows),
+                    "findings": friction_mod.group(rows), "records": rows}
+        return Response(content=friction_mod.render_markdown(rows, since=since, status=status),
+                        media_type="text/markdown; charset=utf-8")
+
+    @app.post("/api/friction/{friction_id}/fix")
+    def fix_friction(friction_id: str, body: dict, request: Request):
+        """Close one record against the change that addressed it (decision 33 §4).
+
+        A record filed again after this flips itself to `recurring` — which is why closing is cheap
+        and why a fixing agent should close what it addressed rather than waiting to be sure."""
+        subject_of(request)
+        try:
+            rec = friction.fix(friction_id, str((body or {}).get("fix_ref") or ""))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such friction record")
+        return {"id": rec["id"], "status": rec["status"], "fix_ref": rec["fix_ref"]}
 
     @app.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False, slug: Optional[str] = None):

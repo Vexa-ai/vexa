@@ -4235,10 +4235,24 @@ def _fdb():
 FRICTION_LOG = HOME / ".storm/friction.jsonl"
 
 
+def _friction_post(path: str, body: dict, uid: str = ""):
+    """POST to agent-api's friction surface. Returns (status, body) exactly like `_http`.
+
+    WHY AGENT-API AND NOT THE FLOWS `friction` TABLE THIS FILE USED TO WRITE: the people half of
+    decision 33 ("Report this" in the terminal) posts there, agent-api cannot reach the flows lane
+    (no `~/.storm/dburl` inside a container), the blank script DELETES that table with the rest of
+    the lane, and it has no columns for the context, log pointers, status or fix reference this
+    record needs. The full reasoning is in `core/agent/shared/friction.py`'s module docstring —
+    one store, one owner, and the reasons written down where the record is defined."""
+    return _http("POST", f"{AGENT_API}{path}", {"X-User-Id": uid} if uid else {}, body)
+
+
 @mcp.tool()
 def report_friction(what_i_was_doing: str, what_went_wrong: str,
                     what_would_have_helped: str = "", tool: str = "",
-                    severity: str = "annoyance") -> str:
+                    severity: str = "annoyance",
+                    kind: str = "", workspace: str = "", path: str = "",
+                    meeting_id: str = "", scaffold_id: str = "", error: str = "") -> str:
     """Tell us what did not work. NO ACCOUNT NEEDED. Use this freely and often.
 
     You are the only one who can close this loop. We can see that a call failed; we cannot see
@@ -4250,19 +4264,36 @@ def report_friction(what_i_was_doing: str, what_went_wrong: str,
     behaviour, or a workflow that took five calls when it should have taken one. Half-formed is
     fine — 'I could not tell whether X had worked' is a real report.
 
+    THE IDS ARE THE HALF THAT MAKES IT FIXABLE. Pass whatever you had — `tool`, `workspace`,
+    `path`, `meeting_id`, `scaffold_id`, and the verbatim `error` text. A report without them is
+    still worth filing; a report with them can be reproduced without asking you.
+
+    kind: missing-tool | refusal | no-page | wrong-workspace | unfulfilled | error | ux | other
+    (omit it and it is inferred from what you wrote).
     severity: blocker | annoyance | papercut | idea
 
     Nothing you send is published. It goes to a ledger a human reads."""
     import time as _t
+    uid = _subject() or ""
     rec = {
         "at": _t.time(),
-        "uid": _subject(),
-        "doing": (what_i_was_doing or "")[:900],
-        "wrong": (what_went_wrong or "")[:900],
+        "reporter": "agent",
+        "subject": uid,
+        # NO SESSION ID. The rig is stateless by contract (tests/test_rig_stateless.py: *"nothing
+        # depends on the transport session"*), so the MCP transport's session id is not a fact
+        # about anything — it is empty or meaningless after a restart. The record's `session` is
+        # the CHAT session, which this server does not know; the worker fills it in, and an empty
+        # string here is the honest answer rather than an id that reads as one.
+        "session": "",
+        "kind": kind or "",
+        "tried": (what_i_was_doing or "")[:900],
+        "happened": (what_went_wrong or "")[:900],
         "would_help": (what_would_have_helped or "")[:900],
-        "tool": (tool or "")[:80],
         "severity": severity if severity in ("blocker", "annoyance", "papercut", "idea")
                     else "annoyance",
+        "context": {k: v for k, v in (("tool", tool), ("workspace", workspace), ("path", path),
+                                      ("meeting_id", meeting_id), ("scaffold_id", scaffold_id),
+                                      ("error", error or what_went_wrong)) if v},
     }
     # THE FILE FIRST, ALWAYS. It is the fallback, not the store: if the database is
     # unreachable the report still lands somewhere, and losing feedback because a store was
@@ -4275,24 +4306,17 @@ def report_friction(what_i_was_doing: str, what_went_wrong: str,
     except Exception:  # noqa: BLE001
         ok = False
 
-    # then the durable store, deduped: the same edge reported twice is one row carrying the
-    # newest wording, not two rows nobody can count.
-    try:
-        import hashlib
-        fp = hashlib.sha256(
-            f"{rec.get('tool','')}|{(rec.get('wrong') or '')[:300]}".encode()).hexdigest()[:32]
-        _fdb().execute(
-            "INSERT INTO friction (at,uid,doing,wrong,would_help,tool,severity,fingerprint) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
-            "ON CONFLICT (fingerprint) DO UPDATE SET at=EXCLUDED.at, doing=EXCLUDED.doing, "
-            "would_help=EXCLUDED.would_help, severity=EXCLUDED.severity",
-            (rec["at"], rec["uid"], rec["doing"], rec["wrong"], rec["would_help"],
-             rec["tool"], rec["severity"], fp))
-        ok = True
-    except Exception:  # noqa: BLE001
-        pass
+    # then the durable store, deduped SERVER-SIDE: the same edge reported twice is one row
+    # carrying the newest wording and a count, not two rows nobody can total.
+    st, body = _friction_post("/api/friction", rec, uid)
+    known, out = False, {}
+    if 200 <= st < 300 and isinstance(body, dict):
+        ok, known, out = True, bool(body.get("known")), body
     return json.dumps({
         "recorded": ok,
+        "id": out.get("id", ""),
+        "already_known": known,
+        "occurrences": out.get("recurrence", 1),
         "thank_you": "This is the only signal we get about what it is actually like to use "
                      "this. Keep going — do not let it interrupt what you were doing.",
     })
@@ -4305,22 +4329,78 @@ def friction_so_far(token: str = "") -> str:
 
     Useful before reporting: if the thing you hit is already here, add what is different about
     your case rather than filing it again."""
-    me()   # account-scoped: this touches shared state
+    uid = me()   # account-scoped: this touches shared state
+    st, body = _http("GET", f"{AGENT_API}/api/friction/dump?status=&format=json",
+                     {"X-User-Id": uid})
+    if 200 <= st < 300 and isinstance(body, dict):
+        return _capped({"count": body.get("count", 0), "reports": body.get("records", [])[:40]},
+                       12000)
+    # FALLBACKS, in the order that loses least. The legacy flows table still holds everything
+    # filed before the store moved (see `_friction_post`) — it is read, never written — and the
+    # append-only file is the floor, exactly as it is on the write side.
     rows = []
     try:
         for at, uid_, doing, wrong, help_, tool_, sev, filed in _fdb().execute(
                 "SELECT at,uid,doing,wrong,would_help,tool,severity,filed_as "
                 "FROM friction ORDER BY at DESC LIMIT 60").fetchall():
-            rows.append({"at": at, "uid": uid_, "doing": doing, "wrong": wrong,
-                         "would_help": help_, "tool": tool_, "severity": sev,
-                         "already_filed": filed})
+            rows.append({"at": at, "subject": uid_, "tried": doing, "happened": wrong,
+                         "would_help": help_, "context": {"tool": tool_}, "severity": sev,
+                         "already_filed": filed, "legacy": True})
     except Exception:  # noqa: BLE001
         try:
             rows = [json.loads(x) for x in FRICTION_LOG.read_text().splitlines() if x.strip()]
             rows.reverse()
         except Exception:  # noqa: BLE001
             rows = []
-    return _capped({"count": len(rows), "reports": rows[:40]}, 12000)
+    return _capped({"count": len(rows), "reports": rows[:40],
+                    "note": f"agent-api answered {st} — these are the legacy/fallback rows"}, 12000)
+
+
+@mcp.tool()
+@_anon_guard
+def friction_dump(since: str = "", status: str = "open", token: str = "") -> str:
+    """THE FIXER'S BRIEF: every open rough edge, grouped by likely cause, ready to work.
+
+    This is decision 33 §3 — the thing the whole loop exists to produce. It returns MARKDOWN, in
+    the alpha ledger's finding shape (symptom · exact context · likely cause · log pointers ·
+    repro), deduplicated with occurrence counts, `recurring` first. Hand it to a fixing agent
+    verbatim; it needs no other briefing.
+
+    since: "" (everything) · "2h" · "3d" · an ISO instant.
+    status: "open" (the default — includes `recurring`, which is the most urgent work there is) ·
+            "fixed" · "recurring" · "" for all.
+
+    When you fix something from it, close it: `friction_fixed([ids], "<commit or PR>")`."""
+    uid = me()
+    q = f"?since={urllib.parse.quote(since)}&status={urllib.parse.quote(status)}&format=md"
+    st, body = _http("GET", f"{AGENT_API}/api/friction/dump{q}", {"X-User-Id": uid})
+    if not (200 <= st < 300):
+        return json.dumps({"error": f"agent-api answered {st}", "detail": str(body)[:300],
+                           "do": "the dump is unreadable — say so plainly; do not invent one"})
+    return str(body)[:60000]
+
+
+@mcp.tool()
+@_anon_guard
+def friction_fixed(ids: list[str], fix_ref: str, token: str = "") -> str:
+    """Close the rough edges a change addressed (decision 33 §4).
+
+    `fix_ref` is whatever lets the next reader find the change — a commit sha, a PR url, a branch,
+    or one sentence. Closing is CHEAP and meant to be: a record filed again after a fix flips itself
+    to `recurring`, so a fix that did not hold announces itself instead of hiding. Close what you
+    addressed; do not close what you merely looked at."""
+    uid = me()
+    if not str(fix_ref or "").strip():
+        return json.dumps({"error": "fix_ref is required",
+                           "why": "a record marked fixed with nothing to point at is "
+                                  "indistinguishable from one somebody wanted off the list"})
+    out = []
+    for rid in list(ids or [])[:100]:
+        st, body = _friction_post(f"/api/friction/{urllib.parse.quote(str(rid))}/fix",
+                                  {"fix_ref": fix_ref}, uid)
+        out.append({"id": rid, "ok": 200 <= st < 300,
+                    "status": (body or {}).get("status") if isinstance(body, dict) else str(body)[:120]})
+    return json.dumps({"closed": sum(1 for r in out if r["ok"]), "results": out})
 
 
 # ---------------------------------------------------------------- visible affordances
