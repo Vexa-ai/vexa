@@ -30,7 +30,33 @@ from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, ret
 from flows_defs import production  # noqa: E402
 from flows_steps.common import db_url  # noqa: E402
 
-API_KEY = os.environ.get("VEXA_FLOWS_API_KEY", "changeme")
+def _require_api_key() -> str:
+    """The operator key, or the process refuses to start.
+
+    It used to be `os.environ.get("VEXA_FLOWS_API_KEY", "changeme")`. The variable was never set
+    on the running deployment — `flows-up.sh` exports `VEXA_FLOWS_ADMIN_KEY`, which is the
+    admin-api token under a different name this module never reads — so the live intake accepted
+    `X-Flows-Admin-Key: changeme`, a string printed in this file. The port binds 127.0.0.1, but
+    the control MCP is public and forwards to it with that same key, so the door was open to
+    anyone who could read the source.
+
+    A weak default is worse than no default: it makes an unconfigured deployment look configured
+    and it fails no test. So there is no default. A deployment that has not set the variable
+    stops here, loudly, rather than serving on a known string.
+    """
+    key = (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "VEXA_FLOWS_API_KEY is unset — flows-api refuses to start rather than serve on a "
+            "default. Mint one into a mode-600 file (the ~/.storm/dburl pattern) and export it "
+            "from the lane's start script; never put the value in the repo.")
+    if key in ("changeme", "change-me", "default", "secret"):
+        raise RuntimeError(
+            f"VEXA_FLOWS_API_KEY is the placeholder {key!r} — refusing to start.")
+    return key
+
+
+API_KEY = _require_api_key()
 
 db = postgres_db(db_url())
 clock = SystemClock()
