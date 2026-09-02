@@ -93,11 +93,19 @@ telling them is still a choice they can act on. The `_global` setup chat tells t
 same thing and records their own answer in `STRUCTURE.md`.
 
 Note the wording: "your workspaces", the ordinary English word — not the product's NAME for a
-person's own workspace, which is being renamed (placeholder: **desk**) and lives behind one constant
-per runtime: `mailtext.WORKSPACE_WORD` and `clients/terminal/src/minutes/vocabulary.ts`. Templates
-and presets write `{{workspace}}` rather than the word, so the rename is those two lines. Code paths,
-slugs and API fields keep saying "workspace" on purpose — a naming decision should not cost a
-migration.
+person's own space, which is a **desk** (founder, 2026-09-02: a personal desk, and a group desk for
+a group). The name lives behind one constant per runtime, `mailtext.WORKSPACE_WORD` and
+`clients/terminal/src/minutes/vocabulary.ts`; templates and presets write `{{workspace}}` rather than
+the word. Code paths, slugs and API fields keep saying "workspace" on purpose — a naming decision
+should not cost a migration.
+
+The word carries the meaning, which is why "private" was the wrong word: **a desk is company
+knowledge held by one person**, and the company's agents may read it for a meeting that person is
+in. What stays genuinely private is `_system` — chats, sessions, settings — which is not a desk.
+
+After a meeting the shared artefact goes to every attendee's desk as well as by mail, so the mail
+may say so; `attendee-head.md` says it as literal text for the same reason it carries the service
+sentence literally — its renderer fills four tokens and would mail `{{workspace}}` verbatim.
 
 **`attendee-head.md` carries the service sentence as LITERAL TEXT, not as `{{service}}`** — its
 renderer fills four tokens and would mail `{{service}}` verbatim. If that sentence is ever changed it

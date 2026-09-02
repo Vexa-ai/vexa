@@ -55,10 +55,18 @@ first (founder decision 21, 2026-09-02):
 > Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces
 > is visible to the company's agents; recordings and transcripts stay here.
 
-A person's own workspace is **not private from the company**. Ask the administrator whether that is
-what they intend, and record the answer — theirs, not this sentence — in `STRUCTURE.md` under who
-can see what. If they say it is not what they intend, that is a `MISSING.md` line, not something to
-smooth over: it is a policy this deployment does not yet enforce.
+Say what the words mean, because the name is the argument:
+
+- a person's own space is their **desk**, and a group has a **group desk**;
+- **a desk is company knowledge held by one person** — not private from the company. The company's
+  agents may read it for a meeting that person is in;
+- what stays genuinely private is `_system` — their chats, sessions and settings. That is not a desk
+  and no agent reads it for anybody else.
+
+Ask the administrator whether that is what they intend, and record the answer — **theirs, not this
+sentence** — in `STRUCTURE.md` under who can see what. If they say it is not what they intend, that
+is a `MISSING.md` line, not something to smooth over: it is a policy this deployment does not yet
+enforce, and writing it down as if it did would be the worst of both.
 
 Every attendee is told the same thing in the first mail they ever get from us, so the administrator
 should know it is being said.

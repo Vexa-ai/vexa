@@ -32,11 +32,15 @@ from .common import ws_file
 SERVICE_SENTENCE = ("I sit in meetings you are invited to; afterwards you get what came out of "
                     "them and what they leave on your plate.")
 
-# THE USER-FACING NAME of a person's own workspace. Founder decision 21, 2026-09-02: the personal
-# workspace is NOT private and will be renamed; "desk" is a PLACEHOLDER until he picks the word.
+# THE USER-FACING NAME of a person's own workspace. Founder, 2026-09-02: it is a **DESK** — a
+# personal desk, and a group desk for a group. Not a placeholder any more; the word is chosen.
 # Change it HERE and every mail this runtime sends follows. Code paths, slugs and API fields keep
 # saying "workspace" deliberately — renaming those is a migration, and a migration is not what a
 # naming decision should cost.
+#
+# The word carries the meaning the founder attached to it, and it is the reason "private" was the
+# wrong word: a desk is COMPANY KNOWLEDGE HELD BY ONE PERSON. The company's agents may read it for a
+# meeting that person is in. `_system` — chats, sessions, settings — stays private and is not a desk.
 #
 # The terminal has the same constant on its side (clients/terminal/src/minutes/vocabulary.ts) and
 # fills `{{workspace}}` in the presets from it; the two runtimes cannot share a literal, so they
@@ -48,9 +52,9 @@ SERVICE_SENTENCE = ("I sit in meetings you are invited to; afterwards you get wh
 # understand who can see their notes.
 WORKSPACE_WORD = "desk"
 
-# WHO CAN SEE WHAT, in the founder's own words (decision 21). It goes into the mails a person reads
-# before they have decided whether to keep anything here, because that is the only moment at which
-# telling them is a choice they still have. Not a disclaimer and not a legal line: three facts.
+# WHO CAN SEE WHAT, in the founder's own words. It goes into the mails a person reads before they
+# have decided whether to keep anything here, because that is the only moment at which telling them
+# is a choice they still have. Not a disclaimer and not a legal line: three facts.
 VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you and your colleagues "
                        "keep in your workspaces is visible to the company's agents; recordings and "
                        "transcripts stay here.")
@@ -93,7 +97,7 @@ DEFAULTS: dict[str, str] = {
     "minutes-head": (
         "subject: Minutes: {{title}}\n"
         "---\n"
-        "{{title}} — {{when}}.\n"
+        "{{title}} — {{when}}. This is now on your {{workspace}}.\n"
         "\n"
         "{{visibility}}\n"
     ),
