@@ -1641,6 +1641,10 @@ working.</p>""", "Connected")
             ]})
             await send({"type": "http.response.body", "body": body})
             return
+        # Kept for the header's provenance in logs only. The server is STATELESS (see the app
+        # construction at the bottom): there is no session to look up, and identity is the bearer
+        # token on this request. Nothing reads CURRENT_SID, and SESSION_BIND is never written —
+        # both are recorded here so the next reader does not mistake them for state that matters.
         sid = hdrs.get("mcp-session-id")
         CURRENT_SID.set(sid)
         # A bearer token wins; otherwise fall back to an account this very conversation
@@ -4329,7 +4333,26 @@ def _transport_security():
     return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
 
 
-app = AUTH_MIDDLEWARE(mcp.streamable_http_app(transport_security=_transport_security()))
+# STATELESS ON PURPOSE — there is no session to lose, so there is nothing to reconnect.
+#
+# ⚠ 2026-09-02. The founder was told a control "isn't available this turn". The MCP CLIENT here is
+# the Claude CLI's own — we hand it a `.mcp.json` and it owns the connection loop — so no amount of
+# retry logic in this repo can make that client reconnect. What we DO own is whether a session
+# exists to be lost, and this server was stateful: its `Mcp-Session-Id` lives in the transport
+# manager's memory, so every rig restart invalidates every in-flight client mid-turn, and a dropped
+# connection cannot be resumed. Restarting the rig while somebody is working is what produced the
+# symptom, and the standing rule against doing so was treating the fix as a scheduling problem.
+#
+# Nothing in this file needs the session. `SESSION_BIND` is declared and read once and NEVER
+# WRITTEN; `CURRENT_SID` is set and never read. Identity comes from the bearer token on every
+# request (see `_Auth` and `_subject`), which is self-contained by construction — so each request
+# already carries everything it needs, and the session was pure liability.
+#
+# Stateless means each request stands alone: no session handshake to reject, no server memory to
+# outlive, and a restart is invisible to a client mid-turn. The cost is server-initiated streaming,
+# which this server does not use — every tool here answers in one response.
+app = AUTH_MIDDLEWARE(mcp.streamable_http_app(
+    transport_security=_transport_security(), stateless_http=True))
 
 if __name__ == "__main__":
     import uvicorn
