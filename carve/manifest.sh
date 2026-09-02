@@ -74,6 +74,7 @@ export CARVE_MAILMAP="$MONO/carve/mailmap.txt"
 # --- Carve-owned override files (copied over the mono's after materialize) ---
 # Each line: "<override-file-under-carve/overrides/>  <dest-path-in-carve>"
 export CARVE_OVERRIDES=(
+  bot-eval-README.md:core/meetings/services/bot/eval/README.md
   "Makefile:Makefile"          # compose-only entrypoint (mono's references removed deploy/lite)
   # De-robot the Vexum surface (vexa-platform#239): docs.core.vexa.ai stays up for
   # humans, invisible to robots. These four files + the docs.json seo transform in
