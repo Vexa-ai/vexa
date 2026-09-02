@@ -104,6 +104,29 @@ class TranscriptStore(Protocol):
         same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
         ...
 
+    async def complete_transcript_import(
+        self, user_id: int, meeting_id: int, *, segments: list, started_at, ended_at,
+        source: str, session_uid: str,
+    ) -> "Optional[dict]":
+        """OWNER-scoped: land an ALREADY-HAPPENED meeting's transcript on the row and complete it.
+
+        The import route's whole persistence. One transaction: the segments are upserted into
+        ``transcriptions`` through the SAME sink the db-writer flushes with (the ``(meeting_id,
+        segment_id)`` identity), the row's ``status`` becomes ``completed``, ``start_time`` /
+        ``end_time`` become the window the caller states (the ONE thing a bot run cannot express —
+        it derives both from ``now()``), and ``data.transcript_import`` records the provenance.
+
+        IDEMPOTENT on ``session_uid``, which the caller derives from ``(source, meeting_id)``: a
+        second import of the same source onto the same row writes NOTHING and reports
+        ``imported: False``. The segment ids are derived from the same ``session_uid``, so even a
+        write that did land twice would upsert in place rather than duplicate.
+
+        Returns the completed row summary, ``{"error": "conflict", ...}`` when the row is inside the
+        bot FSM (this never fights the FSM — a live meeting is completed by its bot, not by an
+        import), or ``None`` when the caller owns no such row (→ 404, no existence oracle).
+        """
+        ...
+
     async def redeem_transcript_share(
         self, user_id: int, user_email: "Optional[str]", token: str
     ) -> "Optional[dict]":

@@ -117,6 +117,9 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     # Minting a share is the same power on either address shape — the row id and the (platform,
     # native) pair name the same meeting; only the pair cannot name all of them.
     ("POST", "/meetings/{meeting_id}/share"): TX,
+    # Importing a transcript writes the caller's OWN meeting — the same plane as annotating or
+    # sharing it, addressed by the row id for the same reason (the pair is not an identity).
+    ("POST", "/meetings/{meeting_id}/transcript-import"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/workspace"): TX,
     # A participants read is meeting DATA, not bot control — same plane as the transcript it is
@@ -667,6 +670,13 @@ def create_app(
     @app.post("/meetings/{meeting_id}/share")
     async def mint_transcript_share_by_id(meeting_id: int, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+
+    # Import a transcript into a meeting the caller owns — "this already happened, here are its
+    # words" — and complete it. Row-id addressed like the mint above; same _forward, so the same
+    # key→identity resolution (X-User-Id) the meeting-api route scopes on.
+    @app.post("/meetings/{meeting_id}/transcript-import")
+    async def import_meeting_transcript(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/transcript-import"), request)
 
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
