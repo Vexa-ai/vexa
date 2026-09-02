@@ -96,7 +96,10 @@ describe("scaffoldToChat", () => {
     expect(rec.id).toBe("meet-97");        // not a parallel conversation
     expect(rec.label).toBe("");            // the rail names it from the meeting
     expect(rec.meeting).toBe("97");
-    expect(rec.artifacts).toEqual([
+    // the chat's HOME leads the strip (decision 28.5); the declared pages follow in the preset's
+    // own order, which is the author's reading order
+    expect(rec.artifacts[0]).toMatchObject({ path: "README.md", desk: true });
+    expect(rec.artifacts.slice(1)).toMatchObject([
       { path: "kg/entities/meeting/abc-defg-hij.md", label: "Minutes" },  // post → Minutes
       { kind: "meeting", path: "97", label: "Transcript" },
     ]);
@@ -106,7 +109,8 @@ describe("scaffoldToChat", () => {
   it("without a native the note is DROPPED, not guessed at", () => {
     // a tab pointing at a guessed path opens a page that can never load — worse than one fewer tab
     const rec = scaffoldToChat(parseScaffold({ ...WIRE, native: null })!);
-    expect(rec.artifacts).toEqual([{ kind: "meeting", path: "97", label: "Transcript" }]);
+    expect(rec.artifacts.filter((a) => !a.desk))
+      .toMatchObject([{ kind: "meeting", path: "97", label: "Transcript" }]);
   });
 
   it("phase null keeps the meeting's own layout and never infers `post`", () => {
@@ -115,7 +119,8 @@ describe("scaffoldToChat", () => {
     const s = parseScaffold({ ...WIRE, phase: null })!;
     expect(s.phase).toBeNull();
     const rec = scaffoldToChat(s);
-    expect(rec.artifacts[0]).toEqual({ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" });
+    expect(rec.artifacts.filter((a) => !a.desk)[0])
+      .toMatchObject({ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" });
   });
 
   it("a scaffold with no meeting opens its own chat over its declared workspaces", () => {
@@ -128,7 +133,11 @@ describe("scaffoldToChat", () => {
     expect(rec.id).toBe("scaffold-OU5hWbkhdKt9tI2ulYxn4h1Zh8yy3HFm1S9Vd5NalCI");
     expect(rec.label).toBe("setup global");
     expect(rec.meeting).toBeUndefined();
-    expect(rec.artifacts.map((a) => a.path)).toEqual(["README.md", "MISSING.md"]);
+    // `_global/README.md` is declared AND is not the home (the chat mounts no group and no desk
+    // slug), so the strip carries the desk README first and the declared pair after it
+    expect(rec.artifacts.map((a) => a.path)).toEqual(["README.md", "README.md", "MISSING.md"]);
+    expect(rec.artifacts[0]).toMatchObject({ desk: true, label: "Desk" });
+    expect(rec.artifacts[0].slug).toBeUndefined();   // the reader's OWN desk carries no slug
     expect(rec.focus).toBe("_global|README.md");
   });
 
@@ -148,7 +157,8 @@ describe("localScaffold — the hand link composes through the SAME path", () =>
     const rec = scaffoldToChat(sc);
     expect(rec.id).toBe("meet-95");
     // prep → the same file under the name the reader needs today
-    expect(rec.artifacts).toEqual([{ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" }]);
+    expect(rec.artifacts.filter((a) => !a.desk))
+      .toMatchObject([{ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" }]);
   });
 });
 
@@ -249,5 +259,45 @@ describe("the scaffold kind reaches the chat", () => {
     // the type says `scaffold: { kind, id }`, not `scaffoldKind?: string`: a kind with no id is
     // not a value this function can return.
     expect(Object.keys(chat.scaffold).sort()).toEqual(["id", "kind"]);
+  });
+});
+
+describe("the scaffold DELIVERS the strip (decision 28.5)", () => {
+  it("`tabs` accepts a bare token OR {token, pinned} — the frontmatter is a file a human edits", () => {
+    // asking someone to write `{token: …, pinned: false}` for the common case would be the format
+    // serving the parser rather than the founder
+    const s = parseScaffold({ ...WIRE, tabs: ["meeting:transcript", { token: "meeting:note", pinned: true }] })!;
+    expect(s.tabs).toEqual([
+      { token: "meeting:transcript", pinned: false },
+      { token: "meeting:note", pinned: true },
+    ]);
+  });
+
+  it("a pinned entry arrives as a CHAT pin, at the left edge, after the home", () => {
+    const s = parseScaffold({
+      ...WIRE, workspaces: ["_global", "u_priya", "grp-showb"],
+      tabs: [{ token: "meeting:note", pinned: true }, "meeting:transcript"],
+    })!;
+    const rec = scaffoldToChat(s);
+    // home first (the chat mounts a group, so the GROUP's README, not the desk), then the pin,
+    // then the rest in the preset's own order
+    expect(rec.artifacts[0]).toMatchObject({ path: "README.md", slug: "grp-showb", desk: true });
+    expect(rec.artifacts[1]).toMatchObject({ path: "kg/entities/meeting/abc-defg-hij.md", pinned: true });
+    expect(rec.artifacts[2]).toMatchObject({ kind: "meeting", path: "97" });
+  });
+
+  it("a chat with no group is at home on the reader's own desk", () => {
+    const s = parseScaffold({ ...WIRE, workspaces: ["_global", "u_priya"], tabs: [] })!;
+    expect(scaffoldToChat(s).artifacts[0]).toMatchObject({ path: "README.md", label: "Desk", desk: true });
+  });
+
+  it("a scaffold that names no focus opens on the HOME, never on a blank panel", () => {
+    const s = parseScaffold({ ...WIRE, focus: "", workspaces: ["_global", "grp-showb"], tabs: [] })!;
+    expect(scaffoldToChat(s).focus).toBe("grp-showb|README.md");
+  });
+
+  it("junk entries are dropped, and a malformed tabs list is simply empty", () => {
+    expect(parseScaffold({ ...WIRE, tabs: [1, null, { pinned: true }, "  "] })!.tabs).toEqual([]);
+    expect(parseScaffold({ ...WIRE, tabs: "nope" })!.tabs).toEqual([]);
   });
 });

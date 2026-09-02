@@ -28,12 +28,14 @@ import {
   chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
+  forgetHistory, orderHistory, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
+import { syncSurface } from "../surfaces/surfaceSync";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
-import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -305,7 +307,13 @@ export function MinutesShell() {
       ps.push({ path: "README.md", slug: "_global", label: "_global" });
       return ps;
     };
-    const base: Page[] = c.artifacts.length ? c.artifacts.map((a) => ({ ...a })) : roomPages();
+    // THE CHAT'S HOME LEADS THE STRIP (decision 28.5). Composed here rather than stored, so it
+    // follows the chat's mounts if they change and can never be `×`-ed away — it is the product's
+    // first entry, not something the reader put there.
+    const base: Page[] = withHome(
+      (c.artifacts.length ? c.artifacts.map((a) => ({ ...a })) : roomPages()) as Artifact[],
+      c.workspaces,
+    ) as Page[];
     let list = base;
     let focus: Page | null = c.focus ? base.find((pg) => artifactKey(pg) === c.focus) ?? null : null;
     if (!viewSpent.current && pendingView) {
@@ -314,7 +322,11 @@ export function MinutesShell() {
       const r = resolveView(pendingView, base);
       list = r.pages; focus = r.focus ?? focus;
     }
-    const front = focus ?? list[0];
+    // The stored VIEW wins over the first tab: it is where the reader actually was. A chat with
+    // tabs but no stored view (pre-28, or one that has never been navigated) still opens on its
+    // focused tab, so nothing regresses for records written before the slot existed.
+    const stored = c.view ? { kind: c.view.kind, path: c.view.path, slug: c.view.slug, label: c.view.label } as Page : null;
+    const front = stored ?? focus ?? list[0];
     setSel({
       kind: c.meeting ? "meeting" : "chat",
       chatId: c.id,
@@ -459,18 +471,26 @@ export function MinutesShell() {
   // `pages` together, so this can never write one chat's tabs onto another. A mock chat is not in
   // the stored list, so it simply finds no row and writes nothing.
   useEffect(() => {
-    if (!pages.length) return;
+    if (!docPath) return;
     const id = sel.chatId;
     const focus = artifactKey({ kind: docKind, path: docPath, slug: docSlug });
+    // The VIEW is reading state exactly as the tabs are, so it persists with them — reopening a
+    // chat puts back the document you were looking at whether or not you pinned it. Before
+    // decision 28 the only way the panel could remember a document was to make it a tab, which is
+    // precisely how the pile accumulated. NOTE the guard moved from `pages.length` to `docPath`:
+    // a chat with NO tabs still has a view worth remembering.
+    const label = (docPath.split("/").pop() || docPath).replace(/\.md$/i, "");
+    const view: Artifact = { kind: docKind === "meeting" ? "meeting" : undefined, path: docPath, slug: docSlug, label };
     persist((prev) => {
       const i = prev.findIndex((c) => c.id === id);
       if (i < 0) return prev;
       const c = prev[i];
       const same = c.focus === focus && c.artifacts.length === pages.length
+        && artifactKey(c.view ?? { path: "" }) === artifactKey(view)
         && c.artifacts.every((a, k) => artifactKey(a) === artifactKey(pages[k]) && a.label === pages[k].label);
       if (same) return prev;
       const next = [...prev];
-      next[i] = { ...c, artifacts: pages.map((pg) => ({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label })), focus };
+      next[i] = { ...c, artifacts: pages.map((pg) => ({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label, pinned: true })), focus, view };
       return next;
     });
   }, [sel.chatId, pages, docPath, docSlug, docKind, persist]);
@@ -552,10 +572,37 @@ export function MinutesShell() {
       const stack = [...h.stack.slice(0, h.i + 1), e];
       return { stack, i: stack.length - 1 };
     });
-    setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(pg)) ? prev : [...prev, pg]);
+    // ONE VIEW SLOT, AND THE STRIP IS ITS HISTORY (PRD decision 28 + the founder's amendment).
+    // Navigating replaces what the panel shows AND records where you were: `touchHistory` dedups by
+    // identity, moves the page to the RIGHT end beside the current one, and caps at 12 by evicting
+    // the oldest UNPINNED entry. Pins sit at the left edge and never age out.
+    setPages((prev) => touchHistory(prev, { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label }, Date.now()));
     setDocPath(pg.path); setDocSlug(pg.slug); setDocKind(pg.kind === "meeting" ? "meeting" : "doc");
     setListing(null); setDocNonce((n) => n + 1);
   }, []);
+
+  /** PIN A PAGE. The amendment folded "open in tab" into this: the strip is history, so everything
+   *  you open is already in it, and the only extra thing worth asking for is that one STAYS. */
+  const openPinned = useCallback((pg: Page) => {
+    openPage(pg);
+    setPages((prev) => prev.map((x) => artifactKey(x) === artifactKey(pg) ? { ...x, pinned: true } : x));
+  }, [openPage]);
+
+  /** Pin what is in front, or unpin it. The pin is the whole of "specifically requested" for a
+   *  document the reader navigated to and then decided to keep. */
+  const pinned = useMemo(
+    () => pages.some((x) => artifactKey(x) === artifactKey({ kind: docKind, path: docPath, slug: docSlug })),
+    [pages, docKind, docPath, docSlug],
+  );
+  const togglePin = useCallback(() => {
+    const key = artifactKey({ kind: docKind, path: docPath, slug: docSlug });
+    setPages((prev) => {
+      const hit = prev.find((x) => artifactKey(x) === key);
+      if (hit) return prev.filter((x) => artifactKey(x) !== key);
+      const label = (docPath.split("/").pop() || docPath).replace(/\.md$/i, "");
+      return [...prev, { kind: docKind === "meeting" ? "meeting" as const : undefined, path: docPath, slug: docSlug, label, pinned: true }];
+    });
+  }, [docKind, docPath, docSlug]);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
    *  tab — going back to somewhere you have been should never fail because you tidied up. */
@@ -577,14 +624,18 @@ export function MinutesShell() {
 
   /** Close a tab. The last one never closes — an empty panel is not a state worth reaching — and
    *  closing the tab in front hands focus to its neighbour rather than to nothing. */
+  /** `×` FORGETS an entry. The strip is history, so this is not "close a tab" — it is the reader
+   *  saying they do not want that page remembered. The last one may go too: an empty strip is a
+   *  chat you have not read anything in, which is a real state and was reachable before this. */
   const closeTab = (pg: Page) => {
-    if (pages.length <= 1) return;
     const key = artifactKey(pg);
     const i = pages.findIndex((x) => artifactKey(x) === key);
     if (i < 0) return;
-    const next = pages.filter((_, k) => k !== i);
+    const next = forgetHistory(pages, key);
     setPages(next);
-    if (key === artifactKey({ kind: docKind, path: docPath, slug: docSlug })) openPage(next[Math.min(i, next.length - 1)]);
+    if (key === artifactKey({ kind: docKind, path: docPath, slug: docSlug }) && next.length) {
+      openPage(next[Math.min(i, next.length - 1)]);
+    }
   };
 
   useEffect(() => {
@@ -715,9 +766,9 @@ export function MinutesShell() {
   useEffect(() => {
     const onArtifact = (e: Event) => {
       const detail = (e as CustomEvent<{ workspace?: string; path?: string; focus?: boolean }>).detail || {};
-      const eff = artifactTabEffect(detail, pagesRef.current, readerChoseFocus.current);
-      if (!eff) return;
-      if (eff.focus) openPage(eff.focus); else setPages(eff.pages);
+      const eff = artifactViewEffect(detail, readerChoseFocus.current);
+      if (!eff) return;              // `focus: false` is now NOTHING VISIBLE, not a quiet tab
+      openPage(eff.view);
     };
     window.addEventListener(ARTIFACT_EVENT, onArtifact);
     return () => window.removeEventListener(ARTIFACT_EVENT, onArtifact);
@@ -763,6 +814,27 @@ export function MinutesShell() {
   // with no scaffold behind it cannot be written in the first place.
   const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
     : selChat?.scaffold?.kind === "admin-setup" ? "chat · admin" : "chat";
+
+  // PRD DECISION 30 — THE SURFACE IS A FACT THE SERVER HOLDS, not something the prompt re-describes.
+  // Every change to what the human is looking at is written to the session record: which chat, which
+  // meeting and phase, the view, the strip's history and pins, the navigator. Debounced and
+  // fire-and-forget inside `syncSurface`; inert until stage-1's route lands, and the prompt keeps
+  // its "Active context" prefix until the same flag flips.
+  useEffect(() => {
+    const ordered = orderHistory(pages as Artifact[]);
+    const ref = (a: Artifact) => ({ workspace: a.slug ?? "", path: a.path, title: a.label });
+    syncSurface(sel.chatId, {
+      chat: { id: sel.chatId, kind: sel.kind },
+      meeting: sel.meetingId ? { id: sel.meetingId, phase: selMeeting ? meetingPhase(selMeeting) : null } : null,
+      view: docPath ? { workspace: docSlug ?? "", path: docPath, title: (docPath.split("/").pop() || docPath).replace(/\.md$/i, "") } : null,
+      strip: {
+        history: ordered.filter((a) => !a.pinned && !a.desk).map((a) => ({ ...ref(a), at: a.at ?? 0 })),
+        pins: ordered.filter((a) => a.pinned || a.desk).map(ref),
+      },
+      navigator: { open: !pagesCollapsed, workspace: docSlug ?? null },
+    });
+  }, [sel.chatId, sel.kind, sel.meetingId, selMeeting, pages, docPath, docSlug, pagesCollapsed]);
+
 
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
   // body in `_global/asks/<name>.md` and open a fresh chat already holding it. The preset also says
@@ -1035,7 +1107,7 @@ export function MinutesShell() {
       {pagesCollapsed
         ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
         : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
-            onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
+            onTogglePin={togglePin} pinned={pinned} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
             listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
             canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
             body={docBody} onSaved={() => setDocNonce((n) => n + 1)}

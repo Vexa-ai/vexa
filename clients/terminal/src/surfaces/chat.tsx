@@ -20,6 +20,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
+import { promptCarriesActiveContext } from "./surfaceSync";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -474,6 +475,10 @@ const meetingLabel = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.tit
 function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   if (!ref) return "";
   if (ref.kind === "file") {
+    // PRD decision 30: this narration and the server's surface record are two answers to one
+    // question. While the record is not live the prompt keeps carrying it — dropping it first would
+    // leave the agent knowing LESS than it does today. One flag flips both halves together.
+    if (!promptCarriesActiveContext()) return "";
     return `Active context: the user is viewing the workspace file ${ref.value}. Read it with your Read tool if relevant.`;
   }
 

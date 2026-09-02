@@ -21,7 +21,7 @@
  *      recipient's agent.
  */
 import type { MeetingPhase } from "../surfaces/meetingModel";
-import { artifactKey, meetingChatId, type Artifact } from "./chats";
+import { artifactKey, homeEntry, meetingChatId, withHome, type Artifact } from "./chats";
 import { artifactsFromTokens } from "./roomView";
 
 /** What a scaffold says about the person and the room, for a preset to branch on. */
@@ -54,7 +54,10 @@ export interface Scaffold {
   openingPreset: string;
   /** already substituted server-side, and machinery: the human never sees it as their own words */
   openingText: string;
-  tabs: string[];
+  /** THE STRIP THE LINK DELIVERS (decision 28.5). Entries in order, left to right. An entry may be
+   *  a bare token (history) or carry `pinned: true` (a chat pin, held at the left edge and immune
+   *  to aging). `focus` names the one the view opens on. */
+  tabs: { token: string; pinned: boolean }[];
   focus: string;
   provenance: string;
   redeemedAt: string | null;
@@ -71,6 +74,26 @@ export interface ScaffoldRefusal {
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const strArr = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
+
+/** `tabs` on the wire: a list whose entries are either a bare token or `{token, pinned}`.
+ *
+ *  BOTH shapes, deliberately. The presets' frontmatter is a file the founder edits, and
+ *  `tabs: meeting:note, meeting:transcript` must keep working — asking a human to write
+ *  `{token: …, pinned: false}` for the common case would be the format serving the parser. A
+ *  string is history; the object is how a preset says "and keep this one". */
+function tabsOf(v: unknown): { token: string; pinned: boolean }[] {
+  if (!Array.isArray(v)) return [];
+  const out: { token: string; pinned: boolean }[] = [];
+  for (const e of v) {
+    if (typeof e === "string" && e.trim()) { out.push({ token: e.trim(), pinned: false }); continue; }
+    if (e && typeof e === "object") {
+      const o = e as Record<string, unknown>;
+      const token = typeof o.token === "string" ? o.token.trim() : "";
+      if (token) out.push({ token, pinned: o.pinned === true });
+    }
+  }
+  return out;
+}
 
 const PHASES: MeetingPhase[] = ["prep", "live", "post"];
 
@@ -116,7 +139,7 @@ export function parseScaffold(raw: unknown): Scaffold | null {
     },
     openingPreset: str(r.opening_preset),
     openingText,
-    tabs: strArr(r.tabs),
+    tabs: tabsOf(r.tabs),
     focus: str(r.focus),
     // `provenance` on the wire is the OBJECT {flow, step, reaction_id, minted_by}; the string is
     // `provenance_line`. Reading the object through `str()` degraded to "" silently — four facts
@@ -216,7 +239,18 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
     phase: s.phase,
     mounts: s.workspaces,
   };
-  const artifacts = artifactsFromTokens(s.tabs, ctx);
+  // THE SCAFFOLD DELIVERS THE STRIP (decision 28.5), and the order at open is:
+  //   the chat's HOME · the scaffold's PINS · the scaffold's opening pages · (later) history.
+  // `withHome` puts the first tier in place; `artifactsFromTokens` preserves the preset's order
+  // for the rest, which is the author's reading order.
+  const declared: Artifact[] = [];
+  s.tabs.forEach((t, i) => {
+    const a = artifactsFromTokens([t.token], ctx)[0];
+    // `at` is the preset's own order: the author's reading order becomes the strip's history order,
+    // so the last declared page sits nearest the current one.
+    if (a) declared.push({ ...a, pinned: t.pinned ? true : undefined, at: i + 1 });
+  });
+  const artifacts = withHome(declared, s.workspaces);
   const focusArt = s.focus ? artifactsFromTokens([s.focus], ctx)[0] : undefined;
   return {
     // KIND AND RECORD ID TOGETHER (F37). The chat record carries the pair or carries nothing, so
@@ -230,7 +264,9 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
     meeting: s.meeting ?? undefined,
     workspaces: s.workspaces.length ? s.workspaces : ["_global", "personal"],
     artifacts,
-    focus: focusArt ? artifactKey(focusArt) : undefined,
+    // A scaffold that names no focus opens on the chat's HOME — a chat that opens on nothing is a
+    // chat that opens on a blank panel (decision 26.4).
+    focus: artifactKey(focusArt ?? homeEntry(s.workspaces)),
   };
 }
 
@@ -255,7 +291,7 @@ export function localScaffold(input: {
     refs: { title: input.title, participants: [], participantNames: {}, state: {} },
     openingPreset: input.preset,
     openingText: input.openingText,
-    tabs: input.tabs,
+    tabs: input.tabs.map((t) => ({ token: t, pinned: false })),
     focus: input.focus,
     provenance: "hand link (?ask=)",
     redeemedAt: null,

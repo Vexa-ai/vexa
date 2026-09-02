@@ -176,9 +176,13 @@ describe("maxPagesW — the pages panel's range, one place both bounds meet", ()
     expect(maxPagesW(2560)).toBe(1536);
   });
 
-  it("but never squeezes the conversation below its floor — 1440px caps below 60%", () => {
-    expect(maxPagesW(1440)).toBe(1440 - T.railW - T.chatMin);
-    expect(maxPagesW(1440)).toBeLessThan(1440 * 0.6);
+  it("but never squeezes the conversation below its floor — the cap binds on a SMALL window", () => {
+    // F61 narrowed the rail 397 → 240, which gave 157px back: at 1440 the 60% want now FITS, where
+    // it used to be clipped by the conversation floor. That is the founder's change paying off, so
+    // the invariant is asserted where it still bites rather than deleted.
+    expect(maxPagesW(1440)).toBe(Math.round(1440 * 0.6));
+    expect(maxPagesW(1280)).toBe(1280 - T.railW - T.chatMin);
+    expect(maxPagesW(1280)).toBeLessThan(1280 * 0.6);
   });
 
   it("never returns less than the minimum, however small the window", () => {
@@ -272,20 +276,38 @@ describe("artifacts — the open tabs ARE the chat record", () => {
     expect(artifactKey({ path: "README.md", slug: "acme" })).toBe(artifactKey({ path: "README.md", slug: "acme" }));
   });
 
-  it("a saved tab set survives a reload, focus included", () => {
+  it("a PINNED tab set survives a reload, focus included", () => {
     localStorage.clear();
-    const tabs = [{ path: "kg/entities/meeting/m1.md", label: "Minutes" }, { path: "README.md", slug: "_global", label: "_global" }];
+    const tabs = [{ path: "kg/entities/meeting/m1.md", label: "Minutes", pinned: true },
+                  { path: "README.md", slug: "_global", label: "_global", pinned: true }];
     localStorage.setItem(CHATS_KEY, JSON.stringify([
       // touched, because the load path prunes a chat nobody wrote in (F35) — a saved tab set only
       // exists on a chat somebody actually worked in.
       { id: "c1", label: "Acme", workspaces: ["personal", "_global"], artifacts: tabs, focus: artifactKey(tabs[1]), touched: true, createdAt: T0, lastActivityAt: T0 },
     ]));
     const c = loadChats(T0).find((x) => x.id === "c1")!;
-    expect(c.artifacts).toEqual(tabs);
+    // the pins survive, in order and still pinned. They also gain an `at`: a record written before
+    // the strip became a history bar has no stamp, and ordering needs one — so the migration gives
+    // them their stored order as their history order rather than inventing a time.
+    expect(c.artifacts.map((a) => a.path)).toEqual(tabs.map((t) => t.path));
+    expect(c.artifacts.every((a) => a.pinned)).toBe(true);
+    expect(c.artifacts.every((a) => typeof a.at === "number")).toBe(true);
     expect(c.focus).toBe("_global|README.md");
   });
 
-  it("tolerates the earlier build's bare-string artifacts instead of rendering junk tabs", () => {
+  it("an UNPINNED tab set is ORDERED and capped on load, not deleted (decision 28 as amended)", () => {
+    // The first ruling dropped them; the amendment reframed the strip as a HISTORY bar, so these
+    // are history that was never ordered — kept, ordered, and capped. The page that was in FRONT
+    // lands at the right edge, where the reader left it.
+    localStorage.clear();
+    const tabs = [{ path: "a.md", label: "a" }, { path: "b.md", label: "b" }, { path: "c.md", label: "c" }];
+    localStorage.setItem(CHATS_KEY, JSON.stringify([
+      { id: "c1", label: "Acme", workspaces: ["personal", "_global"], artifacts: tabs, focus: "|b.md", touched: true, createdAt: T0, lastActivityAt: T0 },
+    ]));
+    const c = loadChats(T0).find((x) => x.id === "c1")!;
+    expect(c.artifacts.map((a) => a.path)).toEqual(["a.md", "c.md", "b.md"]);
+    expect(c.view?.path).toBe("b.md");
+  });  it("tolerates the earlier build's bare-string artifacts instead of rendering junk tabs", () => {
     localStorage.clear();
     localStorage.setItem(CHATS_KEY, JSON.stringify([
       { id: "c1", label: "Acme", workspaces: ["personal"], artifacts: ["README.md", null, 7], touched: true, createdAt: T0, lastActivityAt: T0 },
@@ -390,7 +412,9 @@ describe("pruneStale — the 2026-09-02 migration", () => {
   const REAL: Chat = chat({
     id: "askchat-mtjwoie7", label: "setup global", touched: true,
     workspaces: ["_global", "personal"],
-    artifacts: [{ path: "README.md", slug: "_global", label: "README" }, { path: "CHARTER.md", slug: "_global", label: "CHARTER" }],
+    // pinned (decision 28): this fixture is about pruning PLANTED ROWS, and unpinned tabs would
+    // now be collapsed on load — which is a different rule under test elsewhere.
+    artifacts: [{ path: "README.md", slug: "_global", label: "README", pinned: true }, { path: "CHARTER.md", slug: "_global", label: "CHARTER", pinned: true }],
     focus: "_global|README.md",
   });
   /** A scaffolded arrival nobody has replied to yet — composed FOR someone, so it stays. */
