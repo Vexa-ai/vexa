@@ -64,9 +64,13 @@ class Result:
     steps: list = field(default_factory=list)
     wall_s: float = 0.0
     error: str = ""
+    #: The run stopped on a PRECONDITION, not a defect: the stack is not in the shape this state
+    #: describes, and nothing is wrong. `blank-admin` on a claimed instance is the standing case.
+    refused: bool = False
 
     def to_dict(self) -> dict:
-        return {"state": self.state, "as": self.subject, "ok": self.ok, "links": self.links,
+        return {"state": self.state, "as": self.subject, "ok": self.ok, "refused": self.refused,
+                "links": self.links,
                 "mails": self.mails, "subjects": self.subjects, "meeting_row": self.meeting_row,
                 "verify": self.verify, "steps": self.steps, "wall_s": round(self.wall_s, 1),
                 **({"error": self.error} if self.error else {})}
@@ -288,7 +292,13 @@ def rehearse(state: str, as_: str, meeting: str = DEFAULT_MEETING, when: str = D
     except (DoorRefused, cat.CatalogueError, Refused) as e:
         res.ok = False
         res.error = str(e)
-        res.steps.append({"do": "(stopped)", "door": "", "ok": False, "why": str(e)})
+        # WHICH step stopped decides how this is filed. A precondition that says no is not a rough
+        # edge; a door that says no is.
+        stopped = len([x for x in res.steps if x.get("ok")])
+        if stopped < len(st.steps) and cat.VERBS[st.steps[stopped].do].precondition:
+            res.refused = True
+        res.steps.append({"do": "(stopped)", "door": "", "ok": False, "why": str(e),
+                          "refused": res.refused})
     res.subjects = {k: v for k, v in bindings.items()
                     if isinstance(v, dict) and "uid" in v and "email" in v}
     res.wall_s = time.time() - started
@@ -450,76 +460,111 @@ def _scaffold_id(url: str) -> str:
 
 # ── the reset ────────────────────────────────────────────────────────────────────────────────────
 
+def is_malformed(address: str) -> bool:
+    """Is this stored email not an address at all?
+
+    The test is deliberately the SHAPE only and deliberately generous about what counts as an
+    address: it decides whether `subject_reset_malformed` may delete an account, so every doubt
+    has to resolve towards "this might be a person". A real user's email is well-formed by
+    construction — admin-api validates on create — so a stored value that fails this cannot name
+    anybody real. That asymmetry is the whole safety argument for the by-id path.
+    """
+    a = str(address or "").strip()
+    local, sep, host = a.rpartition("@")
+    return not (sep and local and "." in host and not any(c.isspace() for c in a))
+
+
+def subject_reset_malformed(uid: str, *, doors: Doors, catalog: cat.Catalogue | None = None,
+                            env: dict | None = None) -> dict:
+    """Remove an account BY ID — and only one whose stored email is not an address.
+
+    `subject_reset` refuses anything outside the test domain, which is right and must stay right:
+    the guard is the only thing keeping a rehearsal off real people. But it cannot clean up the one
+    account a rehearsal is most likely to create by accident — a subject with no domain at all.
+    User 131 (`20260902t183213z`) was minted by `ensure_user` from a mis-parsed ICS, and the
+    address guard could not pass judgement on it because there is nothing to judge.
+
+    So this path exists, and it is bounded by the fact that makes it safe: **it refuses any account
+    whose email IS well-formed.** A real person's address is well-formed, so this can never reach
+    one. It is not a domain exemption and it is not an override — it is a narrower rule that only
+    covers values no person could have.
+    """
+    catalog = catalog or cat.load()
+    email = doors.user_email(str(uid))
+    if not is_malformed(email):
+        raise Refused(
+            f"uid {uid} is {email!r}, which is a well-formed address — this path exists only for "
+            f"accounts whose email is not an address at all (a parse artefact). A real subject is "
+            f"reset by address, where the domain guard applies: subject_reset({email!r}).")
+    out = _reset_stores(str(uid), email, doors)
+    out["by"] = "id"
+    out["reason"] = "the stored email is not an address; no person can be named by it"
+    return out
+
+
+def _reset_stores(uid: str, address: str, doors: Doors) -> dict:
+    """The removal sequence itself — ONE rulebook, whichever path called it.
+
+    Order matters: the desk and the redis keys are addressed BY uid, so the user goes last. Every
+    store is attempted even when an earlier one refused, and each refusal lands in `remaining`
+    rather than stopping the rest: a reset that gives up halfway leaves a subject in a state no
+    caller can describe.
+    """
+    out: dict = {"address": address, "uid": uid or None, "removed": {}, "remaining": {}, "ok": False}
+
+    def attempt(name, fn):
+        try:
+            out["removed"][name] = fn()
+        except DoorRefused as e:
+            out["remaining"][name] = str(e)
+
+    if uid:
+        attempt("meetings", lambda: doors.meetings_delete_for(uid))
+        attempt("desk", lambda: doors.desk_delete(uid))
+        attempt("sessions", lambda: doors.session_keys_delete(uid))
+        attempt("friction", lambda: doors.friction_delete_for(uid))
+        # The lane's dedup memory. Without this the subject is gone and the state still cannot be
+        # re-entered: `admit()` swallows the next invite as a duplicate and the touch that should
+        # follow is simply never sent.
+        attempt("lane_rows", lambda: doors.lane_rows_delete_for(uid, address))
+    attempt("scaffolds", lambda: doors.scaffold_keys_delete(address))
+    attempt("mail", lambda: doors.mail_delete_for(address))
+    if uid:
+        attempt("user", lambda: doors.user_delete(uid))
+
+    # PROVE IT. Reading back is the whole difference between a reset and a claim of one.
+    if uid:
+        try:
+            doors.user_email(uid)
+            out["remaining"]["user_still_exists"] = uid
+        except DoorRefused:
+            pass                                    # gone, which is what we wanted
+    left = 0
+    try:
+        left = doors.scaffold_keys_delete(address)
+    except DoorRefused:
+        pass
+    if left:
+        out["remaining"]["scaffold_keys"] = left
+    out["ok"] = not out["remaining"]
+    return out
+
+
 def subject_reset(address: str, *, doors: Doors, catalog: cat.Catalogue | None = None,
                   env: dict | None = None) -> dict:
-    """Remove one subject entirely — user, desk, sessions, scaffolds, friction, mail.
+    """Remove one subject entirely — user, meetings, desk, sessions, scaffolds, friction, lane
+    rows, mail.
 
     A state is re-entered in seconds and the instance is never blanked (decision 38.3). The
     refusal is the same one `rehearse` uses and it comes first: a non-test address is not reset,
-    ever, and the tool says so rather than doing part of it.
+    ever, and the tool says so rather than doing part of it. The one account this cannot reach is
+    one whose stored email is not an address at all — see `subject_reset_malformed`.
 
     It VERIFIES EMPTINESS AFTERWARDS and reports what it could not remove. A reset that half
     worked and said "done" is the failure this whole file is built around — the ledger's phantom
     `_global` write, one layer down.
     """
     catalog = catalog or cat.load()
-    domain = catalog.domain(env)
     address = str(address).strip().lower()
-    guard_domain([address], domain)
-
-    out: dict = {"address": address, "removed": {}, "remaining": {}, "ok": False}
-    uid = doors.user_find(address)
-    out["uid"] = uid
-
-    # Order matters: the desk and the redis keys are addressed BY uid, so the user goes last.
-    if uid:
-        try:
-            out["removed"]["meetings"] = doors.meetings_delete_for(uid)
-        except DoorRefused as e:
-            out["remaining"]["meetings"] = str(e)
-        try:
-            out["removed"]["desk"] = doors.desk_delete(uid)
-        except DoorRefused as e:
-            out["remaining"]["desk"] = str(e)
-        try:
-            out["removed"]["sessions"] = doors.session_keys_delete(uid)
-        except DoorRefused as e:
-            out["remaining"]["sessions"] = str(e)
-        try:
-            out["removed"]["friction"] = doors.friction_delete_for(uid)
-        except DoorRefused as e:
-            out["remaining"]["friction"] = str(e)
-        try:
-            # The lane's dedup memory. Without this the subject is gone and the state still
-            # cannot be re-entered: `admit()` swallows the next invite as a duplicate and the
-            # touch that should follow is simply never sent.
-            out["removed"]["lane_rows"] = doors.lane_rows_delete_for(uid, address)
-        except DoorRefused as e:
-            out["remaining"]["lane_rows"] = str(e)
-    try:
-        out["removed"]["scaffolds"] = doors.scaffold_keys_delete(address)
-    except DoorRefused as e:
-        out["remaining"]["scaffolds"] = str(e)
-    try:
-        out["removed"]["mail"] = doors.mail_delete_for(address)
-    except DoorRefused as e:
-        out["remaining"]["mail"] = str(e)
-    if uid:
-        try:
-            out["removed"]["user"] = doors.user_delete(uid)
-        except DoorRefused as e:
-            out["remaining"]["user"] = str(e)
-
-    # PROVE IT. Reading back is the whole difference between a reset and a claim of one.
-    still = doors.user_find(address)
-    if still:
-        out["remaining"]["user_still_exists"] = still
-    left_scaffolds = 0
-    try:
-        left_scaffolds = doors.scaffold_keys_delete(address)
-    except DoorRefused:
-        pass
-    if left_scaffolds:
-        out["remaining"]["scaffold_keys"] = left_scaffolds
-    out["ok"] = not out["remaining"]
-    return out
+    guard_domain([address], catalog.domain(env))
+    return _reset_stores(doors.user_find(address) or "", address, doors)

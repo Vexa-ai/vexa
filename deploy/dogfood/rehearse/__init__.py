@@ -14,7 +14,9 @@ state is entered through the product's own doors: no DB writes, no volume edits,
 """
 from .catalogue import Catalogue, CatalogueError, State, Step, load  # noqa: F401
 from .doors import DoorRefused, Doors, LiveDoors                     # noqa: F401
-from .engine import Refused, Result, rehearse, subject_reset         # noqa: F401
+from .engine import (Refused, Result, is_malformed, rehearse, subject_reset,  # noqa: F401
+                     subject_reset_malformed)
 
 __all__ = ["Catalogue", "CatalogueError", "State", "Step", "load", "Doors", "LiveDoors",
-           "DoorRefused", "rehearse", "subject_reset", "Result", "Refused"]
+           "DoorRefused", "rehearse", "subject_reset", "subject_reset_malformed", "is_malformed",
+           "Result", "Refused"]

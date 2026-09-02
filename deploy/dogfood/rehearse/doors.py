@@ -140,6 +140,7 @@ class Doors:
 
     # ── reads the verify block needs ─────────────────────────────────────────────────────────
     def user_find(self, address: str): raise NotImplementedError
+    def user_email(self, uid: str) -> str: raise NotImplementedError
     def meeting_get(self, owner: str, meeting_id) -> dict: raise NotImplementedError
     def desk_tree(self, subject: str, slug: str = "") -> list: raise NotImplementedError
     def group_members(self, owner: str, group: str) -> list: raise NotImplementedError
@@ -613,6 +614,12 @@ class LiveDoors(Doors):
         st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{urllib.parse.quote(address)}",
                       self._ak())
         return str(u["id"]) if st == 200 and isinstance(u, dict) and u.get("id") else None
+
+    def user_email(self, uid: str) -> str:
+        st, u = _http("GET", f"{ADMIN_API}/admin/users/{uid}", self._ak())
+        if st != 200 or not isinstance(u, dict):
+            raise DoorRefused(f"no user {uid} on this instance ({st})")
+        return str(u.get("email") or "")
 
     def meeting_get(self, owner: str, meeting_id) -> dict:
         st, b = self._gw(owner, "GET", f"/meetings/{meeting_id}")

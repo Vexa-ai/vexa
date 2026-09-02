@@ -10,6 +10,7 @@ in front of them, and the control MCP's `rehearse` / `subject_reset` tools call 
     rehearse.py enter attendee-stranger-minutes sam@rehearse.test --meeting 2026-03-16 --fresh
     rehearse.py enter reply-pending sam@rehearse.test --runner openai-agent   # on the CCC Qwen
     rehearse.py reset olga@rehearse.test
+    rehearse.py reset 131 --by-id                # a subject whose email is not an address
     rehearse.py all                                      # the whole catalogue (run_all)
 
 Every address must be under $VEXA_REHEARSE_DOMAIN (default rehearse.test), and the tool refuses
@@ -29,7 +30,7 @@ from rehearse import catalogue as cat                                    # noqa:
 from rehearse.doors import MAIL_ADDR, DoorRefused, LiveDoors            # noqa: E402
 from rehearse.engine import DEFAULT_MEETING, DEFAULT_WHEN, Refused       # noqa: E402
 from rehearse.engine import rehearse as enter_state                      # noqa: E402
-from rehearse.engine import subject_reset                                # noqa: E402
+from rehearse.engine import subject_reset, subject_reset_malformed       # noqa: E402
 
 
 def cmd_states(a, catalog) -> int:
@@ -70,7 +71,13 @@ def cmd_enter(a, catalog) -> int:
 
 
 def cmd_reset(a, catalog) -> int:
-    out = subject_reset(a.subject, doors=_doors(a), catalog=catalog)
+    doors = _doors(a)
+    if a.by_id:
+        # The one account the address guard cannot judge: a subject whose stored email is not an
+        # address at all. Refused unless that is true of it — see engine.subject_reset_malformed.
+        out = subject_reset_malformed(a.subject, doors=doors, catalog=catalog)
+    else:
+        out = subject_reset(a.subject, doors=doors, catalog=catalog)
     print(json.dumps(out, indent=1, default=str))
     return 0 if out["ok"] else 1
 
@@ -116,7 +123,10 @@ def main(argv=None) -> int:
         p.set_defaults(fn=fn)
 
     p = sub.add_parser("reset", help="remove one subject entirely")
-    p.add_argument("subject")
+    p.add_argument("subject", help="the address, or the uid with --by-id")
+    p.add_argument("--by-id", action="store_true",
+                   help="treat SUBJECT as a uid; only for an account whose stored email is not an "
+                        "address at all (a parse artefact) — a well-formed one is refused")
     p.set_defaults(fn=cmd_reset)
 
     p = sub.add_parser("all", help="run every state (run_all)")
