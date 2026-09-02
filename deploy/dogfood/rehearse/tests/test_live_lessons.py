@@ -91,3 +91,51 @@ def test_blank_admin_refuses_on_a_claimed_instance_which_is_the_live_answer(cata
                    catalog=catalog, env=env)
     assert not res.ok
     assert "NOT blank" in res.error and "blank-instance.sh" in res.error
+
+
+# ── run 4's lesson: a rehearsal must leave NOTHING armed ─────────────────────────────────────────
+
+def test_every_state_that_drops_an_invite_disarms_its_bot_leg(catalog):
+    """`invite_intake` parks on `await_start` until start−2min and then dispatches a REAL bot at
+    the invite's URL. These states rehearse the PREPARE TOUCH; the bot leg is not what they
+    measure, and leaving it parked arms a live dispatch at a fixture Zoom URL that fires on the
+    clock long after the state was reported green.
+
+    It happened on 2026-09-02: meeting 115 reached `joining` at 19:20Z while the catalogue was
+    still running, because the run outlived a `+30m` start.
+    """
+    for name, st in catalog.states.items():
+        verbs = [step.do for step in st.steps]
+        if "drop_invite" not in verbs:
+            continue
+        assert "cancel_bot_leg" in verbs, f"{name} drops an invite and never disarms it"
+        assert verbs.index("cancel_bot_leg") > verbs.index("drop_invite"), name
+
+
+def test_the_default_start_cannot_be_reached_by_a_run_s_own_wall_clock():
+    """A floor, not the fix. Three states with a 677-segment import and an agent turn each ran for
+    well over half an hour; `+30m` put start−2min inside that window."""
+    from rehearse.engine import DEFAULT_WHEN, parse_when
+    assert parse_when(DEFAULT_WHEN, 0.0) >= 3 * 3600
+
+
+def test_the_state_actually_cancels_the_parked_reaction(catalog, env):
+    doors = StubDoors()
+    res = rehearse("organizer-invited", "rehearse-organizer-invited@rehearse.test", doors=doors,
+                   catalog=catalog, env=env)
+    assert res.ok, res.error
+    parked = [r for r in doors.reactions
+              if r["flow"] == "invite_intake" and r["state"] != "cancelled"]
+    assert not parked, f"the run left a parked invite reaction: {parked}"
+
+
+def test_a_cancel_that_is_refused_fails_the_state_rather_than_passing_quietly(catalog, env):
+    """The one outcome that must never be silent: a reaction we could not disarm is a bot that
+    will be dispatched."""
+    class NoCancel(StubDoors):
+        def cancel_bot_leg(self, flow, source_contains=""):
+            raise DoorRefused("cancelled 0, REFUSED ['r1:500']")
+    res = rehearse("organizer-invited", "rehearse-organizer-invited@rehearse.test",
+                   doors=NoCancel(), catalog=catalog, env=env)
+    assert not res.ok
+    assert "REFUSED" in res.error

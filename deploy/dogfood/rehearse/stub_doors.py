@@ -132,6 +132,11 @@ class StubDoors(Doors):
         mid = self._id()
         self.meetings[mid] = {"id": mid, "native_meeting_id": ics_uid or mid, "status": "scheduled",
                               "owner": uid, "title": title}
+        # `invite_intake` PARKS on `await_start` and then dispatches a real bot. Modelled, because
+        # the thing the recipe has to prove is that it leaves nothing armed.
+        self.reactions.append({"flow": "invite_intake", "state": "retrying", "id": self._id("r"),
+                               "created_at": time.time(),
+                               "source_event_id": f"ics-{ics_uid}::invite_intake"})
         self.calls.append(("drop_invite", organizer, title, group))
         return {"ics_uid": ics_uid, "to": "vexa@storm.test", "organizer": organizer,
                 "start": start, "attendees": [a for _, a in attendees]}
@@ -240,6 +245,14 @@ class StubDoors(Doors):
             return "new"
         other = [f for f in files if "/meeting/" not in f and not f.endswith("index.md")]
         return "warm" if other else "pile"
+
+    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+        live = [r for r in self.reactions
+                if r["flow"] == flow and r["state"] in ("admitted", "running", "retrying")]
+        for r in live:
+            r["state"] = "cancelled"
+        self.calls.append(("cancel_bot_leg", flow))
+        return {"flow": flow, "cancelled": len(live), "ids": [r["id"] for r in live]}
 
     # -- reads -----------------------------------------------------------------------------------
     def user_find(self, address: str):

@@ -120,8 +120,8 @@ def test_the_meetings_list_never_reads_a_refusal_as_no_meetings():
     for node in ast.walk(tree):
         if (isinstance(node, ast.Constant) and isinstance(node.value, str)
                 and id(node) not in docstrings):
-            assert "limit=200" not in node.value, (
-                "a request string still asks for more than the cap")
+            assert "/meetings?limit=200" not in node.value, (
+                "a meetings request still asks for more than that route's cap")
     assert doors.MEETINGS_PAGE_MAX == 100, "the route's own cap, not a number we prefer"
 
     # Exactly one place reads that list, and it RAISES rather than defaulting to empty.

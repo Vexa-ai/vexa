@@ -132,6 +132,8 @@ class Doors:
         raise NotImplementedError
     def await_reaction(self, flow: str, since: float = 0.0, budget_s: int = 300) -> dict:
         raise NotImplementedError
+    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+        raise NotImplementedError
 
     # ── the per-subject harness (decisions 37 + 38) ──────────────────────────────────────────
     def bind_runner(self, subject: str, runner: str) -> dict: raise NotImplementedError
@@ -558,6 +560,42 @@ class LiveDoors(Doors):
             raise DoorRefused(f"admin-api refused the runner binding for {subject}: "
                               f"{st} {str(body)[:200]}")
         return {"subject": str(subject), "runner": runner, "config": cfg}
+
+    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+        """Cancel this recipe's own parked reaction — `POST /reactions/{id}/cancel`, the product's
+        audited lifecycle verb.
+
+        A REHEARSAL MUST LEAVE NOTHING ARMED. `invite_intake` parks on `await_start` until
+        start−2min and then dispatches a REAL bot at the invite's URL, and the states that use an
+        invite are rehearsing the PREPARE TOUCH — the bot leg is not what they measure. Leaving the
+        reaction parked means the run has armed a live dispatch at a fixture Zoom URL that fires on
+        the clock, long after the state was reported green. It happened: meeting 115 reached
+        `joining` at 19:20Z while the catalogue was still running.
+
+        Scoped by `source_contains` so it can only reach a reaction this recipe's own derived ids
+        name — never another lane user's parked work.
+        """
+        st, body = _http("GET", f"{FLOWS_API}/reactions?limit=100",
+                         {"X-Flows-Admin-Key": self._flows_key})
+        rows = (body or {}).get("reactions", []) if isinstance(body, dict) else []
+        if st != 200 or not isinstance(body, dict):
+            raise DoorRefused(f"could not list reactions to cancel the bot leg: {st}")
+        targets = [r for r in rows
+                   if r.get("flow") == flow
+                   and str(r.get("status")) in ("admitted", "retrying")
+                   and (not source_contains
+                        or source_contains in str(r.get("source_event_id") or ""))]
+        cancelled, refused = [], []
+        for r in targets:
+            rid = r.get("reaction_id") or r.get("id")
+            cst, cb = _http("POST", f"{FLOWS_API}/reactions/{rid}/cancel",
+                            {"X-Flows-Admin-Key": self._flows_key}, {})
+            (cancelled if 200 <= cst < 300 else refused).append(f"{rid}:{cst}")
+        if refused:
+            raise DoorRefused(
+                f"cancelled {len(cancelled)}, REFUSED {refused} — a parked invite reaction left "
+                f"behind will dispatch a real bot at a fixture URL when its clock arrives")
+        return {"flow": flow, "cancelled": len(cancelled), "ids": cancelled}
 
     # ── reads ─────────────────────────────────────────────────────────────────────────────────
     def user_find(self, address: str):

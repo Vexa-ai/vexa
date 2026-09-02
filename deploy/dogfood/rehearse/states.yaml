@@ -119,6 +119,15 @@ states:
         to: "{{subject}}"
         subject_contains: "Prepare"
         as: prepare_mail
+      # A REHEARSAL LEAVES NOTHING ARMED. `invite_intake` parks on `await_start` until start−2min
+      # and then dispatches a REAL bot at the invite's URL — and this state rehearses the PREPARE
+      # touch, not the bot leg. Left parked, the run arms a live dispatch at a fixture Zoom URL
+      # that fires on the clock long after the state was reported green: on 2026-09-02 meeting 115
+      # reached `joining` while the catalogue was still running.
+      - do: cancel_bot_leg
+        door: flows-api
+        flow: invite_intake
+        source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
     artefacts:
       mail: "RSVP (\"Accepted\") and \"Prepare: {{title}}\" to {{subject}}"
       link: the prepare mail's only link is /?s=<scaffold id> (kind `prep`)
@@ -345,6 +354,10 @@ states:
         to: "{{subject}}"
         subject_contains: "Prepare"
         as: prepare_mail
+      - do: cancel_bot_leg          # same reason as organizer-invited: disarm the bot leg
+        door: flows-api
+        flow: invite_intake
+        source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
     artefacts:
       mail: "\"Prepare: {{title}}\" to {{subject}}"
       link: "/?s=<scaffold id> (kind `prep`) whose refs carry `state: warm`"

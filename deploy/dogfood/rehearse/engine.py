@@ -35,7 +35,16 @@ from . import catalogue as cat
 from .doors import DoorRefused, Doors
 
 DEFAULT_MEETING = "2026-03-02"
-DEFAULT_WHEN = "+30m"
+# FAR ENOUGH OUT THAT A RUN CANNOT OUTLIVE IT. `invite_intake` parks on `await_start` until
+# start−2min and then dispatches a REAL bot at the invite's URL. At +30m a catalogue run — three
+# states with a 677-segment import and an agent turn each — reached start−2min while it was still
+# going, and a bot was dispatched at the fixture Zoom URL (meeting 115, status `joining`, 2026-09-02
+# 19:20Z). +3h is the ledger's own figure, chosen for this exact reason at station 2; not carrying
+# it over is what cost this.
+#
+# The default is a floor, not the fix: `cancel_bot_leg` below is the fix, because a rehearsal must
+# leave nothing armed no matter how long it ran.
+DEFAULT_WHEN = "+3h"
 
 
 class Refused(RuntimeError):
@@ -357,6 +366,8 @@ def _execute(step: cat.Step, args: dict, doors: Doors, bindings: dict, fixture: 
     if v == "await_reaction":
         return doors.await_reaction(args["flow"], float(args.get("since") or 0.0),
                                     int(args.get("budget_s") or 300))
+    if v == "cancel_bot_leg":
+        return doors.cancel_bot_leg(args["flow"], args.get("source_contains") or "")
     raise cat.CatalogueError(f"no executor for verb {v!r} — catalogue.VERBS and engine._execute "
                              f"have drifted apart")
 
