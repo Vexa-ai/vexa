@@ -155,7 +155,7 @@ export function pageForArtifact(ev: { workspace?: string; path?: string }): Page
 
 /** AN AGENT'S WRITE NAVIGATES THE VIEW; IT NEVER MINTS A TAB (PRD decision 28).
  *
- *  This replaces `artifactTabEffect`, which appended one. The founder's screenshot: seven tabs after
+ *  This replaces the REMOVED `artifactTabEffect`, which appended one. The founder's screenshot: seven tabs after
  *  a few chip clicks, and the same path rendered twice. *"we do not want to create new tab for every
  *  click, tab is only when tab is specifically requested."*
  *
