@@ -81,6 +81,7 @@ from control_plane import version as version_mod
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import friction as friction_store_mod
+from control_plane import model_endpoint
 from shared import friction as friction_mod
 from control_plane import chat_intents
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
@@ -637,9 +638,12 @@ def _sse(events) -> Iterator[str]:
 
 def _has_custom_model_endpoint(cfg: dict) -> bool:
     """True iff a per-user Settings → Models config actually delivers a credential to the worker.
-    Mirrors overlay_model_config's inertness rule (dispatch.py): only ``mode=custom`` WITH a
-    ``base_url`` stamps auth env; ``api_key`` is optional (a keyless local gateway is legitimate)."""
-    return (cfg.get("mode") or "").strip() == "custom" and bool((cfg.get("base_url") or "").strip())
+
+    ONE spelling, shared with the dispatch overlay and the Test button (F93): this used to be a
+    third hand-written copy of "is this custom", and the three disagreed — the Test button certified
+    a configuration the turn would not use. It now delegates to `model_endpoint.has_custom_endpoint`
+    so the pre-flight gate and the dispatch cannot answer differently."""
+    return model_endpoint.has_custom_endpoint(cfg)
 
 
 def _model_creds_error_message() -> str:
@@ -1082,6 +1086,10 @@ def create_app(
             _redis_for_friction.from_url(redis_url, decode_responses=True))
     else:
         friction = friction_store_mod.FrictionStore()
+    # A REFUSED model endpoint is friction, not a log line (F84). The dispatcher is built before the
+    # store, so the sink is attached here; a fake dispatcher in a test simply has no such method.
+    if hasattr(dispatcher, "attach_friction"):
+        dispatcher.attach_friction(friction.file)
     wsr = reader or WorkspaceReader("/workspaces")
     mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     # THE WORKSPACE REGISTRY (PRD decision 26.1) — id → where that workspace is NOW. Same redis

@@ -59,7 +59,7 @@ import re
 import subprocess
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Optional
 
 import httpx
@@ -390,19 +390,29 @@ _READ_MAX_CHARS = 100_000
 _GLOB_MAX = 400
 
 
-def mount_roots(work: Path) -> list[Path]:
+def mount_roots(work: Path, *, writable_only: bool = False) -> list[Path]:
     """Every directory this harness's file tools may touch: the turn's cwd plus each declared mount.
 
     Read from ``VEXA_MOUNTS`` the same way ``worker.engine.active_mounts`` does — by ENV, not by
     import, because this module owns no product imports. A malformed value costs the extra mounts,
-    never the turn."""
+    never the turn.
+
+    ``writable_only`` HONOURS THE MOUNT'S ``write`` FLAG (F87). The set carries read-only mounts —
+    ``_global`` (the org tier, platform-write-only) and every desk in a post-meeting room — and this
+    function used to drop the flag, so ``Write``/``Edit`` were rooted in workspaces the dispatch had
+    declared read-only. Only the docker ``:ro`` bind stood between the model and somebody else's
+    desk, and the process backend has no such bind at all. The turn's cwd stays in BOTH sets: it is
+    the primary mount, which ``dispatch._worker_cwd`` picks precisely because it is writable."""
     roots = [work.resolve()]
     raw = os.environ.get("VEXA_MOUNTS") or ""
     if raw:
         try:
             for m in json.loads(raw):
-                if isinstance(m, dict) and m.get("path"):
-                    roots.append(Path(str(m["path"])).resolve())
+                if not (isinstance(m, dict) and m.get("path")):
+                    continue
+                if writable_only and not m.get("write"):
+                    continue
+                roots.append(Path(str(m["path"])).resolve())
         except (ValueError, TypeError, OSError):
             log.warning("VEXA_MOUNTS is not valid JSON — file tools are scoped to the cwd only")
     out: list[Path] = []
@@ -417,26 +427,48 @@ class _Sandbox:
     mistake worth telling the model about — a silently rewritten path writes the right bytes to the
     wrong workspace, which is the one failure nobody can see afterwards."""
 
-    def __init__(self, roots: list[Path]) -> None:
+    def __init__(self, roots: list[Path], write_roots: Optional[list[Path]] = None) -> None:
         self._roots = roots
+        # F87: the WRITABLE subset. Defaults to the read set so a caller that knows of only one
+        # scope (a test, the eval stub) behaves exactly as before.
+        self._write_roots = roots if write_roots is None else write_roots
 
     def resolve(self, raw: str) -> Path:
+        """A path a READ tool may touch — anywhere in the mount set."""
+        return self._within(raw, self._roots, "mounted workspaces")
+
+    def resolve_write(self, raw: str) -> Path:
+        """A path a WRITE tool may touch — the WRITABLE mounts only (F87). A read-only mount is a
+        governance decision the dispatch already made; asking the model nicely is not enforcement."""
+        return self._within(raw, self._write_roots, "WRITABLE mounted workspaces")
+
+    def contains(self, raw: str) -> bool:
+        """True when ``raw`` is inside the read set — for filtering hits rather than refusing a call."""
+        try:
+            self.resolve(raw)
+        except (ValueError, OSError):
+            return False
+        return True
+
+    def _within(self, raw: str, roots: list[Path], what: str) -> Path:
         if not raw:
             raise ValueError("no path given")
+        if not roots:
+            raise ValueError(f"this turn has no {what}")
         p = Path(raw)
         if not p.is_absolute():
-            p = self._roots[0] / p
+            p = roots[0] / p
         # resolve() without strict so a not-yet-existing file still normalises (Write creates it)
         p = Path(os.path.normpath(str(p)))
         try:
             real = p.resolve()
         except OSError:
             real = p
-        for root in self._roots:
+        for root in roots:
             if real == root or root in real.parents:
                 return real
-        raise ValueError(f"path {raw} is outside the mounted workspaces "
-                         f"({', '.join(str(r) for r in self._roots)})")
+        raise ValueError(f"path {raw} is outside the {what} "
+                         f"({', '.join(str(r) for r in roots)})")
 
 
 def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
@@ -451,13 +483,13 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
             chunk = "\n".join(lines[start:start + limit])
             return True, chunk[:_READ_MAX_CHARS]
         if tool == "Write":
-            path = sandbox.resolve(str(args.get("file_path") or ""))
+            path = sandbox.resolve_write(str(args.get("file_path") or ""))
             path.parent.mkdir(parents=True, exist_ok=True)
             content = args.get("content")
             path.write_text("" if content is None else str(content), encoding="utf-8")
             return True, f"wrote {path}"
         if tool == "Edit":
-            path = sandbox.resolve(str(args.get("file_path") or ""))
+            path = sandbox.resolve_write(str(args.get("file_path") or ""))
             old, new = str(args.get("old_string") or ""), str(args.get("new_string") or "")
             text = path.read_text(encoding="utf-8")
             hits = text.count(old)
@@ -471,7 +503,24 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
         if tool == "Glob":
             base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
             pattern = str(args.get("pattern") or "*")
-            hits = sorted(str(p) for p in base.glob(pattern) if p.is_file())[:_GLOB_MAX]
+            # F86: THE PATTERN IS A PATH TOO. `Read` resolved its argument through the sandbox and
+            # `Glob` did not, so `{"pattern": "../../../etc/*"}` enumerated the container's whole
+            # filesystem from inside a workspace turn — the sandbox refused the read that followed,
+            # but the listing itself is the disclosure. Refuse the two escapes a pattern can spell,
+            # then resolve every HIT as well: a symlink inside the mount is the same escape wearing
+            # a legal-looking pattern.
+            if pattern.startswith("/") or ".." in PurePosixPath(pattern).parts:
+                return False, ("pattern must be relative to the search path and may not contain "
+                               "'..' — name a `path` under a mounted workspace instead")
+            hits: list[str] = []
+            for p in base.glob(pattern):
+                try:
+                    real = sandbox.resolve(str(p))
+                except (ValueError, OSError):
+                    continue                      # a symlink out of the mounts is not a hit
+                if real.is_file():
+                    hits.append(str(real))
+            hits = sorted(set(hits))[:_GLOB_MAX]
             return True, "\n".join(hits) if hits else "(no matches)"
         if tool == "Grep":
             base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
@@ -484,6 +533,8 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
                     break
                 if not f.is_file() or ".git" in f.parts:
                     continue
+                if not sandbox.contains(str(f)):
+                    continue                      # same escape as F86, reached through a symlink
                 if keep and not fnmatch.fnmatch(f.name, keep):
                     continue
                 try:
@@ -599,14 +650,72 @@ class _Transcript:
 
 # ── context trimming ────────────────────────────────────────────────────────────────────────────
 
+def _call_ids(msg: dict) -> set[str]:
+    """The ids of the tool calls THIS assistant message made."""
+    return {str(tc.get("id")) for tc in (msg.get("tool_calls") or [])
+            if isinstance(tc, dict) and tc.get("id")}
+
+
+def _exchange(msgs: list[dict], i: int) -> set[int]:
+    """The indices that must leave TOGETHER if index ``i`` leaves — an assistant's tool_calls and
+    every ``tool`` message answering them (F88).
+
+    The OpenAI dialect is strict in both directions: an assistant message whose ``tool_calls`` have
+    no answering ``tool`` message is a 400, and so is a ``tool`` message whose caller is gone. The
+    old trimmer dropped one message at a time and hit both."""
+    msg = msgs[i]
+    ids = _call_ids(msg)
+    if ids:
+        return {i} | {j for j, m in enumerate(msgs)
+                      if m.get("role") == "tool" and str(m.get("tool_call_id")) in ids}
+    if msg.get("role") == "tool":
+        cid = str(msg.get("tool_call_id") or "")
+        caller = next((j for j, m in enumerate(msgs) if cid and cid in _call_ids(m)), None)
+        return {i} if caller is None else _exchange(msgs, caller)
+    return {i}
+
+
+def prune_orphans(messages: list[dict]) -> tuple[list[dict], int]:
+    """Remove tool/assistant messages that cannot be sent because their counterpart is missing.
+
+    This is a REPAIR, not a sacrifice: such a message is unsendable, so keeping it costs the whole
+    turn. It matters most on a RESUMED session — a transcript written by the old trimmer carries the
+    orphan for good, so every subsequent turn of that conversation 400s until somebody starts a new
+    one, which is exactly how the defect reproduced."""
+    msgs = list(messages)
+    removed = 0
+    while True:
+        answered = {str(m.get("tool_call_id")) for m in msgs if m.get("role") == "tool"}
+        called: set[str] = set()
+        for m in msgs:
+            called |= _call_ids(m)
+        drop = {i for i, m in enumerate(msgs)
+                if (m.get("role") == "tool" and str(m.get("tool_call_id")) not in called)
+                or (_call_ids(m) and not (_call_ids(m) & answered))}
+        if not drop:
+            return msgs, removed
+        msgs = [m for i, m in enumerate(msgs) if i not in drop]
+        removed += len(drop)
+
+
 def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
     """Fit ``messages`` under ``budget`` estimated tokens. Returns (messages, trimmed_count).
 
     Order of sacrifice, oldest first: tool RESULTS (replaced by a stub, so the model still sees that
-    the call happened), then whole oldest exchanges, and only then the head of the first user
+    the call happened), then whole oldest EXCHANGES, and only then the head of the first user
     message. The LAST user message is never touched — it is the ask, and a turn that trims the ask
-    answers a question nobody put."""
-    msgs = [dict(m) for m in messages]
+    answers a question nobody put.
+
+    "Exchange", not "message" (F88): dropping an assistant turn without the ``tool`` messages that
+    answered it — or a ``tool`` message without its caller — produces a request every
+    OpenAI-compatible server rejects with a 400, and the malformation is WRITTEN TO THE TRANSCRIPT,
+    so a resumed session reproduced it on every later turn. `prune_orphans` runs first and
+    unconditionally, healing transcripts the old trimmer already broke; its removals are not counted
+    as trimming because they buy no context, they only make the request sendable."""
+    msgs, healed = prune_orphans([dict(m) for m in messages])
+    if healed:
+        log.warning("dropped %d orphaned tool message(s) from the session transcript — an "
+                    "assistant turn and its tool results must leave together", healed)
     if _est_tokens(msgs) <= budget:
         return msgs, 0
     trimmed = 0
@@ -617,14 +726,22 @@ def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
             m["content"] = _TRIM_STUB
             trimmed += 1
     last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-    while _est_tokens(msgs) > budget:                  # 2) drop oldest non-final messages
-        drop = next((i for i, m in enumerate(msgs)
-                     if i != last_user and i != 0 and m.get("role") != "system"), None)
-        if drop is None:
+    while _est_tokens(msgs) > budget:                  # 2) drop oldest non-final EXCHANGES
+        drop: Optional[set[int]] = None
+        for i, m in enumerate(msgs):
+            if i == 0 or i == last_user or m.get("role") == "system":
+                continue
+            group = _exchange(msgs, i)
+            if 0 in group or last_user in group or any(msgs[j].get("role") == "system"
+                                                       for j in group):
+                continue                               # the group is anchored — try the next one
+            drop = group
             break
-        msgs.pop(drop)
+        if not drop:
+            break
+        msgs = [m for i, m in enumerate(msgs) if i not in drop]
+        trimmed += len(drop)
         last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-        trimmed += 1
     if _est_tokens(msgs) > budget and len(msgs) > 1:   # 3) last resort: head-truncate the opener
         head = msgs[0]
         content = str(head.get("content") or "")
@@ -684,7 +801,12 @@ class OpenAIAgentHarness:
             return ("openai-agent: no VEXA_LLM_BASE_URL — every workspace turn will fail until an "
                     "OpenAI-compatible endpoint is set")
         if not (self._model or os.environ.get("VEXA_AGENT_MODEL")):
-            return "openai-agent: no VEXA_LLM_MODEL — the endpoint will be asked for an empty model"
+            # NAME THE KEY THE OPERATOR ACTUALLY SETS (F91). `VEXA_AGENT_MODEL` is what Settings →
+            # Models writes and what the dispatch stamps into every worker; `VEXA_LLM_MODEL` is only
+            # this harness's override, so sending the operator to it sent them to the dial that
+            # would not be read.
+            return ("openai-agent: no VEXA_AGENT_MODEL (nor the VEXA_LLM_MODEL override) — the "
+                    "endpoint will be asked for an empty model")
         return None
 
     def midturn_enabled(self) -> bool:
@@ -715,7 +837,8 @@ class OpenAIAgentHarness:
                 "no agent endpoint: set VEXA_LLM_BASE_URL (e.g. http://192.168.1.6:8001/v1) — the "
                 "openai-agent runner has no default host")
         if not target:
-            raise LLMConfigError("no model: set VEXA_LLM_MODEL (or VEXA_AGENT_MODEL)")
+            raise LLMConfigError("no model: set VEXA_AGENT_MODEL (Settings → Models writes this "
+                                 "one), or the VEXA_LLM_MODEL override for this harness")
 
         chat_root = self._chat_root or work
         store = _Transcript(chat_root, work, sid)
@@ -738,11 +861,21 @@ class OpenAIAgentHarness:
             budget_secs = _float_env("VEXA_AGENT_MAX_TURN_SEC", _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
             started, calls_made, reply = time.monotonic(), 0, ""
-            sandbox = _Sandbox(mount_roots(work))
+            sandbox = _Sandbox(mount_roots(work), mount_roots(work, writable_only=True))
+            # F89: WHAT THE TURN GAVE UP, carried to the `done` event. `turn-truncated` and
+            # `context-trimmed` are emitted for the log and the panel, but neither had a consumer —
+            # the terminal reducer's switch has no case for them and the engine drops them — so a
+            # turn that ran out of tool calls, ran out of wall clock, or answered from a context it
+            # had sacrificed reported `done.ok=True` with a partial reply and looked complete.
+            # `done` is one of the five FROZEN types, so this rides as an optional field on it
+            # rather than as a sixth type.
+            truncation = ""
+            trimmed_total = 0
 
             while True:
                 sent, trimmed = trim_messages(messages, ctx_budget)
                 if trimmed:
+                    trimmed_total += trimmed
                     yield {"type": "context-trimmed", "dropped": trimmed,
                            "tokens": _est_tokens(sent), "budget": ctx_budget}
                     messages = sent
@@ -769,6 +902,7 @@ class OpenAIAgentHarness:
                     if calls_made >= budget_calls or (time.monotonic() - started) > budget_secs:
                         over_budget = True
                         reason = "tool-call budget" if calls_made >= budget_calls else "time budget"
+                        truncation = reason
                         yield {"type": "turn-truncated", "reason": reason,
                                "calls": calls_made, "seconds": round(time.monotonic() - started, 1)}
                         # EVERY call the model made is answered, refusals included. An assistant
@@ -786,7 +920,7 @@ class OpenAIAgentHarness:
                     calls_made += 1
                     yield {"type": "tool-call", "tool": call["name"], "args": call["args"],
                            "callId": call["id"]}
-                    ok, out = self._exec_tool(call, mcp_index, sandbox)
+                    ok, out = self._exec_tool(call, mcp_index, sandbox, allow)
                     out = out[:_TOOL_RESULT_MAX_CHARS]
                     yield {"type": "tool-result", "callId": call["id"], "ok": ok,
                            "summary": _short(out)}
@@ -797,13 +931,33 @@ class OpenAIAgentHarness:
                 if over_budget:
                     reply = text
                     break
-            yield {"type": "done", "reply": reply, "sessionId": sid, "ok": True}
+            # THE TURN'S OWN VERDICT. `ok` is False only when the turn did not finish its own
+            # reasoning — it hit a budget — because that reply is partial and acting on it as if it
+            # were an answer is the failure. A context trim leaves a COMPLETE answer built on less,
+            # so it stays ok=True and says so in `reason`; the consumer decides how loud that is.
+            done: dict = {"type": "done", "reply": reply, "sessionId": sid,
+                          "ok": not truncation}
+            if truncation:
+                done["reason"] = f"the turn stopped early: {truncation}"
+            elif trimmed_total:
+                done["reason"] = (f"context-trimmed: {trimmed_total} message(s) dropped to stay "
+                                  f"inside the turn's {ctx_budget}-token budget")
+            yield done
         finally:
             for srv in servers:
                 srv.close()
 
-    def _exec_tool(self, call: dict, mcp_index: dict, sandbox: _Sandbox) -> tuple[bool, str]:
+    def _exec_tool(self, call: dict, mcp_index: dict, sandbox: _Sandbox,
+                   allow: set[str]) -> tuple[bool, str]:
         name, args = call["name"], call["args"]
+        # F85 (SECURITY): THE ALLOW-SET IS ENFORCED HERE, not only where tools are advertised.
+        # `specs` filters what the model is TOLD about, and a model that names a tool it was never
+        # offered — smaller models do this constantly, and a resumed transcript carries the names of
+        # tools an earlier turn had — was executed anyway. `allowed_tools=["Read"]` ran `Write`.
+        # A refusal is a normal tool result: the model sees it and corrects itself.
+        if not _allowed(name, allow):
+            return False, (f"{name} is not allowed on this turn — the allowed tools are "
+                           f"{sorted(allow)}")
         if name in mcp_index:
             srv, tool = mcp_index[name]
             return srv.call(tool, args if isinstance(args, dict) else {})
@@ -843,6 +997,16 @@ class OpenAIAgentHarness:
                         chunk = json.loads(data)
                     except ValueError:
                         continue
+                    # F90: AN ERROR FRAME ON A 200 RESPONSE. vLLM, LiteLLM and OpenRouter all
+                    # answer 200 and then put the failure INSIDE the stream (a rate limit, a
+                    # context overflow, an upstream 5xx). The old loop looked only for `delta`, so
+                    # such a frame was skipped and the turn ended with an empty successful reply —
+                    # the person saw the agent say nothing and nothing anywhere said why.
+                    err = chunk.get("error")
+                    if err:
+                        detail = err.get("message") if isinstance(err, dict) else str(err)
+                        raise LLMError(f"{self._base} streamed an error frame: "
+                                       f"{_short(detail or err, 300)}")
                     delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
                     if delta.get("content"):
                         acc_text += delta["content"]
@@ -860,6 +1024,14 @@ class OpenAIAgentHarness:
                             slot["function"]["arguments"] += fn["arguments"]
         except httpx.HTTPError as exc:
             raise LLMError(f"agent transport failure against {self._base}: {exc}") from exc
+        # F90: A STREAM THAT SAID NOTHING is a failure, not an empty answer. A truncated connection,
+        # a model that emitted only reasoning tokens (the Qwen thinking case VEXA_LLM_EXTRA_BODY
+        # exists to switch off), a `[DONE]` with no content — all reached `done.ok=True` with an
+        # empty reply, which the chat renders as the agent having nothing to say.
+        if not acc_text and not acc_calls:
+            raise LLMError(f"{self._base} streamed no content and no tool calls — the endpoint "
+                           "answered 200 with an empty completion (a truncated stream, or a model "
+                           "spending its whole budget on reasoning tokens)")
         msg: dict = {"role": "assistant", "content": acc_text}
         if acc_calls:
             msg["tool_calls"] = [acc_calls[k] for k in sorted(acc_calls)]

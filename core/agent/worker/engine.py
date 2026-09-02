@@ -1129,7 +1129,12 @@ def run_turn_over_workspace(
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)
-    if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
+    # A FIRST EVENT THAT IS ALREADY `done.ok=False` means the harness refused the RESUME (an alien or
+    # stale session id) — heal it by running the same prompt with no session. `reason` is what says
+    # this is NOT that case (F89): a turn that stopped on its own budget also reports ok=False, and
+    # re-running it from scratch would burn the budget again and answer no better.
+    if (resume and first is not None and first.get("type") == "done"
+            and not first.get("ok", True) and not first.get("reason")):
         if sess_file.exists():
             sess_file.unlink()
         gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
@@ -1144,6 +1149,10 @@ def run_turn_over_workspace(
             tool_events.append(ev)
         if ev.get("type") == "done" and ev.get("sessionId"):
             captured = ev["sessionId"]
+        if ev.get("type") == "done" and ev.get("reason"):
+            # WHAT THE TURN GAVE UP (F89). Before this the budget/trim events had no consumer at
+            # all, so a turn that stopped halfway looked in every log exactly like one that finished.
+            log.warning("turn incomplete for session=%s: %s", session or "-", ev["reason"])
         yield ev
     # AFTER the stream, never inside it: a report is a footnote to a turn, and a turn must not
     # stall on one. `report` never raises (see worker/friction.py) — this try is the belt.

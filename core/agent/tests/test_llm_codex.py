@@ -5,7 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from llm.codex import CodexHarness, _link_sessions_into_workspace, _mcp_config
+from llm.codex import (CodexHarness, _link_sessions_into_workspace, _mcp_config,
+                       normalize_notification)
 
 
 class _Input:
@@ -151,3 +152,54 @@ def test_codex_ignores_inherited_claude_model_pin(tmp_path: Path):
     start = next(json.loads(line) for line in proc.stdin.lines
                  if json.loads(line).get("method") == "thread/start")
     assert "model" not in start["params"]
+
+
+# ── the panel conventions, shared with the other two harnesses (F92) ────────────────────────────
+
+def _completed(item):
+    return normalize_notification({"method": "item/completed", "params": {"item": item}}, [])
+
+
+def test_a_codex_file_change_opens_the_writers_tab():
+    """F92 REPRODUCTION. This adapter emitted none of the three panel conventions, so the SAME turn
+    painted the person's screen or did not depending on which harness the deployment ran."""
+    evs = _completed({"type": "fileChange", "id": "i1", "status": "completed",
+                      "changes": [{"path": "/workspaces/u_1/notes/a.md"},
+                                  {"path": "/workspaces/u_1/notes/b.md"}]})
+    arts = [e for e in evs if e["type"] == "artifact"]
+    assert [(a["workspace"], a["path"]) for a in arts] == [("u_1", "notes/a.md"), ("u_1", "notes/b.md")]
+    assert [a["focus"] for a in arts] == [False, True]   # the last write is the one to look at
+
+
+def test_a_codex_workspace_write_opens_the_writers_tab():
+    evs = _completed({"type": "mcpToolCall", "id": "i2", "status": "completed",
+                      "server": "vexa", "tool": "workspace_write",
+                      "arguments": {"slug": "_global", "path": "README.md"},
+                      "result": {"content": [{"type": "text", "text": "ok"}]}})
+    art = next(e for e in evs if e["type"] == "artifact")
+    assert (art["workspace"], art["path"], art["focus"]) == ("_global", "README.md", True)
+
+
+def test_a_codex_transcript_terms_publish_paints_the_chips():
+    body = json.dumps({"meeting": "42", "cursor": "c1", "emit": [{"term": "TSC"}]})
+    evs = _completed({"type": "mcpToolCall", "id": "i3", "status": "completed",
+                      "server": "vexa", "tool": "transcript_terms",
+                      "arguments": {}, "result": {"content": [{"type": "text", "text": body}]}})
+    terms = next(e for e in evs if e["type"] == "terms")
+    assert terms["meeting"] == "42" and terms["terms"] == [{"term": "TSC"}]
+
+
+def test_a_codex_bot_send_opens_the_live_transcript():
+    body = json.dumps({"sent": True, "meeting_row": "77"})
+    evs = _completed({"type": "mcpToolCall", "id": "i4", "status": "completed",
+                      "server": "vexa", "tool": "bot_send",
+                      "arguments": {}, "result": body})
+    art = next(e for e in evs if e["type"] == "artifact")
+    assert art["path"] == "meeting:77" and art["pin"] is True
+
+
+def test_a_failed_codex_item_moves_nothing():
+    """Success only — a failed call must move no panel, exactly as in the other two harnesses."""
+    evs = _completed({"type": "fileChange", "id": "i5", "status": "failed",
+                      "changes": [{"path": "/workspaces/u_1/notes/a.md"}]})
+    assert [e["type"] for e in evs] == ["tool-result"]

@@ -23,6 +23,7 @@ from control_plane.workspace_attach import SEED_SLOT, active_workspaces, shared_
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import global_layer
+from control_plane import model_endpoint
 from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
@@ -350,7 +351,8 @@ def _allowlisted(model: str, allowlist: str) -> bool:
     return not allowed or model in allowed
 
 
-def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = "") -> None:
+def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = "",
+                         friction=None, subject: str = "") -> None:
     """Overlay the subject's effective model config (Settings → Models: user pref > platform
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
@@ -396,27 +398,40 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     elif runner:
         logger.warning("runner %r is not a known harness (%s) — using the deployment default",
                        runner, sorted(units.RUNNERS))
-    if (config.get("mode") or "").strip() != "custom":
-        return
-    base_url = (config.get("base_url") or "").strip()
+    base_url = model_endpoint.custom_base_url(config)
     api_key = (config.get("api_key") or "").strip()
     if not base_url:
-        return  # custom mode without an endpoint is inert — deployment credentials still apply
+        # Not custom, or custom with no endpoint — inert either way; deployment credentials apply.
+        return
+    # THE OPERATOR GATE (F84). A subject-supplied URL is an outbound destination chosen by a
+    # non-operator, so it is refused unless the deployment allow-lists its host. The refusal is
+    # LOUD — a log line and a friction record — because a silently-ignored endpoint runs the turn on
+    # the deployment's own model and looks like it worked.
+    refusal = model_endpoint.refuse_reason(base_url)
+    if refusal:
+        logger.warning("model endpoint REFUSED for subject=%s: %s", subject or "?", refusal)
+        if friction is not None:
+            try:
+                friction(model_endpoint.refusal_friction(base_url, refusal, subject=subject))
+            except Exception:  # noqa: BLE001 — a report is never worth a dispatch
+                logger.warning("model endpoint refusal could not be filed as friction")
+        return
     env["ANTHROPIC_BASE_URL"] = base_url
-    if api_key:
-        env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    # ALWAYS THE SUBJECT'S OWN CREDENTIAL — the empty string included (F84, SECURITY). The backfill
+    # at the end of `build_unit_env` fills every MODEL_AUTH_ENV_ALLOWLIST key that is still ABSENT
+    # from agent-api's own environment; an explicit "" is not absent. Stamping only a non-empty key
+    # therefore paired the DEPLOYMENT's brokered token with the SUBJECT's endpoint whenever the
+    # subject supplied a URL and no key. Every credential the harness or the claude CLI would put on
+    # that request is pinned here, so a custom endpoint can only ever receive what its own owner set.
+    env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    env["ANTHROPIC_API_KEY"] = api_key
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = ""    # the subscription token has ONE legitimate destination
     # THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT. Endpoint, credential and model all reach
     # the openai-agent harness through the ANTHROPIC_*/VEXA_AGENT_MODEL keys above (see
     # `llm/openai_agent.py` — `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL`, and so on). `extra_body`
     # has no such fallback, and a self-hosted Qwen returns nothing parseable without
     # {"chat_template_kwargs":{"enable_thinking":false}} — so a per-subject value has to be
     # stamped under its own name or the admin-api field that writes it does nothing.
-    extra_body = (config.get("extra_body") or "").strip()
-    if extra_body:
-        env["VEXA_LLM_EXTRA_BODY"] = extra_body
-    # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
-    # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the model
-    # reasons its whole budget away and returns nothing parseable.
     extra_body = (config.get("extra_body") or "").strip()
     if extra_body:
         env["VEXA_LLM_EXTRA_BODY"] = extra_body
@@ -451,7 +466,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                    model_config: Optional[dict] = None,
                    room: Optional[dict] = None,
                    scaffold_workspaces: Optional[list[str]] = None,
-                   entry_nonce: str = "") -> dict[str, str]:
+                   entry_nonce: str = "", friction=None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -554,7 +569,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # Settings → Models (per-user/platform config from admin-api) beats the deployment env
     # defaults stamped above, field-by-field; anything it leaves unset falls through unchanged.
     if model_config:
-        overlay_model_config(env, model_config, allowlist=settings.model_allowlist)
+        overlay_model_config(env, model_config, allowlist=settings.model_allowlist,
+                             friction=friction, subject=subject)
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -661,11 +677,21 @@ class Dispatcher:
         # AdminApiModelConfig — user pref > platform setting over the admin-api internal edge).
         # None → deployment env defaults only, exactly as before.
         self._model_config = model_config
+        # PRD decision 33: where a REFUSED model endpoint is filed (F84). A callable taking the raw
+        # friction record — `create_app` attaches the store's `file` once it has built it. None (a
+        # test, a dispatcher built without an app) logs the refusal and files nothing; the refusal
+        # itself never depends on the sink.
+        self._friction = None
         self.dispatched: list[dict] = []  # observability — the dispatches that fired
 
     @property
     def settings(self) -> Settings:
         return self._settings
+
+    def attach_friction(self, file_record) -> None:
+        """Wire the friction sink (``FrictionStore.file``) after construction — the store is built
+        inside ``create_app``, which already holds the dispatcher."""
+        self._friction = file_record
 
     def resolve_model_config(self, subject: str) -> Optional[dict]:
         """The subject's effective Settings → Models config (user pref > platform setting).
@@ -724,7 +750,8 @@ class Dispatcher:
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
                              entry_nonce=entry_nonce,
                              model_config=model_config, room=room,
-                             scaffold_workspaces=scaffold_workspaces)
+                             scaffold_workspaces=scaffold_workspaces,
+                             friction=self._friction)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the

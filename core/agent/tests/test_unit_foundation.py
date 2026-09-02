@@ -370,11 +370,12 @@ def test_dispatcher_model_config_stamps_reasoning_effort():
     assert "VEXA_AGENT_EFFORT" not in env2
 
 
-def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape():
+def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape(monkeypatch):
     """mode:custom points the agent harness (ANTHROPIC_*) at the supplied gateway. Dispatch-stamped
     keys WIN downstream (docker_backend copies its own env only for keys absent here). It used to
     stamp a SECOND pair (VEXA_LLM_PROVIDER/_BASE_URL/_API_KEY) for the completion adapters — one
     endpoint, configured twice, in two dialects; PRD decision 34 removed the second consumer."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # F84: the operator gate
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
                            "api_key": "sk-user", "model": "qwen3"})
@@ -402,9 +403,10 @@ def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(
     assert "ANTHROPIC_BASE_URL" not in env
 
 
-def test_dispatcher_model_config_allowlist_gates_models_not_endpoint():
+def test_dispatcher_model_config_allowlist_gates_models_not_endpoint(monkeypatch):
     """A non-allowlisted model is DROPPED (deployment default applies) — never an error; the
     custom endpoint itself is not the allowlist's business."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # the ENDPOINT gate is separate
     settings = load_settings(agent_model="deployment-default", model_allowlist="sonnet,haiku")
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
@@ -519,3 +521,24 @@ def test_message_dispatch_stamps_the_chat_idle_window():
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(settings.chat_idle_timeout_sec)
+
+
+# ── the deployment runner is resolved per call, never frozen at import (F92) ─────────────────────
+
+def test_vexa_runner_is_read_when_the_dispatch_is_built(monkeypatch):
+    """F92 REPRODUCTION. `RUNNER` was a module constant bound into `make_dispatch`'s DEFAULT
+    ARGUMENT, so it was decided once when `shared.units` was first imported — the exact pattern
+    `control_plane/config_test.py` documents at length as a 32-hour outage. An operator who changed
+    VEXA_RUNNER saw nothing happen; a test that set it read whatever the interpreter saw first."""
+    from shared import units as u
+
+    monkeypatch.delenv("VEXA_RUNNER", raising=False)
+    start = u.entrypoint(inline="hi")
+    assert u.make_dispatch(subject="u1", trigger="message", start=start)["runner"] == "claude-code"
+
+    monkeypatch.setenv("VEXA_RUNNER", "openai-agent")
+    assert u.make_dispatch(subject="u1", trigger="message", start=start)["runner"] == "openai-agent"
+
+    # an explicit argument still wins over the deployment floor
+    assert u.make_dispatch(subject="u1", trigger="message", start=start,
+                           runner="codex")["runner"] == "codex"

@@ -14,6 +14,12 @@ import threading
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
+# THE PANEL CONVENTIONS ARE THE CLAUDE ADAPTER'S, IMPORTED (F92) — the writer's tab, decision 35's
+# transcript chips and decision 30.4's bot-send open. This adapter emitted NONE of them, so the same
+# turn painted the person's screen or did not depending on which harness the deployment ran, which
+# is exactly the thing `openai_agent` imports these to avoid. One vocabulary, three harnesses.
+from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
+                             _published_terms, _written_artifact)
 from llm.ports import harness_subprocess_env
 
 
@@ -47,6 +53,54 @@ def _tool_started(item: dict) -> Optional[dict]:
     return None
 
 
+def _result_content(item: dict) -> object:
+    """The item's result in a shape the shared panel helpers read: a string, or Claude's list of
+    content blocks. Codex hands MCP results back as ``{"content": [{"type": "text", ...}]}``, which
+    IS that list one level down; anything else is serialised so a JSON body still survives."""
+    result = item.get("result")
+    if isinstance(result, (str, list)):
+        return result
+    if isinstance(result, dict):
+        if isinstance(result.get("content"), list):
+            return result["content"]
+        return json.dumps(result, default=str)
+    return item.get("aggregatedOutput") or ""
+
+
+def _panel_events(item: dict) -> list[dict]:
+    """The panel moves a SUCCESSFUL codex item earns — the same three conventions `claude_code` and
+    `openai_agent` apply, through the same helpers. A failed item moves nothing."""
+    kind = item.get("type")
+    events: list[dict] = []
+    if kind == "fileChange":
+        # Codex reports one item per edit batch; each changed path is its own artifact, and the
+        # LAST one is the document the person should be looking at, so only it takes focus.
+        targets = [_written_artifact("Write", {"file_path": change.get("path")})
+                   for change in item.get("changes", []) if change.get("path")]
+        found = [t for t in targets if t]
+        for i, (slug, rel) in enumerate(found):
+            events.append({"type": "artifact", "workspace": slug, "path": rel,
+                           "focus": i == len(found) - 1})
+        return events
+    if kind != "mcpToolCall":
+        return events
+    name = f"mcp__{item.get('server', '')}__{item.get('tool', '')}"
+    if name in _WRITER_TOOLS:
+        target = _written_artifact(name, item.get("arguments") or {})
+        if target:
+            events.append({"type": "artifact", "workspace": target[0], "path": target[1],
+                           "focus": True})
+    elif name in _TERMS_TOOLS:
+        ev = _published_terms(_result_content(item))
+        if ev:
+            events.append(ev)
+    elif name in _BOT_TOOLS:
+        ev = _bot_artifact(_result_content(item))
+        if ev:
+            events.append(ev)
+    return events
+
+
 def _tool_completed(item: dict) -> Optional[dict]:
     kind = item.get("type")
     if kind not in {"commandExecution", "fileChange", "mcpToolCall", "webSearch", "imageView"}:
@@ -73,8 +127,13 @@ def normalize_notification(message: dict, reply_parts: list[str]) -> list[dict]:
         event = _tool_started(params.get("item") or {})
         return [event] if event else []
     if method == "item/completed":
-        event = _tool_completed(params.get("item") or {})
-        return [event] if event else []
+        item = params.get("item") or {}
+        event = _tool_completed(item)
+        if not event:
+            return []
+        # Panel moves ride AFTER the tool-result, and only on success — the same ordering and the
+        # same success-only rule the other two harnesses apply.
+        return [event] + (_panel_events(item) if event.get("ok") else [])
     return []
 
 

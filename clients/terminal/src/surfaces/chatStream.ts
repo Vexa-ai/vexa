@@ -23,6 +23,9 @@ export type ChatStreamEvent = {
   sha?: string;
   ok?: boolean;
   reply?: string;
+  /** `done` events only — WHAT THE TURN GAVE UP (F89): its tool-call or wall-clock budget ran out,
+   *  or its context was trimmed to fit. Absent on a turn that finished under its own budgets. */
+  reason?: string;
   message?: string;
   /** `error` events only — the upstream HTTP status the proxy folded into the stream. /api/chat
    *  answers 200 with an `error` event even when the gateway refused with a 401, so this field is
@@ -89,6 +92,13 @@ export type ChatStreamCallbacks = {
   onRejected: () => void;
   /** a done event with ok=false — model inference failed (terminal, surfaced) */
   onModelFailure: (reply: string | undefined) => void;
+  /** THE TURN GAVE SOMETHING UP (F89): `done.reason` — it hit its tool-call or wall-clock budget,
+   *  or answered from a context it had trimmed. The harness emitted `turn-truncated` /
+   *  `context-trimmed` for this and NOTHING consumed them, so a half-finished turn was rendered as
+   *  a finished one. `partial` is whatever reply the turn did produce; it is still worth showing.
+   *  Optional so existing callers/tests need not implement it — when it is absent an `ok=false`
+   *  done still falls through to `onModelFailure`. */
+  onTruncated?: (reason: string, partial: string | undefined) => void;
   /** a hard upstream error the proxy folded into the stream (terminal, surfaced) */
   onError: (message: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
@@ -340,10 +350,17 @@ export async function streamChatTurn(
           case "turn-complete":
             terminal = true;
             break;
-          case "done":
+          case "done": {
             terminal = true;
-            if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
+            // `reason` distinguishes "the model failed" from "the turn stopped early" (F89). They
+            // read identically in the old shape — both arrive as ok=false — and telling a person
+            // "Model inference failed" when the model worked and the BUDGET ran out sends them
+            // looking at the wrong thing.
+            const reason = typeof ev.reason === "string" ? ev.reason : "";
+            if (reason && cb.onTruncated) { sawVisibleOutput = true; cb.onTruncated(reason, ev.reply); }
+            else if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
             break;
+          }
           // A hard upstream error the proxy folded into the stream: the turn genuinely failed — surface
           // it (do NOT treat as a cold-start close to resume).
           //
