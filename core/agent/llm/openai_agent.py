@@ -59,7 +59,7 @@ import re
 import subprocess
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Optional
 
 import httpx
@@ -390,19 +390,29 @@ _READ_MAX_CHARS = 100_000
 _GLOB_MAX = 400
 
 
-def mount_roots(work: Path) -> list[Path]:
+def mount_roots(work: Path, *, writable_only: bool = False) -> list[Path]:
     """Every directory this harness's file tools may touch: the turn's cwd plus each declared mount.
 
     Read from ``VEXA_MOUNTS`` the same way ``worker.engine.active_mounts`` does — by ENV, not by
     import, because this module owns no product imports. A malformed value costs the extra mounts,
-    never the turn."""
+    never the turn.
+
+    ``writable_only`` HONOURS THE MOUNT'S ``write`` FLAG (F87). The set carries read-only mounts —
+    ``_global`` (the org tier, platform-write-only) and every desk in a post-meeting room — and this
+    function used to drop the flag, so ``Write``/``Edit`` were rooted in workspaces the dispatch had
+    declared read-only. Only the docker ``:ro`` bind stood between the model and somebody else's
+    desk, and the process backend has no such bind at all. The turn's cwd stays in BOTH sets: it is
+    the primary mount, which ``dispatch._worker_cwd`` picks precisely because it is writable."""
     roots = [work.resolve()]
     raw = os.environ.get("VEXA_MOUNTS") or ""
     if raw:
         try:
             for m in json.loads(raw):
-                if isinstance(m, dict) and m.get("path"):
-                    roots.append(Path(str(m["path"])).resolve())
+                if not (isinstance(m, dict) and m.get("path")):
+                    continue
+                if writable_only and not m.get("write"):
+                    continue
+                roots.append(Path(str(m["path"])).resolve())
         except (ValueError, TypeError, OSError):
             log.warning("VEXA_MOUNTS is not valid JSON — file tools are scoped to the cwd only")
     out: list[Path] = []
@@ -417,26 +427,48 @@ class _Sandbox:
     mistake worth telling the model about — a silently rewritten path writes the right bytes to the
     wrong workspace, which is the one failure nobody can see afterwards."""
 
-    def __init__(self, roots: list[Path]) -> None:
+    def __init__(self, roots: list[Path], write_roots: Optional[list[Path]] = None) -> None:
         self._roots = roots
+        # F87: the WRITABLE subset. Defaults to the read set so a caller that knows of only one
+        # scope (a test, the eval stub) behaves exactly as before.
+        self._write_roots = roots if write_roots is None else write_roots
 
     def resolve(self, raw: str) -> Path:
+        """A path a READ tool may touch — anywhere in the mount set."""
+        return self._within(raw, self._roots, "mounted workspaces")
+
+    def resolve_write(self, raw: str) -> Path:
+        """A path a WRITE tool may touch — the WRITABLE mounts only (F87). A read-only mount is a
+        governance decision the dispatch already made; asking the model nicely is not enforcement."""
+        return self._within(raw, self._write_roots, "WRITABLE mounted workspaces")
+
+    def contains(self, raw: str) -> bool:
+        """True when ``raw`` is inside the read set — for filtering hits rather than refusing a call."""
+        try:
+            self.resolve(raw)
+        except (ValueError, OSError):
+            return False
+        return True
+
+    def _within(self, raw: str, roots: list[Path], what: str) -> Path:
         if not raw:
             raise ValueError("no path given")
+        if not roots:
+            raise ValueError(f"this turn has no {what}")
         p = Path(raw)
         if not p.is_absolute():
-            p = self._roots[0] / p
+            p = roots[0] / p
         # resolve() without strict so a not-yet-existing file still normalises (Write creates it)
         p = Path(os.path.normpath(str(p)))
         try:
             real = p.resolve()
         except OSError:
             real = p
-        for root in self._roots:
+        for root in roots:
             if real == root or root in real.parents:
                 return real
-        raise ValueError(f"path {raw} is outside the mounted workspaces "
-                         f"({', '.join(str(r) for r in self._roots)})")
+        raise ValueError(f"path {raw} is outside the {what} "
+                         f"({', '.join(str(r) for r in roots)})")
 
 
 def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
@@ -451,13 +483,13 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
             chunk = "\n".join(lines[start:start + limit])
             return True, chunk[:_READ_MAX_CHARS]
         if tool == "Write":
-            path = sandbox.resolve(str(args.get("file_path") or ""))
+            path = sandbox.resolve_write(str(args.get("file_path") or ""))
             path.parent.mkdir(parents=True, exist_ok=True)
             content = args.get("content")
             path.write_text("" if content is None else str(content), encoding="utf-8")
             return True, f"wrote {path}"
         if tool == "Edit":
-            path = sandbox.resolve(str(args.get("file_path") or ""))
+            path = sandbox.resolve_write(str(args.get("file_path") or ""))
             old, new = str(args.get("old_string") or ""), str(args.get("new_string") or "")
             text = path.read_text(encoding="utf-8")
             hits = text.count(old)
@@ -471,7 +503,24 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
         if tool == "Glob":
             base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
             pattern = str(args.get("pattern") or "*")
-            hits = sorted(str(p) for p in base.glob(pattern) if p.is_file())[:_GLOB_MAX]
+            # F86: THE PATTERN IS A PATH TOO. `Read` resolved its argument through the sandbox and
+            # `Glob` did not, so `{"pattern": "../../../etc/*"}` enumerated the container's whole
+            # filesystem from inside a workspace turn — the sandbox refused the read that followed,
+            # but the listing itself is the disclosure. Refuse the two escapes a pattern can spell,
+            # then resolve every HIT as well: a symlink inside the mount is the same escape wearing
+            # a legal-looking pattern.
+            if pattern.startswith("/") or ".." in PurePosixPath(pattern).parts:
+                return False, ("pattern must be relative to the search path and may not contain "
+                               "'..' — name a `path` under a mounted workspace instead")
+            hits: list[str] = []
+            for p in base.glob(pattern):
+                try:
+                    real = sandbox.resolve(str(p))
+                except (ValueError, OSError):
+                    continue                      # a symlink out of the mounts is not a hit
+                if real.is_file():
+                    hits.append(str(real))
+            hits = sorted(set(hits))[:_GLOB_MAX]
             return True, "\n".join(hits) if hits else "(no matches)"
         if tool == "Grep":
             base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
@@ -484,6 +533,8 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
                     break
                 if not f.is_file() or ".git" in f.parts:
                     continue
+                if not sandbox.contains(str(f)):
+                    continue                      # same escape as F86, reached through a symlink
                 if keep and not fnmatch.fnmatch(f.name, keep):
                     continue
                 try:
@@ -738,7 +789,7 @@ class OpenAIAgentHarness:
             budget_secs = _float_env("VEXA_AGENT_MAX_TURN_SEC", _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
             started, calls_made, reply = time.monotonic(), 0, ""
-            sandbox = _Sandbox(mount_roots(work))
+            sandbox = _Sandbox(mount_roots(work), mount_roots(work, writable_only=True))
 
             while True:
                 sent, trimmed = trim_messages(messages, ctx_budget)
@@ -786,7 +837,7 @@ class OpenAIAgentHarness:
                     calls_made += 1
                     yield {"type": "tool-call", "tool": call["name"], "args": call["args"],
                            "callId": call["id"]}
-                    ok, out = self._exec_tool(call, mcp_index, sandbox)
+                    ok, out = self._exec_tool(call, mcp_index, sandbox, allow)
                     out = out[:_TOOL_RESULT_MAX_CHARS]
                     yield {"type": "tool-result", "callId": call["id"], "ok": ok,
                            "summary": _short(out)}
@@ -802,8 +853,17 @@ class OpenAIAgentHarness:
             for srv in servers:
                 srv.close()
 
-    def _exec_tool(self, call: dict, mcp_index: dict, sandbox: _Sandbox) -> tuple[bool, str]:
+    def _exec_tool(self, call: dict, mcp_index: dict, sandbox: _Sandbox,
+                   allow: set[str]) -> tuple[bool, str]:
         name, args = call["name"], call["args"]
+        # F85 (SECURITY): THE ALLOW-SET IS ENFORCED HERE, not only where tools are advertised.
+        # `specs` filters what the model is TOLD about, and a model that names a tool it was never
+        # offered — smaller models do this constantly, and a resumed transcript carries the names of
+        # tools an earlier turn had — was executed anyway. `allowed_tools=["Read"]` ran `Write`.
+        # A refusal is a normal tool result: the model sees it and corrects itself.
+        if not _allowed(name, allow):
+            return False, (f"{name} is not allowed on this turn — the allowed tools are "
+                           f"{sorted(allow)}")
         if name in mcp_index:
             srv, tool = mcp_index[name]
             return srv.call(tool, args if isinstance(args, dict) else {})

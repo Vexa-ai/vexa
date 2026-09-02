@@ -104,9 +104,12 @@ def test_tool_loop_reads_a_file_then_answers(tmp_path):
 
 
 def test_unknown_tool_is_a_failed_result_not_a_crash(tmp_path):
+    # No allow-set (unrestricted, the claude-code `--allowedTools` semantics) so the call reaches
+    # the "this harness does not implement it" branch rather than the F85 allow-set refusal — the
+    # two are different answers to different questions and both must stay non-fatal.
     h = _harness(_server([_msg("", [("c1", "Bash", {"command": "rm -rf /"})]), _msg("ok")]))
     h.prepare(tmp_path)
-    evs = _events(h, tmp_path, "go", allowed_tools=["Read"])
+    evs = _events(h, tmp_path, "go")
     result = next(e for e in evs if e["type"] == "tool-result")
     assert result["ok"] is False and "no tool named Bash" in result["summary"]
     assert evs[-1]["ok"] is True          # the loop recovers; the model gets to choose again
@@ -248,6 +251,8 @@ def test_context_budget_emits_an_event_and_shrinks_the_request(tmp_path, monkeyp
 def test_file_tools_refuse_a_path_outside_the_mounts(tmp_path):
     sandbox = _Sandbox([tmp_path.resolve()])
     ok, out = run_builtin("Write", {"file_path": "/etc/passwd", "content": "x"}, sandbox)
+    assert ok is False and "outside the WRITABLE mounted workspaces" in out
+    ok, out = run_builtin("Read", {"file_path": "/etc/passwd"}, sandbox)
     assert ok is False and "outside the mounted workspaces" in out
     ok, out = run_builtin("Write", {"file_path": str(tmp_path / "a/b.md"), "content": "hi"}, sandbox)
     assert ok is True and (tmp_path / "a/b.md").read_text() == "hi"
@@ -445,3 +450,95 @@ def test_a_failed_write_opens_nothing(tmp_path):
     evs = _events(h, tmp_path, "write it", allowed_tools=["mcp__vexa"])  # no MCP attached
     assert next(e for e in evs if e["type"] == "tool-result")["ok"] is False
     assert not [e for e in evs if e["type"] == "artifact"]
+
+
+# ── the sandbox and the allow-set (F85 · F86 · F87) ─────────────────────────────────────────────
+
+def test_the_allow_set_is_enforced_at_EXECUTION_not_only_at_advertisement(tmp_path):
+    """F85 REPRODUCTION. `allowed_tools=["Read"]` filters the `tools` array the model is handed —
+    and nothing else. A model that names `Write` anyway (small models do, constantly, and a resumed
+    transcript carries names an earlier turn had) had its write performed."""
+    target = tmp_path / "written-anyway.md"
+    h = _harness(_server([
+        _msg("", [("c1", "Write", {"file_path": str(target), "content": "escaped"})]),
+        _msg("done"),
+    ]))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "write it", allowed_tools=["Read"])
+    result = next(e for e in evs if e["type"] == "tool-result")
+    assert result["ok"] is False
+    assert "not allowed on this turn" in result["summary"]
+    assert not target.exists(), "the refused tool must not have run"
+
+
+def test_an_empty_allow_set_still_means_unrestricted(tmp_path):
+    """The claude-code `--allowedTools` semantics `_allowed` documents: no flag = every tool."""
+    target = tmp_path / "ok.md"
+    h = _harness(_server([
+        _msg("", [("c1", "Write", {"file_path": str(target), "content": "hi"})]),
+        _msg("done"),
+    ]))
+    h.prepare(tmp_path)
+    _events(h, tmp_path, "write it")
+    assert target.read_text() == "hi"
+
+
+def test_glob_cannot_enumerate_outside_the_mounts(tmp_path):
+    """F86 REPRODUCTION. `Read` resolved its argument through the sandbox; `Glob` passed the pattern
+    to `Path.glob` raw, so `../../../etc/*` listed a directory no mount contains. The listing IS the
+    disclosure — refusing the read that follows is too late."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (tmp_path / "secret.txt").write_text("outside")
+    (work / "inside.md").write_text("inside")
+    sandbox = _Sandbox([work.resolve()])
+    ok, out = run_builtin("Glob", {"pattern": "../*.txt"}, sandbox)
+    assert ok is False and ".." in out
+    ok, out = run_builtin("Glob", {"pattern": "/etc/*"}, sandbox)
+    assert ok is False
+    ok, out = run_builtin("Glob", {"pattern": "*.md"}, sandbox)
+    assert ok is True and "inside.md" in out
+
+
+def test_glob_drops_hits_that_leave_the_mounts_by_symlink(tmp_path):
+    """The same escape wearing a legal-looking pattern: a symlink inside the mount. `**` does not
+    follow one, but an explicit component does — `link/*.md` walks straight out of the workspace,
+    which is why every HIT is resolved and not merely the pattern checked."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("classified")
+    (work / "link").symlink_to(outside)
+    sandbox = _Sandbox([work.resolve()])
+    ok, out = run_builtin("Glob", {"pattern": "link/*.md"}, sandbox)
+    assert ok is True and "secret.md" not in out, out
+
+
+def test_write_roots_are_the_WRITABLE_mounts_only(tmp_path, monkeypatch):
+    """F87 REPRODUCTION. `mount_roots` dropped each mount's `write` flag, so `_global` and every
+    read-only desk in a post-meeting room became a writable root for `Write`/`Edit`. Only the docker
+    `:ro` bind stood in the way, and the process backend has no such bind."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    ro = tmp_path / "_global"
+    ro.mkdir()
+    (ro / "README.md").write_text("org tier")
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([
+        {"slug": "ws", "path": str(work), "role": "private", "write": True, "primary": True},
+        {"slug": "_global", "path": str(ro), "role": "global", "write": False},
+    ]))
+    assert ro.resolve() in mount_roots(work)
+    assert ro.resolve() not in mount_roots(work, writable_only=True)
+
+    sandbox = _Sandbox(mount_roots(work), mount_roots(work, writable_only=True))
+    ok, out = run_builtin("Read", {"file_path": str(ro / "README.md")}, sandbox)
+    assert ok is True and "org tier" in out          # readable: it IS in the mount set
+    ok, out = run_builtin("Write", {"file_path": str(ro / "hijack.md"), "content": "x"}, sandbox)
+    assert ok is False and "WRITABLE" in out
+    assert not (ro / "hijack.md").exists()
+    ok, out = run_builtin("Edit", {"file_path": str(ro / "README.md"),
+                                   "old_string": "org tier", "new_string": "mine"}, sandbox)
+    assert ok is False and (ro / "README.md").read_text() == "org tier"
+    ok, _ = run_builtin("Write", {"file_path": str(work / "fine.md"), "content": "x"}, sandbox)
+    assert ok is True
