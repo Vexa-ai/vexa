@@ -81,6 +81,9 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$", re.I)
 # ≥128 bits, per the record. 32 url-safe bytes ≈ 256 bits — the id IS the capability until redeem
 # binds it to a subject, so it is sized like one.
 ID_BYTES = 32
+#: How long a minted scaffold stays openable (R-A10). Two weeks: long enough that a mail read after
+#: a holiday still works, finite so an id minted for one meeting is not a standing capability.
+TTL_SECONDS = 14 * 24 * 3600
 
 # THE MACHINERY MARK. A composed opening is not the person's own words: they clicked a link, they
 # did not type a paragraph of instructions, and on 2026-09-02 the founder saw exactly that paragraph
@@ -437,7 +440,13 @@ class ScaffoldStore:
         return f"agent:scaffolds:by:{_recipient_key(address)}"
 
     def mint(self, record: dict) -> dict:
-        """Persist a new record, stamping its id and `minted_at`. Returns the stored record."""
+        """Persist a new record, stamping its id and `minted_at`. Returns the stored record.
+
+        WITH A LIFE (R-A10). The id is a capability — it opens a composed first turn bound to an
+        address — and it was written with no `EXPIRE`, so a post-meeting scaffold minted for an
+        address stayed openable forever, in a store the blank-instance script does not clear
+        (`:39-42`). The touch it composes has a natural life of days; two weeks is generous for
+        "the mail sat unread over a holiday" and finite, which is the property that was missing."""
         rec = dict(record)
         rec["id"] = secrets.token_urlsafe(ID_BYTES)
         rec["minted_at"] = time.time()
@@ -446,13 +455,14 @@ class ScaffoldStore:
         self._put(rec)
         if self._redis is not None:
             self._redis.sadd(self._index_key(rec["who"]), rec["id"])
+            self._redis.expire(self._index_key(rec["who"]), TTL_SECONDS)
         else:
             self._by.setdefault(_recipient_key(rec["who"]), []).append(rec["id"])
         return rec
 
     def _put(self, rec: dict) -> None:
         if self._redis is not None:
-            self._redis.set(self._key(rec["id"]), json.dumps(rec))
+            self._redis.set(self._key(rec["id"]), json.dumps(rec), ex=TTL_SECONDS)
         else:
             self._mem[rec["id"]] = rec
 
@@ -484,6 +494,15 @@ class ScaffoldStore:
             rec["redeemed_at"] = time.time()
             rec["redeemed_by"] = str(subject)
             self._put(rec)
+            # The index is "what is still WAITING for this address" — every reader of it filters on
+            # `pending_only`. It never shed a redeemed id, so it grew for the life of the instance
+            # and every read paid for the whole history (R-A10).
+            if self._redis is not None:
+                self._redis.srem(self._index_key(rec["who"]), scaffold_id)
+            else:
+                ids = self._by.get(_recipient_key(rec["who"]))
+                if ids and scaffold_id in ids:
+                    ids.remove(scaffold_id)
         return rec
 
     def for_recipient(self, address: str, *, pending_only: bool = True) -> list[dict]:

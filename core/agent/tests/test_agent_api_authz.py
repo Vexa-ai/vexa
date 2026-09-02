@@ -276,7 +276,7 @@ def test_re11_the_admin_overview_redacts_the_error_it_reports(monkeypatch, world
 # ── R-A09 / R-E09 · redaction-by-shape missed this project's own secret shapes ───────────────────
 
 @pytest.mark.parametrize("secret,line", [
-    ("f" * 64, "internal secret is {} and it is not a git object"),        # openssl rand -hex 32
+    ("f" * 64, "internal secret is {} in the environment"),               # openssl rand -hex 32
     ("a1b2c3d4" * 4, "admin token {} rejected"),                           # 32-char hex
     ("sk_live_51H8xQ2LkD9fPqRs7", "stripe key {} refused"),
     ("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws secret {} in the env"),
@@ -300,9 +300,16 @@ def test_ra09_a_deploy_key_answer_is_still_readable():
     assert pub in out and fp in out
 
 
-def test_ra09_a_clone_error_still_names_the_repository():
-    msg = "fatal: repository 'https://gitlab.example.com/some-team/some-long-repository-name.git' not found"
-    assert "some-long-repository-name" in git_redaction.redact(msg)
+@pytest.mark.parametrize("msg,keep", [
+    ("fatal: repository 'https://gitlab.example.com/some-team/some-long-repository-name.git' not found",
+     "some-long-repository-name"),
+    ("error: pathspec 'feature/PR-1234-something' did not match any file(s) known to git",
+     "feature/PR-1234-something"),
+])
+def test_ra09_a_git_error_still_says_what_it_is_about(msg, keep):
+    """The widened rule pays for itself only if the message stays readable — a scrubber that eats
+    its own diagnostics gets bypassed, which is worse than one that misses a shape."""
+    assert keep in git_redaction.redact(msg)
 
 
 # ── R-D15 · repo_ref whitelisted a URL's SHAPE but not its HOST (git-clone SSRF) ─────────────────
@@ -351,6 +358,22 @@ def test_re14_a_ref_that_is_a_git_option_is_refused(tmp_path):
     # …and an ordinary ref still checks out, which is the half a blanket refusal would break.
     workspace_attach._git_clone(str(origin), "main", tmp_path / "fine")
     assert (tmp_path / "fine" / "README.md").is_file()
+
+
+def test_re14_and_rd15_reach_the_route_as_a_422_not_a_500(tmp_path, monkeypatch):
+    """Both refusals are ``RepoRefError``, which the attach routes already render as a sentence a
+    person can act on — the point of putting them in ``repo_ref`` rather than raising a bare
+    ``ValueError`` that would surface as an unhandled 500."""
+    from tests import gitserve
+    c = _client(tmp_path)
+    repo = gitserve.serve(tmp_path, gitserve.bare_repo(tmp_path, "mine"), monkeypatch, repo="mine")
+    assert c.post("/api/workspace/swap", json={"repo": repo, "ref": "--detach"},
+                  headers=JANE).status_code == 422
+    assert c.post("/api/workspace/swap", json={"repo": "http://admin-api:8001/a/b", "ref": "main"},
+                  headers=JANE).status_code == 422
+    # …and the ordinary swap still works, so neither guard is a blanket refusal.
+    assert c.post("/api/workspace/swap", json={"repo": repo, "ref": "main"},
+                  headers=JANE).status_code == 200
 
 
 # ── R-E13 · the secret store wrote on a read path, and a wrong key read as "no credential" ───────

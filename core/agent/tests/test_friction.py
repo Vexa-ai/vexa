@@ -265,7 +265,8 @@ def test_the_dump_route_returns_markdown_and_the_fix_route_closes(tmp_path):
     c = _app_client(tmp_path)
     hdr = {"X-User-Id": "126"}
     rid = c.post("/api/friction", json={"kind": "no-page", "path": "kg/x.md",
-                                        "happened": "no page here yet"}).json()["id"]
+                                        "happened": "no page here yet"},
+                 headers=hdr).json()["id"]              # the dump is per-subject now (R-E05)
     md = c.get("/api/friction/dump", headers=hdr)
     assert md.status_code == 200 and md.headers["content-type"].startswith("text/markdown")
     assert "FR-1 · no-page" in md.text and rid in md.text
@@ -281,7 +282,8 @@ def test_the_dump_route_returns_markdown_and_the_fix_route_closes(tmp_path):
 
 def test_the_dump_json_format_carries_the_same_grouping(tmp_path):
     c = _app_client(tmp_path)
-    c.post("/api/friction", json={"kind": "error", "tool": "t", "context": {"error": "e"}})
+    c.post("/api/friction", json={"kind": "error", "tool": "t", "context": {"error": "e"}},
+           headers={"X-User-Id": "126"})                # the dump is per-subject now (R-E05)
     body = c.get("/api/friction/dump?format=json", headers={"X-User-Id": "126"}).json()
     assert body["count"] == 1 and body["findings"][0]["kind"] == "error"
 

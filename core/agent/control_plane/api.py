@@ -76,6 +76,7 @@ from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import workspace_credentials as wcreds
 from control_plane import repo_ref
 from shared.git_redaction import redact as redact_secrets
+from shared import workspace_paths as wpaths
 from control_plane import global_layer
 from control_plane import version as version_mod
 from control_plane import system_mounts
@@ -1372,7 +1373,11 @@ def create_app(
         try:
             overview["workloads"] = admin_panel.fetch_workloads(settings.runtime_api_url)
         except Exception as e:  # noqa: BLE001 — typed partial failure (P18): the panel shows the section error
-            overview["workloads_error"] = f"{type(e).__name__}: {e}"
+            # SCRUBBED, like every other error this service returns (R-E11). Both of these come off
+            # a client built from a URL that routinely carries a credential — `redis://:password@host`
+            # here, an api key in the runtime URL above — and an exception's text is not ours to
+            # predict. `redact` exists two routes away and was not applied here.
+            overview["workloads_error"] = redact_secrets(f"{type(e).__name__}: {e}")
         if redis_url:
             import redis as _redis
 
@@ -1380,7 +1385,7 @@ def create_app(
                 r = _redis.from_url(redis_url, decode_responses=True)
                 overview["meetings"] = admin_panel.pipeline_snapshot(r, live.list())
             except Exception as e:  # noqa: BLE001
-                overview["meetings_error"] = f"{type(e).__name__}: {e}"
+                overview["meetings_error"] = redact_secrets(f"{type(e).__name__}: {e}", redis_url)
         else:
             overview["meetings_error"] = "no redis_url configured"
         return overview
@@ -2270,8 +2275,11 @@ def create_app(
         """File one rough edge — from an agent (`report_friction`), the harness, or a person's
         "Report this" (decision 33 §§1–2). Returns the stored record; `recurrence > 1` means this
         edge was already known and this report is another occurrence of it."""
-        rec = friction.file({**(body or {}), "subject": (body or {}).get("subject")
-                             or _friction_subject(request)})
+        # THE SUBJECT IS THE CALLER'S, NEVER THE BODY'S (R-E04). The route is deliberately
+        # unauthenticated — an unattributable report beats none — but a body that could name a
+        # subject let an anonymous caller write records attributed to a named user, which is worse
+        # than an unattributed record in exactly the way a forged signature is worse than none.
+        rec = friction.file({**(body or {}), "subject": _friction_subject(request)})
         logger.info("friction filed id=%s kind=%s status=%s recurrence=%s tool=%s",
                     rec.get("id"), rec.get("kind"), rec.get("status"), rec.get("recurrence"),
                     (rec.get("context") or {}).get("tool") or "-")
@@ -2287,9 +2295,14 @@ def create_app(
         which is what the rig's `friction_so_far` renders. Both come from ONE renderer in
         `shared/friction.py`: a dump and a tool that disagree about what is open is the two-renderers
         failure this codebase has already paid for twice."""
-        subject_of(request)          # a read: identified callers only, like every other read here
+        subject = subject_of(request)   # a read: identified callers only, like every other read here
         ts = friction_store_mod.parse_since(since)
         rows = friction.since(ts, status=status)
+        # A report carries the workspace names, paths and free text of what a person was DOING when
+        # it broke. So the dump is the caller's own, with one exception: the fixing agent of
+        # decision 33 §3 is the instance admin, and it is the whole point of the dump (R-E05).
+        if not global_layer.is_admin(settings, str(subject)):
+            rows = [r for r in rows if str(r.get("subject") or "") == str(subject)]
         if format == "json":
             return {"since": since, "status": status, "count": len(rows),
                     "findings": friction_mod.group(rows), "records": rows}
@@ -2302,7 +2315,13 @@ def create_app(
 
         A record filed again after this flips itself to `recurring` — which is why closing is cheap
         and why a fixing agent should close what it addressed rather than waiting to be sure."""
-        subject_of(request)
+        subject = subject_of(request)
+        # Same scoping as the dump, and a 404 rather than a 403 for someone else's record: the id is
+        # the only thing a prober would learn from the difference (R-E05).
+        existing = friction.get(friction_id)
+        if existing is None or not (global_layer.is_admin(settings, str(subject))
+                                    or str(existing.get("subject") or "") == str(subject)):
+            raise HTTPException(status_code=404, detail="no such friction record")
         try:
             rec = friction.fix(friction_id, str((body or {}).get("fix_ref") or ""))
         except ValueError as e:
@@ -2371,8 +2390,12 @@ def create_app(
         rel = str(body.get("path") or "").strip()
         slug = str(body.get("slug") or "").strip() or None
         content = body.get("content")
-        if not rel or rel.startswith("/") or ".." in rel.split("/") or not isinstance(content, str):
+        if not isinstance(content, str):
             raise HTTPException(status_code=400, detail="need a relative path and string content")
+        try:
+            wpaths.relative_parts(rel)   # absolute · `..` · `.git`/`.vexa` — one rule, every route
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
         # can only be open on it deliberately — and a save from that tab would silently rewrite the
         # shape every future entity is copied from.
@@ -2393,9 +2416,10 @@ def create_app(
                 except MembershipError:
                     pass  # not shared — fall through; _read_target 403s anything outside the active set
             target = _read_target(request, slug, write=True)
-        f = (target / rel).resolve()
-        if target.resolve() not in f.parents:
-            raise HTTPException(status_code=400, detail="invalid path")
+        try:
+            f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content, encoding="utf-8")
         if (target / ".git").is_dir():
@@ -2511,12 +2535,13 @@ def create_app(
     @app.get("/api/workspace/git/show")
     def ws_git_show(request: Request, sha: str, slug: Optional[str] = None, path: Optional[str] = None):
         """Unified diff of ONE commit (optionally one file) — same authorized resolution as ws_git — so
-        the terminal can highlight exactly what a commit changed."""
+        the terminal can highlight exactly what a commit changed. The optional ``path`` is a pathspec
+        and goes through the same guard as every other caller-supplied path."""
         try:
             target = _read_target(request, slug)  # authorizes: a slug outside the caller's mount set → 403
             return wsr.git_diff_at(target, sha, path)
         except ValueError:
-            raise HTTPException(status_code=400, detail="invalid subject")
+            raise HTTPException(status_code=400, detail="invalid path or subject")
 
     # ── workspace lifecycle (SCAFFOLD / TODO(phase-6)) — init from a validated template, swap which
     # validated workspace/template the next dispatch mounts. The seams exist downstream (seeding.seed_workspace
@@ -2657,8 +2682,15 @@ def create_app(
         because "whose desk does this belong to" is not a question a client gets to answer."""
         subject = subject_of(request)
         wid = str(body.get("workspace") or "").strip()
-        path = str(body.get("path") or "").strip().lstrip("/")
-        if not wid or not path or ".." in path.split("/"):
+        # NOT `.lstrip("/")`. Silently turning `/etc/passwd` into `etc/passwd` is a normalization
+        # that RESCUES the one input the guard below exists to refuse — and this route's answer
+        # travels into the desk README as a link.
+        path = str(body.get("path") or "").strip()
+        try:
+            wpaths.relative_parts(path)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not wid:
             raise HTTPException(status_code=400, detail="a touch names a workspace id and a path")
         rec = workspace_registry.get(wid)
         if ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member) != ids_mod.ACCESS_READABLE:

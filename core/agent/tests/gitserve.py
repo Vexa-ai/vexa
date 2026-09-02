@@ -54,4 +54,6 @@ def serve(tmp_path: Path, bare: Path, monkeypatch, *, owner: str = "acme", repo:
     )
     script.chmod(0o755)
     monkeypatch.setenv("GIT_SSH_COMMAND", str(script))
-    return f"ssh://git@fake-host/{owner}/{repo}.git"
+    # `.test` (RFC 2606) rather than a bare `fake-host`: an unqualified host is now refused as a
+    # deployment-internal name (R-D15), and the stub drops the host anyway.
+    return f"ssh://git@fake-host.test/{owner}/{repo}.git"
