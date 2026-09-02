@@ -175,3 +175,21 @@ def test_the_test_button_probes_a_custom_endpoint_with_the_subjects_own_key():
                           env={"ANTHROPIC_AUTH_TOKEN": "deployment-secret"}, post=post)
     assert out["ok"] is True
     assert seen["auth"] == "Bearer "
+
+
+# ── F93: the extra_body stamp exists once ───────────────────────────────────────────────────────
+
+def test_extra_body_is_stamped_exactly_once(monkeypatch):
+    """The block was written twice, verbatim, in one function. Harmless today — the second
+    assignment writes the same value — and precisely the shape that stops being harmless the moment
+    one copy is edited."""
+    import inspect
+
+    from control_plane import dispatch as d
+
+    src = inspect.getsource(d.overlay_model_config)
+    assert src.count('env["VEXA_LLM_EXTRA_BODY"]') == 1, src
+
+    env = _overlay({"mode": "custom", "base_url": ALLOWED, "api_key": "k",
+                    "extra_body": '{"chat_template_kwargs": {"enable_thinking": false}}'})
+    assert env["VEXA_LLM_EXTRA_BODY"] == '{"chat_template_kwargs": {"enable_thinking": false}}'

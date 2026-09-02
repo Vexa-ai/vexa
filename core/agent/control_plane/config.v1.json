@@ -164,7 +164,7 @@
       "key": "VEXA_AGENT_MODEL",
       "class": "defaulted",
       "default": "(harness CLI default)",
-      "description": "the model id every agent turn runs on \u2014 the chat turn and the write-back phase alike; empty means the harness CLI's own default",
+      "description": "the model id every agent turn runs on \u2014 the chat turn and the write-back phase alike; the key Settings \u2192 Models writes and the dispatch stamps into every worker. Empty means the harness's own default, which exists only for the CLI harnesses: the openai-agent harness has no default host and no default model and refuses the turn with a named-key error rather than asking an endpoint for an empty model",
       "targets": [
         "compose"
       ]
@@ -173,7 +173,7 @@
       "key": "VEXA_RUNNER",
       "class": "defaulted",
       "default": "claude-code",
-      "description": "agent harness stamped onto dispatched workspace turns; codex selects the Codex app-server, openai-agent selects this repo\u2019s own loop over any OpenAI-compatible endpoint (VEXA_LLM_BASE_URL/_MODEL/_EXTRA_BODY, already forwarded)",
+      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the WORKER reads from its dispatch-stamped env: #1415 removed them from the runtime's forward list, so they travel by stamp and never by forwarding",
       "targets": [
         "compose"
       ]

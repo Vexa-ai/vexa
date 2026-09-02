@@ -435,12 +435,6 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     extra_body = (config.get("extra_body") or "").strip()
     if extra_body:
         env["VEXA_LLM_EXTRA_BODY"] = extra_body
-    # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
-    # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the model
-    # reasons its whole budget away and returns nothing parseable.
-    extra_body = (config.get("extra_body") or "").strip()
-    if extra_body:
-        env["VEXA_LLM_EXTRA_BODY"] = extra_body
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:

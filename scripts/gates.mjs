@@ -278,6 +278,15 @@ function gateContractVersion() {
   if (changed.length) return fail(changed.map((k) =>
     `sealed contract changed: ${k} — a published .vN is frozen. BREAKING change → add the next version (vN+1); ` +
     `BACK-COMPATIBLE change → re-seal with \`pnpm seal:contracts\` in a lane:contract human-reviewed PR.`));
+  // A SEAL ENTRY WITH NO CONTRACT BEHIND IT (F93). The loop above walks the DIRS, so an entry for a
+  // deleted contract is never read and never fails — `processed-notes.v1` stayed sealed long after
+  // PRD decision 34 removed the pipeline that produced it. A stale pin is not harmless: it is the
+  // seal file asserting that something is frozen when nothing is.
+  const sealedDirs = new Set(dirs.map((d) => rel(d).replace(/\\/g, "/")));
+  const orphaned = Object.keys(seal).filter((k) => !sealedDirs.has(k));
+  if (orphaned.length) return fail(orphaned.map((k) =>
+    `sealed contract no longer exists: ${k} — remove it from contracts.seal.json (or restore the ` +
+    `contract). A pin with nothing behind it freezes nothing.`));
   const note = unsealed.length ? `; ${unsealed.length} unsealed (in development): ${unsealed.join(", ")}` : "";
   console.log(`  ✓ gate:contract-version — ${dirs.length - unsealed.length} sealed contract(s) frozen${note}`);
   return true;
