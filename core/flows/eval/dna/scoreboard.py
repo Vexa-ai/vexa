@@ -19,8 +19,9 @@ import pathlib
 import subprocess
 
 HEADER = ("| rev | when | fingerprint | layer | what changed | fixtures | mean | note_shape | "
-          "depth | prep mail | minutes mail | open prep | open min | compounding | judge |\n"
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+          "depth | prep mail | minutes mail | open prep | open min | compounding | "
+          "entities/turn | names linked | judge |\n"
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
 
 def fingerprint(fixtures: pathlib.Path, line_sha: str, presets: dict, stack: dict) -> str:
@@ -77,7 +78,8 @@ def main() -> int:
            f"{a.changed or '—'} | {scores['fixtures_scored']} | **{scores['mean_score']:.3f}** | "
            + " | ".join(f"{d[k]:.2f}" for k in
                         ["note_shape", "transcript_depth", "prepare_mail", "minutes_mail",
-                         "opening_prep", "opening_minutes", "compounding"])
+                         "opening_prep", "opening_minutes", "compounding",
+                         "entities_touched", "names_linked"])
            + f" | {jcol} |")
 
     if not prior:

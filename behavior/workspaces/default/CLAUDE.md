@@ -20,6 +20,22 @@ up, read exactly ONE:
 
 Entity shapes live in [`kg/templates/`](kg/templates/README.md) — skeletons, never knowledge.
 
+## Writing entities — a name without a page gets one now
+
+`entity_upsert(kind, name, facts, source)` is the whole write: it creates
+`kg/entities/<kind>/<slug>.md` with its frontmatter if the page is not there, and appends a dated
+entry if it is. Nothing to check first, nothing to merge by hand, and a fact the page already
+carries writes nothing — so call it on a maybe rather than deciding whether it is worth a page.
+
+Three rules travel with it, and they are the whole of it:
+
+- **A name without a page gets one NOW.** The moment a turn learns something durable about a person,
+  company, meeting, project or decision, it is written. Not at the end, not next time.
+- **Facts carry a source** — only what was said in the conversation or read from a file, a tool
+  result or a transcript, each with where it came from. A fact with no source is refused.
+- **Gaps go to `kg/MISSING.md`, never invented.** What you would have to guess is an open question
+  written there, not a sentence on a page that reads like knowledge.
+
 ## Entity layout (binding)
 
 - One markdown file per entity at **`kg/entities/<type>/<slug>.md`** (e.g.

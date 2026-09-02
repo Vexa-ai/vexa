@@ -2108,6 +2108,59 @@ def workspace_write(path: str, content: str, slug: str = "", token: str = "") ->
 
 @mcp.tool()
 @_anon_guard
+def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str = "",
+                  token: str = "") -> str:
+    """Record what you just learned about a person, company, meeting, project or decision.
+
+    ONE call does the whole thing: it creates `kg/entities/<kind>/<slug>.md` with frontmatter if the
+    page does not exist, or appends a dated entry if it does. You never have to check first, never
+    have to invent the shape, never have to merge by hand. Call it on a maybe — repeating a fact the
+    page already carries writes nothing.
+
+    Use it the moment a turn learns anything durable: a name and who they are, a company and what
+    they do, what a meeting decided, who owns what, a decision and why it went that way. A name
+    without a page gets one NOW.
+
+    - `kind` — person | company | meeting | project | decision
+    - `name` — what the page is about, as a person would say it ("Cottalango Leon", "Sony Pictures
+      Imageworks"). It becomes the title `[[wikilinks]]` resolve to.
+    - `facts` — one short sentence each, only what was SAID or READ. Write other entities inside a
+      fact as `[[Their Name]]`; the result tells you which of those have no page yet, and those are
+      your next calls.
+    - `source` — where it came from, in a few words: the meeting, the mail, the file, the person's
+      own message. REQUIRED. A fact with no source is refused, not written — if you do not have one,
+      the gap belongs in `kg/MISSING.md`, never on the page.
+    - `slug` — a shared workspace, omitted means this person's own desk.
+    """
+    uid = me()
+    if isinstance(facts, str):
+        facts = [facts]
+    st, body = _http("POST", f"{AGENT_API}/api/workspace/entity", {"X-User-Id": uid},
+                     {"kind": kind, "name": name, "facts": list(facts or []),
+                      "source": source, "slug": slug or ""})
+    if st == 422:
+        detail = (body or {}).get("detail") if isinstance(body, dict) else str(body)
+        return json.dumps({"refused": detail,
+                           "do": "fix the fact, do not retry the same call — the refusal is the rule"})
+    if st not in (200, 201):
+        return json.dumps({"error": "the entity could not be written", "status": st,
+                           "detail": str(body)[:300],
+                           "do": "say so plainly in one sentence, and report_friction()"})
+    out = dict(body) if isinstance(body, dict) else {"result": body}
+    path = out.get("path") or ""
+    if path:
+        out["paste_this_link"] = f"[[{name}]]"
+        out["never_show_the_path"] = ("the path is an argument for tools; in your reply write "
+                                      "[[" + str(name) + "]] and nothing slashed")
+    if out.get("links_missing"):
+        out["next"] = ("these names have no page yet and will render as inert 'not found' chips — "
+                       "upsert each one now, with its own source: "
+                       + ", ".join(out["links_missing"]))
+    return json.dumps(out)[:6000]
+
+
+@mcp.tool()
+@_anon_guard
 def workspace_new(name: str, purpose: str = "", token: str = "") -> str:
     """Create a SHARED workspace — a place a team writes into together — and own it.
 

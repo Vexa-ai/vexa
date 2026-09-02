@@ -41,7 +41,8 @@ def note_belongs_to(rec: dict, fx: dict) -> bool:
 
 
 MECHANICAL = ["note_shape", "transcript_depth", "prepare_mail", "minutes_mail",
-              "opening_prep", "opening_minutes", "compounding"]
+              "opening_prep", "opening_minutes", "compounding",
+              "entities_touched", "names_linked"]
 
 
 def frac(hits: list[bool]) -> float:
@@ -233,6 +234,95 @@ def d_compounding(rec: dict, earlier: list[dict]) -> tuple[float, dict]:
         "prior_meetings": len(earlier), "named_earlier_dates": named, "shared_terms": hit[:10]}
 
 
+# ── the entity write-back (PRD decision 24.4) ────────────────────────────────────────────────────
+#
+# Two numbers, because decision 24 has two halves and they fail differently. A run can write plenty
+# of pages and still leave every name in the note dead (`entities_touched` high, `names_linked`
+# low), and it can write beautifully linked prose that created nothing (the reverse). Averaging them
+# into one score would hide exactly the distinction the change is meant to move.
+
+# A capitalised RUN of two or more words — "Sony Pictures Imageworks", "Cottalango Leon". Single
+# capitalised words are deliberately not counted: at the start of a sentence every word is one, and
+# a measure that fires on "The" and "Monday" tells you about English, not about the product.
+# `and` and `the` are NOT intra-name particles, and the first version of this had them: it read
+# "Blue Light Card and Kaar Tech" as ONE name, undercounting by exactly the amount a note listing
+# several dead names does. A measure's own bugs bias in the direction that flatters the product.
+_BARE_NAME = re.compile(r"\b[A-Z][a-zA-Z'’\-]+(?:\s+(?:of|de|del|van|von|da|di)\s+[A-Z][a-zA-Z'’\-]+"
+                        r"|\s+[A-Z][a-zA-Z'’\-]+)+")
+_FENCE = re.compile(r"```[\s\S]*?```")
+# Headings and list labels are formatting, not mentions; a `## Decided` never wanted a wikilink.
+_HEADING = re.compile(r"^#{1,6}\s.*$", re.M)
+_NOT_A_NAME = {"Open Items", "Action Items", "Next Steps", "Open Questions", "Decided Committed"}
+
+# ⚠ MEASURED FALSE POSITIVE, removed after the first baseline run. Over ten real DNA notes the
+# measure flagged "Complete SSO", "Ask ASF", "Co-author TAC", "Lead TAC", "Attend SIGGRAPH",
+# "Escalate GitHub", "Await PR" — every one of them a Committed-section bullet, which by convention
+# opens with an imperative verb and is followed by an acronym. Those are not names anybody failed to
+# link; counting them inflated the deficit by roughly a third and would have made the fix look
+# better than it was. A measure's own bugs bias in whichever direction flatters the change, so they
+# get found before the change is scored, not after.
+_LEADING_VERB = {
+    "add", "address", "agree", "answer", "ask", "assign", "attend", "await", "book", "bring",
+    "build", "check", "circulate", "clarify", "close", "co-author", "complete", "confirm",
+    "consider", "continue", "create", "decide", "define", "deliver", "deploy", "discuss", "draft",
+    "escalate", "explore", "file", "finalize", "finalise", "find", "fix", "follow", "get", "give",
+    "identify", "include", "investigate", "invite", "keep", "land", "lead", "let", "look", "make",
+    "merge", "move", "open", "organise", "organize", "pick", "plan", "post", "prepare", "present",
+    "propose", "provide", "publish", "raise", "reach", "read", "record", "report", "request",
+    "resolve", "review", "revisit", "run", "schedule", "send", "set", "share", "should", "start",
+    "submit", "support", "take", "test", "track", "update", "verify", "wait", "work", "write",
+}
+_POSSESSIVE = re.compile(r"[\u2019']s$")
+
+
+def unlinked_names(note: str) -> list:
+    """Capitalised multi-word names in the note that are NOT inside a `[[wikilink]]` or a markdown
+    link. This is a PROXY and says so: it cannot know that "Technical Steering Committee" deserves
+    a page. It is a good proxy because it is exactly the failure decision 24 names — a name went
+    past and nothing was created — and because it can only be improved by writing the page."""
+    if not note:
+        return []
+    fm = re.match(r"^---\n[\s\S]*?\n---\n", note)
+    body = note[fm.end():] if fm else note
+    body = _FENCE.sub(" ", body)
+    body = _HEADING.sub(" ", body)
+    body = re.sub(r"\[\[[^\]]+\]\]", " ", body)          # already a chip
+    body = re.sub(r"\[[^\]]+\]\([^)]*\)", " ", body)      # already a link
+    out = []
+    for m in _BARE_NAME.finditer(body):
+        n = _POSSESSIVE.sub("", " ".join(m.group(0).split())).strip()
+        if not n or n in _NOT_A_NAME or n in out:
+            continue
+        if n.split()[0].lower() in _LEADING_VERB:
+            continue
+        out.append(n)
+    return out
+
+
+def d_entities_touched(rec: dict) -> tuple[float, dict]:
+    """Entity pages written per agent turn. One page per turn scores 1.0.
+
+    The target is deliberately modest. Decision 24 is about a floor — a turn that met a name and
+    created nothing — not about volume, and a dimension that rewards volume would be gamed by an
+    agent writing a page per sentence."""
+    files = rec.get("entity_files")
+    if files is None:
+        return -1.0, {"why": "this run predates the entity measure — not scored"}
+    turns = max(1, int(rec.get("entity_turns") or 1))
+    per_turn = len(files) / turns
+    return round(min(1.0, per_turn), 3), {"entity_files": files[:12], "pages": len(files),
+                                          "turns": turns, "per_turn": round(per_turn, 3)}
+
+
+def d_names_linked(rec: dict) -> tuple[float, dict]:
+    """Bare capitalised names left unlinked in the note. Five of them scores zero."""
+    note = rec.get("note") or ""
+    if not note:
+        return 0.0, {"why": "no committed note"}
+    bare = unlinked_names(note)
+    return round(max(0.0, 1.0 - len(bare) / 5.0), 3), {"unlinked": bare[:12], "count": len(bare)}
+
+
 # ── the judge ────────────────────────────────────────────────────────────────────────────────────
 
 def ask_json(prompt: str, model: str, timeout: int = 900) -> dict | None:
@@ -268,7 +358,11 @@ def ask_json(prompt: str, model: str, timeout: int = 900) -> dict | None:
 
 SCHEMA = ("Reply with ONLY a JSON object, no prose, no code fence, with exactly these integer keys "
           "(0-100 unless stated): decisions_recalled, decisions_invented (count), decisions_missed "
-          "(count), owners_correct, open_items_correct, attributions_wrong (count), overall.")
+          "(count), owners_correct, open_items_correct, attributions_wrong (count), overall, "
+          # decision 24.4: the entity pages are scored for GROUNDING, never for volume.
+          "and — only when an ENTITY PAGES section is present below — entities_supported (0-100: "
+          "how much of what those pages assert is supported by the truth or the note) and "
+          "entities_invented (count of claims on them that are neither).")
 
 
 def truth_is_empty(truth: str) -> bool:
@@ -287,10 +381,19 @@ def judge(rec: dict, truth: str, model: str) -> dict:
         return {"skipped": "truth sidecar is an empty stub — nothing to judge against",
                 "next": "fill decided/committed/open (a human, or the plan's first-pass LLM "
                         "extraction tagged unvalidated) before this column means anything"}
+    # The entity pages are part of what this turn produced, and they are mailed to nobody — which
+    # is exactly why they need a judge. A fabricated line on a person's page is invisible in a way
+    # a fabricated line in a note is not: nobody reads it until it is quoted back as knowledge.
+    pages = rec.get("entity_pages") or {}
+    pages_block = ""
+    if pages:
+        pages_block = ("\n\n=== ENTITY PAGES THIS TURN WROTE ===\n"
+                       + "\n\n".join(f"--- {p} ---\n{c}" for p, c in pages.items())[:12000])
     prompt = (
         "You are scoring a meeting note against a truth sidecar. Be strict and literal: an item is "
         "recalled only if the truth contains it, invented only if the truth contradicts or omits it.\n\n"
-        f"{SCHEMA}\n\n=== TRUTH SIDECAR ===\n{truth}\n\n=== THE NOTE UNDER TEST ===\n{note[:12000]}\n")
+        f"{SCHEMA}\n\n=== TRUTH SIDECAR ===\n{truth}\n\n=== THE NOTE UNDER TEST ===\n{note[:12000]}\n"
+        + pages_block)
     got = ask_json(prompt, model, timeout=600)
     return got if got is not None else {"error": "judge produced no json file"}
 
@@ -326,6 +429,8 @@ def main() -> int:
         dims["opening_prep"], ev["opening_prep"] = _opening(rec, "opening_prep", None)
         dims["opening_minutes"], ev["opening_minutes"] = _opening(rec, "opening_minutes", 100)
         dims["compounding"], ev["compounding"] = d_compounding(rec, earlier)
+        dims["entities_touched"], ev["entities_touched"] = d_entities_touched(rec)
+        dims["names_linked"], ev["names_linked"] = d_names_linked(rec)
 
         counted = [v for k, v in dims.items() if v >= 0]
         belongs = note_belongs_to(rec, fx)

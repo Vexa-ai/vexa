@@ -96,7 +96,13 @@ MACHINERY_NOTE = (
     # Reading is how the job is done, not part of the job; announcing it teaches the reader only
     # that they are waiting.
     "Read whatever you need silently: the FIRST sentence you emit is addressed to the person, and "
-    "you never narrate your own tool use.")
+    "you never narrate your own tool use. "
+    # Decision 24. A composed opening is the turn most likely to meet a name for the first time
+    # — an attendee clicking a post-meeting link brings a whole room with them — and it is the
+    # turn least likely to stop and write pages, because it is answering an ask.
+    "A name without a page gets one now: whatever this turn learns about a person, company, "
+    "meeting, project or decision goes in through entity_upsert with its source. Facts carry a "
+    "source; gaps go to kg/MISSING.md, never invented.")
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
 
