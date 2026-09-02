@@ -14,14 +14,18 @@ import type { Chat } from "./chats";
 
 export const MOCK_FLAG = "vexa.minutes.mock";
 
+/** Is the mock on RIGHT NOW? Reads `?mock=1` and nothing else.
+ *
+ *  It used to persist the answer in localStorage, which made one `?mock=1` visit permanent: the
+ *  browser kept serving fake meetings ("Acme — pricing review") to a real user on a clean URL,
+ *  with nothing on screen saying so and no way back except clearing site data. Fake data must be
+ *  reachable only while you are asking for it, so the flag lives in the URL and dies with it. The
+ *  stale key is cleared on sight so a browser poisoned by the old build recovers on first load. */
 export function mockOn(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    if (new URLSearchParams(window.location.search).get("mock") === "1") {
-      localStorage.setItem(MOCK_FLAG, "1");
-      return true;
-    }
-    return localStorage.getItem(MOCK_FLAG) === "1";
+    localStorage.removeItem(MOCK_FLAG);
+    return new URLSearchParams(window.location.search).get("mock") === "1";
   } catch { return false; }
 }
 

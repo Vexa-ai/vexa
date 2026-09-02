@@ -79,37 +79,19 @@ want help with, anything the web missed). More cycles are welcome while they're 
 Typed entity files at `kg/entities/<type>/<slug>.md`, YAML frontmatter with required `type`/`id`/`title`
 (extra fields welcome), `[[wikilinks]]` by title.
 
-- `kg/entities/person/<slug>.md` — the user (the OWNER, marked `self: true`) + every discovered person.
-  The user's OWN node carries `self: true` and holds the full profile; everyone else is a plain person
-  node (no `self`):
+- `kg/entities/person/<slug>.md` — the user (the OWNER, marked `self: true`) + every discovered
+  person. **Copy the shape from [`kg/templates/person.md`](../kg/templates/person.md)** — that file
+  is the single definition of the person shape, so do not retype it from memory. Two things it
+  leaves to you here:
 
-  ```
-  ---
-  type: person
-  id: jane-liu
-  title: Jane Liu
-  self: true                                       # ← the workspace owner (the user); EXACTLY one node
-  company: Acme
-  role: VP Eng
-  location: Lisbon
-  linkedin: https://www.linkedin.com/in/janeliu/   # the URL THEY gave you (their own profile)
-  ---
-  One line on who they are and why they matter to the user. Works at [[Acme]].
-  ```
+  - the OWNER's node adds `self: true` — **exactly one node in the workspace carries it** — and it
+    holds the full profile (company, role, location);
+  - the OWNER's node may add `linkedin:` — **only** the URL THEY gave you, their own profile.
 
   Discovered people use the same shape **without** `self` or `linkedin`.
 
-- `kg/entities/company/<slug>.md` — the company + notable orgs:
-
-  ```
-  ---
-  type: company
-  id: acme
-  title: Acme
-  domain: acme.com
-  ---
-  One line on what they do; stage/size/market if known.
-  ```
+- `kg/entities/company/<slug>.md` — the company + notable orgs. **Copy the shape from
+  [`kg/templates/company.md`](../kg/templates/company.md)**; add `domain:` when you know it.
 
 - update `CLAUDE.md` — a personalized header (who the user is, company/role/timezone) **and** a standing
   directive that you should default to researching things yourself rather than asking unnecessary questions.

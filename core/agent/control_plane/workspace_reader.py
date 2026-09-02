@@ -65,6 +65,21 @@ _ALWAYS_HIDDEN = {".git"}
 _RESERVED_PREFIXES = ("kg/templates/",)
 _TEMPLATE_FM = re.compile(r"^(?:template|example):\s*true\b", re.M)
 
+# Hiding a shape from every ENUMERATOR is only half of it — `read` is a second door, and it was
+# open: `GET /api/workspace/file` and the MCP `workspace_read` take a path the agent supplies, so a
+# shape it saw quoted anywhere (a prose file, an earlier reply, a guess) still came back as plain
+# markdown with conformant `type/id/title` frontmatter and read exactly like a record.
+#
+# The answer is NOT a refusal: creating an entity legitimately means looking at its shape first.
+# It is that the bytes must announce what they are, before the frontmatter, in the same read.
+_TEMPLATE_BANNER = (
+    "TEMPLATE — THIS IS THE SHAPE OF AN ENTITY, NOT A RECORD.\n"
+    "Nothing below is a real person, company or meeting: the angle-bracket fields are blanks.\n"
+    "Never cite it, never name it, never list or count it as prior context, and never copy a\n"
+    "placeholder value into an answer. Read it only to learn the shape you are about to fill.\n"
+    "\n"
+)
+
 
 def _is_template_doc(p: Path) -> bool:
     """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it."""
@@ -148,12 +163,22 @@ class WorkspaceReader:
         return self.read_at(self._ws(subject), path)
 
     def read_at(self, base: Path, path: str) -> Optional[str]:
-        """The text at ``path`` within the ``base`` workspace dir, or None if absent. Traversal-guarded."""
+        """The text at ``path`` within the ``base`` workspace dir, or None if absent. Traversal-guarded.
+
+        A template (by reserved PATH or by ``template: true`` FLAG — the same two tests ``tree_at``
+        applies) comes back with ``_TEMPLATE_BANNER`` prepended, so a shape can never be read as a
+        record. Deliberately not a refusal: the shape is what you consult to write a real entity."""
         ws = self._guard_under_root(base)
         f = (ws / path).resolve()
         if ws not in f.parents:  # the resolved path must stay inside the workspace
             raise ValueError("invalid path")
-        return f.read_text() if f.exists() and f.is_file() else None
+        if not (f.exists() and f.is_file()):
+            return None
+        text = f.read_text()
+        rel = f.relative_to(ws).as_posix()
+        if rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(f):
+            return _TEMPLATE_BANNER + text
+        return text
 
     def _session_id(self, ws: Path, session: str) -> Optional[str]:
         """The claude sessionId for a thread, read from its continuity pointer

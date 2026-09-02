@@ -6,6 +6,8 @@ type: person                      # required
 id: <slug>                        # required — kebab-case, matches the filename
 title: <Full Name>                # required — what [[wikilinks]] resolve to
 description: <one line: who they are and why they matter here>
+self: true                        # optional — set on the ONE person entity that is the
+                                  # workspace's owner (the user); every other person omits it
 role: <their role>                # optional
 company: <Company>                # optional — use the company's title so [[Company]] links
 resource: <url>                   # optional — a profile or source you can cite
