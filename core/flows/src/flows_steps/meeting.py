@@ -241,6 +241,117 @@ def transcript_text(uid: str, meeting_id) -> str:
     return "\n".join(str(g.get("text") or "") for g in segs)
 
 
+def _tokens(text: str) -> list:
+    """A name as comparable words: lowercase, split on anything that is not a letter or a digit,
+    bare numbers dropped. `Anna-Maria Smith` and `anna maria smith` become the same three."""
+    import re as _re
+    return [t for t in _re.split(r"[^a-z0-9]+", (text or "").lower()) if t and not t.isdigit()]
+
+
+def _match(label: str, names: dict) -> str:
+    """One transcript speaker label -> ONE invite address, or "" when it is not unambiguous.
+
+    Matched against the invite's own `CN=` DISPLAY NAMES, never against an email local part. That
+    is the whole reason `participant_names` exists: deriving "Anna Smith" from `a.smith@` is a
+    guess, and a guess here silently reorders whose desk gets read first.
+
+    Scored by shared name tokens, best score wins, and A TIE MATCHES NOBODY — at least one shared
+    token must be three characters or longer, so initials and particles cannot carry a match.
+
+    Note what this decides and what it does not: it decides ORDER. Membership is the invite, so a
+    label that matches nobody costs that person nothing — they are still in the room, just further
+    down the list. This function can never remove anyone.
+    """
+    want = _tokens(label)
+    if not want:
+        return ""
+    best, best_score, tied = "", 0, False
+    for email, display in (names or {}).items():
+        common = set(want) & set(_tokens(display))
+        score = len(common) if any(len(t) >= 3 for t in common) else 0
+        if score > best_score:
+            best, best_score, tied = email, score, False
+        elif score and score == best_score and email != best:
+            tied = True
+    return "" if (tied or not best_score) else best
+
+
+def speaking_seconds(uid: str, meeting_id) -> dict:
+    """`{speaker label: seconds}` for one meeting, read through the transcript's owning endpoint.
+
+    `end - start` summed per label. When a producer gives no usable timings the fallback is
+    CHARACTERS spoken — a proxy for the same thing, which keeps the ORDER honest even when the
+    seconds are not available.
+
+    Never raises: an unreadable transcript is `{}`, which means nobody is prioritised and the
+    invite's own order stands. It is not a reason to fail a meeting."""
+    try:
+        _st, body = http("GET", f"{GATEWAY}/transcripts/by-id/{meeting_id}",
+                         {"X-API-Key": user_api_key(str(uid))})
+    except StepError:
+        return {}
+    segs = (body or {}).get("segments") or [] if isinstance(body, dict) else []
+    seconds, chars = {}, {}
+    for g in segs:
+        if not isinstance(g, dict):
+            continue
+        label = str(g.get("speaker") or "").strip()
+        if not label:
+            continue
+        try:
+            dur = float(g.get("end") or 0) - float(g.get("start") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        seconds[label] = seconds.get(label, 0.0) + max(dur, 0.0)
+        chars[label] = chars.get(label, 0) + len(str(g.get("text") or ""))
+    if not seconds:
+        return {}
+    return seconds if any(v > 0 for v in seconds.values()) else {k: float(v)
+                                                                 for k, v in chars.items()}
+
+
+def room_order(uid: str, meeting_id, participants: list, names: dict,
+               cap: int = 12) -> list:
+    """The invite's addresses, PRIORITISED by speaking time, cut at `cap`.
+
+    Founder, 2026-09-02, in two halves that have to stay separate:
+
+      MEMBERSHIP is the invite. Everybody on it is eligible — being quiet in a meeting you were in
+      does not remove your desk from the room, and it never could: the point of reading a desk is
+      to understand what somebody meant, and the quiet ones are exactly the people whose context is
+      not in the transcript.
+      SPEAKING only ORDERS. Matched participants first, by how much they spoke; everyone else
+      after them in invite order; cut at `cap` (`room_read_max`, default 12) so a fifty-person
+      all-hands does not hand the run fifty desks.
+
+    **A failed match degrades to invite order, NEVER to an empty room.** No transcript, no
+    timings, no `CN=` names, nothing matching anything — the answer is still the first `cap`
+    addresses on the invite. An empty room from a matcher that could not do its job is a silent
+    loss of the whole feature, and it would look exactly like a meeting where nobody spoke.
+
+    Addresses, not subject ids: agent-api resolves identity and mounts only the people who already
+    have a desk, so a stranger on the invite is skipped THERE and no account is minted anywhere."""
+    invite = [str(a).strip().lower() for a in (participants or []) if str(a).strip()]
+    seen, ordered = set(), []
+    for a in invite:                       # dedupe, keep the invite's own order
+        if a not in seen:
+            seen.add(a)
+            ordered.append(a)
+    if not ordered:
+        return []
+    seconds = speaking_seconds(uid, meeting_id)
+    rank = {}
+    for label, weight in seconds.items():
+        email = _match(label, names or {})
+        if email in seen:
+            rank[email] = rank.get(email, 0.0) + float(weight)
+    # matched-and-spoke first (most first), then everybody else in the invite's own order
+    spoke = sorted(rank, key=lambda a: (-rank[a], ordered.index(a)))
+    rest = [a for a in ordered if a not in rank]
+    limit = max(int(cap), 0) or len(ordered)
+    return (spoke + rest)[:limit]
+
+
 def _phrases(text: str, n: int = 6) -> set:
     import re as _re
     ws = _re.findall(r"[a-z0-9']+", (text or "").lower())

@@ -118,6 +118,10 @@ def test_zoom_invite_becomes_the_exact_invite_received_refs():
         "title": "DNA TSC weekly",
         "group": "dna-tsc",
         "participants": ["amelia@dna.test", "priya@dna.test"],
+        # the ATTENDEE lines' own CN= display names, address -> name. Without them, matching a
+        # transcript speaker to somebody on the invite means guessing a name out of an email local
+        # part, which is the guess the room ordering must not make.
+        "participant_names": {"amelia@dna.test": "Amelia Chen", "priya@dna.test": "Priya Raman"},
     }
 
 

@@ -83,13 +83,32 @@ DEFAULTS: dict[str, str] = {
     ),
     # The ATTENDEE follow-up head -- for most people in a large meeting this is the first time they
     # hear from Vexa at all, so it is the whole introduction: whose Vexa this is, what it does,
-    # which meeting, and who had it in the room. The agent's own per-person section follows it.
+    # which meeting, who had it in the room, where the report now lives, and who can see it.
+    #
+    # BYTE-FOR-BYTE `deploy/dogfood/mail/attendee-head.md`, and it has to stay that way: the README
+    # in that directory says the source and the baked default are the same content or the source
+    # lies. It HAS drifted twice already, both times invisibly, because nothing read both -- once
+    # substituting {{title}}/{{when}}/{{attendees}} which no step fills, and once missing the
+    # visibility sentence entirely. `test_the_baked_defaults_match_the_files_in_deploy_dogfood_mail`
+    # now reads both, for every template.
+    #
+    # THREE SENTENCES ARE LITERAL HERE, not tokens: the service sentence, "your desk", and the
+    # visibility sentence. `render` would fill {{service}}, {{workspace}} and {{visibility}}, but
+    # the FILE spells them out and these two strings must be equal. The visibility one especially
+    # must not become a token that a deployment could leave unfilled: it is the sentence that tells
+    # a stranger who can see their notes, in the first mail they ever get from us, and a baked
+    # fallback that quietly drops it discloses nothing. Change any of the three and you change
+    # every place the mail README names.
     "attendee-head": (
-        "subject: {{title}} — what it means for you\n"
+        "subject: {{meeting}} — what it means for you\n"
         "---\n"
-        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "I am Vexa, the meeting assistant at {{company}}. I sit in meetings you are invited to; "
+        "afterwards you get what came out of them and what they leave on your plate.\n"
         "\n"
-        "{{organizer}} had me in {{title}}, {{when}}, with {{attendees}} others in the room.\n"
+        "{{organizer}} had me in {{meeting}} on {{date}}. This is now on your desk.\n"
+        "\n"
+        "Vexa runs on this organisation's own servers; what you and your colleagues keep in your "
+        "workspaces is visible to the company's agents; recordings and transcripts stay here.\n"
     ),
     # The MINUTES head -- the same meeting, to someone who already knows what Vexa is. No
     # introduction: repeating it to a returning person is the tell of a machine that does not know
@@ -140,7 +159,13 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     product differently; everything else comes from `values`. An unknown `{{token}}` is left
     STANDING rather than blanked: a visible `{{organizer}}` in a test inbox is a bug report, and a
     silently empty sentence is not."""
-    raw = ws_file(uid, f"mail/{name}.md", "_global") or DEFAULTS.get(name)
+    raw = ws_file(uid, f"mail/{name}.md", "_global")
+    # An override that is EMPTY, or only whitespace, is an accident and not an instruction. `or`
+    # alone did not catch it -- `"   \n\n"` is truthy in Python, so an admin who cleared the file
+    # instead of editing it would have mailed a stranger a blank introduction with a blank subject,
+    # which is worse than the placeholder wording they were trying to replace.
+    if not (raw or "").strip():
+        raw = DEFAULTS.get(name)
     if raw is None:
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
     subject, body = _split(raw)

@@ -15,6 +15,32 @@ ADMIN_API = os.environ.get("VEXA_FLOWS_ADMIN_API_URL", "http://localhost:18057")
 ADMIN_KEY = os.environ.get("VEXA_FLOWS_ADMIN_KEY", "changeme")
 FIXTURE_TRANSCRIPT = os.environ.get("VEXA_FLOWS_FIXTURE_TRANSCRIPT", "") == "1"   # declared double
 
+
+def require_internal_secret() -> str:
+    """The INTERNAL-TIER secret, or the process refuses to start.
+
+    agent-api's meeting room (`control_plane/meeting_room.py`, gate 0) opens only for a caller that
+    presents `X-Internal-Secret`. A browser client through the gateway holds no such secret and
+    therefore cannot open a room at all — which is the entire point of the gate, and why flows,
+    which is an internal-tier caller, must hold one.
+
+    Deliberately the SAME REFUSAL as `flows_api._require_api_key`, down to the wording: a weak
+    default makes an unconfigured deployment look configured and fails no test, so there is no
+    default and no fallback. The value lives in a mode-600 file under `~/.storm/`, exported by the
+    lane's start script as `VEXA_INTERNAL_SECRET`; it never appears in this repository, in a log,
+    or in an error message — including the ones below, which name the VARIABLE and never the value.
+    """
+    key = (os.environ.get("VEXA_INTERNAL_SECRET") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "VEXA_INTERNAL_SECRET is unset — flows refuses to start rather than run with no "
+            "internal-tier identity. Mint one into a mode-600 file (the ~/.storm/dburl pattern) "
+            "and export it from the lane's start script; never put the value in the repo.")
+    if key in ("changeme", "change-me", "default", "secret"):
+        raise RuntimeError(
+            f"VEXA_INTERNAL_SECRET is the placeholder {key!r} — refusing to start.")
+    return key
+
 # Where a person's own terminal lives. Same env name the control MCP already reads, and the same
 # default — one deployment fact, one variable, never two spellings of one host. A mail that says
 # "open it here" and names a host the person cannot reach is worse than a mail with no link.
@@ -63,24 +89,30 @@ def http(method: str, url: str, headers: dict, body: dict | None = None, timeout
         raise StepError(f"http {method} {url}: {type(e).__name__}: {e}"[:400])
 
 
-def ensure_platform_user(email: str) -> str:
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/{email}", {"X-Admin-API-Key": ADMIN_KEY})
-    if code != 200:
-        code, u = http("POST", f"{ADMIN_API}/admin/users", {"X-Admin-API-Key": ADMIN_KEY},
-                       {"email": email, "name": email.split("@")[0].title()})
-    return str(u["id"])
-
-
 def platform_user_id(email: str) -> str:
-    """This person's platform id IF THEY ALREADY HAVE ONE, else "". Never creates.
+    """This person's platform id IF THEY ALREADY HAVE ONE, else "". NEVER creates.
 
-    `ensure_platform_user` was the only door, so a step that merely wanted to know whether somebody
-    is already a user had to mint an account to find out — and an account minted by a mail nobody
-    asked for is a ghost that later reads as an adopted user. Asking is now a different verb from
-    creating.
+    `ensure_platform_user` was once the only door, so a step that merely wanted to know whether
+    somebody is already a user had to mint an account to find out — and an account minted by a mail
+    nobody asked for is a ghost that later reads as an adopted user. Asking is a different verb
+    from creating, and this is the asking half: one GET, no side effect, "" for a stranger.
     """
     code, u = http("GET", f"{ADMIN_API}/admin/users/email/{email}", {"X-Admin-API-Key": ADMIN_KEY})
     return str(u["id"]) if code == 200 and isinstance(u, dict) and u.get("id") is not None else ""
+
+
+def ensure_platform_user(email: str) -> str:
+    """This person's platform id, CREATING the account when they have none.
+
+    The creating half, written ON TOP OF the asking half rather than beside it: the same lookup
+    used to be spelled out twice, so a change to how we ask would have had to be made in two places
+    and would have been made in one."""
+    existing = platform_user_id(email)
+    if existing:
+        return existing
+    _code, u = http("POST", f"{ADMIN_API}/admin/users", {"X-Admin-API-Key": ADMIN_KEY},
+                    {"email": email, "name": email.split("@")[0].title()})
+    return str(u["id"])
 
 
 def user_api_key(uid: str) -> str:

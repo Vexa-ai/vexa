@@ -97,10 +97,25 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     # participant: we are the notetaker, and an onboarding aimed at ourselves is an echo loop.
     me = (self_addr if self_addr is not None else os.environ.get("VEXA_MAIL_ADDR", "")).strip().lower()
     participants: list[str] = []
-    for a in re.finditer(r"ATTENDEE[^\n]*?mailto:([^\s;,>\"]+)", ve, re.I):
-        who = a.group(1).strip().lower()
-        if who and who != me and who not in participants:
+    # THE DISPLAY NAMES, alongside the addresses. An ATTENDEE line carries `CN="Anna Smith"`, and
+    # that is the only place a person's real name and their address appear together — without it,
+    # matching a transcript's speaker label to somebody on the invite means guessing a name out of
+    # an email local part, which is exactly the guess we must not ship. Address -> name, addresses
+    # lowercased to match `participants`, names kept verbatim.
+    #
+    # A separate ref, not a change to `participants`: every existing consumer of that list keeps
+    # the shape it has, and a CN that is missing is simply an address with no name here.
+    names: dict = {}
+    for a in re.finditer(r"ATTENDEE([^\n]*?)mailto:([^\s;,>\"]+)", ve, re.I):
+        params, who = a.group(1), a.group(2).strip().lower()
+        if not who or who == me:
+            continue
+        if who not in participants:
             participants.append(who)
+        cn = re.search(r'CN=(?:"([^"]*)"|([^;:,]*))', params, re.I)
+        label = ((cn.group(1) or cn.group(2)) if cn else "").strip()
+        if label and who not in names:
+            names[who] = label
     start = time.time() + 150
     if dt:
         import calendar as cal
@@ -122,7 +137,8 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
             "ics_uid": (uid.group(1).strip() if uid else f"noid-{int(start)}"),
             "title": (summ.group(1).strip() if summ else "Meeting"),
             "group": group,
-            "participants": participants}
+            "participants": participants,
+            "participant_names": names}
 
 
 def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,

@@ -111,7 +111,7 @@ def test_email_minutes_carries_the_composed_review_link(monkeypatch):
     monkeypatch.setattr(production, "ws_file", lambda uid, path: "## Decided\n- ship it\n")
     out = reg.steps["email_minutes"](_ctx(
         {"uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync", "meeting_id": 41},
-        {"process_meeting": {"note_path": "kg/entities/meeting/x.md", "summary": "s", "sha": "abc123def"}}))
+        {"process_meeting": {"report": "## Decided\n- ship it", "group": ""}}))
     assert isinstance(out, Done)
     assert len(ch.sent) == 1
     msg = ch.sent[0]
@@ -207,7 +207,7 @@ ATTENDEE_REFS = {
     "uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync", "meeting_id": 97,
     "participants": ["anna@bank.test", "ben@bank.test", "cara@bank.test", "out@other.test"],
 }
-ATTENDEE_PRIOR = {"process_meeting": {"note_path": "kg/x.md", "summary": "s", "sha": "abc123"}}
+ATTENDEE_PRIOR = {"process_meeting": {"report": "## Decided\n- ship it", "group": ""}}
 
 
 def _attendee_rig(monkeypatch, *, mint, row=None):

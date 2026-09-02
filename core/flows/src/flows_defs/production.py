@@ -24,6 +24,7 @@ is about, and the sign-in hop preserves it. What travels the wire is a NOTIFICAT
 Laws (from the live witness): steps never sleep · all state in refs/receipts · replies by thread."""
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -45,6 +46,8 @@ UPCOMING = EventType("meeting.upcoming")
 MAIL_REPLY = EventType("mail.reply")
 
 NUDGE_EVERY_S = 15 * 60
+
+logger = logging.getLogger("flows.production")
 
 def _repo_root() -> Path:
     # repo checkout: <root>/core/flows/src/flows_defs/production.py → parents[4];
@@ -77,12 +80,12 @@ def prompt_for(ctx, fname: str, default: str) -> str:
     over = (ctx.flow.param("prompts") or {}) if ctx.flow else {}
     return over.get(fname, default)
 
+
 ONBOARD_KICKOFF = _prompt("onboard-person.md")
 
 GROUP_KICKOFF = _prompt("onboard-group.md")
 
 PROCESS_KICKOFF = _prompt("process-meeting.md")
-
 
 def build(reg: Registry, db) -> None:
     # ── shared small steps ────────────────────────────────────────────────────
@@ -284,98 +287,145 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def process_meeting(ctx: StepCtx):
-        """REAL agent turn on session meet-<id>: write the meeting note (Decided/Committed/
-        Open, wikilinked) into the workspace and commit. Completion detected by a commit touching
-        kg/entities/meeting/ (matched by PATH, never count). Params: style (rendering guidance).
-        Reads: refs.{uid,meeting_id,native} · Effect: agent worker + git commit
-        Result: {sha, note_path}."""
+        """ONE REAL AGENT TURN on session meet-<id>, producing ONE SHARED ARTEFACT: the meeting's
+        report, the same words for everybody who was in the room.
+
+        IT WRITES INTO NO DESK (founder decision 22, 2026-09-02). Not the organiser's either. The
+        canonical home of the note is THE MEETING ROW AND ITS TRANSCRIPT STORE; every attendee's
+        desk — the organiser's included, nobody special — receives the artefact itself afterwards,
+        from `drop_to_attendees`. One meeting, one artefact, and the desks are where it lands, not
+        where it lives.
+
+        COMPLETION IS THE REPLY, GROUNDED IN THE TRANSCRIPT. It used to be a new commit touching
+        `kg/entities/meeting/` in the organiser's repo (`ag.latest_meeting_note`, now deleted with
+        its baseline). With no desk write that commit never happens, so that detector would wait
+        fifteen minutes and fail every meeting — a silently never-completing step, which is worse
+        than a loud one. The turn's own reply IS the artefact: the kick already required the reply
+        to BE the report, because it was already being mailed verbatim.
+
+        THE GROUNDING GATE IS UNCHANGED and now matters more, since the reply is no longer
+        cross-checkable against a committed file: does the report share any six-word run with the
+        actual transcript? If not the agent is told exactly that, once, and asked again; if it
+        still cannot ground it the reaction FAILS LOUDLY rather than mailing a report nobody can
+        trace to the meeting.
+
+        THE ROOM. The turn may READ the desks of the people on the invite, prioritised by speaking
+        time and capped by `room_read_max`. Flows proposes; agent-api verifies, resolves each
+        address to a subject, and mounts only those who already have a desk — so nothing here
+        mounts anything and no account is ever minted for the room.
+
+        THE GROUP, and ONLY when there is one: the group desk is mounted read/write and this turn
+        MAINTAINS it — its people, decisions, open items, README — rather than appending an
+        artefact to it. A meeting with no group gets none of that.
+
+        Reads: refs.{uid,meeting_id,native,participants?,participant_names?,group?}
+        Effect: one agent turn · Result: {report, group, room_read}."""
         uid = ctx.refs["uid"]
+        session = f"meet-{ctx.refs['meeting_id']}"
+        group = str(ctx.refs.get("group") or "").strip()
         if "baseline" not in ctx.scratch:
-            ctx.scratch["shas"] = ag.commit_shas(uid)
             kick = prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(
                 mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
                 date=_meeting_stamp(ctx, uid))
-            # ONE agent turn produces everything, including the per-attendee follow-ups when the
-            # personal variant is on. No per-attendee agent, no per-attendee session before a
-            # click — the button composes the chat when it is pressed, as the organizer's does.
-            if _followup_mode(ctx) == "personal":
-                who = _attendees(ctx)
-                if who:
-                    kick += (
-                        "\n\nALSO, in this same turn, write the file "
-                        f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md. For each address "
-                        f"below write a section `## <address>` followed by at most three lines "
-                        "addressed to that person: what THEY committed to, what was asked of "
-                        "them, or what they asked — from the transcript, in their words where "
-                        "possible. If the meeting held nothing for that person, write the "
-                        "meeting's single decision instead. No greeting, no sign-off, no "
-                        "meta-commentary.\n" + "\n".join(who))
+            # WHOSE DESKS THIS TURN MAY READ — the invite, ordered by who spoke, capped. Computed
+            # here because flows is where the transcript is reachable, and sent as a PROPOSAL:
+            # agent-api verifies membership itself and mounts only people who already have a desk.
+            # A matcher that cannot match degrades to invite order, never to an empty room.
+            room_read = mt.room_order(uid, ctx.refs["meeting_id"],
+                                      ctx.refs.get("participants") or [],
+                                      ctx.refs.get("participant_names") or {},
+                                      cap=_room_read_max(ctx))
+            ctx.scratch["room_read"] = room_read
+            # THE ROW ID, not refs["meeting_id"] — the room gate resolves a MEETINGS-DOMAIN ROW,
+            # and refs may still carry a native id from meeting_ref(). This is the same identity
+            # bug that mailed meeting 97's attendees a link with no token: `platform='unknown'`
+            # with an empty native is addressed by NO pair, and only the row id always exists.
+            row = mt.meeting_row(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+            row_id = (row or {}).get("id") if isinstance(row, dict) else None
+            kick += _shared_report_rules(room_read, group)
             ctx.scratch["baseline"] = ag.dispatch_turn(
-                uid, f"meet-{ctx.refs['meeting_id']}", kick)
+                uid, session, kick,
+                room={"meeting_id": row_id, "read": room_read,
+                      "names": ctx.refs.get("participant_names") or {},
+                      "read_max": _room_read_max(ctx)} if row_id else None)
             return Wait(seconds=12)
-        reply = ag.collect_reply(uid, f"meet-{ctx.refs['meeting_id']}", ctx.scratch["baseline"])
-        sha, path = ag.latest_meeting_note(uid, ctx.scratch["shas"])
-        if reply is not None and sha:
-            # THE GROUNDING GATE. Removing the transcript from the event made the note depend on
+        reply = ag.collect_reply(uid, session, ctx.scratch["baseline"])
+        if reply is not None:
+            # THE GROUNDING GATE. Removing the transcript from the event made the report depend on
             # the agent CHOOSING to fetch it, and measured on Haiku it chooses to about half the
-            # time — and when it does not, it writes a confident note anyway, from the title and
+            # time — and when it does not, it writes a confident report anyway, from the title and
             # the prompt. That is strictly worse than the truncated copy it replaced: a shallow
-            # note is visibly shallow, a fabricated one is not.
-            #
-            # An instruction is not a gate. So the step checks: does the note share any six-word
-            # run with the actual transcript? If not, the agent is told exactly that, once, and
-            # asked again. If it still cannot ground it, the reaction FAILS LOUDLY rather than
-            # emailing minutes nobody can trace to the meeting.
-            note = ws_file(uid, path)
-            if not mt.grounded_in(note or reply, mt.transcript_text(uid, ctx.refs["meeting_id"])):
+            # report is visibly shallow, a fabricated one is not. An instruction is not a gate.
+            if not mt.grounded_in(reply, mt.transcript_text(uid, ctx.refs["meeting_id"])):
                 if not ctx.scratch.get("regrounded"):
                     ctx.scratch["regrounded"] = True
-                    ctx.scratch["shas"] = ag.commit_shas(uid)
                     ctx.scratch["baseline"] = ag.dispatch_turn(
-                        uid, f"meet-{ctx.refs['meeting_id']}",
-                        "STOP. The note you just wrote contains nothing that appears in the "
+                        uid, session,
+                        "STOP. The report you just wrote contains nothing that appears in the "
                         f"meeting. You did not read it. Call mcp__vexa__meeting_transcript with "
                         f"meeting_id={ctx.refs['meeting_id']} and tail=0 NOW, read every segment, "
-                        "then rewrite the note from what it returns — quoting one verbatim "
-                        "sentence with its speaker. If you cannot call that tool, say so and "
-                        "write nothing.")
+                        "then write it again from what it returns — quoting one verbatim "
+                        "sentence with its speaker. If you cannot call that tool, say so.")
                     return Wait(seconds=12)
                 raise StepError(
-                    "the note is not grounded in the transcript — the agent did not read the "
-                    "meeting, twice. Refusing to email minutes that cannot be traced to it.",
+                    "the report is not grounded in the transcript — the agent did not read the "
+                    "meeting, twice. Refusing to mail a report that cannot be traced to it.",
                     retryable=False)
-            return Done({"sha": sha, "note_path": path, "summary": reply[:6000]})
-        if reply is not None:
-            # THE TURN ENDED AND PRODUCED NO NOTE. Silence and finishing-empty are different
-            # facts, and this step used to treat them the same: wait, and after fifteen minutes
-            # say "agent produced no note in 15min" — a sentence that names the symptom and
-            # discards the cause. The agent had, in one measured case, already explained itself in
-            # its first thirty seconds ("the tool appears in the deferred MCP tools list, but I
-            # don't have a direct function invocation"), and the step spent the next fifteen
-            # minutes not reading it. A stalled fixture cost 34 minutes of a replay that way.
-            #
-            # A collected reply means the turn is OVER. Ask once more, naming what happened, and
-            # then fail with the agent's OWN LAST WORDS in the reason, because that is the only
-            # part of this that tells anyone what to fix.
-            if not ctx.scratch.get("re_asked_note"):
-                ctx.scratch["re_asked_note"] = True
-                ctx.scratch["shas"] = ag.commit_shas(uid)
-                ctx.scratch["baseline"] = ag.dispatch_turn(
-                    uid, f"meet-{ctx.refs['meeting_id']}",
-                    "Your last turn ended without writing the meeting note. Do it now: call "
-                    f"mcp__vexa__meeting_transcript with meeting_id={ctx.refs['meeting_id']} and "
-                    "tail=0, read every segment, then write the note. If that tool will not run "
-                    "for you, reply with the exact error and write nothing — do not summarise "
-                    "from the title.")
-                return Wait(seconds=12)
-            raise StepError(
-                "the agent's turn ended twice with no note. Its last words: "
-                + " ".join(reply.split())[:280], retryable=False)
+            return Done({"report": reply[:6000], "group": group,
+                         "room_read": ctx.scratch.get("room_read", [])})
         # Still running: the long wait stays, because a turn that is genuinely working is allowed
-        # to take its time. It just no longer covers a turn that has already given up.
+        # to take its time. What is GONE is the "turn ended but wrote no note" branch — with the
+        # reply itself as the artefact, a finished turn and a finished artefact are the same
+        # event, and there is no longer a state where one exists without the other.
         if ctx.clock_now - ctx.scratch.get("t0", ctx.scratch.setdefault("t0", ctx.clock_now)) > 900:
             raise StepError("the agent turn never finished (no reply after 15min)", retryable=False)
         return Wait(seconds=10)
+
+    def _shared_report_rules(room_read: list, group: str) -> str:
+        """What the post-meeting turn is told on top of the behavior-domain kick.
+
+        ⚠ IT SUPERSEDES PART OF THAT KICK, and cannot do so by editing it: the canonical text is
+        `behavior/prompts/process-meeting.md`, a BEHAVIOR-domain file (proprietary voice, private
+        mount) that this tier does not own and must not rewrite. That file still says "write the
+        meeting note at kg/entities/meeting/... update the index... update README.md" — the desk
+        writes decision 22 removed. So this block says so explicitly rather than hoping the model
+        resolves the contradiction, and whoever owns that file should delete those three clauses.
+        """
+        block = (
+            "\n\nTHE REPORT IS SHARED, AND IT IS YOUR REPLY. One report for this meeting, the "
+            "same words to everybody who was in the room — the organiser and every attendee read "
+            "the identical mail. Do not write a section per person, do not address anyone "
+            "individually, and do not write anything only one reader is meant to see.\n\n"
+            "WRITE NO FILES FOR THIS REPORT. Ignore any instruction above to save the note into a "
+            "workspace, to update an index, or to update a README: this report is not filed "
+            "anywhere by you. Its home is the meeting itself, and every person in the room gets a "
+            "copy on their own desk afterwards, which is not your job either. Your REPLY is the "
+            "artefact — it is mailed verbatim, so no preamble and no meta-commentary.\n\n"
+            "MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's desk informs the report, it is "
+            "never quoted into it. ")
+        if room_read:
+            block += (
+                "You have READ-ONLY access to the desks of the people who were in this meeting ("
+                + ", ".join(room_read) + "). Use them to understand what was said and to attribute "
+                "it correctly, and never copy a line, a note or a phrase out of one into this "
+                "report — a report that goes to everyone in the room is not a place where one "
+                "person's own notes can appear. ")
+        block += ("Everything in the report was said, decided, committed or asked IN THIS ROOM.\n\n"
+                  "Anything person-centric happens when they click the link in the mail, not here.")
+        if group:
+            block += (
+                f"\n\nTHIS MEETING BELONGS TO THE GROUP #{group}, AND ITS DESK IS YOURS TO "
+                "MAINTAIN. You have it mounted READ/WRITE — the one desk you write to in this "
+                "turn. Maintaining is not appending: bring the group's own pages up to date with "
+                "what this meeting changed.\n"
+                "  - its PEOPLE: who is in this group, what each of them is carrying now\n"
+                "  - its DECISIONS: add what was decided, and correct anything this meeting "
+                "overturned rather than leaving both\n"
+                "  - its OPEN ITEMS: close what closed, add what opened, re-own what moved\n"
+                "  - its README: the dashboard a member reads first — make it true as of today\n"
+                "Edit the pages that exist before creating new ones, and never copy one person's "
+                "desk into the group's.")
+        return block
 
     @reg.step
     def email_minutes(ctx: StepCtx):
@@ -393,12 +443,14 @@ def build(reg: Registry, db) -> None:
         Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
-        p = ctx.prior["process_meeting"]
-        note = _readable(ws_file(ctx.refs["uid"], p["note_path"])
-                         or p["summary"])
+        # THE ONE ARTEFACT, off the receipt. It used to be re-read out of the organiser's desk
+        # (`ws_file(uid, note_path)`), which no longer holds it — the run writes into no desk, so
+        # `process_meeting`'s reply IS the report and the receipt is where it lives. The commit sha
+        # went with the desk write it referred to.
+        report = _readable(ctx.prior["process_meeting"]["report"])
         body = (_provenance(ctx, ctx.refs["uid"], to_attendee=False)
-                + note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
-                "Reply to this email with corrections or questions — I'll update the workspace "
+                + report + "\n\n—\nRecorded by Vexa\n"
+                "Reply to this email with corrections or questions — I'll update what we hold "
                 "and answer here. Or open it and talk it through:")
         link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"])
         mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
@@ -528,6 +580,13 @@ def build(reg: Registry, db) -> None:
         The flow can, so the address travels in the artifact that knows it.
 
         PLACEHOLDER WORDING — the founder has not chosen these words.
+
+        CURRENTLY UNREFERENCED (2026-09-02). The attendee mail was its only caller, and its head
+        is now the founder's own file (`deploy/dogfood/mail/attendee-head.md`) — this sentence is
+        not in it. Kept, not deleted, because it is the only place the deployment's own mailbox
+        address is turned into prose: putting the offer back is one `{{mailbox}}` token in that
+        file plus one entry in the `values` dict handed to `mailtext.render`, and deleting this
+        would lose the env lookup that makes it correct on a deployment that is not ours.
         """
         import os
         box = os.environ.get("VEXA_MAIL_ADDR", "").strip()
@@ -536,18 +595,73 @@ def build(reg: Registry, db) -> None:
         return ("\nWant Vexa in a meeting of your own? Forward its calendar invite to "
                 f"{box}.\n")
 
+
+    def _meeting_date(ctx, uid) -> str:
+        """`{{date}}` — the day the MEETING happened, in the organiser's zone.
+
+        Derived from `_meeting_stamp`, NOT `_their_clock`. `_their_clock` renders a clock time
+        ("14:30 CEST") from an epoch the caller must already hold, and it has no answer at all
+        when refs carry no `start`; the head needs a DATE and has to survive that case.
+        `_meeting_stamp` already owns exactly the rules this needs — refs.start, else the meeting
+        row's start_time, else its created_at; the organiser's timezone, else UTC, never the
+        server's clock — so this reuses it and only reshapes `%Y-%m-%d-%H%M` into prose.
+        Reimplementing that fallback chain here is how the two would drift apart."""
+        import datetime
+        stamp = _meeting_stamp(ctx, uid)
+        try:
+            return datetime.datetime.strptime(stamp[:10], "%Y-%m-%d").strftime("%-d %B %Y")
+        except Exception:  # noqa: BLE001
+            return stamp[:10]
+
+
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
-    def _followup_mode(ctx) -> str:
-        """off | shared | personal.
+    def _followup_on(ctx) -> bool:
+        """Does the attendee fan-out run for this meeting at all?
 
         `shared` (default ON) is Marvin's own rule read across to SPI — creator-controlled
         sharing, default on, with a per-meeting opt-out (`refs.share is False`). Default OFF and
         this loop is dead on day one; that one value IS the coefficient.
-        `personal` is the same single agent run writing a per-person line for each attendee.
+
+        THE PERSONAL/SHARED AXIS IS GONE (founder, 2026-09-02): one meeting produces one report
+        and everybody in the room receives it unchanged, so there is nothing left to choose
+        between. `attendee_followup` survives as the ON/OFF SWITCH it also was — a deployment
+        that has it set to `off` keeps meaning that, and losing the kill switch to a refactor
+        would be a silent re-enabling of a fan-out somebody turned off on purpose. Any other
+        value, including the historical `personal` and `shared`, simply means on.
+
+        REMOVED WITH THE AXIS: `attendee_silent_policy` and `attendee_personal_max`. Both existed
+        only to decide what a person the meeting held nothing FOR should receive, and a shared
+        report holds something for everyone who was in the room. They are gone rather than left
+        inert: an inert param a deployment can still set is a control that silently does nothing,
+        which is worse than one that is not there.
         """
         if ctx.refs.get("share") is False:
-            return "off"
-        return str((ctx.flow.param("attendee_followup") if ctx.flow else None) or "shared")
+            return False
+        v = (ctx.flow.param("attendee_followup") if ctx.flow else None)
+        if v is None:
+            return True                 # UNSET IS ON. Spelled out because `str(None)` is the
+        return str(v).strip().lower() not in ("off", "none", "false", "0")   # string "none".
+
+    def _room_read_max(ctx) -> int:
+        """`room_read_max` — DEFAULT 12. How many DESKS the post-meeting turn may have read-only
+        mounts for.
+
+        Founder, 2026-09-02: *"need to make sure agent will not die if it has 200 folders in it."*
+        The cap is on MOUNTS, not on people: everybody on the invite still gets the mail and the
+        artefact on their desk, because those are a write per person and cost nothing per head.
+        Reading is what does not scale.
+
+        It caps a room whose MEMBERSHIP is the invite — speaking time only decides who is at the
+        front of the list, so the cap is what turns "everyone in the room" into "the twelve most
+        likely to explain it". A non-numeric or non-positive value is the default, never an error:
+        zero would be indistinguishable from "unset" while meaning the opposite, so it is not a way
+        to say "mount nobody"; agent-api's own verification owns that."""
+        raw = (ctx.flow.param("room_read_max") if ctx.flow else None)
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return 12
+        return n if n > 0 else 12
 
     def _attendees(ctx) -> list:
         """Inside-domain attendees, minus the organizer. PRD §16.2: outside the domain, NEVER —
@@ -573,28 +687,38 @@ def build(reg: Registry, db) -> None:
         """Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click
         composes. Cannot run before the note: its input is process_meeting's receipt.
 
-        Two variants, both ONE agent turn per meeting:
-          shared    the note's essentials, the same body to everyone (the cheap baseline)
-          personal  the per-person block the same turn already wrote to
-                    mail_outbox/attendees-<id>.md
+        THE SHAPE, in order: HEAD → the shared report → one gap line → one button. Nothing else.
+        The head AND the subject are one `mailtext.render("attendee-head", …)` — the live text is
+        `_global/mail/attendee-head.md`, re-read every send, falling back to the identical baked
+        default; the gap line and the button are `notify.compose`'s, so the step never writes the
+        url itself.
+
+        ONE REPORT, THE SAME MAIL TO EVERYONE (founder, 2026-09-02). Every inside-domain attendee
+        receives byte-identical words — the same report the organiser gets from `email_minutes` —
+        and the ONLY thing that differs per person is the share token in their own button, which
+        has to differ because a forwarded link must grant its new reader nothing. There is no
+        per-person section, no `## _decision`, no silent-attendee policy and no room-size cap: the
+        `mail_outbox/attendees-<id>.md` mechanism those needed is gone from `process_meeting`.
+        Personalisation happens in the chat AFTER the click, where the person is there to be asked.
 
         Reads: refs.{participants, organizer, title, meeting_id, share?} · Effect: N notifications
-        Result: {sent, mode, skipped}."""
-        mode = _followup_mode(ctx)
+        Result: {sent, followup, skipped, drops, failed}.
+
+        `drops` is what `drop_to_attendees` runs on: one entry per person the mail ACTUALLY went
+        to, carrying the exact link they were given, so the next step neither recomputes the
+        fan-out nor mints a second share capability per attendee. It does mean the receipt holds
+        those links, tokens included: see the step below."""
+        on = _followup_on(ctx)
         who = _attendees(ctx)
-        if mode == "off" or not who:
-            return Done({"sent": 0, "mode": mode,
-                         "skipped": "opted out" if mode == "off" else "no inside-domain attendee"})
-        p = ctx.prior["process_meeting"]
-        note = _readable(ws_file(ctx.refs["uid"], p["note_path"])
-                         or p["summary"] or "")
-        blocks = {}
-        if mode == "personal":
-            raw = ws_file(ctx.refs["uid"], f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md")
-            for chunk in (raw or "").split("## ")[1:]:
-                head, _, rest = chunk.partition("\n")
-                blocks[head.strip().lower()] = rest.strip()
-        subject = f"{ctx.refs['title']} — what it means for you"
+        if not on or not who:
+            return Done({"sent": 0, "followup": "on" if on else "off", "to": [], "drops": [],
+                         "skipped": "no inside-domain attendee" if on else "opted out"})
+        # THE ONE ARTEFACT. `_readable` turns the agent's report into something a person meets in
+        # a mail (frontmatter off, wikilinks flattened, relative links absolutised); it is the same
+        # string `email_minutes` puts in front of the organiser and the same one every attendee's
+        # desk receives, which is what "the same report" means operationally rather than as an
+        # intention.
+        report = _readable(ctx.prior["process_meeting"]["report"]).strip()
         # The meeting belongs to the ORGANISER. Without a capability the attendee's link resolves
         # to "no such meeting" and the agent greets them as a new user instead of telling them
         # what the meeting held — every attendee click landed on the wrong chat. One restricted
@@ -619,9 +743,49 @@ def build(reg: Registry, db) -> None:
                 f"cannot mail {len(who)} attendee(s): this meeting has no row id to mint a share "
                 f"against (got {mid!r} from the row and refs). Every attendee link would resolve "
                 "to a meeting the reader cannot see.", retryable=False)
+        # THE HEAD AND THE SUBJECT COME OUT OF ONE READER. `mailtext.render` is the contract
+        # `deploy/dogfood/mail/README.md` states for this whole directory: the live text is
+        # `_global/mail/attendee-head.md` — git-backed, admin-writable, mounted into every worker
+        # — falling back to the identical baked default in `flows_steps/mailtext.py`, and the
+        # `subject:` / `---` header is PARSED rather than mailed.
+        #
+        # This step used to run its own reader (`mail_template` + `_fill`) against the REPO path,
+        # which is not what a send reads: an admin's live edit was ignored, and because that reader
+        # did not know about the header the body began with the literal line `subject: … ---`. Two
+        # readers for one directory is the defect; a third would be worse, so there is now one.
+        # `{{company}}` and `{{service}}` are `render`'s own — no caller can forget them or spell
+        # the product differently — and an unknown token is left STANDING on purpose.
+        try:
+            subject, head = mailtext.render("attendee-head", ctx.refs["uid"], {
+                "organizer": ctx.refs.get("organizer") or "the organiser",
+                "meeting": ctx.refs.get("title") or "your meeting",
+                "date": _meeting_date(ctx, ctx.refs["uid"]),
+            })
+        except KeyError as e:
+            # No baked default AND no `_global` override. It cannot happen while `mailtext.DEFAULTS`
+            # carries `attendee-head`, and it must not become a silent half-mail if it ever does:
+            # a fan-out with no introduction is exactly the stranger-facing failure the head exists
+            # to prevent. Not retryable — a missing template is not a passing condition.
+            raise StepError(
+                f"cannot mail {len(who)} attendee(s) for meeting {mid}: there is no "
+                f"'attendee-head' mail template — neither a baked default nor "
+                f"`_global/mail/attendee-head.md` ({e}).", retryable=False) from e
+        if not subject:
+            # `mailtext._split` returns "" when a template lost its `subject:` line, and says the
+            # caller has to supply one — a mail with an empty subject line reads as spam. The
+            # meeting's own title is the honest last resort, and the loss is logged because it
+            # means somebody edited the header out of the live file.
+            logger.warning("the attendee-head template carries no `subject:` line — falling back "
+                           "to the meeting title")
+            subject = ctx.refs.get("title") or "Your meeting"
+        # ONE BODY, BUILT ONCE, FOR EVERYBODY. Nothing inside the loop touches it.
+        body = head + "\n\n" + report
         # Durable across retries: a StepError below re-runs this step, and an attendee already
         # mailed must not be mailed twice. ctx.scratch is persisted after every step.
         sent = list(ctx.scratch.setdefault("sent", []))
+        # What each person was actually told, recorded as they are told it — in scratch, so a
+        # retry that skips an already-mailed attendee still carries their entry forward.
+        drops = list(ctx.scratch.setdefault("drops", []))
         for a in who:
             if a in sent:
                 continue
@@ -650,29 +814,230 @@ def build(reg: Registry, db) -> None:
             # `mid`, not refs["meeting_id"]: the token was minted against the ROW, so the link
             # must name that same row. refs may still carry a native id from meeting_ref().
             link = ui_link(ask=ask, meeting=mid, tshare=token)
-            body = blocks.get(a) if mode == "personal" else None
-            if not body:
-                body = note.strip()
-            body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + body
-            # PLACEMENT, not prose. The mailbox line existed and was still not landing: at
-            # n=48 the top fixable blocker among people who CAN add the bot was `unclear_how` —
-            # "nobody told me how to set this up in my dailies or who does it, and I don't have
-            # time to figure it out before tomorrow" — from coordinators who had been sent the
-            # instruction. It sat below the whole note, past the separator, where somebody with
-            # two minutes between dailies never reaches. It now runs directly under the two
-            # provenance lines, above the note. Same sentence, same placeholder wording; only
-            # where it sits changed, and where it sits is mechanics.
-            body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + _mailbox_line().lstrip("\n") \
-                + "\n" + body[len(_provenance(ctx, ctx.refs["uid"], to_attendee=True)):]
-            body += "\n\n—\nOpen it and ask anything about the meeting:"
+            # THE WHOLE MAIL: template head, one blank line, the shared report. The gap line and
+            # the button after it are `notify.compose`'s ("body\n\n<url>\n") — the step does not
+            # write the url, which is why the link is asserted on the call, not on prose.
+            #
+            # `body` is built OUTSIDE this loop on purpose: it does not depend on `a`, and one
+            # string built once is the cheapest possible proof that everybody got the same words.
+            #
+            # What is GONE, deliberately: the `_provenance(...)` + `_mailbox_line()` preamble the
+            # head replaces (it was spliced in twice — the second splice sliced the first back
+            # off, which is how the double-splice went unnoticed), and the "—\nOpen it and ask
+            # anything about the meeting:" trailer. Four elements were approved; this is four.
             try:
                 notify(a, subject, body, link=link)
                 sent.append(a)
                 ctx.scratch["sent"] = sent
+                drops.append({"to": a, "link": link})
+                ctx.scratch["drops"] = drops
             except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
                 ctx.scratch.setdefault("failed", []).append(f"{a}: {type(e).__name__}")
-        return Done({"sent": len(sent), "mode": mode, "to": sent, "meeting_id": mid,
+        return Done({"sent": len(sent), "followup": "on", "to": sent, "meeting_id": mid,
+                     "drops": drops,               # what drop_to_attendees writes, per person
                      "failed": ctx.scratch.get("failed", [])})
+
+    # ── the drop — one meeting entity into each attendee's own workspace (PRD decision 20) ──
+    def _slug(text: str, cap: int = 60) -> str:
+        """A meeting title as a filename fragment. Lowercase, one `-` per run of anything that is
+        not a letter or a digit, capped, and never empty.
+
+        The character class is an ALLOW-list on purpose: a title is attacker-adjacent text (it
+        comes off a calendar invite anybody in the room can edit), so `/`, `..`, a leading dot, a
+        NUL and every other separator are gone by construction rather than by a blacklist somebody
+        has to keep complete. The cap keeps `<date>-<slug>.md` inside every filesystem's name
+        limit."""
+        import re as _re
+        out = _re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:cap].rstrip("-")
+        return out or "meeting"
+
+    def _yaml(value: str) -> str:
+        """One frontmatter scalar, always double-quoted. A meeting title legitimately contains
+        `:`, `#`, `[`, quotes and emoji; unquoted, any of them turns the entity's own frontmatter
+        into something a parser reads differently from what we wrote."""
+        return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    def _drop_entity(*, title, day, date_prose, organizer, participants, report, link) -> str:
+        """THE ARTEFACT ITSELF, in the shape `kg/templates/meeting.md` defines — not a pointer to
+        somebody else's copy of it (founder decision 22, 2026-09-02).
+
+        There is no longer a copy elsewhere to point AT: the run writes into no desk, the note's
+        canonical home is the meeting row and its transcript store, and every person who was in
+        the room gets the report on their own desk. The organiser included, nobody special.
+
+        THE SAME BYTES FOR EVERYONE except the last line. Frontmatter, heading, provenance line and
+        report are identical in every desk this is written to — the entity is a fact about the
+        meeting, and a fact that differs per reader is not one. The link differs because it carries
+        that person's own restricted share token, and a forwarded link must grant its new reader
+        nothing.
+
+        `participants` is the meeting's own roster, so the frontmatter says who was in the room
+        rather than who this copy happens to belong to — which is also what keeps the bytes equal."""
+        roster = ", ".join(_yaml(a) for a in participants)
+        return "\n".join([
+            "---",
+            "type: meeting",
+            f"id: {day}-{_slug(title)}",
+            f"title: {_yaml(title)}",
+            f"date: {day}",
+            f"organizer: {_yaml(organizer)}",
+            f"participants: [{roster}]",
+            "tags: [vexa-meeting]",
+            "---",
+            "",
+            f"# {title}",
+            "",
+            f"{date_prose} — {organizer} had Vexa in the room.",
+            "",
+            (report or "").strip(),
+            "",
+            "---",
+            "",
+            f"Open the meeting: {link}",
+            "",
+        ])
+
+    def _index_entry(current: str, title: str, filename: str, day: str) -> str:
+        """`kg/entities/meeting/index.md` with this meeting listed once.
+
+        Returns the file as it should be; the caller writes only if that differs from what is
+        there, so a re-run appends nothing. The seed's `_No entities yet…` placeholder is REPLACED
+        rather than left standing above the first real row — it is the index saying it is empty,
+        and it stops being true here."""
+        line = f"- [{title}]({filename}) — {day}"
+        if current is None:
+            return ("# meeting\n\nMeetings — one file per meeting at "
+                    "`meeting/<yyyy-mm-dd-slug>.md`.\n\n" + line + "\n")
+        if f"]({filename})" in current:
+            return current
+        kept = [ln for ln in current.rstrip("\n").splitlines()
+                if not ln.strip().startswith("_No entities yet")]
+        while kept and not kept[-1].strip():
+            kept.pop()
+        return "\n".join(kept) + "\n\n" + line + "\n" if kept else line + "\n"
+
+    def _write_if_changed(their_uid: str, path: str, content: str) -> bool:
+        """Write only when the bytes differ. This is the ACROSS-RUN half of idempotence: scratch
+        remembers who is done inside one run, but a worker restart loses scratch, and a re-run
+        that rewrites an identical file still produces a second commit in somebody's history."""
+        if ws_file(their_uid, path) == content:
+            return False
+        ag.workspace_write(their_uid, path, content)
+        return True
+
+    @reg.step
+    def drop_to_attendees(ctx: StepCtx):
+        """The meeting's ARTEFACT into every desk in the room — the organiser's included. Plain
+        code, no agent turn, no LLM (founder decisions 20 and 22).
+
+        This is where the meeting lands on a person's desk. `process_meeting` writes into no desk
+        at all, so nothing else does it: one meeting produces one artefact, and this step copies
+        that same artefact, byte-for-byte, to everybody who was in the room. The only thing that
+        differs between two people's copies is the `?meeting=` link, which carries their own share
+        token because a forwarded link must grant its new reader nothing.
+
+        WHO. The organiser, plus every attendee `email_attendees` ACTUALLY mailed (its `drops`
+        payload carries the exact link each of them was given, so nothing is recomputed and no
+        second share capability is minted). The organiser is not special: they get the same entity,
+        with the link `email_minutes` already built for them.
+
+        PER PERSON, three effects and no others:
+          1. their platform user (`ensure_platform_user`) and their desk
+             (`POST /api/workspace/init` AS THEM — the same seeding the click does). Nothing else
+             is built: no chat, no session, no scaffolding.
+          2. `kg/entities/meeting/<date>-<slug>.md` — the report, with the meeting's title, date,
+             organiser and roster as frontmatter, and their own link at the foot.
+          3. `kg/entities/meeting/index.md` gains one line, once.
+        Both writes go through `PUT /api/workspace/file`, which commits, so each lands in that
+        desk's history rather than as an untracked file.
+
+        IT IS ENTITY-FREE, AND THAT IS AN ECONOMIC BOUND, NOT AN OVERSIGHT (founder, decision 22
+        addendum). No person entity, no company entity, no decision entity, no README rewrite, and
+        no agent turn — the whole step is plain code. *A desk nobody talks to is a flat pile of
+        reports: complete, and free.* Wiring that pile into entities costs a model call per person
+        per meeting, and for somebody who never opens the product it buys nothing. The wiring
+        happens when the person ENGAGES, in their own chat, proposed by the agent rather than run
+        on their behalf. The one exception is the GROUP desk, which `process_meeting` maintains
+        with entities because it is the room's shared state rather than one person's pile — and
+        that is the group's desk, never an individual's.
+
+        IT READS NO DESK. The only paths it reads anywhere are the two it is itself the author of —
+        the entity above and that index — and it reads them for exactly one reason: so a second run
+        writes nothing instead of a second entity, a second index line and a second commit. What it
+        reads is compared against what it was about to write and then dropped: never returned,
+        never logged, never shown to another person, never mixed into anyone else's file. Nothing
+        belonging to one person reaches another.
+
+        IDEMPOTENT per (meeting, person) twice over, because the two halves fail differently:
+        `ctx.scratch` skips people already done inside this run (a `StepError` re-runs the whole
+        step), and each write is a content-compare on a stable path, which is what survives a
+        worker restart that loses scratch entirely.
+
+        FAILURE POLICY: one person's drop failing must never cost the others theirs, so each is
+        attempted in its own try and the failures are collected into the result — a partial drop is
+        a fact an operator can see and re-run. The step fails only when EVERY drop failed, which is
+        not one person's bad state but the agent-api being unreachable; retryable, since every
+        write above is safe to repeat.
+
+        Prior: process_meeting{report}, email_attendees{drops}, email_minutes{link}
+        Effect: N desk writes · Result: {dropped, to, failed, entity}."""
+        pm = ctx.prior.get("process_meeting") or {}
+        report = _readable(pm.get("report") or "").strip()
+        if not report:
+            return Done({"dropped": 0, "to": [], "failed": [],
+                         "skipped": "there is no report to drop"})
+        uid = ctx.refs["uid"]
+        title = ctx.refs.get("title") or "your meeting"
+        organizer = ctx.refs.get("organizer") or "the organiser"
+        day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
+        date_prose = _meeting_date(ctx, uid)
+        filename = f"{day}-{_slug(title)}.md"
+        entity_path = f"kg/entities/meeting/{filename}"
+        index_path = "kg/entities/meeting/index.md"
+        att = ctx.prior.get("email_attendees") or {}
+        roster = [str(a).strip().lower() for a in (ctx.refs.get("participants") or [])
+                  if str(a).strip()]
+        if organizer.lower() not in roster:
+            roster = [organizer.lower()] + roster
+        # THE ORGANISER IS ONE OF THE ROOM. Their link is the one `email_minutes` already built —
+        # no share token, because the meeting is theirs — and when that step was skipped (their
+        # `mail_minutes` is off) the same link is composed here rather than dropped: a preference
+        # about MAIL is not a preference about what lands on their own desk.
+        mid = att.get("meeting_id") or ctx.refs.get("meeting_id")
+        organiser_link = (ctx.prior.get("email_minutes") or {}).get("link") \
+            or ui_link(ask="minutes-review", meeting=mid)
+        room = [{"to": organizer, "link": organiser_link}] + list(att.get("drops") or [])
+        body = _drop_entity(title=title, day=day, date_prose=date_prose, organizer=organizer,
+                            participants=roster, report=report, link="")
+        done = list(ctx.scratch.setdefault("dropped", []))
+        failed = list(ctx.scratch.setdefault("drop_failed", []))
+        for d in room:
+            a = str((d or {}).get("to") or "").strip()
+            if not a or a in done:
+                continue
+            try:
+                their_uid = ensure_platform_user(a)
+                ag.workspace_init(their_uid)
+                _write_if_changed(their_uid, entity_path, _drop_entity(
+                    title=title, day=day, date_prose=date_prose, organizer=organizer,
+                    participants=roster, report=report, link=d.get("link") or ""))
+                _write_if_changed(their_uid, index_path, _index_entry(
+                    ws_file(their_uid, index_path), title, filename, day))
+                done.append(a)
+                failed = [f for f in failed if not f.startswith(a + ":")]
+            except Exception as e:  # noqa: BLE001 — one person never costs the rest theirs
+                failed = [f for f in failed if not f.startswith(a + ":")]
+                failed.append(f"{a}: {type(e).__name__}: {e}"[:240])
+            ctx.scratch["dropped"] = done
+            ctx.scratch["drop_failed"] = failed
+        if done:
+            return Done({"dropped": len(done), "to": done, "failed": failed,
+                         "entity": entity_path, "meeting_id": mid,
+                         # every copy is these bytes plus that person's own link
+                         "bytes": len(body)})
+        raise StepError(
+            f"every desk drop failed for meeting {mid} ({len(room)} person(s) in the room): "
+            + " · ".join(failed), retryable=True)
 
     # ── before the meeting ────────────────────────────────────────────────────
     @reg.step
@@ -794,6 +1159,6 @@ def build(reg: Registry, db) -> None:
              steps=[s["prepare_meeting"]])
     reg.flow(name="post_meeting", version=1, on=COMPLETED,
              steps=[s["require_workspace"], s["process_meeting"], s["email_minutes"],
-                    s["email_attendees"]])
+                    s["email_attendees"], s["drop_to_attendees"]])
     reg.flow(name="email_chat", version=1, on=MAIL_REPLY,
              steps=[s["feedback_turn"], s["email_reply"]])
