@@ -274,10 +274,20 @@ class DockerBackend:
             "VEXA_LLM_API_KEY",
             "VEXA_LLM_MODEL",
             "VEXA_LLM_MAX_TOKENS",
+            # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
+            # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the
+            # model reasons its whole budget away and returns nothing parseable — a failure that
+            # looks like a bad model, not like a missing variable.
+            "VEXA_LLM_EXTRA_BODY",
             "VEXA_MODEL_ALLOWLIST",
             "VEXA_RUNNER",
             "VEXA_MIDTURN_INJECT",
             "VEXA_CODEX_MODEL",
+            # openai-agent harness budget dials (per-turn ceiling + context trim + streaming)
+            "VEXA_AGENT_MAX_TOOL_CALLS",
+            "VEXA_AGENT_MAX_TURN_SEC",
+            "VEXA_AGENT_CONTEXT_TOKENS",
+            "VEXA_AGENT_STREAM",
             # codex harness API-key auth (subscription auth is the read-only bind above)
             "OPENAI_API_KEY",
             "CODEX_API_KEY",
