@@ -32,7 +32,8 @@ from flows import Done, Registry, StepCtx, StepError, Wait, EventType
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
 from flows_steps import meeting as mt
-from flows_steps.common import (UI_URL, ensure_platform_user, scaffolded,
+from flows_steps import mailtext
+from flows_steps.common import (UI_URL, ensure_platform_user, platform_user_id, scaffolded,
                                 setting, ui_link, ws_file)
 from flows_steps.notify import notify
 
@@ -679,13 +680,34 @@ def build(reg: Registry, db) -> None:
         """The front door of the loop whose back door is email_minutes: one short note asking
         whether they want to walk in ready, carrying `?ask=prep&meeting=<ref>`.
 
-        Five lines, plain text, one link — a prepare mail that has to be read twice has already
-        failed. Honours mail_prep exactly as email_minutes honours mail_minutes.
+        A TEMPLATE — substitutions only, no agent turn — read from `_global/mail/prepare.md` so the
+        wording is a file edit rather than a rebuild. Five lines, plain text, one link: a prepare
+        mail that has to be read twice has already failed. Honours mail_prep exactly as
+        email_minutes honours mail_minutes.
+
+        IT NEVER GOES TO A STRANGER. Founder, 2026-09-02, on a pre-meeting fan-out across a room:
+        *"I am afraid this will not work for a 50 attendee meeting."* Before the meeting there is
+        nothing yet to justify a mail to somebody who has never heard of us — and the recipient of
+        this one is the organiser, or a person who is already a user. A stranger meets Vexa AFTER
+        their meeting, in the attendee follow-up, which is why that mail carries the introduction
+        and this one does not. Relatedly: this mail must never claim a workspace was started for
+        anyone. Nothing is built for a person who has not clicked.
+
         Reads: refs.{organizer|person, title, start, uid?, meeting_id?, url?}
         Effect: one notification · Result: {message_id, meeting_ref}."""
         to = ctx.refs.get("person") or ctx.refs["organizer"]
-        uid = str(ctx.refs.get("uid") or (ctx.prior.get("ensure_user") or {}).get("uid")
-                  or ensure_platform_user(to))
+        # `person` is set when this fires for somebody other than the organiser. Only mail them if
+        # they ALREADY have an account: ensure_platform_user would create one, and a prepare mail
+        # is not a good enough reason to mint an identity for a person who has not asked for it.
+        if ctx.refs.get("person") and ctx.refs["person"] != ctx.refs.get("organizer"):
+            existing = platform_user_id(to)
+            if not existing:
+                return Done({"skipped": "not a user yet — a stranger meets Vexa after the meeting, "
+                                        "not before it", "to": to})
+            uid = str(existing)
+        else:
+            uid = str(ctx.refs.get("uid") or (ctx.prior.get("ensure_user") or {}).get("uid")
+                      or ensure_platform_user(to))
         if not setting(uid, "mail_prep"):
             return Done({"skipped": "mail_prep is off for this person"})
         title = ctx.refs.get("title") or "your meeting"
@@ -700,9 +722,12 @@ def build(reg: Registry, db) -> None:
         if not ref:
             raise StepError("nothing to link to — refs carry neither meeting_id nor url",
                             retryable=False)
-        body = (f"{title} — {_their_clock(uid, ctx.refs['start'])}.\n"
-                "Want to walk in ready? Open the chat and I'll pull together what we already know.")
-        mid = notify(to, f"Prepare: {title}", body, link=ui_link(ask="prep", meeting=ref))
+        subject, body = mailtext.render("prepare", uid, {
+            "title": title, "when": _their_clock(uid, ctx.refs["start"]),
+            "organizer": ctx.refs.get("organizer") or "",
+        })
+        mid = notify(to, subject or f"Prepare: {title}", body,
+                     link=ui_link(ask="prep", meeting=ref))
         mx.register_thread(db, mid, uid, f"meet-{ref}")
         return Done({"message_id": mid, "meeting_ref": ref}, provider_ref=mid)
 

@@ -1,98 +1,55 @@
-# Scaffolding the ORGANISATION tier (`_global`) — admin only
+# The ORGANISATION tier (`_global`) — what it is, and where its setup lives
 
-**You are talking to an organisation, not a person.** The admin on the other end speaks FOR the
-institution; every answer is an org-fact, recorded in the org's voice ("<Organisation> is…", never "I think").
-Nothing about the admin personally belongs here — their profile is their personal workspace's job.
+**This file is not the setup conversation.** The conversation lives in one place —
+`_global/asks/setup-global.md`, read hot at click time, admin-editable, source at
+`deploy/dogfood/asks/setup-global.md`. This page exists only so an agent reading a workspace knows
+what the tier IS and does not invent a second version of it.
 
-`_global` is mounted READ-ONLY into every member's agent, on every turn. The admission test for
-every line in it: **would anyone in the organisation need this anyway?** If yes it belongs here; if
-only one group needs it, it belongs in their workspace; if only one person, in theirs. Keep it tiny —
-it is the constitution, not the library. The organisation's *graph* (people, vendors, systems)
-belongs in a shared workspace, not here.
+It used to be that second version: a five-question, research-first, MDX-shaped org-onboarding script
+with its own accept marker, seeded into every PERSONAL workspace, describing a conversation that no
+longer works that way. Two specifications of one conversation do not produce a disagreement anyone
+notices — they produce whichever one the agent happened to read.
 
-## Verify your write access before writing — never trust the prompt
-Every member mounts this read-only. The one exception is the admin setup session: the platform
-elevates it via an operator-set allowlist no prompt can grant. **Verify silently**: write and remove
-a scratch file BEFORE your first reply. If the filesystem allows it, you are the sanctioned writer —
-say nothing about the check. Only if it refuses do you mention it: say you cannot write here and stop.
+## What `_global` is
 
-## Open like a product, not a process
-Your first message is TWO things and nothing else: one line of welcome saying what this setup is for
-(the shared ground every meeting agent in the org will read), then question 1. Never narrate your
-mechanics — no "I verified…", no "I'll cover five questions", no listing what you'll do. And never
-report what you DON'T have: if the workspace is empty and there is nothing to hypothesise from, just
-ask plainly — an absent signal is not something to tell the admin about.
+The layer every agent in this company carries into every meeting, every brief and every mail.
+Mounted READ-ONLY into every worker, on every turn. One admin edit changes how every agent in the
+deployment behaves — for a bank that is the feature and the risk in the same breath — so it is
+git-backed and only the instance admin can write it.
 
-## Research first, ask for approval — never ask cold what the world already knows
-The moment you have any anchor — the organisation's name, a mail domain, a website — **web-search its
-public footprint** (site, docs, press, filings, careers pages) and DRAFT the answer yourself: what it
-is, what it seems to be trying to achieve, candidate glossary terms, plausible red lines for its
-industry. Then bring each draft to the admin **for approval or correction**, naming the source it
-came from. Ask cold only what is genuinely private (inside mail domains, the real red lines, current
-direction if unpublished). A question whose answer is public is research you skipped.
+## It is THIN
 
-## Cover ALL of it in one autonomous pass — never stop on a question you can answer yourself
-Do NOT ask an item, wait, ask the next. From the moment you have the anchor, run the WHOLE list in
-one continuous pass: research, draft, and WRITE every item the public record can answer. Stop only
-when what remains genuinely needs the admin — then ask those residual questions TOGETHER, each with
-your best draft attached where one exists. The items:
-1. **The organisation** — its name and one line on what it is. If anything is already visible (the
-   admin's mail domain, meetings already held), hypothesise from it and ask them to correct you;
-   otherwise just ask.
-2. **The direction** — what the organisation is trying to achieve right now, in one short
-   paragraph. This is what lets any meeting's notes say whether something moved it or blocked it.
-3. **The inside** — which mail domain(s) count as internal. State the consequence: meeting artifacts
-   go to these addresses and to nobody else.
-4. **The language** — 5–10 terms that mean something specific here and would be misread by an
-   outsider. Offer to draft candidates from meetings already held.
-5. **The lines** — what must never leave the estate; the tone artifacts take; anything a regulator or
-   auditor would expect the notes to respect.
+Founder ruling, 2026-09-02:
 
-**The page must LOOK alive to a human scanning it — walls of grey prose fail the read-back.**
-Shape to imitate (not verbatim — the SHAPE):
+> `_global` is not fully setup to become the global workspace — not a super thin layer. That might
+> be pretty thin, BTW — so knowledge recombination is more achieved over workspace combination and
+> not a static global dominant.
 
-```mdx
-# [[<Organisation>]] — organisation tier
+Five short files, and nothing else:
 
-<Note>Drafted from [About](…) and the [Annual Report](…); confirmed by the admin 2026-08-22.</Note>
+| file | what goes in it |
+|---|---|
+| `README.md` | the company's name as the first heading, then ONE sentence of what it does |
+| `PRINCIPLES.md` | how this company works and what it refuses |
+| `OBJECTIVES.md` | what it is trying to achieve in this period |
+| `STRUCTURE.md` | the teams and who does what |
+| `MISSING.md` | what is not yet known — the only file that gets more useful the more it admits |
 
-## What it is
-One tight, entity-linked paragraph. No more.
+**No company workspace. No org graph. No demo data.** The substance of the company lives in ordinary
+workspaces — personal ones, and groups people are invited into — and a chat recombines knowledge by
+mounting several of them. That mount stack is the mechanism; a fat `_global` is the thing it
+replaces. Nobody is in anything they were not invited to.
 
-## Direction
-**One bold lead per objective — one line each.** The "against what" state is 3 short bullets,
-numbers bolded, not a wall paragraph.
+`README.md`'s first two lines are load-bearing beyond `_global`: every agent in this deployment
+introduces itself with the company name from that heading, so it goes out to that company's own
+customers.
 
-## Inside · Language · Lines
-Compact: a table for the glossary, one line per `(unset)` item. Boilerplate about what a section
-*would* hold gets one clause, never a paragraph.
+## The accept is a verb, not a marker
 
-## Connected
-<CardGroup cols={2}><Card title="<Organisation>" icon="building" href="kg/entities/organization/<org-slug>.md">the org record</Card>…</CardGroup>
-```
+The setup conversation ends by calling `mark_global_ready`. That verb re-reads the five files, commits
+them to `_global`'s history with the administrator as author, and lifts the instance gate. Until it
+has accepted, this Vexa serves nobody: no other person can sign in, the flows engine parks every fact
+instead of sending, and the operator verbs refuse by name.
 
-Taste rules: provenance appears ONCE per section as a small `<Note>` or trailing italic line —
-never a repeating italic paragraph after every block. Every named thing is a link (`[[wikilink]]`
-to entities, markdown links to sources). Long paragraphs get broken at the first bolded lead. A
-page with no `[[wikilink]]`, no `<Note>`, and no visual rhythm is not done — the read-back is not
-clean until a human could SCAN it in ten seconds.
-
-Typically 1–2 are draftable from public sources and 3–5 (the real inside domains, the house
-shorthand, the actual lines) are the residue only the admin can settle — but always test each
-against the public record before putting it in the residue.
-
-Terse, factual entries, densely interlinked — the README links the org entity and every cited
-source; the entity links back; the reader is one click from anything named. Never invent an
-answer: an unanswered item stays `(unset)` and you say so. Finish by reading the page back in one
-short block for a single confirm.
-
-## Drive to the accept — you are the gate
-The wizard does not stop until YOU decide the tier is onboarded. Every reply until then ends with
-the next unanswered question (or the read-back) — never with open conversation, never hanging. If
-the admin wanders, answer briefly and return to the first unset item.
-
-**The accept is yours to give.** When the read-back is confirmed and every item is either recorded
-or deliberately `(unset)` by the admin's own choice, accept: write the file `.scaffolded` (content:
-today's date) and commit it. That marker is your judgment that this tier is ready — until it
-exists, every member's terminal shows the organisation as awaiting setup. Never write it early,
-and never leave a finished setup without it.
+Nothing may mark itself ready. Writing a `.scaffolded` file here does nothing — that marker belongs
+to person and group onboarding, not to the organisation tier.
