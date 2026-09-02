@@ -1,0 +1,39 @@
+From: Marvin Nolan <Organizer@DNA.test>
+To: vexa@oenb.at
+Subject: Invitation: DNA TSC weekly @ Sat Mar 2, 2030 2pm (UTC)
+Message-ID: <invite-dna-tsc-1@dna.test>
+Date: Tue, 01 Sep 2026 21:14:02 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset="utf-8"
+
+You have been invited to DNA TSC weekly.
+
+--b1
+Content-Type: text/calendar; charset="utf-8"; method=REQUEST; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+PRODID:-//Zoom//Zoom Calendar//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20300302T140000Z
+DTEND:20300302T150000Z
+UID:dna-tsc-20300302@zoom.us
+ORGANIZER;CN=Marvin Nolan:mailto:Organizer@DNA.test
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=Ame
+ lia Chen:mailto:Amelia@DNA.test
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;CN=Priya Raman:mailto:priya@
+ dna.test
+ATTENDEE;CN=Vexa;PARTSTAT=NEEDS-ACTION:mailto:VEXA@oenb.at
+SUMMARY:DNA TSC weekly
+DESCRIPTION:Join Zoom Meeting #group:dna-tsc\nhttps://us02web.zoom.us/j/8412
+ 3456789?pwd=aBcD1234efGH
+LOCATION:https://us02web.zoom.us/j/84123456789?pwd=aBcD1234efGH
+END:VEVENT
+END:VCALENDAR
+
+--b1--

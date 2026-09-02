@@ -82,10 +82,31 @@ class MailThread(Base):
 
 
 class MailCursor(Base):
+    """One row: where the inbox poller stopped.
+
+    'uid' is the IMAP UID — monotonic, so one integer is a complete position. 'token' is for
+    sources whose ids are not ordered at all (mailpit's are random base62): it holds an opaque
+    source-native watermark, and the 'mail_seen' table holds the ids it cannot separate."""
     __tablename__ = "mail_cursor"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    token: Mapped[str | None] = mapped_column(Text)
     __table_args__ = (CheckConstraint("id = 1", name="cursor_singleton"),)
+
+
+class MailSeen(Base):
+    """Ids already routed, per inbox source — the never-re-admit half of a non-monotonic cursor.
+
+    A watermark alone cannot make a re-scan idempotent when the source orders by a timestamp that
+    several messages can share, so the poller re-scans a small window behind the watermark and
+    this table decides what inside it has already been answered. Rows older than the window are
+    pruned on every commit; they can never be fetched again."""
+    __tablename__ = "mail_seen"
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    ext_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    created: Mapped[str] = mapped_column(Text, nullable=False)
+    seen_at: Mapped[float] = mapped_column(Double, nullable=False)
+    __table_args__ = (Index("mail_seen_window", "source", "created"),)
 
 
 class MailOutboxSent(Base):

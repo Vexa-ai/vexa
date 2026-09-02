@@ -31,6 +31,44 @@ from shared.units import chat_session, dispatch_id, input_topic, output_topic
 logger = logging.getLogger("agent_api.dispatch")
 
 
+def _ensure_workspace_exists(settings: Settings, subject: str) -> bool:
+    """Make sure this subject HAS a workspace directory before we ask the runtime to mount it.
+
+    The seeding seam is documented as lazy — "seeded on first turn" — but it can never run,
+    because the worker BIND-MOUNTS ``<root>/<subject>`` and the runtime refuses to start a
+    container whose bind source does not exist:
+
+        docker start vexa-worker-75-chat-meet-32 failed (404): cannot access path
+        /var/lib/docker/volumes/..._agent-workspaces/_data/75: no such file or directory
+
+    which surfaces to the caller as a bare ``500 Internal Server Error`` from ``/api/chat``.
+    In practice the directory only ever existed because the EMAIL ONBOARDING flow called
+    ``POST /api/workspace/init`` explicitly. Every path that reaches a chat WITHOUT going
+    through that flow therefore 500s on its very first turn — and the most important such path
+    is the one the growth loop is built on: an attendee who presses the button in a meeting
+    follow-up is a brand-new platform user, has never onboarded, and lands on an error.
+
+    Idempotent and fail-soft: an existing workspace is untouched, and a seeding failure logs
+    and lets the spawn proceed exactly as before rather than turning a degraded turn into no
+    turn at all.
+    """
+    try:
+        from pathlib import Path
+
+        from shared.seeding import resolve_seed_dir, seed_workspace
+        ws = Path(settings.workspaces_dir) / str(subject)
+        if (ws / ".git").exists():
+            return False
+        seed_workspace(ws, resolve_seed_dir(
+            getattr(settings, "default_template", None),
+            seeds_root=getattr(settings, "workspace_seeds_dir", None)))
+        logger.info("dispatch SEEDED workspace for subject=%s (first turn, never onboarded)", subject)
+        return True
+    except Exception:  # noqa: BLE001 — never let this be the reason a turn does not happen
+        logger.warning("workspace ensure failed for subject=%s — spawning anyway", subject, exc_info=True)
+        return False
+
+
 def build_active_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None) -> list[dict]:
     """The subject's NORMAL active workspaces (the MIDDLE tier of the stack — WP-A1.1/A2.1): one entry
     per ACTIVE workspace in the additive set. Each entry: ``{slug, path, role, write, primary}`` with
@@ -498,6 +536,8 @@ class Dispatcher:
         #     entrypoint (no double turn).
         # A watchdog then waits for the worker's turn-accepted ack and respawns once if the worker
         # exited in the XADD↔idle-exit race window without taking the message.
+        # The mount must exist before the runtime is asked to bind it (see the helper).
+        _ensure_workspace_exists(self._settings, identity["subject"])
         delivery = self._predeliver(uid, invocation) if invocation["trigger"] == "message" else None
         acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
         if delivery is not None:
