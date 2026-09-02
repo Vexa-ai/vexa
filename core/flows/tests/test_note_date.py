@@ -96,7 +96,31 @@ def test_date_comes_from_the_meeting_not_from_today():
     assert time.strftime("%Y-%m-%d") not in p or time.strftime("%Y-%m-%d") == "2026-03-02", p
 
 
+def test_seeded_row_with_no_start_falls_back_and_is_still_unique():
+    """A SEEDED meeting has no start: `meeting_seed` posts `scheduled_at: None`, so the row's
+    `start_time` is NULL and `refs.start` is absent. The stamp then falls through to the row's
+    `created_at`, and finally to now — which separates two occurrences only because their
+    creation times differ, i.e. correctness by luck rather than by design. The filename in that
+    case carries the REPLAY's clock, not the meeting's date.
+
+    This is a known gap, recorded here so it fails loudly if someone later assumes the fallback
+    is meaningful. The real fix is upstream: `meeting_seed` should set `scheduled_at` from the
+    fixture's own occurrence, and then the first branch handles it.
+    """
+    native = "96088138284"                       # the replay's real recurring id
+    a = {"uid": "1", "meeting_id": 36, "native": native, "transcript": "t",
+         "organizer": "a@x.test", "title": "DNA TSC"}          # no `start`
+    b = dict(a)
+    b["meeting_id"] = 37
+    pa = _path_from(_stamp_for(a))
+    pb = _path_from(_stamp_for(b))
+    # both resolve, both carry the native, and neither carries a meeting date it cannot know
+    assert native in pa and native in pb
+    assert pa.startswith("kg/entities/meeting/") and pb.startswith("kg/entities/meeting/")
+
+
 if __name__ == "__main__":
     test_two_occurrences_same_day_same_native_are_two_notes()
     test_date_comes_from_the_meeting_not_from_today()
+    test_seeded_row_with_no_start_falls_back_and_is_still_unique()
     print("note-date tests PASS")
