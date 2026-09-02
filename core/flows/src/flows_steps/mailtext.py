@@ -85,7 +85,7 @@ DEFAULTS: dict[str, str] = {
     # hear from Vexa at all, so it is the whole introduction: whose Vexa this is, what it does,
     # which meeting, who had it in the room, where the report now lives, and who can see it.
     #
-    # BYTE-FOR-BYTE `deploy/dogfood/mail/attendee-head.md`, and it has to stay that way: the README
+    # BYTE-FOR-BYTE `behavior/mail/attendee-head.md`, and it has to stay that way: the README
     # in that directory says the source and the baked default are the same content or the source
     # lies. It HAS drifted twice already, both times invisibly, because nothing read both -- once
     # substituting {{title}}/{{when}}/{{attendees}} which no step fills, and once missing the

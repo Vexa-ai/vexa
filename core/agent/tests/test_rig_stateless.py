@@ -21,11 +21,14 @@ from __future__ import annotations
 import pathlib
 import re
 
-RIG = pathlib.Path(__file__).resolve().parents[3] / "deploy/dogfood/rig/vexa_control_mcp.py"
+# The rig became `core/mcp` (PRD decision 40). These three assertions were its ONLY coverage —
+# regex over the source, from another package's suite — and they still hold the same rules, now
+# against the package. `deploy/dogfood/rig/vexa_control_mcp.py` is a launcher that imports it.
+MCP = pathlib.Path(__file__).resolve().parents[3] / "core/mcp/src/vexa_mcp"
 
 
 def _src() -> str:
-    return RIG.read_text()
+    return "\n".join(f.read_text() for f in sorted(MCP.rglob("*.py")))
 
 
 def test_the_rig_serves_statelessly():
@@ -59,12 +62,15 @@ def test_nothing_depends_on_the_transport_session():
             writes.append(ln)
     assert writes == [], (
         f"SESSION_BIND is now written — statelessness is no longer free: {writes}")
-    assert "CURRENT_SID.get()" not in src, "something now reads the session id"
+    # A USE, not a mention: `web.py` names the removed contextvar in the comment explaining why
+    # it is gone, and a check that cannot tell prose from code is a check people delete.
+    assert re.search(r"CURRENT_SID\s*[.=]", src) is None, (
+        "a session id is back — statelessness is no longer free")
 
 
 def test_identity_is_per_request_not_per_session():
     # A stateless server can only work if every request carries its own identity. It does: the
     # bearer token is resolved on each one.
     src = _src()
-    assert "def _subject_raw()" in src
+    assert "def subject_raw()" in src
     assert "CALL_TOKEN.get()" in src

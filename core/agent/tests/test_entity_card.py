@@ -235,10 +235,12 @@ def test_the_tool_description_names_only_sections_the_renderer_has():
 
 
 def test_the_rig_tool_description_carries_the_generated_section_list():
-    """The rig is a standalone file on the host that imports nothing from agent-api (PRD 3.3), so
-    the sections are a literal there. This is the only thing stopping the two from drifting."""
-    rig = pathlib.Path(__file__).resolve().parents[3] / "deploy/dogfood/rig/vexa_control_mcp.py"
-    doc = rig.read_text()
+    """The MCP is a separate image that imports nothing from agent-api (PRD 3.3), so the sections
+    are a literal in `entity_upsert`'s docstring there. This is the only thing stopping the two from
+    drifting — and the docstring is what an agent reads to decide how to fill the call, so a drift
+    is a wrong page rather than a wrong comment."""
+    tool = pathlib.Path(__file__).resolve().parents[3] / "core/mcp/src/vexa_mcp/tools/workspaces.py"
+    doc = tool.read_text()
     for line in E.tool_sections_text().splitlines():
         assert line in doc, line
 

@@ -1,0 +1,179 @@
+{
+  "contract": "config.v1",
+  "service": "mcp-control",
+  "keys": [
+    {
+      "key": "VEXA_URL",
+      "class": "defaulted",
+      "default": "http://gateway:8000",
+      "description": "THE deployment input: the stack's gateway. Every meeting verb reaches it with the caller's own key, and the other service URLs default around it — a deployment that names one URL works.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_GATEWAY_URL",
+      "class": "defaulted",
+      "default": "(VEXA_URL)",
+      "description": "The gateway, when it is not where VEXA_URL points. Split deployments only.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_AGENT_API_URL",
+      "class": "defaulted",
+      "default": "http://agent-api:8100",
+      "description": "agent-api — the workspace, claim-book, settings, queue, friction and terms routes every workspace verb forwards to.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_ADMIN_API_URL",
+      "class": "defaulted",
+      "default": "http://admin-api:8001",
+      "description": "admin-api — accounts, and the per-user gateway key this edge mints once and remembers.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_FLOWS_API_URL",
+      "class": "defaulted",
+      "default": "http://flows-api:8200",
+      "description": "flows-api — the fact intake, the reaction projection and the timeline. Unset on a deployment without the flows engine; those verbs then say so by name and nothing else changes.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_PUBLIC_MCP_URL",
+      "class": "defaulted",
+      "default": "http://localhost:18310/mcp",
+      "description": "The name this edge PUBLISHES. It drives the sign-in links, the agent bootstrap and the transport's DNS-rebinding host guard — a server that publishes one name while admitting another refuses its own users.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_UI_URL",
+      "class": "defaulted",
+      "default": "(empty — deeplink then answers with no origin rather than a well-formed dead link)",
+      "description": "The minutes terminal every deeplink opens. The SAME name flows reads, deliberately: two spellings of the host is how a link that names a host the person cannot reach gets minted.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_ADMIN_API_TOKEN",
+      "class": "capability",
+      "capability": "platform_admin",
+      "secret": true,
+      "description": "admin-api's operator token. The rig read this by running `docker inspect vexa-dogfood-admin-api-1` and splitting that container's environment — a docker socket and a hardcoded container name, for a string (seam inventory B6.2). It is a credential and it arrives like one.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_FLOWS_API_KEY",
+      "class": "capability",
+      "capability": "flows",
+      "secret": true,
+      "description": "flows-api's operator key. Unset ⇒ the flows verbs are not configured here; they say so by name and every other tool is unaffected.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_SECRET",
+      "class": "capability",
+      "capability": "delegation",
+      "secret": true,
+      "description": "The HMAC key agent-api mints per-dispatch `vxd_` tokens with. UNSET REFUSES EVERY DELEGATION: a zero-length HMAC key verifies for anyone who knows the format, so 'not configured here' must mean nobody gets in.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_INTERNAL_API_SECRET",
+      "class": "capability",
+      "capability": "internal_tier",
+      "secret": true,
+      "description": "The stack's internal secret (#526), same name and same value as the rest of the internal tier. A server-to-server caller presents it where a person would present a token.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_WORKSPACE_REGIME",
+      "class": "defaulted",
+      "default": "cloud",
+      "description": "The regime for a workspace nothing has been recorded about. `cloud` = the files live on the stack. `local` = the files live on the person's machine and no cloud agent runs for them; the workspace verbs still operate on the cloud copy and git is the sync.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_RIG_MODE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "OFF in the product, and off BY DEFAULT here — the rig defaulted it on. It enables the `token=` call-argument fallback and the `GET /do` bridge, both of which put a credential in a query string: right for a fetch-only agent on a private host, wrong anywhere requests are logged.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "MAILPIT_URL",
+      "class": "capability",
+      "capability": "mail_double",
+      "description": "The dev lane's inbox. Unset in a real deployment, which is what makes `mail_inbox`/`mail_read` answer 'not configured here' rather than inventing one.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_HOST",
+      "class": "defaulted",
+      "default": "localhost",
+      "description": "Where the sign-in code is posted. The code goes over the same channel the product lives on, so a person proving they read that mailbox is the whole authentication.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PORT",
+      "class": "defaulted",
+      "default": "1025",
+      "description": "Port for the same.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_ADDR",
+      "class": "defaulted",
+      "default": "(empty)",
+      "description": "The mailbox a rehearsal drives when it needs one. Operator verbs only.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_DOCS_URL",
+      "class": "defaulted",
+      "default": "https://docs.vexa.ai",
+      "description": "Where `vexa_overview` and `vexa_search_docs` read from — the two tools that answer before anybody has an account.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_HOME",
+      "class": "defaulted",
+      "default": "~/.vexa",
+      "description": "The ONLY directory this service writes: durable tokens, pending sign-in codes, the per-person gateway keys it minted, converted transcript fixtures. A volume in a deployment. `tests/test_thin_forward.py` asserts no tool writes anywhere else.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MCP_ALLOWED_HOSTS",
+      "class": "defaulted",
+      "default": "(empty — loopback plus the host in VEXA_PUBLIC_MCP_URL)",
+      "description": "Extra Host headers the transport will answer to, comma separated. The SDK's DNS-rebinding guard defaults to localhost-only for a loopback bind, so a deployment behind more than one name says so here rather than turning the guard off.",
+      "targets": []
+    },
+    {
+      "key": "PORT",
+      "class": "defaulted",
+      "default": "18310",
+      "description": "The port this service listens on.",
+      "targets": ["compose"]
+    }
+  ],
+  "capabilities": {
+    "platform_admin": {
+      "description": "Reaching admin-api as the platform operator: resolving an account by email, creating one during sign-in, and minting the per-person gateway key every meeting verb travels on.",
+      "when_unconfigured": "Sign-in and every gateway-backed verb answer with the service's own refusal (admin-api 401), named, rather than a tool pretending the account does not exist."
+    },
+    "flows": {
+      "description": "The flows engine: facts in, reactions out, the timeline, and the scheduled-join projection.",
+      "when_unconfigured": "The flows verbs return `unavailable: <tool>` naming this key; every other tool on the server is unaffected."
+    },
+    "delegation": {
+      "description": "Accepting the short-lived, scoped `vxd_` token agent-api mints per dispatch, instead of a durable user credential in a spawned container.",
+      "when_unconfigured": "Every delegation token is refused — deliberately, and closed: an empty HMAC key would verify for anyone who knows the format."
+    },
+    "internal_tier": {
+      "description": "Server-to-server callers presenting the stack's internal secret where a person would present a token.",
+      "when_unconfigured": "Only person-shaped credentials authenticate; an internal caller is anonymous."
+    },
+    "mail_double": {
+      "description": "Reading what the product actually sent, as a person receives it — the dev lane's inbox.",
+      "when_unconfigured": "`mail_inbox` and `mail_read` say the inbox is not configured here."
+    }
+  }
+}

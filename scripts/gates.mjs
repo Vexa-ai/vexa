@@ -969,6 +969,19 @@ const CONFIG_ADOPTED = [
     scan: ["core/gateway/services/gateway/src"],
     compose: "gateway", helm: ["deployment-gateway.yaml"], lite: "gateway",
   },
+  {
+    // PRD decision 40 — the MCP edge. It is here for check 5 above all: the predecessor
+    // (deploy/dogfood/rig) read 20 env keys that no scan list covered, which is how a docker
+    // socket, two container names and a Postgres URL became deployment inputs nobody declared.
+    // helm/lite are EMPTY on purpose: the service ships behind a compose profile until the
+    // gateway's /mcp route is repointed off the 14-tool `mcp` service, and every key it does not
+    // plumb yet is declared with `targets: []` rather than pretending a surface carries it.
+    service: "mcp-control",
+    decl: "core/mcp/config.v1.json",
+    preflight: "core/mcp/src/vexa_mcp/config_preflight.py",
+    scan: ["core/mcp/src"],
+    compose: "mcp-control", helm: [], lite: null,
+  },
 ];
 
 // docker-compose.yml is parsed line-wise (no YAML dep): a service block runs from `  name:` to the
@@ -1055,7 +1068,9 @@ function gateConfigContract() {
     const compose = composeServiceEnv(svc.compose);
     if (!compose) { errs.push(`${svc.service}: compose service '${svc.compose}' not found`); continue; }
     const helm = helmEnvKeys(svc.helm);
-    const lite = liteProgramEnv(svc.lite);
+    // A service that is not on a surface yet declares no keys for it (`targets: []`); an
+    // absent program name means the surface simply contributes nothing to check 4.
+    const lite = svc.lite ? liteProgramEnv(svc.lite) : new Set();
     // 3. declaration → surfaces (per the key's declared targets; default = all three)
     for (const k of decl.keys || []) {
       const targets = k.targets ?? ["compose", "helm", "lite"];

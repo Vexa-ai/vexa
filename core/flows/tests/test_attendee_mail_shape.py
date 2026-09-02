@@ -9,7 +9,7 @@ Four properties this file exists to hold:
   1. THERE IS ONE MAIL READER, AND IT IS `mailtext`. The live text a send reads is
      `_global/mail/<name>.md` — admin-writable, git-backed, mounted into every worker — falling
      back to the identical baked default in `flows_steps/mailtext.py`. This step used to run a
-     SECOND reader of its own against the repo path `deploy/dogfood/mail/`, which is not what a
+     SECOND reader of its own against the repo path `behavior/mail/`, which is not what a
      send reads: an admin's live edit was ignored, and because that reader did not parse the
      `subject:` / `---` header the body it mailed began with the literal line `subject: … ---`.
   2. THE SUBJECT COMES OUT OF THE SAME RENDER as the body. It used to be a Python f-string, so
@@ -17,7 +17,7 @@ Four properties this file exists to hold:
   3. ONE REPORT, THE SAME MAIL TO EVERYONE (founder, 2026-09-02). No per-person section, no
      `## _decision`, no silent policy, no room-size cap — and therefore nothing that can hand two
      people in one room different words. Personalisation happens in the chat after the click.
-  4. THE SOURCE FILE AND THE BAKED DEFAULT ARE THE SAME BYTES. `deploy/dogfood/mail/README.md`
+  4. THE SOURCE FILE AND THE BAKED DEFAULT ARE THE SAME BYTES. `behavior/mail/README.md`
      says they are, so a drift gate is the only thing that makes that true rather than intended.
 
 No network, no clock, no DB: the step is called directly with the refs its flow would hand it.
@@ -138,7 +138,7 @@ def test_the_head_comes_from_the_global_override_and_every_token_is_filled(monke
 
 
 def test_an_admin_override_wins_over_the_baked_default(monkeypatch):
-    """THE POINT OF THE WHOLE DIRECTORY. The previous reader resolved `deploy/dogfood/mail/` in the
+    """THE POINT OF THE WHOLE DIRECTORY. The previous reader resolved `behavior/mail/` in the
     REPO, so an admin's edit to the live `_global` copy changed nothing and they had no way to
     find that out."""
     reg, ch = _rig(monkeypatch, head="subject: Admin subject\n---\nAdmin wording for {{company}}.")
@@ -260,7 +260,7 @@ def test_a_big_room_changes_nothing_about_what_anyone_receives(monkeypatch):
 
 def test_the_organiser_and_the_attendees_get_the_same_report(monkeypatch):
     """`email_minutes` and `email_attendees` are two sends of ONE artefact. The heads differ — a
-    returning person is not introduced to Vexa again, per `deploy/dogfood/mail/README.md` — but
+    returning person is not introduced to Vexa again, per `behavior/mail/README.md` — but
     the report inside both is the same `_readable(note)` string."""
     reg, ch = _rig(monkeypatch, head="HEAD.")
     reg.steps["email_minutes"](_ctx(dict(REFS), PRIOR))
@@ -353,15 +353,15 @@ def test_company_follows_mailtexts_rule(monkeypatch, readme, expected):
 
 
 # ── the source of truth and the baked default do not drift ───────────────────────────────────
-def test_the_baked_defaults_match_the_files_in_deploy_dogfood_mail():
-    """`deploy/dogfood/mail/README.md`: those files are the SOURCE, the baked defaults are the
+def test_the_baked_defaults_match_the_files_in_behavior_mail():
+    """`behavior/mail/README.md`: those files are the SOURCE, the baked defaults are the
     same content, "edited in both, or the source lies". They HAD drifted — the baked
     `attendee-head` substituted `{{title}}`, `{{when}}` and `{{attendees}}`, none of which the
     step fills, while the file substitutes `{{company}} {{organizer}} {{meeting}} {{date}}`. A
     deployment with no override would have mailed a stranger standing braces. Nothing read both,
     so nothing noticed; this reads both."""
     root = Path(mailtext.__file__).resolve().parents[4]      # <repo>/core/flows/src/flows_steps
-    mail_dir = root / "deploy" / "dogfood" / "mail"
+    mail_dir = root / "behavior" / "mail"
     if not mail_dir.is_dir():                                # the image is not a checkout
         pytest.skip(f"no source directory at {mail_dir}")
     for name, baked in mailtext.DEFAULTS.items():

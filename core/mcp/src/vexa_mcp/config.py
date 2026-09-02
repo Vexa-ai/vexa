@@ -8,50 +8,46 @@ their own token. It does not run on a laptop.
 
 ONE SHAPE OF DEPLOYMENT INPUT: a sibling service's URL, or a credential. There is no docker socket
 here, no container name, no database URL and no path to another service's source tree — the four
-things that made the rig un-packageable (seam inventory B6). Every key below is declared in
-``core/mcp/config.v1.json`` and checked by ``gate:config-contract``.
+things that made the rig un-packageable (seam inventory B6). Config is env, service-shaped, exactly
+like every other service in the stack: no dotfile, no per-person file, nothing read out of a home
+directory.
 
-Config is env, service-shaped, exactly like every other service in the stack: no dotfile, no
-per-person file, nothing read out of a home directory. ``VEXA_HOME`` is the one path here and it is
-not config — it is where this process keeps the small amount of state it holds (durable tokens,
-pending sign-in codes, the per-user gateway keys it minted), a volume in a deployment.
+EVERY READ BELOW SPELLS ITS KEY AS A LITERAL, ON PURPOSE. ``gate:config-contract``'s undeclared-read
+scan is four regexes over the source, so a tidy ``get(name)`` wrapper would hide every key from it
+and leave the declaration green over nothing. The declaration is ``core/mcp/config.v1.json`` and
+that scan is what keeps it honest — it is sharp enough that it caught a key named in this very
+paragraph, which is the correct amount of sharp.
 """
 from __future__ import annotations
 
 import os
 import pathlib
 
-
-def get(key: str, default: str = "") -> str:
-    """One deployment value, from the environment. Empty is the same as unset — a key set to the
-    empty string in a compose file means "I did not configure this", never "configure it to
-    nothing"."""
-    val = os.environ.get(key)
-    return val if val not in (None, "") else default
-
-
 # ── the siblings ─────────────────────────────────────────────────────────────────────────────
 # VEXA_URL is the stack's gateway — the one URL a deployment must name; the rest default to the
 # in-network service names, which is what a compose or helm deployment actually has.
-URL = get("VEXA_URL", "http://gateway:8000").rstrip("/")
-GATEWAY = get("VEXA_GATEWAY_URL", URL).rstrip("/")
-AGENT_API = get("VEXA_AGENT_API_URL", "http://agent-api:8100").rstrip("/")
-ADMIN_API = get("VEXA_ADMIN_API_URL", "http://admin-api:8001").rstrip("/")
-FLOWS_API = get("VEXA_FLOWS_API_URL", "http://flows-api:8200").rstrip("/")
-MAILPIT = get("MAILPIT_URL", "").rstrip("/")
-UI_BASE = get("VEXA_UI_URL", "").rstrip("/")
-CANONICAL = get("VEXA_PUBLIC_MCP_URL", "http://localhost:18310/mcp")
+URL = (os.environ.get("VEXA_URL") or "http://gateway:8000").rstrip("/")
+GATEWAY = (os.environ.get("VEXA_GATEWAY_URL") or URL).rstrip("/")
+AGENT_API = (os.environ.get("VEXA_AGENT_API_URL") or "http://agent-api:8100").rstrip("/")
+ADMIN_API = (os.environ.get("VEXA_ADMIN_API_URL") or "http://admin-api:8001").rstrip("/")
+FLOWS_API = (os.environ.get("VEXA_FLOWS_API_URL") or "http://flows-api:8200").rstrip("/")
+# The mail DOUBLE — a dev-lane inbox, never a service. Unset in a real deployment, which is what
+# makes `mail_inbox`/`mail_read` answer "not configured here" instead of inventing an inbox.
+MAILPIT = (os.environ.get("MAILPIT_URL") or "").rstrip("/")
+UI_BASE = (os.environ.get("VEXA_UI_URL") or "").rstrip("/")
+CANONICAL = os.environ.get("VEXA_PUBLIC_MCP_URL") or "http://localhost:18310/mcp"
 
 # ── credentials ──────────────────────────────────────────────────────────────────────────────
 # The platform admin token, AS A DEPLOYMENT VALUE. The rig lifted this out of another container's
 # environment with `docker inspect vexa-dogfood-admin-api-1` — a docker socket and a hardcoded
-# container name, for a string. It is a credential; it arrives the way credentials arrive.
-ADMIN_API_TOKEN = get("VEXA_ADMIN_API_TOKEN", "")
-FLOWS_API_KEY = get("VEXA_FLOWS_API_KEY", "")
-DELEGATION_SECRET = get("VEXA_MCP_DELEGATION_SECRET", "")
-# The same internal secret the rest of the stack's internal tier checks (#526), under the same
-# name, from the same contract. A server-to-server caller presents it instead of a person's token.
-INTERNAL_API_SECRET = get("VEXA_INTERNAL_API_SECRET", "")
+# container name, for a string (seam inventory B6.2). It is a credential; it arrives the way
+# credentials arrive.
+ADMIN_API_TOKEN = os.environ.get("VEXA_ADMIN_API_TOKEN") or ""
+FLOWS_API_KEY = os.environ.get("VEXA_FLOWS_API_KEY") or ""
+DELEGATION_SECRET = os.environ.get("VEXA_MCP_DELEGATION_SECRET") or ""
+# The same internal secret the rest of the stack's internal tier checks (#526), under the same name,
+# from the same contract. A server-to-server caller presents it instead of a person's token.
+INTERNAL_API_SECRET = os.environ.get("VEXA_INTERNAL_API_SECRET") or ""
 
 # ── behaviour ────────────────────────────────────────────────────────────────────────────────
 # The default regime for a workspace nothing has been recorded about. `cloud` = the files live on
@@ -59,21 +55,21 @@ INTERNAL_API_SECRET = get("VEXA_INTERNAL_API_SECRET", "")
 # person's own machine and NO cloud agent runs for them: the workspace verbs still operate on the
 # cloud copy, git (workspace_pull / workspace_push) is the sync, and the person's own agent writes
 # the local files itself with its native tools.
-WORKSPACE_REGIME = (get("VEXA_WORKSPACE_REGIME", "cloud") or "cloud").strip().lower()
+WORKSPACE_REGIME = (os.environ.get("VEXA_WORKSPACE_REGIME") or "cloud").strip().lower()
 # The `token=` call-argument fallback and the `GET /do` bridge put a credential in a query string.
-# Right for a fetch-only agent on a private host, wrong anywhere requests are logged — so unlike
-# the rig, which defaulted it ON, the shipped default is OFF and the dogfood lane opts in.
-RIG_MODE = get("VEXA_RIG_MODE", "0") != "0"
-MAIL_SMTP_HOST = get("VEXA_MAIL_SMTP_HOST", "localhost")
-MAIL_SMTP_PORT = int(get("VEXA_MAIL_SMTP_PORT", "1025") or "1025")
-MAIL_ADDR = get("VEXA_MAIL_ADDR", "")
-DOCS_BASE = get("VEXA_DOCS_URL", "https://docs.vexa.ai").rstrip("/")
-PORT = int(get("PORT", "18310") or "18310")
+# Right for a fetch-only agent on a private host, wrong anywhere requests are logged — so unlike the
+# rig, which defaulted it ON, the shipped default is OFF and the dogfood lane opts in.
+RIG_MODE = (os.environ.get("VEXA_RIG_MODE") or "0") != "0"
+MAIL_SMTP_HOST = os.environ.get("VEXA_MAIL_SMTP_HOST") or "localhost"
+MAIL_SMTP_PORT = int(os.environ.get("VEXA_MAIL_SMTP_PORT") or "1025")
+MAIL_ADDR = os.environ.get("VEXA_MAIL_ADDR") or ""
+DOCS_BASE = (os.environ.get("VEXA_DOCS_URL") or "https://docs.vexa.ai").rstrip("/")
+PORT = int(os.environ.get("PORT") or "18310")
 
 # ── the state this edge keeps, all of it under one directory ─────────────────────────────────
 # NOT config: a volume. Durable `vxa_mcp_…` tokens, pending sign-in codes, the one gateway key per
 # person this process minted. `tests/test_thin_forward.py` asserts no tool writes anywhere else.
-VEXA_HOME = pathlib.Path(get("VEXA_HOME", "") or (pathlib.Path.home() / ".vexa"))
+VEXA_HOME = pathlib.Path(os.environ.get("VEXA_HOME") or (pathlib.Path.home() / ".vexa"))
 TOKENS_FILE = VEXA_HOME / "mcp-tokens.json"
 USER_KEYS_FILE = VEXA_HOME / "user-api-keys.json"
 EMAIL_CODES = VEXA_HOME / "oauth" / "email-codes.json"

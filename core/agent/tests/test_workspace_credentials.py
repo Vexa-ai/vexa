@@ -20,7 +20,10 @@ import pytest
 from control_plane import deploy_keys, git_credentials
 from control_plane import workspace_credentials as wc
 
-RIG = Path(__file__).resolve().parents[3] / "deploy/dogfood/rig/vexa_control_mcp.py"
+# The rig became `core/mcp`; its workspace verbs are one module now, and the refusal helper is
+# `shaping.refuse_credentials`. Same two rules, same parse-the-shipped-code method.
+MCP_WS = Path(__file__).resolve().parents[3] / "core/mcp/src/vexa_mcp/tools/workspaces.py"
+MCP_SHAPING = Path(__file__).resolve().parents[3] / "core/mcp/src/vexa_mcp/shaping.py"
 
 
 @pytest.fixture(autouse=True)
@@ -139,7 +142,7 @@ def test_only_an_authorisation_refusal_triggers_the_deploy_key_answer(message, a
 # ── the rig's own tools: nowhere to put a secret, and a refusal on the way in ──────────────────────
 
 def _rig_functions() -> dict[str, ast.FunctionDef]:
-    tree = ast.parse(RIG.read_text(encoding="utf-8"))
+    tree = ast.parse(MCP_WS.read_text(encoding="utf-8"))
     return {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
 
 
@@ -149,7 +152,7 @@ def test_the_rig_workspace_tools_have_no_credential_parameter():
     banned = {"pat", "github_token", "repo_token", "password", "ssh_key", "private_key", "credential"}
     fns = _rig_functions()
     for name in ("workspace_attach", "workspace_push", "workspace_pull"):
-        assert name in fns, f"{name} is missing from the rig"
+        assert name in fns, f"{name} is missing from the MCP"
         params = {a.arg for a in fns[name].args.args}
         assert not (params & banned), f"{name} exposes a credential parameter: {params & banned}"
 
@@ -158,26 +161,26 @@ def test_the_rig_refuses_a_credential_smuggled_into_an_argument():
     """The rig's detector, executed as it actually ships (parsed out of the file, so this cannot drift
     from the deployed code) — a PAT typed into the repo URL is refused with a sentence that points at
     the key instead of asking again."""
-    tree = ast.parse(RIG.read_text(encoding="utf-8"))
-    wanted = ("_CREDENTIAL_REFUSAL", "_refuse_credentials")
+    tree = ast.parse(MCP_SHAPING.read_text(encoding="utf-8"))
+    wanted = ("CREDENTIAL_REFUSAL", "refuse_credentials")
     picked = [n for n in tree.body
               if (isinstance(n, ast.FunctionDef) and n.name in wanted)
               or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") in wanted for t in n.targets))]
     assert len(picked) == 2, "the rig's refusal helper moved — this test must follow it"
     ns: dict = {}
-    exec(compile(ast.Module(body=picked, type_ignores=[]), str(RIG), "exec"), ns)  # noqa: S102
+    exec(compile(ast.Module(body=picked, type_ignores=[]), str(MCP_SHAPING), "exec"), ns)  # noqa: S102
 
-    refuse = ns["_refuse_credentials"]
+    refuse = ns["refuse_credentials"]
     assert refuse("https://ghp_AAAAAAAAAAAAAAAAAAAA@github.com/acme/kg.git")
     assert refuse("git@github.com:acme/kg.git", "main", "", "ghp_BBBBBBBBBBBBBBBBBBBB")
     assert refuse("https://user:secret@github.com/acme/kg.git")
     assert refuse("git@github.com:acme/kg.git", "main", "grp-a1b2c3", "") == ""
-    assert "will not take a token in chat" in ns["_CREDENTIAL_REFUSAL"]
+    assert "will not take a token in chat" in ns["CREDENTIAL_REFUSAL"]
 
 
 def test_the_rig_calls_that_refusal_before_it_does_anything():
-    src = RIG.read_text(encoding="utf-8")
+    src = MCP_WS.read_text(encoding="utf-8")
     fns = _rig_functions()
     for name in ("workspace_attach", "workspace_push", "workspace_pull"):
         body = ast.get_source_segment(src, fns[name]) or ""
-        assert "_refuse_credentials(" in body, f"{name} does not screen its arguments"
+        assert "refuse_credentials(" in body, f"{name} does not screen its arguments"

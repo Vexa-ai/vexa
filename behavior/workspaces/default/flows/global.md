@@ -2,7 +2,7 @@
 
 **This file is not the setup conversation.** The conversation lives in one place —
 `_global/asks/setup-global.md`, read hot at click time, admin-editable, source at
-`deploy/dogfood/asks/setup-global.md`. This page exists only so an agent reading a workspace knows
+`behavior/asks/setup-global.md`. This page exists only so an agent reading a workspace knows
 what the tier IS and does not invent a second version of it.
 
 It used to be that second version: a five-question, research-first, MDX-shaped org-onboarding script

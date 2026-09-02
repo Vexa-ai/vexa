@@ -855,12 +855,12 @@ working.</p>""", "Connected")
             ]})
             await send({"type": "http.response.body", "body": body})
             return
-        # Kept for the header's provenance in logs only. The server is STATELESS (see the app
-        # construction at the bottom): there is no session to look up, and identity is the bearer
-        # token on this request. Nothing reads CURRENT_SID, and SESSION_BIND is never written —
-        # both are recorded here so the next reader does not mistake them for state that matters.
+        # THE SESSION ID IS READ AND NOT KEPT. The server is stateless (see `server.http_app`):
+        # there is nothing to look up, and identity is the bearer token on this request. The rig
+        # carried a `CURRENT_SID` contextvar that was set on every request and read nowhere — the
+        # exact shape a later reader mistakes for state that matters, so it is gone rather than
+        # commented.
         sid = hdrs.get("mcp-session-id")
-        CURRENT_SID.set(sid)
         # A bearer token wins; otherwise fall back to an account this very conversation
         # created through start_onboarding.
         CURRENT.set(sub["uid"] if sub else SESSION_BIND.get(sid))

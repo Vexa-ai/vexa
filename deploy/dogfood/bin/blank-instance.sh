@@ -261,7 +261,7 @@ cat <<'NEXT'
   layer; until it does, no other person can sign in, the flows engine parks every fact instead of
   sending, and the operator verbs refuse.
 
-  Kept on purpose: _global/asks/ (the preset library), _global/mail/ (the mail templates) and
+  Kept on purpose: _global/asks/ (the preset library, sourced from behavior/asks/), _global/mail/ (the mail templates, sourced from behavior/mail/) and
   _global/.git (the history). Those are the deployment's own furniture, not anybody's data. In redis
   the same rule, from the other side: the chat-thread index and every scaffold are gone, and the
   transcript streams and per-dispatch streams are untouched — plumbing, never a person.

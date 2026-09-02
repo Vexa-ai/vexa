@@ -718,7 +718,72 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # ── mcp-control ─────────────────────────────────────────────────────────────────────────────
+  # THE EDGE a person's own agent connects to (PRD decision 40): 64 tools across identity,
+  # meetings, workspaces, flows, friction, rehearse, panel and docs, each a thin forward to the
+  # service that owns the store. Like the gateway it carries the caller's identity and owns no
+  # state; unlike the 14-tool `mcp` service above it reaches agent-api and flows-api as well as
+  # the gateway, which is what makes the workspace and flow verbs reachable from a chat at all.
+  #
+  # BEHIND A PROFILE UNTIL THE CUTOVER, deliberately. The gateway's /mcp route points at `mcp`
+  # (MCP_URL=http://mcp:8010) and repointing it retires the 14-tool service — that is a delivery
+  # decision with its own validation, not a side effect of adding a package. Start it with
+  # `docker compose --profile mcp-control up mcp-control`; the default stack is unchanged.
+  mcp-control:
+    build:
+      context: ../../core/mcp
+      dockerfile: Dockerfile
+    image: vexaai/v012-mcp-control:${IMAGE_TAG:-dev}
+    profiles: ["mcp-control"]
+    ports:
+      - "127.0.0.1:${MCP_CONTROL_HOST_PORT:-18310}:18310"
+    environment:
+      - PORT=18310
+      # The one URL a deployment must name; the siblings default to the in-network names and are
+      # spelled here anyway so the declaration and the surface agree key for key.
+      - VEXA_URL=http://gateway:8000
+      - VEXA_AGENT_API_URL=http://agent-api:8100
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      # The name this edge PUBLISHES — it drives the sign-in links, the agent bootstrap AND the
+      # transport's host guard. A server that publishes one name while admitting another refuses
+      # its own users.
+      - VEXA_PUBLIC_MCP_URL=${VEXA_PUBLIC_MCP_URL:-http://localhost:18310/mcp}
+      - VEXA_UI_URL=${VEXA_UI_URL:-}
+      # Credentials, from the same store the rest of the internal tier reads.
+      - VEXA_ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-}
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      # `local` means the person's workspace lives on their machine and no cloud agent runs for
+      # them — the verbs still operate on the cloud copy and git is the sync.
+      - VEXA_WORKSPACE_REGIME=${VEXA_WORKSPACE_REGIME:-cloud}
+      # OFF, by absence of a reason to turn it on: it enables a credential in a query string.
+      - VEXA_RIG_MODE=0
+      # The mail double is a dev lane, not a service. Unset ⇒ the two mail verbs say so.
+      - MAILPIT_URL=${MAILPIT_URL:-}
+      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-mailpit}
+      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-1025}
+      # The only directory this service writes: durable tokens, pending sign-in codes, the one
+      # gateway key per person it minted.
+      - VEXA_HOME=/var/lib/vexa-mcp
+    volumes:
+      - mcp-control-state:/var/lib/vexa-mcp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:18310/mcp/health').status<500 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
 volumes:
+  mcp-control-state:
   redis-data:
   postgres-data:
   minio-data:
