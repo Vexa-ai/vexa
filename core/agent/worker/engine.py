@@ -181,7 +181,11 @@ def kg_links_preamble() -> str:
         "- Put the reference OUTSIDE code fences and never backtick a `[[wikilink]]` — a fenced"
         " block is literal text and renders dead.\n"
         "- Don't write `[[wikilinks]]` for things that have no entity doc (they render as inert"
-        " 'not found' chips) — create the entity first, or use plain text.\n\n"
+        " 'not found' chips) — create the entity first, or use plain text.\n"
+        "- `kg/templates/` and any doc whose frontmatter carries `template: true` are SHAPES, not"
+        " records: never list them as entities or meetings, never `[[wikilink]]` them, never cite"
+        " them in a brief and never count them as prior context. If you hold nothing on a subject,"
+        " say so — a shape is not a substitute for knowledge you do not have.\n\n"
     )
 
 

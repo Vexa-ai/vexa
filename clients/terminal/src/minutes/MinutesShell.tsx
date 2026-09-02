@@ -13,9 +13,9 @@
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
-import { useLiveMeetings } from "../surfaces/liveMeetings";
+import { useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
 import {
   readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile,
   listSharedMemberships, listWorkspaceTree, type Membership,
@@ -555,47 +555,91 @@ export function MinutesShell() {
   // The chat is created TOUCHED: today nothing distinguishes a link the user clicked from one a
   // flow injected, and the safe reading of an ambiguous case is "the human meant to be here".
   const presetFired = useRef(false);
+  const meetingsLoaded = useLiveMeetingsLoaded();
+  // A bounded wait, so a meetings list that never answers cannot leave the click with nothing: the
+  // preset fires anyway after this, naming the meeting less well rather than not at all.
+  const [presetWaited, setPresetWaited] = useState(false);
+  const presetTimer = useRef(false);
   useEffect(() => {
     if (presetFired.current) return;
     let raw: string | null = null;
     try { raw = localStorage.getItem("vexa.pendingPreset"); } catch { /* ignore */ }
     if (!raw) return;
-    presetFired.current = true;
-    try { localStorage.removeItem("vexa.pendingPreset"); } catch { /* ignore */ }
     let intent: { ask?: string; ws?: string; meeting?: string };
-    try { intent = JSON.parse(raw) as typeof intent; } catch { return; }
+    try { intent = JSON.parse(raw) as typeof intent; } catch { presetFired.current = true; return; }
     const name = (intent.ask || "").trim();
     // a NAME, and only a name — no slashes, no dots, nothing that walks out of asks/
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(name)) return;
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(name)) { presetFired.current = true; return; }
+    // THE PRESET OWNS THE OPENING, and it claims that synchronously — before any await, and
+    // before the onboarding seed fires at +600ms. A brand-new attendee who clicked a minutes link
+    // used to get the cached PHASE greeting ("I'm booked for your meeting") on a meeting that had
+    // already happened, because the preset was still in flight and nothing said so.
+    setPresetInFlight(true);
+    // A preset ABOUT a meeting waits for the meeting list: substituting before it lands is what
+    // put a Zoom number where the meeting's NAME belongs. A preset with no ref waits for nothing.
+    if (intent.meeting && !meetingsLoaded && !presetWaited) {
+      if (!presetTimer.current) {
+        presetTimer.current = true;
+        window.setTimeout(() => setPresetWaited(true), 8000);
+      }
+      return;
+    }
+    presetFired.current = true;
+    try { localStorage.removeItem("vexa.pendingPreset"); } catch { /* ignore */ }
     void (async () => {
-      const body = await readWorkspaceFile(`asks/${name}.md`, { slug: "_global" }).catch(() => null);
-      // an unknown preset opens nothing. Never fall back to text from the URL.
-      if (!body || !body.trim()) return;
+      const body = await readWorkspaceFile("asks/" + name + ".md", { slug: "_global" })
+        .catch((e) => { console.error("preset asks/" + name + ".md could not be read:", e); return null; });
+      // An unknown preset opens nothing — but never SILENTLY. A click that produces nothing is
+      // indistinguishable from a broken product, so it is logged and the opening is handed back to
+      // the greeting this preset had suppressed.
+      if (!body || !body.trim()) {
+        console.error("preset asks/" + name + ".md is missing or empty — the emailed link opened nothing");
+        setPresetInFlight(false);
+        window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT));
+        return;
+      }
       // optional frontmatter: `mounts:` (comma-separated) and `label:`
       let text = body, mounts: string[] = [], label = name.replace(/[-_]/g, " ");
       const fm = /^---\n([\s\S]*?)\n---\n?/.exec(body);
       if (fm) {
         text = body.slice(fm[0].length);
-        const m = /^mounts:\s*(.+)$/m.exec(fm[1]);
-        if (m) mounts = m[1].split(",").map((x) => x.trim()).filter(Boolean);
+        const mm = /^mounts:\s*(.+)$/m.exec(fm[1]);
+        if (mm) mounts = mm[1].split(",").map((x) => x.trim()).filter(Boolean);
         const l = /^label:\s*(.+)$/m.exec(fm[1]);
         if (l) label = l[1].trim();
       }
       if (intent.ws) mounts = [intent.ws, ...mounts.filter((x) => x !== intent.ws)];
       if (!mounts.length) mounts = ["_global", "personal"];
+      // The ROW behind the ref, so a preset can name the meeting instead of reciting its id.
+      const ref = (intent.meeting || "").trim();
+      const nativeRef = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
+      const row = ref
+        ? meetings.find((x) => String(x.id) === ref || (x as { native_id?: string }).native_id === nativeRef)
+        : undefined;
       const prompt = text
-        .replace(/\{\{\s*meeting\s*\}\}/g, intent.meeting || "the meeting in view")
+        .replace(/\{\{\s*meeting\s*\}\}/g, ref || "the meeting in view")
+        .replace(/\{\{\s*title\s*\}\}/g, row?.title || "the meeting in view")
+        .replace(/\{\{\s*when\s*\}\}/g, row?.when || "")
         .replace(/\{\{\s*ws\s*\}\}/g, mounts[0] || "")
         .replace(/\{\{\s*today\s*\}\}/g, new Date().toISOString().slice(0, 10))
         .trim();
-      if (!prompt) return;
-      // NOT dispatching OPEN_MEETING_EVENT: its handler would replace the selection made here and
-      // take the preset's mounts with it. The ref reaches the agent through the {{meeting}}
-      // substitution, and it can open the meeting itself.
+      if (!prompt) { setPresetInFlight(false); return; }
+      // ONE consumer for a link that carries BOTH `?ask=` and `?meeting=`. There used to be two:
+      // this effect opened an askchat and selected it, the `?meeting=` effect then opened the
+      // meeting's own chat over the top, and the kick fired 1.2s later into a session no longer
+      // mounted — so an attendee got the meeting room with its cached phase greeting and never the
+      // preset at all. When the ref resolves, the preset speaks INTO the meeting's chat and spends
+      // the meeting ref here, so nothing re-opens it underneath.
+      if (row) {
+        try { localStorage.removeItem("vexa.openMeetingRef"); } catch { /* ignore */ }
+        meetingRefSpent.current = true;
+        const chatId = await openMeeting(row, { touched: true });
+        if (chatId) { fireKick(chatId, prompt); return; }
+      }
       // same settle delay the other seeded conversations use — the chat must be mounted to hear it
-      addChat(label, mounts, { id: `askchat-${Date.now().toString(36)}`, kick: prompt });
+      addChat(label, mounts, { id: "askchat-" + Date.now().toString(36), kick: prompt });
     })();
-  }, [addChat]);
+  }, [addChat, meetings, meetingsLoaded, presetWaited, openMeeting]);
 
   return (
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${pagesCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>

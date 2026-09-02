@@ -44,6 +44,48 @@ def meeting_ref(uid: str, url: str) -> str:
     return str(max(ids)) if ids else native
 
 
+def ensure_meeting_row(uid: str, url: str, title: str | None = None,
+                       start_epoch: float | None = None) -> str:
+    """The row a person is about to be SHOWN must exist before they are shown it.
+
+    A prepare mail goes out long before dispatch_bot mints the meeting row, so its link used
+    to carry the NATIVE id — a Zoom number — and the terminal substituted that number into the
+    prep preset as the meeting's name. The agent then held nothing under it, said so, and reached
+    for the only meeting it could find. The meeting the invite described was never in the product.
+
+    So plan it here, as the organiser, out of what the invite already knew: the title, the start,
+    and the link. POST /meetings writes an INTENT row (scheduled), and dispatch_bot's
+    guarded create CLAIMS that same row in place at start − 2 min rather than inserting a second
+    (bot_spawn/adapters.py create_meeting_guarded, step 2b) — so the plan, the prep chat and
+    the transcript all live on ONE id.
+
+    auto_join is FALSE on purpose. The row carries a time, and the auto-join sweep would
+    otherwise dispatch its own bot on that time — a second dispatcher for a meeting this flow
+    already dispatches. One loop, one write surface.
+
+    Never raises: a link to a native id is weaker than a link to a row, and both beat no mail.
+    """
+    import datetime
+
+    native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    existing = meeting_ref(uid, url)
+    if existing != native:
+        return existing                      # a row already exists (calendar sync, a retry, us)
+    body: dict = {"meeting_url": url, "auto_join": False}
+    if title:
+        body["title"] = title
+    if start_epoch:
+        body["scheduled_at"] = datetime.datetime.fromtimestamp(
+            float(start_epoch), datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        st, row = http("POST", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(uid)}, body)
+    except StepError:
+        return native
+    if st in (200, 201) and isinstance(row, dict) and row.get("id") is not None:
+        return str(row["id"])
+    return meeting_ref(uid, url)             # 409 = someone minted it in the gap; read it back
+
+
 def meeting_row(uid: str, meeting_id, native: str | None = None):
     """This user's meeting row from the gateway, or None. One read, several callers."""
     try:

@@ -6,6 +6,7 @@ internals and guards against path traversal (a read path can never escape the su
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +51,35 @@ def _block_text(content) -> str:
 # unconditionally. Everything else dot-prefixed (`.claude` + any dotfile/dotdir) is hidden by
 # default but surfaced when the caller opts in via ``hidden=True``.
 _ALWAYS_HIDDEN = {".git"}
+
+# TEMPLATES ARE NOT RECORDS. `kg/templates/` holds the SHAPE of an entity — a skeleton with
+# `<Full Name>` where a name goes — and every prose file in the workspace says it is never
+# knowledge. Nothing enforced that: the shapes carry conformant `type/id/title` frontmatter, and
+# `tree_at` is the single enumerator behind the Files tree, the MCP `workspace_tree`, the client's
+# link resolver and its find-file index, so an agent asked "what meetings do I have" could read one
+# and answer with it. The founder's rule is that the SYSTEM must know a template is a template.
+#
+# Two tests, because both are needed: the PATH covers the shipped files before anyone edits their
+# frontmatter, and the `template: true` FLAG covers a shape copied anywhere else. `hidden=True`
+# still shows them — a human browsing deliberately is not the failure mode.
+_RESERVED_PREFIXES = ("kg/templates/",)
+_TEMPLATE_FM = re.compile(r"^(?:template|example):\s*true\b", re.M)
+
+
+def _is_template_doc(p: Path) -> bool:
+    """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it."""
+    if p.suffix.lower() != ".md":
+        return False
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(800)
+    except OSError:
+        return False
+    if not head.startswith("---"):
+        return False
+    end = head.find("\n---", 3)
+    return bool(_TEMPLATE_FM.search(head if end == -1 else head[:end]))
+
 
 # Commit authors that are platform/seed PLUMBING, not a member's agent — classified ``system`` so the
 # activity feed never mistakes a policy or seed commit for a member push. The per-mount turn-commit stamps
@@ -107,7 +137,10 @@ class WorkspaceReader:
             if not hidden and any(part.startswith(".") for part in parts):
                 continue
             if p.is_file():
-                out.append(str(p.relative_to(ws)))
+                rel = str(p.relative_to(ws))
+                if not hidden and (rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(p)):
+                    continue
+                out.append(rel)
         return out
 
     def read(self, subject: str, path: str) -> Optional[str]:

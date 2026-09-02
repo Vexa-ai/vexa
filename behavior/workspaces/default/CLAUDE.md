@@ -62,8 +62,11 @@ OKF's recommended keys when you know the value:
 - `tags:` — list of categorization strings.
 - `timestamp:` — ISO 8601 time you last updated the knowledge in the file.
 
-**Reserved files** (no frontmatter, not entities):
+**Reserved files** (not entities — never listed as records, never cited, never `[[linked]]`):
 
+- **`kg/templates/**` and any doc whose frontmatter carries `template: true`** — the SHAPE of an
+  entity, not one. They are hidden from the workspace tree and from every listing, so if you are
+  asked what meetings or people you hold and you hold none, the answer is *none* — never a shape.
 - `index.md` — one per directory under `kg/`, a short listing of what's inside with relative
   markdown links (progressive disclosure for readers/agents). When you add or remove an entity,
   update the `index.md` of its type directory (and create the directory's `index.md` when you

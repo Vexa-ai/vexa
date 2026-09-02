@@ -80,6 +80,19 @@ export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
 export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
 // MINUTES cold-start: the reader arrived through a meeting door — greet from the meeting, not
 // from a blank slate, and ask the one thing that shapes the workspace: their role.
+/** A `?ask=` preset OWNS the opening of the chat it lands in.
+ *
+ *  The cached phase greeting and an emailed preset are two writers of one first turn, and the
+ *  greeting always won: it is instant, the preset has to fetch `_global/asks/<name>.md` first. A
+ *  brand-new attendee who clicked "what it means for you" therefore got "I'm booked for your
+ *  meeting" about a meeting that had already happened, and the preset never spoke.
+ *
+ *  Module state, not storage, on purpose: it is true for exactly ONE page load, and a preset that
+ *  fails to resolve clears it and re-fires the seed so the greeting still happens. */
+let presetInFlight = false;
+export const setPresetInFlight = (v: boolean) => { presetInFlight = v; };
+export const presetOwnsOpening = () => presetInFlight;
+
 export const MINUTES_ONBOARDING_GREETING = "👋 I kept the minutes of your meeting — they're in this workspace, with the full transcript. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
 // Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
 // the conversation is a BRIEFING, and the role question rides inside it.
