@@ -67,6 +67,13 @@ export type ChatStreamRequest = {
   active: unknown;
   /** the terminal-state context bundle {tz, surface, focus, include}, or undefined */
   context?: unknown;
+  /** THE SCAFFOLD this turn opened from (PRD §5.5), on the FIRST turn only.
+   *
+   *  One record, two renderers: the panel rendered its tabs from this id and dispatch reads its
+   *  mounts and opening from the same one. Absent on every later turn — the session carries the
+   *  thread from then on, and re-sending it would invite the server to re-apply an arrival that
+   *  already happened. */
+  scaffold_id?: string;
 };
 
 /** One nonce per user turn, constant across that turn's reconnect attempts. It lets agent-api tell a
@@ -178,7 +185,11 @@ export async function streamChatTurn(
       r = await fetchImpl("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
-        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId }),
+        // `scaffold_id` is OMITTED when absent rather than sent as null: agent-api's ChatBody is
+        // `extra="forbid"`-adjacent about shapes, and an explicit null is a different statement
+        // from "this turn did not come from an arrival".
+        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId,
+          ...(req.scaffold_id ? { scaffold_id: req.scaffold_id } : {}) }),
         signal,
       });
     } catch (e) {

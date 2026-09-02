@@ -811,7 +811,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     return data.files ?? [];
   };
 
-  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean } = {}) => {
+  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean; scaffoldId?: string } = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
     const { hidden = false, ground = true } = opts;
@@ -886,7 +886,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     });
     try {
       const result = await streamChatTurn(
-        { prompt: p, session: sessionForSend, active, context },
+        // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
+        { prompt: p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId },
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
@@ -948,20 +949,20 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   sendRef.current = send;
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string }>).detail;
+      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
       // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
       // stash it; the target session's Chat consumes it the moment it mounts.
       if (detail?.session && detail.session !== session) {
-        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground })); } catch { /* ignore */ }
+        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground, scaffoldId: detail.scaffoldId })); } catch { /* ignore */ }
         return;
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
       // the user's own sentence renders as their message, and the grounding it carries does not.
-      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
+      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId });
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
@@ -976,8 +977,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     const t = setTimeout(() => {
       try { localStorage.removeItem(key); } catch { /* ignore */ }
       try {
-        const d = JSON.parse(raw as string) as { prompt: string; display?: string; hidden?: boolean; ground?: boolean };
-        if (d.prompt) void sendRef.current(d.display || d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground });
+        const d = JSON.parse(raw as string) as { prompt: string; display?: string; hidden?: boolean; ground?: boolean; scaffoldId?: string };
+        if (d.prompt) void sendRef.current(d.display || d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground, scaffoldId: d.scaffoldId });
       } catch { /* ignore */ }
     }, 600);
     return () => clearTimeout(t);

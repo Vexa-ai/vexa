@@ -32,12 +32,13 @@ import {
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
+import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { artifactsFromTokens, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
-import { T, maxPagesW, surface } from "./tokens";
+import { T, maxPagesW, surface, type as ty } from "./tokens";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
@@ -49,9 +50,13 @@ const PERSONAL_SEL: Sel = { kind: "chat", chatId: PERSONAL_CHAT_ID, label: "Pers
  *  so it can never land in whichever conversation happens to be visible. `say` is the visible form
  *  for a chip whose words are the user's own; without one the turn arrives hidden, as system kickoffs
  *  always have. */
-const fireKick = (session: string, prompt: string, say?: string) =>
+const fireKick = (session: string, prompt: string, say?: string, scaffoldId?: string) =>
   window.setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT,
-    { detail: { hidden: !say, display: say, session, prompt } })), 1200);
+    // `scaffoldId` rides with the FIRST turn so dispatch can read the same record the panel
+    // rendered from (PRD §5.5: one record, two renderers). Without it the server would have to
+    // re-derive mounts and opening from the session, which is the composed-from-whatever-was-there
+    // problem the scaffold exists to end.
+    { detail: { hidden: !say, display: say, session, prompt, scaffoldId } })), 1200);
 
 export function MinutesShell() {
   const layout = useService(LayoutServiceId);
@@ -293,14 +298,14 @@ export function MinutesShell() {
     return row ? await openRow(row, opts) : null;
   }, [openRow]);
 
-  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string; artifacts?: Artifact[]; focus?: string } = {}) => {
+  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string; artifacts?: Artifact[]; focus?: string; scaffoldId?: string } = {}) => {
     const base = newChat(label, workspaces, { id: opts.id, touched: true, meeting: opts.meeting });
     // A preset's declared tabs ARE the chat's opening artifacts — see openRow. A chat born from a
     // link is the one case where the record is written before a human has touched the panel.
     const c = opts.artifacts?.length ? { ...base, artifacts: opts.artifacts, focus: opts.focus } : base;
     persist((prev) => upsertChat(prev, c));
     void openChat(c);
-    if (opts.kick) fireKick(c.id, opts.kick, opts.say);
+    if (opts.kick) fireKick(c.id, opts.kick, opts.say, opts.scaffoldId);
     return c;
   }, [openChat, persist]);
 
@@ -602,6 +607,73 @@ export function MinutesShell() {
   // preset fires anyway after this, naming the meeting less well rather than not at all.
   const [presetWaited, setPresetWaited] = useState(false);
   const presetTimer = useRef(false);
+
+  /** THE ONE PATH from "a link was clicked" to "a chat exists" (PRD §5.5 step 3).
+   *
+   *  Both entry points end here: `?s=<id>` with a server-minted scaffold, and the `?ask=&meeting=`
+   *  hand link with a local one. Before this they were two bodies of composition code that had
+   *  already drifted — only one of them knew about tabs — and that drift is the class of defect the
+   *  scaffold record exists to end. If a third arrival is ever added, it mints a scaffold and calls
+   *  this; it does not grow a third composer. */
+  const openFromScaffold = useCallback((sc: Scaffold, native: string | null) => {
+    const rec = scaffoldToChat(sc, { native });
+    // Decision 18's rule: a chat that already carries tabs belongs to its reader, and a second
+    // arrival must not tidy their desk out from under them.
+    const existing = chatsRef.current.find((c) => c.id === rec.id);
+    const fresh = !existing?.artifacts.length;
+    addChat(rec.label, rec.workspaces, {
+      id: rec.id,
+      meeting: rec.meeting,
+      artifacts: fresh ? rec.artifacts : undefined,
+      focus: fresh ? rec.focus : undefined,
+      kick: sc.openingText,
+      scaffoldId: sc.kind === "hand-link" ? undefined : sc.id,
+    });
+  }, [addChat]);
+
+  // A scaffold that would not open. Held so the reader is TOLD — a person who clicked a real link
+  // and landed on a blank chat cannot tell a spent invitation from a broken product.
+  const [scaffoldRefusal, setScaffoldRefusal] = useState<ScaffoldRefusal | null>(null);
+  const scaffoldFired = useRef(false);
+
+  // `?s=<id>` — THE SCAFFOLD (PRD §5.5 step 3). One record per arrival: the server says which
+  // workspaces, which documents, and what the opening is; the terminal renders a chat from it and
+  // NOTHING here is composed from what was there before. The right panel keeps rendering from the
+  // chat record only — the decision-18 contract — so this effect's whole job is to write that
+  // record correctly and then get out of the way.
+  useEffect(() => {
+    if (scaffoldFired.current) return;
+    let id: string | null = null;
+    try { id = localStorage.getItem("vexa.pendingScaffold"); } catch { /* ignore */ }
+    if (!id) return;
+    // A scaffold ABOUT a meeting needs the meetings list to resolve the note's native id, exactly
+    // as the preset path does. Bounded by the same 8s wait: a list that never answers must not
+    // leave a real click with nothing.
+    if (!meetingsLoaded && !presetWaited) {
+      if (!presetTimer.current) {
+        presetTimer.current = true;
+        window.setTimeout(() => setPresetWaited(true), 8000);
+      }
+      return;
+    }
+    scaffoldFired.current = true;
+    setPresetInFlight(true);        // the scaffold OWNS the opening, like a preset
+    try { localStorage.removeItem("vexa.pendingScaffold"); } catch { /* ignore */ }
+    void (async () => {
+      const got = await fetchScaffold(id);
+      if (!got.ok) {
+        console.error("scaffold " + id + " did not open:", got.refusal.reason, got.refusal.detail);
+        setPresetInFlight(false);
+        setScaffoldRefusal(got.refusal);
+        return;
+      }
+      const sc = got.scaffold;
+      const row = sc.meeting ? meetings.find((x) => String(x.id) === sc.meeting) : undefined;
+      const native = (row as { native_id?: string } | undefined)?.native_id ?? null;
+      openFromScaffold(sc, native);
+    })();
+  }, [addChat, meetings, meetingsLoaded, presetWaited]);
+
   useEffect(() => {
     if (presetFired.current) return;
     let raw: string | null = null;
@@ -716,30 +788,27 @@ export function MinutesShell() {
       const focusArt = focusToken ? artifactsFromTokens([focusToken], tabCtx)[0] : undefined;
       const focusKey = focusArt ? artifactKey(focusArt) : undefined;
 
+      // A HAND LINK MINTS A LOCAL SCAFFOLD and renders through the one path (PRD §5.5 step 3).
+      // `?ask=&meeting=` survives only as this fallback: it composes the SAME record an emailed
+      // `?s=` produces, so there is one composer rather than two that drift. Nothing about the URL
+      // carries prompt text — the body still comes from `_global/asks/<name>.md`, admin-authored.
       if (row) {
         try { localStorage.removeItem("vexa.openMeetingRef"); } catch { /* ignore */ }
         meetingRefSpent.current = true;
-        const chatId = await openMeeting(row, { touched: true, artifacts, focus: focusKey });
-        if (chatId) { fireKick(chatId, prompt); return; }
       }
-      // ONE MEETING IS ONE CHAT, even when its row has not arrived yet. This fallback used to mint
-      // `askchat-<base36>` labelled from the preset name, so a click whose meeting list was still
-      // loading produced a second conversation — the founder got "prepare" AND "DNA TSC" for one
-      // meeting, and a retry produced another. When the ref is a ROW ID we can name the chat the
-      // same thing the meeting's own row will name it (`meet-<id>`), bind `meeting` so the rail
-      // knows what it is, and leave the LABEL EMPTY: railRows falls back to the meeting's title
-      // (`c.label || meetingTitle(m)`), so the row names itself the moment the list lands, and the
-      // meeting's own chat resolves to this very record instead of a second one.
-      const rowRef = /^\d+$/.test(ref) ? ref : "";
-      // same settle delay the other seeded conversations use — the chat must be mounted to hear it
-      addChat(rowRef ? "" : label, mounts, {
-        id: rowRef ? meetingChatId(rowRef) : "askchat-" + Date.now().toString(36),
-        meeting: rowRef || undefined,
-        artifacts, focus: focusKey,
-        kick: prompt,
-      });
+      openFromScaffold(localScaffold({
+        preset: name,
+        openingText: prompt,
+        meeting: row ? String(row.id) : (/^\d+$/.test(ref) ? ref : null),
+        phase,
+        workspaces: mounts,
+        tabs: tabTokens,
+        focus: focusToken,
+        title: row?.title,
+      }), tabCtx.native);
+      return;
     })();
-  }, [addChat, meetings, meetingsLoaded, presetWaited, openMeeting]);
+  }, [openFromScaffold, meetings, meetingsLoaded, presetWaited]);
 
   return (
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${pagesCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
@@ -752,8 +821,31 @@ export function MinutesShell() {
       <ContextBar sel={sel} flavor={flavor} memberships={memberships}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))} />
-      <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
-        <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
+      <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
+        {/* A SCAFFOLD THAT WOULD NOT OPEN STATES ITSELF. Someone who clicked a real link and landed
+            on an empty conversation cannot tell a spent invitation from a broken product — and the
+            second reading is the one they take. So: whose it is, and what to do about it. It sits
+            ABOVE the chat rather than replacing it, because their own conversations are still
+            theirs and hiding them would be a second wrong. */}
+        {scaffoldRefusal && (() => {
+          const c = refusalCopy(scaffoldRefusal);
+          return (
+            <div role="alert" data-scaffold-refusal={scaffoldRefusal.reason}
+              style={{ flex: "none", margin: "12px 14px 0", padding: "12px 14px", borderRadius: 8,
+                border: "1px solid var(--line)", background: "var(--bg2, var(--bg))" }}>
+              <div style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", marginBottom: 4 }}>{c.title}</div>
+              <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.55 }}>{c.body}</div>
+              <button onClick={() => setScaffoldRefusal(null)}
+                style={{ ...ty.chip, marginTop: 10, color: "var(--t3)", background: "transparent",
+                  border: "1px solid var(--line)", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+                Dismiss
+              </button>
+            </div>
+          );
+        })()}
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
+        </div>
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
           lights up on hover/focus, and arrow keys for anyone not dragging. A collapsed panel has no
