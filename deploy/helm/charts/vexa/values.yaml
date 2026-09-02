@@ -509,3 +509,19 @@ flows:
   mail:
     address: ""
     appPassword: ""
+    # WHO THE MAILBOX WILL ACT FOR. A sender who is neither a known user nor inside this list
+    # gets no account, no agent turn and no model call — one quarantine row (R-B12).
+    # EMPTY IS NOT "EVERYONE": it means the mailbox's own domain, exactly as an unset attendee
+    # allow-list means the organizer's (PRD §16.2 — outside the domain, never). Set it when the
+    # mailbox is hosted on a domain other than the organisation it serves.
+    domains: ""                       # comma-separated, e.g. "oenb.at,dna.test"
+    # One fixed line back to a quarantined stranger, once per address, no model. Off by default:
+    # an automatic reply to an unverified sender is a reflector.
+    quarantineReply: ""               # "1" to enable
+  # THE CEILING ON WHAT ONE INBOX CAN COST. Per-sender bounds one correspondent (including a
+  # user whose own mail client has looped); global bounds the deployment, which is the number
+  # that matters when the sender is a hundred allow-listed addresses rather than one.
+  mailRate:
+    perSender: "12"
+    global: "120"
+    windowSeconds: "3600"

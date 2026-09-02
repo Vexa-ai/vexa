@@ -90,13 +90,14 @@ def test_everything_that_is_not_a_completed_document_reads_missing(monkeypatch, 
 def test_only_a_completed_document_opens_the_gate(monkeypatch):
     fake, calls = _http((200, {"admin_exists": True, "global_setup": "completed",
                                "company": "Vexa"}))
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "a-real-admin-key")
     monkeypatch.setattr(common, "http", fake)
     assert gate.gate_state() == "completed"
     assert gate.company_layer_ready() is True
     # the contract: the admin door the flows tier already holds, read-only
     assert calls[0]["method"] == "GET"
     assert calls[0]["url"].endswith("/admin/instance")
-    assert calls[0]["headers"]["X-Admin-API-Key"] == common.ADMIN_KEY
+    assert calls[0]["headers"]["X-Admin-API-Key"] == "a-real-admin-key"
 
 
 # ── 2. the cache ─────────────────────────────────────────────────────────────────────────────

@@ -7,13 +7,14 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from typing import Optional
+from urllib.parse import quote as _q
 
 GATEWAY = os.environ.get("VEXA_FLOWS_GATEWAY_URL", "http://localhost:18056")
 AGENT_API = os.environ.get("VEXA_FLOWS_AGENT_API_URL", "http://localhost:18100")
 ADMIN_API = os.environ.get("VEXA_FLOWS_ADMIN_API_URL", "http://localhost:18057")
-ADMIN_KEY = os.environ.get("VEXA_FLOWS_ADMIN_KEY", "changeme")
 FIXTURE_TRANSCRIPT = os.environ.get("VEXA_FLOWS_FIXTURE_TRANSCRIPT", "") == "1"   # declared double
 
 
@@ -29,6 +30,42 @@ INTERNAL_SECRET_ENV_DEPRECATED = ("VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SEC
 #: face. Same list as the services' config.v1 `forbidden_values`.
 INTERNAL_SECRET_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme",
                                 "change-me", "CHANGE-ME", "default", "secret")
+#: ONE REFUSAL LIST, NOT ONE PER CREDENTIAL. The note above is about a secret with three names
+#: having three refusal lists that drift; a second list for a second key is the same defect one
+#: step removed. `require_admin_key` reads this, so a placeholder learned here is refused
+#: everywhere in this brick at once.
+PLACEHOLDER_SECRETS = INTERNAL_SECRET_PLACEHOLDERS
+
+
+def require_admin_key() -> str:
+    """The ADMIN-API key, or the caller refuses to act.
+
+    It used to be `ADMIN_KEY = os.environ.get("VEXA_FLOWS_ADMIN_KEY", "changeme")` — a module
+    constant with a weak default, four lines above `require_internal_secret`, whose docstring says
+    *"a weak default is worse than no default… so there is no default"*. The default was the
+    stronger claim of the two, because this key is not a read credential: it opens
+    `ensure_platform_user`, which mints platform accounts, and `user_api_key`, which mints
+    full-scope gateway tokens for ANY user id the caller names (R-B11).
+
+    A FUNCTION, not a constant, on purpose: a constant read at import forces the refusal into
+    module-import time, where a test that never touches admin-api still pays for it, and where the
+    failure is attributed to whoever imported first rather than to the call that needed the key.
+    """
+    key = (os.environ.get("VEXA_FLOWS_ADMIN_KEY") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "VEXA_FLOWS_ADMIN_KEY is unset — refusing to call admin-api rather than trying a "
+            "placeholder. It mints accounts and full-scope tokens; give it a real value the same "
+            f"way {INTERNAL_SECRET_ENV} gets one, from a mode-600 file the start script exports.")
+    if key in PLACEHOLDER_SECRETS:
+        raise RuntimeError(f"VEXA_FLOWS_ADMIN_KEY is the placeholder {key!r} — refusing to use it. "
+                           "That literal is published in this repository, so it authenticates "
+                           "nobody and everybody.")
+    return key
+
+
+def _admin_headers() -> dict:
+    return {"X-Admin-API-Key": require_admin_key()}
 
 
 def require_internal_secret() -> str:
@@ -185,7 +222,11 @@ def platform_user_id(email: str) -> str:
     nobody asked for is a ghost that later reads as an adopted user. Asking is a different verb
     from creating, and this is the asking half: one GET, no side effect, "" for a stranger.
     """
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/{email}", {"X-Admin-API-Key": ADMIN_KEY})
+    # PERCENT-ENCODED. `email` comes off an ICS `ATTENDEE`/`ORGANIZER` line — attacker-adjacent
+    # text — and was interpolated raw into an internal service path, where a `/`, a `?` or a `#`
+    # re-points the request at a different route on a service that trusts this caller (R-B14).
+    # agent-api's own resolver has always quoted; these two calls did not.
+    code, u = http("GET", f"{ADMIN_API}/admin/users/email/{_q(email, safe='')}", _admin_headers())
     return str(u["id"]) if code == 200 and isinstance(u, dict) and u.get("id") is not None else ""
 
 
@@ -198,9 +239,19 @@ def ensure_platform_user(email: str) -> str:
     existing = platform_user_id(email)
     if existing:
         return existing
-    _code, u = http("POST", f"{ADMIN_API}/admin/users", {"X-Admin-API-Key": ADMIN_KEY},
+    _code, u = http("POST", f"{ADMIN_API}/admin/users", _admin_headers(),
                     {"email": email, "name": email.split("@")[0].title()})
     return str(u["id"])
+
+
+_KEY_CACHE: dict = {}
+
+
+def _key_ttl() -> int:
+    try:
+        return max(int((os.environ.get("VEXA_FLOWS_USER_KEY_TTL_S") or "900").strip()), 60)
+    except (TypeError, ValueError):
+        return 900
 
 
 def user_api_key(uid: str) -> str:
@@ -209,21 +260,42 @@ def user_api_key(uid: str) -> str:
     Returning None here was the whole bug: the caller put it straight into an X-API-Key header,
     urllib died joining it, and the reaction blamed the gateway for a 404 from the admin API. A
     key that cannot be minted is a fact about the account, and it belongs in the reason.
+
+    IT MINTED A PERMANENT FULL-SCOPE TOKEN ON EVERY CALL, and it is called per gateway read —
+    including once per attendee inside `mint_transcript_share`. One 20-person meeting left about
+    thirty `["bot","browser","tx"]` tokens on the organiser's account and nothing ever deleted one
+    (R-B13). Two changes, and the second is the one that bounds the damage:
+
+      * `expires_in` — admin-api has taken it since the mint endpoint existed. A token that a
+        post-meeting run needs for four minutes does not need to outlive the deployment.
+      * a per-uid cache with the same lifetime — so a run that reads the gateway thirty times
+        mints ONE token, and a restart simply mints another. Process memory, never a file: this
+        is a cache of a credential, not state a step may depend on (the file's stateless law).
     """
-    st, tok = http("POST", f"{ADMIN_API}/admin/users/{uid}/tokens",
-                   {"X-Admin-API-Key": ADMIN_KEY}, {"scopes": ["bot", "browser", "tx"]})
+    ttl = _key_ttl()
+    hit = _KEY_CACHE.get(str(uid))
+    if hit and hit[1] > time.time() + 30:
+        return hit[0]
+    st, tok = http("POST", f"{ADMIN_API}/admin/users/{_q(str(uid), safe='')}/tokens",
+                   _admin_headers(),
+                   {"scopes": ["bot", "browser", "tx"], "expires_in": ttl})
     key = tok.get("token") or tok.get("key") if isinstance(tok, dict) else None
     if not key:
         from flows import StepError
         detail = (tok.get("detail") if isinstance(tok, dict) else str(tok))
         raise StepError(f"no api key for platform user {uid} — admin api said {st}: "
                         f"{str(detail)[:120]}")
+    _KEY_CACHE[str(uid)] = (key, time.time() + ttl)
     return key
 
 
 def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
-    q = f"&slug={slug}" if slug else ""
-    code, body = http("GET", f"{AGENT_API}/api/workspace/file?path={path}{q}", {"X-User-Id": uid})
+    # `path` is refs-derived and one of its sources is the invite's own `#group:` token, so it is
+    # attacker-adjacent in exactly the way the address above is: unencoded, a `&` or a `#` in it
+    # forges a second query parameter on an internal service (R-B14).
+    q = f"&slug={_q(slug, safe='')}" if slug else ""
+    code, body = http("GET", f"{AGENT_API}/api/workspace/file?path={_q(path, safe='')}{q}",
+                      {"X-User-Id": uid})
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 
 

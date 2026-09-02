@@ -32,6 +32,7 @@ point (see `flows_integrations/instance_gate.py`):
     they are about to configure."""
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sys
@@ -108,14 +109,27 @@ app = FastAPI(title="flows-api", version="0.1.0",
               description="Submit and manage Vexa workflows as data — no code over the wire.")
 
 
+def _same_key(presented: str, expected: str) -> bool:
+    """Constant-time, like agent-api's equivalent check (R-B16).
+
+    `!=` returns on the first differing byte, so the time it takes is a function of how much of
+    the key the caller already has — which is the whole shape of a byte-at-a-time recovery. This
+    is the key that gates `flows_submit`: decision 4's entire access model is "flows are
+    admin-controlled, org-wide, full stop", and this comparison is that full stop.
+    """
+    if not expected:
+        return False
+    return hmac.compare_digest(str(presented or ""), str(expected))
+
+
 def auth(x_flows_admin_key: str = Header(default="")) -> None:
-    if x_flows_admin_key != API_KEY:
+    if not _same_key(x_flows_admin_key, API_KEY):
         raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
 
 
 def timeline_auth(x_flows_admin_key: str = Header(default="")) -> None:
     """The operator key opens everything, including this. The timeline key opens only this."""
-    if x_flows_admin_key == API_KEY or (TIMELINE_KEY and x_flows_admin_key == TIMELINE_KEY):
+    if _same_key(x_flows_admin_key, API_KEY) or _same_key(x_flows_admin_key, TIMELINE_KEY):
         return
     raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
 

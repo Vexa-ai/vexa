@@ -6,7 +6,13 @@ Founder, 2026-09-02, in two halves that must not be confused with each other:
   not remove your desk from the room — the point of reading a desk is to understand what somebody
   meant, and the quiet ones are exactly the people whose context is not in the transcript.
   SPEAKING ONLY ORDERS. Matched participants first, by how much they spoke; everyone else after
-  them in invite order; cut at `room_read_max` (default 12).
+  them in invite order.
+
+  THE CUT IS AGENT-API'S, and only agent-api's (R-B17). `room_read_max` (default 12) still
+  travels, as `read_max` on the dispatch — but flows no longer applies it to the ADDRESS list.
+  Both sides used to cut, and agent-api's comment says why its own is the right one: *"capping
+  before resolution would silently under-fill the room"*. Twelve addresses of which nine have no
+  desk is a three-desk room.
 
 Flows PROPOSES; agent-api verifies membership itself, resolves each ADDRESS through admin-api and
 mounts only people who already have a subject and a desk. So this side sends addresses, never
@@ -20,7 +26,7 @@ Five properties:
   3. NEVER ZERO. No transcript, no timings, no names, nothing matching: the answer is still the
      first `cap` addresses in invite order. An empty room from a matcher that could not do its job
      is a silent loss of the whole feature and looks exactly like a meeting where nobody spoke.
-  4. THE CAP is `room_read_max`, default 12.
+  4. THE CAP is `room_read_max`, default 12 — enforced by agent-api, on resolved desks, once.
   5. THE DISPATCH carries `room_meeting_id` (the ROW id), `room_participants`, `room_participant_names` and
      `room_read_max`, plus `X-Internal-Secret` — and none of them on any other turn.
 """
@@ -178,14 +184,21 @@ def test_the_cap_applies_to_invite_order_too(monkeypatch):
     assert mt.room_order("7", 97, ROOM, NAMES, cap=2) == ROOM[:2]
 
 
-def test_the_default_cap_is_twelve(monkeypatch):
+def test_the_cap_is_sent_to_agent_api_and_applied_nowhere_else(monkeypatch):
+    """`room_read_max` still defaults to twelve — but flows no longer CUTS with it (R-B17).
+
+    It used to cut the ADDRESS list here and also send the number to agent-api, which caps MOUNTED
+    DESKS instead and says why in its own words: *"capping before resolution would silently
+    under-fill the room"*. Both cuts ran, so twelve addresses of which nine had no desk produced a
+    three-desk room. Flows orders; agent-api resolves and then cuts. The number still travels — as
+    `read_max` on the wire — and the ordered room travels whole."""
     reg = Registry()
     production.build(reg, _StubDB())
     seen = {}
 
-    def note_cap(uid, mid, participants, names, cap=12):
+    def note_cap(uid, mid, participants, names, cap=0):
         seen["cap"] = cap
-        return []
+        return list(participants)
 
     class _Flow:
         def __init__(self, **p):
@@ -196,7 +209,8 @@ def test_the_default_cap_is_twelve(monkeypatch):
 
     monkeypatch.setattr(production.mt, "room_order", note_cap)
     monkeypatch.setattr(production.mt, "meeting_row", lambda uid, m, native=None: {"id": 97})
-    monkeypatch.setattr(production.ag, "dispatch_turn", lambda *a, **k: 0)
+    monkeypatch.setattr(production.ag, "dispatch_turn",
+                        lambda uid, s, p, room=None: seen.update(room=room) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
 
     def run(flow):
@@ -208,13 +222,18 @@ def test_the_default_cap_is_twelve(monkeypatch):
         seen.clear()
         reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
                                              clock_now=1_700_000_000.0, scratch={}, flow=flow))
-        return seen["cap"]
+        return seen
 
-    assert run(None) == 12
-    assert run(_Flow()) == 12
-    assert run(_Flow(room_read_max=4)) == 4
-    assert run(_Flow(room_read_max="nonsense")) == 12   # a typo is the default, never an error
-    assert run(_Flow(room_read_max=0)) == 12
+    # the number: still twelve by default, still overridable, still default on a typo or a zero
+    assert run(None)["room"]["read_max"] == 12
+    assert run(_Flow())["room"]["read_max"] == 12
+    assert run(_Flow(room_read_max=4))["room"]["read_max"] == 4
+    assert run(_Flow(room_read_max="nonsense"))["room"]["read_max"] == 12
+    assert run(_Flow(room_read_max=0))["room"]["read_max"] == 12
+    # and the cut: flows asks room_order for NO cap, and the whole ordered room goes on the wire
+    got = run(_Flow(room_read_max=4))
+    assert not got["cap"], "flows must not pre-cut the address list — agent-api owns the cap"
+    assert got["room"]["read"] == ROOM, "the full ordered room travels; agent-api resolves it"
 
 
 # ── 5 · what actually goes on the wire ───────────────────────────────────────────────────────

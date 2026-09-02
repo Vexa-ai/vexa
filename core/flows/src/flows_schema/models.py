@@ -109,6 +109,47 @@ class MailSeen(Base):
     __table_args__ = (Index("mail_seen_window", "source", "created"),)
 
 
+class MailQuarantine(Base):
+    """A mail the intake REFUSED to act on, and everything it knew.
+
+    The row is the whole point (`flows_integrations/mail_policy`). A refusal that leaves no trace
+    is indistinguishable from a poller that died, and for an invite it would also throw away the
+    meeting facts the mail carried — so `facts` keeps them verbatim, and a known user can have the
+    event re-admitted through `POST /events` once the sender is vouched for, without anyone going
+    back to the mailbox.
+
+    Keyed by the inbound message id, so the poller's lookback re-scan writes each refusal once.
+    `replied_at` is the once-per-address semaphore for the fixed one-line template: a stranger who
+    keeps writing gets rows, never a second reply, so two auto-responders cannot loop."""
+    __tablename__ = "mail_quarantine"
+    ext_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    from_addr: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    facts: Mapped[str | None] = mapped_column(Text)
+    at: Mapped[float] = mapped_column(Double, nullable=False)
+    replied_at: Mapped[float | None] = mapped_column(Double)
+    __table_args__ = (Index("mail_quarantine_sender", "from_addr"),)
+
+
+class MailTurn(Base):
+    """One ADMITTED mail-triggered agent turn — the sliding window both rate limits count over.
+
+    Admitted, not received: a quarantined stranger never enters this table, so a flood cannot
+    exhaust the budget of the people who are allowed to use the mailbox. Keyed by the message id
+    for the same reason as the quarantine row — a re-scan must not inflate a sender's count and
+    lock them out of their own inbox."""
+    __tablename__ = "mail_turn"
+    ext_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    from_addr: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[float] = mapped_column(Double, nullable=False)
+    # ONE index, on the window column. Both counts filter on `at` first and the window is an
+    # hour, so a per-sender count is a scan of a handful of rows inside it; a second index would
+    # buy nothing, and two indexes on one table do not come out of the generator in a stable
+    # order — which the drift gate would then fail at random.
+    __table_args__ = (Index("mail_turn_window", "at"),)
+
+
 class MailOutboxSent(Base):
     __tablename__ = "mail_outbox_sent"
     subject_uid: Mapped[str] = mapped_column(Text, primary_key=True)

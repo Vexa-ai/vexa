@@ -14,7 +14,8 @@ opens the gate is admin-api saying, in so many words, `global_setup == "complete
     GET {VEXA_FLOWS_ADMIN_API_URL}/admin/instance     header X-Admin-API-Key
       -> {"admin_exists": bool, "global_setup": "completed" | "missing", "company": str | null}
 
-The door is the one the flows tier already holds (`flows_steps.common.ADMIN_API` / `ADMIN_KEY`) —
+The door is the one the flows tier already holds (`flows_steps.common.ADMIN_API` /
+`require_admin_key()`) —
 one deployment fact, one variable, never two spellings of one host.
 
 TWO THINGS THIS MODULE IS CAREFUL ABOUT, because both were cheap to get wrong:
@@ -83,7 +84,11 @@ def _read() -> Tuple[str, str]:
 
     url = f"{common.ADMIN_API.rstrip('/')}/admin/instance"
     try:
-        code, body = common.http("GET", url, {"X-Admin-API-Key": common.ADMIN_KEY}, timeout=5)
+        # `require_admin_key` raises when the key is unset or a placeholder, and this `except`
+        # turns that into "missing" — the fail-closed answer. A deployment with no admin identity
+        # is exactly the state this gate exists to park the engine in.
+        code, body = common.http("GET", url, {"X-Admin-API-Key": common.require_admin_key()},
+                                 timeout=5)
     except Exception as e:  # noqa: BLE001 — including StepError, which common.http raises
         # An unreachable admin-api is NOT permission to proceed. This branch is the whole reason
         # the module exists: the failure mode it prevents is a flow mailing a stranger because the

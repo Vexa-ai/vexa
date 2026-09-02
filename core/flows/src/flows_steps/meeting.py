@@ -222,8 +222,9 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     return None
 
 
-def transcript_text(uid: str, meeting_id) -> str:
-    """The meeting's words, read through the OWNING service's endpoint, for verification only.
+def transcript_text(uid: str, meeting_id) -> str | None:
+    """The meeting's words, read through the OWNING service's endpoint, for verification only —
+    or **None** when they could not be read at all.
 
     This is deliberately not a return to the copy that was just removed. Nothing here is written
     into an event, a prompt, or a file — it is read, compared, and dropped. The audit's rule is
@@ -231,13 +232,22 @@ def transcript_text(uid: str, meeting_id) -> str:
     `GET /transcripts/by-id/{id}` on the gateway is exactly that. What was wrong before was
     COPYING the words into a fact and truncating them to fit.
 
-    Never raises: verification that cannot run must not fail a meeting."""
+    THE TWO EMPTIES ARE NOT THE SAME EMPTY, and collapsing them switched the grounding gate off
+    exactly when it was most needed (R-B19). This returned `""` for *the meeting had no speech*
+    and also for *we could not read it* — a 404 on an id that addresses nothing, a token that
+    would not mint, the gateway restarting — and `grounded_in("")` answers True by design. So on
+    precisely the broken-identity meetings the gate exists for, it passed silently and mailed a
+    report nobody could trace. `None` is now the unreadable case and the caller decides; `""`
+    still means a meeting with no captured speech, which must still be writable.
+    """
     try:
         _st, body = http("GET", f"{GATEWAY}/transcripts/by-id/{meeting_id}",
                          {"X-API-Key": user_api_key(str(uid))})
     except StepError:
-        return ""
-    segs = (body or {}).get("segments") or [] if isinstance(body, dict) else []
+        return None
+    if not isinstance(body, dict) or "segments" not in body:
+        return None
+    segs = body.get("segments") or []
     return "\n".join(str(g.get("text") or "") for g in segs)
 
 
@@ -311,8 +321,16 @@ def speaking_seconds(uid: str, meeting_id) -> dict:
 
 
 def room_order(uid: str, meeting_id, participants: list, names: dict,
-               cap: int = 12) -> list:
-    """The invite's addresses, PRIORITISED by speaking time, cut at `cap`.
+               cap: int = 0) -> list:
+    """The invite's addresses, PRIORITISED by speaking time — and by default cut by NOBODY.
+
+    THE CAP MOVED, and the default inverted with it (R-B17). This function used to cut the list
+    to twelve ADDRESSES while agent-api, handed the same number, deliberately capped MOUNTED DESKS
+    instead — *"capping before resolution would silently under-fill the room"*, in its own words.
+    Both cuts ran. Twelve addresses of which nine had no desk produced a three-desk room, and `0`
+    meant "no cut" here, "unset, use twelve" in the flow param, and "mount nobody" nowhere. One
+    enforcement, at the end, by the service that can tell a desk from an address: this function
+    now ORDERS and the cap is agent-api's, unless a caller explicitly asks for one.
 
     Founder, 2026-09-02, in two halves that have to stay separate:
 
