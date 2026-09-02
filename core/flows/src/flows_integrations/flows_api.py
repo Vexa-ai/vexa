@@ -126,8 +126,24 @@ class EventSubmission(BaseModel):
     refs: dict = Field(default_factory=dict)
 
 
+def _actor(x_actor: str) -> str:
+    """WHO admitted this fact — carried on the receipt and onto the reaction.
+
+    The intake authenticates with the lane's operator key, so by default the honest answer is
+    that a service did it: "service-key". A caller acting FOR a person says so with X-Actor, and
+    that value is recorded verbatim rather than trusted for anything — it is provenance, not
+    authorisation. Authorisation already happened at the key.
+
+    The question this exists to answer is the one S1 will ask first: "who invited the mailbox to
+    that meeting?" Before this, a reaction could say what it reacted to and never who caused it,
+    and an admin bulk-seeding an org is exactly the case where that matters.
+    """
+    a = (x_actor or "").strip()
+    return a[:120] if a else "service-key"
+
+
 @app.post("/events", status_code=202, dependencies=[Depends(auth)])
-def admit_event(ev: EventSubmission):
+def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     """THE FACT INTAKE for producers that are not the mailbox.
 
     mailbox.py admits exactly two event types, both read off an IMAP inbox: invite.received and
@@ -146,10 +162,12 @@ def admit_event(ev: EventSubmission):
         raise HTTPException(status_code=400, detail={
             "no_flow_reacts_to": ev.event_type,
             "reactable_event_types": sorted({f.on.name for f in vocab.flows.values()})})
+    actor = _actor(x_actor)
+    refs = {**ev.refs, "admitted_by": actor}
     n = admit(db, vocab, clock, source_event_id=ev.source_event_id,
-              event_type=ev.event_type, subject_refs=ev.refs)
+              event_type=ev.event_type, subject_refs=refs)
     return {"event_type": ev.event_type, "source_event_id": ev.source_event_id,
-            "reactions_created": n, "duplicate": n == 0}
+            "admitted_by": actor, "reactions_created": n, "duplicate": n == 0}
 
 
 class SeedRow(BaseModel):
@@ -170,7 +188,7 @@ class SeedBatch(BaseModel):
 
 
 @app.post("/events/batch", status_code=202, dependencies=[Depends(auth)])
-def admit_batch(batch: SeedBatch, x_actor: str = Header(default="admin")):
+def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
     """PUT THE MAILBOX ON MANY RECURRING MEETINGS AT ONCE — the admin seed, in one call.
 
     The simulator measured the reach bottleneck at 89-100% of every org never being touched, and
@@ -195,12 +213,13 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="admin")):
             "no_flow_reacts_to": batch.event_type,
             "reactable_event_types": sorted({f.on.name for f in vocab.flows.values()})})
     stamp = int(clock.now())
+    actor = _actor(x_actor)
     out, admitted, dupes = [], 0, 0
     for i, m in enumerate(batch.meetings):
         sid = m.ics_uid or f"{batch.prefix}-{stamp}-{i:04d}"
         refs = {"organizer": m.organizer, "url": m.url, "start": float(m.start),
                 "ics_uid": sid, "title": m.title, "group": m.group,
-                "participants": list(m.participants)}
+                "participants": list(m.participants), "admitted_by": actor}
         try:
             n = admit(db, vocab, clock, source_event_id=sid,
                       event_type=batch.event_type, subject_refs=refs)
@@ -211,7 +230,7 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="admin")):
         except Exception as e:  # noqa: BLE001 — one bad row must never lose the other nineteen
             out.append({"source_event_id": sid, "title": m.title,
                         "error": f"{type(e).__name__}: {e}"[:200]})
-    log = {"actor": x_actor, "submitted": len(batch.meetings),
+    log = {"admitted_by": actor, "submitted": len(batch.meetings),
            "admitted": admitted, "duplicates": dupes,
            "failed": sum(1 for r in out if "error" in r)}
     return {**log, "meetings": out}
