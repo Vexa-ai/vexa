@@ -31,6 +31,8 @@ import re
 import time
 import urllib.error
 import urllib.request
+
+from shared.git_redaction import redact
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -87,7 +89,14 @@ def report(record: dict, *, subject: str = "", timeout: float = TIMEOUT_S) -> di
     block around somebody's actual work. The failure is logged and the record is appended to the
     fallback file, so it is recoverable from the container's own log even when agent-api is the
     thing that is broken — which, given what this channel reports on, is a case that will happen."""
-    body = dict(record)
+    # SCRUBBED BEFORE IT IS DURABLE (#1416's rule, applied to this writer too). `shared/friction.py`
+    # redacts every free-text field on the way in — `_clip` — but that is the SERVER's copy of the
+    # path. This function writes two other places: the fallback log below, which is a file in the
+    # container that outlives the turn, and the request body on the wire. A record reaches here
+    # carrying whatever the turn was about, and the F70 detector deliberately puts the person's
+    # prompt and the agent's reply into one — so a pasted token would land in both. Shape-based, so
+    # it does not depend on anyone having recognised the value as a secret first.
+    body = {k: (redact(v) if isinstance(v, str) else v) for k, v in dict(record).items()}
     body.setdefault("reporter", "agent")
     if subject and not body.get("subject"):
         body["subject"] = str(subject)

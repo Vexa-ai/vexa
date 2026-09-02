@@ -74,3 +74,30 @@ def test_a_failed_send_opens_nothing():
 def test_a_result_that_is_not_json_is_not_a_crash():
     for junk in (None, [], [{"type": "text", "text": "the bot is in"}]):
         assert _bot_artifact(junk) is None
+
+
+def test_the_worker_friction_path_scrubs_before_it_is_durable(tmp_path, monkeypatch):
+    """#1416 redacts on the way INTO the server's copy. `worker/friction.report` writes two other
+    places — a fallback log that outlives the turn, and the request body — and neither was scrubbed.
+
+    The F70 detector is what makes this load-bearing rather than theoretical: it deliberately puts
+    the person's prompt and the agent's reply into a record, so the turn where somebody pastes a
+    token and the agent then refuses a capability writes that token to disk."""
+    import json
+    from worker import friction
+
+    log = tmp_path / "friction.jsonl"
+    monkeypatch.setattr(friction, "FALLBACK_LOG", log)
+    monkeypatch.setattr(friction, "_api", lambda: "http://127.0.0.1:1")  # unreachable: log-only path
+
+    secret = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    friction.report({"kind": "capability-hallucination", "tool": "bot_send",
+                     "prompt": f"attach the repo with {secret} please",
+                     "reply": "I don't have a bot-dispatch tool in this session"},
+                    subject="126")
+
+    written = log.read_text()
+    assert secret not in written, "a pasted token reached the durable fallback log"
+    rec = json.loads(written.splitlines()[-1])
+    assert rec["tool"] == "bot_send"          # non-secret fields survive intact
+    assert "bot-dispatch tool" in rec["reply"]
