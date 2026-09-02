@@ -13,6 +13,7 @@ reaction rows, the model proof, and ``replay.json`` -- the input ``score.py`` re
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import os
 import pathlib
@@ -302,20 +303,27 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
     # sending — a real one always has one, so sending it is the faithful thing as well as the
     # working one. The native id stays shared, as it is in life, so the fix is actually under test.
     native = m["native_meeting_id"]
-    occurred = int(time.mktime(time.strptime(date, "%Y-%m-%d")))
+    # UTC midnight of the occurrence, not local midnight. time.mktime reads the SERVER's zone, so
+    # on a UTC+3 host "2026-03-02" became 2026-03-01T21:00Z and every note was filed a day early —
+    # which, for a recurring series, is a collision with the previous occurrence.
+    occurred = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
     if unique_native:
         # --unique-native: for an engine that does NOT yet carry the note-date fix. It makes the
         # sweep complete, and it makes the fix untestable — so it is a flag the operator sets on
         # purpose and the run records, never a default that quietly hides which behaviour was live.
         native = f"{native}-{date}"
-    seed = rig.call("meeting_seed", native_id=native, title=m["title"], video_id=vid)
+    seed = rig.call("meeting_seed", native_id=native, title=m["title"], video_id=vid,
+                    occurred_at=str(occurred))
     if not isinstance(seed, dict) or "meeting_id" not in seed:
         rec["error"] = f"meeting_seed: {str(seed)[:300]}"
         return rec
     mid = seed["meeting_id"]
-    transcript = seed.get("transcript", "")
+    # No transcript body comes back any more, and none is passed on. The agent reads the words
+    # itself over the MCP; `delivered` is kept as an explicit 0 so a run before and a run after
+    # this change are still readable side by side.
     rec.update(meeting_id=mid, segments_loaded=seed.get("segments_loaded"),
-               transcript_chars_delivered=len(transcript))
+               scheduled_at=seed.get("scheduled_at"),
+               transcript_chars_delivered=len(seed.get("transcript") or ""))
 
     mail_mark = time.time()
     up_id = f"dna-r{rev}-prep-{date}"
@@ -331,7 +339,7 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
     rec["emit_completed"] = rig.call(
         "fact_emit", event_type="meeting.completed", source_event_id=done_id,
         subject_refs={"organizer": org, "title": m["title"], "uid": uid, "meeting_id": mid,
-                      "native": native, "start": occurred, "transcript": transcript})
+                      "native": native, "start": occurred})
     hit = wait_note(uid, shas_before, 1200)
     note_path = None
     if hit:
@@ -406,6 +414,19 @@ def main() -> int:
               f"minutes_mail={bool(rec.get('minutes_mail'))} latency={rec.get('latency_s')}",
               flush=True)
     (run / "haiku-proof.json").write_text(json.dumps(haiku_proof(a.uid), indent=1))
+    # Stamp the stack AGAIN and say plainly if it moved. A sweep runs for the best part of an
+    # hour on a hot deployment; revolution 3 had its engine swapped underneath it half way
+    # through, so its stamp described a stack that served only the first half. A run that cannot
+    # say which stack produced it is not a measurement, and a single stamp cannot say.
+    out["stack_end"] = stack_stamp()
+    drift = {k: [out["stack"].get(k), out["stack_end"].get(k)]
+             for k in out["stack_end"] if out["stack"].get(k) != out["stack_end"].get(k)}
+    out["stack_drift"] = drift
+    (run / "replay.json").write_text(json.dumps(out, indent=1, default=str))
+    if drift:
+        print("[replay] WARNING — the stack MOVED mid-sweep; this run mixes two stacks:", flush=True)
+        for k, (a_, b_) in drift.items():
+            print(f"          {k}: {a_} -> {b_}", flush=True)
     print("wrote", run / "replay.json")
     return 0
 

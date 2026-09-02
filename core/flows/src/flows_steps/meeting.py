@@ -48,10 +48,14 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     """The meeting row's OWN start epoch, or None.
 
     Used when the event's refs carry no `start` — a meeting created by the terminal or seeded
-    from a fixture rather than admitted from an invite. Falls back to `created_at`, because a
-    row with no start_time still knows when it came into existence, and that is far closer to
-    the meeting's date than the day a worker happened to process it. Never raises: a date we
-    cannot resolve degrades to today, which is the behaviour this replaces.
+    from a fixture rather than admitted from an invite.
+
+    Order: `start_time` (when it actually ran) → `scheduled_at` (when it was meant to) →
+    `created_at` (when the row appeared). `scheduled_at` was the missing rung and it is the one a
+    seeded meeting has: `meeting_seed` sets it from the fixture's own occurrence while
+    `start_time` stays NULL, so without this the stamp fell through to `created_at` — today — and
+    several occurrences of one recurring series collapsed into a single note file. Never raises:
+    a date we cannot resolve degrades to today, which is the behaviour this replaces.
     """
     import datetime
     try:
@@ -70,7 +74,7 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
             row = m
     if not row:
         return None
-    for key in ("start_time", "created_at"):
+    for key in ("start_time", "scheduled_at", "created_at"):
         v = row.get(key)
         if not v:
             continue

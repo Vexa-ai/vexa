@@ -18,6 +18,8 @@ import pathlib
 import re
 import subprocess
 
+OLD_EVENT_CAP = 8000   # what meeting.completed used to carry; now the comparison boundary
+
 MECHANICAL = ["note_shape", "transcript_depth", "prepare_mail", "minutes_mail",
               "opening_prep", "opening_minutes", "compounding"]
 
@@ -93,7 +95,13 @@ def d_transcript_depth(rec: dict, fx: dict) -> tuple[float, dict]:
     if not note.strip():
         return 0.0, {"why": "nothing to check"}
     segs = fx["segments"]
-    cap = rec.get("transcript_chars_delivered") or 0
+    # THE BOUNDARY IS FIXED AT 8,000 CHARACTERS — the size of the copy the event used to carry —
+    # and NOT at whatever this run delivered. That keeps one question across the change: "did the
+    # note use anything past the first 8,000 characters?" Before the fix it could not, because it
+    # was never shown them; after, it can. Moving the boundary to `delivered` would make the check
+    # unfailable the moment delivery became complete, and a dimension that cannot fail is
+    # decoration — it would have reported a perfect score for a fix that changed nothing.
+    cap = OLD_EVENT_CAP
     seen, cut = 0, len(segs)
     for i, sg in enumerate(segs):
         seen += len(sg.get("speaker", "")) + len(sg.get("text", "")) + 2
@@ -105,7 +113,9 @@ def d_transcript_depth(rec: dict, fx: dict) -> tuple[float, dict]:
         return "\n".join(f"{x.get('speaker','?')}: {x.get('text','')}" for x in segs[a:b])
 
     head, tail = render(0, cut), render(cut, len(segs))
-    ev = {"delivered_chars": cap, "full_chars": rec.get("transcript_chars_full"),
+    ev = {"boundary_chars": cap,
+          "delivered_in_event": rec.get("transcript_chars_delivered"),
+          "full_chars": rec.get("transcript_chars_full"),
           "segments_delivered": cut, "segments_total": len(segs),
           "delivered_frac": round(cut / max(1, len(segs)), 3)}
     if cut >= len(segs):
@@ -138,13 +148,28 @@ def d_minutes_mail(rec: dict) -> tuple[float, dict]:
         return 0.0, {"why": "no minutes mail"}
     body = mail["body"]
     links = re.findall(r"https?://\S+", body)
-    verbatim = False
+    # CONTENT PRESENT AND READABLE, not verbatim. #1390 made the mail carry a rendered version of
+    # the note on purpose — frontmatter stripped, wikilinks flattened, links made absolute — so a
+    # verbatim check was measuring the old intent and scoring the new one as a regression. What
+    # matters is that the note's SUBSTANCE arrived and that it reads as prose to someone who will
+    # never open the workspace.
+    readable = present = False
     if note:
-        core = [l.strip() for l in note.splitlines() if len(l.strip()) > 25][:6]
-        verbatim = bool(core) and frac([c in body for c in core]) >= 0.8
-    hits = [verbatim, len(links) == 1,
+        body_l = body.lower()
+        fm = re.match(r"^---\n[\s\S]*?\n---\n", note)
+        core = [l.strip() for l in (note[fm.end():] if fm else note).splitlines()
+                if len(l.strip()) > 25]
+        # strip the note's own markup the way the mail rendering does, then look for the words
+        def flat(x):
+            x = re.sub(r"\[\[([^\]]+)\]\]", r"\1", x)
+            return re.sub(r"[#*`>]", "", x).strip().lower()
+        core = [flat(c) for c in core][:8]
+        present = bool(core) and frac([c[:60] in body_l for c in core]) >= 0.5
+        readable = ("---" not in body.split("\n")[0]) and "[[" not in body
+    hits = [present, readable, len(links) == 1,
             any("ask=minutes-review" in l and "meeting=" in l for l in links)]
-    return frac(hits), {"note_verbatim": verbatim, "links": len(links)}
+    return frac(hits), {"note_content_present": present, "renders_readable": readable,
+                        "links": len(links)}
 
 
 def _opening(rec: dict, key: str, word_cap: int | None) -> tuple[float, dict]:
