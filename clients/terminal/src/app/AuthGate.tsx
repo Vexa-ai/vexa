@@ -72,6 +72,8 @@
  *  The probe is the authority precisely because a 403 is usually resource-scoped and means nothing
  *  about the session; suspicion never signs anybody out on its own. */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { setCompanyLayerHint } from "../minutes/chats";
+import { COMPANY_LAYER_EVENT } from "../canvas/actions";
 import { signIn } from "next-auth/react";
 import { onSessionSuspect } from "./session";
 import { SESSION_ENDED_HEADLINE } from "../surfaces/apiClient";
@@ -204,7 +206,23 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       .then((d: { admin_exists?: boolean; global_setup?: string }) => {
         if (!active) return;
         setAdminExists(d.admin_exists !== false);
-        setGlobalSetup(d.global_setup === "missing" ? "missing" : "completed");
+        const layer = d.global_setup === "missing" ? "missing" : "completed";
+        setGlobalSetup(layer);
+        // THE RAIL'S CACHE OF THIS SAME FIELD, written HERE because this probe is the one that
+        // always runs. `loadChats` is synchronous and cannot await anything, so the rail reads a
+        // cached answer to decide whether the structural rows exist yet.
+        //
+        // ⚠ It used to be written only by the setup card's poll — and that card stops rendering the
+        // moment setup completes, so the cache froze at whatever it last saw. An admin who finished
+        // the company layer and reloaded could keep a stale "missing" forever, and their Personal
+        // row would silently never come back. A cache whose only writer is a component that
+        // disappears is a cache that goes stale by design.
+        //
+        // Both writers copy the SERVER's field verbatim and neither computes it, so this is two
+        // read points of one source of truth, not two opinions about it. The card keeps its write
+        // because it is the one watching for the flip DURING a session, when this probe ran long ago.
+        setCompanyLayerHint(layer);
+        window.dispatchEvent(new CustomEvent(COMPANY_LAYER_EVENT));
         setInstanceProbed(true);
       })
       // A probe that could not run has still SETTLED — it settled on the fail-safe values already in
