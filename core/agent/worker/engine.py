@@ -378,6 +378,41 @@ def _extra_mount_paths(work: Path) -> list[Path]:
 # (`mcp__vexa`), so the two must agree — hence one constant, not two string literals.
 VEXA_MCP_SERVER = "vexa"
 
+# THE ALLOW-SET IS NAMED, TOOL BY TOOL, AND THAT IS THE POINT.
+#
+# The server prefix alone (`mcp__vexa`) permits every tool on it, so this list adds no access — it
+# changes how the tools ARRIVE. With only the prefix, the harness may hand them to the model as
+# DEFERRED tools: discoverable by a tool-search step, callable only after the model loads one.
+# Measured on Haiku over a ten-meeting replay, that round trip fails often enough to matter — about
+# one dispatch in four ends with the model saying, in its own words, "the tool appears in the
+# deferred MCP tools list, but I don't have a direct function invocation", writing nothing, and
+# leaving the step to time out fifteen minutes later. Naming the tools puts them in front of the
+# model directly, with no self-load to get wrong.
+#
+# The list is the MEASURED 21-tool union from deploy/dogfood/rig/TOOL-USAGE.md — every tool real
+# delegated workers called (14) or reached for by name without calling (7) across 45 sessions. It
+# is deliberately not all 53: the other 32 are the person-agent's own surface (registration,
+# identity, deeplinks, operator bot control) and a worker has no business being offered them.
+#
+# `workspace_write` is here despite measuring zero calls, and the same document says why: workers
+# write the workspace 63 times a turn through the volume mount, so the write side looks unused only
+# because it is being reached another way. A worker without the mount needs it on day one.
+#
+# A tool the server does not serve is inert in an allow-set, so this list ageing behind the server
+# costs nothing; a tool the server gains and this list lacks is still permitted by the prefix on
+# the first line. It degrades in both directions.
+VEXA_MCP_TOOLS = (
+    # called by real workers, most-used first
+    "whats_waiting", "meeting_transcript", "meetings_list", "workspace_tree", "workspaces",
+    "bot_send", "bot_stop", "meeting_info", "company_context", "workspace_new", "workspace_read",
+    "report_friction", "flows_list", "propose",
+    # reached for by name but never successfully called — the same surface, one step later
+    "flow_lifecycle", "flows_submit", "start_onboarding", "validate", "vexa_overview",
+    "workspace_purpose", "mark_scaffolded",
+    # the write side, unused only because the volume mount hides it
+    "workspace_write",
+)
+
 
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
@@ -411,7 +446,8 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
         path.chmod(0o600)
     except OSError:  # a store backend that does not carry modes — the attachment still stands
         pass
-    return str(path), [f"mcp__{VEXA_MCP_SERVER}"]
+    return str(path), [f"mcp__{VEXA_MCP_SERVER}",
+                       *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
 
 
 def run_turn_over_workspace(

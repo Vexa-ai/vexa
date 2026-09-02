@@ -51,18 +51,39 @@ def history(uid: str, session: str) -> list:
     return turns if isinstance(turns, list) else []
 
 
+def worker_alive(uid: str, session: str) -> bool:
+    """Is this session's worker container still up? The runtime names it after the unit."""
+    names = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                           capture_output=True, text=True).stdout.split()
+    return f"vexa-worker-{uid}-chat-{session}" in names
+
+
 def chat_turn(uid: str, session: str, prompt: str, budget_s: int = 420) -> str | None:
     """Dispatch one turn and wait for the agent's reply. ``/api/chat`` is an SSE stream that stays
     open for the whole turn, so a client timeout while it runs is SUCCESS -- the same lesson
-    ``flows_steps/agent.dispatch_turn`` carries. Completion is read from the session history."""
+    ``flows_steps/agent.dispatch_turn`` carries. Completion is read from the session history.
+
+    IT ALSO STOPS WHEN THE TURN IS OVER, which is not the same as waiting for the budget. A turn
+    that ends having written nothing looked identical here to a turn still thinking, so a fixture
+    whose agent gave up in thirty seconds still cost seven minutes -- twice, once per opening.
+    Combined with the same mistake in ``process_meeting``, one stalled fixture burned 34 minutes.
+    The worker container is the signal: the runtime reaps it when the unit goes idle, so once it
+    has been seen and is then gone with no new turn in the history, waiting longer cannot help."""
     base = len(history(uid, session))
     http("POST", f"{AGENT_API}/api/chat", {"X-User-Id": uid},
          {"prompt": prompt, "session": session}, timeout=3)
-    deadline = time.time() + budget_s
+    deadline, seen_worker = time.time() + budget_s, False
     while time.time() < deadline:
         h = history(uid, session)
         if len(h) > base and h[-1].get("role") == "agent" and h[-1].get("text"):
             return h[-1]["text"].strip()
+        alive = worker_alive(uid, session)
+        if alive:
+            seen_worker = True
+        elif seen_worker:
+            print(f"  [{session}] the worker exited with no reply — not waiting out the budget",
+                  flush=True)
+            return None
         time.sleep(6)
     return None
 

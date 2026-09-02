@@ -336,8 +336,36 @@ def build(reg: Registry, db) -> None:
                     "meeting, twice. Refusing to email minutes that cannot be traced to it.",
                     retryable=False)
             return Done({"sha": sha, "note_path": path, "summary": reply[:6000]})
+        if reply is not None:
+            # THE TURN ENDED AND PRODUCED NO NOTE. Silence and finishing-empty are different
+            # facts, and this step used to treat them the same: wait, and after fifteen minutes
+            # say "agent produced no note in 15min" — a sentence that names the symptom and
+            # discards the cause. The agent had, in one measured case, already explained itself in
+            # its first thirty seconds ("the tool appears in the deferred MCP tools list, but I
+            # don't have a direct function invocation"), and the step spent the next fifteen
+            # minutes not reading it. A stalled fixture cost 34 minutes of a replay that way.
+            #
+            # A collected reply means the turn is OVER. Ask once more, naming what happened, and
+            # then fail with the agent's OWN LAST WORDS in the reason, because that is the only
+            # part of this that tells anyone what to fix.
+            if not ctx.scratch.get("re_asked_note"):
+                ctx.scratch["re_asked_note"] = True
+                ctx.scratch["shas"] = ag.commit_shas(uid)
+                ctx.scratch["baseline"] = ag.dispatch_turn(
+                    uid, f"meet-{ctx.refs['meeting_id']}",
+                    "Your last turn ended without writing the meeting note. Do it now: call "
+                    f"mcp__vexa__meeting_transcript with meeting_id={ctx.refs['meeting_id']} and "
+                    "tail=0, read every segment, then write the note. If that tool will not run "
+                    "for you, reply with the exact error and write nothing — do not summarise "
+                    "from the title.")
+                return Wait(seconds=12)
+            raise StepError(
+                "the agent's turn ended twice with no note. Its last words: "
+                + " ".join(reply.split())[:280], retryable=False)
+        # Still running: the long wait stays, because a turn that is genuinely working is allowed
+        # to take its time. It just no longer covers a turn that has already given up.
         if ctx.clock_now - ctx.scratch.get("t0", ctx.scratch.setdefault("t0", ctx.clock_now)) > 900:
-            raise StepError("agent produced no note in 15min", retryable=False)
+            raise StepError("the agent turn never finished (no reply after 15min)", retryable=False)
         return Wait(seconds=10)
 
     @reg.step
