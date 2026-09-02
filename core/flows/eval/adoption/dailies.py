@@ -65,6 +65,39 @@ SPEAKER NAME | what they say
 No preamble, no headings, no stage directions, no blank lines."""
 
 
+def pace(lines: list, rng) -> list:
+    """Turn speaker/text lines into timed segments that occupy a REAL dailies duration.
+
+    Timing off speech length alone rendered a 100-line review as 7.8 minutes. Dailies are mostly
+    silence: a shot plays (often two or three times), everyone watches, then somebody speaks.
+    A duration-derived number taken off the un-paced version is wrong in the same way a
+    transcript with no gaps is wrong, so this is not cosmetic.
+
+    Targets the 20-40 minute band the DNA check-in describes ("their review runs 30 min"), by
+    putting a playback pause between shot discussions rather than spreading time evenly.
+    """
+    out, t = [], float(rng.randint(20, 60))
+    for i, ln in enumerate(lines):
+        text = ln["text"]
+        dur = max(1.4, min(14.0, len(text) / 15.0))
+        out.append({"t": round(t, 2), "end": round(t + dur, 2),
+                    "speaker": ln["speaker"], "text": text})
+        t += dur + rng.uniform(0.4, 3.0)
+        if i and i % rng.randint(4, 7) == 0:
+            t += rng.uniform(15.0, 45.0)        # the shot plays again, twice, three times
+    return out
+
+
+def retime(path, seed: int = 0) -> float:
+    """Re-pace a fixture already on disk — the generation is the expensive part, the clock is not."""
+    import random as _r
+    d = json.loads(Path(path).read_text())
+    d["segments"] = pace([{"speaker": s["speaker"], "text": s["text"]} for s in d["segments"]],
+                         _r.Random(str(path) + str(seed)))
+    Path(path).write_text(json.dumps(d, indent=1))
+    return round(d["segments"][-1]["end"] / 60.0, 1)
+
+
 def _roster(org, show: str, dept: str, rng) -> list:
     team = [p for p in org.people if p.dept == show and p.team.endswith("/ " + dept)]
     office = [p for p in org.people if p.dept == show and "Production Office" in p.team]
@@ -96,7 +129,7 @@ def generate(org, show: str, dept: str, date: str, seed: int = 0) -> dict | None
         raw = judge._ask(prompt, timeout=300)
         if raw and raw.count("|") >= 25:
             break                                        # a malformed first answer is common
-    segs, t = [], float(rng.randint(20, 60))
+    segs = []
     for line in (raw or "").splitlines():
         line = line.strip().lstrip("-•* ")
         if "|" not in line:
@@ -110,17 +143,10 @@ def generate(org, show: str, dept: str, date: str, seed: int = 0) -> dict | None
             if not match:
                 continue
             who = match[0]
-        dur = max(1.4, min(14.0, len(text) / 15.0))
-        segs.append({"t": round(t, 2), "end": round(t + dur, 2), "speaker": who, "text": text})
-        # Dailies are mostly SILENCE: the shot plays, everyone watches, then somebody speaks.
-        # Pacing purely off speech length produced an 8-minute "30-minute review", which would
-        # have made every duration-derived number wrong. A playback pause every few exchanges
-        # is what puts a 100-line session in the 20-40 minute band it actually occupies.
-        t += dur + rng.uniform(0.4, 3.0)
-        if len(segs) % rng.randint(5, 9) == 0:
-            t += rng.uniform(8.0, 26.0)                 # the shot plays again
+        segs.append({"speaker": who, "text": text})
     if len(segs) < 25:
         return None
+    segs = pace(segs, rng)
     return {
         "meeting": {
             "title": f"{show} {dept} dailies {date}",
