@@ -26,7 +26,7 @@ link that a template could write is a link anyone who can edit a file can point 
 | file | who reads it | when |
 |---|---|---|
 | `prepare.md` | the ORGANISER, and people who are already users | before the meeting |
-| `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the agent's own per-person section |
+| `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the shared report |
 | `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
 
 **`prepare.md` never goes to a stranger and never claims a workspace was started.** Founder,
@@ -34,6 +34,18 @@ link that a template could write is a link anyone who can edit a file can point 
 Nothing is built for a person who has not clicked, and a mail before the meeting has nothing yet to
 justify itself with. The stranger's first contact is `attendee-head.md`, after a meeting they were
 actually in, which is why that one carries the whole introduction and the other two do not.
+
+## One mail, the same for everyone
+
+Founder simplification, 2026-09-02: the post-meeting mail is **the head, the shared report of the
+meeting, and one button** — identical for every recipient. No template carries a per-person section
+and no template should grow one.
+
+Personalisation happens **after the click**, in the chat, where the agent can read the person's own
+workspace and answer for them. That is the trade: a mail that is the same for fifty people is a mail
+that cannot be wrong about any of them, and the button is where "what does this leave on MY plate"
+gets answered by something that actually knows. It is also why the head has to earn the click on its
+own — it is the whole mail besides the report.
 
 ## Substitutions
 
