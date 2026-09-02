@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
@@ -408,32 +409,47 @@ _ENTITY_FILE_SHAPE = (
 # named. Told to record "what this turn learned about a person, company, meeting, project or
 # decision", the phase answered `nothing new` on a turn that had just written a note naming six
 # people and three organisations, and explained itself: *"further pages for individual TSC members
-# or companies can be added as the project develops and additional facts about them become
-# relevant beyond their participation in this kickoff."* Every clause of that is a reasonable
-# editorial judgement, and every clause is the reason the graph stays empty.
+# or companies can be added as the project develops and additional facts about them become relevant
+# beyond their participation in this kickoff."* Every clause of that is a reasonable editorial
+# judgement, and every clause is the reason the graph stays empty.
 #
-# So the phase no longer asks whether a name deserves a page. It asks for the LIST first — a
-# mechanical step with no judgement in it — and then makes the list the work. `nothing new` is
-# narrowed to the one case it is true in: no name was touched at all. And the note is explicitly
-# NOT a substitute for a page, because "it is already in the note" was the reasoning that ran.
-WRITEBACK_PROMPT = (
-    MACHINERY_MARK + " Write-back phase — not a message from the person, and nothing you say here "
-    "reaches them. Do not address them, do not summarise the turn, do not ask them anything.\n\n"
-    "FIRST, list every proper name this turn touched: every person who spoke or was named, every "
-    "company or organisation, every meeting, project or decision. Just the names.\n\n"
-    "THEN give each one a page, with `entity_upsert(kind, name, facts, source)` — one call per "
-    "name, in order. A name with no page gets one NOW; a page that exists gets this turn's facts "
-    "appended; a fact already on the page writes nothing, so call it rather than wondering.\n\n"
-    "Do not judge whether a name is important enough, whether it will matter later, or whether it "
-    "is already covered somewhere else. A meeting note is NOT a substitute for a page — it records "
-    "an occasion, a page records a subject, and the whole point is that the next turn can find the "
-    "subject. If a name was touched and you know one true thing about it, it gets a page. One "
-    "sentence of fact is enough to start one.\n\n"
-    + _ENTITY_FILE_SHAPE +
-    "Every fact carries its source, and only what was said in this conversation or read from a "
-    "file, a tool result or a transcript counts. Anything you would have to guess goes to "
-    "`kg/MISSING.md` as an open question, never onto a page.\n\n"
-    "Reply exactly `nothing new` ONLY if this turn touched no name at all.")
+# ⚠ THE SECOND VERSION WAS RIGHT AND SLOW. Asking the model to find the names cost 118-136s on
+# Haiku against a 31-47s answer, so the worker stayed busy three times as long and every message the
+# person sent meanwhile queued behind it. Finding names is a regex over text the turn already
+# produced; only the FACTS need a model. So the list arrives already made (`missing_names`), the
+# phase is told to take it in order, and a turn whose names all have pages never reaches a model.
+def writeback_prompt(candidates: list[str]) -> str:
+    """The phase's one model call, with the work already identified.
+
+    No "list what you learned" step survives here: that step was both the slow half and the half
+    that hesitated. The names are given, in order, and the only question left is what this turn can
+    honestly say about each and where it read it."""
+    named = "\n".join(f"- {c}" for c in candidates)
+    return (
+        MACHINERY_MARK + " Write-back phase — not a message from the person, and nothing you say "
+        "here reaches them. Do not address them, do not summarise the turn, do not ask anything.\n\n"
+        "These names came up in the turn you just finished and NONE of them has a page yet:\n\n"
+        + named + "\n\n"
+        "Give each one a page, in the order listed, with `entity_upsert(kind, name, facts, source)` "
+        "— one call per name, starting immediately, no preamble and no re-reading. `kind` is one of "
+        "person, company, meeting, project, decision. `facts` are what THIS turn actually said or "
+        "read about them — one short sentence each, and one sentence is enough to start a page. "
+        "`source` is where you read it: the meeting, the mail, the file, the person's message.\n\n"
+        "Do not judge whether a name is important enough or whether it is covered somewhere else. A "
+        "meeting note is NOT a substitute for a page — it records an occasion, a page records a "
+        "subject, and the point is that the next turn can find the subject.\n\n"
+        + _ENTITY_FILE_SHAPE +
+        "A name you cannot say one sourced thing about does NOT get a page: append it to "
+        "`kg/MISSING.md` as one line — the name and what you would need to know — in a single "
+        "write at the end. Never invent a fact to fill a page.\n\n"
+        "Work only from this turn. You have a hard budget: no exploration, no reading files you "
+        "have not already read.")
+
+
+# Kept as a module constant because the tests and the docs name it, and because a phase with an
+# empty candidate list is unreachable by construction — `should_write_back` refuses it first.
+WRITEBACK_PROMPT = writeback_prompt(["<the names the pre-pass found>"])
+
 
 # Read/Glob/Grep to check what a page already says, Write/Edit for `kg/MISSING.md`, and the entity
 # verb itself. Deliberately NOT the research tools: this phase records what the turn already learned,
@@ -454,17 +470,96 @@ def writeback_min_tokens() -> int:
         return 40
 
 
-def should_write_back(prompt: str, tool_calls: int, *, min_tokens: int | None = None) -> bool:
-    """Skip only a turn that is cheap on BOTH counts: it called no tools AND the person said very
-    little. Either one alone is a turn that can have learned something — a long message carries
-    facts with no tool call, and a short one ("who is Olga?") can pull a whole dossier through a
-    tool. The floor is on the PERSON's words, never on the agent's reply."""
+def writeback_budget() -> "tuple[int, float]":
+    """``(max tool calls, max seconds)`` for the phase — a HARD budget, not a hope.
+
+    The tool cap is what keeps the phase inside the answer's own order of magnitude: each
+    `entity_upsert` is a model round trip, and the third digit of pages a turn writes is worth less
+    than the person's next message not queueing behind it. Eight is six names plus the MISSING write
+    plus slack — and the measure's target is three pages per turn, so a capped phase still scores
+    full marks while the raw page count drops. That trade is deliberate and it is reported."""
+    def _int(name, default):
+        try:
+            return int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+    return _int("VEXA_WRITEBACK_MAX_TOOL_CALLS", 8), float(_int("VEXA_WRITEBACK_MAX_SECONDS", 30))
+
+
+def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
+    """THE PRE-PASS — the phase's cheap half, in code, before any model is asked anything.
+
+    Names out of what the turn already produced (the person's message, the agent's answer, the tool
+    results), minus everything the mounted desks already have a page for. An empty list means the
+    phase has nothing to do, and that is by far the commonest turn: it now costs a regex instead of
+    a two-minute model call."""
+    from shared.entities import missing_names
+
+    roots = [Path(str(m.get("path") or "")) for m in (mounts if mounts is not None else active_mounts())
+             if m.get("write", True) and m.get("path")]
+    if not roots:
+        return []
+    return missing_names(roots, [t for t in texts if t])
+
+
+def should_write_back(prompt: str, tool_calls: int, *, min_tokens: int | None = None,
+                      upserts: int = 0, candidates: "list[str] | None" = None) -> bool:
+    """Four gates, cheapest first, and three of them cost no model call.
+
+    1. the switch;
+    2. **the turn already did it** — a turn that called `entity_upsert` itself (the note step does)
+       has already paid for the write-back, and a phase after it is a second model call to discover
+       that. This is the gate that removes the phase from exactly the turns that need it least;
+    3. cheap on BOTH counts — no tool call AND the person said very little. Either signal alone is a
+       turn that can have learned something: a long message carries facts with no tool call, and a
+       short one ("who is Olga?") can pull a whole dossier through one. The floor is on the PERSON's
+       words, never on the agent's reply;
+    4. **nothing to write** — `candidates` empty. Passing `None` skips this gate (the caller has not
+       run the pre-pass), which is only the tests and the legacy call shape.
+    """
     if not writeback_enabled():
         return False
-    if tool_calls > 0:
-        return True
+    if upserts > 0:
+        return False
     floor = writeback_min_tokens() if min_tokens is None else min_tokens
-    return len((prompt or "").split()) >= floor
+    if tool_calls <= 0 and len((prompt or "").split()) < floor:
+        return False
+    if candidates is not None and not candidates:
+        return False
+    return True
+
+
+def bounded(events: Iterator[dict], *, max_tool_calls: int, max_seconds: float) -> Iterator[dict]:
+    """Stop the phase at its budget and CLOSE the generator, which kills the harness subprocess.
+
+    A budget the phase is merely told about is a budget it exceeds — the same lesson as the
+    grounding gate, one layer down. Closing the generator is what makes it real: `run_harness_turn`
+    sees `GeneratorExit` at its yield, and `llm.claude_code._exec_subprocess` now terminates the CLI
+    rather than waiting on it forever.
+
+    The cost of stopping early is the phase's own post-turn commit, which never runs. It is a small
+    cost by construction: `entity_upsert` commits each page through the endpoint as it goes, and a
+    file written by the fallback path is swept up by the next turn's commit."""
+    t0 = time.monotonic()
+    calls = 0
+    gen = iter(events)
+    try:
+        for ev in gen:
+            yield ev
+            if ev.get("type") == "tool-call":
+                calls += 1
+            if calls >= max_tool_calls:
+                yield {"type": "writeback-truncated", "reason": "tool-call budget",
+                       "tool_calls": calls}
+                return
+            if time.monotonic() - t0 >= max_seconds:
+                yield {"type": "writeback-truncated", "reason": "time budget",
+                       "seconds": round(time.monotonic() - t0, 1), "tool_calls": calls}
+                return
+    finally:
+        close = getattr(gen, "close", None)
+        if close is not None:
+            close()
 
 
 def writeback_events(events: Iterator[dict]) -> Iterator[dict]:
@@ -776,10 +871,21 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         if nonce:
             ack["nonce"] = nonce
         stream.xadd(out_topic, {"event": json.dumps(ack)})
-        tool_calls = 0
+        tool_calls, upserts = 0, 0
+        # What the phase's pre-pass reads. Kept small on purpose: the answer and the tool RESULTS
+        # are where names appear, and accumulating the whole event stream would put the transcript
+        # back in memory for the sake of a regex.
+        said: list[str] = [prompt]
         for ev in turn(prompt):
-            if ev.get("type") == "tool-call":
+            t = ev.get("type")
+            if t == "tool-call":
                 tool_calls += 1
+                if str(ev.get("tool") or "").endswith("entity_upsert"):
+                    upserts += 1
+            elif t == "message-delta" and ev.get("text"):
+                said.append(ev["text"])
+            elif t == "tool-result" and ev.get("summary"):
+                said.append(str(ev["summary"]))
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             if cursor is not None:
                 _drain_inject(cursor)
@@ -787,10 +893,19 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # is already reading — and before `turn-complete`, so its tool calls land as step lines on
         # the turn they belong to instead of on nothing. A phase that raises must not lose the
         # turn: the answer is delivered either way, and bookkeeping is not worth a dead session.
-        if writeback is not None and should_write_back(prompt, tool_calls):
+        #
+        # THE PRE-PASS RUNS FIRST AND IS FREE. Only a turn that touched a name no desk has a page
+        # for reaches a model at all; every other turn now costs a regex where it used to cost two
+        # minutes of worker time with the person's next message queued behind it.
+        if writeback is not None:
             try:
-                for ev in writeback_events(writeback(prompt)):
-                    stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
+                candidates = (writeback_candidates(said)
+                              if should_write_back(prompt, tool_calls, upserts=upserts) else [])
+                if should_write_back(prompt, tool_calls, upserts=upserts, candidates=candidates):
+                    calls, secs = writeback_budget()
+                    for ev in writeback_events(bounded(writeback(candidates),
+                                                       max_tool_calls=calls, max_seconds=secs)):
+                        stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             except Exception as e:  # noqa: BLE001
                 log.warning("write-back phase failed on %s: %s: %s", turn_id, type(e).__name__, e)
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
@@ -1039,8 +1154,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
             # session would have to be told the whole conversation to ask one bookkeeping question.
             # Small budget by TOOLSET rather than by a step cap the harness does not expose.
-            writeback=lambda _prompt: run_turn_over_workspace(
-                work, WRITEBACK_PROMPT, model=model,
+            writeback=lambda candidates: run_turn_over_workspace(
+                work, writeback_prompt(candidates), model=model,
                 allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
                 mcp_config=mcp_cfg, harness=chat_harness),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,

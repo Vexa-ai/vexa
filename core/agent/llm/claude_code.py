@@ -245,6 +245,25 @@ def inject_user_message(text: str) -> bool:
             return False
 
 
+def _reap(proc, grace: float = 5.0) -> None:
+    """Wait for the CLI, then KILL it if it will not go.
+
+    ⚠ `finally: proc.wait()` alone is a HANG waiting to happen, and it became reachable the moment a
+    caller could stop consuming early (the write-back phase's budget closes the generator, which
+    raises GeneratorExit at the yield and runs this finally while the CLI is still mid-turn). A bare
+    wait there blocks the worker forever on a process nobody is reading any more — the budget would
+    have produced the exact stall it exists to prevent. On the normal path the CLI has already
+    exited by the time stdout hits EOF, so the grace period costs nothing."""
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    except TypeError:
+        # a Popen-shaped test double whose wait() takes no timeout — the seam, not the CLI
+        proc.wait()
+
+
 def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Iterator[str]:
     """stdin-mode exec: the prompt travels as the first stream-json user message and stdin STAYS
     OPEN for mid-turn injection; a `result` line closes it (turn over → CLI exits)."""
@@ -274,7 +293,7 @@ def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Ite
             proc.stdin.close()
         except Exception:  # noqa: BLE001
             pass
-        proc.wait()
+        _reap(proc)
 
 
 def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
@@ -289,7 +308,11 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
     try:
         yield from proc.stdout
     finally:
-        proc.wait()
+        try:
+            proc.stdout.close()
+        except Exception:  # noqa: BLE001
+            pass
+        _reap(proc)
 
 
 def _link_chat_into_workspace(work: Path) -> None:

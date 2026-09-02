@@ -17,6 +17,7 @@ import json
 import pathlib
 import re
 import subprocess
+import sys
 
 OLD_EVENT_CAP = 8000   # what meeting.completed used to carry; now the comparison boundary
 
@@ -241,62 +242,20 @@ def d_compounding(rec: dict, earlier: list[dict]) -> tuple[float, dict]:
 # low), and it can write beautifully linked prose that created nothing (the reverse). Averaging them
 # into one score would hide exactly the distinction the change is meant to move.
 
-# A capitalised RUN of two or more words — "Sony Pictures Imageworks", "Cottalango Leon". Single
-# capitalised words are deliberately not counted: at the start of a sentence every word is one, and
-# a measure that fires on "The" and "Monday" tells you about English, not about the product.
-# `and` and `the` are NOT intra-name particles, and the first version of this had them: it read
-# "Blue Light Card and Kaar Tech" as ONE name, undercounting by exactly the amount a note listing
-# several dead names does. A measure's own bugs bias in the direction that flatters the product.
-_BARE_NAME = re.compile(r"\b[A-Z][a-zA-Z'’\-]+(?:\s+(?:of|de|del|van|von|da|di)\s+[A-Z][a-zA-Z'’\-]+"
-                        r"|\s+[A-Z][a-zA-Z'’\-]+)+")
-_FENCE = re.compile(r"```[\s\S]*?```")
-# Headings and list labels are formatting, not mentions; a `## Decided` never wanted a wikilink.
-_HEADING = re.compile(r"^#{1,6}\s.*$", re.M)
-_NOT_A_NAME = {"Open Items", "Action Items", "Next Steps", "Open Questions", "Decided Committed"}
-
-# ⚠ MEASURED FALSE POSITIVE, removed after the first baseline run. Over ten real DNA notes the
-# measure flagged "Complete SSO", "Ask ASF", "Co-author TAC", "Lead TAC", "Attend SIGGRAPH",
-# "Escalate GitHub", "Await PR" — every one of them a Committed-section bullet, which by convention
-# opens with an imperative verb and is followed by an acronym. Those are not names anybody failed to
-# link; counting them inflated the deficit by roughly a third and would have made the fix look
-# better than it was. A measure's own bugs bias in whichever direction flatters the change, so they
-# get found before the change is scored, not after.
-_LEADING_VERB = {
-    "add", "address", "agree", "answer", "ask", "assign", "attend", "await", "book", "bring",
-    "build", "check", "circulate", "clarify", "close", "co-author", "complete", "confirm",
-    "consider", "continue", "create", "decide", "define", "deliver", "deploy", "discuss", "draft",
-    "escalate", "explore", "file", "finalize", "finalise", "find", "fix", "follow", "get", "give",
-    "identify", "include", "investigate", "invite", "keep", "land", "lead", "let", "look", "make",
-    "merge", "move", "open", "organise", "organize", "pick", "plan", "post", "prepare", "present",
-    "propose", "provide", "publish", "raise", "reach", "read", "record", "report", "request",
-    "resolve", "review", "revisit", "run", "schedule", "send", "set", "share", "should", "start",
-    "submit", "support", "take", "test", "track", "update", "verify", "wait", "work", "write",
-}
-_POSSESSIVE = re.compile(r"[\u2019']s$")
+# THE EXTRACTOR IS THE PRODUCT'S, NOT THE SCORER'S. `shared/entities.py` owns what counts as a
+# name, because the write-back phase's pre-pass now runs the same function to decide whether a turn
+# has anything to record at all. Two spellings of that rule is how a scorer ends up measuring
+# something the product never looked for — and the first version of this file WAS the second
+# spelling.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "agent"))
+from shared.entities import candidate_names  # noqa: E402
 
 
 def unlinked_names(note: str) -> list:
-    """Capitalised multi-word names in the note that are NOT inside a `[[wikilink]]` or a markdown
-    link. This is a PROXY and says so: it cannot know that "Technical Steering Committee" deserves
-    a page. It is a good proxy because it is exactly the failure decision 24 names — a name went
-    past and nothing was created — and because it can only be improved by writing the page."""
-    if not note:
-        return []
-    fm = re.match(r"^---\n[\s\S]*?\n---\n", note)
-    body = note[fm.end():] if fm else note
-    body = _FENCE.sub(" ", body)
-    body = _HEADING.sub(" ", body)
-    body = re.sub(r"\[\[[^\]]+\]\]", " ", body)          # already a chip
-    body = re.sub(r"\[[^\]]+\]\([^)]*\)", " ", body)      # already a link
-    out = []
-    for m in _BARE_NAME.finditer(body):
-        n = _POSSESSIVE.sub("", " ".join(m.group(0).split())).strip()
-        if not n or n in _NOT_A_NAME or n in out:
-            continue
-        if n.split()[0].lower() in _LEADING_VERB:
-            continue
-        out.append(n)
-    return out
+    """Capitalised multi-word names in the note that are NOT already a `[[wikilink]]` or a markdown
+    link. A linked name is not a failure, so the measure masks them; the phase's pre-pass does not
+    (a `[[Name]]` with no page is an inert chip, which is the same failure wearing brackets)."""
+    return candidate_names(note or "", mask_linked=True)
 
 
 ENTITY_TARGET_PER_TURN = 3.0

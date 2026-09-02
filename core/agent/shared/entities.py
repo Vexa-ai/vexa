@@ -240,6 +240,123 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
             "links_missing": unresolved, "kind": kind, "name": name, "date": day}
 
 
+# ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────
+#
+# THE POINT OF THIS BEING CODE. The write-back phase used to spend a whole model call finding out
+# that it had nothing to do — measured at 118-136s on Haiku against a 31-47s answer, which keeps the
+# worker busy 3x longer and queues every message the person sends behind it. Extracting the names is
+# a regex and a directory listing; only writing the FACTS needs a model. So the cheap half runs
+# first, in code, and a turn whose names all already have pages never reaches a model at all.
+#
+# It is also the SSOT for the measure: `core/flows/eval/dna/score.py` imports this function rather
+# than keeping a second regex. Two spellings of "what counts as a name" is how a scorer ends up
+# measuring something the product never looked for.
+
+# A capitalised RUN of two or more words — "Sony Pictures Imageworks", "Cottalango Leon". Single
+# capitalised words are deliberately not counted: at the start of a sentence every word is one, and
+# a rule that fires on "The" and "Monday" is about English, not about the knowledge graph.
+#
+# `and` and `the` are NOT intra-name particles, and the first version had them: it read "Blue Light
+# Card and Kaar Tech" as ONE name, undercounting by exactly the amount a note listing several dead
+# names does.
+_BARE_NAME = re.compile(r"\b[A-Z][a-zA-Z'’\-]+(?:\s+(?:of|de|del|van|von|da|di)\s+[A-Z][a-zA-Z'’\-]+"
+                        r"|\s+[A-Z][a-zA-Z'’\-]+)+")
+_FENCE = re.compile(r"```[\s\S]*?```")
+_HEADING = re.compile(r"^#{1,6}\s.*$", re.M)
+_MD_LINK = re.compile(r"\[[^\]]+\]\([^)]*\)")
+_POSSESSIVE = re.compile(r"[’']s$")
+_NOT_A_NAME = {"Open Items", "Action Items", "Next Steps", "Open Questions", "Decided Committed"}
+
+# ⚠ MEASURED FALSE POSITIVE. Over ten real DNA notes the extractor flagged "Complete SSO",
+# "Ask ASF", "Co-author TAC", "Lead TAC", "Attend SIGGRAPH", "Escalate GitHub", "Await PR" — every
+# one a Committed-section bullet, which by convention opens with an imperative verb and is followed
+# by an acronym. Those are not names anybody failed to write; counting them inflated the deficit by
+# roughly a third and would have sent the phase off to create pages for them.
+_LEADING_VERB = {
+    "add", "address", "agree", "answer", "ask", "assign", "attend", "await", "book", "bring",
+    "build", "can", "check", "circulate", "clarify", "close", "co-author", "complete", "confirm",
+    "consider", "continue", "create", "decide", "define", "deliver", "deploy", "did", "discuss",
+    "do", "does", "draft", "escalate", "explore", "file", "finalize", "finalise", "find", "fix",
+    "follow", "get", "give", "has", "have", "identify", "if", "include", "incorporate",
+    "investigate", "invite", "is", "keep", "land", "lead", "let", "look", "make", "merge", "move",
+    "open", "organise", "organize", "pick", "plan", "post", "prepare", "present", "propose",
+    "provide", "publish", "raise", "reach", "read", "record", "report", "request", "require",
+    "resolve", "review", "revisit", "run", "schedule", "send", "set", "share", "should", "start",
+    "submit", "support", "take", "test", "that", "the", "these", "this", "those", "track", "update",
+    "using", "verify", "wait", "was", "were", "what", "when", "where", "which", "who", "why",
+    "will", "work", "would", "write", "your",
+}
+
+
+def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
+    """Proper names in a piece of prose, in order of appearance, de-duplicated.
+
+    A PROXY, and it says so: it cannot know that "Technical Steering Committee" deserves a page. It
+    is a good proxy because it is exactly the shape decision 24 names — a name went past and nothing
+    was created — and because the only way to improve the number is to write the page.
+
+    ``mask_linked`` drops names that are already a ``[[wikilink]]`` or a markdown link. TRUE for the
+    measure (a linked name is not a failure). FALSE for the phase's pre-pass, because a ``[[Name]]``
+    whose page does not exist renders as an inert "not found" chip — the index, not the brackets,
+    decides whether a page is there."""
+    if not text:
+        return []
+    fm = _FRONTMATTER.match(text)
+    body = text[fm.end():] if fm else text
+    body = _FENCE.sub(" ", body)
+    body = _HEADING.sub(" ", body)
+    if mask_linked:
+        body = _WIKILINK.sub(" ", body)
+        body = _MD_LINK.sub(" ", body)
+    else:
+        body = _WIKILINK.sub(r" \1 ", body)
+    out: list[str] = []
+    for m in _BARE_NAME.finditer(body):
+        n = _POSSESSIVE.sub("", " ".join(m.group(0).split())).strip()
+        if not n or n in _NOT_A_NAME or n in out:
+            continue
+        if n.split()[0].lower() in _LEADING_VERB:
+            continue
+        out.append(n)
+    return out
+
+
+def known_slugs(root) -> set:
+    """Every entity slug this workspace already holds — read from `kg/entities/`, never from the
+    generated index, because the index can be one write behind and a stale index means a duplicate
+    page."""
+    base = Path(root) / ENTITIES_DIR
+    out = set()
+    for kind in KINDS:
+        d = base / kind
+        if d.is_dir():
+            out |= {f.stem for f in d.glob("*.md") if f.name != "index.md"}
+    return out
+
+
+def missing_names(roots, texts, *, limit: int = 12) -> list[str]:
+    """The names these texts touched that no mounted desk has a page for, in order, capped.
+
+    This is the whole pre-pass: empty means the phase has nothing to do and no model call is made.
+    The cap is here rather than in the prompt because the list IS the budget — a phase handed forty
+    names either ignores the cap or runs for four minutes."""
+    known: set = set()
+    for r in roots:
+        try:
+            known |= known_slugs(r)
+        except OSError:
+            continue
+    out: list[str] = []
+    for t in texts:
+        for n in candidate_names(t, mask_linked=False):
+            slug = slugify(n)
+            if slug and slug not in known and n not in out:
+                out.append(n)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
 # ── the index that rides in every dispatch ───────────────────────────────────────────────────────
 
 def _last_updated(text: str, fallback: str) -> str:
