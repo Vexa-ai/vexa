@@ -41,6 +41,7 @@ function InviteGate({ children }: { children: ReactNode }) {
   const setup = params.get("setup");       // ?setup=global — MINUTES: the admin org-tier conversation
   const view = params.get("view");         // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
   const ask = params.get("ask");           // ?ask=<preset> — MINUTES: open a chat already primed
+  const scaffold = params.get("s");        // ?s=<id> — THE SCAFFOLD: one record per arrival (§5.5)
 
   // MINUTES `?setup=global`: the ADMIN company-layer conversation. It stashes a PRESET — the same
   // `vexa.pendingPreset` every emailed `?ask=` link stashes — so the opening turn comes from
@@ -91,6 +92,19 @@ function InviteGate({ children }: { children: ReactNode }) {
     } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [ask, invite, tshare]);
+
+  // `?s=<id>` — THE SCAFFOLD (PRD §5.5). The link carries an ID and nothing else: no prompt text,
+  // no mount set, no tabs. The terminal fetches the record as the signed-in identity and renders a
+  // chat from it, and the agent is handed the same record — one record, two renderers, so neither
+  // side composes from whatever was there before.
+  //
+  // Same stash-and-clean discipline as `?ask=`: the URL is cleaned on landing so a reload does not
+  // re-open a spent arrival, and the id travels to MinutesShell through storage.
+  useEffect(() => {
+    if (!scaffold) return;
+    try { localStorage.setItem("vexa.pendingScaffold", scaffold); } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [scaffold, invite, tshare]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.
