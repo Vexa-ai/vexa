@@ -222,7 +222,8 @@ def wait_mail(org: str, prefix: str, title: str, since: float, budget_s: int):
     return wait_for(lambda: mail_search(org, f"{prefix}: {title}", since), budget_s)
 
 
-def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
+def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = "",
+              transcript: str = ""):
     """A new commit touching kg/entities/meeting/ — the same completion test the flows engine
     itself applies (``flows_steps/agent.latest_meeting_note``), so the wait and the engine agree.
 
@@ -243,6 +244,25 @@ def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
     occurrence — all ten DNA fixtures are Zoom 96088138284 — so it matches the whole library.)"""
     best, GRACE = {}, 30
 
+    def about_this_meeting(path: str) -> bool:
+        """Is the note at ``path`` about the meeting this fixture is replaying?
+
+        The stamp preference is not enough on its own. Within ONE sweep, a slow fixture's agent can
+        commit its note after the next fixture has already started waiting, and the next fixture
+        adopts it — three of nine rows in rev 9, caught only afterwards by the scorer. Checking the
+        CONTENT at collection time stops it being collected at all, using the same six-word test
+        the scorer and the engine's grounding gate use."""
+        note = ws_file(uid, path) or ""
+        if not note.strip() or not transcript:
+            return True                  # nothing to judge with — do not reject on ignorance
+        import re as _re
+
+        def grams(t):
+            w = _re.findall(r"[a-z0-9']+", t.lower())
+            return {" ".join(w[i:i + 6]) for i in range(len(w) - 5)
+                    if any(len(x) >= 6 for x in w[i:i + 6])}
+        return bool(grams(note) & grams(transcript))
+
     def probe():
         for c in (workspace_git(uid).get("commits") or []):
             if c.get("sha") in shas_before:
@@ -250,6 +270,8 @@ def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
             for f in (c.get("files") or []):
                 if not f.startswith("kg/entities/meeting/"):
                     continue
+                if not about_this_meeting(f):
+                    continue             # another fixture's note landing late — not ours
                 if stamp and stamp in f:
                     return (c["sha"], f, True)
                 if "any" not in best:
@@ -437,7 +459,8 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
         "meeting.completed", done_id,
         {"organizer": org, "title": m["title"], "uid": uid, "meeting_id": mid,
          "native": native, "start": occurred}, actor=f"uid {uid}")
-    hit = wait_note(uid, shas_before, 1200, stamp=date)
+    hit = wait_note(uid, shas_before, 1200, stamp=date,
+                    transcript="\n".join(x["text"] for x in segs))
     note_path = None
     if hit:
         sha, note_path, matched = hit
