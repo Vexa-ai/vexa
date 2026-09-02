@@ -265,3 +265,40 @@ export function resolveView(spec: string | null | undefined, phasePages: Page[])
   }
   return { pages, focus };
 }
+
+// ── THE VIEW SLOT — a click NAVIGATES, it does not collect (PRD decision 28) ─────────────────────
+/** A file clicked in the panel's navigator moves the panel's SINGLE view; it never mints a tab.
+ *  Tabs are minted only by an explicit open-in-tab (middle-click, the row's ⧉) or by a scaffold.
+ *
+ *  STUB. Branch `panel-view-slot` owns the real thing — `view: {workspace, path}` on the chat
+ *  record, with back/forward over it. What lives here is only the SEAM, so the navigator can be
+ *  written against the final call and nothing has to be rewritten when the slot lands: the click
+ *  ANNOUNCES a destination, the shell puts it in front, and the navigator keeps no state about
+ *  what is being read. On the rebase this block goes and `navigateView` resolves to theirs.
+ *
+ *  Deliberately an event and not a callback prop: it is the same shape as OPEN_ENTITY_EVENT and
+ *  ARTIFACT_EVENT, which is how every other "something wants to be in front" already reaches the
+ *  shell — one route, not two.
+ */
+export const VIEW_NAVIGATE_EVENT = "vexa:view-navigate";
+
+export interface ViewSlot { workspace?: string; path: string; label: string }
+
+/** The slot a workspace + path address. `workspace` empty ⇒ the reader's own desk (no slug), the
+ *  same "" ⇒ undefined rule `artifactFromDocRef` applies — an absent slug is a resolved answer. */
+export function viewSlotFor(workspace: string | undefined, path: string): ViewSlot {
+  const clean = String(path ?? "").replace(/^\/+/, "");
+  return {
+    workspace: workspace || undefined,
+    path: clean,
+    label: (clean.split("/").pop() ?? clean).replace(/\.md$/i, ""),
+  };
+}
+
+/** Put a file in front. A path that walks out of its mount is refused here rather than at the
+ *  fetch, exactly as `resolveView` refuses one from a link. */
+export function navigateView(workspace: string | undefined, path: string): void {
+  const detail = viewSlotFor(workspace, path);
+  if (!detail.path || detail.path.split("/").includes("..")) return;
+  window.dispatchEvent(new CustomEvent(VIEW_NAVIGATE_EVENT, { detail }));
+}

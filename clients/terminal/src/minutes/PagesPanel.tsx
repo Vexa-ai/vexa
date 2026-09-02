@@ -20,7 +20,7 @@
  *  file management.
  */
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -28,6 +28,7 @@ import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
 import { CollapseButton } from "./Collapse";
+import { CreatePageButton, ExtendButton, SelectionExtend, useIntentLanding } from "./ExtendAction";
 import { registry } from "../contributions";
 import { header, surface, type as ty } from "./tokens";
 
@@ -79,6 +80,11 @@ export function PagesPanel(p: {
   // surfaces register, shells render what is registered.
   const canvas = p.docKind === "meeting" && !p.listing;
   const MeetingCanvas = canvas ? registry.tabComponent("meeting") : undefined;
+  // The rendered document's own box — the scope a text selection must be inside to be THIS page's
+  // (see SelectionExtend), and the positioning context the floating action sits in.
+  const docBox = useRef<HTMLDivElement | null>(null);
+  // One listener for the panel: when an Extend/Create turn commits, its page becomes the view.
+  useIntentLanding();
   const [mode, setMode] = useState<"view" | "edit">("view");
   // RAW is a lens on the view, not a third mode: `</>` shows the markdown the renderer was given,
   // which is the question it answers ("what is actually in the file?"). Keeping it orthogonal to
@@ -181,6 +187,9 @@ export function PagesPanel(p: {
                   style={iconBtn(copied)} onMouseEnter={litIcon} onMouseLeave={dimIcon(copied)}>
                   <Icon name={copied ? "check" : "copy"} size={14} />
                 </button>
+                {/* PRD decision 32.1 — the open page, whole. `docSlug`/`docPath` are the RESOLVED
+                    view slot, never the tab label or the crumb (F63). */}
+                <ExtendButton workspace={p.docSlug} path={p.docPath} />
                 <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}
                   title="Edit" aria-label="Edit"
                   style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
@@ -211,7 +220,7 @@ export function PagesPanel(p: {
           {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
           <span style={{ flex: "none", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
         </div>}
-        <div style={{ ...ty.body, flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
+        <div ref={docBox} style={{ ...ty.body, position: "relative", flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
           {canvas
             // the canvas owns its own scrolling, header and padding — it is a whole surface, not a body
             ? (MeetingCanvas
@@ -220,7 +229,11 @@ export function PagesPanel(p: {
             : listing
               ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
               : p.body === null
-                ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
+                ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>
+                    <div>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
+                    {/* …or you ask for it now (decision 32.4). Same resolved slot as the header. */}
+                    <CreatePageButton workspace={p.docSlug} path={p.docPath} />
+                  </div>
                 : mode === "edit"
                   ? <MarkdownEditor value={draft} onChange={setDraft} />
                   : raw
@@ -228,6 +241,11 @@ export function PagesPanel(p: {
                     // so `</>` stays a lens and Edit stays the one way to change a file
                     ? <pre data-doc-raw style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--t1)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{p.body}</pre>
                     : <MdxDoc>{p.body}</MdxDoc>}
+          {/* PRD decision 32.1's second trigger. Only while READING — an editor's selection is
+              being edited, not asked about. */}
+          {doc && p.body !== null && mode === "view" && (
+            <SelectionExtend containerRef={docBox} workspace={p.docSlug} path={p.docPath} body={p.body} />
+          )}
         </div>
       </div>
     </>

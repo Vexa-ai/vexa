@@ -34,7 +34,7 @@ import { Rail } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { fetchScaffold, localScaffold, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
-import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
@@ -556,6 +556,25 @@ export function MinutesShell() {
     setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(pg)) ? prev : [...prev, pg]);
     setDocPath(pg.path); setDocSlug(pg.slug); setDocKind(pg.kind === "meeting" ? "meeting" : "doc");
     setListing(null); setDocNonce((n) => n + 1);
+  }, []);
+
+  /** THE VIEW SLOT (decision 28) — a navigation moves what is IN FRONT and mints no tab. Reading
+   *  a workspace by walking it is browsing, and browsing that collects leaves a tab strip nobody
+   *  asked for; a tab is now an explicit act.
+   *
+   *  Until branch `panel-view-slot` puts `view: {workspace, path}` on the chat record, the
+   *  destination lands in the shell's own document state — the very state a focused tab drives —
+   *  so nothing here is panel-local and `artifacts[]` is untouched. */
+  useEffect(() => {
+    const onView = (e: Event) => {
+      const d = (e as CustomEvent<ViewSlot>).detail;
+      if (!d?.path) return;
+      setPagesCollapsed(false); saveCollapsed("right", false);
+      setDocPath(d.path); setDocSlug(d.workspace); setDocKind("doc");
+      setListing(null); setDocNonce((n) => n + 1);
+    };
+    window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
+    return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
   }, []);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a

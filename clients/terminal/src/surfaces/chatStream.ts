@@ -11,6 +11,7 @@
  *
  *  Extracted from Chat.send so the robustness logic is unit-testable against a faked fetch/SSE. */
 
+import type { ChatIntent } from "./chatIntent";
 import { noteAuthFailure, isAuthStatus } from "@/app/session";
 import { SESSION_ENDED_HEADLINE } from "./apiClient";
 
@@ -110,6 +111,9 @@ export type ChatStreamRequest = {
    *  thread from then on, and re-sending it would invite the server to re-apply an arrival that
    *  already happened. */
   scaffold_id?: string;
+  /** PRD decision 32 — what a button pressed on a page asks for. Typed, never prose: the server
+   *  half turns it into the matching preset. Omitted when absent, like `scaffold_id`. */
+  intent?: ChatIntent;
 };
 
 /** One nonce per user turn, constant across that turn's reconnect attempts. It lets agent-api tell a
@@ -225,7 +229,8 @@ export async function streamChatTurn(
         // `extra="forbid"`-adjacent about shapes, and an explicit null is a different statement
         // from "this turn did not come from an arrival".
         body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId,
-          ...(req.scaffold_id ? { scaffold_id: req.scaffold_id } : {}) }),
+          ...(req.scaffold_id ? { scaffold_id: req.scaffold_id } : {}),
+          ...(req.intent ? { intent: req.intent } : {}) }),
         signal,
       });
     } catch (e) {
