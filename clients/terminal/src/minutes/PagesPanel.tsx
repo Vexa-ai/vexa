@@ -28,6 +28,9 @@ import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
 import { CollapseButton } from "./Collapse";
+import { Navigator } from "./Navigator";
+import { isMachineryEntry } from "./machinery";
+import { loadNavOpen, saveNavOpen } from "./navigatorApi";
 import { registry } from "../contributions";
 import { header, surface, type as ty } from "./tokens";
 
@@ -82,6 +85,11 @@ export function PagesPanel(p: {
   // surfaces register, shells render what is registered.
   const canvas = p.docKind === "meeting" && !p.listing;
   const MeetingCanvas = canvas ? registry.tabComponent("meeting") : undefined;
+  // THE NAVIGATOR'S DOOR (PRD decision 27.4). Default hidden, remembered per browser — the boolean
+  // lives here rather than in the shell because the rail is part of this panel, and the panel is
+  // already the thing that knows whether it is folded away at all.
+  const [navOpen, setNavOpen] = useState<boolean>(() => loadNavOpen());
+  const showNav = (v: boolean) => { setNavOpen(v); saveNavOpen(v); };
   const [mode, setMode] = useState<"view" | "edit">("view");
   // RAW is a lens on the view, not a third mode: `</>` shows the markdown the renderer was given,
   // which is the question it answers ("what is actually in the file?"). Keeping it orthogonal to
@@ -133,6 +141,14 @@ export function PagesPanel(p: {
       <div style={{ ...header, gridRow: 1, gridColumn: 3, gap: 6, flexWrap: "nowrap", minWidth: 0, overflowX: "auto", borderLeft: "1px solid var(--line)" }}>
         {/* where you have BEEN, at the panel's left edge — the reading order of a document surface
             starts here (Obsidian, and the old terminal, both put them exactly there). */}
+        {/* the navigator's toggle — the panel's leftmost control, because the rail it opens is the
+            panel's leftmost column. One button, no other chrome (decision 27.4). */}
+        <button data-nav-toggle aria-pressed={navOpen} aria-label={navOpen ? "Hide the file navigator" : "Show the file navigator"}
+          title={navOpen ? "Hide the file navigator" : "Show the file navigator (Esc closes, / filters)"}
+          onClick={() => showNav(!navOpen)} style={iconBtn(navOpen)}
+          onMouseEnter={litIcon} onMouseLeave={dimIcon(navOpen)}>
+          <Icon name="folder" size={13} />
+        </button>
         <button data-nav="back" aria-label="Back" title="Back (⌘/Ctrl + [)" disabled={!p.canBack} onClick={p.onBack} style={navBtn(!!p.canBack)}>‹</button>
         <button data-nav="forward" aria-label="Forward" title="Forward (⌘/Ctrl + ])" disabled={!p.canForward} onClick={p.onForward} style={navBtn(!!p.canForward)}>›</button>
         <div style={{ flex: "1 1 0%", minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflowX: "auto", overflowY: "hidden", paddingLeft: 2 }}>
@@ -158,7 +174,13 @@ export function PagesPanel(p: {
         {/* outside the tab scroller (`flex: none`), so it never scrolls out of reach */}
         {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} />}
       </div>
-      <div style={{ gridRow: 2, gridColumn: 3, display: "flex", flexDirection: "column", minHeight: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
+      <div style={{ gridRow: 2, gridColumn: 3, display: "flex", minHeight: 0, minWidth: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
+        {/* The rail sits INSIDE the panel, under the shared header band — beside the open file, the
+            way the founder's reference has it. `onOpenTab` is this panel's own open route, so an
+            explicit open-in-tab lands on the chat record exactly like a link click does; a plain
+            click never comes through here at all (decision 28). */}
+        {navOpen && <Navigator onOpenTab={p.onOpen} onClose={() => showNav(false)} />}
+        <div style={{ flex: "1 1 0%", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
         {/* WHAT is in front, and what can be done to it — the document's own header row.
             Filename prominent, location subdued beside it, every utility grouped hard right
             (founder reference, the desktop app's doc panel). Three rows now stack above the body
@@ -241,6 +263,7 @@ export function PagesPanel(p: {
                     ? <pre data-doc-raw style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--t1)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{p.body}</pre>
                     : <MdxDoc>{p.body}</MdxDoc>}
         </div>
+        </div>
       </div>
     </>
   );
@@ -254,8 +277,12 @@ const entryS: CSSProperties = {
 /** A folder, as a list of names. Directories first, then files; clicking a directory goes deeper,
  *  clicking a file opens it as a tab. Deliberately plain — this is orientation, not a file manager. */
 function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undefined, prefix: string) => void; onOpen: (pg: Page) => void }) {
-  const { slug, prefix, dirs, files } = p.listing;
+  const { slug, prefix } = p.listing;
   const at = (name: string) => (prefix ? `${prefix}/${name}` : name);
+  // HUMAN FILES ONLY (decision 27.2) — and from the same list `./machinery` gives the navigator,
+  // so a folder walked here and the same folder expanded there can never disagree.
+  const dirs = p.listing.dirs.filter((d) => !isMachineryEntry(prefix, d));
+  const files = p.listing.files.filter((f) => !isMachineryEntry(prefix, f));
   if (!dirs.length && !files.length) {
     return <div style={{ ...ty.body, color: "var(--t3)" }}>Nothing in this folder.</div>;
   }

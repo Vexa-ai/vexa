@@ -35,7 +35,7 @@ import { syncSurface } from "../surfaces/surfaceSync";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
-import { artifactsFromTokens, artifactViewEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
@@ -603,6 +603,25 @@ export function MinutesShell() {
       return [...prev, { kind: docKind === "meeting" ? "meeting" as const : undefined, path: docPath, slug: docSlug, label, pinned: true }];
     });
   }, [docKind, docPath, docSlug]);
+
+  /** THE VIEW SLOT (decision 28) — the navigator moves what is IN FRONT and mints no tab. Reading
+   *  a workspace by walking it is browsing, and browsing that collects leaves a tab strip nobody
+   *  asked for; a tab is now an explicit act.
+   *
+   *  Until branch `panel-view-slot` puts `view: {workspace, path}` on the chat record, the
+   *  destination lands in the shell's own document state — the very state a focused tab drives —
+   *  so nothing here is panel-local and `artifacts[]` is untouched. */
+  useEffect(() => {
+    const onView = (e: Event) => {
+      const d = (e as CustomEvent<ViewSlot>).detail;
+      if (!d?.path) return;
+      setPagesCollapsed(false); saveCollapsed("right", false);
+      setDocPath(d.path); setDocSlug(d.workspace); setDocKind("doc");
+      setListing(null); setDocNonce((n) => n + 1);
+    };
+    window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
+    return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
+  }, []);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
    *  tab — going back to somewhere you have been should never fail because you tidied up. */
