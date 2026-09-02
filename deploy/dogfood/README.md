@@ -60,6 +60,32 @@ are not acceptable on something with a public hostname. `make up` also never bui
 published, release-validated tag, because a dogfood stack running a local source build proves
 nothing about the release.
 
+## Handing the instance back to first run
+
+A first-run rehearsal needs an instance that has never been claimed, and a long-lived dogfood stack
+is the opposite of that: the admin is whoever signed in first — usually a test identity — and the
+setup wizard is marked complete. Neither fact can be undone from any product surface.
+
+```bash
+deploy/dogfood/bin/reset-instance [--admin-email minutes-test@vexa.ai] [--keep-global]
+```
+
+Three values, named, and nothing else: the admin role is released so the next sign-in claims it, the
+first-run wizard state is cleared, and the company-layer gate goes back up. **It deletes nothing** —
+workspaces, chats, meetings, transcripts and `_global/asks/` all survive. That narrow blast radius is
+the point: the account it has to reset sits next to the founder's, and the alternative that existed
+before this script was hand surgery on a jsonb column by whoever remembered the query.
+
+After it runs, until the admin's setup chat calls `mark_global_ready`:
+
+- a non-admin sign-in is refused with one sentence, and no user row is created for them;
+- the flows engine **parks** every fact instead of sending — nothing claimed, nothing failed, no
+  attempt burned, arrival order kept;
+- `flows_submit` and `flow_lifecycle` refuse by name.
+
+`--keep-global` leaves the company layer accepted, for rehearsing the claim without re-typing the
+company.
+
 ## Validating
 
 ```bash
