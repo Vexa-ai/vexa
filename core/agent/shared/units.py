@@ -18,6 +18,17 @@ import os
 
 RUNNER = (os.environ.get("VEXA_RUNNER") or "").strip() or "claude-code"
 
+# The harness names a dispatch may carry. `llm/registry.HARNESS_RUNNERS` is the AUTHORITY — it maps
+# each name to the class that implements it — but `llm/` ships only in the WORKER image: the
+# control plane cannot import it (`ModuleNotFoundError: No module named 'llm'` inside
+# vexa-dogfood-agent-api-1), and it is the control plane that has to decide whether a subject's
+# stored runner preference is a name this deployment knows.
+#
+# So the list lives here, in `shared/`, which both images carry — and `llm/tests/test_registry.py`
+# asserts the two agree exactly. That is the difference between one authority with a proven mirror
+# and two copies that drift: the mirror cannot go stale without a red test naming both files.
+RUNNERS = ("claude-code", "codex", "openai-agent")
+
 
 def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:
     """Derive the launcher (who/what triggered the dispatch — it holds the delegation grant)."""
