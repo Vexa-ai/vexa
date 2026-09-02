@@ -2322,11 +2322,52 @@ def meeting_seed(native_id: str, title: str, video_id: str,
     url = f"https://meet.jit.si/{native_id}"
     st, m = _gw_http(uid, "POST", "/meetings",
                      {"title": title, "scheduled_at": when, "meeting_url": url})
-    if st not in (200, 201):                    # a rejected url must not lose the seed
-        st, m = _gw_http(uid, "POST", "/meetings", {"title": title, "scheduled_at": when})
+    if st == 409:
+        # 409 is NOT "the url was rejected". It is `uq_meeting_active_user_platform_native`
+        # saying an ADDRESSABLE non-terminal row for jitsi/<native_id> already exists for this
+        # user. This block used to retry WITHOUT the url, which succeeds — and mints exactly the
+        # ("unknown", NULL) row the paragraph above exists to prevent: no share can be minted
+        # against it, so the attendee mail ships with no token. One 409 cost the founder a click
+        # into a chat that could not see meeting 97.
+        #
+        # We do NOT adopt the existing row. Non-terminal means planned or LIVE, and a double that
+        # climbs joining→active→completed on a row it did not create would drive the FSM of a real
+        # meeting and stack a second transcript on top of its segments. So the seed makes the
+        # caller's intent explicit instead: it names the row that is in the way and the two ways
+        # out — seed under a different native id, or `meeting_delete` the row first. Note that a
+        # seed which reaches `completed` leaves the index (the constraint is partial on
+        # status NOT IN (completed, failed)), so re-seeding a FINISHED double never lands here;
+        # what does land here is a leftover idle/scheduled row, or a genuinely live meeting.
+        gst, gb = _gw_http(uid, "GET", "/meetings?limit=100")
+        rows = (gb or {}).get("meetings", []) if isinstance(gb, dict) else []
+        dup = next((x for x in rows
+                    if x.get("platform") == "jitsi"
+                    and str(x.get("native_meeting_id")) == str(native_id)
+                    and x.get("status") not in ("completed", "failed")), {})
+        return json.dumps({"error": "a non-terminal meeting already holds this native id",
+                           "status": 409, "native_id": native_id, "platform": "jitsi",
+                           "existing_meeting_id": dup.get("id"),
+                           "existing_status": dup.get("status"),
+                           "lookup_status": gst,
+                           "next": "seed under a different native_id, or meeting_delete("
+                                   "meeting_id=<existing>) if that row is a leftover double"})
     if st not in (200, 201):
-        return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300]})
+        # Every other non-2xx, 422 ("unrecognized 'meeting_url'") included. The url-less retry
+        # used to live here as well; it is gone. An unaddressable row IS a defective double, so
+        # trading a loud failure for a silent one bought nothing and lost the share.
+        return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300],
+                           "meeting_url": url})
     mid = m["id"]
+    # POST-CONDITION, checked rather than assumed: this tool must never report success having
+    # created a row that cannot be addressed. Both fields come back on the create response.
+    if m.get("platform") in (None, "", "unknown") or not m.get("native_meeting_id"):
+        return json.dumps({"error": "seed created an UNADDRESSABLE row — no share can be minted "
+                                    "against it and the attendee link would carry no token",
+                           "meeting_id": mid, "platform": m.get("platform"),
+                           "native_meeting_id": m.get("native_meeting_id"),
+                           "meeting_url": url,
+                           "next": "meeting_delete(meeting_id=%s) and fix the seed url" % mid})
+
     pw = subprocess.run(
         ["docker", "inspect", "vexa-dogfood-postgres-1", "--format",
          "{{range .Config.Env}}{{println .}}{{end}}"], capture_output=True, text=True,
@@ -2422,6 +2463,7 @@ def meeting_seed(native_id: str, title: str, video_id: str,
     r = _psql("SELECT status||'|'||coalesce(to_char(start_time,'YYYY-MM-DD\"T\"HH24:MI:SS'),'')"
               "||'|'||coalesce(to_char(end_time,'YYYY-MM-DD\"T\"HH24:MI:SS'),'')"
               "||'|'||coalesce(data->>'completion_reason','')"
+              "||'|'||coalesce(platform,'')||'|'||coalesce(platform_specific_id,'')"
               f" FROM meetings WHERE id={mid}", "-tA")
     row = (r.stdout or "").strip().split("|") if r.returncode == 0 else []
     # NO transcript body. It used to return the same 8,000-char copy the flows step made, so a
@@ -2430,10 +2472,13 @@ def meeting_seed(native_id: str, title: str, video_id: str,
     return json.dumps({"meeting_id": mid, "native_id": native_id, "title": title,
                        "segments_loaded": loaded, "uid": uid, "session_uid": session_uid,
                        "scheduled_at": when,
-                       "status": row[0] if len(row) > 3 else None,
-                       "start_time": row[1] if len(row) > 3 else None,
-                       "end_time": row[2] if len(row) > 3 else None,
-                       "completion_reason": row[3] if len(row) > 3 else None,
+                       "platform": row[4] if len(row) > 5 else m.get("platform"),
+                       "native_meeting_id": row[5] if len(row) > 5 else
+                       m.get("native_meeting_id"),
+                       "status": row[0] if len(row) > 5 else None,
+                       "start_time": row[1] if len(row) > 5 else None,
+                       "end_time": row[2] if len(row) > 5 else None,
+                       "completion_reason": row[3] if len(row) > 5 else None,
                        "duration_minutes": round(duration / 60, 1),
                        "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
