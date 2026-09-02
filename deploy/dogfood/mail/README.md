@@ -37,17 +37,36 @@ actually in, which is why that one carries the whole introduction and the other 
 
 ## Substitutions
 
-| token | becomes | filled by |
-|---|---|---|
-| `{{company}}` | the company's name | `_global/README.md`'s first heading — written by the admin at instance setup |
-| `{{service}}` | one sentence of what Vexa does | **fixed product text**, not editable here — see below |
-| `{{title}}` | the meeting's title | the step |
-| `{{when}}` | when it is, or was, in the reader's own clock | the step |
-| `{{organizer}}` | who had Vexa in the room | the step |
-| `{{attendees}}` | how many other people were in it | the step |
+**Each template gets only the tokens its own step fills**, and they are not the same set. A token a
+step does not fill is left STANDING, not blanked — a visible `{{organizer}}` in a test inbox is a bug
+report; a silently empty sentence is not — so putting a token into the wrong file ships braces to a
+customer.
 
-An unknown `{{token}}` is left STANDING, not blanked. A visible `{{organizer}}` in a test inbox is a
-bug report; a silently empty sentence is not.
+`prepare.md` and `minutes-head.md` (rendered by `flows_steps/mailtext.render`):
+
+| token | becomes |
+|---|---|
+| `{{company}}` | the company's name — `_global/README.md`'s first heading, written by the admin at setup |
+| `{{service}}` | one sentence of what Vexa does — **fixed product text**, see below |
+| `{{title}}` | the meeting's title |
+| `{{when}}` | when it is, or was, in the reader's own clock |
+| `{{organizer}}` | who had Vexa in the room |
+
+`attendee-head.md` (rendered by `email_attendees` in `flows_defs/production.py`):
+
+| token | becomes |
+|---|---|
+| `{{company}}` | the company's name, from the same `_global` README |
+| `{{organizer}}` | who had Vexa in the room |
+| `{{meeting}}` | the meeting's title |
+| `{{date}}` | the day it happened, in the organiser's zone |
+
+**`attendee-head.md` carries the service sentence as LITERAL TEXT, not as `{{service}}`** — its
+renderer fills four tokens and would mail `{{service}}` verbatim. If that sentence is ever changed it
+must be changed in three places at once: this file, `mailtext.SERVICE_SENTENCE`, and the MCP
+instructions in `deploy/dogfood/rig/vexa_control_mcp.py`. That is a known duplication, written down
+here rather than discovered later: two renderers of one directory grew from two sides of the same
+night, and collapsing them into one is worth doing before a third appears.
 
 ### Why `{{service}}` is not editable
 
