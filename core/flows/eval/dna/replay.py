@@ -88,19 +88,28 @@ def chat_turn(uid: str, session: str, prompt: str, budget_s: int = 420) -> str |
     return None
 
 
-def mail_since(ts: float, to: str) -> list[dict]:
-    """Every message to ``to`` newer than ``ts``, newest first, bodies included."""
-    _, d = http("GET", f"{MAILPIT}/api/v1/messages?limit=60")
-    out = []
+def mail_search(to: str, subject: str, since: float) -> dict | None:
+    """Find ONE message by recipient and exact subject, through mailpit's search.
+
+    This used to page the newest 60 messages and filter them. That works only while this replay is
+    the only thing sending mail on the host, and it is not: with the adoption simulator running
+    beside it, the prepare mail this fixture was waiting for sat at position 121 and the harness
+    recorded `prepare_mail=False` for a mail the product had sent correctly two minutes earlier.
+    A neighbour's traffic is not a product failure, and a window big enough today is a window that
+    silently shrinks tomorrow. Search is O(1) in the neighbour's volume; the window was not."""
+    import urllib.parse
+    q = urllib.parse.quote(f'to:"{to}" subject:"{subject}"')
+    _, d = http("GET", f"{MAILPIT}/api/v1/search?query={q}&limit=25")
     for m in (d.get("messages", []) if isinstance(d, dict) else []):
+        if m.get("Subject") != subject:
+            continue
         if to not in [t.get("Address", "") for t in m.get("To", [])]:
             continue
-        created = m.get("Created", "")
         _, full = http("GET", f"{MAILPIT}/api/v1/message/{m['ID']}")
         body = (full.get("Text") or full.get("HTML") or "") if isinstance(full, dict) else ""
-        out.append({"id": m["ID"], "created": created, "subject": m.get("Subject", ""),
-                    "body": body})
-    return out
+        return {"id": m["ID"], "created": m.get("Created", ""), "subject": m.get("Subject", ""),
+                "body": body}
+    return None
 
 
 # ── presets ──────────────────────────────────────────────────────────────────────────────────────
@@ -173,8 +182,7 @@ def wait_for(fn, budget_s: int, every: int = 8):
 
 
 def wait_mail(org: str, prefix: str, title: str, since: float, budget_s: int):
-    return wait_for(lambda: next((m for m in mail_since(since, org)
-                                  if m["subject"] == f"{prefix}: {title}"), None), budget_s)
+    return wait_for(lambda: mail_search(org, f"{prefix}: {title}", since), budget_s)
 
 
 def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
