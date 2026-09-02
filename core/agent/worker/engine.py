@@ -39,6 +39,17 @@ from llm import (
 )
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+# PRD decision 31 §1 — WHERE THIS PERSON IS IN TIME, on every dispatch (used in the preamble list
+# in `run_turn_over_workspace`). Imported rather than written here: the work is an HTTP read and a
+# cache, not prompt text, and what it returns is rendered by the flows route — the same rendering
+# the control-MCP `timeline` tool gets, so a chat and a machinery note cannot disagree about when
+# a meeting was.
+#
+# It stays its OWN call rather than a section of somebody else’s block: decision 30 §2’s
+# human-surface block (which chat, which meeting, which page is open) is composed by another hand,
+# and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
+# Whoever composes that block appends what this returns.
+from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
 
 log = logging.getLogger("agent_api.worker")
 
@@ -242,7 +253,6 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         " them in a brief and never count them as prior context. If you hold nothing on a subject,"
         " say so — a shape is not a substitute for knowledge you do not have.\n\n"
     )
-
 
 # The rule text of PRD decision 24, and the index it is a rule about. One string, because the rule
 # is unreadable without the list and the list is inert without the rule.
@@ -480,6 +490,12 @@ def writeback_prompt(candidates: list[str]) -> str:
         "Do not judge whether a name is important enough or whether it is covered somewhere else. A "
         "meeting note is NOT a substitute for a page — it records an occasion, a page records a "
         "subject, and the point is that the next turn can find the subject.\n\n"
+        "For a MEETING, pass `dates` as well — `held_at` when you know it ran, "
+        "`report_delivered_at` when you know its write-up reached them, `scheduled_at` when it is "
+        "still ahead (ISO-8601 or epoch, any subset, only what this turn actually knows). Those "
+        "three fields are what the desk's `Now` section and `timeline` both read, so a meeting "
+        "that ran with no write-up shows as an open commitment without anyone writing a sentence "
+        "about it. A meeting page with no `dates` is a page nothing can order.\n\n"
         + _ENTITY_FILE_SHAPE +
         "A name you cannot say one sourced thing about does NOT get a page: append it to "
         "`kg/MISSING.md` as one line — the name and what you would need to know — in a single "
@@ -1034,7 +1050,8 @@ def run_turn_over_workspace(
     author = _principal_author()
     extras = _extra_mount_paths(work)
     turn_prompt = (voice_preamble() + kg_links_preamble(mounts) + mounts_preamble(mounts)
-                   + entity_index_preamble(mounts) + global_context_preamble(mounts)
+                   + entity_index_preamble(mounts) + timeline_preamble()
+                   + global_context_preamble(mounts)
                    + prompt)
     # THE PERSON'S HALF, WRITTEN DOWN SEPARATELY (F47) — see `record_user_text` for why the history
     # reader must never have to find it again by parsing the composed prompt above. Recorded BEFORE

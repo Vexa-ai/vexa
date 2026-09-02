@@ -230,8 +230,54 @@ def _rewrite_links(root, facts, *, name: str, mounts) -> tuple[list, list]:
     return out, all_rewrites
 
 
+# ── dated facts (PRD decision 31 §3) ─────────────────────────────────────────────────────────────
+#
+# A meeting page carries WHEN, in frontmatter, so that the desk README's `Now` section and the
+# timeline read the same fact instead of two descriptions of it (`shared/desk_now.py` is the
+# reader). Three keys, closed set, ISO-8601 UTC. A closed set on purpose: an open one turns
+# frontmatter into a scratchpad, and the value of these is that a reader knows what it will find.
+DATE_FIELDS = ("scheduled_at", "held_at", "report_delivered_at")
+
+
+def _as_iso(value) -> str:
+    """ISO-8601 `Z` from an epoch or an ISO string; "" for anything else.
+
+    Naive strings are UTC: every timestamp this system writes is UTC, and guessing local would move
+    a meeting by hours on a host whose clock is not the deployment's, silently.
+    """
+    import datetime as _dt
+    if value in (None, "", []):
+        return ""
+    if isinstance(value, (int, float)):
+        dt = _dt.datetime.fromtimestamp(float(value), _dt.timezone.utc)
+    else:
+        text = str(value).strip()
+        try:
+            dt = _dt.datetime.fromtimestamp(float(text), _dt.timezone.utc)
+        except ValueError:
+            try:
+                dt = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return ""
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_dt.timezone.utc)
+    return dt.astimezone(_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _dated(dates) -> dict:
+    """The whitelisted, normalised subset of what a caller passed. Anything else is dropped."""
+    if not isinstance(dates, dict):
+        return {}
+    out = {}
+    for key in DATE_FIELDS:
+        iso = _as_iso(dates.get(key))
+        if iso:
+            out[key] = iso
+    return out
+
+
 def upsert_entity(root, kind: str, name: str, facts, source: str, *,
-                  today: str | None = None, aliases=(), mounts=None) -> dict:
+                  today: str | None = None, aliases=(), mounts=None, dates=None) -> dict:
     """Create ``kg/entities/<kind>/<slug>.md`` with frontmatter and a first dated entry, or append a
     dated entry to the page already there. Returns what happened, in the caller's words.
 
@@ -245,13 +291,21 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
     id form ``[[ws:<workspace-id>/<entity-id>]]`` before it is stored, so the link survives that
     workspace being renamed. The home workspace always wins — a name with a page HERE is left alone,
     because the reader's own desk is the page they meant. Omitting ``mounts`` is the single-workspace
-    behaviour, byte-identical to before."""
+    behaviour, byte-identical to before.
+
+    ``dates`` records WHEN, in frontmatter, for the keys in ``DATE_FIELDS`` — `scheduled_at`,
+    `held_at`, `report_delivered_at`. It is how the desk README's `Now` section and the timeline
+    stay in agreement (decision 31 §3): both read these fields, neither parses prose. A dates-only
+    call is a real change and is reported as one, but it appends NO dated entry — the page's body
+    is the record of what was learned, and "the report went out" is not a new fact about the
+    meeting, it is a property of it."""
     root = Path(root)
     src = str(source or "").strip()
     facts = [str(f).strip() for f in (facts or []) if str(f).strip()]
-    if not facts:
+    stamps = _dated(dates)
+    if not facts and not stamps:
         raise EntityRefused("nothing to record — pass the facts this turn learned, or say nothing new")
-    if not src:
+    if not src and facts:
         raise EntityRefused(
             "every fact needs a source: what was said or read that this came from (the meeting, the "
             "mail, the file, the person's own words). A page carries only what was said or read — "
@@ -279,15 +333,17 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
         unresolved = [n for n in unresolved if n not in crossed]
     day = _today(today)
 
-    if existed and not fresh:
+    new_stamps = {k: v for k, v in stamps.items() if _fm_get(fm, k) != v}
+    if existed and not fresh and not new_stamps:
         return {"path": rel, "created": False, "changed": False, "facts_written": 0,
                 "already_recorded": len(facts), "links_resolved": resolved,
-                "links_missing": unresolved, "links_rewritten": rewritten, "kind": kind, "name": name}
+                "links_missing": unresolved, "links_rewritten": rewritten,
+                "kind": kind, "name": name, "dates": {}}
 
     if not existed:
         fm = [f"type: {kind}", f"id: {slugify(name)}", f"title: {name}",
               f"aliases: {_render_list(aliases)}", f"created: {day}",
-              f"sources: {_render_list([src])}"]
+              f"sources: {_render_list([s_ for s_ in [src] if s_])}"]
         body = f"\n# {name}\n"
     else:
         # A page that predates this module (or one a human wrote) may carry none of these keys.
@@ -301,17 +357,21 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
         if _fm_get(fm, "created") is None:
             fm = _fm_set(fm, "created", day)
         fm = _fm_set(fm, "aliases", _render_list(_list_field(_fm_get(fm, "aliases")) + list(aliases)))
-        fm = _fm_set(fm, "sources", _render_list(_list_field(_fm_get(fm, "sources")) + [src]))
+        if src:
+            fm = _fm_set(fm, "sources", _render_list(_list_field(_fm_get(fm, "sources")) + [src]))
 
-    written = fresh or facts
-    entry = [f"\n## {day}\n"] + [f"- {f} — source: {src}" for f in written] + [""]
-    body = body.rstrip("\n") + "\n" + "\n".join(entry)
+    for key, value in new_stamps.items():
+        fm = _fm_set(fm, key, value)
+    written = fresh if existed else facts
+    if written:
+        entry = [f"\n## {day}\n"] + [f"- {f} — source: {src}" for f in written] + [""]
+        body = body.rstrip("\n") + "\n" + "\n".join(entry)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\n" + "\n".join(fm) + "\n---\n" + body.lstrip("\n"), encoding="utf-8")
     return {"path": rel, "created": not existed, "changed": True, "facts_written": len(written),
             "already_recorded": len(facts) - len(written), "links_resolved": resolved,
-            "links_missing": unresolved, "links_rewritten": rewritten, "kind": kind, "name": name,
-            "date": day}
+            "links_missing": unresolved, "links_rewritten": rewritten, "kind": kind,
+            "name": name, "date": day, "dates": new_stamps}
 
 
 # ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────

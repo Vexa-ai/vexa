@@ -2411,8 +2411,12 @@ def create_app(
             # workspace is stored as `[[ws:<id>/<entity-id>]]` (PRD decision 26.3). Without it the
             # link resolves by TITLE in whichever mount the reader searches first, and dies the
             # moment either workspace is renamed — which is the ordinary case, not the edge.
+            # `dates` (decision 31 §3): the whitelisted temporal frontmatter — `scheduled_at`,
+            # `held_at`, `report_delivered_at`. Filtered and normalised in `upsert_entity`, so a
+            # caller cannot write an arbitrary key by naming it here.
             result = entities_mod.upsert_entity(target, kind, name, facts, source,
-                                                mounts=_entity_mounts(subject))
+                                                mounts=_entity_mounts(subject),
+                                                dates=body.get("dates"))
         except entities_mod.EntityRefused as e:
             # 422, not 400: the request is well-formed and the REFUSAL is the product — the agent is
             # meant to read the sentence and fix the fact, not to retry the call.
