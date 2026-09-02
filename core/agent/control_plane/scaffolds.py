@@ -108,6 +108,13 @@ MACHINERY_NOTE = (
     "Anything marked `template: true`, and anything under `kg/templates/`, is a SHAPE and never a "
     "fact: copy it to make a new record, never cite it, never name it to a person, and never treat "
     "the example inside it as somebody real. "
+    # `(unset)` IS A GAP. A group workspace created before the template-free seed still carries the
+    # seed's placeholders in its README, and an agent reported "the project's objective is still
+    # `(unset)`" as though that were something it had found out. It is the templates-are-SHAPES
+    # mistake one step smaller — a blank read as a value — so it gets the sentence next to it.
+    "`(unset)` and any other angle-bracket or placeholder value is a GAP, never a fact: say the "
+    "thing is not recorded yet and offer to fill it in, never report the placeholder as the "
+    "answer. "
     # Decision 24. A composed opening is the turn most likely to meet a name for the first time
     # — an attendee clicking a post-meeting link brings a whole room with them — and it is the
     # turn least likely to stop and write pages, because it is answering an ask.

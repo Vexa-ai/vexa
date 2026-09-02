@@ -31,8 +31,9 @@ import {
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
+import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
+import { fetchScaffold, localScaffold, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -809,6 +810,21 @@ export function MinutesShell() {
   const [scaffoldRefusal, setScaffoldRefusal] = useState<ScaffoldRefusal | null>(null);
   const scaffoldFired = useRef(false);
 
+  // WHO THE SERVER THINKS IS ASKING (F48). A refusal is a judgement about an identity, and the
+  // reader cannot see which identity that was — so the card names it. Probed only when a refusal
+  // actually exists: the common path is a link that opens, and it should cost nothing. Fail-soft —
+  // an identity probe that does not answer leaves the copy exactly as it read before.
+  const [signedInAs, setSignedInAs] = useState<string | null>(null);
+  useEffect(() => {
+    if (!scaffoldRefusal) return;
+    let active = true;
+    void fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (active) setSignedInAs((d?.user?.email as string | undefined) ?? null); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [scaffoldRefusal]);
+
   // `?s=<id>` — THE SCAFFOLD (PRD §5.5 step 3). One record per arrival: the server says which
   // workspaces, which documents, and what the opening is; the terminal renders a chat from it and
   // NOTHING here is composed from what was there before. The right panel keeps rendering from the
@@ -999,22 +1015,10 @@ export function MinutesShell() {
             second reading is the one they take. So: whose it is, and what to do about it. It sits
             ABOVE the chat rather than replacing it, because their own conversations are still
             theirs and hiding them would be a second wrong. */}
-        {scaffoldRefusal && (() => {
-          const c = refusalCopy(scaffoldRefusal);
-          return (
-            <div role="alert" data-scaffold-refusal={scaffoldRefusal.reason}
-              style={{ flex: "none", margin: "12px 14px 0", padding: "12px 14px", borderRadius: 8,
-                border: "1px solid var(--line)", background: "var(--bg2, var(--bg))" }}>
-              <div style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", marginBottom: 4 }}>{c.title}</div>
-              <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.55 }}>{c.body}</div>
-              <button onClick={() => setScaffoldRefusal(null)}
-                style={{ ...ty.chip, marginTop: 10, color: "var(--t3)", background: "transparent",
-                  border: "1px solid var(--line)", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
-                Dismiss
-              </button>
-            </div>
-          );
-        })()}
+        {scaffoldRefusal && (
+          <ScaffoldRefusalCard refusal={scaffoldRefusal} signedInAs={signedInAs}
+            onDismiss={() => setScaffoldRefusal(null)} />
+        )}
         <div style={{ flex: 1, minHeight: 0 }}>
           <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
         </div>

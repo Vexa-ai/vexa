@@ -40,9 +40,16 @@ function toolOp(tool: string, args?: Record<string, unknown>): Op {
   return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "done", file, wrote };
 }
 
-/** the backend history turn shape (GET /api/sessions/:session/history) */
+/** the backend history turn shape (GET /api/sessions/:session/history).
+ *
+ *  `text` is what the MODEL was given: the worker's preambles, the control plane's grounding, and
+ *  the person's sentence at the end of it. `user_text` is what the PERSON typed — recorded as its
+ *  own field by the worker (`worker/engine.py` record_user_text) and served verbatim by
+ *  `workspace_reader.history`. It is optional because records written before the field existed do
+ *  not have it, and only because of that: for every turn taken from now on it is the only thing
+ *  this surface should render. */
 type HistoryTurn =
-  | { role: "user"; text: string }
+  | { role: "user"; text: string; user_text?: string }
   | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean }[]; commit?: string };
 
 type AgentTurn = Extract<Turn, { role: "agent" }>;
@@ -210,11 +217,23 @@ const CONTEXT_BLOCKS: Array<[RegExp, RegExp]> = [
   [/^The user is looking at the workspace/, /(?:<\/readme>\s*|context is missing\.\s*)/],
 ];
 
-// The server marks the grounding→user boundary with this sentinel (control_plane/api.py). When present,
-// ONE cut removes every folded block regardless of wording drift; the regex blocks below are the
-// fallback for chats stored before the sentinel shipped.
+// The grounding→user boundary marker (control_plane/api.py CONTEXT_SENTINEL, and the composer below
+// writes it too). When present, ONE cut removes every folded block regardless of wording drift.
 const CONTEXT_SENTINEL = "<!--vexa:user-input-below-->";
 
+/** THIS IS THE FALLBACK, AND IT IS ONLY THE FALLBACK (F47).
+ *
+ *  Every turn taken from 2026-09-02 onward carries the person's words as their own field
+ *  (`HistoryTurn.user_text`), and the loader below renders that field and never a composed prompt.
+ *  This function reconstructs the human half of an OLDER record by stripping the machinery off the
+ *  front — the sentinel when the record has one, else the wording-matched blocks above.
+ *
+ *  It is kept, and it is not to be relied on again. Reconstruction by stripping is derived from text
+ *  the SERVER owns and nothing checks the derivation, so it fails silently and completely whenever a
+ *  preamble changes shape: on 2026-09-02 the preamble set changed and every turn in the founder's
+ *  chat rendered as a grey USER bubble containing "## Referencing knowledge (always)", the mount
+ *  stack and the write-routing policy, with his own sentence buried at the bottom. Do not extend it
+ *  to cover a new preamble; the field is the answer. */
 export function stripContextBlocks(raw: string): string {
   const si = raw.lastIndexOf(CONTEXT_SENTINEL);
   if (si >= 0) {
@@ -261,6 +280,20 @@ function compactStoredUserText(text: string): string {
   // The default is the CONTEXT-STRIPPED text (sentinel/regex) — NOT the raw stored prompt. Returning
   // `text` here silently discarded the strip, leaking the whole grounding preamble into the bubble.
   return raw;
+}
+
+/** WHAT A STORED USER TURN RENDERS AS — the whole rule, in one place (F47).
+ *
+ *  `user_text` is the person's own words, recorded as their own field by the worker at the moment
+ *  the turn was composed. When it is there it is the answer, verbatim: the composed prompt is never
+ *  shown, whatever preambles happen to be in front of it this month.
+ *
+ *  Only a record written before that field existed falls through to `compactStoredUserText`, which
+ *  reconstructs the human half by stripping the machinery off the front — the sentinel if the record
+ *  carries one, else the wording-matched preamble blocks. That path is the fallback and nothing
+ *  else; see `stripContextBlocks` for why it must never be the primary again. */
+export function historyUserText(t: { text: string; user_text?: string }): string {
+  return t.user_text ?? compactStoredUserText(t.text);
 }
 
 const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
@@ -445,7 +478,15 @@ function referenceContext(text: string): string {
 
 function promptWithReferences(prompt: string, userText: string): string {
   const context = referenceContext(userText);
-  return context ? `${prompt.trim()}\n\n---\n${context}` : prompt.trim();
+  // THE PERSON'S WORDS COME LAST, AND THE SENTINEL SAYS WHERE THEY START (F47). The reference block
+  // is machinery this composer wrote — token resolution instructions for the model — and it used to
+  // be appended AFTER the sentence, which put it inside everything downstream treats as "what the
+  // person said": the worker records that half as `user_text`, and the bubble would have shown a
+  // `- token: @meeting:…  kind: meeting  native_id: …` dump under every question about a meeting.
+  // Moving it in front and marking the boundary costs the model nothing (grounding first, ask last,
+  // like every other preamble) and makes the human half exact rather than approximately right. The
+  // server inserts its own sentinel in front of this whole string; both readers take the LAST one.
+  return context ? `${context}\n\n---\n${CONTEXT_SENTINEL}${prompt.trim()}` : prompt.trim();
 }
 
 function activeReference(tab: ActiveTab | null): ActiveReference | null {
@@ -710,13 +751,21 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
-        // COMPACT FIRST, then decide. A stored user turn does not begin with what the reader saw:
-        // agent-api prepends its own grounding, so the raw text opens with "## Referencing
-        // knowledge (always)…" and the person's (or the product's) words start further down.
-        // compactStoredUserText is what strips that — so any test on the SHAPE of an opening has to
-        // run on the compacted form or it silently never matches. It cost this fix one round.
+        // THE PERSON'S WORDS ARE A FIELD, NOT SOMETHING TO RECOVER (F47). `user_text` is what they
+        // typed, recorded by the worker beside the turn; `text` is the composed prompt the model
+        // was given. When the field is there it is rendered as-is and the composed prompt is never
+        // shown. `compactStoredUserText` runs only for records written before the field existed —
+        // it strips the machinery off the front by sentinel, else by matching preamble wording,
+        // which is the derivation that silently broke on 2026-09-02 and put the whole grounding
+        // prompt in a grey user bubble.
+        //
+        // `raw` stays the stored prompt either way: the filters below test the SHAPE of what was
+        // stored (an onboarding kickoff, a machinery-marked composed opening), and those marks live
+        // in the prompt, not in the person's sentence.
         const compacted = (data.turns ?? []).map((t) =>
-          t.role === "user" ? { ...t, text: compactStoredUserText(t.text), raw: t.text } : { ...t, raw: t.text });
+          t.role === "user"
+            ? { ...t, text: historyUserText(t), raw: t.text }
+            : { ...t, raw: t.text });
         const loaded: Turn[] = compacted
           // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
           // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.

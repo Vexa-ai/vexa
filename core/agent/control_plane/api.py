@@ -1616,11 +1616,20 @@ def create_app(
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
         )
-        # Mark the grounding→user boundary so the terminal strips ALL folded context in one cut. Every
-        # branch returns `<grounding> + body.prompt`, so the user's words are the exact suffix; insert the
-        # sentinel right before them (no-op when nothing was folded). The kg/mounts preambles the worker
-        # prepends land before `prompt`, hence before the sentinel too — so they're stripped as well.
-        if body.prompt and prompt.endswith(body.prompt) and len(prompt) > len(body.prompt):
+        # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
+        # user's words are the exact suffix; the sentinel goes right before them.
+        #
+        # ⚠ IT USED TO SKIP THE TURNS THAT NEEDED IT MOST. The condition carried `len(prompt) >
+        # len(body.prompt)` — "only mark it when I actually folded something" — which is wrong twice
+        # over: the WORKER prepends its own preambles (voice, kg-links, mount stack, entity index,
+        # global context) AFTER this function returns, so a turn this function folded nothing into
+        # still reaches the transcript with several screens of machinery in front of the sentence.
+        # That is the exact shape of the 2026-09-02 regression: the founder's turns had no meeting,
+        # no schedule and no workspace grounding, so no sentinel was written, so the terminal fell
+        # through to its regexes, which no longer matched the preambles — and his whole machinery
+        # prompt rendered as a grey USER bubble. A boundary marker that is present only sometimes is
+        # a boundary marker nobody can rely on. Now: any turn carrying the person's words carries it.
+        if body.prompt and prompt.endswith(body.prompt):
             prompt = prompt[: len(prompt) - len(body.prompt)] + CONTEXT_SENTINEL + body.prompt
         # Attribute this turn's commits to the human editor by EMAIL (gateway-injected, trusted) rather
         # than the bare subject id — the git author NAME becomes the email; the synthetic author email
