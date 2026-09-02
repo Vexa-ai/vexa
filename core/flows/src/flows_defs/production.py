@@ -193,8 +193,30 @@ def build(reg: Registry, db) -> None:
     def ensure_user(ctx: StepCtx):
         """Provision the platform user for the organizer (idempotent lookup-or-create).
         Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call)
-        Result: {uid} — every later step's identity."""
-        uid = ensure_platform_user(ctx.refs["organizer"])
+        Result: {uid} — every later step's identity.
+
+        ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step
+        created user 131 with the email `20260902t183213z` — an invite's own DTSTAMP, handed to it
+        by an ICS parser that had matched the word "organizer" inside the UID line. The parse is
+        fixed (`mailbox.parse_ics` anchors its property patterns), and this is the second lock,
+        because this step is the LAST place that can tell: everything after it works with a uid and
+        has no way to know the account behind it is a timestamp.
+
+        A refusal here is not retryable — the refs are frozen at admission, so the same malformed
+        value would arrive on every attempt — and it must be loud: an account minted from a parse
+        artefact is invisible until somebody reads the user table, which is how this one was found.
+        """
+        who = str(ctx.refs.get("organizer") or "").strip()
+        # The shape only — never a domain allow-list, which is a deployment's business and not
+        # this step's. `a@b.c` is the whole test: one @, something either side, a dot in the host.
+        local, _, host = who.rpartition("@")
+        if not local or "." not in host or " " in who:
+            raise StepError(
+                f"the organizer on this invite is not an email address ({who[:80]!r}) — refusing "
+                f"to create an account for it. A value like this comes from a parse, not from a "
+                f"person, and every step after this one only sees the uid.",
+                retryable=False)
+        uid = ensure_platform_user(who)
         return Done({"uid": uid}, provider_ref=uid)
 
     def _their_clock(uid, epoch):

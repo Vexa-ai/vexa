@@ -88,9 +88,24 @@ def guard_domain(addresses, domain: str, mailbox: str = "") -> None:
     `mailbox` is the address the deployment's own mail double answers as (`VEXA_MAIL_ADDR`). It is
     the product's identity, not a person's, and every invite is addressed to it; excluding it here
     is the one exception and it is named rather than pattern-matched.
+
+    IT CHECKS THE SHAPE, NOT ONLY THE SUFFIX. `endswith("@" + domain)` passes anything ending in
+    those characters and says nothing about the rest, so a value that is not an address at all —
+    a timestamp, an empty local part, a whole sentence — is judged only on its tail. That is how
+    a domainless account (`20260902t183213z`) reached the instance on 2026-09-02: not through this
+    guard, which never saw it, but the guard could not have stopped it either, and a safety check
+    that would have waved it through is not one.
     """
-    bad = sorted({a.lower() for a in addresses
-                  if not a.lower().endswith("@" + domain) and a.lower() != mailbox.lower()})
+    def refused(value: str) -> bool:
+        a = value.lower().strip()
+        if a == mailbox.lower().strip() and mailbox:
+            return False
+        local, sep, host = a.rpartition("@")
+        # No whitespace anywhere: `a b@rehearse.test` has the right tail and is not an address,
+        # and the display form `Real Person <a@b.test>` is the shape a header hands you unparsed.
+        return not (sep and local and host == domain and not any(c.isspace() for c in a))
+
+    bad = sorted({a.lower() for a in addresses if refused(a)})
     if bad:
         raise Refused(
             f"refusing: {', '.join(bad)} " + ("is" if len(bad) == 1 else "are") +
