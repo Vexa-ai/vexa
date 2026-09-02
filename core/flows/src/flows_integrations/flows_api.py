@@ -332,10 +332,33 @@ def set_flow_status(name: str, version: int, action: str):
 
 
 @app.get("/reactions", dependencies=[Depends(auth)])
-def list_reactions(status: Optional[str] = None):
-    q, params = "", {}
-    if status and status.isalpha():
-        q, params = " WHERE status = :st", {"st": status}
+def list_reactions(status: Optional[str] = None, source_event_prefix: Optional[str] = None):
+    """The operator projection: what happened, why, and what is waiting.
+
+    ``status`` takes ONE state or several comma-separated — "what is still live for this booking" is
+    four states, and asking it as four round-trips is how a caller ends up reading the table itself.
+    ``source_event_prefix`` narrows to the facts ONE producer wrote: a scheduled join is
+    ``sched-<meeting>-<epoch>``, and that prefix is the only handle on "the join I booked for THIS
+    meeting", because the listing carries no meeting reference.
+
+    Both exist because the control MCP had neither, so it opened ``psycopg.connect`` straight into
+    this service's Postgres with a URL out of a dotfile and ran the query itself (seam inventory
+    B6.3) — two access paths to one store, one of them past its owner. A missing filter is not a
+    small thing: it is the reason somebody writes the second path."""
+    where, params = [], {}
+    states = [s.strip() for s in (status or "").split(",") if s.strip().isalpha()]
+    if states:
+        keys = []
+        for i, s_ in enumerate(states):
+            params["st%d" % i] = s_
+            keys.append(":st%d" % i)
+        where.append("status IN (%s)" % ", ".join(keys))
+    if source_event_prefix:
+        # LIKE with the caller's text as a BOUND parameter and the wildcard appended here — never
+        # interpolated, and never the caller's own pattern.
+        params["sep"] = source_event_prefix.replace("%", "").replace("_", "") + "%"
+        where.append("source_event_id LIKE :sep")
+    q = (" WHERE " + " AND ".join(where)) if where else ""
     rows = db.execute("SELECT reaction_id, flow, flow_version, step, status, attempt, reason, "
                       f"next_run_at FROM reaction{q} ORDER BY created_at DESC LIMIT 100", params)
     return {"reactions": [

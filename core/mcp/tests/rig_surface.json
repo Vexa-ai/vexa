@@ -1,0 +1,1708 @@
+{
+ "prompts": [
+  {
+   "description": "Connect this person's meetings to Vexa. Start here.",
+   "name": "start",
+   "title": "Set up Vexa"
+  },
+  {
+   "description": "Everything Vexa is waiting on, and what to do about each.",
+   "name": "whats_waiting",
+   "title": "What does Vexa need from me?"
+  },
+  {
+   "description": "Read the docs and answer \u2014 no account needed.",
+   "name": "what_is_vexa",
+   "title": "What is Vexa?"
+  }
+ ],
+ "tools": {
+  "auth_claim": {
+   "description": "Second half of auth_link(): returns pending until the person approves, then the token.\n    Pass the token as token=<value> on every account tool afterwards.",
+   "input_schema": {
+    "properties": {
+     "handle": {
+      "title": "Handle",
+      "type": "string"
+     }
+    },
+    "required": [
+     "handle"
+    ],
+    "title": "auth_claimArguments",
+    "type": "object"
+   }
+  },
+  "auth_link": {
+   "description": "Sign your person in with ONE CLICK-AND-A-CODE on a page, instead of relaying the code\n    through the chat. Returns a link: give it to them, then poll auth_claim(handle) every few\n    seconds until the token arrives. NO ACCOUNT NEEDED to call this.",
+   "input_schema": {
+    "properties": {},
+    "title": "auth_linkArguments",
+    "type": "object"
+   }
+  },
+  "bot_config": {
+   "description": "Adjust a bot already in a call: transcription language (e.g. 'es'), or its display\n    name.",
+   "input_schema": {
+    "properties": {
+     "bot_name": {
+      "default": "",
+      "title": "Bot Name",
+      "type": "string"
+     },
+     "language": {
+      "default": "",
+      "title": "Language",
+      "type": "string"
+     },
+     "meeting_url": {
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "meeting_url"
+    ],
+    "title": "bot_configArguments",
+    "type": "object"
+   }
+  },
+  "bot_say": {
+   "description": "Have the bot SPEAK into the live call \u2014 a sentence read aloud to everyone in the room.\n\n    Requires asked_by_a_human=true: pass it only when your person actually asked for these\n    words to be said out loud, and say them verbatim. A required field cannot be skimmed\n    past the way a warning paragraph can \u2014 and this tool is one call away from being\n    audible to real people.",
+   "input_schema": {
+    "properties": {
+     "asked_by_a_human": {
+      "default": false,
+      "title": "Asked By A Human",
+      "type": "boolean"
+     },
+     "meeting_url": {
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "text": {
+      "title": "Text",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "meeting_url",
+     "text"
+    ],
+    "title": "bot_sayArguments",
+    "type": "object"
+   }
+  },
+  "bot_schedule": {
+   "description": "Book the bot to join a meeting LATER, or call that booking off with cancel=True.\n\n    ALWAYS PASS tz \u2014 the person's IANA zone (\"Europe/Lisbon\"), which you know from their\n    environment. Then say a time the way they said it: at_local=\"17:10\" or \"2026-09-01 17:10\"\n    is read in THEIR clock, and everything said back to you carries its zone. Do not convert\n    times yourself; that arithmetic is where silent, late errors come from.\n\n    in_minutes (from now) and at_epoch (unix seconds) still work. The booking lives on the\n    server, so it does not depend on this conversation, this client, or this laptop staying\n    alive. The person gets an acknowledgment email; after the call the write-up runs on its own.\n\n    cancel=True with the same meeting_url calls off whatever was booked for that meeting \u2014\n    no id to find, no queue to read.",
+   "input_schema": {
+    "properties": {
+     "at_epoch": {
+      "default": 0,
+      "title": "At Epoch",
+      "type": "number"
+     },
+     "at_local": {
+      "default": "",
+      "title": "At Local",
+      "type": "string"
+     },
+     "cancel": {
+      "default": false,
+      "title": "Cancel",
+      "type": "boolean"
+     },
+     "in_minutes": {
+      "default": 0,
+      "title": "In Minutes",
+      "type": "integer"
+     },
+     "meeting_url": {
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "tz": {
+      "default": "",
+      "title": "Tz",
+      "type": "string"
+     }
+    },
+    "required": [
+     "meeting_url"
+    ],
+    "title": "bot_scheduleArguments",
+    "type": "object"
+   }
+  },
+  "bot_send": {
+   "description": "Send a Vexa bot into a live meeting NOW. THE main verb \u2014 when your person hands you a\n    meeting link, this is the call.\n\n    The bot knocks within ~30 seconds; someone in the call admits it. From then on\n    meeting_transcript(meeting_url) returns the words as they are spoken \u2014 read them into this\n    conversation and work with them directly. The workspace machinery is optional.",
+   "input_schema": {
+    "properties": {
+     "bot_name": {
+      "default": "",
+      "title": "Bot Name",
+      "type": "string"
+     },
+     "meeting_url": {
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "meeting_url"
+    ],
+    "title": "bot_sendArguments",
+    "type": "object"
+   }
+  },
+  "bot_stop": {
+   "description": "Pull the bot out of a meeting. The transcript up to this moment stays readable.",
+   "input_schema": {
+    "properties": {
+     "meeting_url": {
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "meeting_url"
+    ],
+    "title": "bot_stopArguments",
+    "type": "object"
+   }
+  },
+  "bots_running": {
+   "description": "Every bot this account has in a meeting right now.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "bots_runningArguments",
+    "type": "object"
+   }
+  },
+  "captions_to_segments": {
+   "description": "Turn a downloaded YouTube caption track into speaker-attributed meeting segments.\n\n    Auto-captions carry no diarization, so turns are cut on silence gaps and labelled\n    Speaker 1..N rather than inventing identities \u2014 which is also what our own pipeline\n    produces before attribution runs. Source stays in ~/.storm/caps/<id>.en.json3.",
+   "input_schema": {
+    "properties": {
+     "max_minutes": {
+      "default": 45,
+      "title": "Max Minutes",
+      "type": "integer"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "video_id": {
+      "title": "Video Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "video_id"
+    ],
+    "title": "captions_to_segmentsArguments",
+    "type": "object"
+   }
+  },
+  "company_context": {
+   "description": "The validated company context \u2014 only claims a human has confirmed or corrected.\n\n    This is what every agent in the tenant may rely on. Proposed claims are deliberately absent:\n    if it is not here, nobody has stood behind it yet.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "company_contextArguments",
+    "type": "object"
+   }
+  },
+  "confirm_login": {
+   "description": "Trade the emailed 6-digit code for a token. Second half of start_onboarding.\n\n    On success: pass the returned token as token=<value> to every account tool for the rest\n    of this conversation \u2014 you are authenticated immediately, nothing needs restarting.",
+   "input_schema": {
+    "properties": {
+     "code": {
+      "title": "Code",
+      "type": "string"
+     },
+     "email": {
+      "title": "Email",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "code"
+    ],
+    "title": "confirm_loginArguments",
+    "type": "object"
+   }
+  },
+  "deeplink": {
+   "description": "A link that opens the Vexa terminal in a specific state \u2014 hand it to your person\n    whenever you talk about a thing they might want to SEE.\n\n    WHICH LINK TO HAND\n    - they should DO something in a fresh chat \u2014 review the minutes, prep the call, answer a\n      standing question \u2192 target='ask', name=<preset>, optionally meeting=<row id> and\n      ws=<workspace slug>. You choose WHICH preset; you never choose what it says.\n    - they should LOOK at one meeting \u2192 target='meeting', ref=<row id | link | platform/native>.\n    - they should see two things at once \u2192 'view', or 'pre_meeting'/'during_meeting'/\n      'post_meeting' for the lifecycle shapes.\n    - they should read one file \u2192 target='workspace_file', ref=<path>.\n    - the whole list \u2192 'meetings'. The org-level setup conversation \u2192 'setup_global'.\n\n    target: 'ask' (name = a preset in _global/asks/; meeting and ws are refs the preset may\n    substitute), 'meeting' (ref = a meeting link or platform/native), 'meetings' (the list),\n    'workspace_file' (ref = path), 'setup_global' (the org-level setup conversation),\n    'view' (ref = pane spec 'file:<path>,meeting:<platform/native>,readme' \u2014 first pane\n    left, the rest split beside it: YOU compose what the person sees), or the lifecycle\n    presets 'pre_meeting' / 'during_meeting' / 'post_meeting' (ref = platform/native,\n    optionally 'platform/native|<doc path>' to put a specific file beside the meeting).\n\n    NEVER put prompt text in a link. name= is a preset NAME; the words behind it are a file\n    only an admin can write, and that is the whole security of the ask link.",
+   "input_schema": {
+    "properties": {
+     "meeting": {
+      "default": "",
+      "title": "Meeting",
+      "type": "string"
+     },
+     "name": {
+      "default": "",
+      "title": "Name",
+      "type": "string"
+     },
+     "ref": {
+      "default": "",
+      "title": "Ref",
+      "type": "string"
+     },
+     "target": {
+      "title": "Target",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "ws": {
+      "default": "",
+      "title": "Ws",
+      "type": "string"
+     }
+    },
+    "required": [
+     "target"
+    ],
+    "title": "deeplinkArguments",
+    "type": "object"
+   }
+  },
+  "entity_upsert": {
+   "description": "Record what you just learned about a person, company, meeting, project or decision.\n\n    ONE call does the whole thing: it creates `kg/entities/<kind>/<slug>.md` if the page does not\n    exist and updates it in place if it does. You never have to check first, never have to invent\n    the shape, never have to merge by hand. Call it on a maybe \u2014 repeating a fact the page already\n    carries writes nothing.\n\n    THE PAGE IS A CARD, not a log: a one-line summary, then the sections below for its kind, then\n    `## Connected` (links both ways), `## Sources`, `## Open questions`, and `## Timeline` last for\n    anything dated. File each fact into its section with `fields` \u2014 that is what makes a page worth\n    opening. A fact passed in `facts` with no `section` lands in the Timeline, which is fine for a\n    log line and wrong for what someone does.\n\n    SECTIONS AND FIELDS, by kind:\n      - person: Role and organisation \u00b7 What they care about \u00b7 How we relate  (fields: cares_about, company, relationship, role)\n      - company: What it is \u00b7 People \u00b7 Our relationship  (fields: people, relationship, what)\n      - meeting: When and who \u00b7 Decided \u00b7 Committed  (fields: committed, decided, participants, when, who)\n      - project: What it is \u00b7 Who \u00b7 Status  (fields: status, what, who)\n      - decision: What was decided \u00b7 Why \u00b7 What it changes  (fields: changes, what, why)\n\n    - `fields` \u2014 `{\"role\": \"Chairs the TSC\", \"company\": \"[[Sony Pictures Imageworks]]\"}`. Each key\n      above files into its section. A field that names another entity also draws the link BOTH ways:\n      giving a person a `company` adds them to that company's page too.\n\n    Use it the moment a turn learns anything durable: a name and who they are, a company and what\n    they do, what a meeting decided, who owns what, a decision and why it went that way. A name\n    without a page gets one NOW.\n\n    - `kind` \u2014 person | company | meeting | project | decision\n    - `name` \u2014 what the page is about, as a person would say it (\"Cottalango Leon\", \"Sony Pictures\n      Imageworks\"). It becomes the title `[[wikilinks]]` resolve to.\n    - `facts` \u2014 one short sentence each, only what was SAID or READ. Write other entities inside a\n      fact as `[[Their Name]]`; the result tells you which of those have no page yet, and those are\n      your next calls. Pass `section=\"<one of the section names above>\"` to file them, or leave it\n      and they go to the Timeline.\n    - `summary` \u2014 the single line under the title, in plain words. Set once; it is not overwritten,\n      so give it when you create the page.\n    - `connections` \u2014 `[\"Acme\"]` or `[{\"name\": \"Acme\", \"relation\": \"works at\"}]`. Chips on this\n      page and the reciprocal chip on theirs, when their page exists.\n    - `open_questions` \u2014 what you would need to know, written AS the question. This is where a gap\n      goes; it never goes on the page as a guess.\n    - `source` \u2014 where it came from, in a few words: the meeting, the mail, the file, the person's\n      own message. REQUIRED. A fact with no source is refused, not written \u2014 if you do not have one,\n      the gap belongs in `kg/MISSING.md`, never on the page.\n    - `slug` \u2014 a shared workspace, omitted means this person's own desk.\n    - `dates` \u2014 WHEN, for a meeting: `{\"scheduled_at\": ..., \"held_at\": ..., \"report_delivered_at\":\n      ...}`, ISO-8601 or epoch, any subset. Record `held_at` the moment you know a meeting ran and\n      `report_delivered_at` the moment its write-up reached them. These are the fields the desk\n      README's `Now` section and `timeline` both read, so a meeting that ran and has no write-up\n      shows up as an open commitment without anyone writing a sentence about it. Any other key is\n      dropped. A call with only `dates` is legal and needs no facts.\n    ",
+   "input_schema": {
+    "properties": {
+     "connections": {
+      "anyOf": [
+       {
+        "items": {},
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Connections"
+     },
+     "dates": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Dates"
+     },
+     "facts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Facts",
+      "type": "array"
+     },
+     "fields": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Fields"
+     },
+     "kind": {
+      "title": "Kind",
+      "type": "string"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "open_questions": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Open Questions"
+     },
+     "section": {
+      "default": "",
+      "title": "Section",
+      "type": "string"
+     },
+     "slug": {
+      "default": "",
+      "title": "Slug",
+      "type": "string"
+     },
+     "source": {
+      "default": "",
+      "title": "Source",
+      "type": "string"
+     },
+     "summary": {
+      "default": "",
+      "title": "Summary",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "kind",
+     "name"
+    ],
+    "title": "entity_upsertArguments",
+    "type": "object"
+   }
+  },
+  "fact_emit": {
+   "description": "Inject a fact and let every matching flow admit its own reaction.\n\n    This is the system's real front door \u2014 the mailbox poller is just one producer of\n    facts. Admission dedups on (source_event_id, flow), so re-emitting the same id is a\n    no-op rather than a duplicate.\n\n    invite.received wants: organizer, url, start (epoch), ics_uid, title, group|null.",
+   "input_schema": {
+    "properties": {
+     "event_type": {
+      "title": "Event Type",
+      "type": "string"
+     },
+     "source_event_id": {
+      "title": "Source Event Id",
+      "type": "string"
+     },
+     "subject_refs": {
+      "additionalProperties": true,
+      "title": "Subject Refs",
+      "type": "object"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "event_type",
+     "source_event_id",
+     "subject_refs"
+    ],
+    "title": "fact_emitArguments",
+    "type": "object"
+   }
+  },
+  "flow_lifecycle": {
+   "description": "Activate or retire one flow version. verb: activate | retire.\n\n    In-flight reactions keep the version stamped at their admission \u2014 retiring never\n    rewrites work already running.\n\n    REFUSED while the company layer is missing, for the same reason flows_submit is.",
+   "input_schema": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "verb": {
+      "title": "Verb",
+      "type": "string"
+     },
+     "version": {
+      "title": "Version",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "name",
+     "version",
+     "verb"
+    ],
+    "title": "flow_lifecycleArguments",
+    "type": "object"
+   }
+  },
+  "flows_list": {
+   "description": "Every flow version the engine knows plus the full step vocabulary with contracts.\n\n    Read this before writing a flow: `steps` must be names from `steps_vocabulary`, and a\n    name that is not in it is rejected at submission with a 400 rather than failing at run\n    time.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "flows_listArguments",
+    "type": "object"
+   }
+  },
+  "flows_submit": {
+   "description": "Submit a flow as DATA and (by default) activate it. Live in about ten seconds \u2014 the\n    worker hot-reloads active rows; no image rebuild, no deploy.\n\n    steps: ordered step names from flows_list's vocabulary.\n    on_event: a trigger name, e.g. invite.received / meeting.completed / mail.reply.\n    params: flow-level tuning read by steps via ctx.flow.param(key).\n\n    REFUSED while the company layer is missing: a flow submitted into an instance that cannot yet\n    say who it works for is a machine configured for nobody.",
+   "input_schema": {
+    "properties": {
+     "activate": {
+      "default": true,
+      "title": "Activate",
+      "type": "boolean"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "on_event": {
+      "title": "On Event",
+      "type": "string"
+     },
+     "params": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Params"
+     },
+     "steps": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Steps",
+      "type": "array"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "on_event",
+     "steps"
+    ],
+    "title": "flows_submitArguments",
+    "type": "object"
+   }
+  },
+  "friction_dump": {
+   "description": "THE FIXER'S BRIEF: every open rough edge, grouped by likely cause, ready to work.\n\n    This is decision 33 \u00a73 \u2014 the thing the whole loop exists to produce. It returns MARKDOWN, in\n    the alpha ledger's finding shape (symptom \u00b7 exact context \u00b7 likely cause \u00b7 log pointers \u00b7\n    repro), deduplicated with occurrence counts, `recurring` first. Hand it to a fixing agent\n    verbatim; it needs no other briefing.\n\n    since: \"\" (everything) \u00b7 \"2h\" \u00b7 \"3d\" \u00b7 an ISO instant.\n    status: \"open\" (the default \u2014 includes `recurring`, which is the most urgent work there is) \u00b7\n            \"fixed\" \u00b7 \"recurring\" \u00b7 \"\" for all.\n\n    When you fix something from it, close it: `friction_fixed([ids], \"<commit or PR>\")`.",
+   "input_schema": {
+    "properties": {
+     "since": {
+      "default": "",
+      "title": "Since",
+      "type": "string"
+     },
+     "status": {
+      "default": "open",
+      "title": "Status",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "friction_dumpArguments",
+    "type": "object"
+   }
+  },
+  "friction_fixed": {
+   "description": "Close the rough edges a change addressed (decision 33 \u00a74).\n\n    `fix_ref` is whatever lets the next reader find the change \u2014 a commit sha, a PR url, a branch,\n    or one sentence. Closing is CHEAP and meant to be: a record filed again after a fix flips itself\n    to `recurring`, so a fix that did not hold announces itself instead of hiding. Close what you\n    addressed; do not close what you merely looked at.",
+   "input_schema": {
+    "properties": {
+     "fix_ref": {
+      "title": "Fix Ref",
+      "type": "string"
+     },
+     "ids": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Ids",
+      "type": "array"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ids",
+     "fix_ref"
+    ],
+    "title": "friction_fixedArguments",
+    "type": "object"
+   }
+  },
+  "friction_so_far": {
+   "description": "Everything reported through report_friction, newest first. NO ACCOUNT NEEDED.\n\n    Useful before reporting: if the thing you hit is already here, add what is different about\n    your case rather than filing it again.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "friction_so_farArguments",
+    "type": "object"
+   }
+  },
+  "mail_inbox": {
+   "description": "Read the mail double. Every message the system has sent, with nothing leaving the\n    host \u2014 this is the outbound half of the loop and the honest way to check what a flow\n    actually said to a person. Account-scoped: an open inbox would let an agent read the\n    sign-in codes and skip the human.",
+   "input_schema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "mail_inboxArguments",
+    "type": "object"
+   }
+  },
+  "mail_read": {
+   "description": "The full body of one sent message \u2014 the artifact as the person receives it.",
+   "input_schema": {
+    "properties": {
+     "message_id": {
+      "title": "Message Id",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "message_id"
+    ],
+    "title": "mail_readArguments",
+    "type": "object"
+   }
+  },
+  "mark_global_ready": {
+   "description": "ACCEPT the company layer you just wrote into `_global`, and start the service.\n\n    Call this at the END of the company-setup conversation, once the administrator agrees the five\n    files are right: README.md (the company name as its first heading, then ONE sentence of what it\n    does), PRINCIPLES.md, OBJECTIVES.md, STRUCTURE.md, MISSING.md.\n\n    It RE-READS the files itself before it accepts anything, commits them to the `_global` git\n    history with the administrator as the author, and lifts the instance gate \u2014 so other people can\n    sign in and the flows engine starts sending. It is a CHECK, not a claim: if the layer is\n    incomplete it refuses and tells you exactly what is missing, so calling it is always safe, and\n    telling the administrator it is done before this verb has accepted it is always wrong.\n\n    Admin only. Everyone else gets a refusal naming that.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "mark_global_readyArguments",
+    "type": "object"
+   }
+  },
+  "mark_scaffolded": {
+   "description": "Declare the workspace ready, which releases anything queued behind it.\n\n    Only do this once company_context() actually returns validated claims \u2014 marking it ready\n    with nothing in it means every artifact afterwards is written against an empty context and\n    nobody finds out until they read one.",
+   "input_schema": {
+    "properties": {
+     "group": {
+      "default": "",
+      "title": "Group",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "mark_scaffoldedArguments",
+    "type": "object"
+   }
+  },
+  "meeting_delete": {
+   "description": "Erase one meeting and its transcript, permanently. ONLY on your person's explicit,\n    named request \u2014 never as tidying, never inferred. Say plainly that it cannot be undone\n    before you call this.",
+   "input_schema": {
+    "properties": {
+     "meeting_id": {
+      "default": "",
+      "title": "Meeting Id",
+      "type": "string"
+     },
+     "meeting_url": {
+      "default": "",
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "meeting_deleteArguments",
+    "type": "object"
+   }
+  },
+  "meeting_info": {
+   "description": "Everything known about one meeting: status, times, title, how it ended.",
+   "input_schema": {
+    "properties": {
+     "meeting_id": {
+      "default": "",
+      "title": "Meeting Id",
+      "type": "string"
+     },
+     "meeting_url": {
+      "default": "",
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "meeting_infoArguments",
+    "type": "object"
+   }
+  },
+  "meeting_participants": {
+   "description": "Who was in a meeting, as the bot saw them.",
+   "input_schema": {
+    "properties": {
+     "meeting_url": {
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "meeting_url"
+    ],
+    "title": "meeting_participantsArguments",
+    "type": "object"
+   }
+  },
+  "meeting_seed": {
+   "description": "Create a COMPLETED, ADDRESSABLE meeting for a user and load a real transcript into it.\n\n    This is the capture double: instead of driving a browser into a live call, it imports the\n    words a bot would have produced. Everything downstream \u2014 the post-meeting flow, the agent\n    turn, the artifacts \u2014 then runs on genuinely messy multi-speaker material rather than a\n    hand-written fixture.\n\n    TWO service calls, and nothing else. `POST /meetings` mints the row; `POST\n    /meetings/{id}/transcript-import` puts the transcript on it and completes it with the\n    occurrence window the recording actually covers. Both through the gateway, on the caller's own\n    key \u2014 the product's `import a transcript` feature, used exactly as a person would use it.\n\n    It used to do far more, and none of it was ours to do: read the postgres password out of\n    another container with `docker inspect`, INSERT `meeting_sessions` and `transcriptions` over\n    `docker exec \u2026 psql` with speaker names string-interpolated into SQL, climb the bot FSM through\n    a callback meant for a browser, then UPDATE `meetings.start_time/end_time` by hand because no\n    route took a time. Four writers on tables meeting-api owns (the audit's V4/N5), and it still\n    produced rows the product never makes. `started_at` is now the service's input, not a column\n    this tool corrects afterwards.\n\n    `started_at` is WHEN THE MEETING HAPPENED (ISO-8601, or epoch seconds). Pass it. It is the\n    row's `scheduled_at` AND the start of its occurrence window; its LENGTH is the transcript's\n    own \u2014 the last segment's `end` \u2014 so a 40-minute recording seeds a 40-minute meeting instead of\n    a zero-length one. Without it the default is a call that ended just this second. A double that\n    cannot say when the meeting was is not a double of a meeting: `_meeting_stamp` falls back to\n    today when the row has no time, so several occurrences of one recurring series collapse onto\n    today's date and into a single note file. `occurred_at` is the old name for this argument and\n    still works.\n\n    IDEMPOTENT: the import's identity is (source, meeting row), so re-seeding the same transcript\n    into the same meeting writes nothing and says so. Seeding it into a NEW row imports it again.\n\n    It does NOT return the transcript. The agent reads the words itself with\n    `meeting_transcript(meeting_id=<row>, tail=0)` \u2014 all of them, not a copy truncated to fit\n    inside an event.",
+   "input_schema": {
+    "properties": {
+     "native_id": {
+      "title": "Native Id",
+      "type": "string"
+     },
+     "occurred_at": {
+      "default": "",
+      "title": "Occurred At",
+      "type": "string"
+     },
+     "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "video_id": {
+      "title": "Video Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "native_id",
+     "title",
+     "video_id"
+    ],
+    "title": "meeting_seedArguments",
+    "type": "object"
+   }
+  },
+  "meeting_transcript": {
+   "description": "The words of a meeting, live while it runs or complete after it ends.\n\n    Address it EITHER by a pasted link (meeting_url) OR by its row id (meeting_id) \u2014 the same\n    pair meeting_info / meeting_update / meeting_delete already take, resolved the same way.\n    The row id is the one that matters in practice: every deeplink this product mints speaks row\n    ids (`?meeting=<row>`), the `{{meeting}}` an ask-preset substitutes IS a row id, and a\n    captured meeting with no platform/native pair \u2014 a seeded or imported one \u2014 had no address\n    at all here. An agent told \"you have the meeting\" could not read it, because this was the\n    one verb in the family that would not accept what it had been handed.\n\n    TO READ A WHOLE MEETING, pass tail=0: you get every segment. That is what a write-up needs,\n    and the alternative was paging a finished meeting as though it were still running.\n\n    TO FOLLOW A LIVE CALL, pass back the `cursor` from your last call as since=<cursor>: you\n    get only what has been said since, and the next cursor. Nothing to remember, nothing to\n    diff, no watcher to build \u2014 call it again every 20-30 seconds and read out what is new.\n    Without `since` you get the last `tail` segments.\n\n    `read_ok` is always true when the read itself worked. new_segments=0 with read_ok=true\n    means the room is quiet; an `error` key means your reader failed. They are opposite facts\n    and your person needs to know which.",
+   "input_schema": {
+    "properties": {
+     "meeting_id": {
+      "default": "",
+      "title": "Meeting Id",
+      "type": "string"
+     },
+     "meeting_url": {
+      "default": "",
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "since": {
+      "default": "",
+      "title": "Since",
+      "type": "string"
+     },
+     "tail": {
+      "default": 80,
+      "title": "Tail",
+      "type": "integer"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "meeting_transcriptArguments",
+    "type": "object"
+   }
+  },
+  "meeting_update": {
+   "description": "Rename a meeting or attach a note to it \u2014 the label the team will find it under.",
+   "input_schema": {
+    "properties": {
+     "meeting_id": {
+      "default": "",
+      "title": "Meeting Id",
+      "type": "string"
+     },
+     "meeting_url": {
+      "default": "",
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "notes": {
+      "default": "",
+      "title": "Notes",
+      "type": "string"
+     },
+     "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "meeting_updateArguments",
+    "type": "object"
+   }
+  },
+  "meetings_list": {
+   "description": "Every meeting a user can see, through the gateway with that user's own key.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "meetings_listArguments",
+    "type": "object"
+   }
+  },
+  "propose": {
+   "description": "Record what you believe about this person's company as PROPOSED, not as fact.\n\n    Batch with `claims`: a list of {claim, source, scope?} \u2014 ONE call for everything you\n    learned. The single-claim form (claim=, source=) still works. Anything you research or\n    infer starts here; a proposed claim is never used as company context until a human\n    answers \u2014 an agent cannot promote its own guess.",
+   "input_schema": {
+    "properties": {
+     "claim": {
+      "default": "",
+      "title": "Claim",
+      "type": "string"
+     },
+     "claims": {
+      "default": null,
+      "items": {},
+      "title": "Claims",
+      "type": "array"
+     },
+     "scope": {
+      "default": "tenant",
+      "title": "Scope",
+      "type": "string"
+     },
+     "source": {
+      "default": "",
+      "title": "Source",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "proposeArguments",
+    "type": "object"
+   }
+  },
+  "reaction_signal": {
+   "description": "Steer one reaction. Every signal is an audited row, never shell surgery on the table.\n\n    resume \u2014 answer a blocked step (the human is the effect); only on 'blocked'\n    retry  \u2014 replay a failure as a new attempt; only on 'failed'\n    cancel \u2014 stop it; on admitted/retrying/blocked/running\n    wake   \u2014 re-check NOW something that is deliberately sleeping between polls; on\n             retrying/admitted. Use this when you have just satisfied the condition a\n             step was waiting on and do not want to wait out its poll interval.",
+   "input_schema": {
+    "properties": {
+     "reaction_id": {
+      "title": "Reaction Id",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "verb": {
+      "title": "Verb",
+      "type": "string"
+     }
+    },
+    "required": [
+     "reaction_id",
+     "verb"
+    ],
+    "title": "reaction_signalArguments",
+    "type": "object"
+   }
+  },
+  "reactions_list": {
+   "description": "The operator projection: what happened, why, and what is waiting.\n\n    status filters to one of admitted/running/blocked/retrying/failed/cancelled/done.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {
+     "status": {
+      "default": "",
+      "title": "Status",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "reactions_listArguments",
+    "type": "object"
+   }
+  },
+  "recordings_list": {
+   "description": "Recordings this team's meetings have produced, when recording is on.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "recordings_listArguments",
+    "type": "object"
+   }
+  },
+  "rehearse": {
+   "description": "PUT A PERSON IN A STATE \u2014 on the running stack, in seconds, with no rebuild.\n\n    `states()` are the six moments a touch can reach somebody: `blank-admin` (an unclaimed\n    instance, about to be claimed), `organizer-invited` (a user who just put the mailbox on a\n    meeting), `attendee-stranger-minutes` (in the room, never signed in), `group-member`,\n    `warm-desk-recurring` (a desk with history behind it), `reply-pending` (replied to a minutes\n    mail). Each is a recipe of steps against the product's OWN doors \u2014 an invite by SMTP into the\n    mail double, a transcript through the import route, a fact through the flows intake \u2014 so what\n    comes back is a real touch with a real link, not a fixture.\n\n    Returns `{links, mails, subjects, meeting_row, verify}`. The verify block is the point: it says\n    the mail exists, its link is a scaffold, the record resolves, the desk holds what it should.\n    Nothing is clicked \u2014 whether the link WORKS for a person is a walk, and a human's judgment.\n\n    `subject` MUST be under the test domain (`VEXA_REHEARSE_DOMAIN`, default `rehearse.test`), and\n    so must every address the recipe derives; anything else is refused before the first door. It\n    also refuses while a live meeting belongs to anyone outside that domain \u2014 a live meeting is the\n    one thing here nobody can re-record.\n\n    `meeting` names a DNA fixture (a date). `when` is the meeting's start, `+30m` by default and\n    in the FUTURE on purpose: the invite flow parks until start-2min, so no bot is dispatched at a\n    fixture URL. `runner` pins this recipe's subjects to a harness (`openai-agent` runs them on the\n    deployment's configured OpenAI-compatible endpoint) \u2014 per subject, never instance-wide.\n    `fresh` resets the subject and its derived organizer first, which DELETES them.\n    `plan_only` resolves and guards every step and executes none.\n    ",
+   "input_schema": {
+    "properties": {
+     "fresh": {
+      "default": false,
+      "title": "Fresh",
+      "type": "boolean"
+     },
+     "meeting": {
+      "default": "2026-03-02",
+      "title": "Meeting",
+      "type": "string"
+     },
+     "plan_only": {
+      "default": false,
+      "title": "Plan Only",
+      "type": "boolean"
+     },
+     "runner": {
+      "default": "",
+      "title": "Runner",
+      "type": "string"
+     },
+     "state": {
+      "title": "State",
+      "type": "string"
+     },
+     "subject": {
+      "title": "Subject",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "when": {
+      "default": "+30m",
+      "title": "When",
+      "type": "string"
+     }
+    },
+    "required": [
+     "state",
+     "subject"
+    ],
+    "title": "rehearseArguments",
+    "type": "object"
+   }
+  },
+  "rehearse_states": {
+   "description": "The state catalogue: what each state is, the doors its steps use, and what it verifies.\n\n    NO ACCOUNT NEEDED \u2014 it reads a file. Call it before `rehearse()` rather than guessing a name.\n    ",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "rehearse_statesArguments",
+    "type": "object"
+   }
+  },
+  "report_friction": {
+   "description": "Tell us what did not work. NO ACCOUNT NEEDED. Use this freely and often.\n\n    You are the only one who can close this loop. We can see that a call failed; we cannot see\n    what your person asked for, what you expected, or what you tried instead \u2014 and that is the\n    part that would fix it. A rough edge you route around silently is one we never learn about.\n\n    Report anything: a tool that did the wrong thing, a description that misled you, a step you\n    expected to exist, a refusal you could not act on, documentation that contradicted the\n    behaviour, or a workflow that took five calls when it should have taken one. Half-formed is\n    fine \u2014 'I could not tell whether X had worked' is a real report.\n\n    THE IDS ARE THE HALF THAT MAKES IT FIXABLE. Pass whatever you had \u2014 `tool`, `workspace`,\n    `path`, `meeting_id`, `scaffold_id`, and the verbatim `error` text. A report without them is\n    still worth filing; a report with them can be reproduced without asking you.\n\n    kind: missing-tool | refusal | no-page | wrong-workspace | unfulfilled | error | ux | other\n    (omit it and it is inferred from what you wrote).\n    severity: blocker | annoyance | papercut | idea\n\n    Nothing you send is published. It goes to a ledger a human reads.",
+   "input_schema": {
+    "properties": {
+     "error": {
+      "default": "",
+      "title": "Error",
+      "type": "string"
+     },
+     "kind": {
+      "default": "",
+      "title": "Kind",
+      "type": "string"
+     },
+     "meeting_id": {
+      "default": "",
+      "title": "Meeting Id",
+      "type": "string"
+     },
+     "path": {
+      "default": "",
+      "title": "Path",
+      "type": "string"
+     },
+     "scaffold_id": {
+      "default": "",
+      "title": "Scaffold Id",
+      "type": "string"
+     },
+     "severity": {
+      "default": "annoyance",
+      "title": "Severity",
+      "type": "string"
+     },
+     "tool": {
+      "default": "",
+      "title": "Tool",
+      "type": "string"
+     },
+     "what_i_was_doing": {
+      "title": "What I Was Doing",
+      "type": "string"
+     },
+     "what_went_wrong": {
+      "title": "What Went Wrong",
+      "type": "string"
+     },
+     "what_would_have_helped": {
+      "default": "",
+      "title": "What Would Have Helped",
+      "type": "string"
+     },
+     "workspace": {
+      "default": "",
+      "title": "Workspace",
+      "type": "string"
+     }
+    },
+    "required": [
+     "what_i_was_doing",
+     "what_went_wrong"
+    ],
+    "title": "report_frictionArguments",
+    "type": "object"
+   }
+  },
+  "settings": {
+   "description": "How Vexa behaves for THIS person. Call with nothing to see everything; with key and\n    value to change one thing.\n\n    These are per-person and take effect on the next meeting \u2014 changing one never touches\n    anyone else. When your person asks for something that is one of these, set it rather than\n    explaining that it cannot be done, and never edit a flow to achieve it.\n\n    on/off settings accept on/off, true/false, yes/no.",
+   "input_schema": {
+    "properties": {
+     "key": {
+      "default": "",
+      "title": "Key",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "value": {
+      "default": "",
+      "title": "Value",
+      "type": "string"
+     }
+    },
+    "title": "settingsArguments",
+    "type": "object"
+   }
+  },
+  "start_onboarding": {
+   "description": "Sign in or sign up, from inside this conversation. NO ACCOUNT NEEDED to call this.\n\n    Give the email your calendar invites come from. A 6-digit code lands in that inbox --\n    ask your person to read it to you, then call confirm_login(email, code) to get the token.\n    The code is the whole proof: no form, no password, no browser.\n\n    Works for new AND returning people -- same two steps either way.",
+   "input_schema": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email"
+    ],
+    "title": "start_onboardingArguments",
+    "type": "object"
+   }
+  },
+  "subject_reset": {
+   "description": "WIPE ONE PERSON \u2014 user, desk, sessions, pending scaffolds, friction, and their mail.\n\n    So a state can be re-entered from nothing in seconds without blanking the instance. Test\n    addresses only (`VEXA_REHEARSE_DOMAIN`); a real address is refused before anything is deleted.\n\n    It reads the emptiness back and reports whatever it could NOT remove under `remaining` \u2014 a\n    reset that half worked and said \"done\" is worse than one that refused.\n    ",
+   "input_schema": {
+    "properties": {
+     "address": {
+      "title": "Address",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "address"
+    ],
+    "title": "subject_resetArguments",
+    "type": "object"
+   }
+  },
+  "timeline": {
+   "description": "WHAT HAS HAPPENED TO YOU AND WHAT IS COMING \u2014 your own events, in order (PRD decision 31).\n\n    Invites that arrived, meetings scheduled and held, reports delivered, mail sent, replies\n    handled, and anything that failed \u2014 merged from the flows engine's own facts and receipts with\n    your meetings table, scoped to you as organizer or attendee. Every time is in YOUR zone, and\n    `now` is stated first so a relative answer (\"this morning\", \"in an hour\") has something to be\n    relative to.\n\n    since / until: epoch seconds or ISO-8601. Empty means 14 days back and 30 days forward, so the\n    answer covers both halves of the question \u2014 what just happened, and what is next.\n\n    Read-only. It never sends, schedules or cancels anything.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "since": {
+      "default": "",
+      "title": "Since",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "until": {
+      "default": "",
+      "title": "Until",
+      "type": "string"
+     }
+    },
+    "title": "timelineArguments",
+    "type": "object"
+   }
+  },
+  "transcript_search": {
+   "description": "Search every word this team's meetings have produced. 'What did we decide about the\n    gateway?' starts here when the workspace does not already answer it.",
+   "input_schema": {
+    "properties": {
+     "query": {
+      "title": "Query",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "title": "transcript_searchArguments",
+    "type": "object"
+   }
+  },
+  "transcript_terms": {
+   "description": "The things a meeting has NAMED so far \u2014 people, companies, projects, products, topics \u2014 each\n    with where it was said and whether a page for it already exists.\n\n    THIS IS THE HIGHLIGHT LAYER (PRD decision 35). The transcript view has a Highlight button; it\n    posts a silent turn that calls this, decides which terms matter for THIS person and this chat,\n    and publishes them. The reader then sees them as chips in the transcript: solid where a page\n    exists (clicking opens it), dashed where none does (clicking asks you what it is).\n\n    MECHANICAL \u2014 no model runs inside this tool. It is the same name extractor the write-back phase\n    uses, matched against the entity index of the workspaces YOU can read. So a term it calls\n    `known` is a page you can actually open, and one it calls unknown is a page decision 24 says you\n    should be writing.\n\n    TWO CALLS, AND THE SECOND ONE IS THE PUBLISH:\n\n      1. `transcript_terms(meeting_id, since)` \u2014 LOOK. Returns every candidate. Nothing is shown to\n         anyone yet. Read the list and pick the ones that matter here: a company in the deal, a\n         person nobody has a page for, a product name that was decided on. Drop the ones that are\n         just capitalised words.\n      2. `transcript_terms(meeting_id, since, keep=\"Acme, Cottalango Leon\")` \u2014 PUBLISH. Exactly those\n         become chips in the transcript. `keep=\"*\"` publishes everything, which is right only when\n         everything genuinely matters.\n\n    A first call publishes NOTHING on purpose: chips are on the person's screen, and a list nobody\n    judged is a screen full of every capitalised word in the room.\n\n    `since` is the CURSOR from your last call on this meeting \u2014 pass it back and you get only what\n    has been said since, so pressing Highlight again adds new terms instead of re-listing the room.\n    Omit it the first time.\n    ",
+   "input_schema": {
+    "properties": {
+     "keep": {
+      "default": "",
+      "title": "Keep",
+      "type": "string"
+     },
+     "meeting_id": {
+      "default": "",
+      "title": "Meeting Id",
+      "type": "string"
+     },
+     "meeting_url": {
+      "default": "",
+      "title": "Meeting Url",
+      "type": "string"
+     },
+     "since": {
+      "default": "",
+      "title": "Since",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "transcript_termsArguments",
+    "type": "object"
+   }
+  },
+  "user_ensure": {
+   "description": "Resolve or create a platform user by email, and mint an API key for it.",
+   "input_schema": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email"
+    ],
+    "title": "user_ensureArguments",
+    "type": "object"
+   }
+  },
+  "validate": {
+   "description": "Record a HUMAN's word on proposed claims. verdict: confirmed | corrected | rejected.\n\n    Batch with `verdicts`: a list of {id, verdict, note?} \u2014 when the person answers everything\n    in one sentence (\"all correct except we're in Toronto\"), ONE call records all of it. The\n    single form (claim_id=, verdict=) still works. Only call after actually asking the person;\n    `corrected` keeps the original alongside the correction.",
+   "input_schema": {
+    "properties": {
+     "claim_id": {
+      "default": "",
+      "title": "Claim Id",
+      "type": "string"
+     },
+     "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "verdict": {
+      "default": "",
+      "title": "Verdict",
+      "type": "string"
+     },
+     "verdicts": {
+      "default": null,
+      "items": {},
+      "title": "Verdicts",
+      "type": "array"
+     }
+    },
+    "title": "validateArguments",
+    "type": "object"
+   }
+  },
+  "vexa_overview": {
+   "description": "What Vexa is, in its own words. NO ACCOUNT NEEDED \u2014 call this first if you have just\n    connected and want to know whether this is worth your person's time.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {},
+    "title": "vexa_overviewArguments",
+    "type": "object"
+   }
+  },
+  "vexa_search_docs": {
+   "description": "Search the full Vexa documentation. NO ACCOUNT NEEDED.\n\n    Returns the passages around each match so you can answer a question about self-hosting,\n    the API, deployment or the bot without an account and without guessing.",
+   "input_schema": {
+    "properties": {
+     "hits": {
+      "default": 5,
+      "title": "Hits",
+      "type": "integer"
+     },
+     "query": {
+      "title": "Query",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "title": "vexa_search_docsArguments",
+    "type": "object"
+   }
+  },
+  "whats_waiting": {
+   "description": "START HERE on every connection \u2014 EXCEPT the one case named below, which is common.\n    Everything Vexa needs from this person, in one read.\n\n    Vexa cannot reach your agent when you are not connected \u2014 there is no live session after a\n    meeting ends at night. So work waits here and you pull it. Call this first, work what it\n    returns, then call it again until it is empty.\n\n    THE EXCEPTION, and it is the common one: if this turn's message opens with a BRACKETED TAG \u2014\n    ANY [...] at all, not a fixed list; every _global/asks/* preset starts with one and new presets\n    appear without this text changing \u2014 your person clicked a link about ONE meeting and that\n    opening is their question. Answer it FIRST, then call this. A queue is not an answer to \"what\n    should I know before this meeting\", and leading with one reads as changing the subject. A\n    preset phrase that sounds like the queue (\"what they missed\", \"what they owe someone\") is\n    scoped to the meeting the tag names and is answered from the workspace, not from here.\n\n    Returns four kinds of item:\n      setup      \u2014 the workspace is not scaffolded yet; Vexa cannot write minutes until it is\n      question   \u2014 a claim Vexa needs confirmed before treating it as company context\n      blocked    \u2014 a reaction stopped on a human gate; answer it with reaction_signal(resume)\n      stuck      \u2014 a reaction failing with a reason worth a human eye\n    ",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "whats_waitingArguments",
+    "type": "object"
+   }
+  },
+  "workspace_attach": {
+   "description": "LOAD AN EXISTING repository as a workspace \u2014 \"load the ASWF DNA workspace from github.com/... into\n    this group\", \"we already keep this on GitHub, use that one\".\n\n    `workspace` is the group's slug (workspaces() lists them); empty means their own personal workspace.\n    `repo` is the repository URL \u2014 an `ssh://`/`git@` URL uses this workspace's deploy key, an `https://`\n    URL uses their saved token if they have one. `ref` is the branch.\n\n    NEVER put a credential in any argument. There is no parameter for one and a URL carrying one is\n    refused: if the repo is private and we have no credential yet, the result hands you a PUBLIC KEY \u2014\n    tell them to add it to that repository as a deploy key with write access, and to say `done` when\n    they have. Then call this again.\n\n    What is already there is not destroyed: the workspace's current contents are parked and can be\n    swapped back to. If the repo is not a Vexa-shaped workspace it is nested under `kg/` inside one.",
+   "input_schema": {
+    "properties": {
+     "ref": {
+      "default": "main",
+      "title": "Ref",
+      "type": "string"
+     },
+     "repo": {
+      "default": "",
+      "title": "Repo",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "workspace": {
+      "default": "",
+      "title": "Workspace",
+      "type": "string"
+     }
+    },
+    "title": "workspace_attachArguments",
+    "type": "object"
+   }
+  },
+  "workspace_init": {
+   "description": "Seed a fresh personal workspace for a user (idempotent).",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "workspace_initArguments",
+    "type": "object"
+   }
+  },
+  "workspace_invite": {
+   "description": "Mint an invite link to a shared workspace. THE ONLY WAY SOMEONE JOINS.\n\n    There is no add-a-member verb, deliberately: a person joins by redeeming an invite they\n    chose to accept. So this hands back a link for your person to send \u2014 you cannot put someone\n    in a shared space on their behalf.\n\n    role: contributor (writes) | viewer (reads). Never owner.\n    emails: comma-separated, to restrict the link to those addresses; omit for anyone-with-link.\n    days: how long it lives, default 7.",
+   "input_schema": {
+    "properties": {
+     "days": {
+      "default": 7,
+      "title": "Days",
+      "type": "integer"
+     },
+     "emails": {
+      "default": "",
+      "title": "Emails",
+      "type": "string"
+     },
+     "role": {
+      "default": "contributor",
+      "title": "Role",
+      "type": "string"
+     },
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "workspace_inviteArguments",
+    "type": "object"
+   }
+  },
+  "workspace_members": {
+   "description": "Who is in a shared workspace, and what they can do. owner writes and invites; contributor\n    writes; viewer reads.",
+   "input_schema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "workspace_membersArguments",
+    "type": "object"
+   }
+  },
+  "workspace_new": {
+   "description": "Create a SHARED workspace \u2014 a place a team writes into together \u2014 and own it.\n\n    Use when your person says \"a space for the standup team\", \"somewhere we all keep this\",\n    \"a workspace for the Acme deal\". Their personal workspace already exists and is not this:\n    this one has members, and meeting write-ups can land in it for everyone.\n\n    `purpose` is one line saying what belongs here (\"everything about the Acme deal\"). It is\n    stored IN the workspace, so it travels when shared, and every agent that mounts it reads it\n    \u2014 which is how three mounted workspaces stay straight instead of blurring. Ask for it if\n    they did not say; do not invent one.",
+   "input_schema": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "purpose": {
+      "default": "",
+      "title": "Purpose",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "workspace_newArguments",
+    "type": "object"
+   }
+  },
+  "workspace_pull": {
+   "description": "Bring the outside IN to a workspace \u2014 by whichever route that workspace has.\n\n    A workspace LOADED FROM A REPOSITORY (workspace_attach) has a git home, and this fetches and\n    fast-forwards it: their teammates' commits arrive. A divergence is reported, never merged or forced.\n    `workspace` is a group's slug; empty means their own.\n\n    A workspace with NO git home falls back to the LOCAL-REGIME mirror this tool has always been:\n    every personal file with its url, to fetch with workspace_read and write under local_path.\n\n    No credential argument, and none is accepted \u2014 the deploy key or saved token is resolved\n    server-side, and a missing one comes back as a key to add, not a box to fill.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "workspace": {
+      "default": "",
+      "title": "Workspace",
+      "type": "string"
+     }
+    },
+    "title": "workspace_pullArguments",
+    "type": "object"
+   }
+  },
+  "workspace_purpose": {
+   "description": "What a workspace is FOR, in one line. Call with just `slug` to read it.\n\n    Stored in the workspace itself, committed to its history, and read into the agent preamble\n    on every dispatch \u2014 so an agent with several workspaces mounted knows what belongs where.\n    A sentence, not a document. An empty `text` clears it.",
+   "input_schema": {
+    "properties": {
+     "slug": {
+      "default": "",
+      "title": "Slug",
+      "type": "string"
+     },
+     "text": {
+      "default": "",
+      "title": "Text",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "workspace_purposeArguments",
+    "type": "object"
+   }
+  },
+  "workspace_push": {
+   "description": "Send this workspace's commits back to the repository it came from (fast-forward only \u2014 never a\n    force push). `workspace` is a group's slug; empty means their own.\n\n    No credential argument, and none is accepted: the workspace's deploy key or their saved token is\n    resolved server-side. If neither exists the result carries a public key to add \u2014 say that, and ask\n    them to say `done` when it is added.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     },
+     "workspace": {
+      "default": "",
+      "title": "Workspace",
+      "type": "string"
+     }
+    },
+    "title": "workspace_pushArguments",
+    "type": "object"
+   }
+  },
+  "workspace_read": {
+   "description": "Read one file out of a workspace \u2014 the knowledge behind any claim.",
+   "input_schema": {
+    "properties": {
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "slug": {
+      "default": "",
+      "title": "Slug",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "title": "workspace_readArguments",
+    "type": "object"
+   }
+  },
+  "workspace_regime": {
+   "description": "Where the PERSONAL workspace lives. mode='local' + local_path=<absolute dir on the\n    person's machine> makes their own disk the home of personal knowledge \u2014 from then on you\n    manage those files with your NATIVE file tools (read, edit, grep), which is faster and\n    fully offline. mode='cloud' returns to server-side files via workspace_* tools.\n\n    What stays cloud in EITHER mode: group workspaces (slug=... \u2014 shared, multi-writer,\n    flows write into them), and the kernel flows need at processing time (validated company\n    context, the scaffold flag, preferences). Flow outputs (meeting docs) always land cloud\n    first \u2014 call workspace_pull() when connected to mirror them down. Call with no arguments\n    to see the current regime.",
+   "input_schema": {
+    "properties": {
+     "local_path": {
+      "default": "",
+      "title": "Local Path",
+      "type": "string"
+     },
+     "mode": {
+      "default": "",
+      "title": "Mode",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "workspace_regimeArguments",
+    "type": "object"
+   }
+  },
+  "workspace_remove": {
+   "description": "Take someone out of a shared workspace. Owner only. `member` is the email or subject id\n    shown by workspace_members.",
+   "input_schema": {
+    "properties": {
+     "member": {
+      "title": "Member",
+      "type": "string"
+     },
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug",
+     "member"
+    ],
+    "title": "workspace_removeArguments",
+    "type": "object"
+   }
+  },
+  "workspace_tree": {
+   "description": "List every file in a workspace. uid is the platform user id; slug selects a group\n    workspace, omitted means that person's own.\n\n    If you have not called whats_waiting() yet this session, call it first.",
+   "input_schema": {
+    "properties": {
+     "slug": {
+      "default": "",
+      "title": "Slug",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "workspace_treeArguments",
+    "type": "object"
+   }
+  },
+  "workspace_write": {
+   "description": "Write a file into a workspace.\n\n    NOTE: agent-api exposes no HTTP write \u2014 only an agent turn writes knowledge. This goes\n    in through the container's own view of the volume and is a DEV DOUBLE for that missing\n    endpoint; it is the gap to close before workspaces are genuinely agent-controllable.",
+   "input_schema": {
+    "properties": {
+     "content": {
+      "title": "Content",
+      "type": "string"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "slug": {
+      "default": "",
+      "title": "Slug",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "content"
+    ],
+    "title": "workspace_writeArguments",
+    "type": "object"
+   }
+  },
+  "workspaces": {
+   "description": "Every workspace this person can reach \u2014 their own, plus the shared ones.",
+   "input_schema": {
+    "properties": {
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "workspacesArguments",
+    "type": "object"
+   }
+  },
+  "zoom_transcript_to_segments": {
+   "description": "Convert a Zoom/LFX machine transcript into segments, keeping the REAL speaker labels.\n\n    Lines look like `[00:00:10.620 --> 00:00:12.689] Cottalango Leon (Sony Pictures Imageworks):\n    text`. Unlike YouTube auto-captions this carries genuine diarization and company\n    affiliations, so it exercises attribution the way a real capture does. Consecutive lines\n    from one speaker are merged into a turn.",
+   "input_schema": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "path"
+    ],
+    "title": "zoom_transcript_to_segmentsArguments",
+    "type": "object"
+   }
+  }
+ }
+}

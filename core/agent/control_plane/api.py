@@ -81,6 +81,11 @@ from control_plane import version as version_mod
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import friction as friction_store_mod
+from control_plane import queue as queue_mod
+from control_plane import claims as claims_mod
+from control_plane import person_settings as person_settings_mod
+from shared import terms as terms_mod
+from shared import workspace_id as workspace_id_mod
 from shared import friction as friction_mod
 from control_plane import chat_intents
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
@@ -1009,6 +1014,39 @@ def _http_email_subject_lookup(admin_api_url: str, internal_secret: str, admin_t
         return str(row["id"]) if isinstance(row, dict) and row.get("id") is not None else None
 
     return _lookup
+
+
+def _meeting_api_get(meeting_api_url: str, path: str, uid: str, timeout_s: float = 4.0):
+    """One read from meeting-api as the caller. Returns the parsed body, or None."""
+    import urllib.request as _ur
+    base = (meeting_api_url or "").rstrip("/")
+    if not base:
+        return None
+    req = _ur.Request(f"{base}{path}", headers={"X-User-Id": str(uid)})
+    try:
+        with _ur.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 — internal service URL
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except Exception:  # noqa: BLE001 — a source that cannot be read contributes nothing
+        return None
+
+
+def _flows_get(path: str, timeout_s: float = 4.0):
+    """One read from flows-api with the deployment's own key. Returns the parsed body, or None.
+
+    The SAME key resolution `shared/timeline.py` uses, deliberately: the timeline key first (it is
+    scoped to read routes), the operator key as the fallback a single-key deployment has."""
+    import urllib.request as _ur
+    base = (os.environ.get("VEXA_FLOWS_API_URL") or "").rstrip("/")
+    key = ((os.environ.get("VEXA_FLOWS_TIMELINE_KEY") or "").strip()
+           or (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip())
+    if not base or not key:
+        return None
+    req = _ur.Request(f"{base}{path}", headers={"X-Flows-Admin-Key": key})
+    try:
+        with _ur.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 — internal service URL
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _http_meeting_owner_lookup(meeting_api_url: str):
@@ -2264,6 +2302,244 @@ def create_app(
         length-capped in `shared/friction.py`, and the dedup key folds a flood of identical reports
         into ONE row with a counter."""
         return (request.headers.get("x-user-id") or "").strip()
+
+    # ── the four readers the queue and the terms route are composed from ───────────────────────
+    def _running_bots(uid: str) -> list:
+        body = _meeting_api_get(settings.meeting_api_url if settings is not None else "",
+                                "/bots/status", uid)
+        rows = (body or {}).get("running") or (body or {}).get("running_bots") or []
+        return rows if isinstance(rows, list) else []
+
+    def _flows_reactions() -> list:
+        body = _flows_get("/reactions")
+        rows = (body or {}).get("reactions") or []
+        return rows if isinstance(rows, list) else []
+
+    def _friction_seen() -> int:
+        try:
+            return len(friction.since(0.0, status=""))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _resolve_meeting_row(uid: str, meeting_url: str) -> str:
+        """A meeting ROW id from a pasted link. The MCP used to do this against the gateway, which
+        made `transcript_terms` a two-service tool; resolving it here keeps that tool thin."""
+        u = (meeting_url or "").strip()
+        pf = nat = ""
+        for pat, name in ((r"meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", "google_meet"),
+                          (r"teams\.live\.com/meet/(\d+)", "teams"),
+                          (r"zoom\.us/j/(\d+)", "zoom")):
+            m = re.search(pat, u)
+            if m:
+                pf, nat = name, m.group(1)
+                break
+        if not pf:
+            return ""
+        body = _meeting_api_get(settings.meeting_api_url if settings is not None else "",
+                                "/meetings?limit=100", uid) or {}
+        for row in body.get("meetings", []) if isinstance(body, dict) else []:
+            if row.get("platform") == pf and str(row.get("native_meeting_id")) == nat:
+                return str(row.get("id"))
+        return ""
+
+    def _transcript_segments(uid: str, row: str):
+        body = _meeting_api_get(settings.meeting_api_url if settings is not None else "",
+                                f"/transcripts/by-id/{row}", uid)
+        if body is None:
+            return None
+        segs = body.get("segments") if isinstance(body, dict) else None
+        return segs if isinstance(segs, list) else []
+
+    def _entity_index(request: Request, uid: str) -> list:
+        """Every entity page the CALLER can read, desk first, then their groups, then `_global`.
+
+        ORDER IS PRECEDENCE (`match_known` takes the first hit): a name this person has written
+        about on their own desk resolves to THEIR page, never to a namesake in a group they happen
+        to be in."""
+        index: list = []
+        seen: set = set()
+        mounts = [{"slug": "", "path": str(_read_target(request, None))}]
+        mounts += [m for m in _entity_mounts(uid)]
+        g = _global_dir()
+        if g:
+            mounts.append({"slug": system_mounts.GLOBAL_SLUG, "path": str(g)})
+        for m in mounts:
+            path = m.get("path")
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            try:
+                files = wsr.tree_at(Path(path))
+            except Exception:  # noqa: BLE001 — a mount this reader cannot list is not an error
+                continue
+            wsid = workspace_id_mod.workspace_id_of(Path(path)) or (m.get("slug") or str(uid))
+            index += terms_mod.index_entries(str(wsid), m.get("slug") or "", files)
+        return index
+
+    # ── the queue, the claim book, the settings and the terms (PRD decision 40, seam B1/B2) ────
+    #
+    # Four groups the control MCP used to compute in a tool body. They are here because the stores
+    # are here: the workspace, the claim book, `.settings.json`, the scaffold flag and the entity
+    # index are all files this service owns, and the only way the MCP could write them was to reach
+    # into this container with `docker exec … cat >` (seam inventory B6.1). Every one of these is a
+    # thin route over a module that is pure over a directory, which is what makes them testable
+    # without a stack.
+
+    def _person_workspace(request: Request) -> Path:
+        """This caller's own desk. The claim book, the settings and the scaffold flag are per
+        person and never per shared workspace, so they resolve here and not through `_read_target`
+        — a slug would let a caller write another workspace's readiness flag."""
+        return _read_target(request, None, write=True)
+
+    def _global_dir() -> "Path | None":
+        """The organisation tier, for the copy an admin has written. None when unconfigured, which
+        means every block falls back to its baked default."""
+        g = wsr.root / system_mounts.GLOBAL_SLUG
+        return g if g.is_dir() else None
+
+    @app.get("/api/queue/waiting")
+    def queue_waiting(request: Request, anonymous: bool = False):
+        """EVERYTHING VEXA NEEDS FROM THIS PERSON, in one read — what `whats_waiting` returns.
+
+        The tool is a forward now. This assembles it: the scaffold flag and the claim book from the
+        caller's own desk, their meetings and running bots from meeting-api, the blocked and failed
+        reactions from flows-api, and the copy from `_global/queue/*.md` when an admin has written
+        any (PRD §3.8 — an admin changes what a new person hears without a deploy).
+
+        DEGRADES, NEVER FAILS: a source that cannot be read contributes nothing and is named in
+        `sources_unavailable`. A queue that 500s because one of four services is slow is worse than
+        a queue missing one section, and the caller cannot tell the difference from a refusal."""
+        if anonymous:
+            return queue_mod.anonymous_welcome(_global_dir())
+        subject = subject_of(request)
+        unavailable = []
+        try:
+            ws = _person_workspace(request)
+        except Exception:  # noqa: BLE001
+            ws, _ = None, unavailable.append("workspace")
+        meetings, bots, reactions = [], [], []
+        try:
+            meetings = schedule_digest_mod.fetch_user_meetings(
+                settings.meeting_api_url if settings is not None else "", subject)
+        except Exception:  # noqa: BLE001
+            unavailable.append("meetings")
+        try:
+            bots = _running_bots(subject)
+        except Exception:  # noqa: BLE001
+            unavailable.append("bots")
+        try:
+            reactions = _flows_reactions()
+        except Exception:  # noqa: BLE001
+            unavailable.append("reactions")
+        out = queue_mod.build(subject=str(subject), workspace=ws, global_dir=_global_dir(),
+                              meetings=meetings, bots=bots, reactions=reactions,
+                              friction_seen=_friction_seen())
+        if unavailable:
+            out["sources_unavailable"] = unavailable
+        return out
+
+    @app.get("/api/claims")
+    def read_claims(request: Request):
+        """The validated company context — only claims a human has confirmed or corrected."""
+        return claims_mod.context(_person_workspace(request))
+
+    @app.post("/api/claims")
+    def write_claims(request: Request, body: dict = Body(...)):
+        """Record claims as PROPOSED. An agent cannot promote its own guess."""
+        batch = (body or {}).get("claims") or []
+        if not isinstance(batch, list) or not batch:
+            raise HTTPException(status_code=400, detail="claims must be a non-empty list")
+        return claims_mod.propose(_person_workspace(request), batch)
+
+    @app.post("/api/claims/verdicts")
+    def write_verdicts(request: Request, body: dict = Body(...)):
+        """Record a HUMAN's word on proposed claims — and mark the desk ready, because a human
+        answering IS the workspace becoming ready and there was never a decision between the two."""
+        batch = (body or {}).get("verdicts") or []
+        if not isinstance(batch, list) or not batch:
+            raise HTTPException(status_code=400, detail="verdicts must be a non-empty list")
+        return claims_mod.record_verdicts(_person_workspace(request), batch)
+
+    @app.post("/api/claims/scaffold")
+    def write_scaffold(request: Request, body: dict = Body(...)):
+        """Declare the workspace ready. Refused while nothing is validated."""
+        st, out = claims_mod.scaffold(_person_workspace(request),
+                                      str((body or {}).get("group") or ""))
+        if st != 200:
+            return JSONResponse(status_code=st, content=out)
+        return out
+
+    @app.get("/api/settings")
+    def read_settings(request: Request):
+        """How Vexa behaves for THIS person, with the closed vocabulary that bounds it."""
+        return {"settings": person_settings_mod.read(_person_workspace(request)),
+                "what_each_means": person_settings_mod.MEANINGS,
+                "to_change": "settings(key=..., value=...) — one at a time"}
+
+    @app.post("/api/settings")
+    def write_settings(request: Request, body: dict = Body(...)):
+        """Change one setting. An unknown key is refused WITH the list: a setting that silently does
+        nothing is worse than an error, and an agent with no vocabulary invents one."""
+        st, out = person_settings_mod.write(_person_workspace(request),
+                                            str((body or {}).get("key") or ""),
+                                            (body or {}).get("value"))
+        if st != 200:
+            return JSONResponse(status_code=st, content=out)
+        return out
+
+    @app.get("/api/transcript/terms")
+    def transcript_terms(request: Request, meeting_id: str = "", meeting_url: str = "",
+                         since: str = "", keep: str = ""):
+        """THE HIGHLIGHT LAYER (PRD decision 35) — what a meeting has NAMED, and whether a page for
+        it exists in a workspace THIS caller can read.
+
+        MECHANICAL: no model runs here. It is `shared/terms.py`, the same extractor the write-back
+        phase uses, matched against an entity index built by walking the caller's own mounts. The
+        control MCP used to do this by injecting `core/agent` onto its own `sys.path` and rebuilding
+        the index from N HTTP reads behind two caches (seam inventory B6.4) — two extractors would
+        drift the first time either was tuned, and the drift shows up as a chip that opens nothing.
+        """
+        subject = subject_of(request)
+        row = str(meeting_id or "").strip()
+        if not row:
+            row = _resolve_meeting_row(subject, meeting_url)
+        if not row:
+            raise HTTPException(status_code=404,
+                                detail="no captured meeting matches that link yet")
+        raw = _transcript_segments(subject, row)
+        if raw is None:
+            raise HTTPException(status_code=502, detail="the transcript could not be read")
+
+        def _at(g):
+            return g.get("absolute_start_time") or g.get("start")
+
+        fresh = [g for g in raw if str(_at(g) or "") > str(since)] if since else raw
+        segments = [{"id": _at(g), "at": _at(g), "text": (g.get("text") or "").strip()}
+                    for g in fresh if (g.get("text") or "").strip()]
+        cursor = str(_at(raw[-1])) if raw else (since or "")
+        found = terms_mod.terms_for(segments, _entity_index(request, subject))
+        wanted = [w.strip().lower() for w in str(keep or "").split(",") if w.strip()]
+        publish_all = any(w in ("*", "all") for w in wanted)
+        emit = (found if publish_all else
+                [t for t in found if str(t.get("term", "")).lower() in wanted] if wanted else [])
+        unmatched = [] if publish_all else [
+            w for w in wanted if not any(str(t.get("term", "")).lower() == w for t in found)]
+        known = [t for t in found if t.get("known")]
+        return {
+            "meeting": row, "read_ok": True, "cursor": cursor, "since": since or "",
+            "scanned_segments": len(segments), "terms": found,
+            "known_count": len(known), "unknown_count": len(found) - len(known),
+            "emit": emit, "published": len(emit), "keep_not_found": unmatched,
+            "next": ("Nothing is on the person's screen yet. Call me again with keep=\"<the terms "
+                     "that matter here, comma separated>\" to publish them as chips — or keep=\"*\" "
+                     "only if genuinely all of them do."
+                     if not emit else
+                     "Published. Say nothing to your person about it — the chips are the answer. "
+                     f"Keep cursor={cursor} for the next Highlight on this meeting."),
+            "a_term_with_known_null": ("has no page anywhere you can read. That is decision 24's "
+                                       "cue, not a gap to narrate: entity_upsert it when you know "
+                                       "what it is."),
+        }
 
     @app.post("/api/friction", status_code=201)
     def file_friction(body: dict, request: Request):

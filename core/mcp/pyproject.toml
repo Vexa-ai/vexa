@@ -1,0 +1,39 @@
+[project]
+name = "vexa-mcp"
+version = "0.12.0"
+description = "The Vexa control MCP — one MCP surface over the whole machine (identity · meetings · workspaces · flows · friction · rehearse · panel · docs), every tool a thin forward to a service route over HTTP carrying the caller's identity."
+requires-python = ">=3.11"
+# STDLIB PLUS THE MCP SDK, deliberately. Every tool reaches a service over `urllib`; the package
+# opens no database, runs no subprocess and injects no other service's source tree onto sys.path —
+# that is the contract `tests/test_thin_forward.py` enforces, and a dependency list is the first
+# place it would quietly be broken.
+dependencies = [
+    "mcp>=2.1,<3",
+    "uvicorn[standard]>=0.29,<1",
+]
+
+[project.scripts]
+# ONE entrypoint, two transports. `vexa-mcp` alone speaks stdio (the local install:
+# `claude mcp add vexa -- vexa-mcp`); `vexa-mcp serve` speaks streamable HTTP (the hosted shape).
+vexa-mcp = "vexa_mcp.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+# The repo convention for its Python trees (see core/agent, deploy/dogfood/rehearse): `uv run` does
+# not build the project, so `gate:python` needs no build backend at CI time. A real install
+# (`pip install core/mcp`) still works and still gets the `vexa-mcp` console script — that is what
+# `[build-system]` below is for.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vexa_mcp"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
