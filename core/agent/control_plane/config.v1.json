@@ -173,7 +173,7 @@
       "key": "VEXA_RUNNER",
       "class": "defaulted",
       "default": "claude-code",
-      "description": "agent harness stamped onto dispatched workspace turns; codex selects Codex app-server",
+      "description": "agent harness stamped onto dispatched workspace turns; codex selects the Codex app-server, openai-agent selects this repo\u2019s own loop over any OpenAI-compatible endpoint (VEXA_LLM_BASE_URL/_MODEL/_EXTRA_BODY, already forwarded)",
       "targets": [
         "compose"
       ]

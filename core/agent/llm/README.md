@@ -23,8 +23,25 @@ fakes.
   `claude_cli.py` (beats via the claude CLI on mounted SUBSCRIPTION credentials — no API key;
   slower per beat; for subscription-only deployments).
 - **Harnesses**: `claude_code.py` (the `claude` CLI — stream-json + open-stdin steering) · `codex.py`
-  (Codex app-server JSON-RPC — durable threads + `turn/steer`). Both normalize into the same frozen
-  UnitEvents; Claude remains the deployment default.
+  (Codex app-server JSON-RPC — durable threads + `turn/steer`) · `openai_agent.py` (**ours** — an
+  agent loop over any OpenAI-compatible `chat/completions` with function calling, no CLI and no
+  vendor SDK). All three normalize into the same frozen UnitEvents; Claude remains the deployment
+  default.
+
+### The runner matrix
+
+| `VEXA_RUNNER` | What drives the turn | Tools the model gets | Sessions | Steering |
+|---|---|---|---|---|
+| `claude-code` (default) | the `claude` CLI, `--output-format stream-json` | the CLI's own (Read/Write/Edit/Bash/Web...) + MCP via `--mcp-config` | CLI transcripts under `.claude/projects` | mid-turn stdin injection |
+| `codex` | Codex app-server over JSON-RPC | Codex's own + MCP | durable threads | `turn/steer` |
+| `openai-agent` | **this repo's loop**, raw httpx to `POST {base}/chat/completions` | `Read`/`Write`/`Edit`/`Glob`/`Grep` implemented here, sandboxed to the mounts, plus every MCP tool in the same `mcp.json` (http **and** stdio) | JSONL written in the CLI's on-disk shape, so `workspace_reader.history` reads it unchanged | none (one request at a time) |
+
+`openai-agent` exists for PRD decision 37: run the service on a model we host. It has **no `Bash`,
+no `WebSearch`/`WebFetch` and no skills discovery** — a name in the allow-set it does not implement
+is simply not attached. It carries a hard per-turn budget (tool calls + wall clock) and trims
+context oldest-tool-result-first, because the box it was built for holds ~29 requests at 24k
+context. Qwen on that box needs `VEXA_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}`
+or it spends the whole budget reasoning.
 
 Raw `httpx`, no vendor SDKs — the protocols are ~10 lines each and a pinned SDK is a heavier
 supply-chain surface than the dialect itself.
@@ -38,7 +55,11 @@ supply-chain surface than the dialect itself.
 | `VEXA_LLM_API_KEY` | credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
 | `VEXA_LLM_MODEL` | deployment-default model (free string) | empty → fail-loud at completion call |
 | `VEXA_LLM_MAX_TOKENS` | Messages-API max_tokens | 4096 |
-| `VEXA_RUNNER` | harness adapter key: `claude-code` \| `codex` | `claude-code` |
+| `VEXA_RUNNER` | harness adapter key: `claude-code` \| `codex` \| `openai-agent` | `claude-code` |
+| `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY request (openai-compat + openai-agent) | `{}` |
+| `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
+| `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
+| `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
 | `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter ONLY | — |
 | `HOST_CODEX_CREDENTIALS`, `OPENAI_API_KEY` | codex adapter subscription-file / API-key auth | — |
 

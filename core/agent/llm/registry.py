@@ -17,6 +17,7 @@ from llm.claude_cli import ClaudeCliCompletion
 from llm.claude_code import ClaudeCodeHarness
 from llm.codex import CodexHarness
 from llm.errors import LLMConfigError
+from llm.openai_agent import OpenAIAgentHarness
 from llm.openai_compat import OpenAICompatCompletion
 from llm.ports import CompletionPort, HarnessPort
 
@@ -30,6 +31,9 @@ COMPLETION_PROVIDERS: dict[str, type] = {
 HARNESS_RUNNERS: dict[str, type] = {
     "claude-code": ClaudeCodeHarness,
     "codex": CodexHarness,
+    # PRD decision 37 — OURS, not a vendor CLI: an agent loop over any OpenAI-compatible endpoint,
+    # so a deployment can run the service on a model it hosts itself (the CCC box serving Qwen).
+    "openai-agent": OpenAIAgentHarness,
 }
 
 
