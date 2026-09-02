@@ -58,3 +58,18 @@ open(p, "a").write("\n")
 print("derobot: seo.metatags.robots=noindex,nofollow stamped on docs.json")
 PY
 fi
+
+# Re-seal the pruned CALM model and regenerate the views derived from it. Both live in
+# vexa-core-resident tooling (scripts/ was seeded once and is not carved), and both went
+# stale on every train so far (vexa-core cb9f3ff on the 07-29 train, f414502 on the
+# 09-02 train) because the calm-prune above changes the chart hash. Deterministic:
+# seal = hash of the pruned chart, views = generated from it. No-ops in the mono (which
+# is not where transform.sh runs) and on a tree without the scripts.
+if [ -f scripts/arch-dsl.mjs ] && [ -f architecture.calm.json ]; then
+  node scripts/arch-dsl.mjs --write >/dev/null 2>&1 && echo "arch-dsl: views regenerated" \
+    || echo "arch-dsl: regen failed (non-fatal — gate:dataflow will say so)"
+fi
+if [ -f scripts/gates.mjs ] && [ -f architecture.seal.json ]; then
+  node scripts/gates.mjs seal-arch >/dev/null 2>&1 && echo "seal-arch: re-sealed" \
+    || echo "seal-arch: re-seal failed (non-fatal — gate:dataflow will say so)"
+fi
