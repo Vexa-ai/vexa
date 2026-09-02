@@ -214,8 +214,11 @@ per push/pull/publish/attach. Set it in **API Tokens → GitHub**; the git-op fo
   Encrypt-then-MAC (HMAC-SHA256 subkeys + a SHA-256 counter keystream, stdlib only — no new dependency in
   the control-plane image); a tampered envelope or a wrong key reads as **"no credential"**, never as
   garbage. A token written by the older plaintext code is migrated (re-sealed, plaintext unlinked) the
-  first time it is read. Still use a **minimally-scoped, revocable fine-grained PAT**: a stored PAT is
-  password-equivalent, and encryption at rest does not protect a running server.
+  first time it is read. **Set `VEXA_SECRETS_KEY` in any deployment whose workspace volume is backed up
+  or synced**: without it the generated key sits in the same directory as the ciphertext, so a stolen
+  volume carries both — that default buys protection against a stray file read, not against a volume
+  leak. Still use a **minimally-scoped, revocable fine-grained PAT**: a stored PAT is
+  password-equivalent, and no encryption at rest protects a running server.
 
 Code: `git_credentials.py` (`set`/`read`/`masked_github_token`), `secret_store.py` (the sealed store),
 `api.py` (`GET`/`POST /api/workspace/git-token`; push/pull/publish/attach fallback), `tokens.tsx` (the

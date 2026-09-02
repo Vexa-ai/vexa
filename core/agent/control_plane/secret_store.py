@@ -9,8 +9,11 @@ The shape:
 
   * **One server-side key.** ``VEXA_SECRETS_KEY`` (config contract) when the operator supplies one;
     otherwise a key is generated on first use and written ``0600`` to ``<root>/.secrets/.master.key``
-    (its directory ``0700``). Self-hosters get encryption without having to configure anything, and an
-    operator who wants the key OUT of the data volume sets the env var.
+    (its directory ``0700``). Self-hosters get encryption without configuring anything — but be honest
+    about what the generated default buys: it sits in the same directory as the ciphertext, so it
+    defends against a stray file read, a mis-scoped mount or a log, and NOT against a stolen volume or
+    backup. Any deployment that syncs or backs up the workspace store should set the env var, which is
+    the whole reason it exists.
   * **Encrypt-then-MAC, stdlib only.** No new dependency lands in the control-plane image for this, so
     the construction is built from ``hashlib``/``hmac``: per-secret random salt → two subkeys by
     HMAC-SHA256 (encryption / authentication, domain-separated) → a SHA-256 counter keystream XORed
