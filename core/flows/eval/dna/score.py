@@ -184,6 +184,37 @@ def d_compounding(rec: dict, earlier: list[dict]) -> tuple[float, dict]:
 
 # ── the judge ────────────────────────────────────────────────────────────────────────────────────
 
+def ask_json(prompt: str, model: str, timeout: int = 900) -> dict | None:
+    """Run one `claude -p` and get a JSON object back — through a FILE, never through stdout.
+
+    The CLI answers in its own voice: a long structured reply comes back as a TLDR summary and the
+    object itself never reaches stdout at all, so a scraper reads 147 characters of prose and
+    reports "extraction failed". This is the same lesson the flows engine already learned in
+    `feedback_turn` — the agent WRITES its answer to an agreed path and the caller reads the file.
+    Ask for the artifact, not for the transcript of producing it."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d) / "out.json"
+        ask = (prompt + f"\n\nWRITE YOUR JSON OBJECT — and nothing else — to the file {out}. "
+                        "Use the Write tool. Do not print it. Your reply text is ignored.")
+        try:
+            subprocess.run(["claude", "-p", "--model", model,
+                            "--permission-mode", "acceptEdits", ask],
+                           capture_output=True, text=True, timeout=timeout)
+        except Exception:                                         # noqa: BLE001
+            return None
+        if not out.exists():
+            return None
+        raw = out.read_text()
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:                                             # noqa: BLE001
+        return None
+
+
 SCHEMA = ("Reply with ONLY a JSON object, no prose, no code fence, with exactly these integer keys "
           "(0-100 unless stated): decisions_recalled, decisions_invented (count), decisions_missed "
           "(count), owners_correct, open_items_correct, attributions_wrong (count), overall.")
@@ -209,19 +240,8 @@ def judge(rec: dict, truth: str, model: str) -> dict:
         "You are scoring a meeting note against a truth sidecar. Be strict and literal: an item is "
         "recalled only if the truth contains it, invented only if the truth contradicts or omits it.\n\n"
         f"{SCHEMA}\n\n=== TRUTH SIDECAR ===\n{truth}\n\n=== THE NOTE UNDER TEST ===\n{note[:12000]}\n")
-    try:
-        p = subprocess.run(["claude", "-p", "--model", model, prompt],
-                           capture_output=True, text=True, timeout=300)
-    except Exception as e:                                        # noqa: BLE001
-        return {"error": f"{type(e).__name__}: {e}"}
-    out = (p.stdout or "").strip()
-    m = re.search(r"\{[\s\S]*\}", out)
-    if not m:
-        return {"error": "judge returned no json", "raw": out[:300]}
-    try:
-        return json.loads(m.group(0))
-    except Exception:                                             # noqa: BLE001
-        return {"error": "judge json did not parse", "raw": out[:300]}
+    got = ask_json(prompt, model, timeout=600)
+    return got if got is not None else {"error": "judge produced no json file"}
 
 
 # ── main ─────────────────────────────────────────────────────────────────────────────────────────
