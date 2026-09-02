@@ -23,7 +23,16 @@ set -u
 #                        arrival while looking perfectly well-formed.
 #   VEXA_MCP_DELEGATION_SECRET  the HMAC key agent-api mints delegated tokens with. Read from
 #                        $HOME/.storm/delegation-secret at start; never echoed, never defaulted.
-FL="${VEXA_FLOWS_SRC:-/home/dima/dev/vexa-flows1315/core/flows}"
+# ONE LINE (2026-09-02): the flows checkout is the LINE worktree. This default is not
+# cosmetic — start_worker passes VEXA_FLOWS_SRC="$FL" into flows-up.sh, which OVERRIDES
+# flows-up.sh's own default, so a later `rig.sh restart` with the old value here would
+# silently move the running engine back to the pre-merge lineage and quietly undo the
+# attendee follow-up, the note-date fix and the provenance lines. Previous value:
+#   FL="${VEXA_FLOWS_SRC:-/home/dima/dev/vexa-flows1315/core/flows}"
+FL="${VEXA_FLOWS_SRC:-/home/dima/dev/wt-line/core/flows}"
+# The venv still lives in the old checkout: same dependencies, and a worktree has none of
+# its own. Source and interpreter are different questions.
+VENV_DIR="${VEXA_FLOWS_VENV:-/home/dima/dev/vexa-flows1315/core/flows}"
 PUBLIC_MCP_URL="${VEXA_PUBLIC_MCP_URL:-https://rig.dev.vexa.ai/mcp}"
 UI_URL="${VEXA_UI_URL:-https://app.dev.vexa.ai}"
 
@@ -32,7 +41,7 @@ UI_URL="${VEXA_UI_URL:-https://app.dev.vexa.ai}"
 RIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CTL="$RIG_DIR/vexa_control_mcp.py"
 
-V=$FL/.venv/bin
+V=$VENV_DIR/.venv/bin
 LOG=/tmp/storm-logs
 mkdir -p "$LOG"
 
