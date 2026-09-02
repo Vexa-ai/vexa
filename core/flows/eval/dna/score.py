@@ -154,15 +154,21 @@ def d_minutes_mail(rec: dict) -> tuple[float, dict]:
     # matters is that the note's SUBSTANCE arrived and that it reads as prose to someone who will
     # never open the workspace.
     readable = present = False
+
+    def flat(x):
+        """Both sides through the same sieve. The first version of this flattened only the NOTE
+        and compared it against the raw mail, so every line the note wrote as `**bold**` failed to
+        match the identical bold line in the mail — and the check reported 'the mail carries none
+        of the note' about a mail that carried all of it, on every fixture. A dimension that always
+        answers the same thing is telling you about itself, not about the product."""
+        x = re.sub(r"\[\[([^\]]+)\]\]", r"\1", x)
+        return re.sub(r"[#*`>_]", "", x).strip().lower()
+
     if note:
-        body_l = body.lower()
+        body_l = flat(body)
         fm = re.match(r"^---\n[\s\S]*?\n---\n", note)
         core = [l.strip() for l in (note[fm.end():] if fm else note).splitlines()
                 if len(l.strip()) > 25]
-        # strip the note's own markup the way the mail rendering does, then look for the words
-        def flat(x):
-            x = re.sub(r"\[\[([^\]]+)\]\]", r"\1", x)
-            return re.sub(r"[#*`>]", "", x).strip().lower()
         core = [flat(c) for c in core][:8]
         present = bool(core) and frac([c[:60] in body_l for c in core]) >= 0.5
         readable = ("---" not in body.split("\n")[0]) and "[[" not in body

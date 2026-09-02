@@ -156,18 +156,41 @@ def wait_mail(org: str, prefix: str, title: str, since: float, budget_s: int):
                                   if m["subject"] == f"{prefix}: {title}"), None), budget_s)
 
 
-def wait_note(uid: str, shas_before: list, budget_s: int):
+def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
     """A new commit touching kg/entities/meeting/ — the same completion test the flows engine
-    itself applies (``flows_steps/agent.latest_meeting_note``), so the wait and the engine agree."""
+    itself applies (``flows_steps/agent.latest_meeting_note``), so the wait and the engine agree.
+
+    ``stamp`` is a PREFERENCE, not a filter, and the reason is a finding in its own right. "The
+    next new note" is only correct while this replay is the sole writer, and it is not: anything
+    else dispatching a turn for the same user commits a note too, and the fixture in flight adopts
+    it, scores someone else's meeting, and looks entirely successful doing so. I did that to myself
+    by running a fabrication trial beside a sweep.
+
+    The obvious fix — demand the meeting's own stamp in the filename — does not work, because THE
+    AGENT DOES NOT USE THE FILENAME IT IS GIVEN. The step computes `{date}-{native}` and the prompt
+    names that exact path; the agent writes `2026-09-02-dna-tsc-inaugural.md` — today's date and a
+    slug of its own. So the path is preferred when it appears and accepted otherwise, with
+    ``stamp_matched`` recorded either way, because a wait that demanded it would hang on every
+    fixture and a wait that ignores it can be stolen.
+
+    (Narrowing on the native id would be worse still: a recurring series shares ONE across every
+    occurrence — all ten DNA fixtures are Zoom 96088138284 — so it matches the whole library.)"""
+    best = {}
+
     def probe():
         for c in (workspace_git(uid).get("commits") or []):
             if c.get("sha") in shas_before:
                 continue
             for f in (c.get("files") or []):
-                if f.startswith("kg/entities/meeting/"):
-                    return (c["sha"], f)
+                if not f.startswith("kg/entities/meeting/"):
+                    continue
+                if stamp and stamp in f:
+                    return (c["sha"], f, True)
+                best.setdefault("any", (c["sha"], f, False))
         return None
-    return wait_for(probe, budget_s)
+
+    hit = wait_for(probe, budget_s)
+    return hit or best.get("any")
 
 
 def workspace_git(uid: str) -> dict:
@@ -340,11 +363,11 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
         "fact_emit", event_type="meeting.completed", source_event_id=done_id,
         subject_refs={"organizer": org, "title": m["title"], "uid": uid, "meeting_id": mid,
                       "native": native, "start": occurred})
-    hit = wait_note(uid, shas_before, 1200)
+    hit = wait_note(uid, shas_before, 1200, stamp=date)
     note_path = None
     if hit:
-        sha, note_path = hit
-        rec["note_sha"] = sha[:9]
+        sha, note_path, matched = hit
+        rec["note_sha"], rec["stamp_matched"] = sha[:9], matched
         rec["note"] = ws_file(uid, note_path)
     rec["note_path"] = note_path
     print(f"  note={bool(note_path)}", flush=True)
