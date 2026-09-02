@@ -369,136 +369,288 @@ def tool_sections_text() -> str:
 
 
 class Card:
-    """A parsed entity page. Parse → render is the ONLY write path, which is what makes migration
-    free: a flat page parses into a card with everything in `timeline`, and rendering it produces
-    the shape. There is no separate migration routine to forget to run."""
+    """A parsed entity page, kept as RAW LINES.
 
-    __slots__ = ("title", "summary", "sections", "order", "timeline", "was_flat")
+    ⚠ THE FIRST VERSION OF THIS PARSED A PAGE INTO A MODEL AND RE-RENDERED THE WHOLE THING, and on a
+    page a human had written that lost things nobody agreed to lose (F98, found by round-tripping
+    real pages): paragraphs collapsed into one line, blank lines between them vanished, and a `##`
+    *inside a code fence* was promoted to a real heading — which silently cut the fence in half and
+    made everything after it a section. A tool that rewrites what it did not write is a tool people
+    stop letting near their notes, and the damage is invisible until someone opens the page.
+
+    So the page is a HEAD plus a list of BLOCKS, each holding the exact source lines of one `##`
+    section, and rendering is a join. Nothing outside the sections this tool owns is ever
+    regenerated: `render(parse(x)) == x`, byte for byte, for any page — which is a property test
+    (`test_render_of_parse_is_the_identity_on_arbitrary_markdown`), not a claim.
+
+    Lines are split on `"\\n"` rather than with `splitlines()` on purpose: `splitlines()` cannot tell
+    `"a\\nb"` from `"a\\nb\\n"`, and a renderer that adds or drops the final newline of every page it
+    touches makes a diff out of nothing."""
+
+    __slots__ = ("head", "blocks", "was_flat")
 
     def __init__(self):
-        self.title = ""
-        self.summary = ""
-        self.sections: dict = {}
-        self.order: list = []
-        self.timeline: list = []          # [(date | "", [lines])]
+        self.head: list = []          # raw lines before the first heading this tool can see
+        self.blocks: list = []        # [[name, [raw lines, heading first]], …]
         self.was_flat = False
 
-    def section(self, name: str) -> list:
-        if name not in self.sections:
-            self.sections[name] = []
-            self.order.append(name)
-        return self.sections[name]
+    # ── reading ──────────────────────────────────────────────────────────────────────────────────
+
+    def index(self, name: str) -> int:
+        want = (name or "").strip().lower()
+        for i, (head, _lines) in enumerate(self.blocks):
+            if head.strip().lower() == want:
+                return i
+        return -1
+
+    def content(self, name: str) -> list:
+        """The section's lines WITHOUT its heading — what a reader of that section sees."""
+        i = self.index(name)
+        return self.blocks[i][1][1:] if i >= 0 else []
+
+    @property
+    def title(self) -> str:
+        for line in self.head:
+            if line.startswith("# "):
+                return line[2:].strip()
+        return ""
+
+    @title.setter
+    def title(self, value: str) -> None:
+        for i, line in enumerate(self.head):
+            if line.startswith("# "):
+                self.head[i] = f"# {value}"
+                return
+        self.head = ["", f"# {value}", ""] if self.head else ["", f"# {value}", ""]
+
+    @property
+    def summary(self) -> str:
+        seen_title = False
+        for line in self.head:
+            if line.startswith("# ") and not seen_title:
+                seen_title = True
+                continue
+            if seen_title and line.strip():
+                return line.strip()
+        return ""
+
+    @summary.setter
+    def summary(self, value: str) -> None:
+        if self.summary or not value.strip():
+            return
+        for i, line in enumerate(self.head):
+            if line.startswith("# "):
+                self.head[i + 1:i + 1] = ["", value.strip()]
+                return
+        self.head += ["", value.strip()]
+
+    # ── writing, only into sections this tool owns ───────────────────────────────────────────────
+
+    def ensure(self, name: str, at: int = -1) -> int:
+        i = self.index(name)
+        if i >= 0:
+            return i
+        # heading · the blank under it · the blank that separates it from whatever comes next. A
+        # block owns its own trailing blank, otherwise the first bullet appended to a section welds
+        # the NEXT heading onto it — which is what the first version of this did.
+        block = [name, [f"## {name}", "", ""]]
+        at = len(self.blocks) if at < 0 or at > len(self.blocks) else at
+        self.blocks.insert(at, block)
+        return at
+
+    def _has(self, lines, line: str) -> bool:
+        want = _normalise(_SOURCE_SUFFIX.sub("", line.lstrip("-* ")))
+        return any(_normalise(_SOURCE_SUFFIX.sub("", l.lstrip("-* "))) == want
+                   for l in lines if l.strip())
+
+    def place(self, name: str) -> int:
+        """The index of an owned section, creating it in CANONICAL order if it is missing.
+
+        `ensure` appends, which is right for a caller that has already worked out where the section
+        goes and wrong for everyone else: `link_back` reached a page whose `## Connected` did not
+        exist yet and appended it after `## Sources`. A tail section knows where it belongs."""
+        i = self.index(name)
+        if i >= 0 or name not in TAIL_SECTIONS:
+            return self.ensure(name)
+        n = TAIL_SECTIONS.index(name)
+        at = len(self.blocks)
+        for later in TAIL_SECTIONS[n + 1:]:
+            j = self.index(later)
+            if j >= 0:
+                at = min(at, j)
+        return self.ensure(name, at)
 
     def add(self, name: str, line: str) -> bool:
-        """Append a bullet unless the page already carries that fact. Returns whether it landed."""
+        """Append a bullet to one owned section unless the page already carries that fact."""
         line = line.strip()
         if not line:
             return False
-        want = _normalise(_SOURCE_SUFFIX.sub("", line.lstrip("-* ")))
-        for existing in self.sections.get(name, ()):
-            if _normalise(_SOURCE_SUFFIX.sub("", existing.lstrip("-* "))) == want:
-                return False
-        self.section(name).append(line if line.startswith("-") else f"- {line}")
+        i = self.place(name)
+        lines = self.blocks[i][1]
+        if self._has(lines[1:], line):
+            return False
+        _append_in_block(lines, line if line.startswith("-") else f"- {line}")
+        return True
+
+    def set_section(self, name: str, content: list) -> bool:
+        """Replace one owned section's content. Only ``## Sources`` uses this — it is derived from
+        frontmatter, so it is the one section whose body is not something anybody typed."""
+        i = self.place(name)
+        want = [f"## {name}", ""] + list(content) + [""]
+        if self.blocks[i][1] == want:
+            return False
+        self.blocks[i][1] = want
         return True
 
     def add_timeline(self, day: str, line: str) -> bool:
-        for _d, lines in self.timeline:
-            for existing in lines:
-                if _normalise(_SOURCE_SUFFIX.sub("", existing.lstrip("-* "))) == \
-                        _normalise(_SOURCE_SUFFIX.sub("", line.lstrip("-* "))):
-                    return False
-        for d, lines in self.timeline:
-            if d == day:
-                lines.append(line if line.startswith("-") else f"- {line}")
+        line = line if line.startswith("-") else f"- {line}"
+        i = self.ensure("Timeline")
+        lines = self.blocks[i][1]
+        if self._has(lines[1:], line):
+            return False
+        head = f"### {day}"
+        for j, l in enumerate(lines):
+            if l.strip() == head:
+                end = j + 1
+                while end < len(lines) and not lines[end].startswith("### "):
+                    end += 1
+                while end > j + 1 and not lines[end - 1].strip():
+                    end -= 1
+                lines.insert(end, line)
                 return True
-        self.timeline.append((day, [line if line.startswith("-") else f"- {line}"]))
+        _append_in_block(lines, head, "", line)
         return True
 
 
-def parse_card(body: str) -> Card:
-    """Read any page — a card, a flat log, or something a human wrote — into one representation.
+def _append_in_block(lines: list, *new: str) -> None:
+    """Append inside a section, BEFORE its trailing blank lines — so the blank line that separates
+    it from the next section stays where it is instead of migrating to the middle.
 
-    A top-level `## 2026-09-02` is the OLD FLAT SHAPE and becomes a timeline entry. That single line
-    is the whole of the migration the founder asked for, and it is here rather than in a one-shot
-    script because a page can be flat for two reasons: this tool wrote it before today, or a person
-    typed it. Both want the same treatment, on touch, forever."""
+    The blank line immediately AFTER a heading is never consumed: on an empty section it is the only
+    blank there is, and eating it renders `## What they care about` with the first bullet welded to
+    it, which is not the shape every other section on the page has."""
+    floor = 2 if len(lines) > 1 and not lines[1].strip() else 1
+    end = len(lines)
+    while end > floor and not lines[end - 1].strip():
+        end -= 1
+    lines[end:end] = list(new)
+
+
+# ── fences and comments are OPAQUE ───────────────────────────────────────────────────────────────
+#
+# F98's third mangle: a `## Setup` inside a ```markdown fence became a real heading, which cut the
+# fence in half and turned the rest of the page into sections. Everything between the fence markers
+# is text ABOUT markdown, never markdown, and the same goes for an HTML comment — the seed's own
+# templates carry `<!-- the web: link every entity … -->` with prose inside it.
+_FENCE_OPEN = re.compile(r"^\s{0,3}(```+|~~~+)")
+
+
+def _opaque_mask(lines) -> list:
+    """[bool] per line — True where a heading must NOT be recognised."""
+    mask, fence, comment = [], "", False
+    for line in lines:
+        if fence:
+            mask.append(True)
+            if line.strip().startswith(fence):
+                fence = ""
+            continue
+        if comment:
+            mask.append(True)
+            if "-->" in line:
+                comment = False
+            continue
+        m = _FENCE_OPEN.match(line)
+        if m:
+            fence = m.group(1)[:3]
+            mask.append(True)
+            continue
+        stripped = line.strip()
+        if stripped.startswith("<!--"):
+            mask.append(True)
+            comment = "-->" not in stripped[4:]
+            continue
+        mask.append(False)
+    return mask
+
+
+def parse_card(body: str) -> Card:
+    """Read any page — a card, a flat log, or something a human wrote — into head + blocks.
+
+    Every line is kept exactly as it arrived. A top-level `## 2026-09-02` is the OLD FLAT SHAPE and
+    is only NOTED here (`was_flat`); the move into `## Timeline` happens in `migrate_flat`, which
+    the write path calls, so parsing stays a pure read and the round trip stays an identity."""
     card = Card()
-    mode = "head"            # head → summary lines · section → a named section · timeline
-    current = ""
-    summary: list = []
-    for raw in (body or "").splitlines():
-        line = raw.rstrip()
-        if line.startswith("# ") and not card.title:
-            card.title = line[2:].strip()
-            continue
-        m2 = _H2.match(line)
-        if m2:
-            head = m2.group(1).strip()
-            if _ISO_DAY.match(head):                       # the old flat shape
+    lines = (body or "").split("\n")
+    mask = _opaque_mask(lines)
+    current = None
+    for line, opaque in zip(lines, mask):
+        m = _H2.match(line) if not opaque else None
+        if m:
+            name = m.group(1).strip()
+            if _ISO_DAY.match(name):
                 card.was_flat = True
-                mode, current = "timeline", head
-                card.timeline.append((head, []))
-                continue
-            if head.lower() == "timeline":
-                mode, current = "timeline", ""
-                continue
-            mode, current = "section", head
-            card.section(head)
+            current = [name, [line]]
+            card.blocks.append(current)
             continue
-        if mode == "timeline":
-            m3 = _H3.match(line)
-            if m3:
-                current = m3.group(1).strip()
-                card.timeline.append((current, []))
-                continue
-            if not line.strip():
-                continue
-            if not card.timeline:
-                card.timeline.append(("", []))
-            card.timeline[-1][1].append(line)
-            continue
-        if mode == "section":
-            if line.strip():
-                card.sections[current].append(line)
-            continue
-        if line.strip():
-            summary.append(line.strip())
-    card.summary = " ".join(summary).strip()
-    if not card.sections and not card.timeline:
-        card.was_flat = True                              # a bare page is as flat as a logged one
+        (current[1] if current is not None else card.head).append(line)
+    if not card.blocks:
+        card.was_flat = True                     # a bare page is as flat as a logged one
     return card
 
 
-def render_card(card: Card, kind: str, fm: list) -> str:
-    """The card, in one order, every time. Empty kind-sections are KEPT — they are the shape, and a
-    heading with nothing under it is how the next turn knows where the fact it just learned goes.
-    Empty tail sections are dropped: nobody needs a `## Timeline` that has never had an entry."""
-    out = [f"# {card.title}".rstrip(), ""]
-    if card.summary:
-        out += [card.summary, ""]
+def render_card(card: Card, kind: str = "", fm: "list | None" = None) -> str:
+    """head + every block, verbatim. ``kind`` is accepted and unused: the SHAPE is applied by
+    ``ensure_card_shape`` on the write path, never by rendering, because a renderer that also
+    reshapes cannot be an identity and this one has to be."""
+    body = "\n".join(card.head + [l for _name, lines in card.blocks for l in lines])
+    if fm is None:
+        return body
+    return "---\n" + "\n".join(fm) + "\n---\n" + body
+
+
+def migrate_flat(card: Card) -> bool:
+    """Move top-level `## <date>` sections into `## Timeline` as `### <date>`. The flat shape the
+    founder rejected, converted on touch — for both reasons a page can be flat: this tool wrote it
+    before today, or a person typed it."""
+    dated = [(i, name, lines) for i, (name, lines) in enumerate(card.blocks) if _ISO_DAY.match(name)]
+    if not dated:
+        return False
+    for i, _n, _l in reversed(dated):
+        card.blocks.pop(i)
+    t = card.ensure("Timeline")
+    for _i, name, lines in dated:
+        content = [l for l in lines[1:] if l.strip()]
+        _append_in_block(card.blocks[t][1], f"### {name}", "", *content)
+    return True
+
+
+def ensure_card_shape(card: Card, kind: str) -> None:
+    """Put the sections this tool owns where they belong, WITHOUT moving anything else.
+
+    A missing kind-section lands after the last kind-section that precedes it; a missing tail
+    section lands before the first tail section that follows it, else at the end. Sections a human
+    wrote are never reordered — the card is imposed around their page, not over it."""
     named = list(CARD_SECTIONS.get(kind, ()))
-    for head in named:
-        out += [f"## {head}", ""] + list(card.sections.get(head, ())) + [""]
-    # Anything a human added that is neither the card nor the tail is kept, in the order it was
-    # written. A renderer that silently drops the section somebody typed is a renderer nobody keeps.
-    for head in card.order:
-        if head in named or head in TAIL_SECTIONS:
+    for n, head in enumerate(named):
+        if card.index(head) >= 0:
             continue
-        out += [f"## {head}", ""] + list(card.sections.get(head, ())) + [""]
-    for head in ("Connected", "Sources", "Open questions"):
-        lines = card.sections.get(head) or []
-        if lines:
-            out += [f"## {head}", ""] + list(lines) + [""]
-    if card.timeline:
-        out += ["## Timeline", ""]
-        for day, lines in card.timeline:
-            if not lines:
-                continue
-            if day:
-                out += [f"### {day}", ""]
-            out += list(lines) + [""]
-    text = "\n".join(out).rstrip("\n") + "\n"
-    return "---\n" + "\n".join(fm) + "\n---\n\n" + text
+        at = 0
+        for earlier in named[:n]:
+            j = card.index(earlier)
+            if j >= 0:
+                at = j + 1
+        card.ensure(head, at)
+    for head in TAIL_SECTIONS:
+        card.place(head)
+
+
+def drop_empty_tail(card: Card) -> None:
+    """A `## Timeline` that has never had an entry helps nobody. Kind sections stay even when empty
+    — the heading is how the next turn knows where the fact it just learned goes."""
+    for head in TAIL_SECTIONS:
+        i = card.index(head)
+        if i >= 0 and not any(l.strip() for l in card.blocks[i][1][1:]):
+            card.blocks.pop(i)
 
 
 def find_entity(root, name: str) -> "tuple[str, str] | None":
@@ -523,7 +675,10 @@ def link_back(root, target_name: str, from_name: str, relation: str) -> "str | N
 
     Only onto a page that already exists. Minting one from a name with no facts behind it is the
     invention decision 24.5 forbids — the caller gets it back in `links_missing` instead, and the
-    edge completes the moment that page is written for a real reason."""
+    edge completes the moment that page is written for a real reason.
+
+    It adds ONE bullet to ONE section it owns. The rest of that page — someone else's page, which
+    this call is only passing through — comes back out byte for byte."""
     hit = find_entity(root, target_name)
     if not hit:
         return None
@@ -635,9 +790,12 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     day = _today(today)
 
     card = parse_card(body)
-    migrated = existed and card.was_flat
+    # THE SHAPE IS APPLIED HERE, not by the renderer. `render(parse(x)) == x` has to hold for any
+    # page — including one a human wrote — so reshaping cannot live on the read path (F98).
+    migrated = existed and (migrate_flat(card) or card.was_flat)
     if not card.title:
         card.title = name
+    ensure_card_shape(card, kind)
 
     if not existed:
         fm = [f"type: {kind}", f"id: {slugify(name)}", f"title: {name}",
@@ -693,9 +851,9 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         if card.add("Open questions", q):
             written += 1
 
-    # `## Sources` is RENDERED FROM frontmatter, never parsed back, so the two can never disagree
-    # about where a page came from. One store, one reader.
-    card.sections["Sources"] = [f"- {s}" for s in _list_field(_fm_get(fm, "sources"))]
+    # `## Sources` is DERIVED FROM frontmatter, so it is the one section whose body is not something
+    # anybody typed and the one this tool may replace wholesale. One store, one reader.
+    card.set_section("Sources", [f"- {s}" for s in _list_field(_fm_get(fm, "sources"))])
 
     back_links, seen_edges = [], set()
     for c in connections:
@@ -721,6 +879,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                 "kind": kind, "name": name, "dates": {}, "back_links": back_links,
                 "migrated": False, "filed": {}}
 
+    drop_empty_tail(card)          # a `## Timeline` that never had an entry helps nobody
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_card(card, kind, fm), encoding="utf-8")
     return {"path": rel, "created": not existed, "changed": True, "facts_written": written,
