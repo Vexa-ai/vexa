@@ -83,8 +83,21 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     url = _meeting_url(ve) or _meeting_url(ics)
     if not url:
         return None
-    org = re.search(r"ORGANIZER[^:]*:(?:mailto:)?([^\s]+)", ve, re.I)
-    dt = re.search(r"DTSTART(?:;TZID=([^:;]+))?[^:]*:(\d{8}T\d{6})(Z?)", ve)
+    # ⚠ ANCHORED TO A LINE START, and it has to be. These patterns are case-insensitive and
+    # `[^:]*` matches newlines, so an UNANCHORED `ORGANIZER` matched the word wherever it appeared
+    # — inside a UID, a SUMMARY, a DESCRIPTION — and then ate greedily to the NEXT colon anywhere
+    # in the event, capturing whatever followed it. Found 2026-09-02 on a rehearsal invite whose
+    # UID carried the state name: the organizer parsed as `20260902t183213z`, the DTSTAMP off the
+    # following line, and `rsvp_accept` mailed it — `SMTPRecipientsRefused: 553 not a valid RFC
+    # 5321 address`.
+    #
+    # It fails LOUDLY here only because our own mail double refuses the address. A real ICS whose
+    # SUMMARY reads "Organizer sync" would have handed the flow a plausible-looking wrong address
+    # instead, and every touch for that meeting would have gone to a stranger — silently, with the
+    # flow reporting success. Property names live at the start of a content line (RFC 5545 §3.1),
+    # so `re.M` + `^` is the whole fix, and `_unfold` above has already joined continuations.
+    org = re.search(r"^ORGANIZER[^:]*:(?:mailto:)?([^\s]+)", ve, re.I | re.M)
+    dt = re.search(r"^DTSTART(?:;TZID=([^:;]+))?[^:]*:(\d{8}T\d{6})(Z?)", ve, re.M)
     uid = re.search(r"^UID:(.+)$", ve, re.M)
     summ = re.search(r"^SUMMARY:(.+)$", ve, re.M)
     desc = re.search(r"^DESCRIPTION:(.*)$", ve, re.M)

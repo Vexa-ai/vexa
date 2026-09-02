@@ -69,3 +69,47 @@ def test_the_rendered_report_names_every_state_and_the_score(catalog, env):
     for name in catalog.states:
         assert name in text
     assert f"{len(catalog.states)}/{len(catalog.states)} states green" in text
+
+
+# ── a finding must survive an intake that is not there ───────────────────────────────────────────
+
+def test_a_finding_lands_on_disk_even_when_the_intake_is_missing(catalog, env, tmp_path,
+                                                                 monkeypatch):
+    """`POST /api/friction` is not on the deployed agent-api image yet (#1412), so every record
+    404'd on the first live run. A finding that exists only in a 404 is a finding nobody has —
+    and a 404 is never allowed to read as a pass."""
+    import json as _json
+
+    from rehearse import run_all as ra
+    log = tmp_path / "friction.jsonl"
+    monkeypatch.setattr(ra, "FRICTION_FALLBACK", log)
+
+    def intake_404(_rec):
+        raise RuntimeError("friction intake answered 404: {'detail': 'Not Found'}")
+
+    class NoMail(StubDoors):
+        def await_mail(self, to, subject_contains="", budget_s=180, since=0.0):
+            raise DoorRefused("no mail arrived")
+
+    report = ra.run(NoMail(), catalog=catalog, env=env, reporter=intake_404)
+    assert report["failed"], "a refused intake must not turn a red run green"
+    assert all(f["filed"] is False for f in report["friction"])
+    rows = [_json.loads(ln) for ln in log.read_text().splitlines()]
+    assert len(rows) == len(report["friction"])
+    assert {r["state"] for r in rows} == set(report["failed"])
+    assert all("python -m rehearse.run_all --only" in r["what_would_have_helped"] for r in rows)
+
+
+def test_the_rendered_report_says_the_intake_refused_and_where_the_records_went(catalog, env,
+                                                                                tmp_path,
+                                                                                monkeypatch):
+    from rehearse import run_all as ra
+    monkeypatch.setattr(ra, "FRICTION_FALLBACK", tmp_path / "friction.jsonl")
+
+    class NoMail(StubDoors):
+        def await_mail(self, to, subject_contains="", budget_s=180, since=0.0):
+            raise DoorRefused("no mail arrived")
+
+    text = ra.render(ra.run(NoMail(), catalog=catalog, env=env,
+                            reporter=lambda _r: (_ for _ in ()).throw(RuntimeError("404"))))
+    assert "written to" in text and "the intake refused them" in text

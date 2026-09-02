@@ -12,6 +12,7 @@ good. Those need the stack and, for the last one, a person.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -57,7 +58,13 @@ class StubDoors(Doors):
     def require_instance_blank(self) -> dict:
         self.calls.append(("require_instance_blank",))
         if not self._blank:
-            raise DoorRefused("the instance is NOT blank: an admin has claimed it")
+            # Word for word the live refusal (`LiveDoors.require_instance_blank`): a double whose
+            # error text differs from the door's teaches a caller to handle a message the stack
+            # never sends.
+            raise DoorRefused(
+                "the instance is NOT blank: an admin has claimed it and the company layer is "
+                "completed. `blank-admin` asserts this state, it never creates it — blanking "
+                "deletes every person on the stack and is `bin/blank-instance.sh`, run on purpose.")
         return {"blank": True}
 
     def require_subject_absent(self, address: str) -> dict:
@@ -119,18 +126,32 @@ class StubDoors(Doors):
         self._send(organizer, f"Accepted: {title}", "Vexa will be there.")
         link = self._scaffold("prep", organizer,
                               {"title": title, "when": start, "organizer": organizer,
-                               "state": "warm" if len(self.desks.get(uid, [])) > 1 else "new"})
+                               "state": {"desk": self._desk_state(uid), "group": "absent"}})
         self._send(organizer, f"Prepare: {title}",
                    f"{title} — I'll be in the room. Open the chat: {link}\n")
         mid = self._id()
         self.meetings[mid] = {"id": mid, "native_meeting_id": ics_uid or mid, "status": "scheduled",
                               "owner": uid, "title": title}
+        # `invite_intake` PARKS on `await_start` and then dispatches a real bot. Modelled, because
+        # the thing the recipe has to prove is that it leaves nothing armed.
+        self.reactions.append({"flow": "invite_intake", "state": "retrying", "id": self._id("r"),
+                               "created_at": time.time(),
+                               "source_event_id": f"ics-{ics_uid}::invite_intake"})
         self.calls.append(("drop_invite", organizer, title, group))
         return {"ics_uid": ics_uid, "to": "vexa@storm.test", "organizer": organizer,
                 "start": start, "attendees": [a for _, a in attendees]}
 
+    #: `transcript-import`'s own vocabulary, from its 422. A double that accepts what the real
+    #: route refuses certifies a broken caller — which is exactly what happened on the first live
+    #: run: three states passed here and 422'd there.
+    IMPORT_SOURCES = ("import", "seed")
+
     def seed_meeting(self, owner: str, native: str, title: str, segments: list,
-                     started_at: float) -> dict:
+                     started_at: float, source: str = "seed") -> dict:
+        if source not in self.IMPORT_SOURCES:
+            raise DoorRefused(
+                f"'source' must be one of {list(self.IMPORT_SOURCES)} — say where the transcript "
+                f"came from (got {source!r})")
         for row in self.meetings.values():            # adopt, exactly as LiveDoors does
             if row["native_meeting_id"] == native and row["status"] == "completed":
                 return {"meeting_id": row["id"], "native_meeting_id": native, "platform": "jitsi",
@@ -186,6 +207,8 @@ class StubDoors(Doors):
                 continue
             if subject_contains and subject_contains.lower() not in msg["subject"].lower():
                 continue
+            if since and msg["at"] < since - 5:
+                continue          # a previous run's touch is not this run's evidence
             return dict(msg)
         raise DoorRefused(f"no mail to {to} containing {subject_contains!r}")
 
@@ -211,6 +234,25 @@ class StubDoors(Doors):
         self.runners[str(subject)] = cfg
         self.calls.append(("bind_runner", subject, runner))
         return {"subject": str(subject), "runner": runner, "config": cfg}
+
+    def _desk_state(self, subject: str) -> str:
+        """`new` | `pile` | `warm`, by the product's rule (`control_plane/scaffolds.desk_state`):
+        meeting entities ALONE are a pile — reports landed and nobody wired them — and it takes a
+        non-meeting entity for somebody to have worked here. Mirrored rather than invented, because
+        the recipe asserts against it and a double with its own opinion proves nothing."""
+        files = [f for f in self.desks.get(str(subject), []) if "kg/entities/" in f]
+        if not files:
+            return "new"
+        other = [f for f in files if "/meeting/" not in f and not f.endswith("index.md")]
+        return "warm" if other else "pile"
+
+    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+        live = [r for r in self.reactions
+                if r["flow"] == flow and r["state"] in ("admitted", "running", "retrying")]
+        for r in live:
+            r["state"] = "cancelled"
+        self.calls.append(("cancel_bot_leg", flow))
+        return {"flow": flow, "cancelled": len(live), "ids": [r["id"] for r in live]}
 
     # -- reads -----------------------------------------------------------------------------------
     def user_find(self, address: str):
@@ -246,6 +288,12 @@ class StubDoors(Doors):
                 del self.meetings[mid]
         return {"deleted": True, "via": "admin-api"}
 
+    def meetings_delete_for(self, subject: str) -> int:
+        gone = [m for m, row in self.meetings.items() if row.get("owner") == str(subject)]
+        for m in gone:
+            del self.meetings[m]
+        return len(gone)
+
     def desk_delete(self, subject: str) -> dict:
         return {"deleted": self.desks.pop(str(subject), None) is not None}
 
@@ -260,6 +308,16 @@ class StubDoors(Doors):
 
     def friction_delete_for(self, subject: str) -> int:
         return 0
+
+    def lane_rows_delete_for(self, subject: str, address: str) -> dict:
+        """Drop this subject's admitted facts, so the same derived ids are admissible again —
+        the model of `admit()`'s dedup being per-subject-clearable."""
+        gone = [f for f in self.facts
+                if str(subject) in json.dumps(f.get("refs") or {})
+                or address in json.dumps(f.get("refs") or {})]
+        self.facts = [f for f in self.facts if f not in gone]
+        self.reactions = [r for r in self.reactions if r.get("subject") not in (str(subject),)]
+        return {"facts": len(gone)} if gone else {}
 
     def mail_delete_for(self, address: str) -> int:
         before = len(self.mail)

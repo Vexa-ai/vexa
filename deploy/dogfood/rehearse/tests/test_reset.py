@@ -90,11 +90,30 @@ def test_the_state_can_be_re_entered_immediately_after_a_reset(catalog, env):
 
 
 def test_fresh_resets_the_organizer_too_or_the_fact_would_dedup_the_touch_away(catalog, env):
+    """The lane's dedup memory is the thing that has to go, and it belongs to BOTH people.
+
+    `admit()` dedups on (source_event_id, flow) and a rehearsal's ids are derived from
+    (state, subject, meeting) — deliberately, so a plain re-run is idempotent. The cost is that a
+    re-entry needs the earlier row cleared, and the meeting the fact names belongs to the ORGANIZER
+    the recipe derives, not to the subject. Reset only the subject and the fact is swallowed as a
+    duplicate: no touch is sent, and the step waits out its budget for a mail nothing will produce.
+    That is what the sim lane logged as `admitted 0`.
+    """
     doors = StubDoors()
     who = "rehearse-attendee-stranger-minutes@rehearse.test"
-    rehearse("attendee-stranger-minutes", who, doors=doors, catalog=catalog, env=env)
+    first = rehearse("attendee-stranger-minutes", who, doors=doors, catalog=catalog, env=env)
     organizer = f"organizer-{who.split('@')[0]}@rehearse.test"
-    assert doors.user_find(organizer)
-    rehearse("attendee-stranger-minutes", who, doors=doors, catalog=catalog, env=env, fresh=True)
-    facts = [f["source_event_id"] for f in doors.facts]
-    assert len(set(facts)) == 2, f"the re-entry must mint a new fact id, got {facts}"
+    assert first.ok and doors.user_find(organizer)
+    stale = [f["source_event_id"] for f in doors.facts]
+    assert stale
+
+    again = rehearse("attendee-stranger-minutes", who, doors=doors, catalog=catalog, env=env,
+                     fresh=True)
+    assert again.ok, again.error
+    assert again.links, "a re-entered state must produce a touch, not a deduped silence"
+    # ONE fact in the lane, not two: the earlier one went with the organizer's reset, and the
+    # re-entry admitted its own. Its id differs because it names the meeting ROW, which is new —
+    # both halves matter, and either alone would let the touch be swallowed as a duplicate.
+    fresh_ids = [f["source_event_id"] for f in doors.facts]
+    assert len(fresh_ids) == 1, f"the stale fact survived the reset: {fresh_ids}"
+    assert fresh_ids != stale

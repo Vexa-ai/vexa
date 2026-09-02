@@ -127,6 +127,36 @@ small transcripts in the corpus's own shape live in `tests/fixtures/`. A suite t
 home directory would pass on bbb and fail everywhere else, and would quietly start measuring
 whatever somebody left in that directory.
 
+## The lane a rehearsal runs against
+
+**Never the founder's lane.** The dogfood box carries two flows lanes over one stack: the founder's
+(db `flows`, api `:18200`, mailbox `vexa@storm.test`) and the sim lane (db `flows_sim`, api
+`:18201`, mailbox `vexa@sim.test`). They share agent-api, admin-api, the gateway and mailpit — all
+per-identity — and nothing else. A rehearsal runs on the sim lane.
+
+```bash
+deploy/dogfood/bin/sim-lane-up.sh        # api + worker, from THIS checkout's core/flows
+deploy/dogfood/bin/sim-mailbox-up.sh     # the inbound poller (admits facts — start it on purpose)
+```
+
+Both are twins of `~/.storm/flows-up.sh` with four lane-scoped values changed (db, port, mailbox,
+operator key) plus `rehearse.test` in `VEXA_FLOWS_ATTENDEE_DOMAINS` — without which every follow-up
+to an `@rehearse.test` attendee is filtered and the flow reports success having mailed nobody.
+Their `pkill` patterns are lane-scoped for the reason `flows-up.sh` wrote down the hard way:
+`-m flows_worker` is the FOUNDER lane's argv, and the sim worker keeps its renamed `argv[0]` so
+neither lane's restart can reach the other.
+
+**Check what the worker loaded before trusting a run.** It prints `4 flows · 21 steps`, the gate
+state, and how many versions it hot-loaded from the DB. Then `GET /flows` must show
+`shadowing_versions: []`. A flow version authored through the API is newest-wins and shadows the
+image's — the sim lane held `post_meeting@16` with a retired step list (`require_workspace`, no
+`drop_to_attendees`), so a run against it would have measured flows decision 29 deleted. Retire
+anything above the code's version before running:
+
+```sql
+UPDATE flow_version SET status='retired' WHERE name='post_meeting' AND version > 4;
+```
+
 ## Against the running stack
 
 `run_all` on the live doors is the same code with `LiveDoors` in place of the stub. It clicks

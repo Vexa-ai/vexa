@@ -119,6 +119,15 @@ states:
         to: "{{subject}}"
         subject_contains: "Prepare"
         as: prepare_mail
+      # A REHEARSAL LEAVES NOTHING ARMED. `invite_intake` parks on `await_start` until start−2min
+      # and then dispatches a REAL bot at the invite's URL — and this state rehearses the PREPARE
+      # touch, not the bot leg. Left parked, the run arms a live dispatch at a fixture Zoom URL
+      # that fires on the clock long after the state was reported green: on 2026-09-02 meeting 115
+      # reached `joining` while the catalogue was still running.
+      - do: cancel_bot_leg
+        door: flows-api
+        flow: invite_intake
+        source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
     artefacts:
       mail: "RSVP (\"Accepted\") and \"Prepare: {{title}}\" to {{subject}}"
       link: the prepare mail's only link is /?s=<scaffold id> (kind `prep`)
@@ -318,6 +327,21 @@ states:
         facts:
           - "The series met again and the report landed on this desk."
         source: "rehearse:{{state}}"
+      # `desk_state()` is the product's classifier and its vocabulary is not ours: meeting entities
+      # ALONE are a `pile` — "reports landed and nobody wired them", decision 22's economics —
+      # and it takes a NON-meeting entity for a desk to read `warm` ("somebody has worked here").
+      # The first live run failed here, correctly: two prior reports made a pile, not a warm desk.
+      # A warm desk really does carry both, so the recipe now writes both rather than arguing with
+      # the classifier.
+      - do: desk_entity
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+        kind: person
+        name: "{{subject_local}}"
+        summary: "The subject's own page — what makes this desk worked-in rather than a pile."
+        facts:
+          - "Attends the {{title}} series."
+        source: "rehearse:{{state}}"
       - do: drop_invite
         door: smtp
         organizer: "{{subject}}"
@@ -330,6 +354,10 @@ states:
         to: "{{subject}}"
         subject_contains: "Prepare"
         as: prepare_mail
+      - do: cancel_bot_leg          # same reason as organizer-invited: disarm the bot leg
+        door: flows-api
+        flow: invite_intake
+        source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
     artefacts:
       mail: "\"Prepare: {{title}}\" to {{subject}}"
       link: "/?s=<scaffold id> (kind `prep`) whose refs carry `state: warm`"

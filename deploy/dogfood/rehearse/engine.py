@@ -35,7 +35,16 @@ from . import catalogue as cat
 from .doors import DoorRefused, Doors
 
 DEFAULT_MEETING = "2026-03-02"
-DEFAULT_WHEN = "+30m"
+# FAR ENOUGH OUT THAT A RUN CANNOT OUTLIVE IT. `invite_intake` parks on `await_start` until
+# start−2min and then dispatches a REAL bot at the invite's URL. At +30m a catalogue run — three
+# states with a 677-segment import and an agent turn each — reached start−2min while it was still
+# going, and a bot was dispatched at the fixture Zoom URL (meeting 115, status `joining`, 2026-09-02
+# 19:20Z). +3h is the ledger's own figure, chosen for this exact reason at station 2; not carrying
+# it over is what cost this.
+#
+# The default is a floor, not the fix: `cancel_bot_leg` below is the fix, because a rehearsal must
+# leave nothing armed no matter how long it ran.
+DEFAULT_WHEN = "+3h"
 
 
 class Refused(RuntimeError):
@@ -88,9 +97,24 @@ def guard_domain(addresses, domain: str, mailbox: str = "") -> None:
     `mailbox` is the address the deployment's own mail double answers as (`VEXA_MAIL_ADDR`). It is
     the product's identity, not a person's, and every invite is addressed to it; excluding it here
     is the one exception and it is named rather than pattern-matched.
+
+    IT CHECKS THE SHAPE, NOT ONLY THE SUFFIX. `endswith("@" + domain)` passes anything ending in
+    those characters and says nothing about the rest, so a value that is not an address at all —
+    a timestamp, an empty local part, a whole sentence — is judged only on its tail. That is how
+    a domainless account (`20260902t183213z`) reached the instance on 2026-09-02: not through this
+    guard, which never saw it, but the guard could not have stopped it either, and a safety check
+    that would have waved it through is not one.
     """
-    bad = sorted({a.lower() for a in addresses
-                  if not a.lower().endswith("@" + domain) and a.lower() != mailbox.lower()})
+    def refused(value: str) -> bool:
+        a = value.lower().strip()
+        if a == mailbox.lower().strip() and mailbox:
+            return False
+        local, sep, host = a.rpartition("@")
+        # No whitespace anywhere: `a b@rehearse.test` has the right tail and is not an address,
+        # and the display form `Real Person <a@b.test>` is the shape a header hands you unparsed.
+        return not (sep and local and host == domain and not any(c.isspace() for c in a))
+
+    bad = sorted({a.lower() for a in addresses if refused(a)})
     if bad:
         raise Refused(
             f"refusing: {', '.join(bad)} " + ("is" if len(bad) == 1 else "are") +
@@ -222,6 +246,8 @@ def rehearse(state: str, as_: str, meeting: str = DEFAULT_MEETING, when: str = D
         "fixture_attendees": [a for _, a in attendees] + [subject],
         "fixture_attendee_names": {a: n for n, a in attendees},
         "_attendee_pairs": attendees,
+        # The floor every `await_mail` measures against — see `_execute`.
+        "_started": started,
     }
 
     # Everything the recipe will say, resolved as far as it can be, BEFORE anything is done. This
@@ -322,17 +348,26 @@ def _execute(step: cat.Step, args: dict, doors: Doors, bindings: dict, fixture: 
     if v == "seed_meeting":
         return doors.seed_meeting(str(args["owner"]), args["native"],
                                   args.get("title") or fixture["title"], fixture["segments"],
-                                  float(args.get("started_at") or (start_epoch - 3600)))
+                                  float(args.get("started_at") or (start_epoch - 3600)),
+                                  source=str(args.get("source") or "seed"))
     if v == "emit_fact":
         return doors.emit_fact(args["event_type"], args["source_event_id"], args["refs"])
     if v == "await_mail":
+        # `since` IS THE CHECK. Without it the step matched a message a PREVIOUS run had sent —
+        # found live on run 2, where `warm-desk-recurring` "found" run 1's Prepare mail, verified
+        # run 1's scaffold, and reported a state this run had not produced. A touch is evidence
+        # only if it is this run's touch; the floor is when this run started, and a recipe may
+        # raise it but never lower it.
         return doors.await_mail(args["to"], args.get("subject_contains") or "",
-                                int(args.get("budget_s") or 180))
+                                int(args.get("budget_s") or 180),
+                                since=float(args.get("since") or bindings["_started"]))
     if v == "reply_to_mail":
         return doors.reply_to_mail(bindings[args["to_mail"]], args["from_address"], args["body"])
     if v == "await_reaction":
         return doors.await_reaction(args["flow"], float(args.get("since") or 0.0),
                                     int(args.get("budget_s") or 300))
+    if v == "cancel_bot_leg":
+        return doors.cancel_bot_leg(args["flow"], args.get("source_contains") or "")
     raise cat.CatalogueError(f"no executor for verb {v!r} — catalogue.VERBS and engine._execute "
                              f"have drifted apart")
 
@@ -367,8 +402,12 @@ def _verify(row: dict, bindings: dict, doors: Doors, res: Result) -> dict:
                     out["ok"] = False
                     out["detail"] += f" — expected kind {row['kind']}"
                 if row.get("desk_state"):
-                    got = ((rec.get("refs") or {}).get("state")
-                           or (rec.get("refs") or {}).get("desk"))
+                    # `refs.state` is an OBJECT — `{"desk": "new|pile|warm", "group": …}` — and
+                    # reading it as a string could never match, so the check FAILED on a state that
+                    # had worked. A check that cannot pass is worse than no check: it reports a
+                    # product defect where there is only a reader that guessed a shape.
+                    state = (rec.get("refs") or {}).get("state")
+                    got = state.get("desk") if isinstance(state, dict) else state
                     if got != row["desk_state"]:
                         out["ok"] = False
                         out["detail"] += f" — desk state {got!r}, expected {row['desk_state']!r}"
@@ -435,6 +474,10 @@ def subject_reset(address: str, *, doors: Doors, catalog: cat.Catalogue | None =
     # Order matters: the desk and the redis keys are addressed BY uid, so the user goes last.
     if uid:
         try:
+            out["removed"]["meetings"] = doors.meetings_delete_for(uid)
+        except DoorRefused as e:
+            out["remaining"]["meetings"] = str(e)
+        try:
             out["removed"]["desk"] = doors.desk_delete(uid)
         except DoorRefused as e:
             out["remaining"]["desk"] = str(e)
@@ -446,6 +489,13 @@ def subject_reset(address: str, *, doors: Doors, catalog: cat.Catalogue | None =
             out["removed"]["friction"] = doors.friction_delete_for(uid)
         except DoorRefused as e:
             out["remaining"]["friction"] = str(e)
+        try:
+            # The lane's dedup memory. Without this the subject is gone and the state still
+            # cannot be re-entered: `admit()` swallows the next invite as a duplicate and the
+            # touch that should follow is simply never sent.
+            out["removed"]["lane_rows"] = doors.lane_rows_delete_for(uid, address)
+        except DoorRefused as e:
+            out["remaining"]["lane_rows"] = str(e)
     try:
         out["removed"]["scaffolds"] = doors.scaffold_keys_delete(address)
     except DoorRefused as e:

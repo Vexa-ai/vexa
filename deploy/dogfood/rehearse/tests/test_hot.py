@@ -31,6 +31,7 @@ MAY_SHELL_OUT = {
     "live_meetings",        # the fail-closed guard: no instance-wide live-meeting route exists
     "_redis_cli", "_redis", "_redis_del",   # per-subject session/scaffold keys agent-api owns
     "friction_delete_for", "_flow_lanes",   # per-subject friction rows no route removes
+    "lane_rows_delete_for",                 # per-subject reactions/receipts/threads, ditto
     "_admin_key",           # reading this deployment's own admin token, when it is not in the env
 }
 
@@ -84,8 +85,10 @@ def test_nothing_writes_the_database_or_the_workspace_volume():
     src = (PKG / "doors.py").read_text()
     assert "INSERT" not in src and "UPDATE " not in src
     # One DELETE, and it is the per-subject friction rows the docstring names.
-    deletes = re.findall(r"DELETE FROM (\w+)", src)
-    assert deletes == ["friction"], deletes
+    # The per-subject lane tables the reset owns — named, in FK order, and nothing else. The
+    #  `{table}` is `LANE_TABLES`, which the docstring above it lists and bounds.
+    deletes = sorted(set(re.findall(r"DELETE FROM (\{?\w+\}?)", src)))
+    assert deletes == ["friction", "{table}"], deletes
     assert "cat > /workspaces" not in src and "/workspaces/" not in src
 
 

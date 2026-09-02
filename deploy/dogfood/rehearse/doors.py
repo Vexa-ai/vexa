@@ -17,8 +17,12 @@ rather than discovered later:
   2. `session_keys_delete()` / `scaffold_keys_delete()` in `subject_reset` clear redis by the
      exact per-subject prefixes `blank-instance.sh` documents, and nothing else. agent-api owns
      those keys and exposes no delete for them.
-  3. `friction_delete_for()` deletes that subject's friction rows from the flows lane. Same
-     shape: the rows are per-subject, and no route removes them.
+  3. `lane_rows_delete_for()` deletes that subject's rows from the flows lanes — the reactions the
+     engine admitted for them, their receipts and signals, their mail threads, and their friction.
+     Same shape as the other two: the rows are per-subject and no route removes them. It is the
+     one that makes a state RE-ENTERABLE — `admit()` dedups on (source_event_id, flow), so a
+     reaction from an earlier run silently swallows the next invite (`admitted 0`, no prepare
+     mail, a step that waits out its budget for a touch nothing will send).
 
 `Doors` is a plain class with no HTTP in it, so `stub_doors.StubDoors` subclasses it and
 `run_all.py --stub` proves every recipe offline. `LiveDoors` is the only thing that talks to the
@@ -119,7 +123,7 @@ class Doors:
                     ics_uid: str = "", group: str = "", url: str = "") -> dict:
         raise NotImplementedError
     def seed_meeting(self, owner: str, native: str, title: str, segments: list,
-                     started_at: float) -> dict: raise NotImplementedError
+                     started_at: float, source: str = "seed") -> dict: raise NotImplementedError
     def emit_fact(self, event_type: str, source_event_id: str, refs: dict) -> dict:
         raise NotImplementedError
     def await_mail(self, to: str, subject_contains: str = "", budget_s: int = 180,
@@ -127,6 +131,8 @@ class Doors:
     def reply_to_mail(self, message: dict, from_address: str, body: str) -> dict:
         raise NotImplementedError
     def await_reaction(self, flow: str, since: float = 0.0, budget_s: int = 300) -> dict:
+        raise NotImplementedError
+    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
         raise NotImplementedError
 
     # ── the per-subject harness (decisions 37 + 38) ──────────────────────────────────────────
@@ -143,13 +149,22 @@ class Doors:
     def live_meetings(self) -> list: raise NotImplementedError
     def user_delete(self, uid: str) -> dict: raise NotImplementedError
     def desk_delete(self, subject: str) -> dict: raise NotImplementedError
+    def meetings_delete_for(self, subject: str) -> int: raise NotImplementedError
     def session_keys_delete(self, subject: str) -> int: raise NotImplementedError
     def scaffold_keys_delete(self, address: str) -> int: raise NotImplementedError
     def friction_delete_for(self, subject: str) -> int: raise NotImplementedError
+    def lane_rows_delete_for(self, subject: str, address: str) -> dict:
+        raise NotImplementedError
     def mail_delete_for(self, address: str) -> int: raise NotImplementedError
 
 
 # ── the live implementation ──────────────────────────────────────────────────────────────────────
+
+#: `GET /meetings` caps `limit` at 100 and answers 422 above it. Named here because asking for
+#: more than a route allows is not a bigger answer, it is no answer — and the shape of the refusal
+#: (a dict with `detail`) reads as an empty list to anything that does `.get("meetings", [])`.
+MEETINGS_PAGE_MAX = 100
+
 
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout: float = 40):
     h = {"content-type": "application/json", **(headers or {})}
@@ -343,7 +358,7 @@ class LiveDoors(Doors):
                 "attendees": [a for _, a in attendees], "message_id": m["Message-ID"]}
 
     def seed_meeting(self, owner: str, native: str, title: str, segments: list,
-                     started_at: float) -> dict:
+                     started_at: float, source: str = "seed") -> dict:
         """`POST /meetings` then `POST /meetings/{id}/transcript-import` — two gateway calls.
 
         A jitsi URL, so the native id survives verbatim (meeting-api's google_meet rule would force
@@ -384,7 +399,14 @@ class LiveDoors(Doors):
             "segments": [{"start": float(s["start"]), "end": float(s["end"]),
                           "speaker": s.get("speaker"), "text": s.get("text") or "",
                           "language": s.get("language") or "en"} for s in segments],
-            "started_at": iso(started), "ended_at": iso(ended), "source": "rehearse"},
+            "started_at": iso(started), "ended_at": iso(ended),
+            # `source` is a CLOSED vocabulary on the route — `import` | `seed` — and it refuses
+            # anything else with the list. It sent "rehearse" and got a 422 on the first live run.
+            # The route is RIGHT and the tool was wrong: these words did not come from a recording,
+            # they were imported from a fixture by a double, which is exactly what `seed` means.
+            # Widening the vocabulary to admit a caller's own name for itself would make the column
+            # unreadable, which is the column's whole job.
+            "source": source or "seed"},
             timeout=180)
         if st != 200 or not isinstance(body, dict):
             raise DoorRefused(f"transcript-import refused on meeting {mid}: {st} {str(body)[:300]}")
@@ -398,9 +420,29 @@ class LiveDoors(Doors):
                 "started_epoch": int(started), "ended_epoch": int(ended),
                 "start_time": m.get("start_time"), "end_time": m.get("end_time")}
 
+    def _meetings_of(self, owner: str) -> list:
+        """This subject's meetings — and a REFUSAL IS NOT AN EMPTY LIST.
+
+        Both callers used to read the response as `(b or {}).get("meetings", [])`, which turns any
+        non-2xx into "this person has no meetings". Found live: the list was requested with
+        `?limit=200`, the route caps it at 100 and answered 422, and `subject_reset` reported
+        `meetings: 0` with a row sitting right there — then the next run of that state was refused
+        with a 409 nobody could explain. The other caller is worse: `seed_meeting` asks this to
+        decide whether a completed row already exists, so a swallowed refusal would have minted a
+        SECOND completed meeting and mailed the whole room twice.
+
+        This is the defect the whole package is written against, in its own code: a call that fails
+        and is read as "nothing to do".
+        """
+        st, b = self._gw(owner, "GET", f"/meetings?limit={MEETINGS_PAGE_MAX}")
+        if st != 200 or not isinstance(b, dict) or "meetings" not in b:
+            raise DoorRefused(
+                f"could not list meetings for {owner}: {st} {str(b)[:200]}. Refusing to read that "
+                f"as 'no meetings' — every caller here decides something destructive from it.")
+        return list(b.get("meetings") or [])
+
     def _find_meeting(self, owner: str, native: str) -> dict | None:
-        st, b = self._gw(owner, "GET", "/meetings?limit=200")
-        rows = (b or {}).get("meetings", []) if isinstance(b, dict) else []
+        rows = self._meetings_of(owner)
         return next((r for r in rows if str(r.get("native_meeting_id")) == str(native)), None)
 
     def emit_fact(self, event_type: str, source_event_id: str, refs: dict) -> dict:
@@ -429,18 +471,29 @@ class LiveDoors(Doors):
             st, body = _http("GET", f"{MAILPIT}/api/v1/search?query={query}&limit=60", None)
             msgs = (body or {}).get("messages", []) if isinstance(body, dict) else []
             last = msgs
+            unplaceable = 0
             for msg in msgs:
                 if subject_contains and subject_contains.lower() not in (msg.get("Subject") or "").lower():
                     continue
-                if since and _mail_epoch(msg) < since - 5:
-                    continue
+                when = _mail_epoch(msg)
+                if since and when is not None and when < since - 5:
+                    continue                        # a previous run's touch, definitely
+                if since and when is None:
+                    # We cannot place it in time. INCLUDE it and say so: a false accept is a check
+                    # that needs tightening, a false reject is a touch reported as never sent.
+                    unplaceable += 1
                 return self._mail(msg["ID"])
             if time.time() >= deadline:
+                # The refusal NAMES what it saw and why each candidate was rejected — the previous
+                # version listed the very mail it had just discarded, which reads as a product
+                # failure and was a reader's.
+                seen = "; ".join(sorted({(m.get("Subject") or "") for m in last})[:6])
                 raise DoorRefused(
                     f"no mail to {to}"
                     + (f" whose subject contains {subject_contains!r}" if subject_contains else "")
-                    + f" arrived within {budget_s}s. {len(last)} message(s) to that address exist: "
-                    + "; ".join(sorted({(m.get('Subject') or '') for m in last})[:6]))
+                    + f" arrived within {budget_s}s (only counting mail newer than "
+                      f"{time.strftime('%H:%M:%SZ', time.gmtime(since))} — this run's start)"
+                    + f". {len(last)} message(s) to that address exist: {seen}")
             time.sleep(3)
 
     def _mail(self, message_id: str) -> dict:
@@ -518,6 +571,42 @@ class LiveDoors(Doors):
             raise DoorRefused(f"admin-api refused the runner binding for {subject}: "
                               f"{st} {str(body)[:200]}")
         return {"subject": str(subject), "runner": runner, "config": cfg}
+
+    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+        """Cancel this recipe's own parked reaction — `POST /reactions/{id}/cancel`, the product's
+        audited lifecycle verb.
+
+        A REHEARSAL MUST LEAVE NOTHING ARMED. `invite_intake` parks on `await_start` until
+        start−2min and then dispatches a REAL bot at the invite's URL, and the states that use an
+        invite are rehearsing the PREPARE TOUCH — the bot leg is not what they measure. Leaving the
+        reaction parked means the run has armed a live dispatch at a fixture Zoom URL that fires on
+        the clock, long after the state was reported green. It happened: meeting 115 reached
+        `joining` at 19:20Z while the catalogue was still running.
+
+        Scoped by `source_contains` so it can only reach a reaction this recipe's own derived ids
+        name — never another lane user's parked work.
+        """
+        st, body = _http("GET", f"{FLOWS_API}/reactions?limit=100",
+                         {"X-Flows-Admin-Key": self._flows_key})
+        rows = (body or {}).get("reactions", []) if isinstance(body, dict) else []
+        if st != 200 or not isinstance(body, dict):
+            raise DoorRefused(f"could not list reactions to cancel the bot leg: {st}")
+        targets = [r for r in rows
+                   if r.get("flow") == flow
+                   and str(r.get("status")) in ("admitted", "retrying")
+                   and (not source_contains
+                        or source_contains in str(r.get("source_event_id") or ""))]
+        cancelled, refused = [], []
+        for r in targets:
+            rid = r.get("reaction_id") or r.get("id")
+            cst, cb = _http("POST", f"{FLOWS_API}/reactions/{rid}/cancel",
+                            {"X-Flows-Admin-Key": self._flows_key}, {})
+            (cancelled if 200 <= cst < 300 else refused).append(f"{rid}:{cst}")
+        if refused:
+            raise DoorRefused(
+                f"cancelled {len(cancelled)}, REFUSED {refused} — a parked invite reaction left "
+                f"behind will dispatch a real bot at a fixture URL when its clock arrives")
+        return {"flow": flow, "cancelled": len(cancelled), "ids": cancelled}
 
     # ── reads ─────────────────────────────────────────────────────────────────────────────────
     def user_find(self, address: str):
@@ -605,6 +694,30 @@ class LiveDoors(Doors):
                 "subject_reset can remove a user. Nothing was deleted.")
         raise DoorRefused(f"admin-api refused to delete uid {uid}: {st} {str(b)[:200]}")
 
+    def meetings_delete_for(self, subject: str) -> int:
+        """Every meeting this subject owns, deleted through the product's own `DELETE /meetings/{id}`.
+
+        Needed on its own, not only as part of the user delete: a run that fails BETWEEN
+        `POST /meetings` and the transcript import leaves a non-terminal row, and the next attempt
+        at that state is refused — correctly — with `409 a non-terminal meeting already holds this
+        native id`. Found live on run 2, where three states could not be re-entered for that
+        reason. Without this the only way out was a hand-written call.
+        """
+        rows = self._meetings_of(subject)
+        gone, refused = 0, []
+        for row in rows:
+            dst, body = self._gw(subject, "DELETE", f"/meetings/{row.get('id')}")
+            if dst in (200, 204):
+                gone += 1
+            else:
+                refused.append(f"{row.get('id')}:{dst}")
+        if refused:
+            # A delete that did not happen must not be counted as one. The caller reports this
+            # under `remaining`, and the next run of that state would otherwise meet a 409 it
+            # cannot explain.
+            raise DoorRefused(f"deleted {gone} meeting(s); refused: {', '.join(refused)}")
+        return gone
+
     def desk_delete(self, subject: str) -> dict:
         st, b = _http("DELETE", f"{AGENT_API}/api/workspace/{urllib.parse.quote(str(subject))}",
                       {"X-User-Id": str(subject)})
@@ -670,6 +783,69 @@ class LiveDoors(Doors):
                            capture_output=True, text=True, timeout=60)
         return r.stdout or ""
 
+    #: The lane tables that hold ONE PERSON'S rows, in FK order — receipts and signals reference a
+    #: reaction, so the reaction goes last. The same order `blank-instance.sh` documents, and the
+    #: same list minus the lane-wide ones (`mail_cursor` is the poller's watermark and belongs to
+    #: the deployment, not to a subject; deleting it would replay the whole box).
+    LANE_TABLES = ("effect_receipt", "signal", "reaction", "mail_thread", "mail_outbox_sent")
+
+    def lane_rows_delete_for(self, subject: str, address: str) -> dict:
+        """One subject's rows in every flows lane. THIS is what makes a state re-enterable.
+
+        `admit()` dedups on (source_event_id, flow), and a rehearsal's source ids are derived from
+        (state, subject, meeting) precisely so a re-run is idempotent. The other side of that coin:
+        after a reset the SAME ids must be admissible again, and they are not while the earlier
+        reaction is still in the lane. Found live — the poller logged `admitted 0` for a fresh
+        invite, no prepare mail was sent, and the step waited out its whole budget for a touch
+        nothing was ever going to produce.
+
+        MATCHED ON THE SUBJECT, never on a bare number: `"uid": "13"` must not take uid 130 with
+        it. Both JSON spellings, plus the address, which is how the invite lineage names a person.
+        """
+        out: dict = {}
+        for db in self._flow_lanes():
+            for table in self.LANE_TABLES:
+                where = self._lane_where(table, str(subject), address)
+                if not where:
+                    continue
+                r = subprocess.run(
+                    ["docker", "exec", f"{self.stack}-postgres-1", "psql", "-U", "postgres",
+                     "-d", db, "-tAc", f"DELETE FROM {table} WHERE {where};"],
+                    capture_output=True, text=True, timeout=30)
+                if r.returncode != 0:
+                    if "does not exist" in (r.stderr or ""):
+                        continue                     # lanes differ; absent is not a failure
+                    raise DoorRefused(
+                        f"could not clear {db}.{table} for {address}: "
+                        f"{(r.stderr or '').strip()[:200]}. Refusing to report a reset that would "
+                        f"leave this state un-re-enterable.")
+                n = _int((r.stdout or "").replace("DELETE", ""))
+                if n:
+                    out[f"{db}.{table}"] = n
+        return out
+
+    @staticmethod
+    def _lane_where(table: str, subject: str, address: str) -> str:
+        """The per-subject predicate for one lane table, or "" when the table names no person —
+        in which case it is left alone rather than guessed at."""
+        def q(v: str) -> str:
+            return "'" + str(v).replace("'", "''") + "'"
+
+        # MATCHED ON THE SUBJECT, never on a bare number: `%13%` would take uid 130 with it. Both
+        # JSON spellings of the key, plus the address, which is how the invite lineage names a
+        # person before any uid exists.
+        naming = " OR ".join(
+            f"{{col}} LIKE {q('%' + pat + '%')}"
+            for pat in (f'"uid": "{subject}"', f'"uid":"{subject}"', address))
+        if table in ("effect_receipt", "signal"):
+            inner = naming.format(col="r.subject_refs")
+            return f"reaction_id IN (SELECT reaction_id FROM reaction r WHERE {inner})"
+        if table == "reaction":
+            return naming.format(col="subject_refs")
+        if table in ("mail_thread", "mail_outbox_sent"):
+            return f"subject_uid = {q(subject)}"
+        return ""
+
     def friction_delete_for(self, subject: str) -> int:
         n = 0
         for db in self._flow_lanes():
@@ -715,14 +891,43 @@ def _links(text: str) -> list[str]:
     return out
 
 
-def _mail_epoch(msg: dict) -> float:
-    raw = str(msg.get("Created") or "")
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+def _mail_epoch(msg: dict) -> float | None:
+    """When mailpit says this message was created, or None when the stamp cannot be read.
+
+    NONE IS NOT ZERO, and that distinction cost a whole run. This used to return 0.0 on a stamp it
+    could not parse, and the caller's filter was `_mail_epoch(msg) < since`, so an unreadable
+    timestamp meant "older than this run" — every message rejected. Run 4 failed three states with
+    the message *"no mail whose subject contains 'Prepare' arrived within 180s. 2 message(s) to
+    that address exist: Accepted: …; Prepare: …"* — naming, in its own refusal, the mail it had
+    just thrown away.
+
+    It is the same defect as the 422 read as an empty list, one layer down: a parse that fails is
+    not an answer, and code that turns it into one produces a confident wrong result. A stamp we
+    cannot read now means "I cannot place this message in time", and the caller decides — it
+    includes the message rather than dropping it, because a false accept is a check that needs
+    tightening while a false reject is a touch that never happened.
+
+    Parsed with `datetime.fromisoformat`, which takes mailpit's RFC3339 (Go trims trailing zeros
+    from the fraction, so `.5Z` sits next to `.503Z` — the old fixed-width slicing could not).
+    """
+    raw = str(msg.get("Created") or "").strip()
+    if not raw:
+        return None
+    import datetime as _dt
+    text = raw.replace("Z", "+00:00")
+    try:
+        return _dt.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        pass
+    # Pre-3.11 spellings and over-long fractions: trim the fraction to microseconds and retry.
+    m = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$", text)
+    if m:
+        frac = (m.group(2) or "")[:7]
         try:
-            return time.mktime(time.strptime(raw[:26] + raw[-5:], fmt))
-        except (ValueError, OverflowError):
-            continue
-    return 0.0
+            return _dt.datetime.fromisoformat(m.group(1) + frac + (m.group(3) or "")).timestamp()
+        except ValueError:
+            return None
+    return None
 
 
 def _int(s: str) -> int:

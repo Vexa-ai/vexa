@@ -42,7 +42,7 @@ def test_every_verb_has_a_door_method_and_every_door_method_is_a_verb():
     reads = {"user_find", "meeting_get", "desk_tree", "group_members", "scaffold_get",
              "live_meetings", "user_delete", "desk_delete", "session_keys_delete",
              "scaffold_keys_delete", "friction_delete_for", "mail_delete_for",
-             "bind_runner"}
+             "bind_runner", "meetings_delete_for", "lane_rows_delete_for"}
     assert set(cat.VERBS) <= methods
     assert methods - reads == set(cat.VERBS)
 

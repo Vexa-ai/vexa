@@ -123,3 +123,33 @@ def test_a_dry_run_resolves_the_whole_plan_and_touches_nothing():
     assert res.ok and len(res.steps) == len(CAT["group-member"].steps)
     assert doors.calls == []
     assert time.time() > 0
+
+
+# ── F94: the guard checks the SHAPE, not only the suffix ─────────────────────────────────────────
+
+@pytest.mark.parametrize("value", [
+    "20260902t183213z",          # the DTSTAMP that became user 131 on the instance
+    "",
+    "@rehearse.test",            # a domain with nobody in front of it
+    "someone@",
+    "someone@evil.test",
+    "rehearse.test",             # the domain as a bare word — `endswith` would have judged only
+    "a b@rehearse.test",         # a space is not part of an address
+])
+def test_a_value_that_is_not_an_address_under_the_domain_is_refused(value):
+    """`endswith("@" + domain)` passes anything ending in those characters and says nothing about
+    the rest. A safety check that would wave a timestamp through is not one."""
+    with pytest.raises(Refused):
+        guard_domain([value], "rehearse.test")
+
+
+@pytest.mark.parametrize("value", ["a@rehearse.test", "rehearse-group-member@rehearse.test",
+                                   "OLGA-AVRAMENKO@REHEARSE.TEST"])
+def test_a_real_address_under_the_domain_still_passes(value):
+    guard_domain([value], "rehearse.test")
+
+
+def test_a_subdomain_is_not_the_domain():
+    """`evil.rehearse.test` ends with the domain and is somebody else's host."""
+    with pytest.raises(Refused):
+        guard_domain(["a@evil.rehearse.test"], "rehearse.test")
