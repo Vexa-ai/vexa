@@ -30,11 +30,17 @@ def test_the_qwen_dials_reach_the_worker_together():
         "base_url": "http://192.168.1.6:8001/v1", "model": "qwen3.8-27b",
         "extra_body": '{"chat_template_kwargs":{"enable_thinking":false}}'})
     assert env["VEXA_RUNNER"] == "openai-agent"
-    assert env["VEXA_LLM_BASE_URL"] == "http://192.168.1.6:8001/v1"
-    assert env["VEXA_LLM_MODEL"] == "qwen3.8-27b"
+    # ONE endpoint, stamped ONCE (PRD decision 34). The harness reads
+    # `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL` and `VEXA_LLM_API_KEY or ANTHROPIC_AUTH_TOKEN`,
+    # and takes the model from `VEXA_LLM_MODEL or VEXA_AGENT_MODEL` — so the per-subject gateway
+    # reaches it through these without a second pair in a second dialect.
+    assert env["ANTHROPIC_BASE_URL"] == "http://192.168.1.6:8001/v1"
     assert env["VEXA_AGENT_MODEL"] == "qwen3.8-27b"
+    # `extra_body` is the exception: no Anthropic-dialect equivalent exists, and without it a
+    # self-hosted Qwen reasons its whole budget away and returns nothing parseable.
     assert env["VEXA_LLM_EXTRA_BODY"] == '{"chat_template_kwargs":{"enable_thinking":false}}'
-    assert env["VEXA_LLM_PROVIDER"] == "openai-compat"
+    # The completion pipeline's own dials stay gone: nothing reads them (decision 34).
+    assert "VEXA_LLM_PROVIDER" not in env and "VEXA_MEETING_MODEL" not in env
 
 
 def test_a_config_with_no_runner_leaves_the_dispatch_default_alone():

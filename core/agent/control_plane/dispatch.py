@@ -357,7 +357,9 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
 
     ``mode: custom`` points the agent harness at the supplied gateway (an Anthropic-compatible
     endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model) via
-    ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN``. ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
+    ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN``. ONE endpoint, stamped once: the openai-agent
+    harness (decision 37) reads these same two as its documented fallbacks, so there is no second
+    pair in a second dialect — which is what decision 34 removed and must stay removed. ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
     Claude Code subscription / deployment key — and only the model names apply.
 
     Dispatch-stamped values WIN downstream (the runtime copies its own env only for keys absent
@@ -403,6 +405,21 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     env["ANTHROPIC_BASE_URL"] = base_url
     if api_key:
         env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    # THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT. Endpoint, credential and model all reach
+    # the openai-agent harness through the ANTHROPIC_*/VEXA_AGENT_MODEL keys above (see
+    # `llm/openai_agent.py` — `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL`, and so on). `extra_body`
+    # has no such fallback, and a self-hosted Qwen returns nothing parseable without
+    # {"chat_template_kwargs":{"enable_thinking":false}} — so a per-subject value has to be
+    # stamped under its own name or the admin-api field that writes it does nothing.
+    extra_body = (config.get("extra_body") or "").strip()
+    if extra_body:
+        env["VEXA_LLM_EXTRA_BODY"] = extra_body
+    # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
+    # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the model
+    # reasons its whole budget away and returns nothing parseable.
+    extra_body = (config.get("extra_body") or "").strip()
+    if extra_body:
+        env["VEXA_LLM_EXTRA_BODY"] = extra_body
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
