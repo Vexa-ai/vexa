@@ -20,7 +20,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, presetOwnsOpening, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, presetOwnsOpening, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -716,6 +716,27 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
           // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.
           .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK) && !t.text.includes(ONBOARDING_REPLY_SEP)))
+          // MACHINERY IS NEVER THE PERSON'S SPEECH. A turn the product composed (a `?ask=` preset
+          // from an emailed link, a proposal chip's hidden kick) was hidden when it was sent and
+          // must stay hidden when it is read back — the founder saw his own prepare kick returned
+          // to him as a grey user bubble because nothing marked it. Unconditional, unlike the
+          // onboarding filter above: a kick has no "and then the human replied" form.
+          .filter((t) => !(t.role === "user" && t.text.includes(MACHINERY_MARK)))
+          // LEGACY, and dated: every composed opening sent BEFORE the mark existed (2026-09-02) is
+          // already in a transcript and would keep surfacing. Those sessions cannot be rewritten —
+          // they are the users' own records — so they are recognised by their shape instead, and
+          // only in the one position a composed opening can occupy: the session's FIRST turn,
+          // opening with a bracketed preset tag (`[prep] …`, `[minutes-review] …` — the same tag
+          // the agent instructions key on), and long, because a preset body is an instruction block
+          // and a person's first line is a sentence. Delete this clause once no live session
+          // predates the mark.
+          .filter((t, i, arr) => !(t.role === "user"
+            && arr.findIndex((x) => x.role === "user") === i
+            && t.text.length >= 200
+            && /^\s*\[[a-z][a-z0-9_-]{0,63}\]\s/.test(t.text)
+            // an onboarding reply also opens with a bracketed tag and is long — it is the HUMAN's
+            // words wrapped in grounding, and the filter above already decided its fate.
+            && !t.text.includes(ONBOARDING_KICKOFF_MARK)))
           .map((t, i) =>
             t.role === "user"
               ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
@@ -788,7 +809,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
     const { hidden = false, ground = true } = opts;
     const v = text.trim();
-    const basePrompt = promptWithReferences(prompt, referenceSource.trim());
+    // A HIDDEN turn is machinery, and it must be hidden in the RECORD, not only in this render.
+    // Without the mark the prompt lands in the transcript as a plain `user` message and comes back
+    // from `/api/sessions/<s>/history` on the next hydration as the person's own grey bubble.
+    const rawBase = promptWithReferences(prompt, referenceSource.trim());
+    const basePrompt = rawBase && hidden ? rawBase + MACHINERY_NOTE : rawBase;
     const key = chatKey;
     const sessionForSend = session;
     const state = getChatState(key);
