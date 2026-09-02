@@ -147,6 +147,26 @@ def test_the_budget_is_configurable(monkeypatch):
     assert engine.writeback_budget() == (3, 7.0)
 
 
+def test_the_deadline_leaves_room_for_the_round_trip_already_in_flight(monkeypatch):
+    """The clock can only be read BETWEEN events, so the phase overshoots its deadline by up to one
+    model round trip. Measured on Haiku with the deadline at 30s the phase took 35.1s and 37.1s —
+    correctly truncated, and over budget anyway. The default is the ceiling minus that round trip,
+    and this test is here so nobody 'tidies' it back to a round number."""
+    monkeypatch.delenv("VEXA_WRITEBACK_MAX_SECONDS", raising=False)
+    monkeypatch.delenv("VEXA_WRITEBACK_MAX_TOOL_CALLS", raising=False)
+    calls, secs = engine.writeback_budget()
+    assert secs < 30, "the deadline is not the ceiling — one round trip lands outside it"
+    assert calls <= 8
+
+
+def test_the_candidate_list_never_exceeds_what_the_budget_can_finish(tmp_path):
+    """A list longer than the budget can finish is a plan cut off every time, and the names at the
+    end of it are never the ones anybody chose to drop."""
+    text = " ".join(f"Alpha Beta{chr(97 + i)}{chr(97 + i)} spoke." for i in range(20))
+    calls, _ = engine.writeback_budget()
+    assert len(E.missing_names([tmp_path], [text])) <= calls
+
+
 def test_the_truncation_marker_is_not_shown_as_prose():
     out = list(engine.writeback_events(iter([
         {"type": "writeback-truncated", "reason": "time budget"},
@@ -274,3 +294,40 @@ def test_a_phase_inside_its_budget_is_waited_for_not_killed(tmp_path, monkeypatc
                               max_tool_calls=99, max_seconds=10))
     assert sum(1 for e in out if e["type"] == "tool-call") == 3
     assert not any(e["type"] == "writeback-truncated" for e in out)
+
+
+# ── phantom names out of truncated text ──────────────────────────────────────────────────────────
+
+def test_a_truncated_name_never_becomes_a_page(tmp_path):
+    """Measured on a second turn over a populated desk: the pre-pass proposed "James Spadaf",
+    "James Spad" and "Technical Stee" — fragments cut out of the 80-character tool-result PREVIEW
+    the worker seam carries. None had a page, none ever would, and each dragged a model call the
+    gate existed to prevent: 2 of 2 turns, the gate failing open."""
+    got = E.missing_names([tmp_path], ["James Spadafora and James Spad and James Spadaf spoke."])
+    assert got == ["James Spadafora"]
+
+
+def test_the_pre_pass_is_not_fed_tool_result_previews(tmp_path, monkeypatch):
+    """A truncated string may confirm a name; it may never introduce one — and confirmation buys
+    nothing the complete text has not already given. So the previews are not read at all."""
+    monkeypatch.delenv("VEXA_WRITEBACK", raising=False)
+    monkeypatch.setenv("VEXA_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.delenv("VEXA_MOUNTS", raising=False)
+    got = {}
+
+    def turn(_p):
+        yield {"type": "tool-call", "tool": "Read", "args": {}, "callId": "a"}
+        yield {"type": "tool-result", "callId": "a", "ok": True,
+               "summary": "...transcript of the call with James Spadaf"}
+        yield {"type": "message-delta", "text": "Nothing was decided."}
+        yield {"type": "done", "reply": "x", "sessionId": "s"}
+
+    def writeback(candidates):
+        got["candidates"] = candidates
+        yield {"type": "done", "reply": "", "sessionId": "s"}
+
+    s = FakeStream()
+    serve(s, out_topic="out", in_topic="in", turn=turn,
+          start={"entrypoint": {"inline": "what did the call say?"}}, idle_ms=1,
+          writeback=writeback)
+    assert "candidates" not in got, "a truncated preview introduced a name and ran a model call"

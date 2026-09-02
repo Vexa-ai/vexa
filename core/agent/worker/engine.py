@@ -477,13 +477,21 @@ def writeback_budget() -> "tuple[int, float]":
     `entity_upsert` is a model round trip, and the third digit of pages a turn writes is worth less
     than the person's next message not queueing behind it. Eight is six names plus the MISSING write
     plus slack — and the measure's target is three pages per turn, so a capped phase still scores
-    full marks while the raw page count drops. That trade is deliberate and it is reported."""
+    full marks while the raw page count drops. That trade is deliberate and it is reported.
+
+    ⚠ THE SECONDS ARE A DEADLINE, NOT A DURATION, and 22 is not 30 by accident. `bounded` can only
+    check the clock BETWEEN events, so a model round trip that starts one second inside the deadline
+    runs to completion outside it: the phase overshoots by up to one round trip. Measured on Haiku
+    with the deadline at 30 the phase took 35.1s and 37.1s — correctly truncated, and over budget
+    anyway. 22 leaves room for the round trip that is already in flight. Interrupting one mid-flight
+    would need a thread per turn to buy back six seconds, which is not a trade worth making in a
+    worker."""
     def _int(name, default):
         try:
             return int(os.environ.get(name, str(default)))
         except ValueError:
             return default
-    return _int("VEXA_WRITEBACK_MAX_TOOL_CALLS", 8), float(_int("VEXA_WRITEBACK_MAX_SECONDS", 30))
+    return _int("VEXA_WRITEBACK_MAX_TOOL_CALLS", 8), float(_int("VEXA_WRITEBACK_MAX_SECONDS", 22))
 
 
 def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
@@ -872,9 +880,17 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             ack["nonce"] = nonce
         stream.xadd(out_topic, {"event": json.dumps(ack)})
         tool_calls, upserts = 0, 0
-        # What the phase's pre-pass reads. Kept small on purpose: the answer and the tool RESULTS
-        # are where names appear, and accumulating the whole event stream would put the transcript
-        # back in memory for the sake of a regex.
+        # What the phase's pre-pass reads: the person's message and the agent's answer, and NOT the
+        # tool results.
+        #
+        # ⚠ THE TOOL RESULTS ARE NOT AVAILABLE HERE, and the version that thought they were invented
+        # people. What reaches this seam is `llm.claude_code._short(content, 80)` — an 80-character
+        # PREVIEW — so a name straddling the cut arrives as a fragment. Measured on a second turn
+        # over a populated desk, the pre-pass proposed "James Spadaf", "James Spad", "Technical
+        # Stee" and "DNA TSC Inaugural Meetin": none has a page, none ever would, and each one
+        # dragged a model call it was supposed to prevent — 2 of 2 turns, exactly the gate failing
+        # open. A truncated string is not a source of names. It may confirm one; it may never
+        # introduce one, and confirmation buys nothing the complete text has not already given.
         said: list[str] = [prompt]
         for ev in turn(prompt):
             t = ev.get("type")
@@ -884,8 +900,6 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     upserts += 1
             elif t == "message-delta" and ev.get("text"):
                 said.append(ev["text"])
-            elif t == "tool-result" and ev.get("summary"):
-                said.append(str(ev["summary"]))
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             if cursor is not None:
                 _drain_inject(cursor)

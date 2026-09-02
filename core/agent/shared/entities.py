@@ -334,26 +334,45 @@ def known_slugs(root) -> set:
     return out
 
 
-def missing_names(roots, texts, *, limit: int = 12) -> list[str]:
+def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
     """The names these texts touched that no mounted desk has a page for, in order, capped.
 
     This is the whole pre-pass: empty means the phase has nothing to do and no model call is made.
     The cap is here rather than in the prompt because the list IS the budget — a phase handed forty
-    names either ignores the cap or runs for four minutes."""
+    names either ignores the cap or runs for four minutes. Eight matches the phase's tool-call cap:
+    a list longer than the budget can finish is a plan that gets cut off every single time, and the
+    names at the end of it are never the ones anybody chose to drop."""
     known: set = set()
     for r in roots:
         try:
             known |= known_slugs(r)
         except OSError:
             continue
-    out: list[str] = []
+    seen: list[str] = []
     for t in texts:
         for n in candidate_names(t, mask_linked=False):
             slug = slugify(n)
-            if slug and slug not in known and n not in out:
-                out.append(n)
-                if len(out) >= limit:
-                    return out
+            if slug and slug not in known and n not in seen:
+                seen.append(n)
+    return _drop_prefixes(seen)[:limit]
+
+
+def _drop_prefixes(names: list[str]) -> list[str]:
+    """Drop a name that is a PREFIX of another one in the same list — the longer spelling wins.
+
+    "James Spad" beside "James Spadafora" is one person and one page, and truncation only ever
+    produces the shorter. Deliberately a plain prefix rather than a word-boundary one: the cut that
+    matters here lands MID-WORD ("James Spadaf"), which a word-boundary test does not see.
+
+    The trade, stated: "John Smith" in a turn that also names "John Smithson" is dropped, and no
+    lexical rule can tell those two cases apart. That costs one page not written this turn — it is
+    written the next time the name appears on its own — against a permanent `james-spadaf.md` that
+    nothing will ever link to or clean up. Order is preserved, so the first mention still leads."""
+    out = []
+    for n in names:
+        if any(other != n and other.startswith(n) for other in names):
+            continue
+        out.append(n)
     return out
 
 
