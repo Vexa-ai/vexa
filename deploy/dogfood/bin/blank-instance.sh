@@ -87,6 +87,21 @@ fi
 echo
 echo "wiping at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# ── 0 · the per-turn workers. They are not stack services, and a parked one un-blanks the wipe. ──
+head2 "agent workers"
+# ⚠ A worker container outlives the turn that spawned it (warm-window TTL), holds its subject's desk
+# BOUND READ-WRITE, and will happily re-create /workspaces/<uid> on its next write — for a uid this
+# script has just deleted. Observed 2026-09-02: `vexa-worker-124-chat-…` was still Up after a blank,
+# owned by a user that no longer existed. A wipe that leaves a live writer attached to the thing it
+# wiped is not a wipe; it is a race it has not lost yet. These are per-turn containers the runtime
+# re-creates on demand, so removing them costs nothing.
+W=$(docker ps -aq --filter "name=vexa-worker-" | wc -l | tr -d ' ')
+if [ "$W" != "0" ]; then
+  docker ps -a --filter "name=vexa-worker-" --format '    {{.Names}}  {{.Status}}'
+  docker rm -f $(docker ps -aq --filter "name=vexa-worker-") >/dev/null 2>&1 || true
+fi
+say "removed $W worker container(s); $(docker ps -aq --filter 'name=vexa-worker-' | wc -l | tr -d ' ') left"
+
 # ── 1-3 · identity + product data. No route owns bulk deletion, so this is SQL, in FK order. ────
 head2 "postgres (vexa)"
 psql_vexa "DELETE FROM transcriptions;"     | sed 's/^/  transcriptions:     /'
@@ -136,9 +151,15 @@ for db in $FLOW_DBS; do
   say "lane $db"
   for t in $FLOW_TABLES; do
     if ! out=$(docker exec "$PG" psql -U postgres -d "$db" -tAc "DELETE FROM $t;" 2>&1); then
-      echo "  FAILED on $db.$t: $out" >&2
-      echo "  A flows lane left with rows fires parked work at users that no longer exist." >&2
-      exit 1
+      # A table this lane does not have is not a failure — lanes differ (`friction` exists in one
+      # and not the other) — but it must be SAID, not swallowed. Anything else is fatal: a lane
+      # left with rows fires parked work at users that no longer exist.
+      case "$out" in
+        *"does not exist"*) printf '    %-18s %s\n' "$t" "absent in this lane — skipped"; continue ;;
+        *) echo "  FAILED on $db.$t: $out" >&2
+           echo "  A flows lane left with rows fires parked work at users that no longer exist." >&2
+           exit 1 ;;
+      esac
     fi
     printf '    %-18s %s\n' "$t" "$out"
   done
