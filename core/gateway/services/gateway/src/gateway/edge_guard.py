@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING
 from guard import SecurityConfig, SecurityMiddleware
 
 from .config_preflight import ConfigError
+from .obs import log_event
 from .ratelimit import env_truthy
 
 if TYPE_CHECKING:
@@ -245,6 +246,81 @@ def _env_int(env: str, default: int) -> int:
         return default
 
 
+def _on_http_block(request: object, payload: dict) -> None:
+    """``SecurityConfig.on_block`` callback for the HTTP path - the sibling of the WS side's
+    ``ws_connect_rejected`` (``run_multiplex`` in ``app.py``), which has no HTTP equivalent
+    today: a 429/403 from guard's ``SecurityMiddleware`` otherwise reaches only guard-core's
+    own ``logging.getLogger("guard_core")``, never Vexa's ``logevent.v1`` stream.
+
+    guard-core 3.17.0 fires this exactly once per blocked (or passive-mode-flagged) request,
+    from three call sites (``core/checks/pipeline.py``, ``core/bypass/handler.py``,
+    ``handlers/ratelimit_handler.py``, all via the shared ``_utils/block_events.py``), and
+    ALREADY isolates it: ``invoke_block_hook`` wraps the call (and the awaited result, if the
+    hook returns one) in ``try/except Exception``, logging any failure on the
+    ``guard_core`` logger and never propagating it into the block response - so this callback
+    does not need its own try/except on top. It also never fires at all for three check names:
+    ``ON_BLOCK_EXCLUDED_CHECK_NAMES`` (``guard_core/_utils/block_events.py:11-13``) hard-excludes
+    ``custom_request``, ``custom_validators`` and ``https_enforcement`` inside
+    ``fire_block_hook`` itself. This gateway enables none of the three (grepped
+    ``custom_request_check``, ``custom_validators`` and ``enforce_https`` in
+    :func:`build_guard_config` - no matches), so the exclusion has no effect on what this
+    gateway can observe today, but it holds regardless of what this config later turns on.
+    ``payload`` always carries all of check_name, reason, trigger_info, passive_mode,
+    client_ip, path, method, status_code (verified against
+    ``guard_core/_utils/block_events.py``'s ``build_block_payload``, a fixed-key dict every
+    call), but ``.get()`` is used anyway so a future guard-core payload shape change degrades
+    to a missing field instead of a raised exception. ``status_code`` is ``None`` on the
+    passive-mode path (no response is ever sent). ``trigger_info`` is deliberately NOT
+    forwarded, though the field itself needs it least of anywhere it appears: it is the empty
+    string for every check this gateway can trip except ``suspicious_activity`` (verified by
+    reading ``ip_security.py`` and ``handlers/ratelimit_handler.py`` in this venv - neither
+    ever passes a ``trigger_info`` argument to ``log_activity``, so its default, ``""``, is
+    what reaches the payload). For ``suspicious_activity`` in ACTIVE mode
+    (``guard_core/core/checks/implementations/suspicious_activity.py:108-113``, verified in
+    this venv), the same attacker-controlled ``trigger_info`` - built from request header and
+    query-param NAMES embedded verbatim, per ``guard_core/_utils/body_content_scan.py`` (lines
+    65, 69, 91, 102 for headers; 38, 49 for query params) - is already folded into ``reason``
+    (``sus_specs = f"{client_ip} - {trigger_info}"``, ``reason=f"Suspicious activity detected
+    for IP: {sus_specs}"``), a field this callback DOES log; dropping the separate
+    ``trigger_info`` payload key there would not remove the tainted text, only the second copy
+    of it. Both ``reason`` and ``path`` can therefore carry attacker-controlled text, which is
+    fine for this sink: ``log_event`` (``src/gateway/obs.py``) ``json.dumps``-encodes the whole
+    envelope before it ever reaches stdout, the same way ``request_received`` already logs the
+    raw ``path``. The gateway leaves ``enable_penetration_detection=False`` in
+    :func:`build_guard_config` (confirmed, below), so ``suspicious_activity`` is dormant
+    today - it never even joins the check pipeline, since this gateway also sets no
+    route-level ``enable_suspicious_detection`` and no ``enable_dynamic_rules``, the only other
+    two conditions that turn it on (``SuspiciousActivityCheck.applies_to``, same file).
+    ``trigger_info`` stays excluded from the payload anyway: the callback is shared by every
+    check guard-core ships, present and future, so it does not rely on today's config to keep
+    it safe.
+
+    Confirmed NOT to also fire for the ``/ws`` connect guard: ``guard_websocket``
+    (``guard/websocket.py``) calls the guard-core primitives ``ip_ban_manager.is_ip_banned``,
+    ``is_ip_allowed`` and ``check_rate_limit_by_ip`` directly and raises its own
+    ``WebSocketException`` - none of that path references ``on_block`` or
+    ``fire_block_hook`` (grepped the installed source; confirmed by executing a WS
+    blacklist rejection and a WS rate-limit rejection through the test harness with a
+    recording ``on_block`` - zero calls both times). So this event and ``ws_connect_rejected``
+    never double up for the same connection.
+    """
+    log_event(
+        "http_request_blocked",
+        audience="system",
+        level="warning",
+        span="http",
+        fields={
+            "check_name": payload.get("check_name"),
+            "reason": payload.get("reason"),
+            "client_ip": payload.get("client_ip"),
+            "path": payload.get("path"),
+            "method": payload.get("method"),
+            "status_code": payload.get("status_code"),
+            "passive_mode": payload.get("passive_mode"),
+        },
+    )
+
+
 def build_guard_config() -> SecurityConfig:
     """Build the guard ``SecurityConfig`` from env vars.
 
@@ -254,6 +330,10 @@ def build_guard_config() -> SecurityConfig:
     keys (``ratelimit:``, ``gateway:token:``). ``fail_secure=False`` so a guard
     check bug fails open instead of taking the public gateway down; ``redis_fail_open=True``
     so a Redis outage keeps the rate limiter running on its per-process window.
+    ``on_block=`` :func:`_on_http_block` so every HTTP block (rate-limit 429, IP ban / blacklist
+    403, cloud-provider or country 403, ...) also emits an ``http_request_blocked``
+    ``logevent.v1`` line, the HTTP-side sibling of ``ws_connect_rejected`` (see that
+    function's docstring for the full evidence).
 
     ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES`` are pre-validated
     here (:func:`_validate_ip_or_cidr_csv`) and raise :class:`ConfigError` on a bad entry - they
@@ -319,6 +399,7 @@ def build_guard_config() -> SecurityConfig:
         redis_fail_open=True,
         lazy_init=True,
         exclude_paths=_GUARD_EXCLUDE_PATHS,
+        on_block=_on_http_block,
     )
 
 
