@@ -2047,6 +2047,27 @@ def create_app(
                 mounts.append(group)
         mounts = [system_mounts.GLOBAL_SLUG] + [m for m in mounts if m != system_mounts.GLOBAL_SLUG]
 
+        # ONE FIRST VISIT PER PERSON, NOT ONE PER SIGN-IN.
+        #
+        # Every other kind is minted by a flow at the moment it creates a touch, so a second mint is
+        # a second touch and deserves its own record. `first-visit` is the opposite: it is minted
+        # because nobody sent anything, on every sign-in that arrives without a link. Minting a
+        # fresh record each time would give the terminal a new `scaffold-<id>` chat id each time,
+        # and therefore a new rail row — a fourth sign-in showing four rows the person never made,
+        # which is precisely the defect F34/F35 exist to remove. Caught in review by the terminal
+        # worker before it shipped.
+        #
+        # So the record is reused while it is still PENDING. Once redeemed the person has actually
+        # been through it, and a later sign-in is a genuinely new arrival that may hold new facts —
+        # a workspace shared with them since, a meeting they have been invited to.
+        if body.kind == "first-visit":
+            existing = next((r for r in scaffolds.for_recipient(who, pending_only=True)
+                             if r.get("kind") == "first-visit"), None)
+            if existing:
+                logger.info("scaffold REUSED id=%s kind=first-visit who=%s (unredeemed)",
+                            existing["id"], who)
+                return {"id": existing["id"], "url": f"{ui}/?s={existing['id']}"}
+
         refs = dict(body.refs or {})
         # THE RECIPIENT'S OWN ADDRESS IS A FACT OF THE TURN, and the derived domain is the only
         # anchor a first setup conversation has. Both are computed HERE, from `who`, rather than
