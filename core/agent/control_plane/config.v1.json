@@ -377,6 +377,15 @@
       ]
     },
     {
+      "key": "VEXA_ADMIN_API_TOKEN",
+      "class": "defaulted",
+      "default": "(unset — the post-meeting room resolves no participant and mounts ZERO desks)",
+      "description": "admin-api's ADMIN token, used for ONE question: resolve a meeting participant's email address to a subject for the post-meeting room (control_plane.meeting_room). The narrow door does not exist yet — agent-api's internal-secret tier on admin-api exposes no by-email lookup, and GET /admin/users/email/{email} sits behind this much broader credential (it can also create and patch users). Empty by DEFAULT and the room degrades to ZERO desks without it, never to matching a person by name. Delete this key once admin-api serves GET /internal/users/by-email/{email} returning only {id}: agent-api already prefers that route",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_REQUIRE_GATEWAY_IDENTITY",
       "class": "defaulted",
       "default": "false",

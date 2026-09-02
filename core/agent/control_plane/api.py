@@ -311,15 +311,18 @@ class ChatBody(BaseModel):
     # close. Accepting it additionally requires the internal-tier secret (see ``_resolve_room``), so
     # the general end-user chat surface cannot open a room at all.
     room_meeting_id: Optional[str] = None
-    # PROPOSE-AND-VERIFY. flows holds the transcript, so it is the only party that knows who actually
-    # SPOKE and in what order of speaking time — but it is still a caller, so this list is used for
-    # INTERSECTION AND ORDER ONLY: the server resolves the meeting's own roster and mounts the
-    # intersection. A proposal can therefore only ever NARROW the room, never widen it. Omit it and
-    # the room is the whole verified roster, still capped.
-    room_subjects: Optional[list[str]] = None
-    # The flow's ``room_read_max`` (founder bound: "should only fetch workspaces of those who
-    # actually spoke … will not die if it has 200 folders"). Default 12, clamped server-side to
-    # ``meeting_room.MAX_ROOM_READ`` — a caller may lower it, never raise it.
+    # MEMBERSHIP = the INVITE's participant list, as ADDRESSES. The trusted caller holds the parsed
+    # invite, so it sends the addresses; agent-api resolves each one to a subject through admin-api
+    # and mounts only participants who ALREADY have a subject and a desk. Addresses, never subject
+    # ids and never workspace names: the resolution — and therefore the blast radius — stays here.
+    room_participants: Optional[list[str]] = None
+    # The invite's ICS ``CN=`` map (address → display name). Used ONLY to match transcript speaker
+    # labels back to addresses that are ALREADY in the list above, i.e. only to ORDER the room. A
+    # name never admits anybody, so a bad match costs position and nothing else.
+    room_participant_names: Optional[dict[str, str]] = None
+    # The transcript's speaker labels, already ordered by speaking time DESCENDING (the caller holds
+    # the transcript, so it does that arithmetic). Unmatched labels are simply ignored.
+    room_speakers: Optional[list[str]] = None
     room_read_max: Optional[int] = None
 
 
@@ -899,8 +902,82 @@ def _context_grounding(
 # meeting, so B can't pair its own row with A's native to sniff A's copilot out-stream. Returns the owned
 # meeting record (dict) on success, else None. Injectable so the L2 suite drives it over a fake.
 # How room membership was derived, stamped on every room dispatch + log line so an audit can tell
-# WHICH server-side source named the subjects (never the request body).
-_ROOM_SOURCE = "meeting-api:transcript_viewers"
+# WHERE the room came from. Under the participant model it is the invite's addresses, resolved to
+# subjects here — the ORDER comes from the transcript, the MEMBERSHIP never does.
+_ROOM_SOURCE = "invite:participants→admin-api"
+
+
+def _http_email_subject_lookup(admin_api_url: str, internal_secret: str, admin_token: str):
+    """Build the participant ADDRESS → subject resolver: ``(address) -> str | None``.
+
+    THE DOOR PROBLEM, stated because it constrains the whole feature. agent-api already holds an
+    internal-tier seam to admin-api (``X-Internal-Secret``, used for the membership index + model
+    config), but that tier exposes NO email lookup. The one route that answers this question,
+    ``GET /admin/users/email/{email}``, is gated by ``verify_admin_token`` — a DIFFERENT and much
+    broader credential (it can also create and patch users). So:
+
+      * the narrow door is tried FIRST — ``GET /internal/users/by-email/{email}`` with the internal
+        secret. It does not exist on admin-api today; this is the route that SHOULD be added
+        (returning only ``{"id": ...}``), and when it is, the room works with no new credential and
+        ``VEXA_ADMIN_API_TOKEN`` can be dropped. A 404 here marks it absent for the process lifetime
+        so we probe once, not once per participant;
+      * the wide door is used only when an operator has explicitly set ``VEXA_ADMIN_API_TOKEN``;
+      * with neither, every lookup returns None — the room resolves to ZERO desks and says so. It
+        never falls back to matching a person by name, which is the failure this design exists to
+        avoid.
+
+    Fail-CLOSED and quiet-per-call: any error is None (that participant is skipped), never an
+    exception that could take down the turn."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    base = (admin_api_url or "").rstrip("/")
+    state = {"internal_route": True}   # flipped off the first time the narrow door 404s
+
+    def _get(url: str, headers: dict) -> "dict | None":
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as resp:   # noqa: S310 — internal service URL
+            if resp.status != 200:
+                return None
+            return json.loads(resp.read().decode() or "null")
+
+    def _lookup(address: str) -> "str | None":
+        if not base or not address:
+            return None
+        quoted = urllib.parse.quote(str(address).strip().lower(), safe="")
+        if state["internal_route"] and internal_secret:
+            try:
+                row = _get(f"{base}/internal/users/by-email/{quoted}",
+                           {"X-Internal-Secret": internal_secret})
+                if isinstance(row, dict) and row.get("id") is not None:
+                    return str(row["id"])
+                return None
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    # Ambiguous by design: 404 is both "no such user" and "no such route". Probe the
+                    # ROUTE once — if the wide door is configured we can tell the difference by
+                    # asking it; if it is not, treat the narrow door as present and this address as
+                    # unknown (the safe reading — it skips a person rather than inventing one).
+                    if not admin_token:
+                        return None
+                    state["internal_route"] = False
+                else:
+                    return None
+            except Exception:  # noqa: BLE001 — unreachable admin-api → skip this participant
+                return None
+        if not admin_token:
+            logger.warning("room: no email→subject resolver is configured (admin-api has no "
+                           "internal by-email route and VEXA_ADMIN_API_TOKEN is unset) — the room "
+                           "will mount ZERO desks")
+            return None
+        try:
+            row = _get(f"{base}/admin/users/email/{quoted}", {"X-Admin-API-Key": admin_token})
+        except Exception:  # noqa: BLE001 — 404 (no such user) and transport errors alike → skip
+            return None
+        return str(row["id"]) if isinstance(row, dict) and row.get("id") is not None else None
+
+    return _lookup
 
 
 def _http_meeting_owner_lookup(meeting_api_url: str):
@@ -942,6 +1019,7 @@ def create_app(
     membership_index: Optional[MembershipIndex] = None,
     meeting_owner_lookup: "Optional[object]" = None,
     schedule_source: "Optional[Callable[[str], list]]" = None,
+    email_subject_lookup: "Optional[object]" = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -1016,6 +1094,13 @@ def create_app(
         settings.meeting_api_url if settings is not None else "")
     # The ambient schedule digest's rows source (context bundle): TTL-cached meeting-api fetch;
     # injectable for L2 tests, same seam style as meeting_owner_lookup.
+    # The post-meeting room's participant ADDRESS → subject resolver; injectable for L2 tests, same
+    # seam style as meeting_owner_lookup. See _http_email_subject_lookup for why this door is awkward.
+    _email_subject_lookup = email_subject_lookup or _http_email_subject_lookup(
+        (settings.admin_api_url if settings is not None else "") or "",
+        settings.internal_api_secret.get_secret_value() if settings is not None else "",
+        settings.admin_api_token.get_secret_value() if settings is not None else "",
+    )
     _schedule_source = schedule_source or schedule_digest_mod.digest_source(
         settings.meeting_api_url if settings is not None else "", mindex.list)
 
@@ -1053,46 +1138,51 @@ def create_app(
         raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
 
     def _resolve_room(request: Request, subject: str, meeting_id: str,
-                      proposed: "Optional[list[str]]" = None,
+                      participants: "Optional[list[str]]" = None,
+                      names: "Optional[dict]" = None,
+                      speakers: "Optional[list[str]]" = None,
                       read_max: Optional[int] = None) -> dict:
-        """Turn a caller-named MEETING into the SERVER-DERIVED room this turn may read.
+        """Turn a caller-named MEETING into the room this turn may read.
 
         The room is the post-meeting mount widening (founder ruling: a person's `personal`/desk
-        workspace is company knowledge, not private, and the post-meeting agent reads every
-        attendee's desk to write ONE shared write-up; only `_system` stays private). The dangerous
-        version of this feature is one where the CALLER names the workspaces — that hands any
-        signed-in user a read of any other user's desk. So the caller names only the meeting, and
-        every subject comes from meeting-api.
+        workspace is company knowledge, not private, and the post-meeting agent reads the attendees'
+        desks to write ONE shared write-up; only `_system` stays private).
 
-        THREE GATES, all fail-CLOSED, in this order:
+        GATES, all fail-CLOSED, in this order:
 
         0. CALLER TIER — the internal-tier shared secret (`X-Internal-Secret` == `VEXA_INTERNAL_API_SECRET`,
            the same edge `/api/admin/overview` and the admin-api mirror already use). The room is a
            FLOWS/OPERATOR capability, not an end-user one: the post-meeting run is dispatched by
            `core/flows` talking to agent-api directly, while browser clients reach `/api/chat` through
-           the gateway and hold no internal secret. Gating here keeps the blast radius at "services
-           that already hold the deployment's internal secret" instead of "every signed-in user".
-           An UNCONFIGURED secret means nobody gets a room (403), exactly like the admin panel.
+           the gateway and hold no internal secret. An UNCONFIGURED secret means nobody gets a room.
+           **Under the participant model this gate is also the trust boundary on WHO is in the room** —
+           see the residual below.
         1. ENTITLEMENT — `_meeting_owner_lookup`, the EXISTING meeting access check (meeting-api
            `GET /meetings/{id}`, which evaluates its own access union in SQL and 404s a row the
            caller may not read). No second authorisation rule is invented for the room.
-        2. OWNERSHIP + MEMBERSHIP — `meeting_room.verified_subjects` (see that module): the row must
-           be the caller's OWN meeting, and the room's CEILING is `data.transcript_viewers` as
-           meeting-api maintains it. Those are already SUBJECT ids, so nothing here guesses a person
-           from a name or an email — a wrong guess would mount the wrong human's notes.
-        3. NARROWING — `meeting_room.select_room`: the caller MAY propose a subject list (flows holds
-           the transcript, so only flows knows who SPOKE and in what order of speaking time). The
-           proposal is intersected with the verified ceiling and supplies ORDER ONLY, then the
-           `room_read_max` cap is applied under the server's own ceiling. A caller can narrow the
-           room; it can never widen it, and a proposed-but-unverified id is LOGGED, never silently
-           dropped — a caller naming somebody who was not in the meeting is a finding.
+        2. OWNERSHIP — `meeting_room.assert_owner`: the row must be the caller's OWN meeting. A
+           transcript-share recipient passes gate 1 and is refused here.
+        3. GROUP DESK — `meeting_room.group_workspace_id` reads the meeting's BOUND shared workspace
+           (`data.workspace_id`). Under decision 22 that is the ONE desk a room run may write; every
+           other desk in the stack, the dispatch subject's own included, is demoted to read-only by
+           `dispatch.build_mount_set`. The id is not a grant — the dispatcher re-reads the subject's
+           role from that workspace's own policy/members.json.
+        4. MEMBERSHIP + ORDER — `meeting_room.order_participants`: membership is the INVITE's
+           participant ADDRESSES (`room_participants`); speaking only ORDERS them, via the ICS `CN=`
+           map. Each address is resolved to a subject by `_email_subject_lookup` at mount time, and
+           only a participant who already HAS a subject and a desk is mounted. A name never admits
+           anybody, so a bad CN match costs ordering and nothing else.
 
-        KNOWN NARROWNESS (stated, not papered over): the calendar attendee list
-        (`GET /meetings/{platform}/{native}/participants`) carries EMAILS, and agent-api has no
-        email→subject resolver on any edge it can reach — admin-api's `/admin/users/email/{email}`
-        sits behind the ADMIN token, which agent-api does not hold, and the internal tier exposes no
-        such lookup. Until one exists, an attendee who has not redeemed their share link is not in
-        the room. The seam to widen is `room_subjects`, not this gate.
+        THE RESIDUAL, stated because it is a real one: membership now comes from the CALLER's list,
+        so a trusted internal caller could name addresses that were not in the meeting. Gate 0 IS the
+        trust boundary on that. It is a deliberate trade — the server-held alternative
+        (`data.transcript_viewers`) is empty at post-meeting time, because nobody has clicked their
+        share link yet, which made the whole feature inert on its normal path.
+
+        Returns the room the dispatcher applies. `lookup` rides in it because address→subject
+        resolution has to happen where the mount set is built (it needs the store root and the paths
+        the subject's own stack already holds); it is an in-process callable on a dispatcher
+        argument and never crosses a wire.
         """
         secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
         provided = request.headers.get("x-internal-secret", "")
@@ -1103,24 +1193,20 @@ def create_app(
                                 detail="the meeting room is an internal-tier capability")
         owned = _meeting_owner_lookup(subject, meeting_id)
         try:
-            verified = meeting_room.verified_subjects(owned, requester=subject)
+            meeting_room.assert_owner(owned, requester=subject)
         except meeting_room.RoomRefused as e:
             logger.warning("room REFUSED subject=%s meeting=%s reason=%s", subject, meeting_id, e.reason)
             raise HTTPException(status_code=403, detail=e.reason)
-        subjects, rejected = meeting_room.select_room(verified, proposed=proposed, cap=read_max)
-        if rejected:
-            # A caller naming subjects the meeting's own roster does not contain is either a bug or
-            # an attempt. It is refused by construction (they are simply not in the intersection),
-            # but it is never silent.
-            logger.warning("room PROPOSAL NARROWED subject=%s meeting=%s rejected=%s (not in the "
-                           "meeting's verified roster)", subject, meeting_id, rejected)
-        # A silent widening of what an agent may read is the thing that must never happen: say who
-        # asked, for which meeting, how membership was derived, and exactly which subjects it named.
-        logger.info("room RESOLVED subject=%s meeting=%s source=%s verified=%s proposed=%s "
-                    "selected=%s cap=%s", subject, meeting_id, _ROOM_SOURCE, verified,
-                    proposed if proposed is not None else "-", subjects,
-                    meeting_room.DEFAULT_ROOM_READ_MAX if read_max is None else read_max)
-        return {"meeting_id": str(meeting_id), "subjects": subjects, "source": _ROOM_SOURCE}
+        # DECISION 22: the ONE writable desk of a room run is the meeting's GROUP desk, when the
+        # meeting is bound to a shared workspace. Server-derived — meeting-api owns the binding
+        # (`POST /meetings/{platform}/{native}/workspace`, owner-scoped), so a caller cannot name a
+        # group. Returning the id grants nothing: the dispatcher still asks that workspace's own
+        # policy/members.json whether THIS subject may write it.
+        group = meeting_room.group_workspace_id(owned)
+        ordered = meeting_room.order_participants(participants, names=names, speakers=speakers)
+        return {"meeting_id": str(meeting_id), "ordered": ordered, "source": _ROOM_SOURCE,
+                "group_workspace_id": group, "read_max": read_max,
+                "lookup": _email_subject_lookup}
 
     @app.get("/health")
     def health():
@@ -1345,7 +1431,10 @@ def create_app(
         room = None
         if body.room_meeting_id:
             room = _resolve_room(request, subject, body.room_meeting_id,
-                                 proposed=body.room_subjects, read_max=body.room_read_max)
+                                 participants=body.room_participants,
+                                 names=body.room_participant_names,
+                                 speakers=body.room_speakers,
+                                 read_max=body.room_read_max)
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None

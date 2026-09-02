@@ -23,7 +23,7 @@ from control_plane.workspace_attach import active_workspaces, shared_active_moun
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import global_layer
-from control_plane.meeting_room import room_mounts
+from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared import delegation
@@ -154,7 +154,17 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     existing order/semantics are untouched: with ``room=None`` (every dispatch that names no meeting)
     the stack is byte-identical to before. They are always ``write: False`` (the runtime binds them
     ``:ro``) and ``primary: False``, they can never shadow or duplicate a path the subject's own set
-    already holds, and no other subject's ``_system`` is reachable through them."""
+    already holds, and no other subject's ``_system`` is reachable through them.
+
+    DECISION 22 — A ROOM RUN WRITES NO DESK. The run reads desks and writes ONE shared artefact whose
+    home is the meeting row; flows distributes it into every attendee's desk afterwards, organizer
+    included, nobody special. So in room mode the SUBJECT'S OWN desks are demoted to ``write: False``
+    too — the ruling says "not the organizer's either", and a mount left writable under a run ruled
+    not to write is the silent kind of wrong. The ONE writable desk is the GROUP DESK when the meeting
+    is bound to a shared workspace and the subject is a contributor/owner of it: that one keeps its
+    write bit, becomes the turn's cwd, and the run actively maintains the group's memory.
+    ``_system`` is NOT a desk and stays read-write — chat continuity anchors there
+    (``worker/engine._continuity_root``), and taking it away would break the turn, not narrow it."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
@@ -170,7 +180,20 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
         g = {**g, "write": True}
     stack.append(g)
 
-    # Tier 2 — the NORMAL active set (private baseline + activated extras).
+    # Tier 2 — the NORMAL active set (private baseline + activated extras). In ROOM mode these are
+    # demoted to read-only (decision 22, above) except the meeting's own group desk.
+    if room:
+        group = str(room.get("group_workspace_id") or "")
+        active = [m if (group and m.get("slug") == group)
+                  else {**m, "write": False, "primary": False}
+                  for m in active]
+        if group and not any(m.get("slug") == group for m in active):
+            # The meeting names a group the subject has not activated — resolve it directly through
+            # the authoritative Lane-A seam so the run can maintain the group's memory. Membership
+            # and the write bit are decided THERE, from policy/members.json, not here.
+            g_mount = group_desk_mount(settings.workspaces_dir, subject, group)
+            if g_mount is not None:
+                active.append(g_mount)
     stack.extend(active)
 
     # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
@@ -179,16 +202,25 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     if room:
         try:
             taken = {m["path"] for m in stack if m.get("path")}
-            extra = room_mounts(settings.workspaces_dir, room.get("subjects") or [],
-                                meeting_id=str(room.get("meeting_id") or ""), taken_paths=taken)
+            extra, audit = resolve_desks(
+                settings.workspaces_dir, room.get("ordered") or [],
+                lookup=room.get("lookup") or (lambda _address: None),
+                meeting_id=str(room.get("meeting_id") or ""),
+                cap=room.get("read_max"), taken_paths=taken)
             stack.extend(extra)
-            # OBSERVABILITY (never widen what an agent may read quietly): say which meeting, which
-            # subjects were asked for, which mounts actually landed, and how membership was derived.
+            # OBSERVABILITY — a silent widening of what an agent may read is the thing that must
+            # never happen. THE AUDIT LINE. One row per participant — address, subject, and WHY (matched-and-spoke
+            # / unmatched-invite-order / skipped-no-subject / skipped-no-desk / skipped-over-cap).
+            # This is how anyone ever answers "which desks could that run read, and why those?" —
+            # a widening that cannot be reconstructed afterwards is a widening nobody can audit.
             logger.info(
-                "dispatch ROOM MOUNTS subject=%s meeting=%s source=%s asked=%s mounted=%s read_only=%s",
-                subject, room.get("meeting_id"), room.get("source") or "meeting-api:transcript_viewers",
-                list(room.get("subjects") or []), [m["slug"] for m in extra],
-                all(m.get("write") is False for m in extra),
+                "dispatch ROOM MOUNTS subject=%s meeting=%s source=%s mounted=%s read_only=%s "
+                "group_desk=%s writable_desks=%s audit=%s",
+                subject, room.get("meeting_id"), room.get("source") or "-",
+                [m["slug"] for m in extra], all(m.get("write") is False for m in extra),
+                room.get("group_workspace_id") or "-",
+                [m["slug"] for m in stack if m.get("write") and m.get("role") not in ("global", "system")],
+                audit,
             )
         except Exception:  # noqa: BLE001
             logger.warning("room mount resolution failed for subject=%s meeting=%s — running without "
