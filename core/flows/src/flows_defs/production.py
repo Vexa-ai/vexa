@@ -658,13 +658,18 @@ def build(reg: Registry, db) -> None:
                   or ensure_platform_user(to))
         if not setting(uid, "mail_prep"):
             return Done({"skipped": "mail_prep is off for this person"})
+        title = ctx.refs.get("title") or "your meeting"
         ref = str(ctx.refs.get("meeting_id") or "")
         if not ref and ctx.refs.get("url"):
-            ref = mt.meeting_ref(uid, ctx.refs["url"])
+            # PLAN it, do not merely address it. The link used to carry the native id because the
+            # row is minted at dispatch — so the prep chat opened on a Zoom number, held nothing
+            # under it, and reached for the only meeting it could find. dispatch_bot claims this
+            # same row at start-2min, so nothing downstream forks.
+            ref = mt.ensure_meeting_row(uid, ctx.refs["url"], ctx.refs.get("title"),
+                                        ctx.refs.get("start"))
         if not ref:
             raise StepError("nothing to link to — refs carry neither meeting_id nor url",
                             retryable=False)
-        title = ctx.refs.get("title") or "your meeting"
         body = (f"{title} — {_their_clock(uid, ctx.refs['start'])}.\n"
                 "Want to walk in ready? Open the chat and I'll pull together what we already know.")
         mid = notify(to, f"Prepare: {title}", body, link=ui_link(ask="prep", meeting=ref))

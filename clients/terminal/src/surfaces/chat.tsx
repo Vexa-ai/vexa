@@ -20,7 +20,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, presetOwnsOpening, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -947,6 +947,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const onboardingArmedRef = useRef(false);
   useEffect(() => {
     const onSeed = (event: Event) => {
+      // A `?ask=` preset outranks the cached phase greeting: it is what the person clicked, it
+      // knows which meeting they clicked about, and it arrives late only because it is fetched.
+      // Without this the greeting seeded first and the preset's answer read as a reply to it.
+      if (presetOwnsOpening()) return;
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       const key = chatKey;
       const kind = (event as CustomEvent<{ kind?: OnboardingSeedKind }>).detail?.kind ?? "contextual";

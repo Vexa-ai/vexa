@@ -1,4 +1,7 @@
 ---
+template: true                    # THE SHAPE OF an entity, never one:
+                                  # hidden from every tree, never listed,
+                                  # never cited, never a chip
 type: person                      # required
 id: <slug>                        # required — kebab-case, matches the filename
 title: <Full Name>                # required — what [[wikilinks]] resolve to

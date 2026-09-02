@@ -1513,6 +1513,11 @@ def create_app(
         content = body.get("content")
         if not rel or rel.startswith("/") or ".." in rel.split("/") or not isinstance(content, str):
             raise HTTPException(status_code=400, detail="need a relative path and string content")
+        # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
+        # can only be open on it deliberately — and a save from that tab would silently rewrite the
+        # shape every future entity is copied from.
+        if rel.startswith("kg/templates/"):
+            raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
         if slug == system_mounts.GLOBAL_SLUG:
             admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
             if str(subject) not in admins:

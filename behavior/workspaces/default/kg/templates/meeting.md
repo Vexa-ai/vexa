@@ -1,4 +1,7 @@
 ---
+template: true                    # THE SHAPE OF an entity, never one:
+                                  # hidden from every tree, never listed,
+                                  # never cited, never a chip
 type: meeting                     # required
 id: <yyyy-mm-dd-slug>             # required — matches the filename
 title: <Meeting title>            # required
