@@ -17,8 +17,12 @@ rather than discovered later:
   2. `session_keys_delete()` / `scaffold_keys_delete()` in `subject_reset` clear redis by the
      exact per-subject prefixes `blank-instance.sh` documents, and nothing else. agent-api owns
      those keys and exposes no delete for them.
-  3. `friction_delete_for()` deletes that subject's friction rows from the flows lane. Same
-     shape: the rows are per-subject, and no route removes them.
+  3. `lane_rows_delete_for()` deletes that subject's rows from the flows lanes — the reactions the
+     engine admitted for them, their receipts and signals, their mail threads, and their friction.
+     Same shape as the other two: the rows are per-subject and no route removes them. It is the
+     one that makes a state RE-ENTERABLE — `admit()` dedups on (source_event_id, flow), so a
+     reaction from an earlier run silently swallows the next invite (`admitted 0`, no prepare
+     mail, a step that waits out its budget for a touch nothing will send).
 
 `Doors` is a plain class with no HTTP in it, so `stub_doors.StubDoors` subclasses it and
 `run_all.py --stub` proves every recipe offline. `LiveDoors` is the only thing that talks to the
@@ -147,6 +151,8 @@ class Doors:
     def session_keys_delete(self, subject: str) -> int: raise NotImplementedError
     def scaffold_keys_delete(self, address: str) -> int: raise NotImplementedError
     def friction_delete_for(self, subject: str) -> int: raise NotImplementedError
+    def lane_rows_delete_for(self, subject: str, address: str) -> dict:
+        raise NotImplementedError
     def mail_delete_for(self, address: str) -> int: raise NotImplementedError
 
 
@@ -727,6 +733,69 @@ class LiveDoors(Doors):
         r = subprocess.run(["docker", "exec", f"{self.stack}-redis-1", cli, *args],
                            capture_output=True, text=True, timeout=60)
         return r.stdout or ""
+
+    #: The lane tables that hold ONE PERSON'S rows, in FK order — receipts and signals reference a
+    #: reaction, so the reaction goes last. The same order `blank-instance.sh` documents, and the
+    #: same list minus the lane-wide ones (`mail_cursor` is the poller's watermark and belongs to
+    #: the deployment, not to a subject; deleting it would replay the whole box).
+    LANE_TABLES = ("effect_receipt", "signal", "reaction", "mail_thread", "mail_outbox_sent")
+
+    def lane_rows_delete_for(self, subject: str, address: str) -> dict:
+        """One subject's rows in every flows lane. THIS is what makes a state re-enterable.
+
+        `admit()` dedups on (source_event_id, flow), and a rehearsal's source ids are derived from
+        (state, subject, meeting) precisely so a re-run is idempotent. The other side of that coin:
+        after a reset the SAME ids must be admissible again, and they are not while the earlier
+        reaction is still in the lane. Found live — the poller logged `admitted 0` for a fresh
+        invite, no prepare mail was sent, and the step waited out its whole budget for a touch
+        nothing was ever going to produce.
+
+        MATCHED ON THE SUBJECT, never on a bare number: `"uid": "13"` must not take uid 130 with
+        it. Both JSON spellings, plus the address, which is how the invite lineage names a person.
+        """
+        out: dict = {}
+        for db in self._flow_lanes():
+            for table in self.LANE_TABLES:
+                where = self._lane_where(table, str(subject), address)
+                if not where:
+                    continue
+                r = subprocess.run(
+                    ["docker", "exec", f"{self.stack}-postgres-1", "psql", "-U", "postgres",
+                     "-d", db, "-tAc", f"DELETE FROM {table} WHERE {where};"],
+                    capture_output=True, text=True, timeout=30)
+                if r.returncode != 0:
+                    if "does not exist" in (r.stderr or ""):
+                        continue                     # lanes differ; absent is not a failure
+                    raise DoorRefused(
+                        f"could not clear {db}.{table} for {address}: "
+                        f"{(r.stderr or '').strip()[:200]}. Refusing to report a reset that would "
+                        f"leave this state un-re-enterable.")
+                n = _int((r.stdout or "").replace("DELETE", ""))
+                if n:
+                    out[f"{db}.{table}"] = n
+        return out
+
+    @staticmethod
+    def _lane_where(table: str, subject: str, address: str) -> str:
+        """The per-subject predicate for one lane table, or "" when the table names no person —
+        in which case it is left alone rather than guessed at."""
+        def q(v: str) -> str:
+            return "'" + str(v).replace("'", "''") + "'"
+
+        # MATCHED ON THE SUBJECT, never on a bare number: `%13%` would take uid 130 with it. Both
+        # JSON spellings of the key, plus the address, which is how the invite lineage names a
+        # person before any uid exists.
+        naming = " OR ".join(
+            f"{{col}} LIKE {q('%' + pat + '%')}"
+            for pat in (f'"uid": "{subject}"', f'"uid":"{subject}"', address))
+        if table in ("effect_receipt", "signal"):
+            inner = naming.format(col="r.subject_refs")
+            return f"reaction_id IN (SELECT reaction_id FROM reaction r WHERE {inner})"
+        if table == "reaction":
+            return naming.format(col="subject_refs")
+        if table in ("mail_thread", "mail_outbox_sent"):
+            return f"subject_uid = {q(subject)}"
+        return ""
 
     def friction_delete_for(self, subject: str) -> int:
         n = 0

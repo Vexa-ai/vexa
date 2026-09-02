@@ -12,6 +12,7 @@ good. Those need the stack and, for the last one, a person.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -294,6 +295,16 @@ class StubDoors(Doors):
 
     def friction_delete_for(self, subject: str) -> int:
         return 0
+
+    def lane_rows_delete_for(self, subject: str, address: str) -> dict:
+        """Drop this subject's admitted facts, so the same derived ids are admissible again —
+        the model of `admit()`'s dedup being per-subject-clearable."""
+        gone = [f for f in self.facts
+                if str(subject) in json.dumps(f.get("refs") or {})
+                or address in json.dumps(f.get("refs") or {})]
+        self.facts = [f for f in self.facts if f not in gone]
+        self.reactions = [r for r in self.reactions if r.get("subject") not in (str(subject),)]
+        return {"facts": len(gone)} if gone else {}
 
     def mail_delete_for(self, address: str) -> int:
         before = len(self.mail)

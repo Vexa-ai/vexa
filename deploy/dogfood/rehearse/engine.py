@@ -463,6 +463,13 @@ def subject_reset(address: str, *, doors: Doors, catalog: cat.Catalogue | None =
             out["removed"]["friction"] = doors.friction_delete_for(uid)
         except DoorRefused as e:
             out["remaining"]["friction"] = str(e)
+        try:
+            # The lane's dedup memory. Without this the subject is gone and the state still
+            # cannot be re-entered: `admit()` swallows the next invite as a duplicate and the
+            # touch that should follow is simply never sent.
+            out["removed"]["lane_rows"] = doors.lane_rows_delete_for(uid, address)
+        except DoorRefused as e:
+            out["remaining"]["lane_rows"] = str(e)
     try:
         out["removed"]["scaffolds"] = doors.scaffold_keys_delete(address)
     except DoorRefused as e:
