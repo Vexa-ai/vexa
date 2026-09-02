@@ -27,6 +27,7 @@ const WIRE = {
     participants: ["leo@acme.test", "priya@acme.test"],
     participant_names: { "priya@acme.test": "Priya N", "leo@acme.test": 7 },
     state: { desk: "new", group: "new" },
+    note_path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md",
   },
   opening_preset: "minutes-review-invite",
   opening_label: "minutes",
@@ -100,17 +101,23 @@ describe("scaffoldToChat", () => {
     // own order, which is the author's reading order
     expect(rec.artifacts[0]).toMatchObject({ path: "README.md", desk: true });
     expect(rec.artifacts.slice(1)).toMatchObject([
-      { path: "kg/entities/meeting/abc-defg-hij.md", label: "Minutes" },  // post → Minutes
+      { path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Minutes" },   // post → Minutes, at the path the SERVER named
       { kind: "meeting", path: "97", label: "Transcript" },
     ]);
-    expect(rec.focus).toBe("|kg/entities/meeting/abc-defg-hij.md");
+    expect(rec.focus).toBe("|kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md");
   });
 
-  it("without a native the note is DROPPED, not guessed at", () => {
-    // a tab pointing at a guessed path opens a page that can never load — worse than one fewer tab
-    const rec = scaffoldToChat(parseScaffold({ ...WIRE, native: null })!);
+  it("without a note_path the note is DROPPED, not guessed at", () => {
+    // a tab pointing at a guessed path opens a page that can never load — worse than one fewer
+    // tab. The guess used to be `kg/entities/meeting/<native>.md`, and it was ALWAYS wrong; the
+    // path is now the server's answer or there is no tab (F55).
+    const rec = scaffoldToChat(parseScaffold(
+      { ...WIRE, refs: { ...WIRE.refs, note_path: undefined } })!);
     expect(rec.artifacts.filter((a) => !a.desk))
       .toMatchObject([{ kind: "meeting", path: "97", label: "Transcript" }]);
+    // and the native alone cannot resurrect it — that is the whole point
+    expect(parseScaffold({ ...WIRE, refs: { ...WIRE.refs, note_path: undefined } })!.native)
+      .toBe("abc-defg-hij");
   });
 
   it("phase null keeps the meeting's own layout and never infers `post`", () => {
@@ -120,7 +127,7 @@ describe("scaffoldToChat", () => {
     expect(s.phase).toBeNull();
     const rec = scaffoldToChat(s);
     expect(rec.artifacts.filter((a) => !a.desk)[0])
-      .toMatchObject({ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" });
+      .toMatchObject({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Brief" });
   });
 
   it("a scaffold with no meeting opens its own chat over its declared workspaces", () => {
@@ -152,13 +159,33 @@ describe("localScaffold — the hand link composes through the SAME path", () =>
     const sc = localScaffold({
       preset: "prep", openingText: "[prep] …", meeting: "95", native: "abc-defg-hij", phase: "prep",
       workspaces: ["_global", "personal"], tabs: ["meeting:note"], focus: "meeting:note",
+      notePath: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md",
     });
     expect(sc.kind).toBe("hand-link");
     const rec = scaffoldToChat(sc);
     expect(rec.id).toBe("meet-95");
     // prep → the same file under the name the reader needs today
     expect(rec.artifacts.filter((a) => !a.desk))
-      .toMatchObject([{ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" }]);
+      .toMatchObject([{ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Brief" }]);
+  });
+
+  it("a hand link with no note path opens the transcript alone, never a dead Brief tab", () => {
+    // THE KNOWN NARROWING (F55). `?ask=&meeting=` is composed in the browser, and the note's path
+    // is not derivable there: the day is rendered in the ORGANISER's timezone and the slug through
+    // a server-side allow-list. So a hand link carries no `notePath` unless its caller was given
+    // one, and the tab drops rather than pointing at a guess. Emailed `?s=` links are unaffected —
+    // their scaffold carries `refs.note_path` from the step that writes the file.
+    const sc = localScaffold({
+      preset: "prep", openingText: "[prep] …", meeting: "95", native: "abc-defg-hij", phase: "prep",
+      workspaces: ["_global", "personal"], tabs: ["meeting:note", "meeting:transcript"],
+      focus: "meeting:note",
+    });
+    const rec = scaffoldToChat(sc);
+    expect(rec.artifacts.filter((a) => !a.desk))
+      .toMatchObject([{ kind: "meeting", path: "95", label: "Transcript" }]);
+    // focus drops with the token it named — and under decision 28.5 it lands on the chat's HOME
+    // rather than on nothing, because the strip always has a first entry now.
+    expect(rec.focus).toBe("|README.md");
   });
 });
 

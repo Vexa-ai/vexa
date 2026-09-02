@@ -137,7 +137,11 @@ def list_flows():
                  "params": json.loads(p or "{}"), "status": status,
                  "created_by": by, "source": "api"}
                 for n, v, e, st, p, status, by in rows]
-    return {"steps_vocabulary": [
+    # RUNTIME VERSIONS THAT SHADOW THE IMAGE'S with fewer steps — the F57 class. Surfaced on the
+    # listing rather than only in a startup log, because the log is read when somebody already
+    # suspects something and this is the defect where nobody does.
+    return {"shadowing_versions": vocab.shadowing_versions(),
+            "steps_vocabulary": [
         {"name": n, "doc": " ".join((vocab.steps[n].__doc__ or "undocumented").split())}
         for n in sorted(vocab.steps)],
         "flows": code_flows + db_flows}

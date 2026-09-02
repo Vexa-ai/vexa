@@ -103,6 +103,41 @@ def workspace_init(uid: str) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+def head_sha(uid: str) -> str:
+    """The current HEAD commit of ONE subject's desk, or "" if it has no repo (or cannot be read).
+
+    Used as a BEFORE/AFTER witness, never as an assertion about content: a step that must not
+    write anywhere proves it by showing the desk's history did not move. Degrading to "" is
+    deliberate — a probe that cannot read must not be able to manufacture a difference, so a
+    failed read compares equal to a failed read and the detector stays silent rather than
+    failing a meeting on its own blind spot."""
+    try:
+        code, body = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid}, None)
+    except Exception:  # noqa: BLE001 — a probe never costs the caller its step
+        return ""
+    if not _ok(code) or not isinstance(body, dict):
+        return ""
+    commits = body.get("commits") or []
+    if not commits or not isinstance(commits[0], dict):
+        return ""
+    return str(commits[0].get("sha") or "")
+
+
+def head_subjects(uid: str, limit: int = 3) -> list:
+    """The newest commit subjects on a desk — for naming, in a failure, exactly what landed."""
+    try:
+        code, body = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid}, None)
+    except Exception:  # noqa: BLE001
+        return []
+    if not _ok(code) or not isinstance(body, dict):
+        return []
+    out = []
+    for c in (body.get("commits") or [])[:limit]:
+        if isinstance(c, dict):
+            out.append(f"{str(c.get('sha') or '')[:9]} {c.get('subject') or c.get('message') or ''}")
+    return out
+
+
 def workspace_write(uid: str, path: str, content: str) -> None:
     """WRITE one file into ONE subject's workspace, as that subject, COMMITTED.
 

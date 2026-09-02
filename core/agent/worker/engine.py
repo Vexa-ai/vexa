@@ -18,6 +18,7 @@ re-exports both so existing ``from worker.worker import X`` imports keep resolvi
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import logging
@@ -111,7 +112,14 @@ def _tier_label(m: dict) -> str:
                 f"Read it to ground the shared write-up; NEVER write here, and never copy anything "
                 f"out of it that the meeting itself did not cover.")
     if m.get("primary"):
-        return "your PRIVATE baseline (durable personal memory) — read-write"
+        # DECISION 22 — a workspace is a DESK, and this is the sentence a person reads when the
+        # mount stack is quoted back at them (it renders verbatim into the chat as `**seed** (…)`).
+        # The founder saw "seed" in his own chat on 2026-09-02: a seed is what the platform copied
+        # to make the thing, not what the thing IS afterwards. Only the DESCRIPTION changes here —
+        # the slug, the path and every code identifier keep saying what they say, because renaming
+        # those would move data. Same word as `control_plane.scaffolds.WORKSPACE_WORD` and the
+        # terminal's `minutes/vocabulary.ts`; four spellings of one noun, each naming the others.
+        return "your DESK — your private baseline, durable personal memory — read-write"
     writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"
     return f"{role} workspace — {writable}"
 
@@ -410,6 +418,19 @@ def mounts_preamble(mounts: list[dict]) -> str:
 # be a visible regression in the others.
 MACHINERY_MARK = "[vexa-machinery]"
 
+# THE PHASE'S OWN MARK (F51). The write-back phase runs in the SAME harness session as the turn,
+# so its prompt and its reply land in the transcript the history reader serves — and the founder read
+# them back as his own conversation: an empty agent turn, a USER bubble saying "Continue from where
+# you left off.", then "No response requested — write-back complete." A phase exchange is machinery,
+# and machinery must be recognisable in the RECORD rather than guessed at from its prose.
+#
+# Distinct from `MACHINERY_MARK` and not a replacement for it: a composed OPENING is machinery whose
+# ANSWER the person read and must keep, while a phase exchange is machinery whose answer nobody was
+# ever shown. Suppressing everything after a `MACHINERY_MARK` turn would delete the first real reply
+# of every scaffolded chat. One mark per meaning. `control_plane.workspace_reader.history` drops a
+# turn carrying this one and every agent turn up to the next thing a person actually said.
+WRITEBACK_MARK = "[vexa-phase:writeback]"
+
 # ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
 # dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,
 # [])`), so a phase whose only instruction names `entity_upsert` would be a wasted model call on
@@ -446,7 +467,8 @@ def writeback_prompt(candidates: list[str]) -> str:
     honestly say about each and where it read it."""
     named = "\n".join(f"- {c}" for c in candidates)
     return (
-        MACHINERY_MARK + " Write-back phase — not a message from the person, and nothing you say "
+        MACHINERY_MARK + " " + WRITEBACK_MARK
+        + " Write-back phase — not a message from the person, and nothing you say "
         "here reaches them. Do not address them, do not summarise the turn, do not ask anything.\n\n"
         "These names came up in the turn you just finished and NONE of them has a page yet:\n\n"
         + named + "\n\n"
@@ -720,6 +742,90 @@ def _session_file(work: Path, session: str) -> Path:
     return namespaced
 
 
+# ── THE PERSON'S OWN WORDS, AS THEIR OWN FIELD (F47) ─────────────────────────────────────────────
+#
+# The control plane marks the boundary between everything it folded in front of a turn and the
+# person's actual sentence with this exact comment (``control_plane.api.CONTEXT_SENTINEL``). The
+# literal is DUPLICATED here rather than imported: the worker ships in its own image and never
+# imports the control plane. ``tests/test_user_text_field.py`` asserts the two literals are
+# byte-identical, so a rename on either side is a failing test instead of a silent regression —
+# the same discipline ``MACHINERY_MARK`` already carries across its three languages.
+CONTEXT_SENTINEL = "<!--vexa:user-input-below-->"
+
+
+def human_half(prompt: str) -> str:
+    """The person's own words inside a composed turn prompt.
+
+    A MACHINE boundary and nothing else: everything up to and including the sentinel is grounding
+    the control plane folded in, and the remainder is what the person typed. No sentinel means the
+    control plane folded nothing in front of them, so the whole prompt IS their words — which is the
+    shape a plain turn takes when no meeting, schedule or workspace context applies, and precisely
+    the shape whose history broke on 2026-09-02. Nothing here reads English."""
+    i = prompt.rfind(CONTEXT_SENTINEL)
+    return prompt[i + len(CONTEXT_SENTINEL):].lstrip() if i >= 0 else prompt
+
+
+def _prompt_key(composed: str) -> str:
+    """The lookup key for one turn: a digest of the EXACT string handed to the harness. The harness
+    writes that string into its transcript verbatim (``llm.claude_code`` sends it as the first
+    stream-json user message), so the history reader can find this record by hashing what it read —
+    without knowing how the prompt was assembled, which preambles were in it, or what it says."""
+    return hashlib.sha256(composed.encode("utf-8")).hexdigest()
+
+
+# One line per turn; the reader loads the file whole, so it is capped. A thread that outlives the
+# cap loses its OLDEST records first, and a turn with no record degrades to exactly today's
+# behaviour (the terminal's fallback strip) — never to a wrong bubble.
+USER_TEXT_KEEP = 400
+
+
+def _turns_file(chat_root: Path, session: str) -> Path:
+    """The per-thread turn sidecar, beside the continuity pointer:
+    ``.claude/sessions/<session>.turns.jsonl``. Same FROZEN on-disk contract ``_session_file``
+    carries — ``control_plane.workspace_reader.history`` is the reader on the other end."""
+    return chat_root / ".claude" / "sessions" / f"{session}.turns.jsonl"
+
+
+def record_user_text(chat_root: Path, session: str, composed: str, user_text: str) -> None:
+    """Write down what the PERSON said on this turn, keyed by the prompt the MODEL was given.
+
+    WHY THIS EXISTS, and why it is a field rather than a better parser. Chat history is read back
+    out of the harness transcript, which stores the prompt the CLI was GIVEN: the voice, kg-links,
+    mounts, entity-index and global-context preambles from this file, then the control plane's
+    grounding, then the sentence. The terminal reconstructed the human half by STRIPPING all of
+    that — one cut at the sentinel when the control plane had emitted one, otherwise regexes
+    written against the preambles' own wording. Both are derived from text this file owns, and
+    nothing checked either. So when the preamble set changed on 2026-09-02, every stored turn in
+    the founder's chat rendered as a grey USER bubble containing ``## Referencing knowledge
+    (always)``, the mount stack and the write-routing policy, with his own sentence at the bottom.
+    Reconstruction by stripping cannot be made safe; it can only be made unnecessary. The worker is
+    the last place that still holds the two halves apart, so it writes the human half down here and
+    the reader serves it verbatim. The composed prompt is what the model saw; this is what the
+    person typed, and the two never have to agree about English again.
+
+    FAIL-SOFT ON PURPOSE. A sidecar that cannot be written costs the turn nothing — history falls
+    back to the old strip. Bookkeeping never takes down a turn somebody is waiting on."""
+    if not user_text.strip():
+        return
+    line = json.dumps({"key": _prompt_key(composed), "user_text": user_text,
+                       "ts": time.time()}, ensure_ascii=False)
+    f = _turns_file(chat_root, session)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        prior = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+        kept = [ln for ln in prior if ln.strip()]
+        kept.append(line)
+        if len(kept) > USER_TEXT_KEEP:
+            kept = kept[-USER_TEXT_KEEP:]
+            f.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        else:
+            with f.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+    except OSError as e:
+        log.warning("could not record user_text for session=%s (%s) — history will fall back to "
+                    "stripping the composed prompt", session, e)
+
+
 def _chat_resume_max_bytes() -> int:
     try:
         return int(os.environ.get("VEXA_CHAT_RESUME_MAX_BYTES", "1000000"))
@@ -814,6 +920,40 @@ VEXA_MCP_TOOLS = (
 )
 
 
+def _delegation_dir(work: Path) -> "Path | None":
+    """The first writable home for the delegation credential, or None.
+
+    Three candidates, in order, each keeping the two properties that matter — the file must not be
+    committable, and it must be private to this subject:
+
+      1. ``<cwd>/.claude`` — gitignored by the workspace seed. The normal answer.
+      2. the PRIVATE SYSTEM tier's ``.claude`` — read-write by contract (it is where chat
+         continuity already anchors), private, and outside every desk the turn may commit.
+      3. a per-subject directory under the system temp dir — outside every mount, so no `git add`
+         can reach it, and gone when the container is.
+
+    Returning None is the honest floor: a turn with no toolbelt is a turn that will say so when it
+    is asked to read a transcript, and the grounding gate then fails LOUDLY. A turn that never
+    starts says nothing at all."""
+    import tempfile
+    candidates = [work / ".claude", _continuity_root(work) / ".claude",
+                  Path(tempfile.gettempdir()) / f"vexa-{work.name}" / ".claude"]
+    seen: set[Path] = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        try:
+            cand.mkdir(parents=True, exist_ok=True)
+            probe = cand / ".w"
+            probe.write_text("")          # mkdir succeeds on an existing dir under a ro mount
+            probe.unlink()
+            return cand
+        except OSError as e:
+            log.warning("delegation config dir %s unusable (%s) — trying the next candidate", cand, e)
+    return None
+
+
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
 
@@ -830,6 +970,13 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     post-turn ``git add -A`` in ``run_harness_turn`` commits every changed mount, so a credential
     written anywhere else in the workspace would be committed and synced to the workspace store. The
     file is chmod 600 for the same reason the env var is not echoed: it is a bearer credential.
+
+    WHERE it goes has FALLBACKS, because on 2026-09-02 this function killed the process. The cwd was
+    a read-only mount, ``mkdir`` raised ``OSError: [Errno 30] Read-only file system``, nothing caught
+    it, and the worker exited(1) before the model ever ran — while the caller sat polling for a reply
+    that could not come. The mount mode is fixed in ``dispatch.py``; this is the belt, and it is the
+    more important half: **the LOCATION of a credential is never worth a turn.** See
+    ``_delegation_dir``.
     """
     url = (os.environ.get("VEXA_MCP_URL") or "").strip()
     token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
@@ -838,8 +985,11 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     cfg = {"mcpServers": {VEXA_MCP_SERVER: {
         "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
     }}}
-    d = work / ".claude"
-    d.mkdir(parents=True, exist_ok=True)
+    d = _delegation_dir(work)
+    if d is None:
+        log.warning("no writable directory for the vexa MCP delegation config — running this turn "
+                    "WITHOUT the toolbelt rather than not at all")
+        return None, []
     path = d / "mcp.json"
     path.write_text(json.dumps(cfg))
     try:
@@ -886,6 +1036,14 @@ def run_turn_over_workspace(
     turn_prompt = (voice_preamble() + kg_links_preamble(mounts) + mounts_preamble(mounts)
                    + entity_index_preamble(mounts) + global_context_preamble(mounts)
                    + prompt)
+    # THE PERSON'S HALF, WRITTEN DOWN SEPARATELY (F47) — see `record_user_text` for why the history
+    # reader must never have to find it again by parsing the composed prompt above. Recorded BEFORE
+    # the harness runs, because a turn that dies mid-stream still leaves its user turn in the
+    # transcript, and that turn is exactly the one that would render as the machinery prompt.
+    # `session_continuity=False` (the meeting copilot) writes nothing: its beats are not a
+    # conversation anybody reads back.
+    if session and session_continuity:
+        record_user_text(chat_root, session, turn_prompt, human_half(prompt))
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)

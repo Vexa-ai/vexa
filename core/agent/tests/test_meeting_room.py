@@ -286,8 +286,9 @@ def test_room_mounts_sit_between_the_active_set_and_system(tmp_path):
     rooms = [m for m in stack if m["role"] == "room"]
     assert [m["slug"] for m in rooms] == ["room:u_bob", "room:u_carol"]
     assert all(m["write"] is False for m in rooms)
-    # decision 22: the subject's own desk is ro too; only _system stays writable here
-    assert stack[1]["write"] is False and stack[-1]["write"] is True
+    # the ROOM is read-only; the subject's own desk is NOT the room, and keeps its write bit (F59)
+    assert stack[1]["role"] == "private" and stack[1]["write"] is True
+    assert stack[-1]["write"] is True
 
 
 def test_a_broken_room_never_kills_the_dispatch(tmp_path, monkeypatch):
@@ -545,20 +546,54 @@ def _shared_ws(root: Path, ws_id: str, members: list[tuple[str, str]]) -> Path:
     return ws
 
 
-def test_a_room_run_writes_no_desk_not_even_the_organizers(tmp_path):
+def test_the_room_is_read_only_and_the_subjects_own_desk_is_not(tmp_path):
     """Founder decision 22: the run reads desks and writes ONE shared artefact whose home is the
-    meeting row; flows distributes it afterwards. So the dispatch subject's OWN desk is read-only —
-    leaving it writable under a run ruled not to write to one is the silent kind of wrong."""
+    meeting row; flows distributes it afterwards.
+
+    THE ROOM IS THE OTHER ATTENDEES\' DESKS, AND ONLY THOSE (ruling 2026-09-02). This test used to
+    assert the opposite — that the subject\'s own desk is read-only too — and that assertion was
+    the bug, pinned. The worker writes its delegation credential to `<cwd>/.claude`, the cwd IS the
+    subject\'s own desk when the meeting has no group, and the spawn therefore died on
+    `OSError: [Errno 30] Read-only file system` before the model ever ran. Whether the turn WRITES
+    a desk is enforced by `process_meeting`\'s HEAD-before/HEAD-after check, which is a check on
+    BEHAVIOUR; a mount mode the runtime needs to start is not the place to express a policy."""
     root = tmp_path / "ws"
     for s in ("u_owner", "u_bob"):
         _seed(root, s)
     settings = _settings(tmp_path, root)
     stack = build_mount_set(settings, "u_owner", room=_room(desks=[("b@x.test", "u_bob")]))
-    desks = [m for m in stack if m["role"] not in ("global", "system")]
-    assert desks and all(m["write"] is False for m in desks)
+    rooms = [m for m in stack if m["role"] == "room"]
+    assert rooms and all(m["write"] is False for m in rooms)
+    own = next(m for m in stack if m["role"] == "private")
+    assert own["write"] is True, "the subject cannot start a turn on a read-only cwd"
+    assert own["primary"] is True, "with no group desk, the subject's own desk is the cwd"
+    from control_plane.dispatch import _worker_cwd
+    assert _worker_cwd(str(root), "u_owner", stack) == str(root / "u_owner")
     # _system is NOT a desk — chat continuity anchors there, so it stays read-write
     assert stack[-1]["role"] == "system" and stack[-1]["write"] is True
     assert stack[0]["role"] == "global" and stack[0]["write"] is False
+
+
+def test_a_non_admin_subjects_post_meeting_dispatch_can_start(tmp_path):
+    """THE REGRESSION, end to end at the mount level (F59, 2026-09-02).
+
+    Every post-meeting turn for every non-admin subject died on spawn, and the instance\'s only
+    admin is the founder — so dogfooding could not see it. The three mount modes a room run needs,
+    asserted together because it is their COMBINATION that was wrong."""
+    root = tmp_path / "ws"
+    for s in ("u_org", "u_bob", "u_carol"):
+        _seed(root, s)
+    _shared_ws(root, "g_acme", [("u_org", "contributor")])
+    settings = _settings(tmp_path, root)
+    stack = build_mount_set(settings, "u_org", room=_room(
+        desks=[("b@x.test", "u_bob"), ("c@x.test", "u_carol")], group="g_acme"))
+    by = {m["slug"]: m for m in stack}
+    own = next(m for m in stack if m["role"] == "private")
+    assert own["write"] is True                                # its own desk: rw
+    assert all(by[f"room:{s}"]["write"] is False for s in ("u_bob", "u_carol"))   # the room: ro
+    assert by["g_acme"]["write"] is True                       # the group: rw when present
+    assert by["g_acme"]["primary"] is True                     # ...and it is the cwd
+    assert own["primary"] is False
 
 
 def test_the_same_subject_keeps_a_writable_desk_when_no_room_is_named(tmp_path):
@@ -579,7 +614,9 @@ def test_the_meetings_group_desk_is_the_one_writable_desk(tmp_path):
                             room=_room(desks=[("b@x.test", "u_bob")], group="g_acme"))
     writable = [m["slug"] for m in stack
                 if m["write"] and m["role"] not in ("global", "system")]
-    assert writable == ["g_acme"]
+    # the subject's own desk is writable too (F59) — what the group desk is UNIQUELY is the cwd
+    own_slug = next(m["slug"] for m in stack if m["role"] == "private")
+    assert writable == [own_slug, "g_acme"]
     group = next(m for m in stack if m["slug"] == "g_acme")
     # it becomes the turn's cwd, so the run maintains the group's memory rather than a ro desk
     assert group["primary"] is True
@@ -594,7 +631,9 @@ def test_a_non_member_gets_no_group_desk(tmp_path):
     settings = _settings(tmp_path, root)
     stack = build_mount_set(settings, "u_owner", room=_room(group="g_acme"))
     assert not any(m["slug"] == "g_acme" for m in stack)
-    assert not any(m["write"] for m in stack if m["role"] not in ("global", "system"))
+    # no group desk to work in — so the subject's own desk keeps the cwd, and stays writable (F59)
+    own = next(m for m in stack if m["role"] == "private")
+    assert own["write"] is True and own["primary"] is True
 
 
 def test_a_viewer_of_the_group_desk_reads_it_but_cannot_write_it(tmp_path):
@@ -603,7 +642,14 @@ def test_a_viewer_of_the_group_desk_reads_it_but_cannot_write_it(tmp_path):
     settings = _settings(tmp_path, root)
     stack = build_mount_set(settings, "u_owner", room=_room(group="g_acme"))
     group = next((m for m in stack if m["slug"] == "g_acme"), None)
-    assert group is not None and group["write"] is False and group["primary"] is False
+    assert group is not None and group["write"] is False
+    # AND IT DOES NOT TAKE THE CWD. A read-only group desk as cwd is F59 through a quieter door:
+    # the turn would again start on a mount it cannot write. The subject's own desk keeps it.
+    assert group["primary"] is False
+    own = next(m for m in stack if m["role"] == "private")
+    assert own["primary"] is True and own["write"] is True
+    from control_plane.dispatch import _worker_cwd
+    assert _worker_cwd(str(root), "u_owner", stack) == str(root / "u_owner")
 
 
 def test_the_group_is_read_off_the_meeting_row_never_the_caller(tmp_path):
@@ -622,9 +668,10 @@ def test_the_resolver_carries_the_group_from_meeting_api(tmp_path):
                headers={"X-User-Id": "u_owner", "X-Internal-Secret": INTERNAL_SECRET})
     assert r.status_code == 200
     mounts = _mounts_of(runtime)
-    # no group workspace was materialized in this fixture → no writable desk at all, and the
-    # organizer's own desk is read-only exactly as decision 22 requires
-    assert not any(m["write"] for m in mounts if m["role"] not in ("global", "system"))
+    # no group workspace was materialized in this fixture → the organizer's own desk is the only
+    # writable one, and it is writable because a turn cannot start otherwise (F59)
+    writable = [m["role"] for m in mounts if m["write"] and m["role"] not in ("global", "system")]
+    assert writable == ["private"]
 
 
 def test_the_skills_link_survives_a_read_only_cwd(tmp_path):

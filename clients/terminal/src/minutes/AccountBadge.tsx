@@ -59,6 +59,20 @@ function Overlay({ label, onClose, children }: { label: string; onClose: () => v
   );
 }
 
+/** Sign out and come back on the sign-in screen. Wiping client state on the way out keeps the next
+ *  person from inheriting this one's chats, tabs and pane widths — the same discipline the
+ *  workbench's own profile row applies.
+ *
+ *  Exported because the scaffold refusal card needs the SAME door (F48): a card that says "you are
+ *  signed in as the wrong person" and then makes them hunt for the account menu has not offered a
+ *  way out. One implementation, two callers — not two that drift. */
+export function switchAccount(): void {
+  void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+    try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
+    window.location.reload();
+  });
+}
+
 export function AccountBadge() {
   const [user, setUser] = useState<{ email?: string | null; name?: string | null } | null>(null);
   const [open, setOpen] = useState(false);
@@ -90,14 +104,7 @@ export function AccountBadge() {
   const initials = (name.match(/\b[a-z0-9]/gi) || []).slice(0, 2).join("").toUpperCase() || "?";
   const day = theme === "light";
 
-  // Wiping client state on the way out keeps the next person from inheriting this one's chats, tabs
-  // and pane widths — the same discipline the workbench's profile row applies.
-  const signOut = () => {
-    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
-      try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
-      window.location.reload();
-    });
-  };
+  const signOut = switchAccount;
 
   return (
     <div ref={box} style={{ position: "relative", flex: "none", borderTop: "1px solid var(--line)" }}>

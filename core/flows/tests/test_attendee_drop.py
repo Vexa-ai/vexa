@@ -49,7 +49,15 @@ REFS = {"uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync", "meeti
         "start": 1_700_003_600.0,
         "participants": ["anna@bank.test", "ben@bank.test", "cara@bank.test"]}
 DAY = "2023-11-14"
-ENTITY = f"kg/entities/meeting/{DAY}-pilot-sync.md"
+# THE FILENAME CARRIES THE MEETING'S TIME, not only its day (F58). `_meeting_stamp` renders
+# `%Y-%m-%d-%H%M` precisely "so two occurrences on ONE day are still two files", and the drop was
+# slicing that back to `%Y-%m-%d` before building the name — which silently restored the collision
+# the stamp exists to prevent: a recurring meeting keeps one title across occurrences, so the
+# afternoon's record overwrote the morning's on every desk. `DAY` still appears INSIDE the file
+# (frontmatter `date:`, the index line's trailing date), where a person reads it and no two files
+# have to differ. 23:13 UTC is REFS["start"] = 1_700_003_600.
+STAMP = f"{DAY}-2313"
+ENTITY = f"kg/entities/meeting/{STAMP}-pilot-sync.md"
 INDEX = "kg/entities/meeting/index.md"
 REPORT = "## Decided\n- ship it on the 21st\n\n## Committed\n- Ben — the migration doc"
 
@@ -128,7 +136,7 @@ def test_the_entity_carries_the_report_itself_not_a_pointer_to_it(monkeypatch):
     assert doc is not None, f"nothing written; wrote {store.writes}"
     # a real entity, in the shape kg/templates/meeting.md defines
     assert doc.startswith("---\ntype: meeting\n")
-    assert f"id: {DAY}-pilot-sync" in doc
+    assert f"id: {STAMP}-pilot-sync" in doc
     assert 'title: "Pilot sync"' in doc
     assert f"date: {DAY}" in doc
     assert 'organizer: "anna@bank.test"' in doc
@@ -252,10 +260,10 @@ def test_each_person_gets_a_platform_user_and_a_desk_and_no_more(monkeypatch):
 
 
 @pytest.mark.parametrize("title,expect", [
-    ("../../etc/passwd", "kg/entities/meeting/2023-11-14-etc-passwd.md"),
-    ("A/B test: round 2!", "kg/entities/meeting/2023-11-14-a-b-test-round-2.md"),
-    ("   ", "kg/entities/meeting/2023-11-14-meeting.md"),
-    ("x" * 200, "kg/entities/meeting/2023-11-14-" + "x" * 60 + ".md"),
+    ("../../etc/passwd", "kg/entities/meeting/2023-11-14-2313-etc-passwd.md"),
+    ("A/B test: round 2!", "kg/entities/meeting/2023-11-14-2313-a-b-test-round-2.md"),
+    ("   ", "kg/entities/meeting/2023-11-14-2313-meeting.md"),
+    ("x" * 200, "kg/entities/meeting/2023-11-14-2313-" + "x" * 60 + ".md"),
 ])
 def test_the_title_is_slugified_safely(monkeypatch, title, expect):
     """A title comes off a calendar invite anybody in the room can edit, so the character class is
@@ -270,7 +278,7 @@ def test_a_title_with_yaml_in_it_cannot_break_the_frontmatter(monkeypatch):
     store = Store()
     reg = _rig(monkeypatch, store)
     reg.steps["drop_to_attendees"](_ctx(dict(REFS, title='Q3: "roadmap" [draft]'), PRIOR))
-    doc = store.of("ben@bank.test", "kg/entities/meeting/2023-11-14-q3-roadmap-draft.md")
+    doc = store.of("ben@bank.test", "kg/entities/meeting/2023-11-14-2313-q3-roadmap-draft.md")
     assert 'title: "Q3: \\"roadmap\\" [draft]"' in doc
 
 
@@ -282,7 +290,7 @@ def test_the_index_is_created_when_it_is_absent(monkeypatch):
 
     idx = store.of("ben@bank.test", INDEX)
     assert idx.startswith("# meeting\n")
-    assert f"- [Pilot sync]({DAY}-pilot-sync.md) — {DAY}\n" in idx
+    assert f"- [Pilot sync]({STAMP}-pilot-sync.md) — {DAY}\n" in idx
 
 
 def test_the_index_is_appended_to_when_it_exists(monkeypatch):
@@ -297,7 +305,7 @@ def test_the_index_is_appended_to_when_it_exists(monkeypatch):
 
     idx = store.of("ben@bank.test", INDEX)
     assert "_No entities yet" not in idx
-    assert idx.endswith(f"- [Pilot sync]({DAY}-pilot-sync.md) — {DAY}\n")
+    assert idx.endswith(f"- [Pilot sync]({STAMP}-pilot-sync.md) — {DAY}\n")
     assert "Meetings — one file per meeting" in idx        # the human preamble survives
 
 
@@ -309,7 +317,7 @@ def test_an_existing_index_row_is_kept_and_the_new_one_added_below(monkeypatch):
 
     idx = store.of("ben@bank.test", INDEX)
     assert "- [Earlier](2023-11-01-earlier.md) — 2023-11-01" in idx
-    assert idx.endswith(f"- [Pilot sync]({DAY}-pilot-sync.md) — {DAY}\n")
+    assert idx.endswith(f"- [Pilot sync]({STAMP}-pilot-sync.md) — {DAY}\n")
 
 
 # ── 5 · idempotence ──────────────────────────────────────────────────────────────────────────
@@ -385,9 +393,14 @@ def test_a_retry_after_a_partial_failure_finishes_the_rest(monkeypatch):
 def test_drop_to_attendees_runs_after_email_attendees_in_post_meeting():
     reg = Registry()
     production.build(reg, _StubDB())
-    steps = list(reg.flows[("post_meeting", 1)].steps)
-    assert steps == ["require_workspace", "process_meeting", "email_minutes",
+    steps = list(reg.flows[("post_meeting", 4)].steps)
+    assert steps == ["process_meeting", "email_minutes",
                      "email_attendees", "drop_to_attendees"]
+    # DECISION 29: the minutes are never gated on setup.  used to lead this
+    # list and mail "Finish the setup conversation and the minutes arrive right after" while it
+    # waited; the founder's ruling on that mail was "no we do not want that".
+    assert "require_workspace" not in steps
+    assert ("post_meeting", 1) not in reg.flows, "the old version is not re-registered"
 
 
 # ── the economics bound: the drop is ENTITY-FREE ─────────────────────────────────────────────
