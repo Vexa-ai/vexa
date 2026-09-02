@@ -104,13 +104,44 @@ def meeting_row(uid: str, meeting_id, native: str | None = None):
     return found
 
 
-def mint_transcript_share(uid: str, platform: str, native: str, email: str,
-                          expires_in_sec: int = 30 * 86400):
+class ShareMintError(StepError):
+    """A share mint that produced no token, with the HTTP facts INTACT.
+
+    It exists because the previous shape of this call returned ``None`` on any non-2xx, and the
+    caller's ``except Exception`` therefore never fired — a 404 is not an exception. The mail went
+    out with no capability and nothing anywhere said why. A failure that has to survive a return
+    value is a type, not a sentinel: the status and the response body are the only two facts that
+    tell an operator what to fix, and both travel on this.
+
+    A ``StepError`` subclass so that a caller which does NOT catch it still fails its step loudly
+    rather than continuing — the safe default for a capability that could not be minted.
+    """
+
+    def __init__(self, *, meeting_id, identity: str, status, detail: str, retryable: bool):
+        self.meeting_id = meeting_id
+        self.identity = identity
+        self.status = status
+        self.detail = detail
+        super().__init__(
+            f"share mint failed for meeting {meeting_id} as {identity}: HTTP {status} — {detail}",
+            retryable=retryable)
+
+
+def _http_detail(body) -> str:
+    """The response body as one readable line. FastAPI puts the reason in ``detail``; anything
+    else is shown as-is, because a body we did not anticipate is still evidence."""
+    if isinstance(body, dict):
+        return str(body.get("detail") or body)[:280]
+    return str(body)[:280]
+
+
+def mint_transcript_share(uid: str, meeting_id, email: str,
+                          expires_in_sec: int = 30 * 86400) -> str:
     """A RESTRICTED transcript share grant for ONE attendee — the capability that makes the
-    meeting visible to them.
+    meeting visible to them. Returns the token, or RAISES ``ShareMintError``. Never ``None``.
 
     The whole mechanism already existed and nothing used it from the mail path:
-    ``POST /meetings/{platform}/{native}/share`` mints ``data.share_grants[]``,
+    ``POST /meetings/{meeting_id}/share`` mints ``data.share_grants[]``,
     ``POST /transcripts/share/accept`` redeems it into ``data.transcript_viewers[]``, the
     meetings list and the single-meeting read already carry a transcript-share access branch
     (``collector/adapters.py:438``), the GIN index for the containment probe already exists, and
@@ -122,14 +153,32 @@ def mint_transcript_share(uid: str, platform: str, native: str, email: str,
     ``restricted`` + this attendee's own address, never ``open``: the mail can be forwarded, and
     a forwarded link must grant its new reader nothing. That is the same rule as the fan-out's
     domain allow-list, one layer down.
+
+    Addressed by the ROW id, not by ``(platform, native)``. The pair is not an identity: a meeting
+    planned from an invite whose url matched no platform is stored as ``platform='unknown'`` with
+    an EMPTY native, and NO pair addresses it — which is exactly what happened to row 97 on
+    2026-09-02 (``POST /meetings/unknown/96088138284/share`` → 404, every attendee mailed a link
+    with no capability). The row id always exists.
+
+    A 2xx that carries no token is a failure too, and takes the same branch: the caller asked for
+    a capability and did not get one, and the reason it did not is worth the same noise.
     """
-    st, body = http("POST", f"{GATEWAY}/meetings/{platform}/{native}/share",
+    st, body = http("POST", f"{GATEWAY}/meetings/{meeting_id}/share",
                     {"X-API-Key": user_api_key(str(uid))},
                     {"mode": "restricted", "allowed_emails": [email],
                      "expires_in_sec": int(expires_in_sec)})
-    if isinstance(body, dict) and body.get("token"):
-        return body["token"]
-    return None
+    token = body.get("token") if isinstance(body, dict) else None
+    try:
+        code = int(st)
+    except (TypeError, ValueError):
+        code = 0
+    if 200 <= code < 300 and token:
+        return token
+    # 5xx and 429 are the platform having a moment; everything else is a fact about this meeting
+    # or this key, and retrying it just delays the mail without changing the answer.
+    raise ShareMintError(meeting_id=meeting_id, identity=email, status=st,
+                         detail=_http_detail(body),
+                         retryable=code == 429 or code >= 500)
 
 
 def meeting_start(uid: str, meeting_id, native: str | None = None):

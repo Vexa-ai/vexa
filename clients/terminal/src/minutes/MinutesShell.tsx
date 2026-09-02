@@ -23,7 +23,8 @@ import {
 import { ContextBar } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingTitle, newChat, railRows,
+  chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, newChat, railRows,
+  readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
   type Artifact, type Chat as ChatRec, type Row,
 } from "./chats";
@@ -118,6 +119,25 @@ export function MinutesShell() {
       .catch(() => undefined);
     return () => { live = false; };
   }, []);
+
+  // THE RAIL BELONGS TO WHOEVER IS SIGNED IN. `vexa.minutes.chats` was one global key, so signing
+  // in as a second person on the same browser showed them the FIRST person's rows — including
+  // chats for meetings they have no access to. The identity cannot be known synchronously
+  // (`vexa-user-info` is httpOnly), so the rail loads first and is checked here: same owner is a
+  // no-op, an unstamped legacy rail is adopted, and a DIFFERENT owner's rail is dropped.
+  const railOwnerChecked = useRef(false);
+  useEffect(() => {
+    if (!email || railOwnerChecked.current) return;
+    railOwnerChecked.current = true;
+    const owner = readRailOwner();
+    if (owner === email) return;
+    if (owner !== null) {
+      setChats(resetChats());
+      setSel(PERSONAL_SEL);
+      setPages([]);
+    }
+    writeRailOwner(email);
+  }, [email]);
 
   const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
   const selKey = `c:${sel.chatId}`;
@@ -264,8 +284,8 @@ export function MinutesShell() {
     return row ? await openRow(row, opts) : null;
   }, [openRow]);
 
-  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string } = {}) => {
-    const c = newChat(label, workspaces, { id: opts.id, touched: true });
+  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string } = {}) => {
+    const c = newChat(label, workspaces, { id: opts.id, touched: true, meeting: opts.meeting });
     persist((prev) => upsertChat(prev, c));
     void openChat(c);
     if (opts.kick) fireKick(c.id, opts.kick, opts.say);
@@ -653,8 +673,21 @@ export function MinutesShell() {
         const chatId = await openMeeting(row, { touched: true });
         if (chatId) { fireKick(chatId, prompt); return; }
       }
+      // ONE MEETING IS ONE CHAT, even when its row has not arrived yet. This fallback used to mint
+      // `askchat-<base36>` labelled from the preset name, so a click whose meeting list was still
+      // loading produced a second conversation — the founder got "prepare" AND "DNA TSC" for one
+      // meeting, and a retry produced another. When the ref is a ROW ID we can name the chat the
+      // same thing the meeting's own row will name it (`meet-<id>`), bind `meeting` so the rail
+      // knows what it is, and leave the LABEL EMPTY: railRows falls back to the meeting's title
+      // (`c.label || meetingTitle(m)`), so the row names itself the moment the list lands, and the
+      // meeting's own chat resolves to this very record instead of a second one.
+      const rowRef = /^\d+$/.test(ref) ? ref : "";
       // same settle delay the other seeded conversations use — the chat must be mounted to hear it
-      addChat(label, mounts, { id: "askchat-" + Date.now().toString(36), kick: prompt });
+      addChat(rowRef ? "" : label, mounts, {
+        id: rowRef ? meetingChatId(rowRef) : "askchat-" + Date.now().toString(36),
+        meeting: rowRef || undefined,
+        kick: prompt,
+      });
     })();
   }, [addChat, meetings, meetingsLoaded, presetWaited, openMeeting]);
 

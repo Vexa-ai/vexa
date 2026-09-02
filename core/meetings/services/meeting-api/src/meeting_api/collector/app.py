@@ -886,9 +886,64 @@ def build_router(
         )
         return JSONResponse(content={"workspace_id": bound})
 
+    def _share_payload(payload) -> "tuple[str, list, int]":
+        """mode | allowed_emails | ttl out of a share-mint body, defaulted the same way for both
+        address shapes. `restricted` + allowed_emails is what makes a forwarded mail grant nothing."""
+        if not isinstance(payload, dict):
+            payload = {}
+        return (
+            str(payload.get("mode", "open")).strip() or "open",
+            payload.get("allowed_emails") or [],
+            int(payload.get("expires_in_sec", 86400) or 86400),
+        )
+
+    # --- POST /meetings/{meeting_id}/share → the SAME mint, addressed by the ROW's primary key.
+    #
+    # Why it exists: the (platform, native) pair is not an identity. A meeting planned from an invite
+    # whose url matched no platform lands as platform='unknown' with an EMPTY platform_specific_id —
+    # no pair addresses it, so the pair-keyed mint below answers 404 and every attendee mail for that
+    # meeting went out with no capability at all (row 97, 2026-09-02). The row id always exists.
+    #
+    # Route ordering / shadowing: this path is THREE segments (`meetings/{id}/share`) and the pair
+    # route is FOUR — Starlette compiles a full-path regex per route, so on segment count alone
+    # neither can swallow the other, the same property the gateway's by-row-id notes rely on. The
+    # `meeting_id: int` annotation is belt-and-braces: a non-numeric id is refused by validation here
+    # rather than being resolved as some other kind of name. Registered BEFORE the pair route anyway,
+    # matching the `by-id` precedent at the top of this file.
+    #
+    # Owner-scoped: a row that is not the caller's 404s exactly like an unknown one. Minting a
+    # capability is an owner act, and a share route that distinguished the two would leak existence.
+    @router.post("/meetings/{meeting_id}/share")
+    async def mint_transcript_share_by_id(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        mode, emails, ttl = _share_payload(payload)
+        minted = await store.mint_transcript_share_by_id(
+            user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
+        )
+        if minted is None:
+            log_event(
+                "transcript_share_mint_failed", audience="system", level="warning",
+                span="meetings.transcript.share", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"mode": mode, "reason": "no such meeting for this owner"},
+            )
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"mode": mode, "by": "row_id"})
+        return JSONResponse(content=minted)
+
     # --- POST /meetings/{platform}/{native_meeting_id}/share → mint an INDEPENDENT transcript share link
     # (capability token). Owner-scoped. open|restricted(+allowed_emails), TTL. The token is returned ONCE
-    # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved. ---
+    # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved.
+    # Kept for 0.10 clients and the /transcripts/{platform}/{native}/share alias; new callers use the
+    # by-row-id route above, which can address rows this one cannot. ---
     @router.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(
         platform: str,
@@ -901,18 +956,21 @@ def build_router(
             payload = await request.json()
         except Exception:
             payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        mode = str(payload.get("mode", "open")).strip() or "open"
-        emails = payload.get("allowed_emails") or []
-        ttl = int(payload.get("expires_in_sec", 86400) or 86400)
+        mode, emails, ttl = _share_payload(payload)
         minted = await store.mint_transcript_share(
             user_id, platform, native_meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
         )
         if minted is None:
+            log_event(
+                "transcript_share_mint_failed", audience="system", level="warning",
+                span="meetings.transcript.share", user_id=user_id,
+                meeting_id=f"{platform}/{native_meeting_id}",
+                fields={"mode": mode, "reason": "no meeting addressed by this (platform, native) pair"},
+            )
             raise HTTPException(status_code=404, detail=f"Meeting not found for {platform}/{native_meeting_id}")
         log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
-                  user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}", fields={"mode": mode})
+                  user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+                  fields={"mode": mode, "by": "pair"})
         return JSONResponse(content=minted)
 
     # --- POST /transcripts/share/accept → redeem a transcript share token (any authenticated user) →

@@ -598,17 +598,44 @@ def build(reg: Registry, db) -> None:
         # to "no such meeting" and the agent greets them as a new user instead of telling them
         # what the meeting held — every attendee click landed on the wrong chat. One restricted
         # grant per attendee, redeemed by the terminal on arrival.
+        # THE GATE. A touch that cannot work is not sent — the same doctrine as the grounding gate
+        # in process_meeting, and it is here because the opposite shipped: the mint used to return
+        # None on any non-2xx (not raise), the `except Exception` below it therefore never fired,
+        # and the comment "a mail with a weaker link beats no mail" described a mail whose link was
+        # not weaker but BROKEN. On 2026-09-02 meeting 97 went out to its attendees with no token
+        # at all; every one of them clicked into a chat that answered "no meeting with id 97 on my
+        # side". A mail nobody sent costs one missing follow-up. A mail whose only button lands the
+        # reader in a chat that denies the meeting exists costs the relationship the mail was for.
         row = mt.meeting_row(ctx.refs["uid"], ctx.refs.get("meeting_id"), ctx.refs.get("native"))
-        platform = (row or {}).get("platform") or ctx.refs.get("platform") or "unknown"
-        native = (row or {}).get("native_meeting_id") or ctx.refs.get("native") or ""
-        sent = []
+        # By ROW id, never by (platform, native): row 97 was platform='unknown' with an empty
+        # native, so no pair addressed it and the mint could only ever 404. Prefer the row the
+        # platform just handed us over the ref, which may still be a native id from meeting_ref().
+        mid = (row or {}).get("id") if isinstance(row, dict) else None
+        if mid is None:
+            mid = ctx.refs.get("meeting_id")
+        if mid is None or not str(mid).isdigit():
+            raise StepError(
+                f"cannot mail {len(who)} attendee(s): this meeting has no row id to mint a share "
+                f"against (got {mid!r} from the row and refs). Every attendee link would resolve "
+                "to a meeting the reader cannot see.", retryable=False)
+        # Durable across retries: a StepError below re-runs this step, and an attendee already
+        # mailed must not be mailed twice. ctx.scratch is persisted after every step.
+        sent = list(ctx.scratch.setdefault("sent", []))
         for a in who:
-            token = None
-            if native:
-                try:
-                    token = mt.mint_transcript_share(ctx.refs["uid"], platform, native, a)
-                except Exception:  # noqa: BLE001 — a mail with a weaker link beats no mail
-                    token = None
+            if a in sent:
+                continue
+            try:
+                token = mt.mint_transcript_share(ctx.refs["uid"], mid, a)
+            except mt.ShareMintError as e:
+                pending = [x for x in who if x not in sent]
+                raise StepError(
+                    f"HELD the attendee fan-out for meeting {mid}: no share capability could be "
+                    f"minted for {a} (HTTP {e.status} — {e.detail}). "
+                    f"Mailed: {', '.join(sent) or 'nobody'}. "
+                    f"NOT mailed: {', '.join(pending)}. "
+                    "Not sending: a mail whose only button opens a chat that cannot see the "
+                    "meeting is worse than no mail.",
+                    retryable=e.retryable) from e
             # Which preset the button composes. `minutes-review-invite` is `minutes-review`
             # plus the SECOND ASK — the offer that Vexa can be in the meetings this person runs,
             # and the instruction to ACT on a yes in the same turn (bot_schedule when a url and
@@ -619,7 +646,9 @@ def build(reg: Registry, db) -> None:
             # replace the placeholder without touching a step.
             ask = str((ctx.flow.param("attendee_ask") if ctx.flow else None)
                       or "minutes-review-invite")
-            link = ui_link(ask=ask, meeting=ctx.refs["meeting_id"], tshare=token)
+            # `mid`, not refs["meeting_id"]: the token was minted against the ROW, so the link
+            # must name that same row. refs may still carry a native id from meeting_ref().
+            link = ui_link(ask=ask, meeting=mid, tshare=token)
             body = blocks.get(a) if mode == "personal" else None
             if not body:
                 body = note.strip()
@@ -636,11 +665,12 @@ def build(reg: Registry, db) -> None:
                 + "\n" + body[len(_provenance(ctx, ctx.refs["uid"], to_attendee=True)):]
             body += "\n\n—\nOpen it and ask anything about the meeting:"
             try:
-                mid = notify(a, subject, body, link=link)
+                notify(a, subject, body, link=link)
                 sent.append(a)
+                ctx.scratch["sent"] = sent
             except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
                 ctx.scratch.setdefault("failed", []).append(f"{a}: {type(e).__name__}")
-        return Done({"sent": len(sent), "mode": mode, "to": sent,
+        return Done({"sent": len(sent), "mode": mode, "to": sent, "meeting_id": mid,
                      "failed": ctx.scratch.get("failed", [])})
 
     # ── before the meeting ────────────────────────────────────────────────────
