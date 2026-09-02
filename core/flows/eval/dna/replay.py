@@ -2,8 +2,10 @@
 """Replay a fixture library through the real flows, as a real user, in ONE workspace.
 
 Calendar order, so knowledge compounds the way it does for a person. Everything the replay does to
-the engine goes through the MCP (audit rule 1) except the two primed openings, which are chat turns
-and go where a chat turn goes -- agent-api ``/api/chat``, exactly as ``flows_steps/agent.py`` does.
+the engine goes through the MCP (audit rule 1) except the two primed openings, which are CLICKED --
+``click_link`` follows the link out of the delivered mail, signs in through the magic-link door,
+redeems what the link carries, and takes the turn through the terminal under its own cookies. See
+that function for the one leg still simulated (the React composition of the opening) and why.
 
     python replay.py --fixtures ~/dna-fixtures --rev 1 --uid 68
 
@@ -121,6 +123,320 @@ def mail_search(to: str, subject: str, since: float) -> dict | None:
     return None
 
 
+# ── clicking the link, the way the recipient does ────────────────────────────────────────────────
+#
+# "your fake humans never opened this email and clicked that." Everything below exists to make that
+# false. The mail is the only input; the product's own doors are the only route in.
+
+TERMINAL = os.environ.get("VEXA_DNA_TERMINAL", "https://app.dev.vexa.ai")
+
+# `from http.cookiejar import CookieJar`, never `import http.cookiejar`: this module binds the name
+# `http` to its OWN request helper above, so the package import would be shadowed by it and
+# `http.cookiejar.CookieJar` would raise AttributeError on a function object.
+from http.cookiejar import CookieJar                                # noqa: E402
+import urllib.parse                                                 # noqa: E402
+
+
+def _redact(url: str) -> str:
+    """A sign-in URL is a bearer credential for 15 minutes. Keep both ends so a reader can see it
+    is the URL the mail carried, and drop the middle so pasting a transcript is not a handover."""
+    return re.sub(r"([?&]t=)([^&]{10})[^&]*([^&]{8})(?=&|$)", r"\1\2…\3", url)
+
+
+def _jar_opener():
+    """A cookie-holding opener.
+
+    ``http()`` above is stateless urllib per call: it can carry a header, never a session. That is
+    precisely why this harness used to authenticate by asserting ``X-User-Id`` at an internal port
+    — the only thing it could do. A jar is the whole difference between claiming to be a user and
+    BEING one. Zero dependencies is deliberate: Playwright would render React, and would also stop
+    this running wherever the sweep runs."""
+    jar = CookieJar()
+    return jar, urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+
+def _fetch(opener, method: str, url: str, body=None, headers: dict | None = None, timeout=60):
+    """One request through the jar → ``(status, text, final_url)``. A transport failure is status 0
+    with the exception IN the text; nothing here returns a bare None for a caller to misread."""
+    req = urllib.request.Request(url, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None)
+    for k, v in {"content-type": "application/json", **(headers or {})}.items():
+        req.add_header(k, v)
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace"), r.geturl()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace"), url
+    except Exception as e:                                          # noqa: BLE001
+        return 0, f"{type(e).__name__}: {e}", url
+
+
+def _as_json(raw: str):
+    try:
+        return json.loads(raw)
+    except Exception:                                               # noqa: BLE001
+        return None
+
+
+SIGNIN_SUBJECT = "Your Vexa sign-in link"
+
+
+def _signin_mail_ids(addr: str) -> set:
+    """The sign-in mails already sitting in this address's mailbox.
+
+    Needed because ``mail_search`` takes a ``since`` and never reads it, so "find the sign-in mail"
+    means "find A sign-in mail" — and a magic link is SINGLE USE (``magicToken.ts`` burns the jti).
+    The second click of a run would otherwise redeem the first click's spent link and get a 410
+    that looks like a product fault. Snapshot before asking, then wait for an id that is new."""
+    q = urllib.parse.quote(f'to:"{addr}" subject:"{SIGNIN_SUBJECT}"')
+    _, d = http("GET", f"{MAILPIT}/api/v1/search?query={q}&limit=50")
+    return {m.get("ID") for m in (d.get("messages", []) if isinstance(d, dict) else [])
+            if m.get("Subject") == SIGNIN_SUBJECT}
+
+
+def _new_signin_mail(addr: str, before: set) -> dict | None:
+    q = urllib.parse.quote(f'to:"{addr}" subject:"{SIGNIN_SUBJECT}"')
+    _, d = http("GET", f"{MAILPIT}/api/v1/search?query={q}&limit=50")
+    for m in (d.get("messages", []) if isinstance(d, dict) else []):
+        if m.get("Subject") != SIGNIN_SUBJECT or m.get("ID") in before:
+            continue
+        _, full = http("GET", f"{MAILPIT}/api/v1/message/{m['ID']}")
+        body = (full.get("Text") or full.get("HTML") or "") if isinstance(full, dict) else ""
+        return {"id": m["ID"], "created": m.get("Created", ""), "body": body}
+    return None
+
+
+def _history_via(opener, session: str) -> list:
+    """Session history through the TERMINAL — ``/api/sessions/<s>/history`` is proxied to the
+    gateway's ``/agent/*`` prefix (``api/[...path]/route.ts:36``) under this jar's own identity."""
+    _, raw, _ = _fetch(opener, "GET", f"{TERMINAL}/api/sessions/{session}/history")
+    h = _as_json(raw)
+    turns = h.get("turns", []) if isinstance(h, dict) else []
+    return turns if isinstance(turns, list) else []
+
+
+def click_link(mail: dict, addr: str, budget_s: int = 420, session: str | None = None) -> dict:
+    """FOLLOW THE LINK IN THE MAIL as ``addr``'s browser does, and return what the product gave back.
+
+    Takes the dict ``mail_search`` returns (``{id, created, subject, body}``) plus the recipient
+    address, and performs the hop a person performs: read the link out of the delivered mail, ask
+    for a sign-in link, read THAT mail, redeem it keeping cookies, land on the deeplink, redeem
+    whatever the link carried, and take the opening turn — every leg through a public product door.
+
+    WHAT IS REAL, which is nearly all of it:
+
+      link        taken out of ``mail['body']``, never constructed
+      sign-in     ``POST /api/auth/request-link`` (``request-link/route.ts:39``, URL built at :63)
+                  → the product mails a magic link → read back out of mailpit → ``GET`` the redeem
+                  URL through the jar, following the 302. The redeem sets ``vexa-token`` and
+                  ``vexa-user-info`` (``redeem/route.ts:81-86``) and CREATES THE USER ROW lazily at
+                  :72, so a never-seen ``@rehearsal.test`` address mints a genuinely fresh identity
+                  through the real door — nothing is provisioned behind the product's back.
+      session     asserted at ``GET /api/auth/me``, which validates the token against admin-api's
+                  oracle rather than trusting the cookie's presence. A jar alone does not satisfy it.
+      uid         read out of the ``vexa-user-info`` cookie the redeem wrote (:84) — the same value
+                  every later assertion needs, obtained the way the client obtains it.
+      tshare      redeemed for real against ``/api/transcripts/share/accept``, the endpoint
+                  ``acceptTranscriptShare`` calls from ``App.tsx:101-106``.
+      preset body READ THROUGH THE PRODUCT: ``/api/workspace/file?path=asks/<ask>.md&slug=_global``
+                  under this session's cookies — the same fetch ``MinutesShell.tsx:571`` performs.
+      the turn    POSTed to the TERMINAL's ``/api/chat``, which resolves the identity from the
+                  cookie and proxies to the gateway (``api/chat/route.ts``), and read back from
+                  that session's history through the terminal. No ``X-User-Id`` anywhere.
+
+    WHAT IS STILL SIMULATED — exactly one thing, and it is named so nobody has to take this
+    docstring's word for it (the record carries ``simulated``): THE REACT COMPOSITION OF THE
+    OPENING. A pure-HTTP client cannot run ``App.tsx``/``MinutesShell.tsx``, so the frontmatter
+    parse, the ``{{meeting}}``/``{{ws}}``/``{{today}}`` substitution, the mount set and the
+    ``askchat-<base36>`` session id are reproduced here in Python — against the file the product
+    itself served, but reproduced. That copy can drift from the components, which is the same
+    defect class this function exists to shrink one layer up. Do not describe it as a click of the
+    UI; it is a click of everything under the UI.
+
+    A FAILURE IS LOUD. Every leg records its status and sets ``reason`` on the way out; nothing is
+    swallowed. A click that could not happen is a finding, not a blank."""
+    out: dict = {
+        "address": addr, "mail_id": mail.get("id"), "mail_subject": mail.get("subject"),
+        "ok": False, "reason": None, "signed_in": False, "warnings": [],
+        "simulated": ["react composition of the opening: frontmatter parse, {{...}} substitution, "
+                      "mount set, askchat-<base36> session id"],
+    }
+
+    # 1 ── the link that was in the mail
+    links = [l.rstrip(".,)>\"'") for l in re.findall(r"https?://\S+", mail.get("body") or "")]
+    out["links_in_mail"] = links
+    deep = next((l for l in links if "ask=" in l or "meeting=" in l or "tshare=" in l), None)
+    if not deep:
+        deep = links[0] if links else None
+    if not deep:
+        out["reason"] = "no link in the mail body — nothing to click"
+        return out
+    u = urllib.parse.urlsplit(deep)
+    q = urllib.parse.parse_qs(u.query)
+    out["link"] = deep
+    out["params"] = {k: v[0] for k, v in q.items()}
+    out["tshare_present"] = bool(q.get("tshare"))
+    nxt = (u.path or "/") + (f"?{u.query}" if u.query else "")
+    if not nxt.startswith("/"):
+        nxt = "/" + nxt
+    out["next"] = nxt
+
+    jar, opener = _jar_opener()
+
+    # 2 ── ask for a sign-in link, carrying the deeplink as `next`
+    before = _signin_mail_ids(addr)
+    code, raw, _ = _fetch(opener, "POST", f"{TERMINAL}/api/auth/request-link",
+                          {"email": addr, "next": nxt})
+    out["request_link"] = {"status": code, "body": raw[:200]}
+    if code != 200:
+        # 200 is unconditional by design (no user enumeration); anything else is a broken instance.
+        out["reason"] = f"request-link answered {code}: {raw[:200]}"
+        return out
+
+    # 3 ── read the sign-in mail the product just sent
+    signin = wait_for(lambda: _new_signin_mail(addr, before), 120, every=3)
+    if not signin:
+        out["reason"] = (f"no new '{SIGNIN_SUBJECT}' mail for {addr} within 120s — the door "
+                         f"answered 200 but nothing was delivered")
+        return out
+    out["signin_mail_id"] = signin["id"]
+    m = re.search(r"https?://\S*?/api/auth/redeem\S*", signin.get("body") or "")
+    if not m:
+        out["reason"] = f"sign-in mail {signin['id']} carried no redeem URL"
+        return out
+    redeem = m.group(0).rstrip(".,)>\"'")
+    out["redeem_url"] = _redact(redeem)
+
+    # 4 ── redeem it, keeping the cookies. The 302 is followed; `next` is site-relative so it
+    #      resolves against TERMINAL and we land on the deeplink exactly as a browser would.
+    code, raw, landed = _fetch(opener, "GET", redeem, headers={"accept": "text/html"})
+    out["redeem"] = {"status": code, "landed_on": landed}
+    if code != 200:
+        out["reason"] = f"redeem answered {code}: {raw[:300]}"
+        return out
+    cookies = {c.name: c for c in jar}
+    out["cookies"] = sorted(cookies)
+    missing = [n for n in ("vexa-token", "vexa-user-info") if n not in cookies]
+    if missing:
+        # Almost always an origin mismatch: the cookies are Secure iff TERMINAL_URL is https, so a
+        # 127.0.0.1 origin silently drops them. Say that rather than "not signed in".
+        out["reason"] = (f"redeem set no {'/'.join(missing)} cookie (jar: {sorted(cookies)}) — "
+                         f"is {TERMINAL} the instance's own TERMINAL_URL?")
+        return out
+    info = _as_json(urllib.parse.unquote(cookies["vexa-user-info"].value))
+    if not isinstance(info, dict) or info.get("id") in (None, ""):
+        out["reason"] = f"vexa-user-info cookie carried no id: {cookies['vexa-user-info'].value[:120]}"
+        return out
+    out["uid"], out["email"] = str(info["id"]), info.get("email")
+
+    # 5 ── assert the session against the endpoint that validates, not the one that guesses
+    code, raw, _ = _fetch(opener, "GET", f"{TERMINAL}/api/auth/me")
+    me = _as_json(raw)
+    out["me"] = {"status": code, "body": me if me is not None else raw[:200]}
+    if code != 200 or not (isinstance(me, dict) and me.get("authenticated")):
+        out["reason"] = f"/api/auth/me refused the session ({code}): {raw[:200]}"
+        return out
+    out["signed_in"] = True
+
+    # 6 ── whatever else the link carried, redeemed through the product's own endpoints
+    if out["tshare_present"]:
+        code, raw, _ = _fetch(opener, "POST", f"{TERMINAL}/api/transcripts/share/accept",
+                              {"token": q["tshare"][0]})
+        out["tshare_redeem"] = {"status": code, "body": (_as_json(raw) or raw[:200])}
+        if code != 200:
+            # Recorded, not fatal: the person still lands in the chat. It IS the difference between
+            # seeing the meeting and seeing nothing, so it is never silent.
+            out["warnings"].append(f"transcript share accept {code}: {raw[:200]}")
+
+    ask = (out["params"].get("ask") or "").strip()
+    if not ask:
+        out["ok"] = True
+        out["reason"] = "the link carried no ?ask= — signing in IS the whole touch"
+        return out
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", ask, re.I):
+        # the same shape MinutesShell.tsx:568 enforces: a name, nothing that walks out of asks/
+        out["reason"] = f"?ask={ask!r} is not a preset name"
+        return out
+
+    # 7 ── the opening. The preset BODY comes from the product; only its composition is ours.
+    code, raw, _ = _fetch(
+        opener, "GET",
+        f"{TERMINAL}/api/workspace/file?path={urllib.parse.quote(f'asks/{ask}.md')}&slug=_global")
+    doc = _as_json(raw)
+    preset = doc.get("content") if isinstance(doc, dict) else None
+    out["preset_read"] = {"status": code, "chars": len(preset or "")}
+    if code != 200 or not (preset or "").strip():
+        out["reason"] = (f"asks/{ask}.md unreadable through the terminal ({code}) — an unknown "
+                         f"preset opens nothing: {raw[:200]}")
+        return out
+
+    text, mounts = preset, []
+    fm = FM.match(preset)
+    if fm:
+        text = preset[fm.end():]
+        mm = re.search(r"^mounts:\s*(.+)$", fm.group(1), re.M)
+        if mm:
+            mounts = [x.strip() for x in mm.group(1).split(",") if x.strip()]
+    ws = out["params"].get("ws") or ""
+    if ws:
+        mounts = [ws] + [x for x in mounts if x != ws]
+    if not mounts:
+        mounts = ["_global", "personal"]
+    out["mounts"] = mounts
+
+    def _sub(pat: str, val: str, s: str) -> str:
+        return re.sub(pat, lambda _m: val, s)                       # lambda: no \-escapes in val
+
+    prompt = _sub(r"\{\{\s*meeting\s*\}\}", out["params"].get("meeting") or "the meeting in view", text)
+    prompt = _sub(r"\{\{\s*ws\s*\}\}", mounts[0], prompt)
+    prompt = _sub(r"\{\{\s*today\s*\}\}", time.strftime("%Y-%m-%d"), prompt)
+    prompt = prompt.strip()
+    out["prompt"] = prompt
+    if not prompt:
+        out["reason"] = f"asks/{ask}.md resolved to an empty prompt"
+        return out
+
+    # the mount step MinutesShell performs on open (mountSet → setSharedActive); personal/_global
+    # ride along by construction, so only a shared slug needs the call. Best-effort there too.
+    for slug in [x for x in mounts if x not in ("personal", "_global", "_system")]:
+        code, raw, _ = _fetch(opener, "POST",
+                              f"{TERMINAL}/api/workspace/shared/{urllib.parse.quote(slug)}/active",
+                              {"active": True})
+        if code != 200:
+            out["warnings"].append(f"mount {slug}: {code} {raw[:120]}")
+
+    session = session or f"askchat-{_b36(int(time.time() * 1000))}"
+    out["session"] = session
+    base = len(_history_via(opener, session))
+    # /api/chat is SSE and stays open for the whole turn, so a client timeout here is SUCCESS — the
+    # same lesson chat_turn and flows_steps/agent.dispatch_turn carry. Completion is read from the
+    # history; the worker container is the give-up signal.
+    _fetch(opener, "POST", f"{TERMINAL}/api/chat", {"prompt": prompt, "session": session}, timeout=5)
+    deadline, seen_worker = time.time() + budget_s, False
+    while time.time() < deadline:
+        h = _history_via(opener, session)
+        if len(h) > base and h[-1].get("role") == "agent" and h[-1].get("text"):
+            out["reply"] = h[-1]["text"].strip()
+            out["ok"] = True
+            return out
+        if worker_alive(out["uid"], session):
+            seen_worker = True
+        elif seen_worker:
+            out["reason"] = "the worker exited with no reply — not waiting out the budget"
+            return out
+        time.sleep(6)
+    out["reason"] = f"no agent reply on {session} within {budget_s}s"
+    return out
+
+
+def _b36(n: int) -> str:
+    """``Date.now().toString(36)`` — the session id MinutesShell.tsx:596 mints."""
+    d, s = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    while n:
+        n, r = divmod(n, 36)
+        s = d[r] + s
+    return s or "0"
+
 FLOWS_API = os.environ.get("VEXA_DNA_FLOWS_API", "http://127.0.0.1:18200")
 FLOWS_KEY_FILE = pathlib.Path.home() / ".storm/flows-api-key"
 
@@ -168,7 +484,12 @@ def _unwrap_text(v) -> str:
 def preset_prompt(rig: Rig, name: str, meeting_id) -> str | None:
     """The admin-owned opening, resolved and substituted the way the terminal resolves it
     (``MinutesShell.tsx``): read ``_global/asks/<name>.md``, strip frontmatter, substitute
-    ``{{meeting}}`` with the meeting ref. The URL never carries prompt text; neither does this."""
+    ``{{meeting}}`` with the meeting ref. The URL never carries prompt text; neither does this.
+
+    PROVENANCE ONLY — this is no longer the touch. It re-implements the terminal, which is the
+    substitution ``click_link`` was written to replace; a copy that agrees with the component today
+    is a copy that will disagree with it silently one day. Kept beside ``preset_hashes`` so a run
+    can still say WHICH opening text was live, never to assert that anybody read it."""
     body = rig.call("workspace_read", path=f"asks/{name}.md", slug="_global")
     body = _unwrap_text(body)
     if not isinstance(body, str) or not body.strip():
@@ -472,11 +793,33 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
     rec["latency_s"] = round(time.time() - rec["t_start"], 1)
     rec["reactions_snapshot"] = reactions_snapshot(rig)
 
-    for name, key in (("prep", "opening_prep"), ("minutes-review", "opening_minutes")):
-        p = preset_prompt(rig, name, mid)
-        rec[key] = {"prompt": p,
-                    "reply": chat_turn(uid, f"askchat-r{rev}-{name}-{date}", p) if p else None}
-        print(f"  {key}={bool(rec[key]['reply'])}", flush=True)
+    # THE TOUCH IS A CLICK NOW.
+    #
+    # It used to be `preset_prompt` + `chat_turn`: the terminal's preset resolution re-implemented
+    # in Python, POSTed straight to agent-api with a hand-set `X-User-Id` and a session id this
+    # harness invented. It never read the link out of the mail, never signed in, and never went
+    # near the terminal — so every defect between "the link the product mailed" and "a primed
+    # chat" was invisible to it, which is exactly the class the founder kept hitting by hand:
+    # "your fake humans never opened this email and clicked that."
+    #
+    # `preset_prompt` / `preset_hashes` survive as PROVENANCE — replay.json still records which
+    # opening text was live for a run — but they no longer prove a touch happened.
+    for mail_key, key in (("prepare_mail", "opening_prep"), ("minutes_mail", "opening_minutes")):
+        m = rec.get(mail_key)
+        if not m:
+            rec[key] = {"ok": False, "reason": f"no {mail_key} arrived — there was nothing to click"}
+            print(f"  {key}=skip ({mail_key} never arrived)", flush=True)
+            continue
+        c = click_link(m, org)
+        # The uid the click came back with is the uid the product minted for this address. If it
+        # is not the uid this replay is scoring, the run is reading two identities and the score
+        # is about neither — a finding, recorded on the row rather than reconciled away here.
+        if c.get("uid") and str(c["uid"]) != str(uid):
+            c["uid_mismatch"] = {"clicked": c["uid"], "replay_uid": str(uid)}
+        rec[key] = c
+        print(f"  {key}={c.get('ok')} uid={c.get('uid')} signed_in={c.get('signed_in')} "
+              f"tshare={c.get('tshare_present')}"
+              f"{'' if c.get('ok') else ' — ' + str(c.get('reason'))}", flush=True)
     return rec
 
 

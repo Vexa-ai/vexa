@@ -48,6 +48,41 @@ are per-identity safe. It never deletes a mailpit message.
     python3 sample.py                        # -> $SIM_RUN_DIR/rates.json
     python3 sim.py rates.json spi 2000,20000,200000
 
+## Its touches are SUBSTITUTED — the real-click primitive lives next door
+
+Say this plainly because the numbers do not: **this package does not click anything.** `sample.py`
+and `converse_run.py` compose the opening in Python and POST it to agent-api (`:18500`) with a
+hand-set `X-User-Id`; `probe.login` mints the identity through the MCP's `start_onboarding` /
+`confirm_login` code pair. No link is read out of a mail, no browser session exists, no cookie is
+ever held. So every defect between *the link the product mailed* and *a primed chat* — a dead
+deeplink, a redeem that sets no cookie, an unreadable preset, a share that fails to redeem — is
+invisible here, and a run says "touched" anyway. `probe_click.py` is the closest thing in this
+package and it still stops short: it signs in over the MCP, not over the mailed magic link.
+
+The real-click primitive is **`click_link` in `../dna/replay.py`**. It takes the mail dict
+`mail_search` returns plus the recipient address and performs the actual hop: the link out of the
+delivered body → `POST /api/auth/request-link` → the sign-in mail read back out of mailpit →
+`GET /api/auth/redeem` with a cookie jar (which is where the user row is created) → `GET
+/api/auth/me` to assert the session → `?tshare=` redeemed through
+`/api/transcripts/share/accept` → the preset body read through `/api/workspace/file` → the turn
+POSTed to the terminal's own `/api/chat` and read back from that session's history. Zero
+dependencies (`http.cookiejar` + `urllib`); no Playwright. The one leg it still simulates is the
+React composition of the opening, and its docstring says so.
+
+**To adopt it here** — deliberately not done in this change, because it moves the measured rates
+and a rate that moves for a harness reason is worse than one that is honest about its method:
+
+1. Point the sim at the public terminal (`VEXA_DNA_TERMINAL`), not a loopback origin — the redeem
+   cookies are `Secure`, so a `127.0.0.1` origin silently drops them and the click reads as a
+   product failure.
+2. Replace `probe.login` with the magic-link hop, and take the uid from the `vexa-user-info`
+   cookie instead of `confirm_login`. Personas then mint identities the way strangers do.
+3. Replace the hand-composed openings in `sample.py` / `converse_run.py` with `click_link(mail,
+   addr)` on the mail the persona actually received, and feed `judge.py` the returned `reply`.
+4. Re-baseline: publish the first post-adoption `rates.json` beside the last substituted one and
+   say in `REVOLUTION-N.md` that the method changed. **The number is relative between
+   revolutions**, and this changes what it is relative to.
+
 ## What this does NOT model
 
 Calendar reality (holidays, timezones, meetings people skip), the terminal's own UI beyond the
