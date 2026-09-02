@@ -11,4 +11,20 @@ export type Sel = {
 /** A tab. `kind` absent = a document, which is what every tab was before the transcript stopped
  *  being a file — so a chat persisted by an older build migrates by meaning nothing. A `meeting`
  *  tab's `path` is the meeting ROW ID, not a workspace path. */
-export type Page = { kind?: "doc" | "meeting"; path: string; slug?: string; label: string };
+/** One entry in the pages panel's strip.
+ *
+ *  It carries the strip's three state fields as well as the document's identity, because the strip
+ *  IS the chat's `artifacts[]` (decision 18) and this type is what the panel passes around. They
+ *  were absent, and that absence is what let the persist writer drop `at`/`desk` and stamp
+ *  `pinned: true` on everything WITHOUT A TYPE ERROR — nullifying decisions 28, 28.4 and 28.5 while
+ *  every signature still looked right. `Artifact` in chats.ts is the same shape; the two are
+ *  deliberately structurally compatible so a page and a stored artifact can pass for each other. */
+export type Page = {
+  kind?: "doc" | "meeting"; path: string; slug?: string; label: string;
+  /** the chat's home — first in the strip, never forgotten, never evicted */
+  desk?: boolean;
+  /** asked for: a pin, an explicit open-in-tab, or a scaffold's declared tab */
+  pinned?: boolean;
+  /** when this page was last in front — the strip's order, and what the cap evicts on */
+  at?: number;
+};

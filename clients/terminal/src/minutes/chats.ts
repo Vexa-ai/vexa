@@ -598,6 +598,23 @@ export function chatHistory(c: Chat): { workspace: string; path: string; title: 
     .sort((x, y) => y.at - x.at);
 }
 
+/** THE STRIP, AS THE RECORD STORES IT. A copy, never a re-decision.
+ *
+ *  This was three lines inside MinutesShell's persist effect, and it mapped every entry to
+ *  `pinned: true` while dropping `at` and `desk`. Together those three fields ARE the model:
+ *  nothing could age out (the cap evicts only UNPINNED), the order was lost (`orderHistory` sorts
+ *  on `at`), and the home stopped being the home — decisions 28, 28.4 and 28.5 nullified by one
+ *  literal, with no test able to see it because it lived in an effect nobody drove and `Page` did
+ *  not carry the fields it dropped.
+ *
+ *  Extracted so the mapping is a function with a name, and so a mutation of it fails something. */
+export function stripForRecord(pages: Artifact[]): Artifact[] {
+  return pages.map((pg) => ({
+    kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label,
+    pinned: pg.pinned, desk: pg.desk, at: pg.at,
+  }));
+}
+
 /** The stored view slot, tolerant of a record written before it existed. */
 function viewOf(r: Partial<Chat>): Artifact | undefined {
   const v = r.view as Artifact | undefined;

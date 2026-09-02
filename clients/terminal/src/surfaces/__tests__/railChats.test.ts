@@ -14,7 +14,7 @@ import type { MeetingMock } from "../meetingModel";
 import {
   CHATS_KEY, PROJECTS_KEY, ORG_CHAT_ID, PERSONAL_CHAT_ID,
   artifactKey, chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, pruneStale, railRows,
-  visibleRows, whenShort,
+  visibleRows, whenShort, forgetHistory, touchHistory, withHome, stripForRecord, HISTORY_CAP,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
 import { T, maxPagesW } from "../../minutes/tokens";
@@ -458,5 +458,94 @@ describe("pruneStale — the 2026-09-02 migration", () => {
     expect(out.map((c) => c.id)).toEqual([REAL.id]);
     expect(out[0].label).toBe("setup global");
     expect(out[0].artifacts).toHaveLength(2);
+  });
+});
+
+/** THE STRIP SURVIVES A RELOAD AS ITSELF — the persist→load round trip (decision 28).
+ *
+ *  The writer in MinutesShell mapped every entry to `pinned: true` and dropped `at` and `desk`.
+ *  Three fields, and together they were the whole model: nothing could age out (the cap only evicts
+ *  UNPINNED), the order was lost (`orderHistory` sorts on `at`), and the home stopped being the
+ *  home. One literal nullified decisions 28, 28.4 and 28.5 — and nothing failed, because `Page` did
+ *  not carry the fields, so dropping them was not a type error.
+ *
+ *  These drive the real `touchHistory` → store → `loadChats` path rather than the writer's literal,
+ *  so they fail if the round trip loses any of the three however it is spelled.
+ */
+describe("a strip round-trips: plain pages age out, pins and the home stay", () => {
+  const store = (chat: Partial<Chat>) => {
+    localStorage.clear();
+    localStorage.setItem(CHATS_KEY, JSON.stringify([{
+      id: "c1", label: "C", workspaces: ["personal", "_global"], touched: true,
+      createdAt: T0, lastActivityAt: T0, artifacts: [], ...chat,
+    }]));
+    return loadChats(T0).find((c) => c.id === "c1")!;
+  };
+
+  it("a PLAIN navigation lands unpinned — and therefore can age out", () => {
+    let strip = withHome([], ["personal", "_global"]);
+    strip = touchHistory(strip, { path: "a.md", label: "a" }, 10);
+    const back = store({ artifacts: strip });
+    const a = back.artifacts.find((x) => x.path === "a.md")!;
+    expect(a.pinned).toBeFalsy();          // the regression made this `true`
+    expect(a.at).toBe(10);                 // …and dropped this entirely
+  });
+
+  it("the CAP evicts the oldest plain page and keeps the pin and the home", () => {
+    let strip = withHome([], ["personal", "_global"]);
+    strip = touchHistory(strip, { path: "kept.md", label: "kept", pinned: true }, 1);
+    for (let i = 2; i <= HISTORY_CAP + 3; i++) strip = touchHistory(strip, { path: `f${i}.md`, label: `f${i}` }, i);
+
+    const back = store({ artifacts: strip });
+    const paths = back.artifacts.map((x) => x.path);
+    expect(back.artifacts[0].desk).toBe(true);                       // the home leads, still the home
+    expect(paths).toContain("kept.md");                             // the pin survived the cap
+    expect(back.artifacts.find((x) => x.path === "kept.md")!.pinned).toBe(true);
+    expect(paths).not.toContain("f2.md");                           // the oldest plain page went
+    expect(back.artifacts.filter((x) => !x.pinned && !x.desk)).toHaveLength(HISTORY_CAP);
+  });
+
+  it("the ORDER survives — oldest left, the page you were on at the right edge", () => {
+    let strip = withHome([], ["personal", "_global"]);
+    strip = touchHistory(strip, { path: "first.md", label: "first" }, 1);
+    strip = touchHistory(strip, { path: "second.md", label: "second" }, 2);
+    strip = touchHistory(strip, { path: "first.md", label: "first" }, 3);   // revisited → moves right
+
+    const back = store({ artifacts: strip });
+    expect(back.artifacts.map((x) => x.path)).toEqual(["README.md", "second.md", "first.md"]);
+  });
+
+  it("the home cannot be pinned away or forgotten by the round trip", () => {
+    const strip = withHome([{ path: "a.md", label: "a", at: 5 }], ["personal", "_global"]);
+    const back = store({ artifacts: strip });
+    const home = back.artifacts.find((x) => x.desk)!;
+    expect(home.path).toBe("README.md");
+    expect(forgetHistory(back.artifacts, artifactKey(home)).some((x) => x.desk)).toBe(true);
+  });
+});
+
+/** `stripForRecord` — what the persist writer stores. This is the line that carried the regression:
+ *  it stamped `pinned: true` on every entry and dropped `at` and `desk`, so nothing could age out,
+ *  the order was lost, and the home stopped being the home. It lived inside an effect, where no
+ *  test could reach it; it is a named function now so a mutation of it fails here. */
+describe("stripForRecord — a copy, never a re-decision", () => {
+  it("preserves pinned, desk and at exactly as the strip holds them", () => {
+    const strip = [
+      { path: "README.md", label: "Desk", desk: true },
+      { path: "kept.md", label: "kept", pinned: true, at: 1 },
+      { path: "plain.md", label: "plain", at: 2 },
+    ];
+    expect(stripForRecord(strip)).toEqual(strip);
+  });
+
+  it("does NOT pin a plain page — the regression, pinned in place", () => {
+    const [out] = stripForRecord([{ path: "plain.md", label: "plain", at: 7 }]);
+    expect(out.pinned).toBeFalsy();
+    expect(out.at).toBe(7);
+    expect(out.desk).toBeFalsy();
+  });
+
+  it("keeps the home a home", () => {
+    expect(stripForRecord([{ path: "README.md", label: "Desk", desk: true }])[0].desk).toBe(true);
   });
 });

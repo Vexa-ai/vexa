@@ -28,7 +28,7 @@ import {
   chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
-  forgetHistory, orderHistory, touchHistory, withHome,
+  forgetHistory, orderHistory, stripForRecord, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { syncSurface } from "../surfaces/surfaceSync";
@@ -482,12 +482,22 @@ export function MinutesShell() {
       const i = prev.findIndex((c) => c.id === id);
       if (i < 0) return prev;
       const c = prev[i];
+      // The comparison has to include `pinned`/`desk`/`at`, not just identity and label: a plain
+      // navigation between two pages the strip already holds changes ONLY `at`, and that is exactly
+      // the change worth persisting — it is the strip's order.
       const same = c.focus === focus && c.artifacts.length === pages.length
         && artifactKey(c.view ?? { path: "" }) === artifactKey(view)
-        && c.artifacts.every((a, k) => artifactKey(a) === artifactKey(pages[k]) && a.label === pages[k].label);
+        && c.artifacts.every((a, k) => artifactKey(a) === artifactKey(pages[k]) && a.label === pages[k].label
+          && !!a.pinned === !!pages[k].pinned && !!a.desk === !!pages[k].desk && a.at === pages[k].at);
       if (same) return prev;
       const next = [...prev];
-      next[i] = { ...c, artifacts: pages.map((pg) => ({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label, pinned: true })), focus, view };
+      // THE STRIP IS COPIED, NOT RE-DECIDED (decision 28). This mapped every entry to
+      // `pinned: true` and dropped `at` and `desk` — three fields, and together they were the whole
+      // model: nothing could age out (the cap only evicts UNPINNED), the order was lost on reload
+      // (`orderHistory` sorts on `at`), and the home tier stopped being one. A writer's job here is
+      // to persist what the strip IS; deciding pinned-ness on the way past is how one literal
+      // nullified 28, 28.4 and 28.5 at once.
+      next[i] = { ...c, artifacts: stripForRecord(pages), focus, view };
       return next;
     });
   }, [sel.chatId, pages, docPath, docSlug, docKind, persist]);
