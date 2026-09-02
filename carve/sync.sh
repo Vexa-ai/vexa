@@ -59,6 +59,9 @@ for C in "${COMMITS[@]}"; do
   AUTHOR="$(git -c mailmap.file="$CARVE_MAILMAP" -C "$MONO" show -s --format='%aN <%aE>' --use-mailmap "$C")"
   ADATE="$(git -C "$MONO" show -s --format='%aI' "$C")"
   MSG="$(git -C "$MONO" show -s --format='%B' "$C")"
+  # ADR-0025 §3.4: provenance lives in the commit itself. The back-port lane uses this
+  # trailer to tell a replayed commit from one native to vexa-core.
+  MSG="$(printf '%s\n\nOrigin: Vexa-ai/vexa@%s\n' "$(printf '%s' "$MSG" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" "$C")"
   GIT_COMMITTER_NAME="Dmitry Grankin" GIT_COMMITTER_EMAIL="39370484+DmitriyG228@users.noreply.github.com" \
     git commit -q -s --author="$AUTHOR" --date="$ADATE" -m "$MSG"
   replayed=$((replayed+1))
