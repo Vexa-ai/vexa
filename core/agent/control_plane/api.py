@@ -931,6 +931,57 @@ def create_app(
     wsr = reader or WorkspaceReader("/workspaces")
     mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
+
+    # ── THE COMPANY-LAYER GATE, ENFORCED PER REQUEST ────────────────────────────────────────────
+    # Founder ruling, 2026-09-02: a Vexa with no company layer serves nobody. That was first built
+    # as a check at SIGN-IN — and a session minted before the gate existed walked straight past it,
+    # observed live on 2026-09-02: an old cookie got the whole terminal, a chat, and an agent turn
+    # on an instance that could not say which company it worked for. A door check is not a gate; it
+    # is a greeting. The gate belongs where the WORK happens, on every request, because the client
+    # is presentation and the client can be stale, cached, forged or simply already open.
+    #
+    # WHO GETS THROUGH while the layer is missing: the instance admin, and nobody else. Two
+    # deliberate holes, both narrow:
+    #   * `/api/global/*` — the state the wizard polls and the verb that lifts the gate. A gate
+    #     that blocks the only way to open it is a deadlock.
+    #   * requests with NO subject header — the internal tier (`/api/admin/*` and friends), which
+    #     is gated on X-Internal-Secret instead and has no user to judge.
+    # And when NO admin exists yet the gate does not refuse at all: on a virgin instance the next
+    # sign-in is the claim, so refusing here would make a fresh install unclaimable.
+    #
+    # This is the FAIL-CLOSED half of the pair. The terminal deliberately fails OPEN on an
+    # unreachable probe so a transient fault cannot brick sign-in on a working instance; it can
+    # afford to precisely because this middleware holds, so a browser that renders anyway can still
+    # do nothing.
+    _GATE_OPEN_PREFIXES = ("/api/global/",)
+
+    @app.middleware("http")
+    async def _company_layer_gate(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/api/") and not path.startswith(_GATE_OPEN_PREFIXES):
+            subject = request.headers.get("x-user-id") or (
+                settings.agent_default_subject if settings is not None else "")
+            if subject:
+                gate = global_layer.instance_state(settings)
+                # A DEGRADED read is "unknown", never "missing". `instance_state` answers missing
+                # when it cannot reach admin-api — right for anything that SENDS, wrong here, where
+                # the consequence is locking every user out of a working instance because one probe
+                # timed out (and, in a deployment with no admin-api configured at all, locking them
+                # out permanently). Refuse only on a POSITIVE read. The closed half of the pair
+                # lives where the damage is: the flows engine parks rather than mails, and the
+                # operator verbs refuse, both fail-closed.
+                if (not gate.get("degraded")
+                        and gate.get("global_setup") != global_layer.COMPLETED
+                        and gate.get("admin_exists")
+                        and not global_layer.is_admin(settings, str(subject))):
+                    return JSONResponse(status_code=403, content={
+                        "detail": global_layer.GATE_SENTENCE,
+                        "global_setup": global_layer.MISSING,
+                        "why": ("This instance has not been set up yet. Only its administrator can "
+                                "use it until the company layer is written."),
+                    })
+        return await call_next(request)
+
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
     app.state.live_meetings = live
