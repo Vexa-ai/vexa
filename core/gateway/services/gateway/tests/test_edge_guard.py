@@ -141,7 +141,7 @@ class TestGuardWiring:
         # A guard check bug must fail open, not 500 the public ingress.
         assert cfg.fail_secure is False
         # A Redis outage must degrade the rate limiter to its per-process window, not skip
-        # it (guard-core 3.15.0 raises GuardRedisError under the default False).
+        # it (guard-core >= 3.15.0 raises GuardRedisError under the default False).
         assert cfg.redis_fail_open is True
         # CORS + security-headers OFF (moot on 0.12, kept so a future layer can't double up).
         assert cfg.enable_cors is False
@@ -212,7 +212,7 @@ class TestWsGuardPreflight:
 
 class TestGuardEnvValidation:
     """The IP-list fields (``whitelist`` / ``blacklist`` / ``trusted_proxies``) and
-    ``block_cloud_providers`` all raise on the pinned guard-core (3.15.0): an invalid IP/CIDR
+    ``block_cloud_providers`` all raise on guard-core >= 3.15.0: an invalid IP/CIDR
     entry, or a provider name that is not an exact (or, under STRICT, case-insensitive) member
     of the accepted set, surfaces as a bare pydantic ``ValidationError`` from deep inside
     ``SecurityConfig(...)`` construction. Without a Vexa-side check, that boot fails the same
@@ -341,7 +341,7 @@ class TestGuardEnvValidation:
 
 class TestBlockCloudProvidersDefaultOff:
     """``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` defaults to false, which means exact-case
-    validation, not passthrough: on the pinned guard-core (3.15.0) an unrecognized or
+    validation, not passthrough: on guard-core >= 3.15.0 an unrecognized or
     wrong-case entry raises inside ``SecurityConfig`` regardless of what Vexa does, so the
     default already validates - it just does not case-normalize. See
     ``_resolve_block_cloud_providers`` in edge_guard.py for the rationale."""

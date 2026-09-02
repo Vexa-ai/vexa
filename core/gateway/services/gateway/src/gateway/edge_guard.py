@@ -88,7 +88,7 @@ def _guard_csv(env: str) -> list[str]:
 
 
 # guard_core.models.CloudProvider = Literal["AWS", "GCP", "Azure", "DigitalOcean", "Linode",
-# "Vultr"] (guard-core 3.15.0, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
+# "Vultr"] (guard-core 3.17.0, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
 # six names as a frozenset - both verified in this venv). Mirrored here (not imported) so a
 # library-side rename doesn't quietly change what Vexa accepts out from under this error
 # message.
@@ -100,7 +100,7 @@ def _validate_block_cloud_providers(env: str, *, normalize: bool) -> set[str]:
     """Parse + validate ``GUARD_BLOCK_CLOUD_PROVIDERS`` against guard-core's closed set BEFORE
     it reaches ``SecurityConfig(...)``.
 
-    On the pinned guard-core (3.15.0), an unrecognized ``block_cloud_providers`` entry is NOT
+    On guard-core >= 3.15.0, an unrecognized ``block_cloud_providers`` entry is NOT
     silently dropped: ``SecurityConfig.validate_cloud_providers`` (``guard_core/models.py:163-165``)
     delegates to a value validator that raises a pydantic ``ValidationError`` naming the bad
     entries, from deep inside ``SecurityConfig`` construction. Verified in this venv:
@@ -176,7 +176,7 @@ def _resolve_block_cloud_providers(env: str) -> set[str]:
     """Build the ``block_cloud_providers`` value passed to ``SecurityConfig``, gated by
     ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` (default false).
 
-    On the pinned guard-core (3.15.0) an unrecognized entry raises inside ``SecurityConfig``
+    On guard-core >= 3.15.0 an unrecognized entry raises inside ``SecurityConfig``
     construction no matter what Vexa does (see :func:`_validate_block_cloud_providers`'s
     docstring for the evidence), so boundary validation is unconditional here - there is no
     passthrough path left to gate. ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` only chooses how
@@ -200,8 +200,8 @@ def _validate_ip_or_cidr_csv(env: str) -> list[str]:
     """Parse + validate ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES``
     BEFORE they reach ``SecurityConfig(...)``.
 
-    Like ``block_cloud_providers`` (above), these three fields already raise on the pinned
-    guard-core (3.15.0): ``guard_core/models.py``'s ``validate_ip_lists`` (lines 143-145, for
+    Like ``block_cloud_providers`` (above), these three fields already raise on
+    guard-core >= 3.15.0: ``guard_core/models.py``'s ``validate_ip_lists`` (lines 143-145, for
     ``whitelist``/``blacklist``) and ``validate_trusted_proxies`` (lines 147-150) field
     validators run each entry through the same ``ipaddress``-based parse and raise a pydantic
     ``ValidationError`` on failure, from deep inside ``SecurityConfig`` construction, a bare
@@ -257,7 +257,7 @@ def build_guard_config() -> SecurityConfig:
 
     ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES`` are pre-validated
     here (:func:`_validate_ip_or_cidr_csv`) and raise :class:`ConfigError` on a bad entry - they
-    already raise on the pinned guard-core (3.15.0) too, so this pre-validation is load-bearing
+    already raise on guard-core >= 3.15.0 too, so this pre-validation is load-bearing
     for error-message quality, not future-proofing.
 
     ``GUARD_BLOCK_CLOUD_PROVIDERS`` goes through :func:`_resolve_block_cloud_providers` instead,
@@ -313,7 +313,7 @@ def build_guard_config() -> SecurityConfig:
         # check. guard-core < 3.15.0 always fell back regardless of this flag; 3.15.0 makes
         # the limiter honor it, and the default (False) under fail_secure=False would skip
         # the rate limit entirely for every request until Redis is back. The open pin
-        # (>=7.8.1) resolves to 3.15.0 on a fresh lock, so the flag is set explicitly to
+        # (>=7.8.1) resolves to 3.17.0 on a fresh lock, so the flag is set explicitly to
         # keep one behavior on both sides of that boundary. Ban checks are unaffected:
         # is_ip_banned already fails open (not banned) under fail_secure=False.
         redis_fail_open=True,
