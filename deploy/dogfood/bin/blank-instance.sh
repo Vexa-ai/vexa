@@ -19,13 +19,16 @@
 #   4. every desk in the workspace volume          -> everything except `_global`
 #   5. `_global` reduced to `asks/` + `mail/`      -> the preset library and the mail templates
 #                                                     SURVIVE; a company layer written into it does not
-#   6. both flows lanes: reactions, receipts,      -> nothing queued, nothing half-run, and no dedup
+#   6. redis, BY PREFIX ONLY (see below)           -> no chat threads, no pending scaffolds
+#   7. both flows lanes: reactions, receipts,      -> nothing queued, nothing half-run, and no dedup
 #      signals, mail cursors and thread memory        memory that would swallow a replayed fact
-#   7. mailpit                                     -> an empty inbox (skip with --keep-mail)
+#   8. mailpit                                     -> an empty inbox (skip with --keep-mail)
 #
 # WHAT IT NEVER TOUCHES: images, API keys, the SOPS secrets, `~/dna-fixtures`, run directories,
 # `_global/.git` history, and any container. It deletes data, never infrastructure — so a wipe always
-# leaves a working stack, just an empty one.
+# leaves a working stack, just an empty one. In redis it never issues FLUSHALL or FLUSHDB: the same
+# instance carries the live transcript streams and the bot/meeting machinery, and a blank is about a
+# PERSON'S data, not about the deployment's plumbing (see step 6).
 #
 # It REFUSES while a meeting is live. A wipe mid-meeting destroys the only copy of something nobody
 # can re-record, and "no meeting is live" is cheap to check and impossible to remember.
@@ -66,6 +69,13 @@ MEETINGS=$(psql_vexa "SELECT count(*) FROM meetings;" | tr -d ' ')
 TOKENS=$(psql_vexa "SELECT count(*) FROM api_tokens;" | tr -d ' ')
 SETTINGS=$(psql_vexa "SELECT count(*) FROM platform_settings;" | tr -d ' ')
 DESKS=$(docker exec "$AGENT" sh -lc "ls -A /workspaces | grep -vx '_global' | wc -l" | tr -d ' ')
+REDIS_KEYS=$(docker exec "${STACK}-redis-1" sh -lc '
+  C=$(command -v valkey-cli || command -v redis-cli) || exit 0
+  n=0
+  for p in "agent:sessions:*" "agent:session:*" "agent:scaffold:*" "agent:scaffolds:by:*"; do
+    n=$((n + $($C --scan --pattern "$p" --count 500 | wc -l)))
+  done
+  echo $n' 2>/dev/null | tr -d ' \r' || echo "?")
 MAILS=$(curl -sS "$MAILPIT/api/v1/messages?limit=1" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("messages_count",0))' 2>/dev/null || echo "?")
 
 echo "blank-instance — stack ${STACK}"
@@ -76,6 +86,7 @@ say "platform settings ...... $SETTINGS  (all deleted — no admin wizard state,
 say "desks in the volume .... $DESKS  (all deleted; _global survives)"
 say "mailpit messages ....... $MAILS  $([ "$KEEP_MAIL" = 1 ] && echo '(KEPT: --keep-mail)' || echo '(all deleted)')"
 say "_global ................ reduced to asks/ + mail/ (+ .git history, kept)"
+say "redis (BY PREFIX) ...... $REDIS_KEYS  chat-thread index + scaffold records; nothing else"
 say "flows (both lanes) ..... reactions, receipts, signals, cursors, thread memory"
 
 if [ "$YES" != "1" ]; then
@@ -127,7 +138,63 @@ docker exec "$AGENT" sh -lc '
   echo "  _global now:     $(cd /workspaces/_global && ls -A | tr "\n" " ")"
 '
 
-# ── 6 · every flows lane. Through the POSTGRES CONTAINER, in dependency order, loudly. ─────
+# ── 6 · redis, BY PREFIX. Never FLUSHALL. ───────────────────────────────────────────────────────
+head2 "redis"
+# ⚠ THE BLANK USED TO STOP AT POSTGRES AND THE VOLUME, AND REDIS IS THE THIRD STORE.
+# Found 2026-09-02 while building the scaffold (biz#449): agent-api keeps two durable things here —
+# the per-subject CHAT-THREAD INDEX (`_Sessions`) and the SCAFFOLD RECORDS (`ScaffoldStore`) — and a
+# blank left every one of them behind. 335 session keys survived the two blanks of that morning. A
+# scaffold outliving a blank is worse than untidy: it is a live capability, minted for an address,
+# still redeemable on an instance that has been handed to somebody else.
+#
+# ONLY THESE PREFIXES, and they are listed rather than globbed on `agent:*` on purpose — a prefix
+# list is reviewable, `agent:*` silently adopts whatever the next feature names. Everything here is
+# ONE PERSON'S data:
+#
+#   agent:sessions:<subject>            the subject's chat-thread id set        (api.py `_Sessions`)
+#   agent:session:<subject>:<session>   one thread's title + timestamps         (api.py `_Sessions`)
+#   agent:scaffold:<id>                 one arrival record                      (scaffolds.py)
+#   agent:scaffolds:by:<address>        that recipient's pending-scaffold index (scaffolds.py)
+#
+# AND NOTHING ELSE. `FLUSHALL`/`FLUSHDB` would also take `tc:meeting:*` (the live transcript
+# streams the copilot tails and the db-writer drains), the `unit:*` per-dispatch streams, and the
+# bot machinery — deployment plumbing, and in the transcript case the only copy of something nobody
+# can re-record. The refusal at the top of this script exists for exactly that reason; a flush here
+# would walk straight around it.
+#
+# NOT cleared, deliberately, and said out loud rather than left to be discovered: `unit:*` (the
+# per-dispatch chat streams) and `tc:meeting:*` (transcript streams) are orphaned by this wipe and
+# accumulate. They are GARBAGE, not a hazard — `dispatch_id` is derived from (subject, session) and
+# postgres never reuses a deleted user's id, so a fresh person cannot land on an old stream. Cleaning
+# them is a retention question, not a blanking one, and it is filed rather than smuggled in here.
+REDIS="${STACK}-redis-1"
+REDIS_PREFIXES="agent:sessions:* agent:session:* agent:scaffold:* agent:scaffolds:by:*"
+# valkey since #653; `redis-cli` is kept as the fallback so this works against either engine.
+RCLI=$(docker exec "$REDIS" sh -lc 'command -v valkey-cli || command -v redis-cli' 2>/dev/null | tr -d '\r')
+if [ -z "$RCLI" ]; then
+  echo "REFUSING: no valkey-cli/redis-cli in $REDIS — the chat-thread index and any pending" >&2
+  echo "scaffold would survive the blank, and a scaffold is a live capability." >&2
+  exit 1
+fi
+for pat in $REDIS_PREFIXES; do
+  # SCAN, never KEYS: KEYS blocks the server for the whole sweep, and this one also serves the live
+  # transcript streams. The delete is batched through xargs so a large sweep is not one call per key.
+  n=$(docker exec "$REDIS" sh -lc "$RCLI --scan --pattern '$pat' --count 500 | wc -l" | tr -d ' \r')
+  if [ "${n:-0}" != "0" ]; then
+    docker exec "$REDIS" sh -lc \
+      "$RCLI --scan --pattern '$pat' --count 500 | xargs -r -n 200 $RCLI DEL >/dev/null"
+  fi
+  printf '    %-26s %s\n' "$pat" "$n deleted"
+done
+# … and PROVE it, for the same reason the flows lane below proves itself: a step that cannot do its
+# job and says so quietly is indistinguishable from one that worked.
+for pat in $REDIS_PREFIXES; do
+  left=$(docker exec "$REDIS" sh -lc "$RCLI --scan --pattern '$pat' --count 500 | wc -l" | tr -d ' \r')
+  [ "${left:-0}" = "0" ] || { echo "REFUSING to report success: redis still holds $left key(s) matching $pat" >&2; exit 1; }
+done
+say "verified: no chat-thread index and no scaffold records remain"
+
+# ── 7 · every flows lane. Through the POSTGRES CONTAINER, in dependency order, loudly. ─────
 head2 "flows"
 # ⚠ WHY THIS RUNS `docker exec` AND NOT `psql`. The first version of this script called `psql` on
 # the HOST, where there is no psql binary. Every delete failed, every failure was caught and printed
@@ -174,7 +241,7 @@ for db in $FLOW_DBS; do
   say "lane $db verified empty"
 done
 
-# ── 7 · the inbox ───────────────────────────────────────────────────────────────────────────────
+# ── 8 · the inbox ───────────────────────────────────────────────────────────────────────────────
 head2 "mailpit"
 if [ "$KEEP_MAIL" = 1 ]; then
   say "kept (--keep-mail)"
@@ -195,5 +262,7 @@ cat <<'NEXT'
   sending, and the operator verbs refuse.
 
   Kept on purpose: _global/asks/ (the preset library), _global/mail/ (the mail templates) and
-  _global/.git (the history). Those are the deployment's own furniture, not anybody's data.
+  _global/.git (the history). Those are the deployment's own furniture, not anybody's data. In redis
+  the same rule, from the other side: the chat-thread index and every scaffold are gone, and the
+  transcript streams and per-dispatch streams are untouched — plumbing, never a person.
 NEXT
