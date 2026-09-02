@@ -243,7 +243,10 @@ _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
 # no secrets, admin-gated like the other keys.
-_SETUP_FIELDS = ("models", "transcription", "completed")
+# "global" is the HAND-OFF marker: the admin has left the wizard for the setup chat, and a reload
+# must resume there rather than throwing them back to step 1. It was missing from this tuple, and
+# the omission cost a live blocker on 2026-09-02 — see the write guard below for the whole story.
+_SETUP_FIELDS = ("models", "transcription", "completed", "global")
 # "diagnostics" carries the operator kill switches for capture-side telemetry. Today one field:
 # capture_signal — whether a spawned bot tees its raw captured-signal.v1 stream to durable storage
 # (the offline-replay fixture tape). It is the ONLY control-plane knob on fixture collection, and it
@@ -1122,6 +1125,27 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
         update = {f: payload.get(f) for f in fields if f in payload}
+        # A WRITE THAT RECOGNISED NOTHING IS AN ERROR, not a no-op with a 200 on it.
+        #
+        # This filter silently drops any field not in `fields`. On 2026-09-02 the first-run wizard
+        # sent {"global": "handoff"} to record that the admin had left the wizard for the setup
+        # chat; "global" was not in _SETUP_FIELDS, so the write stored NOTHING and answered 200.
+        # The client had no way to know. On the next load the marker was absent, the wizard decided
+        # it was still at step 1, rendered its full-screen overlay INSTEAD of the workbench — so the
+        # chat it had just handed off to could never mount — and the admin was returned to the
+        # beginning. From the outside the button "did nothing"; underneath, every layer reported
+        # success. It cost the founder a live rehearsal.
+        #
+        # The lesson generalises past the missing tuple entry: an API that accepts a write, changes
+        # nothing, and says 200 is indistinguishable from one that worked, and no amount of care at
+        # the caller can detect it. So refuse. A partially-recognised write still succeeds (a client
+        # sending a known field plus noise is not the failure this catches); only a write where
+        # NOTHING was understood is refused, and the message names the keys and the vocabulary.
+        if payload and not update:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=(f"none of {sorted(payload)} is a field of '{key}'. "
+                        f"Known fields: {list(fields)}"))
         cleaned = _validate_config_fields(update, kind=key)
         row = await db.get(PlatformSetting, key)
         merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)

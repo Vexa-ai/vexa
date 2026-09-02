@@ -198,3 +198,34 @@ def test_gate_routes_are_internal_tier(client):
     assert client.get("/internal/instance").status_code == 403
     assert client.post("/internal/signin-allowed", json={"email": "x@y.z"}).status_code == 403
     assert client.post("/internal/release-admin", json={"user_id": 1}).status_code == 403
+
+
+def test_a_settings_write_that_recognises_nothing_is_refused(client):
+    """The 2026-09-02 live blocker, as a test.
+
+    The first-run wizard sent {"global": "handoff"} to record that the admin had left the wizard for
+    the setup chat. "global" was not a field of "setup", so the write stored NOTHING and answered
+    200. The client could not tell. On the next load the marker was absent, the wizard decided it
+    was still mid-wizard, rendered its full-screen overlay INSTEAD of the workbench — so the chat it
+    had just handed off to could never mount — and the admin was returned to the same step. From the
+    outside the button "did nothing"; underneath, every layer reported success.
+
+    A partially-recognised write still succeeds: a client sending a known field alongside noise is
+    not the failure this catches."""
+    # the field that was missing, and the reason it is here
+    r = client.put("/internal/settings/setup", headers=_internal(), json={"global": "handoff"})
+    assert r.status_code == 200 and r.json()["value"]["global"] == "handoff"
+
+    # a write nothing understood is loud, and says what the vocabulary is
+    r = client.put("/internal/settings/setup", headers=_internal(), json={"nonsense": "x"})
+    assert r.status_code == 400
+    assert "nonsense" in r.json()["detail"] and "global" in r.json()["detail"]
+
+    # ...but a recognised field carried alongside an unknown one still lands
+    r = client.put("/internal/settings/setup", headers=_internal(),
+                   json={"completed": "true", "nonsense": "x"})
+    assert r.status_code == 200 and r.json()["value"]["completed"] == "true"
+    assert "nonsense" not in r.json()["value"]
+
+    # an empty body is not an error — it is a no-op nobody asked anything of
+    assert client.put("/internal/settings/setup", headers=_internal(), json={}).status_code == 200
