@@ -64,6 +64,9 @@ def _flows_api_key() -> str:
 
 FLOWS_KEY = _flows_api_key()
 MAILPIT = os.environ.get("MAILPIT_URL", "http://localhost:8025")
+# meeting-api directly — the lifecycle callback the bot posts to is an INTERNAL route on the
+# service, not a gateway one, and the capture double drives the same FSM through it.
+MEETING_API = os.environ.get("VEXA_MEETING_API_URL", "http://localhost:18480")
 HOME = pathlib.Path.home()
 
 
@@ -2244,35 +2247,68 @@ def zoom_transcript_to_segments(name: str, path: str, token: str = "") -> str:
 @_anon_guard
 def meeting_seed(native_id: str, title: str, video_id: str,
                  occurred_at: str = "") -> str:
-    """Create a completed meeting for a user and load a real transcript into it.
+    """Create a COMPLETED, ADDRESSABLE meeting for a user and load a real transcript into it.
 
     This is the capture double: instead of driving a browser into a live call, it writes the
     segments a bot would have produced. Everything downstream — the post-meeting flow, the
     agent turn, the artifacts — then runs on genuinely messy multi-speaker material rather
     than a hand-written fixture.
 
-    `occurred_at` is WHEN THE MEETING HAPPENED (ISO-8601, or epoch seconds). Pass it. It is
-    written as the row's `scheduled_at`, and a seeded row without one has a NULL start — which
-    is what `_meeting_stamp` falls back from when it names the note file, so several occurrences
-    of one recurring series collapse onto today's date and into a single file. A double that
-    cannot say when the meeting was is not a double of a meeting.
+    A double is only honest if it leaves behind THE ROW THE PRODUCT LEAVES. It used to stop at
+    `POST /meetings`, which mints an INTENT row — status `idle`, start_time and end_time NULL:
+    the shape of a meeting that has NOT happened yet. The terminal reads exactly that shape and
+    says so — `meetingPhase()` buckets `idle`/`scheduled` as `prep`, so an attendee who opened a
+    finished meeting saw "MEETING · UPCOMING" and got the meeting-prep greeting. So the seed now
+    walks the SAME state machine a real bot walks — joining → active → completed, over
+    meeting-api's own `POST /bots/internal/callback/lifecycle` — and the row ends up `completed`,
+    with `data.completion_reason`, the `status_transition[]` trail and `segments_captured`
+    written by the service that owns them.
+
+    `occurred_at` is WHEN THE MEETING HAPPENED (ISO-8601, or epoch seconds). Pass it. It is the
+    row's `scheduled_at` AND the start of its occurrence window; its LENGTH is the transcript's
+    own — the last segment's `end` — so a 40-minute recording seeds a 40-minute meeting instead
+    of a zero-length one. Without it the default is a call that ended just this second. A double
+    that cannot say when the meeting was is not a double of a meeting: `_meeting_stamp` falls
+    back to today when the row has no time, so several occurrences of one recurring series
+    collapse onto today's date and into a single note file.
 
     It does NOT return the transcript. The agent reads the words itself with
     `meeting_transcript(meeting_id=<row>, tail=0)` — all of them, not a copy truncated to fit
     inside an event."""
     uid = me()
+    import datetime as _dt
+    import uuid as _uuid
+
     segs_path = HOME / ".storm/caps" / f"{video_id}.segments.json"
     if not segs_path.exists():
         return json.dumps({"error": "run captions_to_segments first"})
     segs = json.loads(segs_path.read_text())
-    when = None
+    if not segs:
+        return json.dumps({"error": f"no segments in {segs_path}"})
+    # The run's length is the transcript's own length — segment `end`s are seconds from the start
+    # of the capture, so the last one IS the duration of the meeting the bot sat through.
+    duration = max(float(s["end"]) for s in segs)
     if occurred_at:
+        raw = str(occurred_at).strip()
         try:
-            import datetime as _dt
-            when = (_dt.datetime.fromtimestamp(float(occurred_at), _dt.timezone.utc).isoformat()
-                    if str(occurred_at).replace(".", "", 1).isdigit() else str(occurred_at))
-        except Exception:  # noqa: BLE001 — a bad stamp must not lose the seed
-            when = None
+            started = (_dt.datetime.fromtimestamp(float(raw), _dt.timezone.utc)
+                       if raw.replace(".", "", 1).isdigit()
+                       else _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")))
+        except ValueError:
+            # LOUD, not "a bad stamp must not lose the seed". A stamp we silently drop seeds the
+            # meeting at the wrong moment, which is the exact defect this argument exists to fix —
+            # and the caller never learns their stamp was thrown away.
+            return json.dumps({"error": "occurred_at is neither ISO-8601 nor epoch seconds",
+                               "occurred_at": str(occurred_at)})
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=_dt.timezone.utc)
+        started = started.astimezone(_dt.timezone.utc)
+    else:
+        # Default: the call ENDED just now — the state the post-meeting flow meets in the wild.
+        started = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=duration)
+    ended = started + _dt.timedelta(seconds=duration)
+    when = started.isoformat()
+
     # A seeded row must be ADDRESSABLE the way a real one is. POST /meetings derives
     # (platform, native_meeting_id) from `meeting_url` and stores ("unknown", NULL) without one —
     # and several product paths identify a meeting by that pair rather than by row id. The one
@@ -2291,39 +2327,114 @@ def meeting_seed(native_id: str, title: str, video_id: str,
     if st not in (200, 201):
         return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300]})
     mid = m["id"]
-    rows = []
-    for i, s in enumerate(segs):
-        txt = s["text"].replace("'", "''")[:1400]
-        sp = s["speaker"].replace("'", "''")
-        rows.append("INSERT INTO transcriptions (meeting_id,start_time,end_time,text,speaker,"
-                    "language,session_uid,segment_id,created_at) VALUES "
-                    f"({mid},{s['start']:.2f},{s['end']:.2f},'{txt}','{sp}','en',"
-                    f"'yt-{video_id}','yt-{i}',now()) ON CONFLICT DO NOTHING")
     pw = subprocess.run(
         ["docker", "inspect", "vexa-dogfood-postgres-1", "--format",
          "{{range .Config.Env}}{{println .}}{{end}}"], capture_output=True, text=True,
         check=True).stdout.split("POSTGRES_PASSWORD=")[1].split("\n")[0].strip()
-    # The statements go in on STDIN, not in argv. As `-c <sql>` this died with
-    # `OSError: [Errno 7] Argument list too long` on any meeting whose segments are wordy enough —
-    # a 400-row chunk of a real hour-long transcript clears the kernel's argv limit. It failed as an
-    # OSError raised before the tool call, so the caller saw only "Error executing tool".
+
+    def _psql(sql: str, *flags: str):
+        """SQL on STDIN, never in argv: a 400-row chunk of a real transcript clears the kernel's
+        argv limit, and as `-c <sql>` that dies with `OSError: [Errno 7] Argument list too long`
+        before psql is even reached — raised before the tool call, so the caller saw only
+        "Error executing tool"."""
+        return subprocess.run(
+            ["docker", "exec", "-i", "-e", f"PGPASSWORD={pw}",
+             "vexa-dogfood-postgres-1", "psql", "-U", "postgres", "-d", "vexa",
+             "-q", *flags, "-f", "-"],
+            input=sql.rstrip().rstrip(";") + ";\n", capture_output=True, text=True)
+
+    # The bot's connectionId — a uuid4 on a real spawn (bot_spawn/service.py). The lifecycle
+    # callback resolves it to this meeting, so it has to be unique across meetings, not per video.
+    session_uid = str(_uuid.uuid4())
+    # DIRECT WRITE 1 of 2 — the session row, and the reason the rest can go through the service.
+    # `POST /meetings` mints the intent row and nothing else; the `meeting_sessions` row that maps
+    # connectionId → meeting is created ONLY inside bot_spawn (`create_session`), i.e. only by
+    # actually spawning a browser — the very thing this double exists to avoid — and no HTTP
+    # surface exposes it. Without it `update_meeting_status` finds no session, returns early, and
+    # persists NOTHING: the FSM would advance in memory while the row stayed `idle`. Same table,
+    # same three columns a spawn writes.
+    r = _psql("INSERT INTO meeting_sessions (meeting_id,session_uid,session_start_time) VALUES "
+              f"({mid},'{session_uid}','{started.isoformat()}')")
+    if r.returncode != 0:
+        return json.dumps({"meeting_id": mid, "error": f"session row: {r.stderr[:300]}"})
+
+    def _lifecycle(status: str, at, **extra):
+        """One lifecycle.v1 event to the callback the real bot posts to. meeting-api validates it
+        against the sealed schema (422 on a violation) and rejects an illegal edge (409)."""
+        ev = {"connection_id": session_uid, "status": status,
+              "timestamp": at.isoformat().replace("+00:00", "Z"), **extra}
+        return _http("POST", f"{MEETING_API}/bots/internal/callback/lifecycle", None, ev)
+
+    # joining → active. `completed` is legal ONLY from `active` (lifecycle/machine.py
+    # LEGAL_TRANSITIONS), and a record's first event must be `joining` — so the double climbs the
+    # whole ladder instead of jumping to the end. `active` is what sets the row out of the
+    # planned statuses; the transcript lands next, exactly as it does on a live call.
+    for status, at in (("joining", started - _dt.timedelta(seconds=20)), ("active", started)):
+        st, body = _lifecycle(status, at)
+        if st != 200:
+            return json.dumps({"meeting_id": mid, "error": f"lifecycle {status} refused",
+                               "status": st, "body": str(body)[:300]})
+
+    rows = []
+    for i, s in enumerate(segs):
+        txt = s["text"].replace("'", "''")[:1400]
+        sp = s["speaker"].replace("'", "''")
+        # session_uid is the connectionId, the same stamp a real bot's segments carry.
+        rows.append("INSERT INTO transcriptions (meeting_id,start_time,end_time,text,speaker,"
+                    "language,session_uid,segment_id,created_at) VALUES "
+                    f"({mid},{s['start']:.2f},{s['end']:.2f},'{txt}','{sp}','en',"
+                    f"'{session_uid}','yt-{i}',now()) ON CONFLICT DO NOTHING")
     chunk, loaded = 400, 0
     for i in range(0, len(rows), chunk):
-        sql = ";\n".join(rows[i:i + chunk]) + ";\n"
-        r = subprocess.run(["docker", "exec", "-i", "-e", f"PGPASSWORD={pw}",
-                            "vexa-dogfood-postgres-1", "psql", "-U", "postgres", "-d", "vexa",
-                            "-q", "-f", "-"], input=sql, capture_output=True, text=True)
+        r = _psql(";\n".join(rows[i:i + chunk]))
         if r.returncode == 0:
             loaded += len(rows[i:i + chunk])
         else:
             return json.dumps({"meeting_id": mid, "loaded": loaded,
                                "error": r.stderr[:300]})
+
+    # The terminal. `left_alone` is the honest reason for a recording that ran to its end: the
+    # meeting emptied out and the bot left. `stopped` would claim a human pressed stop.
+    # The transcript is already in the table, so the service's own terminal bookkeeping —
+    # `segments_captured`, the finalize flush, `service_provenance` — counts what is really there.
+    st, body = _lifecycle("completed", ended, completion_reason="left_alone", exit_code=0)
+    if st != 200:
+        return json.dumps({"meeting_id": mid, "loaded": loaded,
+                           "error": "lifecycle completed refused", "status": st,
+                           "body": str(body)[:300]})
+
+    # DIRECT WRITE 2 of 2 — the occurrence window, and the one thing the service cannot express.
+    # meeting-api owns start_time/end_time and derives BOTH from wall-clock `now()`
+    # (bot_spawn/adapters.py `update_meeting_status`: start_time on `active`, end_time on the
+    # terminal). It takes no time input and no route accepts one — `PATCH /meetings/{id}` edits a
+    # PLANNED row and refuses once the row has entered the FSM — so a run that happened at any
+    # moment other than this one is not expressible through the service at all. Everything else
+    # about this row came from the service above; this corrects only the two columns it filled
+    # with `now`, to the window the transcript actually covers. Naive UTC, matching the columns.
+    fmt = "%Y-%m-%d %H:%M:%S"
+    r = _psql(f"UPDATE meetings SET start_time='{started.strftime(fmt)}',"
+              f"end_time='{ended.strftime(fmt)}' WHERE id={mid}")
+    if r.returncode != 0:
+        return json.dumps({"meeting_id": mid, "loaded": loaded,
+                           "error": f"occurrence window: {r.stderr[:300]}"})
+
+    # Read the row back — the seed reports what the DB actually holds, not what it intended.
+    r = _psql("SELECT status||'|'||coalesce(to_char(start_time,'YYYY-MM-DD\"T\"HH24:MI:SS'),'')"
+              "||'|'||coalesce(to_char(end_time,'YYYY-MM-DD\"T\"HH24:MI:SS'),'')"
+              "||'|'||coalesce(data->>'completion_reason','')"
+              f" FROM meetings WHERE id={mid}", "-tA")
+    row = (r.stdout or "").strip().split("|") if r.returncode == 0 else []
     # NO transcript body. It used to return the same 8,000-char copy the flows step made, so a
     # fact emitted straight at meeting.completed could carry it — which is exactly the copy this
     # slice removes. The caller gets the row id; the agent reads the words through the MCP.
     return json.dumps({"meeting_id": mid, "native_id": native_id, "title": title,
-                       "segments_loaded": loaded, "uid": uid,
+                       "segments_loaded": loaded, "uid": uid, "session_uid": session_uid,
                        "scheduled_at": when,
+                       "status": row[0] if len(row) > 3 else None,
+                       "start_time": row[1] if len(row) > 3 else None,
+                       "end_time": row[2] if len(row) > 3 else None,
+                       "completion_reason": row[3] if len(row) > 3 else None,
+                       "duration_minutes": round(duration / 60, 1),
                        "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
 
