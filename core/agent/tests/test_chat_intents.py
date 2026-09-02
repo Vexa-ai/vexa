@@ -43,3 +43,56 @@ def test_an_absent_value_renders_as_nothing_never_as_the_word_None():
     t = tokens_for({"kind": "highlight", "meeting": "41"})
     assert t["since"] == "" and t["term"] == "" and t["path"] == ""
     assert "None" not in "".join(t.values())
+
+
+# ── intent.silent → the phase mark (decision 35, F51 mechanism) ───────────────────────────────────
+
+def test_the_four_marks_are_one_string_each():
+    """The literals are DUPLICATED across three modules on purpose — the worker ships in its own
+    image and `chat_intents` is importless by design — so something has to pin them together or a
+    rename drifts them apart silently. This is that something."""
+    from control_plane import chat_intents, scaffolds, workspace_reader
+    assert chat_intents.MACHINERY_MARK == scaffolds.MACHINERY_MARK
+    assert chat_intents.PHASE_MARK == workspace_reader.PHASE_MARK
+    assert chat_intents.SILENT_PREFIX == "[vexa-machinery] [vexa-phase:writeback] "
+
+
+def test_silent_is_read_off_the_kind_never_off_the_wire():
+    """`intent.silent: true` as a CLIENT field would let anyone able to mint an intent make a turn
+    invisible in someone else's conversation — the same capability `opening` is a name rather than a
+    string to deny. The closed set is server-side."""
+    from control_plane import chat_intents
+    assert chat_intents.is_silent({"kind": "highlight"}) is True
+    assert chat_intents.is_silent({"kind": "HIGHLIGHT"}) is True
+    assert chat_intents.is_silent({"kind": "extend"}) is False
+    assert chat_intents.is_silent({"kind": "extend", "silent": True}) is False, \
+        "a wire flag must not be able to hide a turn"
+    for junk in (None, "highlight", {}, {"kind": None}, {"kind": "nope"}):
+        assert chat_intents.is_silent(junk) is False
+
+
+def test_a_silent_turn_carries_BOTH_marks_and_a_visible_one_carries_neither():
+    """Machinery alone hides the prompt but SHOWS the reply; the phase mark drops the prompt and
+    every agent turn after it. A silent kind needs the second — `worker/engine.py` states the
+    distinction at its own definition, and it is why there are two literals rather than one flag."""
+    from control_plane import chat_intents
+    silent = chat_intents.SILENT_PREFIX + "[highlight] do the thing"
+    assert chat_intents.MACHINERY_MARK in silent and chat_intents.PHASE_MARK in silent
+    visible = "[extend] go further on the page"
+    assert chat_intents.PHASE_MARK not in visible
+
+
+def test_the_reader_drops_a_phase_marked_turn():
+    """End of the mechanism: the mark only means anything because `history` acts on it."""
+    from control_plane import chat_intents, workspace_reader
+    assert workspace_reader.PHASE_MARK in chat_intents.SILENT_PREFIX
+
+
+def test_every_intent_kind_has_a_preset_file():
+    """A kind in the closed set with no preset degrades to the client's fallback sentence — correct,
+    but silent. These four ship WITH their presets; the test is what notices if one stops."""
+    import pathlib
+    from control_plane import chat_intents
+    asks = pathlib.Path(__file__).resolve().parents[3] / "deploy/dogfood/asks"
+    for kind, preset in chat_intents.INTENT_PRESETS.items():
+        assert (asks / f"{preset}.md").is_file(), f"{kind} -> {preset}.md is missing"

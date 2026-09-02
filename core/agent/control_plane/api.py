@@ -1637,8 +1637,15 @@ def create_app(
             if _preset:
                 try:
                     _fm, _ask = scaffolds_mod.read_preset(_global_root(), _preset)
-                    body = body.model_copy(update={
-                        "prompt": scaffolds_mod.substitute(_ask, chat_intents.tokens_for(body.intent))})
+                    _text = scaffolds_mod.substitute(_ask, chat_intents.tokens_for(body.intent))
+                    # A SILENT KIND IS MACHINERY END TO END (decision 35). The marks ride the prompt
+                    # itself — the same carrier the write-back phase uses — so `workspace_reader.
+                    # history` drops this turn and every agent turn after it until the person speaks
+                    # again. Nothing downstream needs a new field, and a deployment whose reader is
+                    # older simply renders a marked turn it does not yet hide, rather than breaking.
+                    if chat_intents.is_silent(body.intent):
+                        _text = chat_intents.SILENT_PREFIX + _text
+                    body = body.model_copy(update={"prompt": _text})
                 except scaffolds_mod.ScaffoldError as e:
                     logger.warning("intent %s has no preset here (%s) — the turn runs on the "
                                    "client's fallback sentence", _preset, e)

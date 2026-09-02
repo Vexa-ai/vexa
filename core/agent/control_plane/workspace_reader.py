@@ -104,7 +104,7 @@ _TURNS_SIDECAR = "{session}.turns.jsonl"
 # — duplicated, not imported: the worker ships in its own image; ``tests/test_user_text_field.py``
 # pins the two literals together). Everything from a marked prompt until the next thing a person
 # actually said is bookkeeping the founder was never meant to read back as his own conversation.
-_PHASE_MARK = "[vexa-phase:writeback]"
+PHASE_MARK = "[vexa-phase:writeback]"
 
 # The harness's own auto-continue. It is a user line nobody typed — the runner nudging a turn that
 # stopped early — and it rendered as a grey USER bubble reading "Continue from where you left off."
@@ -426,7 +426,7 @@ class WorkspaceReader:
                 if text.strip() == _HARNESS_CONTINUE:
                     continue
                 flush_agent()
-                if _PHASE_MARK in text:
+                if PHASE_MARK in text:
                     in_phase = True   # …and everything the agent says until the next real prompt
                     continue
                 in_phase = False

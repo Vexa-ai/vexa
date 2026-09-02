@@ -33,6 +33,34 @@ INTENT_PRESETS: dict[str, str] = {
 SILENT_KINDS = frozenset({"highlight"})
 
 
+# THE TWO MARKS A SILENT TURN CARRIES, duplicated here for the reason the others are: this module
+# is pure and importless by design, the worker ships in its own image, and `test_chat_intents.py`
+# pins all four literals together so a rename cannot drift them apart.
+#
+# BOTH marks, and the ORDER matters as little as the pairing matters a lot:
+#   MACHINERY_MARK  hides the PROMPT bubble — the reply is still shown.
+#   PHASE_MARK      drops the prompt AND every agent turn up to the next thing a person said.
+# A silent intent needs the SECOND. Marking it machinery alone would render the tool calls and the
+# prose as a normal exchange; marking a composed OPENING with the phase mark would swallow the first
+# real answer of every scaffolded chat. `worker/engine.py` says exactly this at its own definition —
+# "Distinct from MACHINERY_MARK and not a replacement for it" — and it is the whole reason there are
+# two literals rather than one flag.
+MACHINERY_MARK = "[vexa-machinery]"
+PHASE_MARK = "[vexa-phase:writeback]"
+SILENT_PREFIX = MACHINERY_MARK + " " + PHASE_MARK + " "
+
+
+def is_silent(intent) -> bool:
+    """Is this turn one the person must never see as a bubble?
+
+    Reads the KIND, not a client-supplied flag. `intent.silent: true` on the wire would let anyone
+    able to mint an intent make a turn invisible in someone else's conversation, which is the same
+    capability `opening` is a NAME rather than a string to deny. The closed set is here."""
+    if not isinstance(intent, dict):
+        return False
+    return str(intent.get("kind") or "").strip().lower() in SILENT_KINDS
+
+
 def preset_for(intent) -> str | None:
     """The preset name this intent runs, or None when there is nothing safe to run."""
     if not isinstance(intent, dict):
