@@ -605,24 +605,24 @@ export function MinutesShell() {
     });
   }, [docKind, docPath, docSlug]);
 
-  /** THE VIEW SLOT (decision 28) — the navigator moves what is IN FRONT and mints no tab. Reading
-   *  a workspace by walking it is browsing, and browsing that collects leaves a tab strip nobody
-   *  asked for; a tab is now an explicit act.
+  /** THE VIEW SLOT (decision 28) — the navigator moves what is IN FRONT and mints no tab. Reading a
+   *  workspace by walking it is browsing, and browsing that collects leaves a strip nobody asked for.
    *
-   *  Until branch `panel-view-slot` puts `view: {workspace, path}` on the chat record, the
-   *  destination lands in the shell's own document state — the very state a focused tab drives —
-   *  so nothing here is panel-local and `artifacts[]` is untouched. */
+   *  THE LISTENER IS THE SEAM; `openPage` IS THE MECHANISM. It used to set the document state
+   *  directly, which was correct while the view slot did not exist yet and wrong the moment it did:
+   *  a navigator click skipped the back/forward stack and the strip's history, so it and a chip
+   *  click for the same file landed in two different places. Routing it through `openPage` — the
+   *  one route an entity chip, a wikilink and an `artifact` event already take — is what makes
+   *  "the panel has one view slot" true of every way of reaching it rather than of most of them. */
   useEffect(() => {
     const onView = (e: Event) => {
       const d = (e as CustomEvent<ViewSlot>).detail;
       if (!d?.path) return;
-      setPagesCollapsed(false); saveCollapsed("right", false);
-      setDocPath(d.path); setDocSlug(d.workspace); setDocKind("doc");
-      setListing(null); setDocNonce((n) => n + 1);
+      openPage({ path: d.path, slug: d.workspace, label: d.label });
     };
     window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
     return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
-  }, []);
+  }, [openPage]);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
    *  tab — going back to somewhere you have been should never fail because you tidied up. */

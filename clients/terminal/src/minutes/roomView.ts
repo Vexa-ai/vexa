@@ -268,11 +268,16 @@ export function resolveView(spec: string | null | undefined, phasePages: Page[])
 /** A file clicked in the panel's navigator moves the panel's SINGLE view; it never mints a tab.
  *  Tabs are minted only by an explicit open-in-tab (middle-click, the row's ⧉) or by a scaffold.
  *
- *  STUB. Branch `panel-view-slot` owns the real thing — `view: {workspace, path}` on the chat
- *  record, with back/forward over it. What lives here is only the SEAM, so the navigator can be
- *  written against the final call and nothing has to be rewritten when the slot lands: the click
- *  ANNOUNCES a destination, the shell puts it in front, and the navigator keeps no state about
- *  what is being read. On the rebase this block goes and `navigateView` resolves to theirs.
+ *  This is THE seam, not a placeholder for one. The click ANNOUNCES a destination and the shell
+ *  puts it in front through `openPage` — the single route every other navigation already takes, so
+ *  a navigator click, an entity chip, a wikilink and an agent's `artifact` event all land in the
+ *  same view slot, the same back/forward stack and the same strip history. The navigator itself
+ *  keeps no state about what is being read.
+ *
+ *  It was written as a stub against a branch that had not landed, and that branch implemented the
+ *  slot as an in-shell effect with no event seam — so for a while the placeholder WAS the only
+ *  definition, and its listener set the document state directly, bypassing the history and the
+ *  strip. A navigator click and a chip click went to two different places. One mechanism now.
  *
  *  Deliberately an event and not a callback prop: it is the same shape as OPEN_ENTITY_EVENT and
  *  ARTIFACT_EVENT, which is how every other "something wants to be in front" already reaches the

@@ -13,7 +13,8 @@ import {
   MAX_HITS, NAV_OPEN_KEY, buildWorkspaces, filterByName, loadNavOpen, parseQuery,
   referencedWorkspaceIds, saveNavOpen, treeFrom, type NavWorkspace,
 } from "../navigatorApi";
-import { VIEW_NAVIGATE_EVENT, navigateView, viewSlotFor } from "../roomView";
+import { VIEW_NAVIGATE_EVENT, navigateView, pageForDocRef, viewSlotFor } from "../roomView";
+import { artifactKey, touchHistory } from "../chats";
 import type { ActiveMount } from "../../surfaces/workspaceApi";
 
 const mount = (over: Partial<ActiveMount> & { slug: string }): ActiveMount => ({
@@ -244,5 +245,42 @@ describe("the view slot — a click navigates, it does not collect (decision 28)
     navigateView(undefined, "../../etc/passwd");
     navigateView(undefined, "");
     expect(seen).toEqual([]);
+  });
+});
+
+describe("one mechanism: a navigator click and a chip click land in the same history", () => {
+  // The navigator was written against a STUB seam while the view slot was still on a branch, and
+  // the branch shipped the slot as an in-shell effect with no event. For a while the placeholder
+  // was the only definition, and its listener set the document state directly — so a navigator
+  // click skipped the back/forward stack and the strip, and the same file reached by two routes
+  // landed in two different places. This pins that they are one route.
+  it("both routes produce the SAME view slot for the same file", () => {
+    // what the navigator announces
+    const fromNavigator = viewSlotFor("acme-kg", "kg/brief.md");
+    // what a chip/link click resolves to (pageForDocRef, given a resolver answer)
+    const fromChip = pageForDocRef({ path: "kg/brief.md", slug: "acme-kg" },
+      { path: "kg/brief.md", slug: "acme-kg" })!;
+    expect(fromNavigator.path).toBe(fromChip.path);
+    expect(fromNavigator.workspace).toBe(fromChip.slug);
+    // and therefore the same identity in the strip — which is what "same history" means: one entry,
+    // moved, rather than two chips for one document
+    expect(artifactKey({ path: fromNavigator.path, slug: fromNavigator.workspace }))
+      .toBe(artifactKey({ path: fromChip.path, slug: fromChip.slug }));
+  });
+
+  it("a navigator click DEDUPES against a chip click in the strip, it does not add a second entry", () => {
+    const slot = viewSlotFor("acme-kg", "kg/brief.md");
+    const asArtifact = { path: slot.path, slug: slot.workspace, label: slot.label };
+    // chip first, navigator second — one entry, moved to the right edge
+    const afterChip = touchHistory([], asArtifact, 1);
+    const afterNav = touchHistory(afterChip, asArtifact, 2);
+    expect(afterNav).toHaveLength(1);
+    expect(afterNav[0].at).toBe(2);
+  });
+
+  it("the desk (no workspace) is the same slot either way", () => {
+    const nav = viewSlotFor("", "README.md");
+    expect(nav.workspace).toBeUndefined();
+    expect(artifactKey({ path: nav.path, slug: nav.workspace })).toBe("|README.md");
   });
 });
