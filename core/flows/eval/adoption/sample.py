@@ -54,12 +54,18 @@ COHORT_SOURCES = {
         ("attendee_personal", "what it means for you", ["sim-dnaB-eng1@rehearsal.test"]),
     ],
     cohorts.PRODUCTION: [
-        ("prepare",           "Prepare:",              ["sim-prod-coord@rehearsal.test",
-                                                        "sim-dnaA-coord@rehearsal.test"]),
-        ("minutes",           "Minutes:",              ["sim-prod-coord@rehearsal.test"]),
-        ("attendee_shared",   "what it means for you", ["sim-prod-eng1@rehearsal.test"]),
-        ("attendee_personal", "what it means for you", ["sim-prod-eng2@rehearsal.test",
+        # r3 sources: the `shr` run carries the CURRENT mail text — line 1 kept, opt-out line
+        # dropped — on the production cohort's own dailies. The `prod` run is the r2 text and is
+        # kept as the fallback so a missing r3 mail degrades to the older wording rather than to
+        # an insider meeting, which is the confound this whole cohort split exists to remove.
+        ("prepare",           "Prepare:",              ["sim-shr-coord@rehearsal.test",
+                                                        "sim-prod-coord@rehearsal.test"]),
+        ("minutes",           "Minutes:",              ["sim-shr-coord@rehearsal.test",
+                                                        "sim-prod-coord@rehearsal.test"]),
+        ("attendee_shared",   "what it means for you", ["sim-shr-eng1@rehearsal.test",
                                                         "sim-prod-eng1@rehearsal.test"]),
+        ("attendee_personal", "what it means for you", ["sim-shr-eng2@rehearsal.test",
+                                                        "sim-prod-eng2@rehearsal.test"]),
     ],
 }
 
