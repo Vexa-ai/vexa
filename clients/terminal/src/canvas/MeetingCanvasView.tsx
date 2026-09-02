@@ -7,15 +7,24 @@ import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
 import { useMeetingNotes } from "./notes";
 import { deriveProcessingView } from "./processingView";
+import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
 import { MeetingScopeProvider, MeetingSourceProvider, useEntities, useMeeting, useSignals } from "./useMeeting";
 
 export const MEETING_CANVAS_CONTENT_INSET = 18;
 
 /** ONE render engine for both modes (P23: the terminal RENDERS, it does not re-derive). The toggle picks
  *  the SOURCE — raw segments vs the cleaned processed mirror — not a different renderer. */
-function RawTranscript() {
+function RawTranscript({ meetingId }: { meetingId?: string }) {
   const { transcript } = useMeeting();
-  return <LiveTranscriptEngine segments={transcript.segments} />;
+  // THE TERM CHIPS (PRD decision 35), as a layer over the same words. `useTermRenderer` returns
+  // undefined until a Highlight has published something, so an un-highlighted meeting renders
+  // exactly the plain text it did before — this costs nothing until somebody asks for it.
+  //
+  // It hangs on the RAW view deliberately: the raw transcript is the one that survives decision 34,
+  // and it is the same component for a live meeting and a finished one, so chips work on both
+  // without a second wiring.
+  const renderText = useTermRenderer(meetingId ?? "");
+  return <LiveTranscriptEngine segments={transcript.segments} renderText={renderText} />;
 }
 
 // Map a copilot signal's loose context/kind onto the badge taxonomy (decision / action-item /
@@ -134,11 +143,17 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
           {label}
         </button>
         <span style={{ fontSize: 11.5, color: "var(--t3)" }}>{processing ? "cleaned + copilot" : "raw transcript"}</span>
+        {/* the spacer keeps Highlight on the right of this row and collapses when the row is narrow */}
+        <div style={{ flex: "1 0 0", minWidth: 0 }} />
+        {/* HIGHLIGHT (decision 35.2). Deliberately NOT gated on `effectiveLive`: the founder asked
+            for "a button on transcripts", and a finished transcript is the one people actually read
+            back. It needs the ROW id, which is what `meetingId` is here and what the tool takes. */}
+        {meetingId && <HighlightButton meeting={meetingId} live={effectiveLive} />}
       </div>
       <MeetingHealthBanner />
       <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
-          {processing ? <ProcessedTranscript /> : <RawTranscript />}
+          {processing ? <ProcessedTranscript /> : <RawTranscript meetingId={meetingId} />}
         </div>
       </main>
     </div>

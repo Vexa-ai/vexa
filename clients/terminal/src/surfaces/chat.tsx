@@ -25,6 +25,7 @@ import { promptCarriesActiveContext } from "./surfaceSync";
 import type { ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -982,6 +983,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // A FILE THIS TURN WROTE. Re-emitted for the shell, which owns the chat record's tabs —
           // this surface never opens a document itself (F41).
           onArtifact: (a) => window.dispatchEvent(new CustomEvent(ARTIFACT_EVENT, { detail: a })),
+          // TERMS THIS TURN PUBLISHED for a meeting's transcript (PRD decision 35). Same seam and
+          // same reason as the artifact above: the chips are part of the chat's record and the
+          // transcript renders that record — this surface forwards and stores nothing.
+          onTerms: (t) => window.dispatchEvent(new CustomEvent(TERMS_EVENT, { detail: t })),
           onTool: (tool, args) => {
             breakBeforeNextDelta = true;      // F40 — the assistant message ended here
             const op = toolOp(tool, args);

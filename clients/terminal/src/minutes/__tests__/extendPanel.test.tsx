@@ -11,7 +11,7 @@ import { PagesPanel } from "../PagesPanel";
 import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
 import { VIEW_NAVIGATE_EVENT } from "../roomView";
 import { clearPending } from "../extend";
-import type { ChatIntent } from "../../surfaces/chatIntent";
+import type { PageIntent } from "../../surfaces/chatIntent";
 import type { Page } from "../types";
 
 const PATH = "kg/entities/company/helm.md";
@@ -20,7 +20,8 @@ const BODY = "# Helm Bank\n\nThe pilot ships in March, self-hosted.\n";
 // what is written on a chip would pick this up
 const pages: Page[] = [{ path: PATH, slug: "acme-kg", label: "Some Other Name" }];
 
-const asks: { prompt?: string; display?: string; intent?: ChatIntent }[] = [];
+// this suite is about PAGE intents (extend/create); narrowing here is the assertion, not a cast
+const asks: { prompt?: string; display?: string; intent?: PageIntent }[] = [];
 const views: unknown[] = [];
 const onAsk = (e: Event) => asks.push((e as CustomEvent).detail);
 const onView = (e: Event) => views.push((e as CustomEvent).detail);

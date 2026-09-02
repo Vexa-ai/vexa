@@ -934,6 +934,10 @@ VEXA_MCP_TOOLS = (
     # rather than left to the prefix because the write-back phase is only as reliable
     # as the tool being present without a search step (see the deferral note above).
     "entity_upsert",
+    # decision 35: the transcript's chips. Named for the same reason `entity_upsert` is — the
+    # `highlight` preset's whole turn is two calls to this one tool, and a turn that has to search
+    # for its only verb is a turn that answers with an apology.
+    "transcript_terms",
 )
 
 

@@ -119,9 +119,17 @@ function ContestedText({ text }: { text: string }): React.ReactElement | null {
   return <>{parts}</>;
 }
 
-/** Render a block's text. With `entities` → inline highlights; without → plain text (raw mode). */
-function BlockText({ text, entities, actions }: { text: string; entities?: EngineEntity[]; actions?: EngineActions }) {
+/** Render a block's text. With `renderText` → whatever that layer draws; with `entities` → inline
+ *  highlights; with neither → plain text (raw mode).
+ *
+ *  `renderText` is a SEAM, not a feature: the transcript-terms layer (PRD decision 35) draws chips
+ *  over the same words, and it is a separate component so that this engine stays one renderer and
+ *  the in-product inference pipeline can be removed from underneath it (decision 34) without the
+ *  chips going with it. It wins over `entities` because a caller that supplies both has said which
+ *  layer it wants on top, and two highlight layers over one string would fight for the same spans. */
+function BlockText({ text, entities, actions, renderText }: { text: string; entities?: EngineEntity[]; actions?: EngineActions; renderText?: (text: string) => React.ReactNode }) {
   if (/⟦[^⟧]+⟧\{[^}]+\}/.test(text)) return <ContestedText text={text} />;
+  if (renderText) return <>{renderText(text)}</>;
   if (!entities || !entities.length) return <>{text}</>;
   const spans = splitTextIntoSpans(text, entities);
   return (
@@ -141,12 +149,15 @@ export function LiveTranscriptEngine({
   entities,
   signals,
   actions,
+  renderText,
 }: {
   segments: EngineSegment[];
   emptyLabel?: string;
   entities?: EngineEntity[];
   signals?: EngineSignal[];
   actions?: EngineActions;
+  /** an outer layer's per-block renderer (decision 35's term chips). See `BlockText`. */
+  renderText?: (text: string) => React.ReactNode;
 }) {
   // Confirmed (completed !== false) = stable. Merge consecutive same-speaker confirmed segments into
   // flowing blocks; keyword tags accumulate per block. Pending (completed === false) = the live edge.
@@ -232,7 +243,7 @@ export function LiveTranscriptEngine({
           <div key={b.key}>
             {head(b.speaker, b.tsMs)}
             <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6 }}>
-              <BlockText text={b.text} entities={entities} actions={actions} />
+              <BlockText text={b.text} entities={entities} actions={actions} renderText={renderText} />
               {isLast && liveJoinsLast && (
                 <span style={{ color: "var(--t3)", fontStyle: "italic" }}> {live} …</span>
               )}

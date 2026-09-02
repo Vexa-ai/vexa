@@ -6,13 +6,14 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ASK_CHAT_EVENT } from "../../canvas/actions";
-import { normalizeIntent, SELECTION_MAX, type ChatIntent } from "../../surfaces/chatIntent";
+import { normalizeIntent, SELECTION_MAX, type ChatIntent, type PageIntent } from "../../surfaces/chatIntent";
 import {
   PREVIEW_MAX, clearPending, compactLabel, fallbackText, landPending, pendingLanding, postIntent, sourceRange,
 } from "../extend";
 import { VIEW_NAVIGATE_EVENT } from "../roomView";
 
-const asks: { prompt?: string; display?: string; intent?: ChatIntent }[] = [];
+// these suites are about PAGE intents (extend/create); narrowing here is the assertion, not a cast
+const asks: { prompt?: string; display?: string; intent?: PageIntent }[] = [];
 const views: unknown[] = [];
 const onAsk = (e: Event) => asks.push((e as CustomEvent).detail);
 const onView = (e: Event) => views.push((e as CustomEvent).detail);

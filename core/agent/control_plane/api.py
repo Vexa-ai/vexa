@@ -80,6 +80,7 @@ from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import friction as friction_store_mod
 from shared import friction as friction_mod
+from control_plane import chat_intents
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
@@ -384,6 +385,13 @@ class ChatBody(BaseModel):
     # store. A scaffold that is not this subject's is ignored (never an error) — a stale or
     # forwarded id must not be able to widen anybody's mounts, and must not break their turn either.
     scaffold_id: Optional[str] = None
+    # THE INTENT (PRD decision 32/35). A button pressed on a page — Extend, Create this page,
+    # Explore a term in a transcript, Highlight the transcript — is an ACT on a named thing, not a
+    # sentence somebody typed. The terminal has sent this since decision 32 landed client-side; with
+    # `extra="forbid"` above and no field here, every one of those presses 422'd. It is a plain dict
+    # rather than a model on purpose: the CLOSED vocabulary is `chat_intents.INTENT_PRESETS`, an
+    # unknown kind is ignored, and a client one release ahead must not be refused at the door.
+    intent: Optional[dict] = None
 
 
 class ScaffoldMintBody(BaseModel):
@@ -1616,6 +1624,24 @@ def create_app(
             # fetching anything, and the whole block is machinery-marked so the human never
             # sees it as their own message (ledger F7).
             body = body.model_copy(update={"prompt": scaffolds_mod.turn_prompt(scaffold_view)})
+        # THE INTENT'S PRESET (decision 32.2 / 35.3). Same rule as the scaffold above and for the
+        # same reason: the words are admin-owned content in `_global/asks/`, the wire carries a kind
+        # and its arguments, and the server is the only thing that puts the two together.
+        #
+        # DEGRADES, NEVER REFUSES. `preset_for` returns None for a kind this deployment does not
+        # know and `read_preset` raises when the file is not there; both leave `body.prompt` — the
+        # client's plain fallback sentence — exactly as it arrived. A preset library that is one
+        # release behind the terminal costs the turn its phrasing, not its meaning.
+        elif body.intent:
+            _preset = chat_intents.preset_for(body.intent)
+            if _preset:
+                try:
+                    _fm, _ask = scaffolds_mod.read_preset(_global_root(), _preset)
+                    body = body.model_copy(update={
+                        "prompt": scaffolds_mod.substitute(_ask, chat_intents.tokens_for(body.intent))})
+                except scaffolds_mod.ScaffoldError as e:
+                    logger.warning("intent %s has no preset here (%s) — the turn runs on the "
+                                   "client's fallback sentence", _preset, e)
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None
