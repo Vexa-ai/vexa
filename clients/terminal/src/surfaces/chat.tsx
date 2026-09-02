@@ -20,7 +20,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, presetOwnsOpening, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, presetOwnsOpening, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -899,7 +899,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             if (op.wrote) invalidateDocLinkCaches();
             patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, op] }));
           },
-          onCommit: (sha) => { invalidateDocLinkCaches(); patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })); },
+          onCommit: (sha) => {
+            invalidateDocLinkCaches();
+            // The panel may be showing a document this turn just CREATED. A chat declares its
+            // tabs up front (PRD decision 18), so the setup conversation opens five pages
+            // before four of them exist — and without this they stay "no page here yet" until
+            // something else happens to remount them. A commit is the durable moment the files
+            // became real, so it is the one that tells the panel to look again.
+            window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT));
+            patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha }));
+          },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),

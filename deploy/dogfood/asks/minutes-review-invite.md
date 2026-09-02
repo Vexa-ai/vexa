@@ -1,6 +1,8 @@
 ---
 label: minutes
 mounts: _global, personal
+tabs: meeting:note, meeting:transcript
+focus: meeting:note
 ---
 [minutes-review] Someone clicked through from the post-meeting mail about {{meeting}}.
 Their state is `{{state}}`.

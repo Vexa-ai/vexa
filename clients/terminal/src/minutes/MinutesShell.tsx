@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
 import {
@@ -32,7 +32,7 @@ import {
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { artifactsFromTokens, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -270,23 +270,34 @@ export function MinutesShell() {
    *  (id `meet-<meetingId>`, so it lands on the agent session that meeting has always used).
    *  Returns the id of the chat that was actually opened: a caller with something to say to it
    *  (a proposal chip's kick) must address the chat that LANDED, never a reconstructed id. */
-  const openRow = useCallback(async (r: Row, opts: { touched?: boolean } = {}) => {
+  const openRow = useCallback(async (r: Row, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string } = {}) => {
     const existing = r.chatId ? chatsRef.current.find((c) => c.id === r.chatId) : undefined;
     const c = existing ?? chatForRow(chatsRef.current, r, meetings);
-    const want = opts.touched ? { ...c, touched: true } : c;
-    if (!existing || opts.touched) persist((prev) => upsertChat(prev, want));
+    let want = opts.touched ? { ...c, touched: true } : c;
+    // THE LINK SETS THE RECORD (PRD decision 18). A preset that declares `tabs:` is saying what its
+    // conversation is ABOUT, so those artifacts go on the chat — and the panel then renders from
+    // the record like it does for every other chat, rather than from a second, parallel notion of
+    // "what the link wanted". Only on a chat that has none yet: a reader who has since opened or
+    // closed tabs owns them, and a re-click must not tidy their desk out from under them.
+    if (opts.artifacts?.length && !want.artifacts.length) {
+      want = { ...want, artifacts: opts.artifacts, focus: opts.focus ?? want.focus };
+    }
+    if (!existing || opts.touched || opts.artifacts?.length) persist((prev) => upsertChat(prev, want));
     await openChat(want);
     return want.id;
   }, [meetings, openChat, persist]);
 
-  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean } = {}) => {
+  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string } = {}) => {
     const id = String(m.id);
     const row = railRows(chatsRef.current, [m]).find((r) => r.meetingId === id);
     return row ? await openRow(row, opts) : null;
   }, [openRow]);
 
-  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string } = {}) => {
-    const c = newChat(label, workspaces, { id: opts.id, touched: true, meeting: opts.meeting });
+  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string; artifacts?: Artifact[]; focus?: string } = {}) => {
+    const base = newChat(label, workspaces, { id: opts.id, touched: true, meeting: opts.meeting });
+    // A preset's declared tabs ARE the chat's opening artifacts — see openRow. A chat born from a
+    // link is the one case where the record is written before a human has touched the panel.
+    const c = opts.artifacts?.length ? { ...base, artifacts: opts.artifacts, focus: opts.focus } : base;
     persist((prev) => upsertChat(prev, c));
     void openChat(c);
     if (opts.kick) fireKick(c.id, opts.kick, opts.say);
@@ -507,6 +518,16 @@ export function MinutesShell() {
     return () => { dead = true; };
   }, [docPath, docSlug, docKind, sel.chatId, docNonce, mock]);
 
+  // A turn wrote to the workspace: re-read whatever is in front. This is what makes a tab a chat
+  // declared before its file existed fill IN rather than sit on "no page here yet" — see
+  // WORKSPACE_COMMIT_EVENT. Cheap: one read of the open document, only when a commit actually
+  // landed, and the doc-link caches were already dropped by the same handler.
+  useEffect(() => {
+    const onCommit = () => setDocNonce((n) => n + 1);
+    window.addEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
+    return () => window.removeEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
+  }, []);
+
   // The live phase means words ARRIVING. Re-read the live transcript on a timer so "flowing" is
   // something you watch rather than something the label claims. Mock-only: the real live feed will
   // be a stream, not a poll.
@@ -619,8 +640,12 @@ export function MinutesShell() {
         window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT));
         return;
       }
-      // optional frontmatter: `mounts:` (comma-separated) and `label:`
+      // Optional frontmatter: `mounts:` and `label:`, plus `tabs:`/`focus:` — the preset's own
+      // statement of WHICH DOCUMENTS its conversation is about, and which one is in front. PRD
+      // decision 18: the link sets the chat's record and the panel renders only from the record, so
+      // this is where a link stops being just an opening sentence and becomes a room.
       let text = body, mounts: string[] = [], label = name.replace(/[-_]/g, " ");
+      let tabTokens: string[] = [], focusToken = "";
       const fm = /^---\n([\s\S]*?)\n---\n?/.exec(body);
       if (fm) {
         text = body.slice(fm[0].length);
@@ -628,6 +653,10 @@ export function MinutesShell() {
         if (mm) mounts = mm[1].split(",").map((x) => x.trim()).filter(Boolean);
         const l = /^label:\s*(.+)$/m.exec(fm[1]);
         if (l) label = l[1].trim();
+        const tt = /^tabs:\s*(.+)$/m.exec(fm[1]);
+        if (tt) tabTokens = tt[1].split(",").map((x) => x.trim()).filter(Boolean);
+        const ff = /^focus:\s*(.+)$/m.exec(fm[1]);
+        if (ff) focusToken = ff[1].trim();
       }
       if (intent.ws) mounts = [intent.ws, ...mounts.filter((x) => x !== intent.ws)];
       if (!mounts.length) mounts = ["_global", "personal"];
@@ -672,10 +701,25 @@ export function MinutesShell() {
       // mounted — so an attendee got the meeting room with its cached phase greeting and never the
       // preset at all. When the ref resolves, the preset speaks INTO the meeting's chat and spends
       // the meeting ref here, so nothing re-opens it underneath.
+      // THE LINK'S ROOM. Resolve the preset's `tabs:`/`focus:` against the meeting it names, so
+      // `meeting:note` becomes the Brief before the meeting and the Minutes after it, and
+      // `_global/README.md` becomes a real tab on the org tier. A meeting chat with NO declared
+      // tabs keeps the phase layout (openChat's roomPages) — the rule, not the link, decides then.
+      const phase = row ? meetingPhase(row) : null;
+      const tabCtx = {
+        native: (row as { native_id?: string } | undefined)?.native_id ?? null,
+        meetingId: row ? String(row.id) : null,
+        phase,
+        mounts,
+      };
+      const artifacts = artifactsFromTokens(tabTokens, tabCtx);
+      const focusArt = focusToken ? artifactsFromTokens([focusToken], tabCtx)[0] : undefined;
+      const focusKey = focusArt ? artifactKey(focusArt) : undefined;
+
       if (row) {
         try { localStorage.removeItem("vexa.openMeetingRef"); } catch { /* ignore */ }
         meetingRefSpent.current = true;
-        const chatId = await openMeeting(row, { touched: true });
+        const chatId = await openMeeting(row, { touched: true, artifacts, focus: focusKey });
         if (chatId) { fireKick(chatId, prompt); return; }
       }
       // ONE MEETING IS ONE CHAT, even when its row has not arrived yet. This fallback used to mint
@@ -691,6 +735,7 @@ export function MinutesShell() {
       addChat(rowRef ? "" : label, mounts, {
         id: rowRef ? meetingChatId(rowRef) : "askchat-" + Date.now().toString(36),
         meeting: rowRef || undefined,
+        artifacts, focus: focusKey,
         kick: prompt,
       });
     })();

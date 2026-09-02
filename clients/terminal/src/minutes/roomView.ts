@@ -18,6 +18,7 @@
 import type { MeetingPhase } from "../surfaces/meetingModel";
 import { entitySlug, normalizeDocPath } from "../ui-kit/docLinks";
 import type { Page } from "./types";
+import { artifactKey, type Artifact } from "./chats";
 
 /** The tab a clicked LINK lands on — the whole of what the shell's open-entity listener decides.
  *
@@ -51,6 +52,74 @@ export function pageForDocRef(
 export function pageForMeetingRef(ref: string): Page {
   const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
   return { path: `kg/entities/meeting/${native}.md`, label: native };
+}
+
+/** A preset's `tabs:` / `focus:` token → the ARTIFACT it names. PRD decision 18: the link sets the
+ *  chat's record, and the right panel renders only from the record — so a preset has to be able to
+ *  SAY which documents its conversation is about, in the file's own vocabulary rather than in the
+ *  panel's.
+ *
+ *  Four shapes, in the order they are tried:
+ *
+ *    `meeting:transcript`  the meeting canvas, bound to the ROW id (live segments, recording)
+ *    `meeting:note`        the meeting's own document — "Brief" before it happened, "Minutes"
+ *                          after, which is the same file under the name the reader needs today
+ *    `<workspace>/<path>`  workspace-qualified, e.g. `_global/PRINCIPLES.md`. The first segment is
+ *                          a workspace ONLY when it is one this chat actually mounts — otherwise
+ *                          `kg/entities/meeting/x.md` would resolve to a workspace called `kg`.
+ *    `<path>`              the reader's own desk.
+ *
+ *  A meeting token with no meeting in context resolves to NOTHING rather than to a broken tab: a
+ *  preset written for a meeting, clicked without one, should open one document fewer, not a page
+ *  that can never load. */
+export function artifactFromToken(
+  token: string,
+  ctx: { native?: string | null; meetingId?: string | null; phase?: MeetingPhase | null; mounts?: string[] },
+): Artifact | null {
+  const t = token.trim();
+  if (!t || t.split("/").includes("..")) return null;
+  const named = (p: string) => (p.split("/").pop() ?? p).replace(/\.md$/i, "");
+
+  if (/^meeting:transcript$/i.test(t)) {
+    return ctx.meetingId ? { kind: "meeting", path: String(ctx.meetingId), label: "Transcript" } : null;
+  }
+  if (/^meeting:note$/i.test(t)) {
+    if (!ctx.native) return null;
+    return { path: `kg/entities/meeting/${ctx.native}.md`, label: ctx.phase === "post" ? "Minutes" : "Brief" };
+  }
+  const slash = t.indexOf("/");
+  if (slash > 0) {
+    const head = t.slice(0, slash);
+    const rest = t.slice(slash + 1);
+    // `_global` and `personal` are always workspaces; anything else must be one this chat mounts,
+    // so a path that merely LOOKS qualified (`kg/entities/…`) stays a path.
+    const isWs = head === "_global" || head === "personal" || (ctx.mounts ?? []).includes(head);
+    if (isWs && rest) {
+      return head === "personal"
+        ? { path: rest, label: named(rest) }
+        : { path: rest, slug: head, label: named(rest) };
+    }
+  }
+  return { path: t, label: named(t) };
+}
+
+/** A preset's whole `tabs:` list → the chat's opening `artifacts[]`, deduped by identity and with
+ *  unresolvable tokens dropped. Order is the preset's: it is the author's reading order. */
+export function artifactsFromTokens(
+  tokens: string[],
+  ctx: { native?: string | null; meetingId?: string | null; phase?: MeetingPhase | null; mounts?: string[] },
+): Artifact[] {
+  const out: Artifact[] = [];
+  const seen = new Set<string>();
+  for (const raw of tokens) {
+    const a = artifactFromToken(raw, ctx);
+    if (!a) continue;
+    const k = artifactKey(a);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(a);
+  }
+  return out;
 }
 
 /** Where App.tsx stashes a `?view=` spec — the URL is cleaned on landing, so the value travels here.

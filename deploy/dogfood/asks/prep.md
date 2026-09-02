@@ -1,6 +1,8 @@
 ---
 label: prepare
 mounts: _global, personal
+tabs: meeting:note
+focus: meeting:note
 ---
 [prep] They clicked through from a prepare email about **{{title}}**, {{when}}. Its id in their
 meeting list is {{meeting}}.

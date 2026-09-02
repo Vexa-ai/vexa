@@ -99,6 +99,15 @@ export const MACHINERY_NOTE = "\n\n" + MACHINERY_MARK + " This opening was compo
 // Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
 // instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
 export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
+
+/** A chat turn COMMITTED to the workspace — the moment files it wrote became real.
+ *
+ *  A chat declares its tabs before its documents exist (PRD decision 18: the link sets the record,
+ *  the panel renders the record), so the company-setup conversation opens five pages and then
+ *  writes four of them over the next few turns. Without this the panel keeps showing "no page here
+ *  yet" for a file that has been on disk for a minute, and the reader concludes the agent did
+ *  nothing. */
+export const WORKSPACE_COMMIT_EVENT = "vexa:terminal:workspace-commit";
 // MINUTES cold-start: the reader arrived through a meeting door — greet from the meeting, not
 // from a blank slate, and ask the one thing that shapes the workspace: their role.
 /** A `?ask=` preset OWNS the opening of the chat it lands in.

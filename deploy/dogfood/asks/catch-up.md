@@ -1,6 +1,8 @@
 ---
 label: catch up
 mounts: _global, personal
+tabs: personal/README.md
+focus: personal/README.md
 ---
 [catch-up] They have been away and want to know what they missed, as of {{today}}.
 
