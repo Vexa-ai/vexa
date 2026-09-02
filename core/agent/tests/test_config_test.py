@@ -6,7 +6,19 @@ token, unreachable backend, and the happy paths.
 """
 import json
 
+import pytest
+
 from control_plane import config_test as ct
+
+
+@pytest.fixture(autouse=True)
+def _allow_the_fixture_gateways(monkeypatch):
+    """The endpoint the Test button probes now passes the SAME operator allow-list the dispatch
+    applies (F84) — a button that greens a host the turn refuses is the "certifies a config the
+    turn will not use" defect. These fixtures' hosts are allow-listed explicitly, which is also how
+    an operator enables their own gateway."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW",
+                       "gw.example,gw,transcription.vexa.ai,api.openai.com,t.vexa.ai,t,x")
 
 
 # ── subscription file ─────────────────────────────────────────────────────────────────────────

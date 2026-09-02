@@ -188,6 +188,15 @@
       ]
     },
     {
+      "key": "VEXA_MODEL_BASE_URL_ALLOW",
+      "class": "defaulted",
+      "default": "(empty \u2014 the deployment\u2019s own gateway host(s) plus api.anthropic.com, openrouter.ai and the CCC box)",
+      "description": "operator allow-list for the base_url a SUBJECT may pin under Settings \u2192 Models (comma-separated host globs). A subject-chosen endpoint is an outbound destination picked by a non-operator and the worker carries a model credential to it, so anything unmatched is refused at dispatch with a friction record. Loopback/link-local/private addresses and single-label docker service names (redis, admin-api) need an EXACT literal entry \u2014 a wildcard never reaches the deployment\u2019s own network",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_CHAT_IDLE_TIMEOUT_SEC",
       "class": "defaulted",
       "default": "900",

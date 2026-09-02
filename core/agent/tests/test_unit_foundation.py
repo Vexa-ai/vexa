@@ -370,11 +370,12 @@ def test_dispatcher_model_config_stamps_reasoning_effort():
     assert "VEXA_AGENT_EFFORT" not in env2
 
 
-def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape():
+def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape(monkeypatch):
     """mode:custom points the agent harness (ANTHROPIC_*) at the supplied gateway. Dispatch-stamped
     keys WIN downstream (docker_backend copies its own env only for keys absent here). It used to
     stamp a SECOND pair (VEXA_LLM_PROVIDER/_BASE_URL/_API_KEY) for the completion adapters — one
     endpoint, configured twice, in two dialects; PRD decision 34 removed the second consumer."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # F84: the operator gate
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
                            "api_key": "sk-user", "model": "qwen3"})
@@ -402,9 +403,10 @@ def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(
     assert "ANTHROPIC_BASE_URL" not in env
 
 
-def test_dispatcher_model_config_allowlist_gates_models_not_endpoint():
+def test_dispatcher_model_config_allowlist_gates_models_not_endpoint(monkeypatch):
     """A non-allowlisted model is DROPPED (deployment default applies) — never an error; the
     custom endpoint itself is not the allowlist's business."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # the ENDPOINT gate is separate
     settings = load_settings(agent_model="deployment-default", model_allowlist="sonnet,haiku")
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",

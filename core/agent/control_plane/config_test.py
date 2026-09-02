@@ -23,6 +23,7 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
+from control_plane import model_endpoint
 from shared.host_claude import LEGACY_CREDENTIALS_MOUNT, credentials_path
 
 # The compose-mounted subscription credential (same mounts the runtime probes; the docker backend
@@ -125,6 +126,12 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
     base = base_url.rstrip("/")
     if not base:
         return _result(False, "Custom mode but no Base URL set.")
+    # THE SAME GATE THE DISPATCH APPLIES (F84 · F93). A Test button that greens an endpoint the
+    # dispatch will refuse is worse than no button: it tells the operator the configuration works
+    # and the turn then silently runs on the deployment's own model. One predicate, both surfaces.
+    refusal = model_endpoint.refuse_reason(base)
+    if refusal:
+        return _result(False, f"Refused before any request was made: {refusal}")
     # A base URL may or may not already carry the /v1 suffix — both spellings are common and the
     # completion adapter accepts either (it posts {base}/chat/completions). Appending a second /v1
     # produced /v1/v1/... against a real vLLM: a 404 that reads as "endpoint broken" when the
@@ -171,9 +178,21 @@ def run_models_test(config: dict, env: Optional[dict] = None,
     (Settings user > global config already collapsed by admin-api; env is the floor)."""
     env = env if env is not None else dict(os.environ)
     mode = (config.get("mode") or "").strip()
-    base_url = (config.get("base_url") or "").strip() or env.get("ANTHROPIC_BASE_URL", "")
-    api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
-        or env.get("ANTHROPIC_API_KEY", "")
+    # `custom_base_url` is the dispatch overlay's OWN inertness rule, imported rather than restated
+    # (F93): `mode=custom` with no base_url is inert, and such a turn really does run on the
+    # deployment's endpoint — so that is what this button must probe.
+    cfg_url = model_endpoint.custom_base_url(config)
+    base_url = cfg_url or env.get("ANTHROPIC_BASE_URL", "")
+    if cfg_url:
+        # A CUSTOM ENDPOINT CARRIES THE SUBJECT'S OWN KEY AND NOTHING ELSE (F84). The dispatch now
+        # stamps the empty string rather than letting the deployment's brokered token be backfilled
+        # onto a foreign host — so falling back to that token here would green an endpoint the turn
+        # reaches unauthenticated, which is precisely the "certifies a config the turn will not
+        # use" failure.
+        api_key = (config.get("api_key") or "").strip()
+    else:
+        api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
+            or env.get("ANTHROPIC_API_KEY", "")
     if mode == "custom" or (not mode and base_url and api_key):
         out = test_custom_endpoint(
             base_url, api_key, (config.get("model") or "").strip(), post=post,
