@@ -897,6 +897,115 @@ def build_router(
             int(payload.get("expires_in_sec", 86400) or 86400),
         )
 
+    # --- POST /meetings/{meeting_id}/transcript-import → complete a meeting FROM A TRANSCRIPT.
+    #
+    # The product feature is "import a transcript": a meeting that already happened somewhere we did
+    # not record — a Zoom export, a TSC recording, minutes from a call nobody sent a bot to — becomes
+    # a first-class Vexa meeting. Everything downstream then treats it as one: the canvas, the by-id
+    # transcript read, search, the post-meeting flows.
+    #
+    # It is ALSO the honest capture double. The rehearsal rig used to build this row by hand —
+    # `docker exec … psql` INSERTing `transcriptions` and UPDATEing `meetings` with the DB password
+    # it read out of another container — because meeting-api owned the two things the double needed
+    # and exposed neither: a way to put words on a row, and a way to say WHEN the meeting was (a bot
+    # run stamps start/end from `now()`, so a call that happened last Tuesday was inexpressible).
+    # That shell-out is the audit's V4/N5 — a second writer on a table this service owns, building
+    # SQL by string-interpolating speaker names, and it produced rows the product never makes
+    # (`scheduled`, NULL start/end) which read as "UPCOMING" over a finished meeting. One route
+    # closes the feature gap and the ownership hole at once, which is why `source` is declared
+    # rather than inferred: a reader can always tell a double from a real import.
+    #
+    # ROW ID, not the (platform, native) pair — the same lesson the by-id share mint above records:
+    # the pair is not an identity, and the rows most likely to be imported into are exactly the ones
+    # no pair addresses. Three segments against the pair routes' four, so neither can shadow the
+    # other; registered before them anyway, matching the `by-id` precedent.
+    #
+    # Owner-scoped, and refused (409) while a bot is in flight on the row — the FSM is never fought.
+    @router.post("/meetings/{meeting_id}/transcript-import")
+    async def import_transcript(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        from .transcript_import import (SOURCES, normalize_segments, occurrence_window,
+                                        session_uid_for)
+
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+
+        source = str(payload.get("source") or "import").strip()
+        if source not in SOURCES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'source' must be one of {sorted(SOURCES)} — say where the transcript came from",
+            )
+        session_uid = session_uid_for(source, meeting_id)
+        segments, reason = normalize_segments(payload.get("segments"), session_uid)
+        if reason:
+            raise HTTPException(status_code=422, detail=reason)
+        started_at, ended_at, reason = occurrence_window(
+            segments, payload.get("started_at"), payload.get("ended_at"),
+        )
+        if reason:
+            raise HTTPException(status_code=422, detail=reason)
+
+        result = await store.complete_transcript_import(
+            user_id, meeting_id, segments=segments, started_at=started_at, ended_at=ended_at,
+            source=source, session_uid=session_uid,
+        )
+        if result is None:
+            log_event(
+                "transcript_import_failed", audience="system", level="warning",
+                span="meetings.transcript.import", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"source": source, "reason": "no such meeting for this owner"},
+            )
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        if result.get("error") == "conflict":
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Meeting {meeting_id} is {result.get('status')} — a bot is in flight on it. "
+                        "A live meeting is completed by its bot, not by an import."),
+            )
+
+        if result.get("imported"):
+            # What a real completion emits, emitted here for the same reason: the terminal learns a
+            # meeting's status from the `u:{user}:meetings` frame the gateway `/ws` forwards
+            # (surfaces/gatewayWS.ts), and its live view of a meeting ends on the `session_end`
+            # marker the collector appends to `tc:meeting:{id}` (ingest._transcript_stream). Both are
+            # best-effort, like every other publish on this path — the durable row is the truth.
+            #
+            # What is deliberately NOT emitted: the segments themselves, into the live stream. They
+            # went through it during a real call because the call was happening. Replaying an
+            # already-finished transcript as live frames would be a fake liveness, and the canvas
+            # reads a completed meeting from `GET /transcripts/by-id/{id}` anyway.
+            await _publish_user_meeting_status(
+                redis, user_id=user_id, meeting_id=result.get("meeting_id"),
+                native_id=result.get("native_meeting_id"), status="completed",
+                when=result.get("end_time"), log_event=log_event,
+            )
+            if redis is not None:
+                try:
+                    await redis.xadd(f"tc:meeting:{result['meeting_id']}",
+                                     {"type": "session_end", "uid": session_uid})
+                except Exception as e:  # noqa: BLE001 — best-effort marker; never fail the import
+                    log_event("transcript_import_marker_failed", audience="system", level="warning",
+                              span="meetings.transcript.import", user_id=user_id,
+                              meeting_id=str(meeting_id), fields={"error": str(e)})
+
+        log_event(
+            "transcript_imported", audience="user", span="meetings.transcript.import",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"source": source, "segments": result.get("segments_imported"),
+                    "imported": bool(result.get("imported")),
+                    "start_time": result.get("start_time"), "end_time": result.get("end_time")},
+        )
+        return JSONResponse(content=result)
+
     # --- POST /meetings/{meeting_id}/share → the SAME mint, addressed by the ROW's primary key.
     #
     # Why it exists: the (platform, native) pair is not an identity. A meeting planned from an invite
