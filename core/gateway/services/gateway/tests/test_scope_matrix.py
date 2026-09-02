@@ -53,6 +53,7 @@ CASES = [
      "/meetings/{platform}/{native_meeting_id}/intent"),
     ("POST", "/meetings/google_meet/abc-defg-hij/annotate",
      "/meetings/{platform}/{native_meeting_id}/annotate"),
+    ("POST", "/meetings/42/share", "/meetings/{meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/share",
      "/meetings/{platform}/{native_meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace",
@@ -62,6 +63,7 @@ CASES = [
 
     ("GET", "/transcripts/by-id/42", "/transcripts/by-id/{meeting_id}"),
     ("GET", "/transcripts/google_meet/abc-defg-hij", "/transcripts/{platform}/{native_meeting_id}"),
+    ("POST", "/transcripts/by-id/42/share", "/transcripts/by-id/{meeting_id}/share"),
     ("POST", "/transcripts/google_meet/abc-defg-hij/share",
      "/transcripts/{platform}/{native_meeting_id}/share"),
     ("POST", "/transcripts/share/accept", "/transcripts/share/accept"),
