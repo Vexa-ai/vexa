@@ -27,6 +27,9 @@ let ws: WebSocket | null = null;
 let starting = false;
 let retry = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long a socket must stay open before it counts as working and clears the backoff. */
+const STABLE_MS = 10000;
+let stableTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<Listener>();
 const connListeners = new Set<ConnListener>();
 let connected = false;
@@ -66,7 +69,26 @@ function connect() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const sock = new WebSocket(`${proto}//${location.host}/ws`);
     ws = sock;
-    sock.onopen = () => { retry = 0; setConnected(true); };
+    sock.onopen = () => {
+      setConnected(true);
+      // BACKOFF RESETS ON A CONNECTION THAT PROVED ITSELF, NEVER ON `onopen`.
+      //
+      // Resetting `retry` here made the backoff a no-op against the one failure mode it exists for:
+      // a socket that OPENS and then closes immediately. open → retry=0 → close → reconnect in
+      // 2^0 = 1s → open → retry=0 → … forever, at one reconnect per second, with no growth.
+      //
+      // Measured on the founder's live session 2026-09-02: the gateway was accepting and closing
+      // /ws about once a second, and because `liveMeetings` re-seeds with a `GET /api/meetings`
+      // snapshot on every (re)connect, one idle browser made 519 calls in three minutes and the
+      // store notified its subscribers on every connectedness flip — which is what made the rail
+      // flicker meetings in and out under him.
+      //
+      // A connection that survives STABLE_MS is a working connection, and only that clears the
+      // backoff. A flapping one now walks 1s → 2s → 4s … → 30s as intended, so a server-side close
+      // loop degrades to a slow retry instead of a client-side storm.
+      if (stableTimer) clearTimeout(stableTimer);
+      stableTimer = setTimeout(() => { retry = 0; stableTimer = null; }, STABLE_MS);
+    };
     sock.onmessage = (m) => {
       let data: unknown;
       try { data = JSON.parse(typeof m.data === "string" ? m.data : ""); } catch { return; }
@@ -75,6 +97,8 @@ function connect() {
     };
     sock.onclose = () => {
       if (ws === sock) ws = null;
+      // the connection did not last: whatever progress it made toward "stable" does not count
+      if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
       setConnected(false);
       scheduleReconnect();
     };
@@ -106,6 +130,7 @@ export function onMeetingStatus(fn: Listener): () => void {
     listeners.delete(fn);
     if (listeners.size === 0) {
       clearReconnect();                          // kill any pending reconnect on the last unsubscribe
+      if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
       retry = 0;
       if (ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
     }

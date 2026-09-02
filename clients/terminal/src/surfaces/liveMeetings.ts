@@ -201,7 +201,31 @@ function toMock(d: MeetingRowDTO): MeetingMock {
 
 /** ONE snapshot fetch of the real meetings list (gateway → meeting-api). Seeds / re-seeds the store; the
  *  live deltas thereafter arrive over the WebSocket. Called once on mount and on each (re)connect. */
-async function snapshot() {
+/** Coalesce snapshot bursts. `snapshot()` is fired on mount, on every WS (re)connect, and by every
+ *  status frame naming a row the store does not hold — so anything that repeats upstream becomes a
+ *  request storm here. It did: a gateway close-loop on 2026-09-02 turned one idle browser into 519
+ *  `GET /api/meetings` calls in three minutes, and a store notification on every connectedness
+ *  flip, which flickered the rail under the founder while he was using it.
+ *
+ *  The backoff bug that drove that loop is fixed in `gatewayWS.ts`, but this is the layer that
+ *  AMPLIFIED it, and it should not amplify the next one either. One in-flight snapshot at a time;
+ *  a call arriving while one is running sets a trailing flag and re-runs once when it lands, so a
+ *  burst of N collapses to at most 2 requests and never loses the final state. */
+let snapInFlight = false;
+let snapPending = false;
+
+async function snapshot(): Promise<void> {
+  if (snapInFlight) { snapPending = true; return; }
+  snapInFlight = true;
+  try {
+    await snapshotOnce();
+  } finally {
+    snapInFlight = false;
+    if (snapPending) { snapPending = false; void snapshot(); }
+  }
+}
+
+async function snapshotOnce() {
   const revision = ++storeRevision;
   try {
     const r = await fetch("/api/meetings", { cache: "no-store" });
