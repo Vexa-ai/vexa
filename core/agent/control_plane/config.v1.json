@@ -379,8 +379,17 @@
     {
       "key": "VEXA_ADMIN_API_TOKEN",
       "class": "defaulted",
-      "default": "(unset — the post-meeting room resolves no participant and mounts ZERO desks)",
-      "description": "admin-api's ADMIN token, used for ONE question: resolve a meeting participant's email address to a subject for the post-meeting room (control_plane.meeting_room). The narrow door does not exist yet — agent-api's internal-secret tier on admin-api exposes no by-email lookup, and GET /admin/users/email/{email} sits behind this much broader credential (it can also create and patch users). Empty by DEFAULT and the room degrades to ZERO desks without it, never to matching a person by name. Delete this key once admin-api serves GET /internal/users/by-email/{email} returning only {id}: agent-api already prefers that route",
+      "default": "(unset \u2014 the post-meeting room resolves no participant and mounts ZERO desks)",
+      "description": "admin-api's ADMIN token, used for ONE question: resolve a meeting participant's email address to a subject for the post-meeting room (control_plane.meeting_room). The narrow door does not exist yet \u2014 agent-api's internal-secret tier on admin-api exposes no by-email lookup, and GET /admin/users/email/{email} sits behind this much broader credential (it can also create and patch users). Empty by DEFAULT and the room degrades to ZERO desks without it, never to matching a person by name. Delete this key once admin-api serves GET /internal/users/by-email/{email} returning only {id}: agent-api already prefers that route",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MEETINGS_DB_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 a first-visit scaffold reports no invited meetings rather than guessing)",
+      "description": "Read-only DSN for the meetings database, used for ONE question: which meetings is this email address invited to, read off data.attendees. It is the only record that knows somebody was invited BEFORE they ever signed in, which is exactly the case a first visit is \u2014 an owner-keyed lookup answers 'none' for the person this exists to serve. Unset, invited_meetings is absent from the scaffold and the opening says nothing about meetings rather than asserting there are none; emptiness and ignorance are different sentences to somebody reading their first screen. Delete this key once meeting-api serves an invited-by-address route, so agent-api stops holding a second database credential.",
       "targets": [
         "compose"
       ]
@@ -413,8 +422,8 @@
     {
       "key": "VEXA_UI_URL",
       "class": "defaulted",
-      "default": "(unset — POST /internal/scaffolds refuses to mint)",
-      "description": "where a person's own terminal lives — the origin every scaffold link is built on (PRD §5.5). Deliberately the SAME variable name the flows lane already reads (core/flows/src/flows_steps/common.py UI_URL): one deployment fact, one name, because two spellings of a host is how a link ends up naming somewhere the person cannot reach. Unset, the mint route answers 503 rather than returning a url with no origin — a mint is what a step checks BEFORE it sends, and VEXA_UI_URL being set nowhere is exactly how every deeplink the rig ever minted pointed at a port nothing serves (PRD §3.3)",
+      "default": "(unset \u2014 POST /internal/scaffolds refuses to mint)",
+      "description": "where a person's own terminal lives \u2014 the origin every scaffold link is built on (PRD \u00a75.5). Deliberately the SAME variable name the flows lane already reads (core/flows/src/flows_steps/common.py UI_URL): one deployment fact, one name, because two spellings of a host is how a link ends up naming somewhere the person cannot reach. Unset, the mint route answers 503 rather than returning a url with no origin \u2014 a mint is what a step checks BEFORE it sends, and VEXA_UI_URL being set nowhere is exactly how every deeplink the rig ever minted pointed at a port nothing serves (PRD \u00a73.3)",
       "targets": [
         "compose"
       ]

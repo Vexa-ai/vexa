@@ -266,6 +266,12 @@ services:
       # matching a person by name. Delete this once admin-api serves
       # GET /internal/users/by-email/{email} returning only {id} — agent-api already prefers it.
       - VEXA_ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
+      # Read-only DSN for the meetings database, for ONE question: which meetings is this address
+      # invited to (data.attendees). Only the invite record knows somebody was invited before they
+      # ever signed in, which is the case a first visit is. Unset, the first-visit opening simply
+      # says nothing about meetings — it never asserts there are none. Goes away when meeting-api
+      # serves an invited-by-address route and agent-api stops holding a second DB credential.
+      - VEXA_MEETINGS_DB_URL=${MEETINGS_DB_URL:-}
       # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
       # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
       # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts

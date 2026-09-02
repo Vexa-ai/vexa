@@ -64,7 +64,11 @@ WORKSPACE_WORD = "desk"
 
 # The catalogue (PRD §5.5). One preset file each, both halves declared. A kind outside this set is
 # refused at mint: a scaffold whose kind nothing renders is a link that opens a shrug.
-KINDS = ("admin-setup", "prep", "post-meeting", "catch-up", "group-setup", "invite-offer")
+# "first-visit" is the touch nobody sent: a person signs in with no link, so nothing composed an
+# arrival for them. Before it existed they got the seeded greeting — "paste a meeting link" — which
+# is the wrong sentence for somebody who was INVITED to a meeting and is here because of it.
+KINDS = ("admin-setup", "first-visit", "prep", "post-meeting", "catch-up", "group-setup",
+         "invite-offer")
 
 # A preset NAME, and only a name — no slashes, no dots, nothing that walks out of `asks/`. The same
 # expression the terminal applies to `?ask=` (MinutesShell.tsx), kept identical on purpose: two
@@ -251,6 +255,23 @@ def facts_block(view: dict) -> str:
     if refs.get("domain"):
         rows.append(f"their email domain: {refs['domain']} — the strongest signal you have about "
                     f"the company; propose a name from it rather than asking cold")
+    # WHAT THIS COMPANY ALREADY INVOLVES THEM IN. Without these two lines a first visit has nothing
+    # to say about the person and falls back to the generic greeting — "paste a meeting link" — to
+    # somebody who is here precisely because a colleague already put them in something. Empty is
+    # reported as EMPTY rather than omitted: "nothing is shared with you yet" is a fact the preset
+    # is told to say out loud, and a missing line would read as "not looked up".
+    if "shared_workspaces" in refs:
+        shared = refs.get("shared_workspaces") or []
+        rows.append("shared with them: " + (
+            "; ".join(f"{w.get('name') or w.get('slug')}"
+                      + (f" — {w['purpose']}" if w.get("purpose") else "")
+                      for w in shared) if shared else "nothing yet"))
+    if "invited_meetings" in refs:
+        invited = refs.get("invited_meetings") or []
+        rows.append("meetings they are invited to: " + (
+            "; ".join(f"{m.get('title') or 'untitled'}"
+                      + (f" at {m['when']}" if m.get("when") else "")
+                      for m in invited) if invited else "none yet"))
     for key in ("when", "organizer", "room"):
         if refs.get(key):
             rows.append(f"{key}: {refs[key]}")
@@ -430,3 +451,37 @@ class ScaffoldStore:
             rows = [r for r in rows if not r.get("redeemed_at")]
         rows.sort(key=lambda r: r.get("minted_at") or 0, reverse=True)
         return rows
+
+
+def invited_meetings(address: str) -> list[dict]:
+    """Meetings this ADDRESS is invited to, from the meeting rows the invite intake wrote.
+
+    Read off `data.attendees` — the ICS ATTENDEE list the mailbox parser stores — because that is
+    the only record that knows somebody was invited BEFORE they ever signed in. A first visit is
+    exactly the moment when the person has no subject on any meeting yet, so an owner-keyed lookup
+    would answer "none" for the very case this exists to serve.
+
+    An empty list is a real answer and is reported as one. A failure RAISES rather than returning
+    empty: the caller decides whether an unanswerable lookup means "none yet" or "do not say", and
+    those are different sentences to a person reading their first screen.
+    """
+    import os
+
+    url = (os.environ.get("VEXA_MEETINGS_DB_URL") or "").strip()
+    addr = str(address or "").strip().lower()
+    if not url or not addr:
+        return []
+    import psycopg
+
+    want = json.dumps([{"email": addr}])
+    with psycopg.connect(url, connect_timeout=5) as cx:
+        rows = cx.execute(
+            "SELECT id, data FROM meetings WHERE data->'attendees' @> %s::jsonb "
+            "ORDER BY id DESC LIMIT 10", (want,)).fetchall()
+    out: list[dict] = []
+    for rid, data in rows:
+        d = data if isinstance(data, dict) else {}
+        out.append({"meeting": str(rid),
+                    "title": d.get("title") or "",
+                    "when": d.get("scheduled_at") or ""})
+    return out
