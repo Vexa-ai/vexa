@@ -454,7 +454,11 @@ function CompanyLayerStep({ onHandOff }: { onHandOff: () => void }) {
       </div>
 
       <div style={{ ...card, cursor: "default", gap: 9 }}>
-        <span style={label}>In this instance&rsquo;s _global workspace</span>
+        {/* Deliberately NOT the `desk` word from minutes/vocabulary.ts. That constant names a
+            PERSON's own space; `_global` is the company layer, shared by everyone, and calling it a
+            desk would teach the reader the opposite of the distinction the word exists to draw. The
+            fix for "workspace" here is to name the thing, not to swap one wrong noun for another. */}
+        <span style={label}>This instance&rsquo;s company layer</span>
         <FileList present={state?.present ?? []} />
         {error && !state && (
           <span role="alert" style={{ fontSize: 11.5, color: "var(--t3)" }}>
