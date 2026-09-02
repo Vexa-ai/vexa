@@ -179,8 +179,14 @@ def policy_commit(ws: Path, message: str) -> None:
     if not (ws / ".git").exists():
         subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True,
                        capture_output=True, text=True, env=env)
-    subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR], check=True,
-                   capture_output=True, text=True, env=env)
+    added = subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR],
+                           capture_output=True, text=True, env=env)
+    if added.returncode != 0:
+        # policy/ is EXCLUDED in this clone — the workspace has an ATTACHED external repo as its tree
+        # (workspace_attach.carry_policy), where the member list is deliberately untracked so it is
+        # never pushed to somebody else's repository. The write to disk already happened and
+        # ``read_members`` reads the working tree, so this is a legitimate state, not a failure.
+        return
     # commit only if policy/ actually changed (staged diff non-empty)
     staged = subprocess.run(["git", "-C", str(ws), "diff", "--cached", "--quiet", "--", POLICY_DIR],
                             capture_output=True, text=True, env=env)

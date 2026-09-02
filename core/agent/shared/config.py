@@ -148,6 +148,13 @@ class Settings(BaseSettings):
     # credential at all: a delegation token signed with a zero-length key would verify for anyone who
     # guessed the format, so "unset" must mean ABSENT, never "signed with nothing".
     mcp_delegation_secret: SecretStr = SecretStr("")
+    # The ONE server-side key every stored credential is sealed with (control_plane.secret_store): the
+    # user's saved GitHub PAT and every workspace DEPLOY KEY's private half. Empty is NOT "no
+    # encryption" — the store then generates a 0600 key under the secrets root on first use, so a
+    # self-hoster gets encryption without configuring anything. Set this when the key must live OUTSIDE
+    # the data volume (rotating it makes every previously-sealed secret unreadable, which reads as "no
+    # credential saved" — deliberately, so a wrong key never decrypts to garbage).
+    secrets_key: SecretStr = SecretStr("")
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""
