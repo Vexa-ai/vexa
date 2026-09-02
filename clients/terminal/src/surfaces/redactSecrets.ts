@@ -20,6 +20,11 @@ const GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
  *  Masking it leaves a message reading "add this: «redacted»". */
 const SSH_PUBKEY =
   /\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[A-Za-z0-9-]+|sk-ssh-ed25519@openssh\.com)\s+[A-Za-z0-9+/]+=*(?:\s+\S+)?/g;
+/** …and a KEY FINGERPRINT. `SHA256:` + 43 base64 chars only SOMETIMES contains a `+` or `/`, and those
+ *  are outside the generic rule's class — so today a fingerprint survives by accident, and roughly one
+ *  in four would not. An intermittent bug in the message telling someone which key to add is the worst
+ *  place to have one, so the shape is allow-listed rather than left to chance. */
+const KEY_FINGERPRINT = /\b(?:SHA256:[A-Za-z0-9+/]{20,}=*|MD5:(?:[0-9a-f]{2}:){5,}[0-9a-f]{2})/g;
 
 /** `text` with every credential-shaped run masked. Safe on anything, and safe to run twice. */
 export function redactSecrets(text: unknown): string {
@@ -30,7 +35,8 @@ export function redactSecrets(text: unknown): string {
   // Park public keys before the generic sweep and restore them after — the sweep cannot tell a key
   // from a secret by shape, and here that difference is the whole message.
   const kept: string[] = [];
-  out = out.replace(SSH_PUBKEY, (m) => `\u0000pub${kept.push(m) - 1}\u0000`);
+  const park = (m: string) => `\u0000pub${kept.push(m) - 1}\u0000`;
+  out = out.replace(SSH_PUBKEY, park).replace(KEY_FINGERPRINT, park);
   out = out.replace(GENERIC, (m) => (GIT_OID.test(m) ? m : MASK));
   return kept.reduce((acc, original, i) => acc.replace(`\u0000pub${i}\u0000`, original), out);
 }

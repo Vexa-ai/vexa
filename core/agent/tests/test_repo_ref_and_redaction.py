@@ -224,3 +224,38 @@ def test_looks_like_token_is_narrow_enough_to_be_useful():
     assert looks_like_token(PAT) and looks_like_token(GLPAT)
     for ordinary in ("git@github.com:acme/kg.git", "https://github.com/acme/kg", "main", "acme/kg", ""):
         assert not looks_like_token(ordinary)
+
+
+# ── the answer must survive the scrubbing (else the fix breaks the feature it protects) ───────────
+
+#: A fingerprint whose base64 body contains NEITHER `+` NOR `/`. Those two characters fall outside the
+#: generic rule's character class, so they split a long run — which means a fingerprint that happens to
+#: contain one survives by accident. Roughly one in four does not. This is the one that does not.
+PLAIN_FP = "SHA256:" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jL5nP7rT9v"
+
+
+def test_a_deploy_key_card_renders_the_whole_public_key_and_its_fingerprint():
+    """The card a person acts on carries an ssh public key and a SHA256 fingerprint — both long,
+    opaque, base64-ish runs that the generic secret rule would happily eat. Both are PUBLIC by
+    definition; masking them would leave a message reading "add this: «redacted»"."""
+    key = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHqZ0mQfZ5xW1kTn2vJ8sQpYbR3cL7dM4eF6gH9iJ0kL "
+           "vexa-workspace-ws-acme")
+    card = (f"This workspace has no credential for that repository yet ({PLAIN_FP}). "
+            f"Add this public key as a deploy key with WRITE access, then say `done` when added:\n{key}")
+    out = redact(card)
+    assert key in out, "the public key must survive — it is the answer, not a secret"
+    assert PLAIN_FP in out, "the fingerprint must survive, and not merely by luck"
+    assert "say `done` when added" in out
+
+
+def test_a_pat_in_the_same_message_is_still_masked():
+    """The allow-list must not become a hole: a real credential sitting beside the key still goes."""
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHqZ0mQfZ5xW1kTn2vJ8sQpYbR3cL7dM4eF6gH9iJ0kL vexa"
+    out = redact(f"could not read Username for 'https://{PAT}@github.com'\n{key}\n{PLAIN_FP}")
+    assert PAT not in out and MASK in out
+    assert key in out and PLAIN_FP in out
+
+
+def test_an_md5_fingerprint_survives_too():
+    md5 = "MD5:" + ":".join(["ab"] * 16)
+    assert md5 in redact(f"key fingerprint {md5}")

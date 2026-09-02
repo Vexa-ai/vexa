@@ -57,6 +57,12 @@ _SSH_PUBKEY = re.compile(
     r"\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[A-Za-z0-9-]+|sk-ssh-ed25519@openssh\.com)"
     r"\s+[A-Za-z0-9+/]+=*(?:\s+\S+)?"
 )
+#: …and a KEY FINGERPRINT, for the same reason and with a nastier failure mode. ``SHA256:`` + 43
+#: base64 chars only SOMETIMES contains a ``+`` or ``/`` — those characters are outside the generic
+#: rule's class, so they split the run and the fingerprint survives by accident. Roughly one in four
+#: fingerprints contains neither and would be masked: an intermittent bug in the message that tells a
+#: person which key to add, which is the worst place to have one. Allow-listed explicitly.
+_KEY_FINGERPRINT = re.compile(r"\b(?:SHA256:[A-Za-z0-9+/]{20,}=*|MD5:(?:[0-9a-f]{2}:){5,}[0-9a-f]{2})")
 
 
 def looks_like_token(value: str) -> bool:
@@ -80,8 +86,9 @@ def redact(text, *known: "str | None") -> str:
     out = _TOKEN_FAMILIES.sub(MASK, out)
     out = _URL_USERINFO.sub(MASK, out)
     out = _URL_BARE_USERINFO.sub(MASK, out)
-    # Park public keys before the generic sweep and put them back after: the sweep cannot tell a key
-    # from a secret by shape, and the difference matters more here than anywhere else in this file.
+    # Park PUBLIC key material before the generic sweep and put it back after: the sweep cannot tell a
+    # key from a secret by shape, and the difference matters more here than anywhere else in this file
+    # — these two shapes are the answer we hand someone whose credential is missing.
     kept: list[str] = []
 
     def _park(m):
@@ -89,6 +96,7 @@ def redact(text, *known: "str | None") -> str:
         return f"\x00pub{len(kept) - 1}\x00"
 
     out = _SSH_PUBKEY.sub(_park, out)
+    out = _KEY_FINGERPRINT.sub(_park, out)
     out = _GENERIC.sub(lambda m: m.group(0) if _GIT_OID.match(m.group(0)) else MASK, out)
     for i, original in enumerate(kept):
         out = out.replace(f"\x00pub{i}\x00", original)

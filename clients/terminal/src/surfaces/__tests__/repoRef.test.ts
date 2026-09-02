@@ -80,3 +80,35 @@ describe("redactSecrets — nothing that reaches a person or the console carries
     expect(redactSecrets(undefined)).toBe("");
   });
 });
+
+/** The answer must survive the scrubbing — else the fix breaks the feature it exists to protect.
+ *  `PLAIN_FP`'s base64 body deliberately contains neither `+` nor `/`: those characters fall outside
+ *  the generic rule's class and split a long run, so a fingerprint containing one survives by
+ *  accident. Roughly one in four does not. This is the one that does not. */
+describe("public key material survives, credentials do not", () => {
+  const PLAIN_FP = "SHA256:" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jL5nP7rT9v";
+  const KEY =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHqZ0mQfZ5xW1kTn2vJ8sQpYbR3cL7dM4eF6gH9iJ0kL vexa-workspace-ws-acme";
+  const PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+
+  it("renders the whole deploy-key card unmasked", () => {
+    const card = `no credential yet (${PLAIN_FP}). Add this public key, then say \`done\` when added:\n${KEY}`;
+    const out = redactSecrets(card);
+    expect(out).toContain(KEY);
+    expect(out).toContain(PLAIN_FP);
+    expect(out).toContain("say `done` when added");
+  });
+
+  it("still masks a PAT sitting in the same message — the allow-list is not a hole", () => {
+    const out = redactSecrets(`could not read Username for 'https://${PAT}@github.com'\n${KEY}\n${PLAIN_FP}`);
+    expect(out).not.toContain(PAT);
+    expect(out).toContain(MASK);
+    expect(out).toContain(KEY);
+    expect(out).toContain(PLAIN_FP);
+  });
+
+  it("keeps an MD5 fingerprint too", () => {
+    const md5 = "MD5:" + new Array(16).fill("ab").join(":");
+    expect(redactSecrets(`key fingerprint ${md5}`)).toContain(md5);
+  });
+});
