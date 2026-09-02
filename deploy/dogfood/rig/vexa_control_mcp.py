@@ -1603,6 +1603,55 @@ mcp = MCPServer(
 
 
 # ---------------------------------------------------------------- flows
+
+def _capped(obj, limit: int) -> str:
+    """Serialise ``obj`` as VALID json inside a response budget of ``limit`` characters.
+
+    The one guarantee is validity, not size: if the budget is too small to hold even the
+    "it does not fit" answer, that answer is returned whole rather than cut. Every real
+    budget here is 2,000-12,000 characters, so this matters only to a caller inventing a
+    tiny one.
+
+    Every tool here used to end `json.dumps(...)[:N]`, which slices the STRING — so the moment a
+    payload outgrew its cap the tool returned a JSON document cut mid-key, and every caller saw a
+    parse error or, worse, quietly read nothing. `meetings_list` did exactly that: 24 meetings on
+    the gateway, exactly 10,000 characters returned, ending `"start_tim`, and the agent reading it
+    concluded the person had NO meetings. A truncation that turns 24 into 0 without an error is not
+    a size limit, it is a silent wrong answer.
+
+    So the DATA is trimmed, never the text: the longest list in the payload gives up entries until
+    the whole thing fits, and what was dropped is stated in the result where a reader — human or
+    agent — will see it. If it still does not fit, the caller gets a valid object saying so rather
+    than a broken one saying nothing.
+    """
+    out = json.dumps(obj)
+    if len(out) <= limit:
+        return out
+    if isinstance(obj, dict):
+        obj = json.loads(out)          # a copy; never mutate the caller's structure
+        for _ in range(200):
+            holder, key, longest = None, None, 0
+            for container in (obj, *(v for v in obj.values() if isinstance(v, dict))):
+                for k, v in container.items():
+                    if isinstance(v, list) and len(v) > longest:
+                        holder, key, longest = container, k, len(v)
+            if holder is None or longest == 0:
+                break
+            total = holder.setdefault("_truncated", {}).get(key, {}).get("total", longest)
+            drop = max(1, len(holder[key]) // 8)
+            holder[key] = holder[key][:-drop]
+            holder["_truncated"][key] = {
+                "shown": len(holder[key]), "total": total,
+                "note": "trimmed to fit the tool's response budget — ask again with a "
+                        "narrower filter, or a limit, to see the rest"}
+            out = json.dumps(obj)
+            if len(out) <= limit:
+                return out
+    return json.dumps({"error": "the result does not fit this tool's response budget",
+                       "budget_chars": limit,
+                       "do": "narrow the request (a filter, a limit, or one id) and ask again"})
+
+
 @mcp.tool()
 @_anon_guard
 def flows_list(token: str = "") -> str:
@@ -1613,7 +1662,7 @@ def flows_list(token: str = "") -> str:
     time.\n\n    If you have not called whats_waiting() yet this session, call it first."""
     me()   # account-scoped: this touches shared state
     st, body = _http("GET", f"{FLOWS_API}/flows", _fkey())
-    return json.dumps({"status": st, **(body if isinstance(body, dict) else {"body": body})})[:12000]
+    return _capped({"status": st, **(body if isinstance(body, dict) else {"body": body})}, 12000)
 
 
 @mcp.tool()
@@ -1631,7 +1680,7 @@ def flows_submit(name: str, on_event: str, steps: list[str],
     st, body = _http("POST", f"{FLOWS_API}/flows", _fkey(), {
         "name": name, "on_event": on_event, "steps": steps,
         "params": params or {}, "activate": activate})
-    return json.dumps({"status": st, "result": body})[:4000]
+    return _capped({"status": st, "result": body}, 4000)
 
 
 @mcp.tool()
@@ -1645,7 +1694,7 @@ def flow_lifecycle(name: str, version: int, verb: str, token: str = "") -> str:
     if verb not in ("activate", "retire"):
         return json.dumps({"error": "verb must be activate or retire"})
     st, body = _http("POST", f"{FLOWS_API}/flows/{name}/{version}/{verb}", _fkey(), {})
-    return json.dumps({"status": st, "result": body})[:3000]
+    return _capped({"status": st, "result": body}, 3000)
 
 
 @mcp.tool()
@@ -1657,7 +1706,7 @@ def reactions_list(status: str = "", token: str = "") -> str:
     me()   # account-scoped: this touches shared state
     q = f"?status={status}" if status else ""
     st, body = _http("GET", f"{FLOWS_API}/reactions{q}", _fkey())
-    return json.dumps({"status": st, "result": body})[:12000]
+    return _capped({"status": st, "result": body}, 12000)
 
 
 @mcp.tool()
@@ -1673,7 +1722,7 @@ def reaction_signal(reaction_id: str, verb: str, token: str = "") -> str:
              step was waiting on and do not want to wait out its poll interval."""
     me()   # account-scoped: this touches shared state
     st, body = _http("POST", f"{FLOWS_API}/reactions/{reaction_id}/{verb}", _fkey(), {})
-    return json.dumps({"status": st, "result": body})[:3000]
+    return _capped({"status": st, "result": body}, 3000)
 
 
 @mcp.tool()
@@ -1733,7 +1782,7 @@ def workspace_tree(slug: str = "", token: str = "") -> str:
     uid = me()
     q = f"?slug={slug}" if slug else ""
     st, body = _http("GET", f"{AGENT_API}/api/workspace/tree{q}", {"X-User-Id": uid})
-    return json.dumps({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body})[:8000]
+    return _capped({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body}, 8000)
 
 
 @mcp.tool()
@@ -1952,7 +2001,7 @@ def workspace_init(token: str = "") -> str:
     """Seed a fresh personal workspace for a user (idempotent)."""
     uid = me()
     st, body = _http("POST", f"{AGENT_API}/api/workspace/init", {"X-User-Id": uid}, {})
-    return json.dumps({"status": st, "result": body})[:2000]
+    return _capped({"status": st, "result": body}, 2000)
 
 
 # ---------------------------------------------------------------- meetings / people
@@ -1976,7 +2025,7 @@ def meetings_list(token: str = "") -> str:
     """Every meeting a user can see, through the gateway with that user's own key.\n\n    If you have not called whats_waiting() yet this session, call it first."""
     uid = me()
     st, body = _gw_http(uid, "GET", "/meetings")
-    return json.dumps({"status": st, "result": body})[:10000]
+    return _capped({"status": st, "result": body}, 10000)
 
 
 @mcp.tool()
@@ -2176,7 +2225,7 @@ def mail_inbox(limit: int = 20, token: str = "") -> str:
                  "to": [t["Address"] for t in m.get("To", [])],
                  "subject": m["Subject"], "id": m["ID"]}
                 for m in body.get("messages", [])]
-        return json.dumps({"total": body.get("total"), "messages": msgs})[:8000]
+        return _capped({"total": body.get("total"), "messages": msgs}, 8000)
     return json.dumps({"status": st, "body": str(body)[:400]})
 
 
@@ -2453,7 +2502,7 @@ def whats_waiting(token: str = "") -> str:
             "what is waiting, and handle it — it uses your tokens and you can stop it anytime.\" "
             "On a yes, in Claude Code: /loop 15m with a prompt that calls whats_waiting and "
             "works what it returns.")
-    return json.dumps(out)[:12000]
+    return _capped(out, 12000)
 
 
 # ---------------------------------------------------------------- knowledge lifecycle
@@ -2950,7 +2999,7 @@ def meeting_participants(meeting_url: str, token: str = "") -> str:
     st, r = _gw(uid, "GET", f"/meetings/{platform}/{mid}/participants")
     if st != 200:
         return json.dumps({"error": "no participant data for that meeting", "status": st})
-    return json.dumps(r)[:4000]
+    return _capped(r, 4000)
 
 
 @mcp.tool()
@@ -3012,7 +3061,7 @@ def recordings_list(token: str = "") -> str:
     st, r = _gw(uid, "GET", "/recordings")
     if st != 200:
         return json.dumps({"error": "could not list recordings", "status": st})
-    return json.dumps(r)[:4000]
+    return _capped(r, 4000)
 
 
 @mcp.tool()
@@ -3555,7 +3604,7 @@ def friction_so_far(token: str = "") -> str:
             rows.reverse()
         except Exception:  # noqa: BLE001
             rows = []
-    return json.dumps({"count": len(rows), "reports": rows[:40]})[:12000]
+    return _capped({"count": len(rows), "reports": rows[:40]}, 12000)
 
 
 # ---------------------------------------------------------------- visible affordances
