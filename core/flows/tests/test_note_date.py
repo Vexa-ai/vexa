@@ -39,16 +39,25 @@ def _stamp_for(refs, monkeypatch_setting=None):
 
     seen = {}
 
-    def fake_dispatch(uid, session, prompt):
+    def fake_dispatch(uid, session, prompt, room_read=None):
         seen["prompt"] = prompt
+        seen["room_read"] = room_read
         return 0
 
-    common_setting = common.setting
+    # These are MODULE-LEVEL rebinds, not monkeypatch, so every one of them has to be put back:
+    # `production.setting` was, and the other three were not, which quietly replaced
+    # `agent.dispatch_turn` for every test file that ran after this one in the same process. A
+    # test that passes alone and fails in the suite is the visible half of that; a test that
+    # PASSES in the suite because somebody else's stub is still installed is the dangerous half.
+    saved = {"setting": common.setting, "dispatch_turn": ag.dispatch_turn,
+             "commit_shas": ag.commit_shas, "meeting_start": mt.meeting_start,
+             "speaking_order": mt.speaking_order}
     production.setting = (monkeypatch_setting
                           or (lambda uid, key: ""))   # no timezone -> UTC
     ag.dispatch_turn = fake_dispatch
     ag.commit_shas = lambda uid: []
     mt.meeting_start = lambda uid, mid, native=None: None
+    mt.speaking_order = lambda uid, mid, participants, cap=12: []   # no gateway read in a unit test
 
     reg = Registry()
 
@@ -59,8 +68,14 @@ def _stamp_for(refs, monkeypatch_setting=None):
     production.build(reg, _DB())
     step = reg.steps["process_meeting"]
     ctx = _Ctx(refs)
-    step(ctx)
-    production.setting = common_setting
+    try:
+        step(ctx)
+    finally:
+        production.setting = saved["setting"]
+        ag.dispatch_turn = saved["dispatch_turn"]
+        ag.commit_shas = saved["commit_shas"]
+        mt.meeting_start = saved["meeting_start"]
+        mt.speaking_order = saved["speaking_order"]
     return seen["prompt"]
 
 

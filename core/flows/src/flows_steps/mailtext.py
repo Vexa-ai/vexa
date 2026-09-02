@@ -57,12 +57,25 @@ DEFAULTS: dict[str, str] = {
     # The ATTENDEE follow-up head -- for most people in a large meeting this is the first time they
     # hear from Vexa at all, so it is the whole introduction: whose Vexa this is, what it does,
     # which meeting, and who had it in the room. The agent's own per-person section follows it.
+    #
+    # BYTE-FOR-BYTE `deploy/dogfood/mail/attendee-head.md`, and it has to stay that way: the README
+    # in that directory says the source and the baked default are the same content or the source
+    # lies. This one HAD drifted -- it substituted {{title}}, {{when}} and {{attendees}}, none of
+    # which `email_attendees` fills, while the file substitutes {{company}} {{organizer}}
+    # {{meeting}} {{date}}. A deployment with no `_global` override would therefore have mailed a
+    # stranger a subject reading `{{title}} — what it means for you` and a body with two standing
+    # tokens in it. The drift was invisible because nothing read both.
+    #
+    # The service sentence is LITERAL here, not `{{service}}`: `render` would fill it, but the file
+    # spells it out, and these two must be identical strings. It is still the same sentence as
+    # SERVICE_SENTENCE above -- change one and you change all three places the README names.
     "attendee-head": (
-        "subject: {{title}} — what it means for you\n"
+        "subject: {{meeting}} — what it means for you\n"
         "---\n"
-        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "I am Vexa, the meeting assistant at {{company}}. I sit in meetings you are invited to; "
+        "afterwards you get what came out of them and what they leave on your plate.\n"
         "\n"
-        "{{organizer}} had me in {{title}}, {{when}}, with {{attendees}} others in the room.\n"
+        "{{organizer}} had me in {{meeting}} on {{date}}.\n"
     ),
     # The MINUTES head -- the same meeting, to someone who already knows what Vexa is. No
     # introduction: repeating it to a returning person is the tell of a machine that does not know
@@ -111,7 +124,13 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     product differently; everything else comes from `values`. An unknown `{{token}}` is left
     STANDING rather than blanked: a visible `{{organizer}}` in a test inbox is a bug report, and a
     silently empty sentence is not."""
-    raw = ws_file(uid, f"mail/{name}.md", "_global") or DEFAULTS.get(name)
+    raw = ws_file(uid, f"mail/{name}.md", "_global")
+    # An override that is EMPTY, or only whitespace, is an accident and not an instruction. `or`
+    # alone did not catch it -- `"   \n\n"` is truthy in Python, so an admin who cleared the file
+    # instead of editing it would have mailed a stranger a blank introduction with a blank subject,
+    # which is worse than the placeholder wording they were trying to replace.
+    if not (raw or "").strip():
+        raw = DEFAULTS.get(name)
     if raw is None:
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
     subject, body = _split(raw)

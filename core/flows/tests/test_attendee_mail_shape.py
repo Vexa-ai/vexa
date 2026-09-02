@@ -1,28 +1,34 @@
-"""The attendee mail's SHAPE: a template HEAD the founder edits + the agent's one-run section.
+"""The attendee mail's SHAPE: one template HEAD + ONE shared report, the same words to everybody.
 
-Four elements, in order, and nothing else: head → the person's section → one gap line → one
-button. The gap line and the button belong to `notify.compose`, so every assertion here reads the
-`link` off the recorded call rather than hunting for a url in prose.
+Four elements, in order, and nothing else: head → the shared report → one gap line → one button.
+The gap line and the button belong to `notify.compose`, so every assertion here reads the `link`
+off the recorded call rather than hunting for a url in prose.
 
-Three properties this file exists to hold:
+Four properties this file exists to hold:
 
-  1. THE HEAD IS A FILE, READ AT SEND TIME. The founder edits `deploy/dogfood/mail/attendee-head.md`
-     between runs; a template read at import would need a restart to land, so this reads per send.
-  2. A FALLBACK IS LOUD. When that file is missing the inline default still ships — but it is
-     logged with the exact path, and the step's result carries the same string. A founder editing
-     a file nobody reads must be able to see that without reading a log.
-  3. SILENCE IS KNOWABLE. `process_meeting` no longer asks the agent to substitute the decision
-     for people the meeting held nothing for, so a MISSING `## <address>` section now means
-     exactly one thing, and `attendee_silent_policy` / `attendee_personal_max` decide what those
-     people receive.
+  1. THERE IS ONE MAIL READER, AND IT IS `mailtext`. The live text a send reads is
+     `_global/mail/<name>.md` — admin-writable, git-backed, mounted into every worker — falling
+     back to the identical baked default in `flows_steps/mailtext.py`. This step used to run a
+     SECOND reader of its own against the repo path `deploy/dogfood/mail/`, which is not what a
+     send reads: an admin's live edit was ignored, and because that reader did not parse the
+     `subject:` / `---` header the body it mailed began with the literal line `subject: … ---`.
+  2. THE SUBJECT COMES OUT OF THE SAME RENDER as the body. It used to be a Python f-string, so
+     editing the template could not change it.
+  3. ONE REPORT, THE SAME MAIL TO EVERYONE (founder, 2026-09-02). No per-person section, no
+     `## _decision`, no silent policy, no room-size cap — and therefore nothing that can hand two
+     people in one room different words. Personalisation happens in the chat after the click.
+  4. THE SOURCE FILE AND THE BAKED DEFAULT ARE THE SAME BYTES. `deploy/dogfood/mail/README.md`
+     says they are, so a drift gate is the only thing that makes that true rather than intended.
 
 No network, no clock, no DB: the step is called directly with the refs its flow would hand it.
 """
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import flows_defs.production as production
+import flows_steps.mailtext as mailtext
 import flows_steps.notify as notify_mod
 import pytest
 from flows import Done, Reaction, Registry, StepCtx
@@ -55,32 +61,53 @@ PRIOR = {"process_meeting": {"note_path": "kg/x.md", "summary": "s", "sha": "abc
 NOTE = "## Decided\n- ship it\n"
 THE_DATE = "14 November 2023"
 
+HEAD_OVERRIDE = (
+    "subject: {{meeting}} — what it means for you\n"
+    "---\n"
+    "I'm Vexa, the meeting assistant at {{company}}. I sit in meetings you're invited to; "
+    "afterwards you get what came out of them and what they leave on your plate.\n"
+    "\n"
+    "{{organizer}} had me in {{meeting}} on {{date}}.\n")
 
-def _ws(outbox=None, readme="# Acme Bank\n\nthe org handbook"):
-    """A workspace reader that knows the difference between the ORG's `_global` README, the
-    meeting note, and the per-attendee outbox — the three files this step reads."""
+
+def _ws(readme="# Acme Bank\n\nthe org handbook", mail=None):
+    """A workspace reader that knows the three things this step reads: the ORG's `_global` README,
+    the ORG's `_global/mail/<name>.md` overrides, and the organiser's meeting note."""
+    mail = mail or {}
+
     def read(uid, path, slug=None):
         if slug == "_global":
-            return readme
-        if path.startswith("mail_outbox/"):
-            return outbox
+            if path == "README.md":
+                return readme
+            if path.startswith("mail/"):
+                return mail.get(path[len("mail/"):])
+            return None
         return NOTE
     return read
 
 
-def _rig(monkeypatch, *, outbox=None, readme="# Acme Bank\n\nthe org handbook", mail_dir=None):
+def _rig(monkeypatch, *, readme="# Acme Bank\n\nthe org handbook", head=HEAD_OVERRIDE, mail=None):
+    """`head` is the admin's `_global/mail/attendee-head.md`; None means they wrote none, so the
+    baked default ships. Both `production` and `mailtext` are patched — `mailtext` binds `ws_file`
+    into its own module namespace at import, and patching only one of them would silently test a
+    reader nobody uses."""
     reg = Registry()
     production.build(reg, _StubDB())
     ch = FakeChannel()
     notify_mod.use(ch)
-    monkeypatch.setattr(production, "ws_file", _ws(outbox, readme))
-    monkeypatch.setattr(production, "setting", lambda uid, key: "")      # no timezone → UTC
+    files = mail if mail is not None else {}   # NOT copied: a test edits it mid-run
+    if head is not None:
+        files["attendee-head.md"] = head
+    read = _ws(readme, files)
+    monkeypatch.setattr(production, "ws_file", read)
+    monkeypatch.setattr(mailtext, "ws_file", read)
+    # no timezone -> UTC; every mail preference at its default, which is ON
+    monkeypatch.setattr(production, "setting",
+                        lambda uid, key: "" if key == "timezone" else True)
     monkeypatch.setattr(production.mt, "meeting_row",
                         lambda uid, mid, native=None: {"id": 97})
     monkeypatch.setattr(production.mt, "mint_transcript_share",
                         lambda uid, m, email, expires_in_sec=30 * 86400: f"97.tok-{email}")
-    if mail_dir is not None:
-        monkeypatch.setattr(production, "_mail_dir", lambda: mail_dir)
     return reg, ch
 
 
@@ -88,116 +115,102 @@ def teardown_function():
     notify_mod.use(None)
 
 
-# ── 1 · the head is a file, read at send time ────────────────────────────────────────────────
-HEAD_FILE = ("I'm Vexa, the meeting assistant at {{company}}. I sit in meetings you're invited "
-             "to; afterwards you get what came out of them and what they leave on your plate. "
-             "{{organizer}} had me in {{meeting}} on {{date}}.")
-
-
-def test_the_head_is_read_from_the_file_and_all_four_tokens_are_substituted(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text(HEAD_FILE + "\n")
-    reg, ch = _rig(monkeypatch, mail_dir=tmp_path)
+# ── 1 · one reader, and it is the one a send actually uses ───────────────────────────────────
+def test_the_head_comes_from_the_global_override_and_every_token_is_filled(monkeypatch):
+    reg, ch = _rig(monkeypatch)
     out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
 
     assert isinstance(out, Done) and out.result["sent"] == 2
-    assert out.result["head"] == str(tmp_path / "attendee-head.md")
     body = ch.sent[0]["body"]
     assert body.startswith("I'm Vexa, the meeting assistant at Acme Bank.")   # {{company}}
     assert "anna@bank.test had me in Pilot sync on " + THE_DATE in body       # the other three
-    assert "{{" not in body                                                   # nothing left unfilled
+    assert "{{" not in body                                                   # nothing unfilled
 
 
-def test_the_file_is_re_read_on_every_send_so_an_edit_needs_no_restart(monkeypatch, tmp_path):
-    f = tmp_path / "attendee-head.md"
-    f.write_text("First wording for {{company}}.")
-    reg, ch = _rig(monkeypatch, mail_dir=tmp_path)
+def test_an_admin_override_wins_over_the_baked_default(monkeypatch):
+    """THE POINT OF THE WHOLE DIRECTORY. The previous reader resolved `deploy/dogfood/mail/` in the
+    REPO, so an admin's edit to the live `_global` copy changed nothing and they had no way to
+    find that out."""
+    reg, ch = _rig(monkeypatch, head="subject: Admin subject\n---\nAdmin wording for {{company}}.")
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+
+    assert ch.sent[0]["subject"] == "Admin subject"
+    assert ch.sent[0]["body"].startswith("Admin wording for Acme Bank.")
+    # ...and the baked default, which is what would have shipped, says something else entirely
+    assert "Admin wording" not in mailtext.DEFAULTS["attendee-head"]
+
+
+def test_with_no_override_the_baked_default_ships(monkeypatch):
+    """A fresh deployment mails correctly before anybody has edited anything."""
+    reg, ch = _rig(monkeypatch, head=None)
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+
+    assert ch.sent[0]["subject"] == "Pilot sync — what it means for you"
+    assert ch.sent[0]["body"].startswith("I am Vexa, the meeting assistant at Acme Bank.")
+    assert "anna@bank.test had me in Pilot sync on " + THE_DATE in ch.sent[0]["body"]
+    assert "{{" not in ch.sent[0]["body"]
+
+
+def test_the_override_is_re_read_on_every_send_so_an_edit_needs_no_restart(monkeypatch):
+    live = {"attendee-head.md": "First wording for {{company}}."}
+    reg, ch = _rig(monkeypatch, head=None, mail=live)
     reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
     assert ch.sent[0]["body"].startswith("First wording for Acme Bank.")
 
-    f.write_text("Second wording for {{company}}.")          # the founder edits between runs
-    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))    # no reload, no restart
+    live["attendee-head.md"] = "Second wording for {{company}}."   # the admin edits between runs
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))          # no reload, no restart
     assert ch.sent[-1]["body"].startswith("Second wording for Acme Bank.")
 
 
-def test_a_missing_head_file_falls_back_to_the_inline_default_AND_SAYS_SO(monkeypatch, tmp_path,
-                                                                          caplog):
-    """The documented fallback. A SILENT fallback is the defect this asserts against: the founder
-    has to be able to tell that the file he is editing is not the one being read."""
-    reg, ch = _rig(monkeypatch, mail_dir=tmp_path)               # tmp_path holds no template
-    with caplog.at_level(logging.WARNING, logger="flows.production"):
-        out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
-
-    body = ch.sent[0]["body"]
-    assert body.startswith("I'm Vexa, the meeting assistant at Acme Bank.")   # it still ships
-    # ...and the path it looked for is named, in the log AND in the receipt
-    looked_for = str(tmp_path / "attendee-head.md")
-    warning = "\n".join(r.getMessage() for r in caplog.records)
-    assert looked_for in warning
-    assert "INLINE DEFAULT" in warning
-    assert out.result["head"] == f"inline default (no readable file at {looked_for})"
+def test_an_emptied_override_falls_back_rather_than_mailing_a_blank(monkeypatch):
+    """A file the admin cleared by accident is not a mail with no introduction. `"   \\n\\n"` is
+    truthy in Python, so `or` alone did not catch this."""
+    reg, ch = _rig(monkeypatch, head="   \n\n")
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+    assert ch.sent[0]["body"].startswith("I am Vexa, the meeting assistant at Acme Bank.")
+    assert ch.sent[0]["subject"] == "Pilot sync — what it means for you"
 
 
-def test_an_empty_head_file_is_a_fallback_too(monkeypatch, tmp_path, caplog):
-    """A file the founder emptied by accident is not a mail with no introduction."""
-    (tmp_path / "attendee-head.md").write_text("   \n\n")
-    reg, ch = _rig(monkeypatch, mail_dir=tmp_path)
-    with caplog.at_level(logging.WARNING, logger="flows.production"):
-        out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
-    assert out.result["head"].startswith("inline default")
-    assert ch.sent[0]["body"].startswith("I'm Vexa, the meeting assistant at Acme Bank.")
+# ── 2 · the subject is rendered, and its header never travels ────────────────────────────────
+def test_the_subject_comes_from_the_template_not_from_a_python_f_string(monkeypatch):
+    reg, ch = _rig(monkeypatch, head="subject: Notes on {{meeting}} ({{date}})\n---\nHEAD.")
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+    assert {m["subject"] for m in ch.sent} == {f"Notes on Pilot sync ({THE_DATE})"}
 
 
-def test_a_flow_param_still_outranks_the_file(monkeypatch, tmp_path):
-    """The `prompts` override idiom `prompt_for` already uses — a deployment can replace the head
-    without a file at all."""
-    (tmp_path / "attendee-head.md").write_text(HEAD_FILE)
-    reg, ch = _rig(monkeypatch, mail_dir=tmp_path)
-    flow = _Flow(prompts={"attendee-head.md": "Param wording for {{company}}."})
-    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=flow))
-    assert ch.sent[0]["body"].startswith("Param wording for Acme Bank.")
-    assert out.result["head"] == "flow param prompts[attendee-head.md]"
-
-
-def test_the_same_reader_serves_minutes_head_md(monkeypatch, tmp_path):
-    """`email_minutes` is deliberately NOT wired here — but the reader it would use is this one,
-    unchanged, and this pins that it resolves against the same founder-edited directory."""
-    (tmp_path / "minutes-head.md").write_text("Minutes head for {{company}}.")
-    monkeypatch.setattr(production, "_mail_dir", lambda: tmp_path)
-    text, source = production.mail_template(None, "minutes-head.md", "inline")
-    assert text == "Minutes head for {{company}}."
-    assert source == str(tmp_path / "minutes-head.md")
-
-
-# ── {{company}} — the first line of the _global README ───────────────────────────────────────
-@pytest.mark.parametrize("readme,expected", [
-    ("# Acme Bank\n\nthe org handbook", "Acme Bank"),      # a heading loses its hashes
-    ("Acme Bank\n", "Acme Bank"),                          # ...and a plain first line survives
-    ("\n\n##   Acme Bank  \nrest", "Acme Bank"),           # leading blanks are skipped
+@pytest.mark.parametrize("head", [
+    HEAD_OVERRIDE,                                   # an override with a header
+    None,                                            # the baked default
+    "subject: S\n---\nBody one.",                    # the minimal header
 ])
-def test_company_is_the_first_line_of_the_global_readme(monkeypatch, tmp_path, readme, expected):
-    (tmp_path / "attendee-head.md").write_text("At {{company}}.")
-    reg, ch = _rig(monkeypatch, readme=readme, mail_dir=tmp_path)
+def test_the_subject_header_never_appears_in_a_body(monkeypatch, head):
+    """THE DEFECT THIS REPLACES. The previous reader did not know the `subject:` / `---` header
+    existed, so it mailed it: every attendee's introduction opened with two lines of machinery."""
+    reg, ch = _rig(monkeypatch, head=head)
     reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
-    assert ch.sent[0]["body"].startswith(f"At {expected}.")
+    assert ch.sent, "the fan-out sent nothing, so this asserts nothing"
+    for m in ch.sent:
+        assert not m["body"].lstrip().lower().startswith("subject:")
+        assert "\n---\n" not in m["body"]
+        assert m["subject"], "an empty subject line reads as spam"
 
 
-def test_an_unreadable_global_readme_degrades_honestly(monkeypatch, tmp_path):
-    """Non-empty and true of every reader — the head never claims a name we do not have."""
-    (tmp_path / "attendee-head.md").write_text("At {{company}}.")
-    reg, ch = _rig(monkeypatch, readme=None, mail_dir=tmp_path)
+def test_a_template_with_no_subject_line_falls_back_to_the_meeting_title(monkeypatch, caplog):
+    reg, ch = _rig(monkeypatch, head="No header here, just {{company}}.")
+    with caplog.at_level(logging.WARNING, logger="flows.production"):
+        reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+    assert ch.sent[0]["subject"] == "Pilot sync"
+    assert ch.sent[0]["body"] == "No header here, just Acme Bank.\n\n## Decided\n- ship it"
+    assert "no `subject:` line" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+# ── 3 · one report, the same mail to everyone ────────────────────────────────────────────────
+def test_the_mail_is_exactly_head_blankline_report_then_the_button(monkeypatch):
+    reg, ch = _rig(monkeypatch, head="HEAD for {{company}}.")
     reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
-    assert ch.sent[0]["body"].startswith("At your organisation.")
-
-
-# ── the whole shape: head → section → gap → button ───────────────────────────────────────────
-def test_the_mail_is_exactly_head_blankline_section_then_the_button(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD for {{company}}.")
-    outbox = "## ben@bank.test\nYou own the migration doc by Friday.\n"
-    reg, ch = _rig(monkeypatch, outbox=outbox, mail_dir=tmp_path)
-    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_Flow(attendee_followup="personal")))
 
     msg = next(m for m in ch.sent if m["to"] == "ben@bank.test")
-    assert msg["body"] == "HEAD for Acme Bank.\n\nYou own the migration doc by Friday."
+    assert msg["body"] == "HEAD for Acme Bank.\n\n## Decided\n- ship it"
     # the gap line and the button are the PORT's, not the step's
     assert notify_mod.compose(msg["body"], msg["link"]) == msg["body"] + "\n\n" + msg["link"] + "\n"
     assert _params(msg["link"]) == {"ask": "minutes-review-invite", "meeting": "97",
@@ -208,176 +221,132 @@ def test_the_mail_is_exactly_head_blankline_section_then_the_button(monkeypatch,
     assert "Open it and ask anything about the meeting" not in msg["body"]
 
 
-# ── 2 · attendee_silent_policy ───────────────────────────────────────────────────────────────
-OUTBOX = ("## _decision\nWe ship the pilot on the 21st.\n\n"
-          "## ben@bank.test\nYou own the migration doc by Friday.\n")
+def test_everybody_in_the_room_gets_byte_identical_words(monkeypatch):
+    """The founder's simplification, as a test: two attendees, one report, and the ONLY thing that
+    may differ between their mails is the share token inside their own button."""
+    reg, ch = _rig(monkeypatch)
+    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+
+    assert out.result["sent"] == 2 and out.result["followup"] == "on"
+    assert len({m["body"] for m in ch.sent}) == 1
+    assert len({m["subject"] for m in ch.sent}) == 1
+    assert {_params(m["link"])["tshare"] for m in ch.sent} == {
+        "97.tok-ben@bank.test", "97.tok-cara@bank.test"}
 
 
-def _personal(**params):
-    return _Flow(attendee_followup="personal", **params)
-
-
-def test_silent_policy_decision_is_the_default_and_sends_the_decision(monkeypatch, tmp_path):
-    """cara spoke to nobody and was assigned nothing — she gets the meeting's single decision,
-    and we KNOW that is what she got, which the old contract made impossible."""
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_personal()))
-
-    assert out.result["silent_policy"] == "decision"              # the DEFAULT, unset
-    assert out.result["sent"] == 2 and out.result["skipped_silent"] == []
-    bodies = {m["to"]: m["body"] for m in ch.sent}
-    assert bodies["ben@bank.test"] == "HEAD.\n\nYou own the migration doc by Friday."
-    assert bodies["cara@bank.test"] == "HEAD.\n\nWe ship the pilot on the 21st."
-    assert "## _decision" not in bodies["cara@bank.test"]          # the marker never travels
-
-
-def test_silent_policy_none_sends_them_nothing_and_counts_them(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](
-        _ctx(dict(REFS), PRIOR, flow=_personal(attendee_silent_policy="none")))
-
-    assert [m["to"] for m in ch.sent] == ["ben@bank.test"]
-    assert out.result["sent"] == 1
-    assert out.result["skipped_silent"] == ["cara@bank.test"]      # counted, not pretended-mailed
-    assert "cara@bank.test" not in out.result["to"]
-
-
-def test_silent_policy_none_with_nobody_left_sends_no_mail_at_all(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox="## _decision\nWe ship.\n", mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](
-        _ctx(dict(REFS), PRIOR, flow=_personal(attendee_silent_policy="none")))
-    assert ch.sent == [] and out.result["sent"] == 0
-    assert out.result["skipped_silent"] == ["ben@bank.test", "cara@bank.test"]
-    assert "silent" in out.result["skipped"]
-
-
-def test_a_nonsense_silent_policy_is_the_default_not_an_error(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](
-        _ctx(dict(REFS), PRIOR, flow=_personal(attendee_silent_policy="NONSENSE")))
-    assert out.result["silent_policy"] == "decision" and out.result["sent"] == 2
-
-
-# ── 2 · attendee_personal_max ────────────────────────────────────────────────────────────────
-def _big_refs(n: int) -> dict:
-    """A room of exactly n inside-domain attendees (the organiser is extra and never counted)."""
-    return dict(REFS, participants=["anna@bank.test"] + [f"p{i}@bank.test" for i in range(n)])
-
-
-def test_at_the_boundary_a_silent_person_still_gets_the_decision(monkeypatch, tmp_path):
-    """Room size == attendee_personal_max: personal sections are still the rule, so silence is
-    still governed by attendee_silent_policy."""
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](
-        _ctx(_big_refs(3), PRIOR, flow=_personal(attendee_personal_max=3)))
-    assert out.result["personal_max"] == 3 and out.result["sent"] == 3
-    assert {m["body"] for m in ch.sent} == {"HEAD.\n\nWe ship the pilot on the 21st."}
-
-
-def test_at_the_boundary_the_none_policy_still_skips(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](
-        _ctx(_big_refs(3), PRIOR,
-             flow=_personal(attendee_personal_max=3, attendee_silent_policy="none")))
-    assert ch.sent == [] and out.result["skipped_silent"] == [f"p{i}@bank.test" for i in range(3)]
-
-
-def test_one_above_the_boundary_the_silent_get_the_SHARED_note(monkeypatch, tmp_path):
-    """Above the cap the policy does not apply: nobody is skipped and nobody gets the decision —
-    everybody without a section gets the shared note, including under policy `none`."""
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](
-        _ctx(_big_refs(4), PRIOR,
-             flow=_personal(attendee_personal_max=3, attendee_silent_policy="none")))
-    assert out.result["sent"] == 4 and out.result["skipped_silent"] == []
+def test_a_big_room_changes_nothing_about_what_anyone_receives(monkeypatch):
+    """There is no room-size cap any more, because there is nothing left for it to cap: a report
+    written once costs the same to send to four people as to forty."""
+    reg, ch = _rig(monkeypatch, head="HEAD.")
+    refs = dict(REFS, participants=["anna@bank.test"] + [f"p{i}@bank.test" for i in range(9)])
+    out = reg.steps["email_attendees"](_ctx(refs, PRIOR))
+    assert out.result["sent"] == 9
     assert {m["body"] for m in ch.sent} == {"HEAD.\n\n## Decided\n- ship it"}
 
 
-def test_the_kick_asks_only_for_speakers_once_the_room_is_big(monkeypatch):
-    """The other half of the cap: the ONE agent turn is told not to write 21 personal sections."""
+def test_the_organiser_and_the_attendees_get_the_same_report(monkeypatch):
+    """`email_minutes` and `email_attendees` are two sends of ONE artefact. The heads differ — a
+    returning person is not introduced to Vexa again, per `deploy/dogfood/mail/README.md` — but
+    the report inside both is the same `_readable(note)` string."""
+    reg, ch = _rig(monkeypatch, head="HEAD.")
+    reg.steps["email_minutes"](_ctx(dict(REFS), PRIOR))
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+
+    by_to = {m["to"]: m["body"] for m in ch.sent}
+    assert set(by_to) == {"anna@bank.test", "ben@bank.test", "cara@bank.test"}
+    report = "## Decided\n- ship it"
+    assert report in by_to["anna@bank.test"] and report in by_to["ben@bank.test"]
+
+
+# ── the personalisation machinery is GONE, not merely unused ─────────────────────────────────
+def test_the_kick_asks_for_one_shared_report_and_no_per_person_file(monkeypatch):
+    """`mail_outbox/attendees-<id>.md` and its `## <address>` sections are deleted. A kick that
+    still asked for them would produce a file nothing reads — and an agent that spent a turn
+    writing sixty paragraphs nobody sends."""
     reg = Registry()
     production.build(reg, _StubDB())
     kicks = []
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, session, prompt: kicks.append(prompt) or 0)
+                        lambda uid, session, prompt, room_read=None: kicks.append(prompt) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
     monkeypatch.setattr(production.ag, "commit_shas", lambda uid: [])
-
-    reg.steps["process_meeting"](_ctx(dict(_big_refs(4), native="abc"), flow=_personal(
-        attendee_personal_max=3)))
-    assert "SPOKE or were NAMED" in kicks[0]
-
-    kicks.clear()
-    reg.steps["process_meeting"](_ctx(dict(_big_refs(3), native="abc"), flow=_personal(
-        attendee_personal_max=3)))
-    assert "SPOKE or were NAMED" not in kicks[0]
-    assert "actually held something" in kicks[0]
-
-
-def test_the_kick_forbids_substituting_the_decision_and_demands_one_decision_section(monkeypatch):
-    """The contract change that makes silence knowable at all. The old kick said 'if the meeting
-    held nothing for that person, write the meeting's single decision instead' — which is exactly
-    what this now forbids, because it made a silent person indistinguishable from a served one."""
-    reg = Registry()
-    production.build(reg, _StubDB())
-    kicks = []
-    monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, session, prompt: kicks.append(prompt) or 0)
-    monkeypatch.setattr(production, "setting", lambda uid, key: "")
-    monkeypatch.setattr(production.ag, "commit_shas", lambda uid: [])
-    reg.steps["process_meeting"](_ctx(dict(REFS, native="abc"), flow=_personal()))
+    monkeypatch.setattr(production.mt, "speaking_order",
+                        lambda uid, mid, participants, cap=12: [])
+    reg.steps["process_meeting"](_ctx(dict(REFS, native="abc")))
 
     k = kicks[0]
-    assert "## _decision" in k
-    assert "WRITE NO SECTION for an address the meeting held nothing for" in k
-    assert "do not substitute the decision" in k
-    # 3 · meeting-centric, from the transcript — person-centric work happens on the click
-    assert "MEETING-CENTRIC, FROM THE TRANSCRIPT" in k
-    assert "when they click the link in the mail, not here" in k
+    assert "mail_outbox/attendees-" not in k
+    assert "## _decision" not in k
+    assert "## <address>" not in k
+    assert "THE REPORT IS SHARED" in k
+    # the attribution rule the shared report has to carry, now that the turn can read workspaces
+    assert ("MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's workspace informs the "
+            "report, it is never quoted into it.") in k
 
 
-# ── the agent omits `## _decision` ───────────────────────────────────────────────────────────
-def test_a_missing_decision_section_falls_back_to_the_shared_note_and_says_so(monkeypatch,
-                                                                              tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox="## ben@bank.test\nYou own the doc.\n", mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_personal()))
-
-    assert out.result["decision_missing"] is True                 # the receipt SAYS it degraded
-    bodies = {m["to"]: m["body"] for m in ch.sent}
-    assert bodies["cara@bank.test"] == "HEAD.\n\n## Decided\n- ship it"
-    assert bodies["ben@bank.test"] == "HEAD.\n\nYou own the doc."
+def test_the_removed_params_no_longer_exist(monkeypatch):
+    """`attendee_silent_policy` and `attendee_personal_max` are gone rather than left inert: a
+    param a deployment can still set, that silently does nothing, is worse than one that is not
+    there."""
+    src = Path(production.__file__).with_suffix(".py").read_text()
+    body = src.split("REMOVED WITH THE AXIS", 1)[1].split('"""', 1)[1]   # past the explanation
+    assert "attendee_silent_policy" not in body
+    assert "attendee_personal_max" not in body
 
 
-def test_decision_missing_is_false_when_the_section_is_there(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, _ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_personal()))
-    assert out.result["decision_missing"] is False
+def test_a_per_meeting_opt_out_still_turns_the_fan_out_off(monkeypatch):
+    reg, ch = _rig(monkeypatch)
+    out = reg.steps["email_attendees"](_ctx(dict(REFS, share=False), PRIOR))
+    assert ch.sent == [] and out.result["sent"] == 0 and out.result["followup"] == "off"
 
 
-def test_the_decision_key_is_never_handed_to_a_person_as_their_section(monkeypatch, tmp_path):
-    """`_decision` cannot collide with an address (`_attendees` only yields strings with '@'), and
-    it is popped so it can never be looked up as somebody's block either."""
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_personal()))
-    assert all("_decision" not in m["body"] for m in ch.sent)
-    assert all(m["to"] != "_decision" for m in ch.sent)
+def test_the_param_kill_switch_still_turns_the_fan_out_off(monkeypatch):
+    reg, ch = _rig(monkeypatch)
+    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_Flow(attendee_followup="off")))
+    assert ch.sent == [] and out.result["sent"] == 0 and out.result["followup"] == "off"
 
 
-# ── shared mode is untouched ─────────────────────────────────────────────────────────────────
-def test_shared_mode_still_sends_the_note_to_everybody(monkeypatch, tmp_path):
-    (tmp_path / "attendee-head.md").write_text("HEAD.")
-    reg, ch = _rig(monkeypatch, outbox=OUTBOX, mail_dir=tmp_path)
-    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))       # default mode = shared
-    assert out.result["mode"] == "shared" and out.result["sent"] == 2
-    assert {m["body"] for m in ch.sent} == {"HEAD.\n\n## Decided\n- ship it"}
-    assert out.result["skipped_silent"] == []
+def test_an_unset_param_is_ON(monkeypatch):
+    """The default IS the coefficient: a fan-out that ships off is a loop nobody sees. Spelled out
+    because `str(None)` is the string `"none"`, which the off-list contains."""
+    reg, ch = _rig(monkeypatch)
+    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR, flow=_Flow()))
+    assert out.result["sent"] == 2 and out.result["followup"] == "on"
+
+
+# ── {{company}} — mailtext's own rule, not a second one ──────────────────────────────────────
+@pytest.mark.parametrize("readme,expected", [
+    ("# Acme Bank\n\nthe org handbook", "Acme Bank"),          # the heading the setup gate demands
+    ("\n\n#  Acme Bank  \nrest", "Acme Bank"),                 # leading blanks are skipped
+    ("Acme Bank\n", mailtext.COMPANY_UNSET),                   # no heading is not a company name
+    (None, mailtext.COMPANY_UNSET),                            # nor is an unreadable README
+])
+def test_company_follows_mailtexts_rule(monkeypatch, readme, expected):
+    """`mailtext.company_name` takes the FIRST HEADING of `_global/README.md` and nothing else.
+    The step used to carry its own looser reader that stripped hashes off any first line and
+    degraded to "your organisation" — two answers to one question, and `_global/README.md` is
+    written by the setup gate, which requires the heading. The fallback string is deliberately
+    unpretty: reaching a recipient means the gate let a mail out before the company layer
+    existed, which is a bug, not a wording choice."""
+    reg, ch = _rig(monkeypatch, readme=readme, head="At {{company}}.")
+    reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+    assert ch.sent[0]["body"].startswith(f"At {expected}.")
+
+
+# ── the source of truth and the baked default do not drift ───────────────────────────────────
+def test_the_baked_defaults_match_the_files_in_deploy_dogfood_mail():
+    """`deploy/dogfood/mail/README.md`: those files are the SOURCE, the baked defaults are the
+    same content, "edited in both, or the source lies". They HAD drifted — the baked
+    `attendee-head` substituted `{{title}}`, `{{when}}` and `{{attendees}}`, none of which the
+    step fills, while the file substitutes `{{company}} {{organizer}} {{meeting}} {{date}}`. A
+    deployment with no override would have mailed a stranger standing braces. Nothing read both,
+    so nothing noticed; this reads both."""
+    root = Path(mailtext.__file__).resolve().parents[4]      # <repo>/core/flows/src/flows_steps
+    mail_dir = root / "deploy" / "dogfood" / "mail"
+    if not mail_dir.is_dir():                                # the image is not a checkout
+        pytest.skip(f"no source directory at {mail_dir}")
+    for name, baked in mailtext.DEFAULTS.items():
+        f = mail_dir / f"{name}.md"
+        assert f.is_file(), f"{f} is missing — the baked default has no source to be edited in"
+        assert f.read_text().strip() == baked.strip(), (
+            f"{f} and mailtext.DEFAULTS[{name!r}] have drifted apart")
