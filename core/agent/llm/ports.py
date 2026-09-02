@@ -281,6 +281,48 @@ def _commit_env(author: Optional[tuple[str, str]]) -> dict:
     return env
 
 
+# ── the commit SUBJECT names the change, never the agent's reply ─────────────────────────────────
+# ⚠ 2026-09-02, seen by the founder in `_global`'s own history:
+#     Done — `STRUCTURE.md` records Vexa as run solo by you, and your desk is
+#     Here's what's now in `README.md`:
+# The turn's REPLY was the commit message, cut at 72 characters. Every consequence follows from
+# that one substitution: a `git log --oneline` of the company layer reads as half-sentences
+# addressed to somebody who is not there, a truncated "Here's what's now in" promises a colon and
+# delivers nothing, and — the part that actually costs — you cannot see WHICH FILE a commit
+# touched without opening it. History is the one record a person reads when they are trying to
+# find out what happened, and it was answering a different question.
+#
+# The subject is derived from the staged tree, which is the only thing that knows what changed.
+# The reply keeps its value and goes in the BODY, where a sentence belongs.
+_SUBJECT_MAX = 72
+
+
+def _change_subject(work: Path, env: dict) -> str:
+    """`<workspace>: <path> — <what changed>`, ≤72 chars, read off the index.
+
+    Deliberately mechanical. A generated summary of a diff is a second thing that can be wrong
+    about the diff, and this line's whole job is to be the one part of the record that cannot be."""
+    slug = work.name
+    try:
+        raw = _git(work, "diff", "--cached", "--name-status", env=env) or ""
+    except subprocess.CalledProcessError:
+        raw = ""
+    rows = [ln.split("\t") for ln in raw.splitlines() if "\t" in ln]
+    if not rows:
+        return f"{slug}: workspace updated"[:_SUBJECT_MAX]
+    verbs = {"A": "added", "M": "updated", "D": "removed", "R": "renamed", "C": "copied"}
+    if len(rows) == 1:
+        code, path = rows[0][0][:1], rows[0][-1]
+        return f"{slug}: {path} — {verbs.get(code, 'changed')}"[:_SUBJECT_MAX]
+    # Several files: name the first two and count the rest, so the line still says WHERE rather
+    # than only how many — "3 files" alone sends the reader to the diff for the thing the subject
+    # exists to save them.
+    names = [r[-1] for r in rows]
+    head = ", ".join(names[:2])
+    rest = f" +{len(names) - 2}" if len(names) > 2 else ""
+    return f"{slug}: {head}{rest} — {len(names)} files changed"[:_SUBJECT_MAX]
+
+
 def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]) -> Optional[str]:
     """Commit ``work`` if its tree changed, attributed to ``author`` (committer = platform). Returns the
     new HEAD sha, or None on a clean tree. A path with no ``.git`` is skipped (a mount not yet seeded).
@@ -307,7 +349,15 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     env = _commit_env(author)
     _git(work, "add", "-A", "--", ".", env=env)
     _git(work, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", _CONTINUITY_DIR, env=env)
-    _git(work, "commit", "-m", (message.splitlines()[0][:72] if message else "agent turn"), env=env)
+    # SUBJECT from the tree; the agent's sentence, if there is one, as the BODY. Two `-m` flags is
+    # git's own subject/body split, so `--oneline` shows the change and `git show` still carries
+    # what the agent said about it — nothing is lost, it is filed where a reader expects it.
+    subject = _change_subject(work, env)
+    body = (message or "").strip()
+    args = ["commit", "-m", subject]
+    if body:
+        args += ["-m", body]
+    _git(work, *args, env=env)
     return _git(work, "rev-parse", "HEAD", env=env)
 
 

@@ -190,8 +190,15 @@ def test_run_harness_turn_commits_conformant(tmp_path: Path):
     evs = list(run_harness_turn(repo, "create jane", ClaudeCodeHarness(exec_fn=fake_exec)))
     assert any(e["type"] == "commit" for e in evs)
     assert (repo / "kg/entities/person/jane-liu.md").exists()
+    # THE SUBJECT NAMES THE CHANGE, and the reply is the body. This asserted `"wrote jane" in log`
+    # — the agent's reply as the subject — which is the defect the founder found in `_global`'s own
+    # history on 2026-09-02: `git log --oneline` read as truncated half-sentences and never said
+    # which file a commit touched.
     log = subprocess.run(["git", "log", "--oneline"], cwd=str(repo), capture_output=True, text=True).stdout
-    assert "wrote jane" in log
+    assert "kg/entities/person/jane-liu.md — added" in log
+    assert "wrote jane" not in log
+    body = subprocess.run(["git", "log", "-1", "--format=%b"], cwd=str(repo), capture_output=True, text=True).stdout
+    assert "wrote jane" in body   # kept, where a sentence belongs
 
 
 def test_run_harness_turn_commits_nonconformant_free_zone(tmp_path: Path):
@@ -270,8 +277,15 @@ def test_run_harness_turn_commits_each_changed_mount_independently(tmp_path: Pat
     assert len(commits) == 2, "one commit per changed mount"
     # each mount got its OWN commit (distinct repos, distinct HEADs)
     assert (private / "note.md").exists() and (shared / "doc.md").exists()
-    assert "wrote both" in subprocess.run(["git", "log", "--oneline"], cwd=str(private), capture_output=True, text=True).stdout
-    assert "wrote both" in subprocess.run(["git", "log", "--oneline"], cwd=str(shared), capture_output=True, text=True).stdout
+    # Each mount's subject names ITS OWN change — which is the second thing the old shape lost:
+    # both repos carried the same sentence, so neither said what had happened in it.
+    priv_log = subprocess.run(["git", "log", "--oneline"], cwd=str(private), capture_output=True, text=True).stdout
+    shar_log = subprocess.run(["git", "log", "--oneline"], cwd=str(shared), capture_output=True, text=True).stdout
+    assert "note.md — added" in priv_log and "doc.md — added" in shar_log
+    assert "wrote both" not in priv_log and "wrote both" not in shar_log
+    for repo_dir in (private, shared):
+        body = subprocess.run(["git", "log", "-1", "--format=%b"], cwd=str(repo_dir), capture_output=True, text=True).stdout
+        assert "wrote both" in body
 
 
 def test_run_harness_turn_only_commits_the_mount_that_changed(tmp_path: Path):
