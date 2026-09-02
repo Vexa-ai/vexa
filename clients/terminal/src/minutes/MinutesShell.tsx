@@ -615,8 +615,8 @@ export function MinutesShell() {
    *  already drifted — only one of them knew about tabs — and that drift is the class of defect the
    *  scaffold record exists to end. If a third arrival is ever added, it mints a scaffold and calls
    *  this; it does not grow a third composer. */
-  const openFromScaffold = useCallback((sc: Scaffold, native: string | null) => {
-    const rec = scaffoldToChat(sc, { native });
+  const openFromScaffold = useCallback((sc: Scaffold) => {
+    const rec = scaffoldToChat(sc);
     // Decision 18's rule: a chat that already carries tabs belongs to its reader, and a second
     // arrival must not tidy their desk out from under them.
     const existing = chatsRef.current.find((c) => c.id === rec.id);
@@ -646,16 +646,10 @@ export function MinutesShell() {
     let id: string | null = null;
     try { id = localStorage.getItem("vexa.pendingScaffold"); } catch { /* ignore */ }
     if (!id) return;
-    // A scaffold ABOUT a meeting needs the meetings list to resolve the note's native id, exactly
-    // as the preset path does. Bounded by the same 8s wait: a list that never answers must not
-    // leave a real click with nothing.
-    if (!meetingsLoaded && !presetWaited) {
-      if (!presetTimer.current) {
-        presetTimer.current = true;
-        window.setTimeout(() => setPresetWaited(true), 8000);
-      }
-      return;
-    }
+    // NO WAIT ON THE MEETINGS LIST. The record carries `native` itself, so nothing here needs the
+    // list to resolve the note tab — which matters because the list is exactly what may not have
+    // loaded yet when an emailed link lands, and the preset path's 8s wait exists only because it
+    // had to hunt for that id. One record, and it is complete.
     scaffoldFired.current = true;
     setPresetInFlight(true);        // the scaffold OWNS the opening, like a preset
     try { localStorage.removeItem("vexa.pendingScaffold"); } catch { /* ignore */ }
@@ -667,10 +661,7 @@ export function MinutesShell() {
         setScaffoldRefusal(got.refusal);
         return;
       }
-      const sc = got.scaffold;
-      const row = sc.meeting ? meetings.find((x) => String(x.id) === sc.meeting) : undefined;
-      const native = (row as { native_id?: string } | undefined)?.native_id ?? null;
-      openFromScaffold(sc, native);
+      openFromScaffold(got.scaffold);
     })();
   }, [addChat, meetings, meetingsLoaded, presetWaited]);
 
@@ -800,12 +791,13 @@ export function MinutesShell() {
         preset: name,
         openingText: prompt,
         meeting: row ? String(row.id) : (/^\d+$/.test(ref) ? ref : null),
+        native: tabCtx.native,
         phase,
         workspaces: mounts,
         tabs: tabTokens,
         focus: focusToken,
         title: row?.title,
-      }), tabCtx.native);
+      }));
       return;
     })();
   }, [openFromScaffold, meetings, meetingsLoaded, presetWaited]);
