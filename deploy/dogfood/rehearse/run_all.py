@@ -19,12 +19,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import pathlib
 import sys
 import time
 
 from . import catalogue as cat
 from .doors import Doors, LiveDoors
 from .engine import DEFAULT_MEETING, DEFAULT_WHEN, Refused, rehearse
+
+#: Where a finding goes when the intake cannot take it. Overridable, because a run on a host with
+#: a read-only /tmp still has to be able to keep its findings.
+FRICTION_FALLBACK = pathlib.Path(
+    os.environ.get("VEXA_REHEARSE_FRICTION_LOG", "/tmp/rehearse-friction.jsonl"))
 
 
 def file_friction(doors_kind: str, state: str, res, reporter) -> dict:
@@ -52,11 +59,24 @@ def file_friction(doors_kind: str, state: str, res, reporter) -> dict:
             + f"  ·  failed checks: {', '.join(v['check'] for v in failed) or 'none'}"),
         "error": symptom[:900],
     }
+    # THE FILE FIRST, ALWAYS — the rig's own rule for `report_friction`, and it earned its place
+    # here on the first live run: `POST /api/friction` is not on the deployed agent-api image yet
+    # (#1412), so every record 404'd. A finding that exists only in a 404 is a finding nobody has.
+    # The file is the fallback, never the store: the intake below is still the destination.
+    try:
+        FRICTION_FALLBACK.parent.mkdir(parents=True, exist_ok=True)
+        with FRICTION_FALLBACK.open("a") as f:
+            f.write(json.dumps({"at": time.time(), "state": state, **rec}) + "\n")
+        rec["written_to"] = str(FRICTION_FALLBACK)
+    except OSError as e:
+        rec["written_to"] = f"FAILED: {e}"
     if reporter:
         try:
             reporter(rec)
             rec["filed"] = True
         except Exception as e:                                     # noqa: BLE001
+            # A 404 here is NOT a pass and never becomes one: the record is on disk, the run is
+            # still red, and the report says the intake refused it and where the record went.
             rec["filed"] = False
             rec["file_error"] = f"{type(e).__name__}: {e}"
     return rec
@@ -105,7 +125,13 @@ def render(report: dict) -> str:
     lines.append(f"{report['passed']}/{report['ran']} states green in {report['wall_s']}s"
                  + (f" · failed: {', '.join(report['failed'])}" if report["failed"] else ""))
     if report["friction"]:
-        lines.append(f"{len(report['friction'])} friction record(s) filed (decision 33)")
+        filed = sum(1 for f in report["friction"] if f.get("filed"))
+        unfiled = [f for f in report["friction"] if not f.get("filed")]
+        lines.append(f"{len(report['friction'])} friction record(s): {filed} filed to the intake "
+                     f"(decision 33), {len(unfiled)} written to "
+                     f"{report['friction'][0].get('written_to', FRICTION_FALLBACK)}")
+        if unfiled:
+            lines.append(f"  the intake refused them: {unfiled[0].get('file_error', '?')}")
     return "\n".join(lines)
 
 
