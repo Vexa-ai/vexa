@@ -42,11 +42,19 @@ function InviteGate({ children }: { children: ReactNode }) {
   const view = params.get("view");         // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
   const ask = params.get("ask");           // ?ask=<preset> — MINUTES: open a chat already primed
 
-  // MINUTES `?setup=global`: stash the intent; the workbench fires the admin conversation once
-  // the chat is mounted. Re-runnable on purpose — amending the org tier is the same conversation.
+  // MINUTES `?setup=global`: the ADMIN company-layer conversation. It stashes a PRESET — the same
+  // `vexa.pendingPreset` every emailed `?ask=` link stashes — so the opening turn comes from
+  // `_global/asks/setup-global.md`, admin-authored and read hot at click time. It used to stash a
+  // bespoke flag that the workbench turned into a prompt string baked into this client, pointing
+  // the agent at a file that exists on no deployment; the one conversation that decides how every
+  // agent in the company behaves opened by reading nothing, and its wording could only change by
+  // rebuilding a cold image. Re-runnable on purpose — amending the company layer is the same
+  // conversation.
   useEffect(() => {
     if (setup !== "global") return;
-    try { localStorage.setItem("vexa.setupGlobal", "1"); } catch { /* locked-down storage */ }
+    try {
+      localStorage.setItem("vexa.pendingPreset", JSON.stringify({ ask: "setup-global", ws: "_global" }));
+    } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [setup, invite, tshare]);
 
