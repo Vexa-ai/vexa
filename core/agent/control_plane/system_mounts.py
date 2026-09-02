@@ -79,16 +79,60 @@ def global_mount(settings, root: str) -> dict:
         raise RuntimeError("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH is required: every agent stack includes _global")
     if not Path(src).exists():
         raise RuntimeError(f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH does not exist: {src}")
+    if not Path(src).is_dir():
+        raise RuntimeError(f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH is not a directory: {src}")
     ref = (getattr(settings, "global_system_workspace_ref", "") or "").strip() or None
-    return {
+    target = f"{root}/{GLOBAL_SLUG}"
+    mount = {
         "slug": GLOBAL_SLUG,
-        "source": src,                       # the platform-owned repo/dir on the host (the bind SOURCE)
-        "path": f"{root}/{GLOBAL_SLUG}",     # where it lands in the worker (the bind TARGET)
+        "path": target,                      # where it lands in the worker (the bind TARGET)
         "ref": ref,                          # pinned ref, or None = mount HEAD
         "role": "global",
-        "write": False,                      # READ-ONLY — agents never write _global (bound :ro)
+        "write": False,                      # READ-ONLY by default — the admin session flips this
         "primary": False,
     }
+
+    # ── ONE STORE, OR THE WRITE GOES SOMEWHERE NOBODY READS ──────────────────────────────────────
+    # `source` on a mount means "a host path to bind from", and it is resolved by the DOCKER DAEMON
+    # ON THE HOST. Every other value here is resolved by agent-api INSIDE ITS CONTAINER. When
+    # `_global` lives in the workspace store, those are two different filesystems wearing the same
+    # string, and emitting `source` picks the wrong one.
+    #
+    # ⚠ THE FAILURE THIS PREVENTS, 2026-09-02, live, on the founder's own first-run setup chat.
+    # `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=/workspaces/_global` passed the existence check above,
+    # because inside agent-api that path IS the store volume. It was then handed to docker as a
+    # bind source, where `/workspaces/_global` is a host directory that did not exist — so docker
+    # AUTO-CREATED an empty one and mounted it read-write. The admin dictated the company layer,
+    # the agent wrote README.md, the write SUCCEEDED, and the agent truthfully said so. It had
+    # written into a phantom store that no reader of `_global` has ever looked at: the gate saw no
+    # README, the setup could not complete, and from the outside it read as an agent fabricating a
+    # write it never made. It was the opposite — a write nobody could see. Two disjoint stores
+    # behind one name is the whole defect, and it fails silently by construction, because both
+    # halves report success.
+    #
+    # THE FIX IS TO STOP HAVING TWO. When `_global` sits inside the store root, emit NO source: the
+    # runtime then binds it out of the store volume by subpath, exactly the way `/workspaces/57`
+    # and `_system` are already bound (runtime_kernel.mounts.workspace_binds). One store, resolved
+    # once, by the component that owns it — and it is the same bytes agent-api reads, by
+    # construction rather than by a check that can drift.
+    #
+    # A `_global` genuinely OUTSIDE the store (a separately-managed repo on the host) keeps its own
+    # source, which is what that branch is for. It is a real deployment shape and it is not the one
+    # that broke: an out-of-store path means the same thing to agent-api and to the daemon.
+    src_p = Path(src).resolve()
+    root_p = Path(root).resolve()
+    if src_p == root_p / GLOBAL_SLUG or (root_p in src_p.parents and src_p.name == GLOBAL_SLUG):
+        return mount                          # in-store: rides the store bind, no source
+    if root_p in src_p.parents:
+        # In-store but under some OTHER name. The runtime derives the store subpath from `path`,
+        # which is always `<root>/_global`, so honouring this would mount a different directory
+        # than the operator named — silently, and in the same class as the bug above.
+        raise RuntimeError(
+            f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH points inside the workspace store but is not "
+            f"{root}/{GLOBAL_SLUG}: {src}. Inside the store the organisation tier must BE "
+            f"{GLOBAL_SLUG}; point it outside the store to manage it separately.")
+    mount["source"] = src                     # out-of-store: its own bind, source -> target
+    return mount
 
 
 def _system_store(root: Path, subject: str) -> Path:

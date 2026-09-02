@@ -144,3 +144,66 @@ def test_the_repo_exists_before_its_first_writer(tmp_path):
     # a re-run with nothing to commit is not an error — the acceptance verb is idempotent
     assert global_layer.commit(tmp_path, author_email="admin@acme.test",
                                author_name="the admin", message="again") == sha
+
+
+# ── ONE STORE (the 2026-09-02 phantom-`_global` blocker) ────────────────────────────────────────
+
+def _settings(tmp_path, global_path):
+    from types import SimpleNamespace
+    return SimpleNamespace(workspaces_dir=str(tmp_path),
+                           global_system_workspace_path=str(global_path),
+                           global_system_workspace_ref="", global_admin_subjects="")
+
+
+def test_an_in_store_global_emits_NO_source_so_it_rides_the_store_bind(tmp_path):
+    """The bug, as a test.
+
+    `source` is resolved by the DOCKER DAEMON ON THE HOST; every other value on the mount is
+    resolved by agent-api INSIDE ITS CONTAINER. When `_global` lives in the workspace store those
+    are two different filesystems wearing one string. Emitting `source` picked the host one, docker
+    auto-created an empty directory there, and the founder's setup chat wrote the company layer into
+    a store no reader of `_global` has ever looked at — successfully, which is why nothing reported
+    it. Emitting no source makes the runtime bind it out of the store volume by subpath, the same
+    way `/workspaces/57` and `_system` are already bound: one store, resolved once, by the component
+    that owns it."""
+    from control_plane.system_mounts import GLOBAL_SLUG, global_mount
+    (tmp_path / GLOBAL_SLUG).mkdir()
+    m = global_mount(_settings(tmp_path, tmp_path / GLOBAL_SLUG), str(tmp_path))
+    assert "source" not in m
+    assert m["path"] == f"{tmp_path}/{GLOBAL_SLUG}"
+    assert m["write"] is False
+
+
+def test_an_out_of_store_global_keeps_its_own_source(tmp_path):
+    """A `_global` genuinely outside the store is a real deployment shape and is NOT the broken one:
+    an out-of-store path means the same thing to agent-api and to the daemon."""
+    from control_plane.system_mounts import GLOBAL_SLUG, global_mount
+    outside = tmp_path.parent / (tmp_path.name + "-elsewhere")
+    outside.mkdir(exist_ok=True)
+    m = global_mount(_settings(tmp_path, outside), str(tmp_path))
+    assert m["source"] == str(outside)
+    assert m["path"] == f"{tmp_path}/{GLOBAL_SLUG}"
+
+
+def test_an_in_store_global_under_another_name_is_refused(tmp_path):
+    """The runtime derives the store subpath from `path`, which is always `<root>/_global`. Honouring
+    an in-store directory under a different name would mount something other than what the operator
+    configured — silently, in the same class as the bug above."""
+    import pytest as _pytest
+    from control_plane.system_mounts import global_mount
+    (tmp_path / "company").mkdir()
+    with _pytest.raises(RuntimeError, match="must BE"):
+        global_mount(_settings(tmp_path, tmp_path / "company"), str(tmp_path))
+
+
+def test_a_missing_or_non_directory_global_fails_before_spawn(tmp_path):
+    """Never auto-create, and never bind a file. Docker auto-creating the missing directory is what
+    made the phantom store; agent-api refusing first is what stops it reaching docker at all."""
+    import pytest as _pytest
+    from control_plane.system_mounts import global_mount
+    with _pytest.raises(RuntimeError, match="does not exist"):
+        global_mount(_settings(tmp_path, tmp_path / "nope"), str(tmp_path))
+    f = tmp_path / "afile"
+    f.write_text("x")
+    with _pytest.raises(RuntimeError, match="not a directory"):
+        global_mount(_settings(tmp_path, f), str(tmp_path))

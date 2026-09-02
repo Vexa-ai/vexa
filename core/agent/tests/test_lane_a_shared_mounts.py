@@ -155,7 +155,11 @@ def test_dispatch_mount_set_includes_shared_read_only(tmp_path):
     from control_plane.dispatch import build_mount_set
 
     idx = _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
-    global_dir = tmp_path / "global"
+    # NAMED `_global`, not "global". Inside the store the organisation tier must BE `_global`:
+    # the runtime derives the store subpath from the mount's `path`, which is always
+    # `<root>/_global`, so an in-store directory under any other name would mount something other
+    # than what the operator configured. global_mount refuses it rather than binding the wrong dir.
+    global_dir = tmp_path / "_global"
     global_dir.mkdir()
     settings = SimpleNamespace(
         workspaces_dir=str(tmp_path), global_system_workspace_path=str(global_dir),
@@ -337,7 +341,11 @@ def test_dispatch_without_index_is_private_only(tmp_path):
     from control_plane.dispatch import build_mount_set
 
     _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
-    global_dir = tmp_path / "global"
+    # NAMED `_global`, not "global". Inside the store the organisation tier must BE `_global`:
+    # the runtime derives the store subpath from the mount's `path`, which is always
+    # `<root>/_global`, so an in-store directory under any other name would mount something other
+    # than what the operator configured. global_mount refuses it rather than binding the wrong dir.
+    global_dir = tmp_path / "_global"
     global_dir.mkdir()
     settings = SimpleNamespace(
         workspaces_dir=str(tmp_path), global_system_workspace_path=str(global_dir),
