@@ -1,0 +1,109 @@
+/** "EXTEND" — send the open chat to explore the page, or a piece of it (PRD decision 32).
+ *
+ *  Founder: *"an extend button that would request the same chat that is open now — just go explore
+ *  the page in question or a highlighted text from a file, so the agent would go explore that
+ *  further following the logic of the context and the chat and the focus."*
+ *
+ *  THE SAME CHAT, NOT A NEW ONE. It posts a turn into whatever chat is open, through the same
+ *  `ASK_CHAT_EVENT` seam a canvas chip already uses — so the turn inherits that conversation's
+ *  context, focus and mount set by construction rather than by re-composing them here.
+ *
+ *  WHAT THE PERSON SEES IS THE COMPACT FORM. `Extend: kg/plan.md — "…"`, never the prompt. The
+ *  preset text is the agent's business; a bubble that renders it puts words in the person's mouth
+ *  they did not write, and then their next message argues with a paragraph they never said. The ask
+ *  seam has carried a separate `display` since the canvas chips — this is the same rule, and when
+ *  F47's `user_text` lands on the record it is the same rule again, one layer down.
+ *
+ *  UNTIL THE SERVER HALF LANDS, BOTH TRAVEL. The typed `intent` is what the `extend` preset will
+ *  read; the prompt is the plain sentence that works today. A build where the server ignores the
+ *  intent still does the right thing, and a build where it reads it is not confused by the
+ *  sentence — the two say the same thing.
+ */
+import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { normalizeIntent, type ChatIntent, type ChatIntentKind } from "../surfaces/chatIntent";
+import { navigateView } from "./roomView";
+
+/** How much of a selection the BUBBLE shows. The intent carries up to 2000 characters; a bubble is
+ *  a label, and a paragraph rendered as one is the composed-text failure wearing a quotation mark. */
+export const PREVIEW_MAX = 80;
+
+const VERB: Record<ChatIntentKind, string> = { extend: "Extend", create: "Create" };
+
+/** Collapse the whitespace a rendered selection carries — a highlight dragged across a paragraph
+ *  break arrives with newlines in it, and they belong in the intent, never in a one-line label. */
+const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** THE BUBBLE. Compact by construction: a verb, the page, and — when there is one — a short
+ *  quotation of what was highlighted. */
+export function compactLabel(intent: ChatIntent): string {
+  const head = `${VERB[intent.kind]}: ${intent.path}`;
+  if (!intent.selection) return head;
+  const flat = oneLine(intent.selection);
+  const shown = flat.length > PREVIEW_MAX ? `${flat.slice(0, PREVIEW_MAX).trimEnd()}…` : flat;
+  return `${head} — “${shown}”`;
+}
+
+/** THE PROMPT, until the server turns the intent into the `extend` preset. The whole selection,
+ *  not the preview: this is what the agent reads, and truncating it here would lose the half of a
+ *  paragraph the person actually cared about. */
+export function fallbackText(intent: ChatIntent): string {
+  const head = `${VERB[intent.kind]}: ${intent.path}`;
+  return intent.selection ? `${head} — '${intent.selection}'` : head;
+}
+
+/** WHERE A SELECTION SITS IN THE FILE SOURCE — or nothing.
+ *
+ *  The rendered document is not the file: a heading loses its `#`, a link loses its target, and an
+ *  offset into what the reader highlighted is an offset into neither. So the range is established
+ *  by finding the selection in the SOURCE, and only when it occurs there exactly ONCE. Two
+ *  occurrences is not a near-miss, it is an unknown answer (F63), and an unknown answer is omitted.
+ */
+export function sourceRange(body: string | null | undefined, selection: string): { start: number; end: number } | null {
+  const src = body ?? "";
+  const needle = selection.trim();
+  if (!src || !needle) return null;
+  const first = src.indexOf(needle);
+  if (first < 0) return null;
+  if (src.indexOf(needle, first + 1) >= 0) return null;   // ambiguous → no range
+  return { start: first, end: first + needle.length };
+}
+
+// ── posting, and where the reply lands ───────────────────────────────────────────────────────────
+
+/** The page an in-flight intent will bring into view once the turn commits. Module-level because
+ *  the button that posts and the listener that lands are two different components with one fact
+ *  between them — and it is a POINTER, not state: one intent is pending at a time, the newest wins,
+ *  which is exactly what a second press of Extend means. */
+let pending: { workspace?: string; path: string } | null = null;
+
+/** For tests and for a panel that unmounts mid-turn. */
+export const pendingLanding = (): { workspace?: string; path: string } | null => pending;
+export const clearPending = (): void => { pending = null; };
+
+/** Post an intent into the OPEN chat. Returns the intent that went, or `null` when there was
+ *  nothing honest to send (see `normalizeIntent` — an unnamed page is never guessed at). */
+export function postIntent(raw: Parameters<typeof normalizeIntent>[0]): ChatIntent | null {
+  const intent = normalizeIntent(raw);
+  if (!intent) return null;
+  pending = { workspace: intent.workspace, path: intent.path };
+  window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+    detail: { prompt: fallbackText(intent), display: compactLabel(intent), intent },
+  }));
+  return intent;
+}
+
+/** THE LANDING (decision 32.3): after the reply, the page the intent named becomes the view.
+ *
+ *  It fires on the turn's COMMIT, not on the last token — for `create` the file does not exist
+ *  until then, and navigating to it a moment early is how the panel ends up saying "no page here
+ *  yet" about a page that was just written. A turn that commits nothing lands nothing, which is
+ *  the honest answer: the page did not change.
+ *
+ *  It NAVIGATES, it does not open a tab (decision 28). */
+export function landPending(): boolean {
+  if (!pending) return false;
+  const { workspace, path } = pending;
+  pending = null;
+  navigateView(workspace, path);
+  return true;
+}

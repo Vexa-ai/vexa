@@ -21,6 +21,7 @@ import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
 import { promptCarriesActiveContext } from "./surfaceSync";
+import type { ChatIntent } from "./chatIntent";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -863,7 +864,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     return data.files ?? [];
   };
 
-  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean; scaffoldId?: string } = {}) => {
+  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean; scaffoldId?: string; intent?: ChatIntent } = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
     const { hidden = false, ground = true } = opts;
@@ -943,7 +944,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     try {
       const result = await streamChatTurn(
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
-        { prompt: p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId },
+        // `intent` (PRD decision 32) — an Extend/Create press is an ACT on a named file, not a
+        // sentence; it travels typed so the server can turn it into a preset without parsing prose.
+        { prompt: p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId, intent: opts.intent },
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
@@ -1013,7 +1016,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   sendRef.current = send;
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string }>).detail;
+      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
@@ -1026,7 +1029,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
       // the user's own sentence renders as their message, and the grounding it carries does not.
-      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId });
+      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId, intent: detail?.intent });
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
