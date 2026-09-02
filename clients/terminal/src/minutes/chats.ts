@@ -370,8 +370,24 @@ export function setCompanyLayerHint(state: "missing" | "completed"): void {
   try { localStorage.setItem(LAYER_HINT_KEY, state); } catch { /* locked-down storage */ }
 }
 
-export function companyLayerMissing(): boolean {
-  try { return localStorage.getItem(LAYER_HINT_KEY) === "missing"; } catch { return false; }
+/** THREE-valued, and the third value is the whole correction.
+ *
+ *  ⚠ The first version read `=== "missing"` and treated everything else — including an ABSENT
+ *  hint — as "the layer is fine, seed the rows". That defeats itself on the exact case it exists
+ *  for: a first admin on a fresh browser has no hint yet, because the poll that writes it has not
+ *  returned when the rail renders. Verified live on a cleared browser: the admin got the Personal
+ *  row, the generic "paste a meeting link" greeting and the personal README template — the
+ *  founder's original complaint, reproduced by the fix meant to prevent it.
+ *
+ *  So `null` (unknown) is its own answer and it does NOT seed. The rows are restored by the
+ *  re-seed below the moment the probe says "completed", which is under a second later — and they
+ *  are derived, not stored, so nothing has to be un-hidden. Being briefly rowless costs a second;
+ *  guessing wrong the other way costs the first impression this whole gate exists to protect. */
+export function companyLayerHint(): "missing" | "completed" | null {
+  try {
+    const v = localStorage.getItem(LAYER_HINT_KEY);
+    return v === "missing" || v === "completed" ? v : null;
+  } catch { return null; }
 }
 
 /** The two rows that must always be reachable: your own chat, and the `_global` admin setup — which
@@ -388,7 +404,7 @@ export function companyLayerMissing(): boolean {
  *  the only chat, and it is the whole screen. They come back the moment the instance opens — these
  *  rows are derived, not stored, so nothing has to be un-hidden later. */
 export function seedChats(now = Date.now()): Chat[] {
-  if (companyLayerMissing()) return [];
+  if (companyLayerHint() !== "completed") return [];
   return [
     { id: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"], artifacts: [], touched: true, createdAt: now, lastActivityAt: now },
     { id: ORG_CHAT_ID, label: ORG_CHAT_LABEL, workspaces: ["_global"], artifacts: [], touched: true, createdAt: now - 1, lastActivityAt: now - 1 },
