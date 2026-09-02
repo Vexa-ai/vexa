@@ -22,9 +22,10 @@ dependencies = [
     # on top of it (bounded in-memory stores, Retry-After on every 429, canonicalised ban
     # addresses); 7.8.0 joins repeated X-Forwarded-For field lines in its Starlette adapter, and
     # 7.8.1 makes a whitelisted IP skip the /ws rate limit like the HTTP path (7.8.0 did not).
-    # The lock sits on guard-core 3.15.0, whose rate limiter honors redis_fail_open (the
-    # default False now raises on a Redis outage instead of falling back); edge_guard.py sets
-    # it True explicitly, so the behavior is the same on either side of that boundary.
+    # The lock currently sits on guard-core 3.17.0. guard-core >= 3.15.0 makes the rate
+    # limiter honor redis_fail_open (the default False now raises on a Redis outage instead
+    # of falling back); edge_guard.py sets it True explicitly, so the behavior is the same
+    # on either side of that boundary.
     # Pinned <8.0 so a major bump (which may rename SecurityConfig fields) can't silently break
     # the gateway on a `uv sync --frozen` image rebuild.
     "fastapi-guard>=7.8.1,<8.0",
