@@ -68,6 +68,17 @@ def _shared_ws(root: Path, workspace_id: str, owner: str = "u_owner") -> Path:
     return ws
 
 
+def _desk(root: Path, subject: str) -> Path:
+    """A person's own workspace, where the store keeps it: <root>/<subject>."""
+    ws = root / subject
+    ws.mkdir(parents=True)
+    _git(ws, "init", "-q", "-b", "main")
+    _git(ws, "config", "user.email", "t@t"); _git(ws, "config", "user.name", "t")
+    (ws / "CLAUDE.md").write_text("# my desk\n")
+    _git(ws, "add", "-A"); _git(ws, "commit", "-q", "-m", "seed")
+    return ws
+
+
 def _existing_repo(root: Path, name: str = "their-kg") -> str:
     """Somebody's EXISTING workspace repo, already on 'GitHub' — the thing the founder wants to load."""
     work = root / f"{name}-src"
@@ -334,3 +345,24 @@ def test_the_desk_lane_answers_the_same_way(tmp_path):
     assert refused.status_code == 502
     assert "ssh-ed25519 " in refused.json()["detail"]
     assert "say `done` when added" in refused.json()["detail"]
+
+
+def test_personal_is_a_name_the_desk_answers_to(tmp_path):
+    """The terminal's workspace chip and the MCP verbs both say "personal" for a person's own desk; the
+    store says "seed slot". A route addressed with the first name used to 404 — which is how the deploy
+    key for a desk became unreachable from the very path that needs it most (the MCP, which has no other
+    way to name it)."""
+    c = _client(tmp_path)
+    _desk(tmp_path, "u_desk")
+
+    made = c.post("/api/workspace/personal/deploy-key",
+                  json={"repo": "git@github.com:acme/kg.git"}, headers={"X-User-Id": "u_desk"})
+    assert made.status_code == 200, made.text
+    assert made.json()["public_key"].startswith("ssh-ed25519 ")
+
+    status = c.get("/api/workspace/git-remote-status?slug=personal", headers={"X-User-Id": "u_desk"})
+    assert status.status_code == 200
+
+    # …and it is still their OWN desk it names, never anybody else's
+    assert c.get("/api/workspace/git-remote-status?slug=u_someone_else",
+                 headers={"X-User-Id": "u_desk"}).status_code == 404

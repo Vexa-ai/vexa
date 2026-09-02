@@ -38,6 +38,7 @@ STORE_DIRNAME = ".attached"
 STATE_FILENAME = "state.json"
 SEED_SLOT = "seed"  # the reserved slug for the original template-seeded workspace
 SEED_BACKUP_SLOT = "seed-prev"  # where 'start fresh' tucks the displaced default so it stays recoverable
+PERSONAL_ALIAS = "personal"    # what the terminal and the MCP call a person's own desk (see workspace_dir_for)
 
 # The subject's PRIVATE baseline — the workspace at ``<root>/<subject>`` that a turn always mounts. Its
 # slug in the active set is whatever ``state.active`` points at (the seed by default). This slug marks
@@ -271,6 +272,11 @@ def workspace_dir_for(root: str | Path, subject: str, slug: Optional[str]) -> Pa
         return _safe_subject_dir(rootp, subject)
     if target in state.get("slots", {}):
         return _slug_dir(rootp, subject, state, target)
+    if target == PERSONAL_ALIAS:
+        # "personal" is what the TERMINAL's workspace chip and the MCP verbs call a person's own desk;
+        # the store calls it the seed slot. Resolved AFTER the slot lookup so a real slug of that name
+        # would still win, and only here — the store's own vocabulary is unchanged.
+        return _safe_subject_dir(rootp, subject)
     raise KeyError(target)
 
 
