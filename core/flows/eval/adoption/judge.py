@@ -143,15 +143,22 @@ def decide(person, touch: dict, history: list, day: int = 0, load: int = 0) -> d
         return {"opened": False, "outcome": "ignored", "why": "(judge produced no answer)",
                 "friction": "judge-error", "_error": True}
     for k in ("opened", "clicked", "chat_turn", "replied", "completed_setup",
-              "invited_own_meeting", "forwarded"):
+              "invited_own_meeting", "forwarded", "opted_out"):
         out[k] = bool(out.get(k))
     if not out["opened"]:                       # an unopened mail cannot have been acted on
         for k in ("clicked", "chat_turn", "replied", "completed_setup",
-                  "invited_own_meeting", "forwarded"):
+                  "invited_own_meeting", "forwarded", "opted_out"):
             out[k] = False
-    out["active_action"] = any(out.get(k) for k in personas.UI_ACTIONS)
+    if out.get("opted_out"):
+        # Leaving is not using. A reply whose whole content is "stop sending me these" must not
+        # be able to raise the score of the change that introduced the opt-out line.
+        out["replied"] = False
+    out["active_action"] = (any(out.get(k) for k in personas.UI_ACTIONS)
+                            and not out.get("opted_out"))
     out["outcome"] = out.get("outcome") if out.get("outcome") in (
         "acted", "hesitated", "ignored") else ("acted" if out["active_action"] else "ignored")
+    if out.get("opted_out"):
+        out["outcome"] = "ignored"
     return out
 
 
