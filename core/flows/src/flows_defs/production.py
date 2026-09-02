@@ -34,8 +34,8 @@ from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
 from flows_steps import meeting as mt
 from flows_steps import mailtext
-from flows_steps.common import (UI_URL, ensure_platform_user, platform_user_id, scaffolded,
-                                setting, ui_link, ws_file)
+from flows_steps.common import (UI_URL, ensure_platform_user, mint_scaffold, platform_user_id,
+                                scaffolded, setting, ws_file)
 from flows_steps.notify import notify
 
 INVITE = EventType("invite.received")
@@ -110,6 +110,32 @@ def build(reg: Registry, db) -> None:
                 pass
         return datetime.datetime.fromtimestamp(
             epoch, datetime.timezone.utc).strftime("%H:%M") + " UTC"
+
+    def _scaffold_refs(ctx, uid) -> dict:
+        """THE FACTS A SCAFFOLD CARRIES — what the invite already knew, and nothing derived.
+
+        Every line here is something the agent otherwise has to go and find, and on a small model
+        "otherwise" often means "not at all": the prepare opening that named a meeting by its Zoom
+        id and then said it held nothing was an agent with no facts, reaching for the only meeting
+        it could see. Facts are cheap and they are already in `refs`.
+
+        `when` is the EPOCH (the record's own shape) and `when_text` is the same moment rendered in
+        THIS person's zone — the server can only render UTC, and a bare time in a zone nobody named
+        is the kind of half-fact that reads as a bug. `state` is NOT set here: agent-api computes it
+        at mint and RE-COMPUTES it at open, because a stranger who signs in between the mail and the
+        click is not a stranger any more."""
+        refs = {}
+        for key in ("title", "organizer", "participants", "participant_names"):
+            if ctx.refs.get(key):
+                refs[key] = ctx.refs[key]
+        start = ctx.refs.get("start")
+        if start:
+            refs["when"] = start
+            try:
+                refs["when_text"] = _their_clock(uid, start)
+            except Exception:  # noqa: BLE001 — a clock we cannot render is not a reason to fail a mint
+                pass
+        return refs
 
     @reg.step
     def rsvp_accept(ctx: StepCtx):
@@ -452,7 +478,14 @@ def build(reg: Registry, db) -> None:
                 + report + "\n\n—\nRecorded by Vexa\n"
                 "Reply to this email with corrections or questions — I'll update what we hold "
                 "and answer here. Or open it and talk it through:")
-        link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"])
+        # THE SCAFFOLD, not a raw deeplink (PRD §5.5). No share token: this is the organiser's own
+        # meeting, and a capability nobody needs is a capability nobody should be handed.
+        link = mint_scaffold(
+            "post-meeting", ctx.refs["organizer"], opening="minutes-review",
+            meeting_id=ctx.refs["meeting_id"], refs=_scaffold_refs(ctx, ctx.refs["uid"]),
+            provenance={"flow": "post_meeting", "step": "email_minutes",
+                        "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
+                        "minted_by": str(ctx.refs["uid"])})
         mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
@@ -813,7 +846,26 @@ def build(reg: Registry, db) -> None:
                       or "minutes-review-invite")
             # `mid`, not refs["meeting_id"]: the token was minted against the ROW, so the link
             # must name that same row. refs may still carry a native id from meeting_ref().
-            link = ui_link(ask=ask, meeting=mid, tshare=token)
+            #
+            # THE SCAFFOLD (PRD §5.5). It carries the share token the line above minted, so the one
+            # button in this mail opens a chat that can actually see the meeting — and the mint
+            # RAISES rather than returning a weaker link, which puts a failure here into the same
+            # HELD branch as a failed share. Two ways to send a dead button, one refusal for both.
+            kind = "invite-offer" if ask.endswith("-invite") else "post-meeting"
+            try:
+                link = mint_scaffold(
+                    kind, a, opening=ask, meeting_id=mid, share_token=token,
+                    refs=_scaffold_refs(ctx, ctx.refs["uid"]),
+                    provenance={"flow": "post_meeting", "step": "email_attendees",
+                                "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
+                                "minted_by": str(ctx.refs["uid"])})
+            except StepError as e:
+                pending = [x for x in who if x not in sent]
+                raise StepError(
+                    f"HELD the attendee fan-out for meeting {mid}: no scaffold could be minted for "
+                    f"{a} ({e}). Mailed: {', '.join(sent) or 'nobody'}. "
+                    f"NOT mailed: {', '.join(pending)}.",
+                    retryable=getattr(e, "retryable", False)) from e
             # THE WHOLE MAIL: template head, one blank line, the shared report. The gap line and
             # the button after it are `notify.compose`'s ("body\n\n<url>\n") — the step does not
             # write the url, which is why the link is asserted on the call, not on prose.
@@ -1005,7 +1057,11 @@ def build(reg: Registry, db) -> None:
         # about MAIL is not a preference about what lands on their own desk.
         mid = att.get("meeting_id") or ctx.refs.get("meeting_id")
         organiser_link = (ctx.prior.get("email_minutes") or {}).get("link") \
-            or ui_link(ask="minutes-review", meeting=mid)
+            or mint_scaffold("post-meeting", organizer, opening="minutes-review", meeting_id=mid,
+                             refs=_scaffold_refs(ctx, uid),
+                             provenance={"flow": "post_meeting", "step": "drop_to_attendees",
+                                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
+                                         "minted_by": str(uid)})
         room = [{"to": organizer, "link": organiser_link}] + list(att.get("drops") or [])
         body = _drop_entity(title=title, day=day, date_prose=date_prose, organizer=organizer,
                             participants=roster, report=report, link="")
@@ -1091,8 +1147,15 @@ def build(reg: Registry, db) -> None:
             "title": title, "when": _their_clock(uid, ctx.refs["start"]),
             "organizer": ctx.refs.get("organizer") or "",
         })
-        mid = notify(to, subject or f"Prepare: {title}", body,
-                     link=ui_link(ask="prep", meeting=ref))
+        # THE SCAFFOLD (PRD §5.5). The row was planned above precisely so this link can name it;
+        # the mint is the last check that the chat behind the button will hold the meeting, and it
+        # RAISES rather than mailing a prepare note whose button opens a chat that knows nothing.
+        link = mint_scaffold("prep", to, opening="prep", meeting_id=ref,
+                             refs=_scaffold_refs(ctx, uid),
+                             provenance={"flow": "meeting_prep", "step": "prepare_meeting",
+                                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
+                                         "minted_by": str(uid)})
+        mid = notify(to, subject or f"Prepare: {title}", body, link=link)
         mx.register_thread(db, mid, uid, f"meet-{ref}")
         return Done({"message_id": mid, "meeting_ref": ref}, provider_ref=mid)
 
