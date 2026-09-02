@@ -88,10 +88,14 @@ def generate(org, show: str, dept: str, date: str, seed: int = 0) -> dict | None
         a=rng.randint(1, 4), b=rng.randint(5, 7), c=rng.randint(8, 9),
         work=", ".join(rng.sample(DEPT_WORK.get(dept, ["the shot"]),
                                   min(3, len(DEPT_WORK.get(dept, ["x"]))))),
-        n_lines=rng.randint(70, 130))
+        n_lines=rng.randint(110, 170))
     judge.ensure_cfg()
-    raw = judge._ask(prompt, timeout=300)
     names = {p.name for p in people}
+    raw = ""
+    for _attempt in range(3):
+        raw = judge._ask(prompt, timeout=300)
+        if raw and raw.count("|") >= 25:
+            break                                        # a malformed first answer is common
     segs, t = [], float(rng.randint(20, 60))
     for line in (raw or "").splitlines():
         line = line.strip().lstrip("-•* ")
@@ -108,7 +112,13 @@ def generate(org, show: str, dept: str, date: str, seed: int = 0) -> dict | None
             who = match[0]
         dur = max(1.4, min(14.0, len(text) / 15.0))
         segs.append({"t": round(t, 2), "end": round(t + dur, 2), "speaker": who, "text": text})
-        t += dur + rng.uniform(0.2, 2.2)
+        # Dailies are mostly SILENCE: the shot plays, everyone watches, then somebody speaks.
+        # Pacing purely off speech length produced an 8-minute "30-minute review", which would
+        # have made every duration-derived number wrong. A playback pause every few exchanges
+        # is what puts a 100-line session in the 20-40 minute band it actually occupies.
+        t += dur + rng.uniform(0.4, 3.0)
+        if len(segs) % rng.randint(5, 9) == 0:
+            t += rng.uniform(8.0, 26.0)                 # the shot plays again
     if len(segs) < 25:
         return None
     return {
