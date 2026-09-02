@@ -19,7 +19,7 @@ import time
 from typing import Optional
 
 import contracts
-from control_plane.workspace_attach import active_workspaces, shared_active_mounts
+from control_plane.workspace_attach import SEED_SLOT, active_workspaces, shared_active_mounts
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import global_layer
@@ -129,7 +129,8 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
 
 
 def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None,
-                    room: Optional[dict] = None) -> list[dict]:
+                    room: Optional[dict] = None,
+                    scaffold_workspaces: Optional[list[str]] = None) -> list[dict]:
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
@@ -164,7 +165,23 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     is bound to a shared workspace and the subject is a contributor/owner of it: that one keeps its
     write bit, becomes the turn's cwd, and the run actively maintains the group's memory.
     ``_system`` is NOT a desk and stays read-write — chat continuity anchors there
-    (``worker/engine._continuity_root``), and taking it away would break the turn, not narrow it."""
+    (``worker/engine._continuity_root``), and taking it away would break the turn, not narrow it.
+
+    ── THE SCAFFOLD (PRD 5.5) ─────────────────────────────────────────────────────────────────────
+    ``scaffold_workspaces`` is the mount list a SCAFFOLD RECORD states (agent-api resolved the
+    record and checked it belongs to this subject before passing it here — it never arrives from
+    a request body). It does two things and deliberately not a third:
+
+      * it ORDERS the middle tier, scaffold-named workspaces first, so the turn's cwd and the
+        worker's reading order are the ones the link was composed for;
+      * it ADDS a named workspace the subject has not activated — the meeting's group desk, most
+        often — resolved through ``group_desk_mount``, which asks the workspace's own
+        ``policy/members.json`` whether this subject may write it. Naming a slug is not a grant.
+
+    It does NOT REMOVE anything. For a human chat ``workspaces[]`` is ATTENTION, not permission
+    (PRD 7: "soft for a human, hard for a run") — a person's other desks stay mounted, because a
+    chat restores what was in focus and never a sandbox. The hard isolation axis is ``room``,
+    above, and it is a different argument on purpose so the two can never be confused."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
@@ -194,6 +211,45 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
             g_mount = group_desk_mount(settings.workspaces_dir, subject, group)
             if g_mount is not None:
                 active.append(g_mount)
+    # THE SCAFFOLD'S ORDER + ITS ONE ADDITION (see the docstring). Fails SOFT in both halves: a
+    # scaffold naming a workspace that cannot be resolved costs an ordering, never the turn.
+    if scaffold_workspaces:
+        wanted = [str(w).strip() for w in scaffold_workspaces
+                  if str(w).strip() and str(w).strip() not in (GLOBAL_SLUG, SYSTEM_SLUG)]
+        # A SCAFFOLD NAMES THE RECIPIENT'S OWN DESK BY THEIR SUBJECT ID, because at mint time
+        # that is the only handle the minter has — flows knows an address and a uid, never a
+        # slot name. On the store the same desk is the SEED SLOT (`workspace_attach.SEED_SLOT`,
+        # resolving in place at `<root>/<subject>`), so a literal slug comparison would miss it,
+        # then send it to `group_desk_mount`, which would correctly refuse a private desk and
+        # log it as a missing group. Two names for one desk, resolved here, once.
+        own = {str(subject), SEED_SLOT}
+        own_path = f"{settings.workspaces_dir}/{subject}"
+
+        def _is(mount: dict, want: str) -> bool:
+            return mount.get("slug") == want or (want in own and mount.get("path") == own_path)
+
+        for want in wanted:
+            if any(_is(m, want) for m in active):
+                continue
+            if want in own:
+                # Their own desk is the private baseline by construction; if it is not in the
+                # active set the person switched it OFF, and a link does not switch it back on.
+                continue
+            try:
+                extra_mount = group_desk_mount(settings.workspaces_dir, subject, want)
+            except Exception:  # noqa: BLE001
+                extra_mount = None
+            if extra_mount is not None:
+                active.append(extra_mount)
+
+        def _rank(mount: dict) -> int:
+            for i, want in enumerate(wanted):
+                if _is(mount, want):
+                    return i
+            return len(wanted)
+        active = sorted(active, key=_rank)
+        logger.info("dispatch SCAFFOLD MOUNTS subject=%s wanted=%s mounted=%s",
+                    subject, wanted, [m.get("slug") for m in active])
     stack.extend(active)
 
     # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
@@ -336,7 +392,8 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
                    memberships: Optional[list[dict]] = None,
                    model_config: Optional[dict] = None,
-                   room: Optional[dict] = None) -> dict[str, str]:
+                   room: Optional[dict] = None,
+                   scaffold_workspaces: Optional[list[str]] = None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -347,7 +404,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
     # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
-    mounts = build_mount_set(settings, subject, memberships, room=room)
+    mounts = build_mount_set(settings, subject, memberships, room=room,
+                             scaffold_workspaces=scaffold_workspaces)
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -577,7 +635,8 @@ class Dispatcher:
             logger.warning("model-config lookup failed for subject=%s — treating as env defaults", subject)
             return None
 
-    def dispatch(self, invocation: dict, *, room: Optional[dict] = None) -> str:
+    def dispatch(self, invocation: dict, *, room: Optional[dict] = None,
+                 scaffold_workspaces: Optional[list[str]] = None) -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
 
         ``room`` is the post-meeting MEETING ROOM — ``{meeting_id, subjects[], source}`` — already
@@ -613,7 +672,8 @@ class Dispatcher:
         # credential-less failure mode is the clean rewritten done frame (llm/errors taxonomy).
         model_config = self.resolve_model_config(identity["subject"])
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
-                             model_config=model_config, room=room)
+                             model_config=model_config, room=room,
+                             scaffold_workspaces=scaffold_workspaces)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the
@@ -634,9 +694,10 @@ class Dispatcher:
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
         logger.info(
-            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s room=%s",
+            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s room=%s "
+            "scaffold_mounts=%s",
             acked, invocation["trigger"], identity["subject"], identity["launcher"], delivery is not None,
-            (room or {}).get("meeting_id") or "-",
+            (room or {}).get("meeting_id") or "-", scaffold_workspaces or "-",
         )
         return acked
 
