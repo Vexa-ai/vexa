@@ -309,7 +309,7 @@ describe("the scaffold DELIVERS the strip (decision 28.5)", () => {
     // home first (the chat mounts a group, so the GROUP's README, not the desk), then the pin,
     // then the rest in the preset's own order
     expect(rec.artifacts[0]).toMatchObject({ path: "README.md", slug: "grp-showb", desk: true });
-    expect(rec.artifacts[1]).toMatchObject({ path: "kg/entities/meeting/abc-defg-hij.md", pinned: true });
+    expect(rec.artifacts[1]).toMatchObject({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", pinned: true });
     expect(rec.artifacts[2]).toMatchObject({ kind: "meeting", path: "97" });
   });
 
