@@ -119,7 +119,7 @@ class Doors:
                     ics_uid: str = "", group: str = "", url: str = "") -> dict:
         raise NotImplementedError
     def seed_meeting(self, owner: str, native: str, title: str, segments: list,
-                     started_at: float) -> dict: raise NotImplementedError
+                     started_at: float, source: str = "seed") -> dict: raise NotImplementedError
     def emit_fact(self, event_type: str, source_event_id: str, refs: dict) -> dict:
         raise NotImplementedError
     def await_mail(self, to: str, subject_contains: str = "", budget_s: int = 180,
@@ -143,6 +143,7 @@ class Doors:
     def live_meetings(self) -> list: raise NotImplementedError
     def user_delete(self, uid: str) -> dict: raise NotImplementedError
     def desk_delete(self, subject: str) -> dict: raise NotImplementedError
+    def meetings_delete_for(self, subject: str) -> int: raise NotImplementedError
     def session_keys_delete(self, subject: str) -> int: raise NotImplementedError
     def scaffold_keys_delete(self, address: str) -> int: raise NotImplementedError
     def friction_delete_for(self, subject: str) -> int: raise NotImplementedError
@@ -150,6 +151,12 @@ class Doors:
 
 
 # ── the live implementation ──────────────────────────────────────────────────────────────────────
+
+#: `GET /meetings` caps `limit` at 100 and answers 422 above it. Named here because asking for
+#: more than a route allows is not a bigger answer, it is no answer — and the shape of the refusal
+#: (a dict with `detail`) reads as an empty list to anything that does `.get("meetings", [])`.
+MEETINGS_PAGE_MAX = 100
+
 
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout: float = 40):
     h = {"content-type": "application/json", **(headers or {})}
@@ -343,7 +350,7 @@ class LiveDoors(Doors):
                 "attendees": [a for _, a in attendees], "message_id": m["Message-ID"]}
 
     def seed_meeting(self, owner: str, native: str, title: str, segments: list,
-                     started_at: float) -> dict:
+                     started_at: float, source: str = "seed") -> dict:
         """`POST /meetings` then `POST /meetings/{id}/transcript-import` — two gateway calls.
 
         A jitsi URL, so the native id survives verbatim (meeting-api's google_meet rule would force
@@ -384,7 +391,14 @@ class LiveDoors(Doors):
             "segments": [{"start": float(s["start"]), "end": float(s["end"]),
                           "speaker": s.get("speaker"), "text": s.get("text") or "",
                           "language": s.get("language") or "en"} for s in segments],
-            "started_at": iso(started), "ended_at": iso(ended), "source": "rehearse"},
+            "started_at": iso(started), "ended_at": iso(ended),
+            # `source` is a CLOSED vocabulary on the route — `import` | `seed` — and it refuses
+            # anything else with the list. It sent "rehearse" and got a 422 on the first live run.
+            # The route is RIGHT and the tool was wrong: these words did not come from a recording,
+            # they were imported from a fixture by a double, which is exactly what `seed` means.
+            # Widening the vocabulary to admit a caller's own name for itself would make the column
+            # unreadable, which is the column's whole job.
+            "source": source or "seed"},
             timeout=180)
         if st != 200 or not isinstance(body, dict):
             raise DoorRefused(f"transcript-import refused on meeting {mid}: {st} {str(body)[:300]}")
@@ -398,9 +412,29 @@ class LiveDoors(Doors):
                 "started_epoch": int(started), "ended_epoch": int(ended),
                 "start_time": m.get("start_time"), "end_time": m.get("end_time")}
 
+    def _meetings_of(self, owner: str) -> list:
+        """This subject's meetings — and a REFUSAL IS NOT AN EMPTY LIST.
+
+        Both callers used to read the response as `(b or {}).get("meetings", [])`, which turns any
+        non-2xx into "this person has no meetings". Found live: the list was requested with
+        `?limit=200`, the route caps it at 100 and answered 422, and `subject_reset` reported
+        `meetings: 0` with a row sitting right there — then the next run of that state was refused
+        with a 409 nobody could explain. The other caller is worse: `seed_meeting` asks this to
+        decide whether a completed row already exists, so a swallowed refusal would have minted a
+        SECOND completed meeting and mailed the whole room twice.
+
+        This is the defect the whole package is written against, in its own code: a call that fails
+        and is read as "nothing to do".
+        """
+        st, b = self._gw(owner, "GET", f"/meetings?limit={MEETINGS_PAGE_MAX}")
+        if st != 200 or not isinstance(b, dict) or "meetings" not in b:
+            raise DoorRefused(
+                f"could not list meetings for {owner}: {st} {str(b)[:200]}. Refusing to read that "
+                f"as 'no meetings' — every caller here decides something destructive from it.")
+        return list(b.get("meetings") or [])
+
     def _find_meeting(self, owner: str, native: str) -> dict | None:
-        st, b = self._gw(owner, "GET", "/meetings?limit=200")
-        rows = (b or {}).get("meetings", []) if isinstance(b, dict) else []
+        rows = self._meetings_of(owner)
         return next((r for r in rows if str(r.get("native_meeting_id")) == str(native)), None)
 
     def emit_fact(self, event_type: str, source_event_id: str, refs: dict) -> dict:
@@ -604,6 +638,30 @@ class LiveDoors(Doors):
                 "The route exists on this branch; the deployment needs the admin-api swap before "
                 "subject_reset can remove a user. Nothing was deleted.")
         raise DoorRefused(f"admin-api refused to delete uid {uid}: {st} {str(b)[:200]}")
+
+    def meetings_delete_for(self, subject: str) -> int:
+        """Every meeting this subject owns, deleted through the product's own `DELETE /meetings/{id}`.
+
+        Needed on its own, not only as part of the user delete: a run that fails BETWEEN
+        `POST /meetings` and the transcript import leaves a non-terminal row, and the next attempt
+        at that state is refused — correctly — with `409 a non-terminal meeting already holds this
+        native id`. Found live on run 2, where three states could not be re-entered for that
+        reason. Without this the only way out was a hand-written call.
+        """
+        rows = self._meetings_of(subject)
+        gone, refused = 0, []
+        for row in rows:
+            dst, body = self._gw(subject, "DELETE", f"/meetings/{row.get('id')}")
+            if dst in (200, 204):
+                gone += 1
+            else:
+                refused.append(f"{row.get('id')}:{dst}")
+        if refused:
+            # A delete that did not happen must not be counted as one. The caller reports this
+            # under `remaining`, and the next run of that state would otherwise meet a 409 it
+            # cannot explain.
+            raise DoorRefused(f"deleted {gone} meeting(s); refused: {', '.join(refused)}")
+        return gone
 
     def desk_delete(self, subject: str) -> dict:
         st, b = _http("DELETE", f"{AGENT_API}/api/workspace/{urllib.parse.quote(str(subject))}",

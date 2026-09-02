@@ -76,13 +76,13 @@ VERBS: dict[str, Verb] = {
                                                   "attendees"),
         what="SMTP an ICS invite into the mail double, exactly as a calendar would"),
     "seed_meeting": Verb(
-        "gateway", ("owner", "native"), ("as", "title", "started_at"),
+        "gateway", ("owner", "native"), ("as", "title", "started_at", "source"),
         what="POST /meetings then POST /meetings/{id}/transcript-import with a DNA fixture"),
     "emit_fact": Verb(
         "flows-api", ("event_type", "source_event_id", "refs"), (),
         what="POST /events — the fact intake for a producer that is not the mailbox"),
     "await_mail": Verb(
-        "mailpit", ("to",), ("subject_contains", "as", "budget_s"), writes=False,
+        "mailpit", ("to",), ("subject_contains", "as", "budget_s", "since"), writes=False,
         what="wait for one message in the mail double, and capture it"),
     "reply_to_mail": Verb(
         "smtp", ("to_mail", "from_address", "body"), ("as",),

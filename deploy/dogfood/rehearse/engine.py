@@ -222,6 +222,8 @@ def rehearse(state: str, as_: str, meeting: str = DEFAULT_MEETING, when: str = D
         "fixture_attendees": [a for _, a in attendees] + [subject],
         "fixture_attendee_names": {a: n for n, a in attendees},
         "_attendee_pairs": attendees,
+        # The floor every `await_mail` measures against — see `_execute`.
+        "_started": started,
     }
 
     # Everything the recipe will say, resolved as far as it can be, BEFORE anything is done. This
@@ -322,12 +324,19 @@ def _execute(step: cat.Step, args: dict, doors: Doors, bindings: dict, fixture: 
     if v == "seed_meeting":
         return doors.seed_meeting(str(args["owner"]), args["native"],
                                   args.get("title") or fixture["title"], fixture["segments"],
-                                  float(args.get("started_at") or (start_epoch - 3600)))
+                                  float(args.get("started_at") or (start_epoch - 3600)),
+                                  source=str(args.get("source") or "seed"))
     if v == "emit_fact":
         return doors.emit_fact(args["event_type"], args["source_event_id"], args["refs"])
     if v == "await_mail":
+        # `since` IS THE CHECK. Without it the step matched a message a PREVIOUS run had sent —
+        # found live on run 2, where `warm-desk-recurring` "found" run 1's Prepare mail, verified
+        # run 1's scaffold, and reported a state this run had not produced. A touch is evidence
+        # only if it is this run's touch; the floor is when this run started, and a recipe may
+        # raise it but never lower it.
         return doors.await_mail(args["to"], args.get("subject_contains") or "",
-                                int(args.get("budget_s") or 180))
+                                int(args.get("budget_s") or 180),
+                                since=float(args.get("since") or bindings["_started"]))
     if v == "reply_to_mail":
         return doors.reply_to_mail(bindings[args["to_mail"]], args["from_address"], args["body"])
     if v == "await_reaction":
@@ -367,8 +376,12 @@ def _verify(row: dict, bindings: dict, doors: Doors, res: Result) -> dict:
                     out["ok"] = False
                     out["detail"] += f" — expected kind {row['kind']}"
                 if row.get("desk_state"):
-                    got = ((rec.get("refs") or {}).get("state")
-                           or (rec.get("refs") or {}).get("desk"))
+                    # `refs.state` is an OBJECT — `{"desk": "new|pile|warm", "group": …}` — and
+                    # reading it as a string could never match, so the check FAILED on a state that
+                    # had worked. A check that cannot pass is worse than no check: it reports a
+                    # product defect where there is only a reader that guessed a shape.
+                    state = (rec.get("refs") or {}).get("state")
+                    got = state.get("desk") if isinstance(state, dict) else state
                     if got != row["desk_state"]:
                         out["ok"] = False
                         out["detail"] += f" — desk state {got!r}, expected {row['desk_state']!r}"
@@ -434,6 +447,10 @@ def subject_reset(address: str, *, doors: Doors, catalog: cat.Catalogue | None =
 
     # Order matters: the desk and the redis keys are addressed BY uid, so the user goes last.
     if uid:
+        try:
+            out["removed"]["meetings"] = doors.meetings_delete_for(uid)
+        except DoorRefused as e:
+            out["remaining"]["meetings"] = str(e)
         try:
             out["removed"]["desk"] = doors.desk_delete(uid)
         except DoorRefused as e:

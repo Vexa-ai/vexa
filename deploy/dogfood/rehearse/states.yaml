@@ -318,6 +318,21 @@ states:
         facts:
           - "The series met again and the report landed on this desk."
         source: "rehearse:{{state}}"
+      # `desk_state()` is the product's classifier and its vocabulary is not ours: meeting entities
+      # ALONE are a `pile` — "reports landed and nobody wired them", decision 22's economics —
+      # and it takes a NON-meeting entity for a desk to read `warm` ("somebody has worked here").
+      # The first live run failed here, correctly: two prior reports made a pile, not a warm desk.
+      # A warm desk really does carry both, so the recipe now writes both rather than arguing with
+      # the classifier.
+      - do: desk_entity
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+        kind: person
+        name: "{{subject_local}}"
+        summary: "The subject's own page — what makes this desk worked-in rather than a pile."
+        facts:
+          - "Attends the {{title}} series."
+        source: "rehearse:{{state}}"
       - do: drop_invite
         door: smtp
         organizer: "{{subject}}"
