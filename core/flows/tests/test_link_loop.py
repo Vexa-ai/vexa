@@ -17,7 +17,8 @@ from urllib.parse import parse_qs, urlparse
 import flows_defs.production as production
 import flows_steps.common as common
 import flows_steps.notify as notify_mod
-from flows import Done, Reaction, Registry, StepCtx
+import pytest
+from flows import Done, Reaction, Registry, StepCtx, StepError
 
 
 class FakeChannel:
@@ -50,10 +51,12 @@ def _rig():
     return reg, ch
 
 
-def _ctx(refs: dict, prior: dict | None = None) -> StepCtx:
+def _ctx(refs: dict, prior: dict | None = None, scratch: dict | None = None) -> StepCtx:
+    # `scratch` is passed in when a test replays a step the way the engine does: the real scratch is
+    # persisted after every step, so a retry sees what the failed attempt already recorded.
     r = Reaction("rid", "sid", "e", refs, "f", 1, "step", "running", 1, 0.0, None, None, None)
     return StepCtx(reaction=r, effect_key="rid:step", prior=prior or {},
-                   clock_now=1_700_000_000.0, scratch={})
+                   clock_now=1_700_000_000.0, scratch=scratch if scratch is not None else {})
 
 
 def _params(link: str) -> dict:
@@ -191,3 +194,168 @@ def test_no_recipe_calls_the_mail_transport_by_name():
     src = Path(production.__file__).read_text()
     assert "mx.send(" not in src
     assert "notify(" in src
+
+
+# ── the attendee gate: a touch that cannot work is not sent ──────────────────────────────────
+# 2026-09-02, meeting 97 ("DNA TSC — 3 August"). The row was planned from an invite whose url
+# matched no platform, so it landed platform='unknown' with an empty native; the mint was
+# addressed by that pair, answered 404, and `mint_transcript_share` returned None rather than
+# raising — so the `except Exception` guarding it never fired. The mail went to every attendee
+# with no `tshare` token, and every one of them clicked into a chat that answered "no meeting
+# with id 97 on my side". The gate below is the fix: no capability, no mail.
+ATTENDEE_REFS = {
+    "uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync", "meeting_id": 97,
+    "participants": ["anna@bank.test", "ben@bank.test", "cara@bank.test", "out@other.test"],
+}
+ATTENDEE_PRIOR = {"process_meeting": {"note_path": "kg/x.md", "summary": "s", "sha": "abc123"}}
+
+
+def _attendee_rig(monkeypatch, *, mint, row=None):
+    reg, ch = _rig()
+    monkeypatch.setattr(production, "ws_file", lambda uid, path: "## Decided\n- ship it\n")
+    monkeypatch.setattr(production.mt, "meeting_row",
+                        lambda uid, mid, native=None: row if row is not None
+                        else {"id": 97, "platform": "unknown", "native_meeting_id": ""})
+    monkeypatch.setattr(production.mt, "mint_transcript_share", mint)
+    return reg, ch
+
+
+def test_a_minted_share_travels_in_the_link(monkeypatch):
+    """The happy path, asserted on the artifact the attendee actually receives: one token per
+    attendee, restricted to them, carried on the button as `tshare`."""
+    minted = []
+
+    def mint(uid, meeting_id, email, expires_in_sec=30 * 86400):
+        minted.append((uid, meeting_id, email))
+        return f"97.secret-for-{email}"
+
+    reg, ch = _attendee_rig(monkeypatch, mint=mint)
+    out = reg.steps["email_attendees"](_ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR))
+
+    assert isinstance(out, Done) and out.result["sent"] == 2      # ben + cara; out@other.test is outside
+    # minted BY ROW ID (97), not by the (platform, native) pair the row cannot supply
+    assert [m[1] for m in minted] == [97, 97]
+    assert [m[2] for m in minted] == ["ben@bank.test", "cara@bank.test"]
+    for msg in ch.sent:
+        params = _params(msg["link"])
+        assert params["meeting"] == "97"
+        assert params["tshare"] == f"97.secret-for-{msg['to']}"   # this attendee's OWN capability
+
+
+def test_the_fan_out_is_HELD_when_a_share_cannot_be_minted(monkeypatch):
+    """The regression. A 404 from the mint must stop the send, not degrade the link."""
+    def mint(uid, meeting_id, email, expires_in_sec=30 * 86400):
+        raise production.mt.ShareMintError(
+            meeting_id=meeting_id, identity=email, status=404,
+            detail="Meeting not found for unknown/96088138284", retryable=False)
+
+    reg, ch = _attendee_rig(monkeypatch, mint=mint)
+    with pytest.raises(StepError) as e:
+        reg.steps["email_attendees"](_ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR))
+
+    assert ch.sent == []                                  # NOTHING went out
+    reason = str(e.value)
+    assert "404" in reason                                # the status
+    assert "96088138284" in reason                        # the response detail, not just its class
+    assert "97" in reason                                 # which meeting
+    assert "ben@bank.test" in reason                      # which identity it tried to mint by
+    assert "Mailed: nobody" in reason                     # who was mailed
+    assert "cara@bank.test" in reason                     # ...and who was not
+    assert e.value.retryable is False                     # a 404 does not fix itself
+
+
+def test_a_PARTIAL_fan_out_reports_who_was_mailed_and_does_not_resend(monkeypatch):
+    """The first attendee mints and is mailed; the second cannot. The step still fails — but it
+    names both halves, and the durable scratch means a retry does not mail the first one twice."""
+    def mint(uid, meeting_id, email, expires_in_sec=30 * 86400):
+        if email == "ben@bank.test":
+            return "97.ok"
+        raise production.mt.ShareMintError(meeting_id=meeting_id, identity=email, status=403,
+                                           detail="Invalid API key", retryable=False)
+
+    reg, ch = _attendee_rig(monkeypatch, mint=mint)
+    ctx = _ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR)
+    with pytest.raises(StepError) as e:
+        reg.steps["email_attendees"](ctx)
+
+    assert [m["to"] for m in ch.sent] == ["ben@bank.test"]
+    assert "Mailed: ben@bank.test" in str(e.value)
+    assert "NOT mailed: cara@bank.test" in str(e.value)
+    assert ctx.scratch["sent"] == ["ben@bank.test"]       # durable across the retry
+
+    # the retry: ben is skipped, cara is attempted again
+    tried = []
+
+    def mint2(uid, meeting_id, email, expires_in_sec=30 * 86400):
+        tried.append(email)
+        return "97.ok2"
+
+    monkeypatch.setattr(production.mt, "mint_transcript_share", mint2)
+    out = reg.steps["email_attendees"](_ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR, scratch=ctx.scratch))
+    assert tried == ["cara@bank.test"]                    # ben is NOT minted or mailed twice
+    assert [m["to"] for m in ch.sent] == ["ben@bank.test", "cara@bank.test"]
+    assert isinstance(out, Done) and out.result["sent"] == 2
+
+
+def test_a_meeting_with_no_row_id_never_reaches_the_mint(monkeypatch):
+    """A ref that is a NATIVE id (meeting_ref degrades to one when no row exists) cannot be minted
+    against, and the step says so instead of mailing a link to a meeting nobody can open."""
+    def mint(uid, meeting_id, email, expires_in_sec=30 * 86400):
+        raise AssertionError("must not be reached")
+
+    reg, ch = _attendee_rig(monkeypatch, mint=mint, row={})
+    refs = dict(ATTENDEE_REFS, meeting_id="abc-defg-hij")
+    with pytest.raises(StepError) as e:
+        reg.steps["email_attendees"](_ctx(refs, ATTENDEE_PRIOR))
+    assert ch.sent == []
+    assert "no row id" in str(e.value)
+    assert e.value.retryable is False
+
+
+def test_a_5xx_mint_is_retryable_but_still_sends_nothing(monkeypatch):
+    """The platform having a moment is a different fact from a meeting that cannot be addressed —
+    but neither is a reason to send a broken link."""
+    def mint(uid, meeting_id, email, expires_in_sec=30 * 86400):
+        raise production.mt.ShareMintError(meeting_id=meeting_id, identity=email, status=503,
+                                           detail="upstream unreachable", retryable=True)
+
+    reg, ch = _attendee_rig(monkeypatch, mint=mint)
+    with pytest.raises(StepError) as e:
+        reg.steps["email_attendees"](_ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR))
+    assert ch.sent == [] and e.value.retryable is True
+
+
+# ── the mint itself: no non-2xx is ever swallowed ────────────────────────────────────────────
+def test_mint_returns_the_token_and_asks_by_row_id(monkeypatch):
+    import flows_steps.meeting as mt
+
+    calls = []
+    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
+    monkeypatch.setattr(mt, "http", lambda m, url, h, b=None, **kw:
+                        (calls.append((m, url, b)) or (200, {"token": "97.tok", "id": "g1"})))
+    assert mt.mint_transcript_share("7", 97, "ben@bank.test") == "97.tok"
+    method, url, body = calls[0]
+    assert method == "POST" and url.endswith("/meetings/97/share")
+    assert body["mode"] == "restricted" and body["allowed_emails"] == ["ben@bank.test"]
+
+
+@pytest.mark.parametrize("status,body,retryable", [
+    (404, {"detail": "Meeting 97 not found"}, False),
+    (403, {"detail": "Invalid API key"}, False),
+    (429, {"detail": "Rate limit exceeded"}, True),
+    (503, {"detail": "upstream unreachable"}, True),
+    (200, {"id": "g1"}, False),          # 2xx with NO token is a failure too
+])
+def test_mint_never_swallows_a_non_token_answer(monkeypatch, status, body, retryable):
+    """The exact defect: this used to `return None` on every one of these, so the caller's
+    `except Exception` never fired and the mail shipped without a capability."""
+    import flows_steps.meeting as mt
+
+    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
+    monkeypatch.setattr(mt, "http", lambda *a, **k: (status, body))
+    with pytest.raises(mt.ShareMintError) as e:
+        mt.mint_transcript_share("7", 97, "ben@bank.test")
+    assert e.value.status == status
+    assert str(body.get("detail", body))[:40] in str(e.value)   # the response body survives
+    assert e.value.retryable is retryable
+    assert isinstance(e.value, StepError)        # an uncaught mint failure still fails its step
