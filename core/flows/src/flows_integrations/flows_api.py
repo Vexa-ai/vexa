@@ -126,6 +126,71 @@ def admit_event(ev: EventSubmission):
             "reactions_created": n, "duplicate": n == 0}
 
 
+class SeedRow(BaseModel):
+    """One recurring meeting an admin is putting the mailbox on."""
+    url: str = Field(min_length=6, max_length=500)
+    organizer: str = Field(min_length=3, max_length=254)
+    start: float
+    title: str = Field(default="Meeting", max_length=200)
+    participants: list[str] = Field(default_factory=list)
+    ics_uid: Optional[str] = None
+    group: Optional[str] = None
+
+
+class SeedBatch(BaseModel):
+    meetings: list[SeedRow] = Field(min_length=1, max_length=500)
+    event_type: str = "invite.received"
+    prefix: str = Field(default="seed", max_length=40)
+
+
+@app.post("/events/batch", status_code=202, dependencies=[Depends(auth)])
+def admit_batch(batch: SeedBatch, x_actor: str = Header(default="admin")):
+    """PUT THE MAILBOX ON MANY RECURRING MEETINGS AT ONCE — the admin seed, in one call.
+
+    The simulator measured the reach bottleneck at 89-100% of every org never being touched, and
+    the only strategies that fix it seed the production office or put the mailbox on every
+    recurring dailies. Both are ADMIN actions over N meetings, and until now the product had no
+    verb for either: `POST /events` takes one fact, `bot_schedule` takes one meeting, and
+    forwarding takes one ICS. Twenty dailies meant twenty of something, with no list accepted
+    anywhere and no receipt over the whole set. The machine time was never the cost — the absence
+    of a plural was.
+
+    Deliberately still not a step-runner: it admits FACTS, one per meeting, through the same
+    `admit()` and the same per-(fact, flow) dedup key as the singular endpoint. What each fact
+    causes stays the registry's business. Re-running the same batch is a no-op per meeting, so an
+    admin who pastes their list twice does not double-invite anyone.
+
+    Returns a row per meeting rather than a count: a partial success is the normal case (one bad
+    url in twenty), and a bare number cannot tell an admin WHICH meeting to fix.
+    """
+    vocab.refresh_from_db(db)
+    if not vocab.match(batch.event_type):
+        raise HTTPException(status_code=400, detail={
+            "no_flow_reacts_to": batch.event_type,
+            "reactable_event_types": sorted({f.on.name for f in vocab.flows.values()})})
+    stamp = int(clock.now())
+    out, admitted, dupes = [], 0, 0
+    for i, m in enumerate(batch.meetings):
+        sid = m.ics_uid or f"{batch.prefix}-{stamp}-{i:04d}"
+        refs = {"organizer": m.organizer, "url": m.url, "start": float(m.start),
+                "ics_uid": sid, "title": m.title, "group": m.group,
+                "participants": list(m.participants)}
+        try:
+            n = admit(db, vocab, clock, source_event_id=sid,
+                      event_type=batch.event_type, subject_refs=refs)
+            admitted += 1 if n else 0
+            dupes += 1 if not n else 0
+            out.append({"source_event_id": sid, "title": m.title,
+                        "reactions_created": n, "duplicate": n == 0})
+        except Exception as e:  # noqa: BLE001 — one bad row must never lose the other nineteen
+            out.append({"source_event_id": sid, "title": m.title,
+                        "error": f"{type(e).__name__}: {e}"[:200]})
+    log = {"actor": x_actor, "submitted": len(batch.meetings),
+           "admitted": admitted, "duplicates": dupes,
+           "failed": sum(1 for r in out if "error" in r)}
+    return {**log, "meetings": out}
+
+
 @app.post("/flows/{name}/{version}/{action}", dependencies=[Depends(auth)])
 def set_flow_status(name: str, version: int, action: str):
     if action not in ("activate", "retire"):
