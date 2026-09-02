@@ -25,11 +25,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_serializer, model_validator
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import APIToken, PlatformSetting, User
+from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
+                             Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 
@@ -238,7 +239,15 @@ MODEL_MODES = ("subscription", "custom")
 # via {"chat_template_kwargs": {"enable_thinking": false}} — without this field such an endpoint
 # could only be configured deployment-wide, never through BYOT.
 # effort: the claude-code reasoning-effort pin (low|medium|high|xhigh) — see ModelPrefsUpdate.
-_MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort")
+# runner: WHICH HARNESS runs this subject's workspace turns (PRD decision 37). Stored here as an
+# opaque slug and never validated against a list — agent-api's `llm/registry.HARNESS_RUNNERS`
+# is the one authority on what a runner name means, and it drops an unknown one back to the
+# deployment default the way a non-allowlisted model is dropped. A second copy of that
+# vocabulary in this service would be a second thing to keep in step, and the copy that goes
+# stale is always the one furthest from the code that uses it.
+# The copilot's second model dial is deliberately absent — it went with the in-product
+# inference pipeline (PRD decision 34).
+_MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort", "runner")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
@@ -295,7 +304,15 @@ class ModelPrefsUpdate(BaseModel):
     model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    # extra_body was already in `_MODELS_FIELDS` — so the platform setting carried it and the
+    # effective-config resolution returned it — but it was NOT in this model, so no per-USER
+    # write could ever set it. A field that resolves and cannot be written is a field only the
+    # deployment has, silently. It is load-bearing for exactly the case per-user config exists
+    # for: a self-hosted vLLM/Qwen endpoint returns no valid JSON at all without
+    # {"chat_template_kwargs": {"enable_thinking": false}}.
+    extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
+    runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -465,6 +482,75 @@ def create_app() -> FastAPI:
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
+
+    @app.put("/admin/users/{user_id}/models", dependencies=[Depends(verify_admin_token)])
+    async def set_user_models_as_admin(user_id: int, update: ModelPrefsUpdate,
+                                       db: AsyncSession = Depends(get_db)):
+        """Set ANOTHER user's model config — the admin-tier twin of ``PUT /user/models``.
+
+        The self-serve route takes the caller's own identity, which is exactly right for a person
+        editing their own Settings and exactly wrong for the one caller that has to bind a config
+        to somebody else: the rehearsal harness (PRD decision 38) pins a scratch subject under the
+        test domain to a runner and an endpoint, and it must be able to do that WITHOUT holding
+        that subject's credential and WITHOUT touching the deployment-wide platform setting, which
+        would change the model for every person on the instance.
+
+        Same validation, same partial semantics, same masking as the self-serve route — one
+        rulebook, two tiers. An empty string clears a field.
+        """
+        user = (await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        await _put_user_prefs(update.model_dump(exclude_unset=True), "model_prefs", user, db)
+        prefs = (user.data or {}).get("model_prefs") or {}
+        return {"mode": prefs.get("mode"), "model": prefs.get("model"),
+                "base_url": prefs.get("base_url"),
+                "effort": prefs.get("effort"), "runner": prefs.get("runner"),
+                "extra_body": prefs.get("extra_body"),
+                "api_key_set": bool(prefs.get("api_key")),
+                "api_key": _mask_secret(prefs.get("api_key"))}
+
+    @app.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(verify_admin_token)])
+    async def delete_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
+        """DELETE one person and everything keyed to them. Irreversible.
+
+        WHY IT HAS TO EXIST. There was no per-user delete anywhere in the product, so the only way
+        to remove somebody was `blank-instance.sh`, which deletes EVERY person on the stack — the
+        instrument for "reset one test subject" was a wipe of the whole instance. PRD decision 38.3
+        (`subject_reset`) is the caller that needs it: a state re-entered in seconds, the instance
+        never blanked.
+
+        IT DELETES EXPLICITLY, IN FK ORDER, because the cascade does not exist: `meetings.user_id`
+        is a plain Integer with no ForeignKey to `users`, so removing the row alone would leave
+        that person's meetings, sessions and transcripts behind, owned by an id that no longer
+        names anybody — the ghost-identity failure the rig hit on 2026-09-02, one layer down. The
+        order is the one `blank-instance.sh` documents: transcriptions → meeting_sessions →
+        meetings → api_tokens → the user.
+
+        It does NOT touch the workspace volume, redis, or the flows lanes: those stores belong to
+        other services, and a route that reached into them would be this service writing three
+        surfaces it does not own. `subject_reset` clears them through their own owners.
+        """
+        user = (await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        meeting_ids = [row[0] for row in (await db.execute(
+            select(Meeting.id).where(Meeting.user_id == user_id))).all()]
+        if meeting_ids:
+            await db.execute(delete(Transcription).where(
+                Transcription.meeting_id.in_(meeting_ids)))
+            await db.execute(delete(MeetingSession).where(
+                MeetingSession.meeting_id.in_(meeting_ids)))
+            await db.execute(delete(Meeting).where(Meeting.id.in_(meeting_ids)))
+        await db.execute(delete(APIToken).where(APIToken.user_id == user_id))
+        await db.delete(user)
+        await db.commit()
+        return None
 
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
               status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_admin_token)])
@@ -739,6 +825,7 @@ def create_app() -> FastAPI:
             "model": prefs.get("model"),
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
+            "runner": prefs.get("runner"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }

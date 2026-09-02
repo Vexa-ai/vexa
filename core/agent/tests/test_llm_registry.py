@@ -50,3 +50,23 @@ def test_no_completion_port_is_reachable():
 
     for name in ("completion_from_env", "COMPLETION_PROVIDERS", "CompletionPort", "CompletionResult"):
         assert not hasattr(llm, name), f"llm.{name} is back — the inference pipeline must stay removed"
+
+
+def test_the_shared_runner_list_mirrors_the_registry_exactly():
+    """`shared.units.RUNNERS` is the control plane's copy of the harness names, and this is the
+    test that keeps it honest.
+
+    `llm/` ships only in the WORKER image — `import llm` raises inside the running agent-api
+    container — but the CONTROL PLANE is what decides whether a subject's stored runner preference
+    is a name this deployment knows (`dispatch.overlay_model_config`). So the list is declared in
+    `shared/`, which both images carry, and held to the registry here. Without this, adding a
+    fourth harness would leave a per-subject `runner: <new>` silently dropped back to the
+    deployment default — a preference that reads as set and does nothing, which is the failure
+    class this codebase keeps finding (the settings write that answered 200 and changed nothing).
+    """
+    from shared.units import RUNNERS
+
+    from llm.registry import HARNESS_RUNNERS
+    assert set(RUNNERS) == set(HARNESS_RUNNERS), (
+        "shared/units.py RUNNERS and llm/registry.py HARNESS_RUNNERS have drifted — "
+        "a runner in one and not the other is a preference that cannot take effect")

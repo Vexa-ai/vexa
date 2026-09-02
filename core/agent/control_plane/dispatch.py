@@ -28,6 +28,7 @@ from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, 
 from shared.config import Settings
 from shared import delegation
 from shared.ports import IdentityPort, RuntimePort
+from shared import units
 from shared.units import chat_session, dispatch_id, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
@@ -376,6 +377,23 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     effort = (config.get("effort") or "").strip()
     if effort:
         env["VEXA_AGENT_EFFORT"] = effort
+    # THE HARNESS, per subject (PRD decision 37 + 38). `VEXA_RUNNER` was a deployment-wide dial, so
+    # trying a different harness meant changing it for everybody — which is exactly what a
+    # rehearsal must never do. Here it is one more field of the SAME per-subject config the model
+    # and the endpoint already ride, so `openai-agent` against a local Qwen can be pinned to one
+    # scratch subject while every other person on the instance keeps the deployment's default.
+    #
+    # An unknown name is DROPPED, never an error, and the drop is logged: identical to the model
+    # allowlist above, and for the identical reason — a stale pref must not brick a turn. The known
+    # set is `shared.units.RUNNERS`, which `llm/tests/test_registry.py` proves equal to the runner
+    # registry itself; admin-api stores the slug with no vocabulary of its own, so there is exactly
+    # one list and one test holding it to the code that implements it.
+    runner = (config.get("runner") or "").strip()
+    if runner and runner in units.RUNNERS:
+        env["VEXA_RUNNER"] = runner
+    elif runner:
+        logger.warning("runner %r is not a known harness (%s) — using the deployment default",
+                       runner, sorted(units.RUNNERS))
     if (config.get("mode") or "").strip() != "custom":
         return
     base_url = (config.get("base_url") or "").strip()
