@@ -1556,22 +1556,38 @@ AUTH_MIDDLEWARE = _Auth
 mcp = MCPServer(
     name="vexa-control",
     instructions=(
-        "FIRST ACTION IN EVERY SESSION: call whats_waiting() BEFORE you reply to your person, "
-        "even to a greeting. It returns what is true right now — a meeting happening this "
-        "second, what is queued, what to say first — and none of that is knowable from this "
-        "text.\n"
+        "BEFORE ANYTHING ELSE, LOOK AT YOUR PERSON'S FIRST MESSAGE. If it opens with a "
+        "bracketed tag — any [...] on its first line — the PRECEDENCE rule two paragraphs "
+        "down governs this turn and you do NOT call whats_waiting() first. That fork is the "
+        "whole of it; everything below assumes you took the right branch.\n"
+        "OTHERWISE — FIRST ACTION IN EVERY SESSION: call whats_waiting() BEFORE you reply to "
+        "your person, even to a greeting. It returns what is true right now — a meeting "
+        "happening this second, what is queued, what to say first — and none of that is "
+        "knowable from this text.\n"
         "DO NOT ANSWER OUT OF THESE INSTRUCTIONS. They describe what exists, never what is "
         "happening. An answer composed from them is a guess wearing a uniform, and your "
         "person cannot tell the difference. Call first, then speak.\n"
-        "PRECEDENCE — A COMPOSED OPENING WINS. When the turn's message opens with a "
-        "bracketed preset tag — [prep], [minutes-review], [minutes-review-invite], "
-        "[catch-up], or any other _global/asks/* name — that IS your person's first ask. "
-        "They clicked a link about ONE meeting and this is what they clicked. Answer it "
-        "first, from the workspace and the meeting it names, exactly as the preset says: "
-        "tell them what you hold, then ONE question. Call whats_waiting() AFTER that "
-        "opening, and only if it adds something they did not ask about. Opening with the "
-        "queue instead — 'you have two write-ups stuck' — answers a question nobody "
-        "asked, and it is measurably what happens without this rule.\n\n"
+        "PRECEDENCE — A COMPOSED OPENING WINS, AND THE TEST IS THE BRACKETS, NOT THE WORD "
+        "INSIDE THEM. Every preset in _global/asks/ opens with a bracketed tag, and presets "
+        "are added without this text changing — so the rule is mechanical and has no list: "
+        "IF THE TURN'S MESSAGE BEGINS WITH '[', IT IS A PRESET. [prep], "
+        "[minutes-review], [catch-up] are EXAMPLES; a tag you have never seen before is "
+        "still a preset and still your person's first ask. They clicked a link about ONE "
+        "meeting and this is what they clicked.\n"
+        "Answer it FIRST, from the workspace and the meeting it names, exactly as the preset "
+        "says: tell them what you hold, then ONE question. The preset's own words are the "
+        "whole specification of that first reply.\n"
+        "DO NOT CALL whats_waiting() BEFORE THAT ANSWER. Not to get context, not to check, "
+        "not to be safe, and not because a phrase in the preset sounds like the queue — "
+        "'what they missed', 'what they owe someone', 'anything left open' "
+        "are all scoped to the meeting the tag names and are answered from the workspace, "
+        "never from the queue. The queue knows nothing about the meeting they clicked. "
+        "Opening with it instead — 'you have two write-ups stuck' — answers a question "
+        "nobody asked, and it is measurably what happens without this rule: an opening "
+        "carrying a preset tag still spent six calls on the queue before the person's own "
+        "question was touched.\n"
+        "Call whats_waiting() AFTER that opening, and only if it adds something they did "
+        "not ask about.\n\n"
 
         "Vexa: meetings become words, words become team memory, and your person's own agent — "
         "you — drives all of it from this conversation.\n\n"
@@ -2542,17 +2558,20 @@ def _write_json(uid: str, path: str, obj) -> bool:
 
 @mcp.tool()
 def whats_waiting(token: str = "") -> str:
-    """START HERE on every connection. Everything Vexa needs from this person, in one read.
+    """START HERE on every connection — EXCEPT the one case named below, which is common.
+    Everything Vexa needs from this person, in one read.
 
     Vexa cannot reach your agent when you are not connected — there is no live session after a
     meeting ends at night. So work waits here and you pull it. Call this first, work what it
     returns, then call it again until it is empty.
 
-    ONE EXCEPTION, and it is the common one: if this turn's message opens with a bracketed preset
-    tag ([prep], [minutes-review], [catch-up], any _global/asks/* name), your person clicked a link
-    about ONE meeting and that opening is their question. Answer it first, then call this. A queue
-    is not an answer to "what should I know before this meeting", and leading with one reads as
-    changing the subject.
+    THE EXCEPTION, and it is the common one: if this turn's message opens with a BRACKETED TAG —
+    ANY [...] at all, not a fixed list; every _global/asks/* preset starts with one and new presets
+    appear without this text changing — your person clicked a link about ONE meeting and that
+    opening is their question. Answer it FIRST, then call this. A queue is not an answer to "what
+    should I know before this meeting", and leading with one reads as changing the subject. A
+    preset phrase that sounds like the queue ("what they missed", "what they owe someone") is
+    scoped to the meeting the tag names and is answered from the workspace, not from here.
 
     Returns four kinds of item:
       setup      — the workspace is not scaffolded yet; Vexa cannot write minutes until it is
