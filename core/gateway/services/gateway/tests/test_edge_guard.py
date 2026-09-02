@@ -32,7 +32,12 @@ from starlette.websockets import WebSocketDisconnect
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
 from gateway.app import run_multiplex
 from gateway.config_preflight import ConfigError
-from gateway.edge_guard import _GUARD_EXCLUDE_PATHS, apply_guard, build_guard_config
+from gateway.edge_guard import (
+    _GUARD_EXCLUDE_PATHS,
+    _on_http_block,
+    apply_guard,
+    build_guard_config,
+)
 from gateway.ratelimit import PerUserRateLimiter
 
 
@@ -151,6 +156,9 @@ class TestGuardWiring:
         assert cfg.redis_prefix.startswith("vexa:")
         # /health is excluded so health monitors never trip the guard.
         assert "/health" in cfg.exclude_paths
+        # Every HTTP block also emits an http_request_blocked logevent.v1 line, the
+        # HTTP-side sibling of the WS path's ws_connect_rejected.
+        assert cfg.on_block is _on_http_block
 
     @pytest.mark.asyncio
     async def test_smoke_health_with_guard_active(self) -> None:
@@ -469,6 +477,127 @@ class TestGuardBehavior:
             assert (
                 await ac.get("/", headers={"X-Forwarded-For": "10.0.0.99"})
             ).status_code == 429
+
+
+class TestHttpBlockEvent:
+    """``on_block`` (``_on_http_block``) turns a real guard HTTP block into an
+    ``http_request_blocked`` ``logevent.v1`` line - the sibling of the WS side's
+    ``ws_connect_rejected`` (see ``test_denial_emits_structured_rejection_event``)."""
+
+    @pytest.mark.asyncio
+    async def test_blacklisted_ip_emits_http_request_blocked_event(
+        self, capsys
+    ) -> None:
+        """A REAL 403 from guard's SecurityMiddleware (blacklisted IP, the same setup as
+        ``test_blacklisted_ip_returns_403``) emits ONE ``http_request_blocked`` line with
+        the expected fields - driven through the installed library, not a mocked hook."""
+        app = _make_app(
+            _enforcing_config(
+                rate_limit=1000,
+                trusted_proxies=["127.0.0.1"],
+                blacklist=["10.0.0.9"],
+                on_block=_on_http_block,
+            )
+        )
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            resp = await ac.get("/", headers={"X-Forwarded-For": "10.0.0.9"})
+        assert resp.status_code == 403
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert len(lines) == 1
+        envelope = json.loads(lines[0])
+        assert envelope["event"] == "http_request_blocked"
+        assert envelope["level"] == "warning"
+        assert envelope["span"] == "http"
+        fields = envelope["fields"]
+        assert fields["status_code"] == 403
+        assert fields["path"] == "/"
+        assert fields["client_ip"] == "10.0.0.9"
+        assert fields["check_name"]  # non-empty - which check fired
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_request_emits_http_request_blocked_event(
+        self, capsys
+    ) -> None:
+        """The 429 rate-limit path (a different guard-core call site than the blacklist
+        403 above) also fires the callback, with ``check_name == "rate_limit"``. A unique
+        XFF IP behind a trusted proxy (like ``test_real_exclude_paths_do_not_neuter_guard``)
+        avoids the process-wide RateLimitManager singleton bucket other tests share on the
+        bare ``127.0.0.1`` client identity."""
+        app = _make_app(
+            _enforcing_config(
+                rate_limit=1,
+                trusted_proxies=["127.0.0.1"],
+                on_block=_on_http_block,
+            )
+        )
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            headers = {"X-Forwarded-For": "10.0.0.201"}
+            assert (await ac.get("/", headers=headers)).status_code == 200
+            resp = await ac.get("/", headers=headers)
+        assert resp.status_code == 429
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert len(lines) == 1
+        fields = json.loads(lines[0])["fields"]
+        assert fields["status_code"] == 429
+        assert fields["check_name"] == "rate_limit"
+
+    def test_callback_tolerates_missing_payload_keys(self, capsys) -> None:
+        """A payload missing every key must not raise - ``.get()`` throughout, not ``[]``."""
+        _on_http_block(object(), {})
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert len(lines) == 1
+        fields = json.loads(lines[0])["fields"]
+        assert fields["check_name"] is None
+        assert fields["status_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_ws_rejection_does_not_fire_on_block(
+        self, monkeypatch, capsys
+    ) -> None:
+        """Regression guard for the docstring's evidentiary claim: ``guard_websocket``'s own
+        ``/ws`` connect check must never also fire ``on_block``, or this event and
+        ``ws_connect_rejected`` (``test_denial_emits_structured_rejection_event``) would double
+        up for the same connection. Wires ``on_block=_on_http_block`` onto the SAME config the
+        WS layer resolves (like ``test_blacklisted_ip_denied_at_connect``, plus the hook this
+        class exercises) and drives a blacklisted-IP WS connect through ``run_multiplex``. A
+        unique IP, not shared with any rate-limit-bucket test in this module. If a future
+        guard-core starts routing the WS path through ``fire_block_hook``, this fails loudly on
+        the ``http_request_blocked`` line count, not silently on a double-logged event."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            rate_limit=1000,
+            trusted_proxies=["127.0.0.1"],
+            blacklist=["10.0.0.222"],
+            on_block=_on_http_block,
+        )
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.222", api_key=VALID_KEY, config=cfg
+        )
+        await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
+        assert ws.close_code == 1008  # WS was rejected
+        assert ws.accepted is False
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert lines == []  # on_block never fired for the WS path
 
 
 # ── WS guard hook ──────────────────────────────────────────────────────────────
