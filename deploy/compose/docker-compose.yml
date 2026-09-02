@@ -140,6 +140,11 @@ services:
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
       - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
+      # THE MODEL EVERY SPAWNED WORKER RUNS (decision 36, founder: "let's move to sonnet"). Unset =
+      # the CLI's own default, which on 2.1.197 is `claude-opus-4-8[1m]` — measured, not assumed.
+      # Set it here and the runtime forwards it into each spawned worker (docker_backend's forward
+      # list); ROLLBACK is to unset it and recreate the runtime.
+      - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       # Optional low-latency tuning for the Google Meet speaker-stream pipeline. Empty values keep
       # the bot defaults; runtime forwards configured values to spawned bot containers.
       - BOT_ALONE_SILENCE_WINDOW_MS=${BOT_ALONE_SILENCE_WINDOW_MS:-}

@@ -272,6 +272,12 @@ class DockerBackend:
             "VEXA_LLM_PROVIDER",
             "VEXA_LLM_BASE_URL",
             "VEXA_LLM_API_KEY",
+            # THE WORKER'S MODEL (decision 36). `engine.py` reads VEXA_AGENT_MODEL and passes it to
+            # every turn — the chat turn AND the write-back phase — so a deployment that wants
+            # Sonnet sets one value. It has to be FORWARDED or it reaches the runtime and stops
+            # there: the runtime spawns workers with this list, and a setting the worker never sees
+            # is a setting that silently does nothing while reading as configured.
+            "VEXA_AGENT_MODEL",
             "VEXA_LLM_MODEL",
             "VEXA_LLM_MAX_TOKENS",
             "VEXA_MODEL_ALLOWLIST",

@@ -163,8 +163,11 @@
     {
       "key": "VEXA_AGENT_MODEL",
       "class": "defaulted",
-      "default": "(subscription/provider default)",
-      "description": "the claude model alias/name for chat + workspace turns"
+      "default": "(harness CLI default)",
+      "description": "the model id every agent turn runs on \u2014 the chat turn and the write-back phase alike; empty means the harness CLI's own default",
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_RUNNER",
