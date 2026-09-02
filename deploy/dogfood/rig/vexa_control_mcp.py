@@ -2108,7 +2108,21 @@ def meeting_seed(native_id: str, title: str, video_id: str,
                     if str(occurred_at).replace(".", "", 1).isdigit() else str(occurred_at))
         except Exception:  # noqa: BLE001 — a bad stamp must not lose the seed
             when = None
-    st, m = _gw_http(uid, "POST", "/meetings", {"title": title, "scheduled_at": when})
+    # A seeded row must be ADDRESSABLE the way a real one is. POST /meetings derives
+    # (platform, native_meeting_id) from `meeting_url` and stores ("unknown", NULL) without one —
+    # and several product paths identify a meeting by that pair rather than by row id. The one
+    # that matters here: POST /meetings/{platform}/{native}/share, which mints the capability the
+    # attendee follow-up link carries. With an unaddressable row the mint 404s, the link ships
+    # with no token, and every attendee lands in a chat that cannot see the meeting the mail is
+    # about. A JITSI url deliberately: meeting-api requires a STRICT abc-defg-hij code
+    # for google_meet, which would force a synthetic native id and break the caller's own
+    # identity — the note filename and the dedup key both ride on it. The jitsi room rule
+    # is any path segment, so the native id survives verbatim as native_meeting_id.
+    url = f"https://meet.jit.si/{native_id}"
+    st, m = _gw_http(uid, "POST", "/meetings",
+                     {"title": title, "scheduled_at": when, "meeting_url": url})
+    if st not in (200, 201):                    # a rejected url must not lose the seed
+        st, m = _gw_http(uid, "POST", "/meetings", {"title": title, "scheduled_at": when})
     if st not in (200, 201):
         return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300]})
     mid = m["id"]
