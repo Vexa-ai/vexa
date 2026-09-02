@@ -605,24 +605,24 @@ export function MinutesShell() {
     });
   }, [docKind, docPath, docSlug]);
 
-  /** THE VIEW SLOT (decision 28) — the navigator moves what is IN FRONT and mints no tab. Reading
-   *  a workspace by walking it is browsing, and browsing that collects leaves a tab strip nobody
-   *  asked for; a tab is now an explicit act.
+  /** THE VIEW SLOT (decision 28) — the navigator moves what is IN FRONT and mints no tab. Reading a
+   *  workspace by walking it is browsing, and browsing that collects leaves a strip nobody asked for.
    *
-   *  Until branch `panel-view-slot` puts `view: {workspace, path}` on the chat record, the
-   *  destination lands in the shell's own document state — the very state a focused tab drives —
-   *  so nothing here is panel-local and `artifacts[]` is untouched. */
+   *  THE LISTENER IS THE SEAM; `openPage` IS THE MECHANISM. It used to set the document state
+   *  directly, which was correct while the view slot did not exist yet and wrong the moment it did:
+   *  a navigator click skipped the back/forward stack and the strip's history, so it and a chip
+   *  click for the same file landed in two different places. Routing it through `openPage` — the
+   *  one route an entity chip, a wikilink and an `artifact` event already take — is what makes
+   *  "the panel has one view slot" true of every way of reaching it rather than of most of them. */
   useEffect(() => {
     const onView = (e: Event) => {
       const d = (e as CustomEvent<ViewSlot>).detail;
       if (!d?.path) return;
-      setPagesCollapsed(false); saveCollapsed("right", false);
-      setDocPath(d.path); setDocSlug(d.workspace); setDocKind("doc");
-      setListing(null); setDocNonce((n) => n + 1);
+      openPage({ path: d.path, slug: d.workspace, label: d.label });
     };
     window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
     return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
-  }, []);
+  }, [openPage]);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
    *  tab — going back to somewhere you have been should never fail because you tidied up. */
@@ -762,27 +762,23 @@ export function MinutesShell() {
     return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntityClick); window.removeEventListener(OPEN_MEETING_EVENT, onMeetingClick); };
   }, [meetings, openMeeting, openPage]);
 
-  // ── F41: A FILE THE TURN WROTE BECOMES A TAB ────────────────────────────────────────────────
+  // ── F41, AS AMENDED BY DECISION 28: A FILE THE TURN WROTE NAVIGATES THE VIEW ────────────────
   //
-  //  The founder created a shared workspace, the agent wrote its README, and the right panel stayed
-  //  on `_global/README.md` — the one document the turn had just made was the one thing not on
-  //  screen.
+  //  F41 was the founder creating a shared workspace, the agent writing its README, and the right
+  //  panel staying on `_global/README.md` — the one document the turn had just made was the one
+  //  thing not on screen. That fix appended a tab. Decision 28 is the correction TO that fix: a tab
+  //  exists only when one is asked for, so the write moves the view instead.
   //
-  //  Three rules, and the third is the one worth stating:
-  //    · the tab goes on the CHAT RECORD, not on panel-local state. Layout is a function of the
-  //      chat's state (decision 18), so a reload shows the same tabs — which is why this appends to
-  //      `pages` and lets the artifacts effect, the record's ONE writer, persist it.
-  //    · it comes to the FRONT only when the event says `focus: true`.
+  //  Two rules, and the second is the one worth stating:
+  //    · `focus: true` moves the view; `focus: false` does NOTHING VISIBLE. It used to append a tab
+  //      "quietly behind the reader", which is exactly the accumulation 28 removes — a turn that
+  //      writes four files must not leave four tabs nobody asked for.
   //    · …and never over a focus the READER chose. A person who has opened something is reading it;
-  //      an agent's write appears in the strip and waits. The tab still appears — being appended is
-  //      not conditional on anything.
-  //  Appending is idempotent by artifact key, so the same file written twice in a turn is one tab.
-  //  The decision itself is `artifactTabEffect` — pure, in roomView.ts, tested there. This is the
-  //  wiring: read the tabs in hand, apply it, and either bring the page forward through the ONE
-  //  route into the panel (`openPage`, which also unfolds a collapsed column and pushes history) or
-  //  append it quietly behind the reader.
-  const pagesRef = useRef(pages);
-  useEffect(() => { pagesRef.current = pages; }, [pages]);
+  //      their attention beats our suggestion.
+  //
+  //  The decision itself is `artifactViewEffect` — pure, in roomView.ts, tested there. This is the
+  //  wiring, and it is now one line: hand it to `openPage`, the ONE route into the panel, which
+  //  unfolds a collapsed column, pushes back/forward history and records the visit in the strip.
   useEffect(() => {
     const onArtifact = (e: Event) => {
       const detail = (e as CustomEvent<{ workspace?: string; path?: string; focus?: boolean }>).detail || {};
