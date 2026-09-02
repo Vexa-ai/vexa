@@ -1012,6 +1012,13 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
+          // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
+          // the turn did produce and say plainly that it is partial, so the person knows to ask
+          // again rather than reading half an answer as the whole one.
+          onTruncated: (reason, partial) => patchAgentTurn(key, agentId, (t) => {
+            const body = t.text ?? partial ?? "";
+            return { ...t, status: null, text: body + (body ? "\n\n" : "") + `_${reason}_` };
+          }),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => { if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); },
         },

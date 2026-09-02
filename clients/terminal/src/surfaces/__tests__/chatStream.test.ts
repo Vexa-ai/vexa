@@ -44,7 +44,7 @@ function ev(o: Record<string, unknown>, id?: string): string {
 
 /** Collect the callback effects into a simple record for assertions. */
 function recorder() {
-  const state = { text: "", tools: [] as string[], commit: undefined as string | undefined, rejected: false, error: "", modelFailure: 0, starting: 0 };
+  const state = { text: "", tools: [] as string[], commit: undefined as string | undefined, rejected: false, error: "", modelFailure: 0, starting: 0, truncated: "" };
   const cb: ChatStreamCallbacks = {
     onStarting: () => { state.starting += 1; },
     onDelta: (t) => { state.text += t; },
@@ -53,6 +53,7 @@ function recorder() {
     onRejected: () => { state.rejected = true; },
     onModelFailure: () => { state.modelFailure += 1; },
     onError: (m) => { state.error += m; },
+    onTruncated: (reason) => { state.truncated = reason; },
   };
   return { state, cb };
 }
@@ -414,3 +415,44 @@ describe("streamChatTurn — the transcript's terms", () => {
   });
 });
 
+/** F89 — `done.reason`: the harness's `turn-truncated` / `context-trimmed` events had NO consumer
+ *  anywhere, so a turn that stopped on its budget was rendered exactly like one that finished. The
+ *  reason now rides on `done`, which this reducer reads, and it is NOT reported as a model failure:
+ *  the model worked, the budget ran out, and saying "Model inference failed" sends the person
+ *  looking at the wrong thing. */
+describe("streamChatTurn — a turn that stopped early (F89)", () => {
+  it("reports done.reason through onTruncated, not as a model failure", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "message-delta", text: "half an " }),
+      ev({ type: "done", ok: false, reply: "half an answer", reason: "the turn stopped early: tool-call budget" }),
+    ]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.truncated).toContain("tool-call budget");
+    expect(state.modelFailure).toBe(0);
+    expect(result.terminal).toBe(true);
+    expect(result.sawVisibleOutput).toBe(true);
+  });
+
+  it("still reports a genuine ok=false with no reason as a model failure", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "done", ok: false, reply: "Not logged in" }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.modelFailure).toBe(1);
+    expect(state.truncated).toBe("");
+  });
+});

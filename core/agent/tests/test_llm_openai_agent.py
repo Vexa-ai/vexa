@@ -221,12 +221,19 @@ def test_tool_call_budget_stops_the_turn_and_answers_every_call(tmp_path, monkey
     # both calls answered — an unanswered tool_call is a malformed next request
     answered = {e["callId"] for e in evs if e["type"] == "tool-result"}
     assert answered == {"a", "b"}
-    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is True
+    # F89: the truncation reaches the `done` event, which is the only one anything downstream reads
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is False
+    assert "tool-call budget" in evs[-1]["reason"]
+
+
+def _calls(*ids):
+    return [{"id": i, "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+            for i in ids]
 
 
 def test_trim_eats_the_oldest_tool_results_first():
     msgs = [{"role": "user", "content": "ask"},
-            {"role": "assistant", "content": "x"},
+            {"role": "assistant", "content": "x", "tool_calls": _calls("1", "2")},
             {"role": "tool", "tool_call_id": "1", "content": "H" * 20000},
             {"role": "tool", "tool_call_id": "2", "content": "T" * 20000},
             {"role": "user", "content": "the real question"}]
@@ -542,3 +549,139 @@ def test_write_roots_are_the_WRITABLE_mounts_only(tmp_path, monkeypatch):
     assert ok is False and (ro / "README.md").read_text() == "org tier"
     ok, _ = run_builtin("Write", {"file_path": str(work / "fine.md"), "content": "x"}, sandbox)
     assert ok is True
+
+
+# ── trimming never orphans a tool reply (F88) ───────────────────────────────────────────────────
+
+def _orphans(msgs):
+    """Every unsendable pairing an OpenAI-compatible server 400s on."""
+    called = {tc["id"] for m in msgs for tc in (m.get("tool_calls") or [])}
+    answered = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
+    return (called - answered) | (answered - called)
+
+
+def test_trim_drops_an_assistant_turn_together_with_its_tool_replies(tmp_path):
+    """F88 REPRODUCTION. Step 2 dropped ONE message at a time, so the assistant turn that made the
+    calls went and its `tool` answers stayed — a 400 from every OpenAI-compatible server, written
+    into the transcript, reproduced on every later turn of a resumed session."""
+    # The budget is met the moment the ASSISTANT turn goes — so the old loop stopped right there,
+    # leaving its `tool` answer behind with nobody to answer.
+    msgs = [{"role": "user", "content": "ask"},
+            {"role": "assistant", "content": "X" * 8000, "tool_calls": _calls("c0")},
+            {"role": "tool", "tool_call_id": "c0", "content": "small"},
+            {"role": "user", "content": "the real question"}]
+    out, trimmed = trim_messages(msgs, 200)
+    assert trimmed >= 1
+    assert _orphans(out) == set(), out
+    assert out[-1]["content"] == "the real question"
+
+
+def test_a_transcript_the_old_trimmer_already_broke_is_healed(tmp_path):
+    """The resumed-session half: an orphan already ON DISK must not be sent either. It costs the
+    whole turn, so it is repaired rather than counted as trimming."""
+    msgs = [{"role": "user", "content": "ask"},
+            {"role": "tool", "tool_call_id": "gone", "content": "an answer to nobody"},
+            {"role": "assistant", "content": "", "tool_calls": _calls("never-answered")},
+            {"role": "user", "content": "now what"}]
+    out, trimmed = trim_messages(msgs, 10_000)
+    assert trimmed == 0                       # nothing was sacrificed — it was unsendable
+    assert _orphans(out) == set()
+    assert [m["role"] for m in out] == ["user", "user"]
+
+
+def test_trim_never_orphans_under_a_brutal_budget():
+    msgs = [{"role": "system", "content": "rules"}, {"role": "user", "content": "ask"}]
+    for n in range(4):
+        msgs.append({"role": "assistant", "content": "", "tool_calls": _calls(f"a{n}", f"b{n}")})
+        msgs.append({"role": "tool", "tool_call_id": f"a{n}", "content": "R" * 9000})
+        msgs.append({"role": "tool", "tool_call_id": f"b{n}", "content": "S" * 9000})
+    msgs.append({"role": "user", "content": "the real question"})
+    out, _ = trim_messages(msgs, 50)
+    assert _orphans(out) == set(), out
+
+
+# ── the streaming path (F89 · F90) ──────────────────────────────────────────────────────────────
+
+def _sse(*frames):
+    """An SSE handler: each frame is a dict written as one `data:` line, then `[DONE]`."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = "".join(f"data: {json.dumps(f)}\n\n" for f in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body,
+                              headers={"Content-Type": "text/event-stream"})
+    return handler
+
+
+def _delta(text):
+    return {"choices": [{"delta": {"content": text}}]}
+
+
+def test_streaming_is_the_default_and_streams_deltas(tmp_path, monkeypatch):
+    monkeypatch.delenv("VEXA_AGENT_STREAM", raising=False)
+    h = _harness(_sse(_delta("Hel"), _delta("lo")))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "hi")
+    assert [e["text"] for e in evs if e["type"] == "message-delta"] == ["Hel", "lo"]
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is True and evs[-1]["reply"] == "Hello"
+
+
+def test_a_mid_stream_error_frame_on_a_200_is_a_failure(tmp_path, monkeypatch):
+    """F90 REPRODUCTION. vLLM/LiteLLM/OpenRouter answer 200 and put the failure inside the stream.
+    The old loop looked only for `delta`, so the frame was skipped and the turn ended
+    `done.ok=True` with an empty reply — the agent said nothing and nothing said why."""
+    monkeypatch.delenv("VEXA_AGENT_STREAM", raising=False)
+    h = _harness(_sse(_delta("part"), {"error": {"message": "context length exceeded"}}))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "hi")
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is False
+    assert "context length exceeded" in evs[-1]["reply"]
+
+
+def test_a_stream_with_no_text_and_no_tool_calls_is_a_failure(tmp_path, monkeypatch):
+    """F90 REPRODUCTION, second half: a truncated stream, or a model that spent its whole budget on
+    reasoning tokens (the case VEXA_LLM_EXTRA_BODY exists to switch off), reached done.ok=True with
+    an empty reply."""
+    monkeypatch.delenv("VEXA_AGENT_STREAM", raising=False)
+    h = _harness(_sse())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "hi")
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is False
+    assert "no content and no tool calls" in evs[-1]["reply"]
+
+
+def test_a_streamed_tool_call_still_answers_the_turn(tmp_path, monkeypatch):
+    """A stream carrying only tool_calls (no text) is NOT the empty case."""
+    monkeypatch.delenv("VEXA_AGENT_STREAM", raising=False)
+    (tmp_path / "n.md").write_text("body")
+    state = {"i": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["i"] += 1
+        if state["i"] == 1:
+            frames = [{"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "Read",
+                                                      "arguments": json.dumps(
+                                                          {"file_path": str(tmp_path / "n.md")})}}]}}]}]
+        else:
+            frames = [_delta("read it")]
+        body = "".join(f"data: {json.dumps(f)}\n\n" for f in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
+
+    h = _harness(handler)
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "read", allowed_tools=["Read"])
+    assert any(e["type"] == "tool-call" for e in evs)
+    assert evs[-1]["ok"] is True and evs[-1]["reply"] == "read it"
+
+
+def test_a_trimmed_turn_says_so_on_done(tmp_path, monkeypatch):
+    """F89: `context-trimmed` had no consumer anywhere. The turn is COMPLETE — it just answered from
+    less — so it stays ok=True and reports what it gave up."""
+    monkeypatch.setenv("VEXA_AGENT_CONTEXT_TOKENS", "300")
+    h = _harness(_server([_msg("", [("c1", "Read", {"file_path": str(tmp_path / "big.md")})]),
+                          _msg("ok")]))
+    (tmp_path / "big.md").write_text("x" * 40000)
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "read it", allowed_tools=["Read"])
+    done = evs[-1]
+    assert done["type"] == "done" and done["ok"] is True
+    assert "context-trimmed" in done["reason"]

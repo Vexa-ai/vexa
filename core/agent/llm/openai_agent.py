@@ -650,14 +650,72 @@ class _Transcript:
 
 # ── context trimming ────────────────────────────────────────────────────────────────────────────
 
+def _call_ids(msg: dict) -> set[str]:
+    """The ids of the tool calls THIS assistant message made."""
+    return {str(tc.get("id")) for tc in (msg.get("tool_calls") or [])
+            if isinstance(tc, dict) and tc.get("id")}
+
+
+def _exchange(msgs: list[dict], i: int) -> set[int]:
+    """The indices that must leave TOGETHER if index ``i`` leaves — an assistant's tool_calls and
+    every ``tool`` message answering them (F88).
+
+    The OpenAI dialect is strict in both directions: an assistant message whose ``tool_calls`` have
+    no answering ``tool`` message is a 400, and so is a ``tool`` message whose caller is gone. The
+    old trimmer dropped one message at a time and hit both."""
+    msg = msgs[i]
+    ids = _call_ids(msg)
+    if ids:
+        return {i} | {j for j, m in enumerate(msgs)
+                      if m.get("role") == "tool" and str(m.get("tool_call_id")) in ids}
+    if msg.get("role") == "tool":
+        cid = str(msg.get("tool_call_id") or "")
+        caller = next((j for j, m in enumerate(msgs) if cid and cid in _call_ids(m)), None)
+        return {i} if caller is None else _exchange(msgs, caller)
+    return {i}
+
+
+def prune_orphans(messages: list[dict]) -> tuple[list[dict], int]:
+    """Remove tool/assistant messages that cannot be sent because their counterpart is missing.
+
+    This is a REPAIR, not a sacrifice: such a message is unsendable, so keeping it costs the whole
+    turn. It matters most on a RESUMED session — a transcript written by the old trimmer carries the
+    orphan for good, so every subsequent turn of that conversation 400s until somebody starts a new
+    one, which is exactly how the defect reproduced."""
+    msgs = list(messages)
+    removed = 0
+    while True:
+        answered = {str(m.get("tool_call_id")) for m in msgs if m.get("role") == "tool"}
+        called: set[str] = set()
+        for m in msgs:
+            called |= _call_ids(m)
+        drop = {i for i, m in enumerate(msgs)
+                if (m.get("role") == "tool" and str(m.get("tool_call_id")) not in called)
+                or (_call_ids(m) and not (_call_ids(m) & answered))}
+        if not drop:
+            return msgs, removed
+        msgs = [m for i, m in enumerate(msgs) if i not in drop]
+        removed += len(drop)
+
+
 def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
     """Fit ``messages`` under ``budget`` estimated tokens. Returns (messages, trimmed_count).
 
     Order of sacrifice, oldest first: tool RESULTS (replaced by a stub, so the model still sees that
-    the call happened), then whole oldest exchanges, and only then the head of the first user
+    the call happened), then whole oldest EXCHANGES, and only then the head of the first user
     message. The LAST user message is never touched — it is the ask, and a turn that trims the ask
-    answers a question nobody put."""
-    msgs = [dict(m) for m in messages]
+    answers a question nobody put.
+
+    "Exchange", not "message" (F88): dropping an assistant turn without the ``tool`` messages that
+    answered it — or a ``tool`` message without its caller — produces a request every
+    OpenAI-compatible server rejects with a 400, and the malformation is WRITTEN TO THE TRANSCRIPT,
+    so a resumed session reproduced it on every later turn. `prune_orphans` runs first and
+    unconditionally, healing transcripts the old trimmer already broke; its removals are not counted
+    as trimming because they buy no context, they only make the request sendable."""
+    msgs, healed = prune_orphans([dict(m) for m in messages])
+    if healed:
+        log.warning("dropped %d orphaned tool message(s) from the session transcript — an "
+                    "assistant turn and its tool results must leave together", healed)
     if _est_tokens(msgs) <= budget:
         return msgs, 0
     trimmed = 0
@@ -668,14 +726,22 @@ def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
             m["content"] = _TRIM_STUB
             trimmed += 1
     last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-    while _est_tokens(msgs) > budget:                  # 2) drop oldest non-final messages
-        drop = next((i for i, m in enumerate(msgs)
-                     if i != last_user and i != 0 and m.get("role") != "system"), None)
-        if drop is None:
+    while _est_tokens(msgs) > budget:                  # 2) drop oldest non-final EXCHANGES
+        drop: Optional[set[int]] = None
+        for i, m in enumerate(msgs):
+            if i == 0 or i == last_user or m.get("role") == "system":
+                continue
+            group = _exchange(msgs, i)
+            if 0 in group or last_user in group or any(msgs[j].get("role") == "system"
+                                                       for j in group):
+                continue                               # the group is anchored — try the next one
+            drop = group
             break
-        msgs.pop(drop)
+        if not drop:
+            break
+        msgs = [m for i, m in enumerate(msgs) if i not in drop]
+        trimmed += len(drop)
         last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-        trimmed += 1
     if _est_tokens(msgs) > budget and len(msgs) > 1:   # 3) last resort: head-truncate the opener
         head = msgs[0]
         content = str(head.get("content") or "")
@@ -790,10 +856,20 @@ class OpenAIAgentHarness:
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
             started, calls_made, reply = time.monotonic(), 0, ""
             sandbox = _Sandbox(mount_roots(work), mount_roots(work, writable_only=True))
+            # F89: WHAT THE TURN GAVE UP, carried to the `done` event. `turn-truncated` and
+            # `context-trimmed` are emitted for the log and the panel, but neither had a consumer —
+            # the terminal reducer's switch has no case for them and the engine drops them — so a
+            # turn that ran out of tool calls, ran out of wall clock, or answered from a context it
+            # had sacrificed reported `done.ok=True` with a partial reply and looked complete.
+            # `done` is one of the five FROZEN types, so this rides as an optional field on it
+            # rather than as a sixth type.
+            truncation = ""
+            trimmed_total = 0
 
             while True:
                 sent, trimmed = trim_messages(messages, ctx_budget)
                 if trimmed:
+                    trimmed_total += trimmed
                     yield {"type": "context-trimmed", "dropped": trimmed,
                            "tokens": _est_tokens(sent), "budget": ctx_budget}
                     messages = sent
@@ -820,6 +896,7 @@ class OpenAIAgentHarness:
                     if calls_made >= budget_calls or (time.monotonic() - started) > budget_secs:
                         over_budget = True
                         reason = "tool-call budget" if calls_made >= budget_calls else "time budget"
+                        truncation = reason
                         yield {"type": "turn-truncated", "reason": reason,
                                "calls": calls_made, "seconds": round(time.monotonic() - started, 1)}
                         # EVERY call the model made is answered, refusals included. An assistant
@@ -848,7 +925,18 @@ class OpenAIAgentHarness:
                 if over_budget:
                     reply = text
                     break
-            yield {"type": "done", "reply": reply, "sessionId": sid, "ok": True}
+            # THE TURN'S OWN VERDICT. `ok` is False only when the turn did not finish its own
+            # reasoning — it hit a budget — because that reply is partial and acting on it as if it
+            # were an answer is the failure. A context trim leaves a COMPLETE answer built on less,
+            # so it stays ok=True and says so in `reason`; the consumer decides how loud that is.
+            done: dict = {"type": "done", "reply": reply, "sessionId": sid,
+                          "ok": not truncation}
+            if truncation:
+                done["reason"] = f"the turn stopped early: {truncation}"
+            elif trimmed_total:
+                done["reason"] = (f"context-trimmed: {trimmed_total} message(s) dropped to stay "
+                                  f"inside the turn's {ctx_budget}-token budget")
+            yield done
         finally:
             for srv in servers:
                 srv.close()
@@ -903,6 +991,16 @@ class OpenAIAgentHarness:
                         chunk = json.loads(data)
                     except ValueError:
                         continue
+                    # F90: AN ERROR FRAME ON A 200 RESPONSE. vLLM, LiteLLM and OpenRouter all
+                    # answer 200 and then put the failure INSIDE the stream (a rate limit, a
+                    # context overflow, an upstream 5xx). The old loop looked only for `delta`, so
+                    # such a frame was skipped and the turn ended with an empty successful reply —
+                    # the person saw the agent say nothing and nothing anywhere said why.
+                    err = chunk.get("error")
+                    if err:
+                        detail = err.get("message") if isinstance(err, dict) else str(err)
+                        raise LLMError(f"{self._base} streamed an error frame: "
+                                       f"{_short(detail or err, 300)}")
                     delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
                     if delta.get("content"):
                         acc_text += delta["content"]
@@ -920,6 +1018,14 @@ class OpenAIAgentHarness:
                             slot["function"]["arguments"] += fn["arguments"]
         except httpx.HTTPError as exc:
             raise LLMError(f"agent transport failure against {self._base}: {exc}") from exc
+        # F90: A STREAM THAT SAID NOTHING is a failure, not an empty answer. A truncated connection,
+        # a model that emitted only reasoning tokens (the Qwen thinking case VEXA_LLM_EXTRA_BODY
+        # exists to switch off), a `[DONE]` with no content — all reached `done.ok=True` with an
+        # empty reply, which the chat renders as the agent having nothing to say.
+        if not acc_text and not acc_calls:
+            raise LLMError(f"{self._base} streamed no content and no tool calls — the endpoint "
+                           "answered 200 with an empty completion (a truncated stream, or a model "
+                           "spending its whole budget on reasoning tokens)")
         msg: dict = {"role": "assistant", "content": acc_text}
         if acc_calls:
             msg["tool_calls"] = [acc_calls[k] for k in sorted(acc_calls)]
