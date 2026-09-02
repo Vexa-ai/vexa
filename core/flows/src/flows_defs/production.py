@@ -176,12 +176,21 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def emit_completed(ctx: StepCtx):
-        """EMIT meeting.completed carrying meeting identity + transcript — the fact the
-        post-meeting flows react to. Prior: dispatch_bot, run_meeting."""
+        """EMIT meeting.completed carrying IDENTITY ONLY — the fact the post-meeting flows react
+        to. Prior: dispatch_bot, run_meeting.
+
+        The transcript used to ride inside this event, truncated to 8,000 characters to fit. That
+        made the event a second home for a fact the transcription domain already owns, and the cap
+        was the product's ceiling: on an hour-long meeting the agent saw about the first twelve
+        minutes, so its notes were well-formed and nearly content-free (measured — the mechanical
+        score said 0.94 while the judge said 7/100, and both were right).
+
+        Identity travels; the words stay where they live. The agent reads them itself over the MCP
+        with its delegation token, in full."""
         d = ctx.prior["dispatch_bot"]
+        refs = {k: v for k, v in ctx.refs.items() if k != "transcript"}
         ctx.emit(COMPLETED.name, f"done-{d['meeting_id']}",
-                 {**ctx.refs, "meeting_id": d["meeting_id"], "native": d["native"],
-                  "transcript": ctx.prior["run_meeting"]["transcript"],
+                 {**refs, "meeting_id": d["meeting_id"], "native": d["native"],
                   "uid": ctx.prior["ensure_user"]["uid"]})
         return Done({})
 
@@ -269,15 +278,14 @@ def build(reg: Registry, db) -> None:
         """REAL agent turn on session meet-<id>: write the meeting note (Decided/Committed/
         Open, wikilinked) into the workspace and commit. Completion detected by a commit touching
         kg/entities/meeting/ (matched by PATH, never count). Params: style (rendering guidance).
-        Reads: refs.{uid,meeting_id,native,transcript} · Effect: agent worker + git commit
+        Reads: refs.{uid,meeting_id,native} · Effect: agent worker + git commit
         Result: {sha, note_path}."""
         uid = ctx.refs["uid"]
         if "baseline" not in ctx.scratch:
             ctx.scratch["shas"] = ag.commit_shas(uid)
             kick = prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(
                 mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
-                date=_meeting_stamp(ctx, uid),
-                transcript=ctx.refs["transcript"] or "(no speech captured)")
+                date=_meeting_stamp(ctx, uid))
             # ONE agent turn produces everything, including the per-attendee follow-ups when the
             # personal variant is on. No per-attendee agent, no per-attendee session before a
             # click — the button composes the chat when it is pressed, as the organizer's does.
@@ -369,24 +377,35 @@ def build(reg: Registry, db) -> None:
         "agent produced no note". Replay makes this the normal case rather than the edge one —
         ten recorded meetings replayed this afternoon are ten occurrences processed today.
 
-        So: the meeting's own start (refs.start, else the meeting row's start_time, else its
-        created_at, else now), rendered in the person's timezone, and carrying HHMM so two
-        occurrences on ONE day are two files.
+        THE RULE, stated because a filename that is wrong by one day collides with the next day's
+        occurrence exactly the way the processing-date bug did:
+
+          the instant   refs.start, else the meeting row's start_time, else its created_at
+          the clock     the ORGANIZER'S timezone when we know it, else UTC — never the server's
+          the shape     %Y-%m-%d-%H%M, so two occurrences on ONE day are still two files
+
+        The server's clock was the quiet defect. Every branch here rendered in UTC or the person's
+        zone except the no-start fallback, which used `time.strftime` — local time on whichever
+        machine happened to run the worker. A meeting near midnight then landed on a different day
+        depending on where the process was, which is the one thing a filename must never do.
         """
         import datetime
         start = ctx.refs.get("start")
         if not start:
             start = mt.meeting_start(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
-        if not start:
-            return time.strftime("%Y-%m-%d-%H%M")
+        zone = datetime.timezone.utc
         tz = setting(uid, "timezone")
-        try:
-            import zoneinfo
-            t = datetime.datetime.fromtimestamp(float(start), zoneinfo.ZoneInfo(tz)) if tz \
-                else datetime.datetime.fromtimestamp(float(start), datetime.timezone.utc)
-        except Exception:  # noqa: BLE001
-            t = datetime.datetime.fromtimestamp(float(start), datetime.timezone.utc)
-        return t.strftime("%Y-%m-%d-%H%M")
+        if tz:
+            try:
+                import zoneinfo
+                zone = zoneinfo.ZoneInfo(tz)
+            except Exception:  # noqa: BLE001 — an unknown zone name falls back to UTC, never local
+                zone = datetime.timezone.utc
+        if not start:
+            # Still deterministic and still not the server's clock: a meeting with no knowable
+            # start is stamped in the same zone as one that has it.
+            return datetime.datetime.now(zone).strftime("%Y-%m-%d-%H%M")
+        return datetime.datetime.fromtimestamp(float(start), zone).strftime("%Y-%m-%d-%H%M")
 
 
     def _provenance(ctx, uid, to_attendee: bool) -> str:

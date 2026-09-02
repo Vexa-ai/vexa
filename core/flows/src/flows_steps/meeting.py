@@ -159,7 +159,11 @@ def run_meeting(ctx: StepCtx):
     if s == "completed":
         segs = m.get("segments") or []
         transcript = "\n".join(f"{x.get('speaker','?')}: {x.get('text','')}" for x in segs)
-        return Done({"segments": len(segs), "transcript": transcript[:8000]})
+        # The transcript is NOT returned. It used to come back capped at 8,000 characters so it
+        # could ride inside meeting.completed — a copy of a fact the transcription domain owns,
+        # and a cap that decided how much of an hour the agent would ever see. Segment count is a
+        # receipt; the words are read through the MCP by whoever needs them.
+        return Done({"segments": len(segs)})
     if s == "failed":
         raise StepError(f"meeting failed: {m.get('completion_reason')}", retryable=False)
     return Wait(seconds=6)

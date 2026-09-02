@@ -44,7 +44,8 @@ def _stamp_for(refs, monkeypatch_setting=None):
         return 0
 
     common_setting = common.setting
-    production.setting = lambda uid, key: ""          # no timezone -> UTC
+    production.setting = (monkeypatch_setting
+                          or (lambda uid, key: ""))   # no timezone -> UTC
     ag.dispatch_turn = fake_dispatch
     ag.commit_shas = lambda uid: []
     mt.meeting_start = lambda uid, mid, native=None: None
@@ -119,8 +120,69 @@ def test_seeded_row_with_no_start_falls_back_and_is_still_unique():
     assert pa.startswith("kg/entities/meeting/") and pb.startswith("kg/entities/meeting/")
 
 
+def test_midnight_is_the_organizers_day_not_utcs():
+    """A meeting just after midnight in the organizer's zone belongs to THAT day.
+
+    00:30 in Los Angeles is 07:30 UTC the same date; 00:30 in Sydney is 13:30 UTC the day BEFORE.
+    Stamped in UTC, the Sydney meeting is filed a day early — and a filename that is wrong by one
+    day collides with the next day's occurrence of the same series exactly the way the
+    processing-date bug did. So the organizer's zone decides the date whenever we know it."""
+    import datetime
+    import zoneinfo
+
+    native = "dailies-recur-01"
+    for zone, when in (("Australia/Sydney", "2026-09-02 00:30"),
+                       ("America/Los_Angeles", "2026-09-02 00:30")):
+        local = datetime.datetime.strptime(when, "%Y-%m-%d %H:%M").replace(
+            tzinfo=zoneinfo.ZoneInfo(zone))
+        refs = {"uid": "1", "meeting_id": 201, "native": native, "transcript": "t",
+                "start": local.timestamp(), "organizer": "a@x.test", "title": "Dailies"}
+        path = _path_from(_stamp_for(refs, monkeypatch_setting=lambda u, k, z=zone: z if k == "timezone" else ""))
+        assert "2026-09-02" in path, (zone, path, "filed on the wrong DAY")
+
+    # And the Sydney case is the one that proves it: in UTC that instant is the 1st.
+    syd = datetime.datetime.strptime("2026-09-02 00:30", "%Y-%m-%d %H:%M").replace(
+        tzinfo=zoneinfo.ZoneInfo("Australia/Sydney"))
+    assert syd.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d") == "2026-09-01"
+
+
+def test_no_start_is_stamped_in_a_declared_zone_never_the_servers():
+    """The quiet defect: every branch rendered in UTC or the person's zone EXCEPT the no-start
+    fallback, which used `time.strftime` — local time on whichever machine ran the worker. The
+    same meeting then landed on a different day depending on where the process happened to be.
+
+    Asserted by MOVING THE SERVER'S CLOCK, not by comparing against `now`: set TZ either side of
+    the date line and demand the same stamp. Comparing to `now` would pass on the broken code for
+    most of the day and fail nobody's build until it did — which is how this survived."""
+    import os
+    import time as _t
+
+    refs = {"uid": "1", "meeting_id": 301, "native": "no-start-01", "transcript": "t",
+            "organizer": "a@x.test", "title": "TSC"}                      # no `start`
+    was = os.environ.get("TZ")
+    stamps = []
+    try:
+        for zone in ("Pacific/Kiritimati", "Pacific/Midway"):   # UTC+14 and UTC-11
+            os.environ["TZ"] = zone
+            _t.tzset()
+            stamps.append(_path_from(_stamp_for(refs))[:len("kg/entities/meeting/2026-09-02")])
+    finally:
+        if was is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = was
+        _t.tzset()
+
+    assert stamps[0] == stamps[1], (
+        f"the note filename moved with the SERVER's timezone: {stamps} — a meeting must not "
+        "change date because the worker ran somewhere else")
+
+
 if __name__ == "__main__":
     test_two_occurrences_same_day_same_native_are_two_notes()
     test_date_comes_from_the_meeting_not_from_today()
     test_seeded_row_with_no_start_falls_back_and_is_still_unique()
+    test_midnight_is_the_organizers_day_not_utcs()
+    test_no_start_is_stamped_in_a_declared_zone_never_the_servers()
+    print("all note-date tests pass")
     print("note-date tests PASS")
