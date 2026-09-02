@@ -52,6 +52,44 @@ export const CHATS_KEY = "vexa.minutes.chats";
  *  it stays on disk untouched as the backup. */
 export const PROJECTS_KEY = "vexa.minutes.projects";
 export const RAIL_ALL_KEY = "vexa.minutes.railAll";
+
+/** WHOSE rail this is.
+ *
+ *  `CHATS_KEY` is one global key, so a second identity signing in on the same browser INHERITED
+ *  the previous person's rows — including chats for meetings they cannot see. Reproduced
+ *  2026-09-02: a brand-new account's rail opened showing another account's meeting.
+ *  `onboardingState.ts` had already learned this ("keyed by the user's identity so switching users
+ *  is clean"); the rail simply never did.
+ *
+ *  The owner is a SEPARATE key rather than a wrapper around the payload, because the payload shape
+ *  is load-bearing for the legacy migration below and a stamp does not need to touch it. The client
+ *  cannot know its identity synchronously — `vexa-user-info` is httpOnly and `/api/auth/me` is a
+ *  fetch — so the rail loads first and is CHECKED when the identity arrives. Same person: nothing
+ *  happens, no flicker. Different person: the rail is theirs, not this reader's, and it goes.
+ *
+ *  One-time caveat, deliberate: a rail stored before this key existed has no owner, so the first
+ *  identity to observe it ADOPTS it rather than losing it. Wiping every existing rail on upgrade
+ *  would be a worse trade than one inheritance on a browser that was already shared. */
+export const RAIL_OWNER_KEY = "vexa.minutes.chatsOwner";
+
+/** The identity that owns the stored rail, or null when nothing has claimed it yet. */
+export function readRailOwner(): string | null {
+  try { return localStorage.getItem(RAIL_OWNER_KEY); } catch { return null; }
+}
+
+export function writeRailOwner(identity: string): void {
+  try { localStorage.setItem(RAIL_OWNER_KEY, identity); } catch { /* ignore */ }
+}
+
+/** Drop the stored rail and hand back a fresh one (seeds only) — used when the reader is not the
+ *  person whose rail is in storage. Nothing is lost that matters: meeting rows are DERIVED from the
+ *  meetings list and come back on their own, and every chat's session lives on the server. */
+export function resetChats(now = Date.now()): Chat[] {
+  try { localStorage.removeItem(CHATS_KEY); } catch { /* ignore */ }
+  const fresh = ensureSeeds([], now);
+  saveChats(fresh);
+  return fresh;
+}
 /** Which side columns the reader has folded away. One key per side, because the two are independent
  *  choices and a combined key would make forgetting one of them the default. */
 export const COLLAPSED_KEY = { left: "vexa.minutes.railCollapsed", right: "vexa.minutes.pagesCollapsed" } as const;
