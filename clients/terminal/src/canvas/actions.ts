@@ -99,6 +99,11 @@ export const MACHINERY_NOTE = "\n\n" + MACHINERY_MARK + " This opening was compo
 // Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
 // instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
 export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
+/** The company-layer probe answered. SetupGate owns that probe and is the only dispatcher; the
+ *  rail listens so the structural rows it deliberately withheld on first render can appear the
+ *  moment the instance is known to be set up. One writer, one announcement, no polling in the
+ *  rail. */
+export const COMPANY_LAYER_EVENT = "vexa:terminal:company-layer";
 
 /** A chat turn COMMITTED to the workspace — the moment files it wrote became real.
  *

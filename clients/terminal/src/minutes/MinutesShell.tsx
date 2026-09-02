@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
+import { COMPANY_LAYER_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
 import {
@@ -27,8 +27,8 @@ import {
   chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, newChat, railRows,
   readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
-  type Artifact, type Chat as ChatRec, type Row,
-} from "./chats";
+  ensureSeeds,
+  type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
@@ -69,6 +69,15 @@ export function MinutesShell() {
   const meetings = useMemo(() => (mock ? [...MOCK_MEETINGS, ...realMeetings] : realMeetings), [mock, realMeetings]);
   // The stored list. Mock chats are merged for DISPLAY only — they are never written back.
   const [chats, setChats] = useState<ChatRec[]>(() => loadChats());
+  // The structural rows (Personal, Organisation setup) are withheld on first render while the
+  // company layer is unknown — see chats.ts `companyLayerHint`. SetupGate answers that question a
+  // moment later and announces it here, which is when they may appear. Derived, never stored, so
+  // this adds rows and never removes anyone's.
+  useEffect(() => {
+    const on = () => setChats((prev) => ensureSeeds(prev));
+    window.addEventListener(COMPANY_LAYER_EVENT, on);
+    return () => window.removeEventListener(COMPANY_LAYER_EVENT, on);
+  }, []);
   const allChats = useMemo(() => (mock ? [...chats, ...MOCK_CHATS] : chats), [mock, chats]);
   const chatsRef = useRef(allChats);
   useEffect(() => { chatsRef.current = allChats; }, [allChats]);

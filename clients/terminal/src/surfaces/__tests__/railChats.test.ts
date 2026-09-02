@@ -324,7 +324,14 @@ describe("loadChats — migrate exactly once, and never write the old key", () =
     expect(loadChats(T0).map((c) => c.id)).not.toContain("pchat-b");
   });
 
-  it("the two structural rows always exist, and are touched so the filter cannot hide admin", () => {
+  // ── the structural rows are conditional now (founder ruling 2026-09-02) ─────────────────────
+  // They used to be unconditional, and on a fresh instance that put a "Personal" row seeded with
+  // "paste a meeting link" in front of an admin whose instance could not join a meeting or send a
+  // mail. They exist once the company layer is KNOWN to be written, and not before.
+  const layerReady = () => localStorage.setItem("vexa.companyLayer.v1", "completed");
+
+  it("the two structural rows exist once the instance is set up, touched so the filter cannot hide admin", () => {
+    layerReady();
     const out = loadChats(T0);
     const org = out.find((c) => c.label === ORG_CHAT_LABEL);
     expect(out.find((c) => c.id === PERSONAL_CHAT_ID)?.touched).toBe(true);
@@ -332,7 +339,20 @@ describe("loadChats — migrate exactly once, and never write the old key", () =
     expect(org?.workspaces).toEqual(["_global"]);
   });
 
+  it("withholds them while the company layer is missing — the setup conversation is the only chat", () => {
+    localStorage.setItem("vexa.companyLayer.v1", "missing");
+    expect(loadChats(T0)).toEqual([]);
+  });
+
+  it("withholds them while the answer is UNKNOWN, which is the first render of a fresh browser", () => {
+    // The case the first version of this fix got wrong: the hint is written by a poll that has not
+    // returned when the rail first renders, so "absent" must not read as "fine, seed them". Being
+    // briefly rowless costs a second; guessing wrong costs the first impression.
+    expect(loadChats(T0)).toEqual([]);
+  });
+
   it("a corrupt stored list falls back to the seeds instead of throwing", () => {
+    layerReady();
     localStorage.setItem(CHATS_KEY, "{not json");
     expect(loadChats(T0).map((c) => c.id)).toEqual([PERSONAL_CHAT_ID, "org-setup"]);
   });

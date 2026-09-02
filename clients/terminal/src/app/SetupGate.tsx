@@ -45,6 +45,7 @@ import {
   type GlobalSetting, type GlobalState,
 } from "../surfaces/settingsApi";
 import { setCompanyLayerHint } from "../minutes/chats";
+import { COMPANY_LAYER_EVENT } from "../canvas/actions";
 
 /** Show the setup surface at all? null = not an admin (probe 404s); completed set = already ran.
  *  Note what does NOT appear here: the company layer's own state. `setup.completed` is written by
@@ -229,6 +230,9 @@ function useGlobalState(stop: boolean): Poll {
       // absent. Being wrong costs a row in a list and nothing else: the server refuses every gated
       // request on its own, so this is presentation, never permission.
       setCompanyLayerHint(state.global_setup === "completed" ? "completed" : "missing");
+      // …and SAY so, because the rail rendered before this answer existed and withheld its
+      // structural rows rather than guess. This is the only dispatcher.
+      window.dispatchEvent(new CustomEvent(COMPANY_LAYER_EVENT));
       if (alive.current) setPoll({ state, error: null });
     } catch (e: unknown) {
       if (alive.current) setPoll((prev) => ({ state: prev.state, error: e instanceof Error ? e.message : String(e) }));
