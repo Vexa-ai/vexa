@@ -801,7 +801,12 @@ class OpenAIAgentHarness:
             return ("openai-agent: no VEXA_LLM_BASE_URL — every workspace turn will fail until an "
                     "OpenAI-compatible endpoint is set")
         if not (self._model or os.environ.get("VEXA_AGENT_MODEL")):
-            return "openai-agent: no VEXA_LLM_MODEL — the endpoint will be asked for an empty model"
+            # NAME THE KEY THE OPERATOR ACTUALLY SETS (F91). `VEXA_AGENT_MODEL` is what Settings →
+            # Models writes and what the dispatch stamps into every worker; `VEXA_LLM_MODEL` is only
+            # this harness's override, so sending the operator to it sent them to the dial that
+            # would not be read.
+            return ("openai-agent: no VEXA_AGENT_MODEL (nor the VEXA_LLM_MODEL override) — the "
+                    "endpoint will be asked for an empty model")
         return None
 
     def midturn_enabled(self) -> bool:
@@ -832,7 +837,8 @@ class OpenAIAgentHarness:
                 "no agent endpoint: set VEXA_LLM_BASE_URL (e.g. http://192.168.1.6:8001/v1) — the "
                 "openai-agent runner has no default host")
         if not target:
-            raise LLMConfigError("no model: set VEXA_LLM_MODEL (or VEXA_AGENT_MODEL)")
+            raise LLMConfigError("no model: set VEXA_AGENT_MODEL (Settings → Models writes this "
+                                 "one), or the VEXA_LLM_MODEL override for this harness")
 
         chat_root = self._chat_root or work
         store = _Transcript(chat_root, work, sid)

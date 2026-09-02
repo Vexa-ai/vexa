@@ -924,7 +924,7 @@ function gateDataflow() {
 const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // process-plumbing vars a surface may set without a declaration entry (kept TIGHT + documented):
 // interpreter/runtime wiring only, never product config.
-const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ"]);
+const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ", "HOME", "TMPDIR"]);
 // literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
 const CONFIG_READ_RES = [
   /os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
@@ -951,7 +951,11 @@ const CONFIG_ADOPTED = [
     service: "agent-api",
     decl: "core/agent/control_plane/config.v1.json",
     preflight: "core/agent/control_plane/config_preflight.py",
-    scan: ["core/agent/control_plane", "core/agent/shared"],
+    // F91: the WORKER and the HARNESS adapters are part of this service's config surface. agent-api
+    // does not read their keys itself - it STAMPS them into every worker spec env (build_unit_env)
+    // - so scanning only the control plane made every dial the turn actually runs on invisible to
+    // the contract, and VEXA_LLM_EXTRA_BODY was declared nowhere at all.
+    scan: ["core/agent/control_plane", "core/agent/shared", "core/agent/llm", "core/agent/worker"],
     compose: "agent-api", helm: ["deployment-agent-api.yaml"], lite: "agent-api",
   },
   {

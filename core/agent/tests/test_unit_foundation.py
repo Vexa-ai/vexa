@@ -521,3 +521,24 @@ def test_message_dispatch_stamps_the_chat_idle_window():
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(settings.chat_idle_timeout_sec)
+
+
+# ── the deployment runner is resolved per call, never frozen at import (F92) ─────────────────────
+
+def test_vexa_runner_is_read_when_the_dispatch_is_built(monkeypatch):
+    """F92 REPRODUCTION. `RUNNER` was a module constant bound into `make_dispatch`'s DEFAULT
+    ARGUMENT, so it was decided once when `shared.units` was first imported — the exact pattern
+    `control_plane/config_test.py` documents at length as a 32-hour outage. An operator who changed
+    VEXA_RUNNER saw nothing happen; a test that set it read whatever the interpreter saw first."""
+    from shared import units as u
+
+    monkeypatch.delenv("VEXA_RUNNER", raising=False)
+    start = u.entrypoint(inline="hi")
+    assert u.make_dispatch(subject="u1", trigger="message", start=start)["runner"] == "claude-code"
+
+    monkeypatch.setenv("VEXA_RUNNER", "openai-agent")
+    assert u.make_dispatch(subject="u1", trigger="message", start=start)["runner"] == "openai-agent"
+
+    # an explicit argument still wins over the deployment floor
+    assert u.make_dispatch(subject="u1", trigger="message", start=start,
+                           runner="codex")["runner"] == "codex"

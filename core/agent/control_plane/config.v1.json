@@ -480,6 +480,181 @@
       "default": "5",
       "description": "how many scheduled meetings the per-dispatch timeline block states",
       "targets": []
+    },
+    {
+      "key": "VEXA_LLM_BASE_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 falls back to ANTHROPIC_BASE_URL)",
+      "description": "openai-agent harness: the OpenAI-compatible endpoint the turn's chat/completions run against. Falls back to ANTHROPIC_BASE_URL, which is what a per-subject Settings \u2192 Models gateway arrives as \u2014 there is ONE endpoint pair and this is its second spelling, kept because the harness predates the collapse",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "openai-agent harness: the bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Falls back to ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_MODEL",
+      "class": "defaulted",
+      "default": "(unset \u2014 VEXA_AGENT_MODEL applies)",
+      "description": "openai-agent harness: the model id, when it differs from the product-wide VEXA_AGENT_MODEL. VEXA_AGENT_MODEL is the one Settings \u2192 Models writes and the one the dispatch stamps, so this is an override and not the main dial",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_EXTRA_BODY",
+      "class": "defaulted",
+      "default": "(unset \u2014 no extra fields)",
+      "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). Also settable per subject under Settings \u2192 Models",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_STREAM",
+      "class": "defaulted",
+      "default": "1",
+      "description": "openai-agent harness: stream the completion (SSE). 0/false/no sends one blocking request per step instead \u2014 for an endpoint whose SSE is unreliable",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: hard per-turn ceiling on tool calls. A turn that reaches it stops and reports the truncation on its done event",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TURN_SEC",
+      "class": "defaulted",
+      "default": "900",
+      "description": "openai-agent harness: hard per-turn wall-clock ceiling in seconds, reported the same way as the tool-call budget",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_CONTEXT_TOKENS",
+      "class": "defaulted",
+      "default": "24000",
+      "description": "openai-agent harness: estimated-token ceiling on the request. A SIZING RULE on a shared inference box rather than a nicety \u2014 a 24k-context request is about 1/29th of the CCC KV cache and an unbounded turn evicts everybody else",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_EFFORT",
+      "class": "defaulted",
+      "default": "(unset \u2014 the CLI's own default)",
+      "description": "reasoning-effort pin passed to the claude-code CLI as --effort. Stamped per subject by the dispatch overlay (Settings \u2192 Models \"effort\"); empty leaves the CLI's own default, which OpenAI-compatible backends that validate reasoning_effort reject",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CODEX_MODEL",
+      "class": "defaulted",
+      "default": "(unset \u2014 the Codex account default)",
+      "description": "codex harness: the model for the Codex app-server, when it differs from VEXA_AGENT_MODEL. Empty lets the signed-in subscription account choose, which is what stops a claude-* pin in Settings \u2192 Models from being fed to Codex",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MIDTURN_INJECT",
+      "class": "defaulted",
+      "default": "(unset \u2014 off)",
+      "description": "1 enables mid-turn user-message injection into a running harness turn (claude-code stream-json input, codex turn/steer). Off by default: an injection the harness drops is a message the person believes they sent",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_HARNESS_REAP_GRACE_SEC",
+      "class": "defaulted",
+      "default": "5",
+      "description": "seconds a harness CLI subprocess is given to exit after its stream ends before it is killed",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WRITEBACK",
+      "class": "defaulted",
+      "default": "1",
+      "description": "run the post-turn write-back phase (the entity/timeline bookkeeping that follows a chat turn). 0/false/off/no disables it",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WRITEBACK_MIN_TOKENS",
+      "class": "defaulted",
+      "default": "40",
+      "description": "shortest turn worth a write-back phase, in estimated tokens \u2014 below it the bookkeeping costs more than it records",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_RESUME_MAX_BYTES",
+      "class": "defaulted",
+      "default": "1000000",
+      "description": "largest session transcript the worker will resume from; past it the thread starts a fresh harness session rather than re-sending an unaffordable history",
+      "targets": []
+    },
+    {
+      "key": "VEXA_IDLE_TIMEOUT_SEC",
+      "class": "defaulted",
+      "default": "120",
+      "description": "the WORKER's warm-serve window: how long it keeps serving unit:<id>:in after its last turn. Dispatch-stamped per chat turn from VEXA_CHAT_IDLE_TIMEOUT_SEC; the engine's own default is deliberately tighter",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_TOOLS",
+      "class": "defaulted",
+      "default": "(unset \u2014 the engine's chat default set)",
+      "description": "the allow-set a chat turn's harness is given (comma-separated). Runtime-injected per dispatch; the harness enforces it at EXECUTION, not only on the tool list it advertises",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_SESSION",
+      "class": "defaulted",
+      "default": "main",
+      "description": "the conversation THREAD this dispatch belongs to \u2014 the worker namespaces its continuity session file by it, so several threads coexist in one user workspace. Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
+      "key": "VEXA_START",
+      "class": "defaulted",
+      "default": "{}",
+      "description": "the dispatch's ``start`` object as JSON (the entrypoint ask or the session ref). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_UNIT_OUT_TOPIC",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 the runtime injects unit:<id>:out per dispatch)",
+      "description": "the per-dispatch output Stream (unit:<id>:out) the worker writes its UnitEvents to. Runtime-injected per dispatch; a worker without it cannot report anything and refuses to boot (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_UNIT_IN_TOPIC",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 the runtime injects unit:<id>:in per dispatch)",
+      "description": "the per-dispatch input Stream (unit:<id>:in) the worker's serve loop reads interactive messages from. Runtime-injected per dispatch (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
+      "targets": []
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 the runtime injects the worker's connection per dispatch)",
+      "description": "the WORKER's redis connection (its unit:<id>:in/out Streams). Runtime-injected per dispatch and deliberately withheld from the model's own subprocess (llm/ports._HARNESS_SUBPROCESS_DENY_VARS) \u2014 a Bash tool holding it reaches another tenant's keys (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
+      "targets": []
     }
   ],
   "capabilities": {

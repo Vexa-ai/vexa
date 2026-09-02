@@ -307,9 +307,23 @@ def test_a_broken_room_never_kills_the_dispatch(tmp_path, monkeypatch):
 def test_the_runtime_binds_a_room_mount_read_only(tmp_path):
     """The write flag is not decoration: the shared runtime mount plumbing turns it into a :ro bind,
     so read-only is enforced by the container's mount table rather than by asking the model nicely."""
+    # IMPORT THE MODULE, NOT THE PACKAGE (F92). `from runtime_kernel.mounts import …` executes
+    # `runtime_kernel/__init__.py`, which eagerly imports all three backends — including
+    # `docker_backend`, whose `requests_unixsocket` is a RUNTIME-image dependency the agent test env
+    # has no reason to hold. That import is why this test has been the suite's one standing red, and
+    # the red says nothing about mounts: `mounts.py` itself imports only the stdlib. Load it by path
+    # so the assertion runs against the real shared plumbing without dragging the package in.
+    import importlib.util
     import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "runtime" / "src"))
-    from runtime_kernel.mounts import workspace_binds
+
+    mounts_py = Path(__file__).resolve().parents[2] / "runtime" / "src" / "runtime_kernel" / "mounts.py"
+    name = "runtime_kernel_mounts_under_test"
+    spec = importlib.util.spec_from_file_location(name, mounts_py)
+    assert spec and spec.loader, mounts_py
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module      # @dataclass resolves its own module through sys.modules
+    spec.loader.exec_module(module)
+    workspace_binds = module.workspace_binds
 
     env = {"VEXA_WORKSPACE_MOUNT_SOURCE": "/host/store", "VEXA_WORKSPACE_MOUNT_TARGET": "/workspaces",
            "VEXA_MOUNTS": json.dumps([
