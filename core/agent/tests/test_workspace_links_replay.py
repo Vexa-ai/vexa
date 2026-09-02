@@ -47,6 +47,14 @@ def test_links_between_a_desk_and_a_group_survive_the_group_being_renamed(capsys
     assert report["readme"]["links_to_group_cards"] > 1
     assert report["readme"]["most_used_card_is_first"] is True
     assert report["readme"]["pinned_is_untouched"] is True
+    # `Now` is built from FILED dates and nothing else (coordinator ruling, 2026-09-02). All three
+    # of its lists, and the one thing it must refuse.
+    assert report["now"]["next_meeting"] is True
+    assert report["now"]["dated_commitment"] is True
+    assert report["now"]["open_commitment"] is True
+    assert report["now"]["delivered_meeting_is_closed"] is True
+    assert report["now"]["a_date_in_prose_is_ignored"] is True
+    assert len(report["now"]["lines"]) == 3
 
 
 def test_the_replay_reads_a_truth_sidecar_without_a_yaml_dependency(tmp_path):

@@ -142,7 +142,7 @@ def test_pages_with_no_dates_and_templates_are_not_meetings(tmp_path):
 
 def test_a_desk_with_no_meeting_pages_answers_empty(tmp_path):
     assert desk_now.meetings(tmp_path) == []
-    assert desk_now.now_rows(tmp_path, now=NOW) == {"next": [], "open": []}
+    assert desk_now.now_rows(tmp_path, now=NOW) == {"next": [], "open": [], "due": []}
 
 
 def test_now_renders_links_not_prose(tmp_path):
@@ -156,3 +156,79 @@ def test_now_renders_links_not_prose(tmp_path):
 
 def test_an_empty_now_says_so_rather_than_vanishing(tmp_path):
     assert desk_now.render_now(tmp_path, now=NOW).strip() == "- Nothing scheduled."
+
+
+# ── `due_at`: the last prose seam, closed (coordinator ruling, 2026-09-02) ───────────────────────
+#
+# A dated commitment used to reach the desk README because a regex found an ISO string in a bullet
+# under a heading that happened to be called `## Committed`. It reaches it now because the
+# write-back phase FILED it. The tests below are the difference stated twice: what a filed date can
+# do, and what a written one no longer can.
+
+def test_a_dated_commitment_is_a_field_the_phase_filed(tmp_path):
+    upsert_entity(tmp_path, "decision", "Circulate the charter",
+                  ["Cottalango asked for it before the next TSC."], "the 2026-09-02 transcript",
+                  dates={"due_at": NOW + 18 * 24 * HOUR})
+    rows = desk_now.now_rows(tmp_path, now=NOW)
+    assert [p["title"] for p in rows["due"]] == ["Circulate the charter"]
+    assert "[[Circulate the charter]]" in desk_now.render_now(tmp_path, now=NOW)
+
+
+def test_a_date_written_in_PROSE_is_not_a_commitment(tmp_path):
+    """The whole point. This page says a date, under the heading the old scraper matched, and `Now`
+    does not show it — because nothing filed it, so nothing can move it or close it either."""
+    out = upsert_entity(tmp_path, "meeting", "DNA TSC kickoff", ["It met."], "the transcript",
+                        dates={"held_at": NOW - HOUR, "report_delivered_at": NOW})
+    page = tmp_path / out["path"]
+    page.write_text(page.read_text() + "\n## Committed\n\n- Circulate the charter by 2026-09-20\n")
+    assert desk_now.now_rows(tmp_path, now=NOW)["due"] == []
+    assert "Circulate the charter" not in desk_now.render_now(tmp_path, now=NOW)
+
+
+def test_a_due_date_that_has_passed_is_not_Now(tmp_path):
+    upsert_entity(tmp_path, "decision", "Overdue", ["x"], "s", dates={"due_at": NOW - HOUR})
+    assert desk_now.now_rows(tmp_path, now=NOW)["due"] == []
+
+
+def test_a_commitment_lives_on_whatever_page_owns_it(tmp_path):
+    """All kinds, not only `meeting`: restricting the scan would silently drop every commitment
+    filed on a project or a person."""
+    for kind in ("project", "person", "company", "meeting"):
+        upsert_entity(tmp_path, kind, f"Owner {kind}", ["x"], "s", dates={"due_at": NOW + HOUR})
+    assert len(desk_now.now_rows(tmp_path, now=NOW)["due"]) == 4
+
+
+def test_the_due_cap_holds(tmp_path):
+    for i in range(desk_now.DUE_MAX + 4):
+        upsert_entity(tmp_path, "decision", f"Item {i:02d}", ["x"], "s",
+                      dates={"due_at": NOW + (i + 1) * HOUR})
+    assert len(desk_now.now_rows(tmp_path, now=NOW)["due"]) == desk_now.DUE_MAX
+
+
+def test_the_open_cap_holds(tmp_path):
+    for i in range(desk_now.OPEN_MAX + 3):
+        upsert_entity(tmp_path, "meeting", f"Held {i:02d}", ["x"], "s",
+                      dates={"held_at": NOW - (i + 1) * HOUR})
+    assert len(desk_now.now_rows(tmp_path, now=NOW)["open"]) == desk_now.OPEN_MAX
+
+
+# ── across workspaces (PRD decision 26.2) ────────────────────────────────────────────────────────
+
+def test_a_card_in_another_workspace_is_linked_by_id(tmp_path):
+    """`Now` is part of a hub of links, so it obeys the same link rule as every other section: a
+    card here is `[[Title]]`, a card in a group is `[[ws:<id>/<entity-id>]]` — which survives that
+    group being renamed."""
+    desk, grp = tmp_path / "desk", tmp_path / "grp"
+    upsert_entity(desk, "meeting", "Mine", ["x"], "s", dates={"scheduled_at": NOW + HOUR})
+    upsert_entity(grp, "meeting", "Theirs", ["x"], "s", dates={"scheduled_at": NOW + 2 * HOUR})
+    mounts = [{"path": str(desk), "id": "aaaaaaaaaa"}, {"path": str(grp), "id": "bbbbbbbbbb"}]
+    out = desk_now.render_now(mounts, now=NOW, home_id="aaaaaaaaaa")
+    assert "[[Mine]]" in out
+    assert "[[ws:bbbbbbbbbb/theirs]]" in out
+    assert "[[Theirs]]" not in out
+
+
+def test_a_single_root_still_works_unchanged(tmp_path):
+    """The call shape every existing caller uses: a bare path, and every card is `[[Title]]`."""
+    upsert_entity(tmp_path, "meeting", "Solo", ["x"], "s", dates={"scheduled_at": NOW + HOUR})
+    assert "[[Solo]]" in desk_now.render_now(tmp_path, now=NOW)

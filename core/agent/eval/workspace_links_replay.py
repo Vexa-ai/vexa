@@ -21,12 +21,19 @@ WHAT IT PROVES, and why the shape is what it is:
   6. A DESK, though, is a different answer (founder ruling, 2026-09-02): readable by any signed-in
      member of this instance, writable only by its owner, and `not-yours` only from outside the
      instance. Groups gate on membership; desks gate on writing.
+  7. The README's `## Now` is built from FILED DATES and nothing else (coordinator ruling,
+     2026-09-02). The replay files them the way the write-back phase does — `held_at` when a
+     meeting ran, `report_delivered_at` when its write-up went out, `scheduled_at` for the next
+     one, `due_at` for a commitment — and then asserts that all three of `Now`'s lists say what
+     those fields say. A page here also carries a date in PROSE, under the heading the old scraper
+     matched, and `Now` must not show it.
 
 Usage:  python core/agent/eval/workspace_links_replay.py --fixtures ~/dna-fixtures
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import pathlib
 import re
@@ -137,7 +144,13 @@ def main() -> int:
         mounts = [{"path": str(desk)}, {"path": str(group)}]
         written = 0
 
-        def play(truth: dict) -> None:
+        def at(day: str, hour: int = 15) -> float:
+            """An instant on a fixture's day, UTC — what `entity_upsert(dates=)` files."""
+            d = datetime.date.fromisoformat(day)
+            return datetime.datetime(d.year, d.month, d.day, hour,
+                                     tzinfo=datetime.timezone.utc).timestamp()
+
+        def play(truth: dict, *, delivered: bool) -> None:
             """One meeting, the way decision 22 says a group meeting lands: the PEOPLE and the
             COMPANIES go on the GROUP desk (the run actively maintains it), and the person's own
             desk gets the meeting entity — whose links therefore point across."""
@@ -152,15 +165,26 @@ def main() -> int:
                               f"the {truth['date']} transcript", today=truth["date"])
             facts = [f"Present: " + ", ".join(f"[[{p}]]" for p in truth["people"]) + "."]
             facts += [f"Decided: {d}" for d in truth.get("decided", [])[:3]]
+            # THE DATES ARE FILED, NOT WRITTEN. `held_at` says it ran; `report_delivered_at`
+            # says the write-up reached them, which is what closes the open commitment. A meeting
+            # with the first and not the second is exactly what `Now` calls open.
+            stamps = {"held_at": at(truth["date"])}
+            if delivered:
+                stamps["report_delivered_at"] = at(truth["date"], 18)
             out = upsert_entity(desk, "meeting", f"DNA TSC {truth['date']}", facts,
                                 f"the {truth['date']} transcript", today=truth["date"],
-                                mounts=mounts)
+                                mounts=mounts, dates=stamps)
+            # …and one date in PROSE, under the heading the retired scraper matched. `Now` must not
+            # show it: nothing filed it, so nothing could ever move it or close it either.
+            page = desk / out["path"]
+            page.write_text(page.read_text()
+                            + f"\n## Committed\n\n- Circulate the charter by {truth['date']}\n")
             written += len(out.get("links_rewritten") or [])
             report["steps"].append({"meeting": truth["date"], "page": out["path"],
                                     "links_rewritten": len(out.get("links_rewritten") or [])})
 
         first, second = read_truth(truths[0]), read_truth(truths[1])
-        play(first)
+        play(first, delivered=True)
 
         # ── THE RENAME, and the move with it ────────────────────────────────────────────────────
         renamed_slug = "digital-naming-authority"
@@ -172,7 +196,17 @@ def main() -> int:
         report["rename"] = {"from": GROUP, "to": renamed_slug,
                             "id_unchanged": registry.by_slug(renamed_slug)["id"] == group_id}
 
-        play(second)
+        play(second, delivered=False)          # its write-up never went out — an OPEN commitment
+
+        # The two facts a desk holds about what is ahead, both FILED: the next meeting, and one
+        # thing owed by a date.
+        when_next = at(second["date"]) + 14 * 86400
+        upsert_entity(desk, "meeting", "DNA TSC next", ["Booked in the series."], "the invite",
+                      today=second["date"], dates={"scheduled_at": when_next})
+        upsert_entity(desk, "decision", "Sign the ASWF CLA",
+                      ["SPI asked for the standard shape rather than an authorisation letter."],
+                      f"the {second['date']} transcript", today=second["date"],
+                      dates={"due_at": at(second["date"]) + 7 * 86400})
 
         # ── the desk README, which is the desk: a HUB OF LINKS (founder refinement 2026-09-02) ──
         # Fed every mount, so the group's own cards appear on the desk in `ws:` id form — the whole
@@ -182,13 +216,23 @@ def main() -> int:
             workspaces=[{"id": group_id, "name": "Digital Naming Authority"}],
             touches=[{"workspace": group_id,
                       "path": "kg/entities/person/cottalango-leon.md", "at": 9e9}],
-            home_id=desk_id, name="olga@spi.com", today=second["date"])
+            home_id=desk_id, name="olga@spi.com", now=at(second["date"], 18))
         readme = (desk / desk_readme.README).read_text()
+        now_block = readme.split("## Now", 1)[1].split("<!-- desk:now:end -->", 1)[0]
         report["readme"] = {
             "links_to_group_cards": readme.count(f"[[ws:{group_id}/"),
             "pinned_is_untouched": desk_readme.PINNED_HINT in readme,
             "most_used_card_is_first": (readme.split("## People")[1].strip().splitlines() or [""])[0]
                                        == f"- [[ws:{group_id}/cottalango-leon]]",
+        }
+        report["now"] = {
+            "next_meeting": "[[DNA TSC next]]" in now_block,
+            "dated_commitment": "[[Sign the ASWF CLA]]" in now_block,
+            "open_commitment": (f"[[DNA TSC {second['date']}]]" in now_block
+                                and "no write-up yet" in now_block),
+            "delivered_meeting_is_closed": f"[[DNA TSC {first['date']}]]" not in now_block,
+            "a_date_in_prose_is_ignored": "Circulate the charter" not in now_block,
+            "lines": [ln for ln in now_block.strip().splitlines() if ln.startswith("- ")],
         }
 
         # ── RESOLVE EVERYTHING THE DESK NOW HOLDS, as both readers ──────────────────────────────
@@ -239,6 +283,13 @@ def main() -> int:
             "the card the person opened is at the top of its section":
                 report["readme"]["most_used_card_is_first"],
             "Pinned is left to the person": report["readme"]["pinned_is_untouched"],
+            "`Now` shows the next meeting, from `scheduled_at`": report["now"]["next_meeting"],
+            "`Now` shows a commitment, from `due_at`": report["now"]["dated_commitment"],
+            "`Now` shows the meeting whose write-up never went out":
+                report["now"]["open_commitment"],
+            "`Now` drops the meeting whose write-up did":
+                report["now"]["delivered_meeting_is_closed"],
+            "`Now` ignores a date written in prose": report["now"]["a_date_in_prose_is_ignored"],
             "the desk is readable by its owner, and writable":
                 report["a_link_into_the_desk"]["its_owner"] == {"access": "readable", "writable": True},
             "the desk is readable by a colleague, and NOT writable":

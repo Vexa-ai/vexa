@@ -14,7 +14,7 @@ The page, in order:
 
     # <name> — desk                  two lines of prose, written once, never regenerated
     ## Pinned                        THEIRS. Hand-edited, never touched by this module.
-    ## Now                           next meetings (<=5) + dated open commitments (<=10)
+    ## Now                           next meetings + what is owed — see `shared/desk_now.py`
     ## People / Companies / Projects most-used first, <=12 each, across workspaces
     ## Workspaces                    the groups they are in, id-linked
     ## Recently opened               the last 10 pages they actually opened
@@ -37,6 +37,15 @@ LINK FORM. A card in ANOTHER mounted workspace is `[[ws:<workspace-id>/<entity-i
 survives that workspace being renamed and renders its title at read time (PRD decision 26.2). A card
 on THIS desk stays `[[Title]]` — the in-workspace form, unchanged, and writing an id form for the
 workspace the file is already in would be a redirection through an id for no gain.
+
+⚠ `## Now` IS NOT BUILT HERE. This module writes the file; `shared/desk_now.py` decides what `Now`
+says and renders it (coordinator ruling, 2026-09-02: one writer, one renderer). There were briefly
+two implementations — this one scraped dates out of a card's title and prose and matched
+`## Committed`-shaped headings for commitments — and the other is right for a reason worth keeping
+in front of whoever edits this file next: a date found in a sentence is whatever a model last typed,
+so moving a meeting cannot move the README, and the timeline and the desk end up telling one person
+two different things on one screen. Every date in `Now` is now a frontmatter field that
+`entity_upsert(dates=)` filed, with a source.
 """
 from __future__ import annotations
 
@@ -45,6 +54,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Optional
 
+from shared import desk_now
 from shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
 from shared.links import format_ref
 
@@ -72,8 +82,6 @@ RETIRED_SECTIONS = ("meetings", "commitments", "dates", "purpose", "objective", 
 
 _MARKER = "<!-- desk:{key}:{edge} -->"
 
-MEETINGS_MAX = 5
-COMMITMENTS_MAX = 10
 CARDS_MAX = 12
 RECENT_MAX = 10
 
@@ -81,14 +89,10 @@ RECENT_MAX = 10
 # own: a meeting is in `## Now` while it is ahead and in the card it belongs to afterwards.
 CARD_KINDS = {"people": "person", "companies": "company", "projects": "project"}
 
-_COMMIT_HEADING = re.compile(r"^#{1,6}\s*(committed|commitments|open items?|action items?|next steps?)\b",
-                             re.I | re.M)
-_HEADING = re.compile(r"^#{1,6}\s", re.M)
-_BULLET = re.compile(r"^\s*[-*]\s+(.+?)\s*$", re.M)
-_ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+# The one regex left in this module, and it is not about dates in prose: it finds the dated ENTRY
+# HEADINGS `entity_upsert` writes (`## 2026-09-02`), which is how "when was this page last written"
+# is answered for the usage ranking. Nothing here reads a date out of a sentence any more.
 _DATED_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$", re.M)
-_SOURCE_SUFFIX = re.compile(r"\s+—\s+source:\s.*$")
-_FM_DATE_KEYS = ("date", "when", "scheduled", "starts", "start")
 
 
 def _marker(key: str, edge: str) -> str:
@@ -100,12 +104,12 @@ def _marker(key: str, edge: str) -> str:
 class Card:
     """One entity page, wherever it lives. The unit every section is made of."""
 
-    __slots__ = ("kind", "title", "slug", "path", "workspace", "home", "text", "when", "modified")
+    __slots__ = ("kind", "title", "slug", "path", "workspace", "home", "text", "modified")
 
-    def __init__(self, *, kind, title, slug, path, workspace, home, text, when, modified):
+    def __init__(self, *, kind, title, slug, path, workspace, home, text, modified):
         self.kind, self.title, self.slug, self.path = kind, title, slug, path
         self.workspace, self.home, self.text = workspace, home, text
-        self.when, self.modified = when, modified
+        self.modified = modified
 
     @property
     def link(self) -> str:
@@ -124,24 +128,6 @@ def _fm(lines: list[str], key: str) -> Optional[str]:
         if sep and k.strip() == key:
             return v.split("#")[0].strip()
     return None
-
-
-def _card_when(fm: list[str], text: str, title: str) -> Optional[str]:
-    """The date this card is ABOUT — a meeting's own date, not when it was written.
-
-    Frontmatter first (`date`/`when`/`scheduled`), then the title (meeting pages are named
-    `DNA TSC 2026-03-16`), then the earliest ISO date in the body. Dated entry headings are
-    excluded: those are when somebody wrote, which is the signal this deliberately is not."""
-    for key in _FM_DATE_KEYS:
-        v = _fm(fm, key)
-        if v and _ISO_DATE.search(v):
-            return _ISO_DATE.search(v).group(1)
-    m = _ISO_DATE.search(title or "")
-    if m:
-        return m.group(1)
-    body = _DATED_HEADING.sub(" ", text or "")
-    found = sorted(set(_ISO_DATE.findall(body)))
-    return found[0] if found else None
 
 
 def cards(mounts: Iterable[dict], home_id: str) -> list[Card]:
@@ -174,10 +160,9 @@ def cards(mounts: Iterable[dict], home_id: str) -> list[Card]:
                 if (_fm(fm, "template") or "").lower() == "true":
                     continue          # a SHAPE is never a card
                 title = _fm(fm, "title") or f.stem
-                out.append(Card(kind=kind, title=title, slug=f.stem,
+                out.append(Card(kind=kind, title=title, slug=_fm(fm, "id") or f.stem,
                                 path=f"{ENTITIES_DIR}/{kind}/{f.name}", workspace=wid,
-                                home=(wid == home_id), text=text,
-                                when=_card_when(fm, text, title), modified=modified))
+                                home=(wid == home_id), text=text, modified=modified))
     return out
 
 
@@ -202,25 +187,6 @@ def _rank(card: Card, touched: dict) -> float:
 
 
 # ── the sections ─────────────────────────────────────────────────────────────────────────────────
-
-def _now_rows(cards_: list[Card], today: str) -> list[str]:
-    """What is ahead: meetings, then dated commitments. One line per link, date first."""
-    ahead = sorted((c for c in cards_ if c.kind == "meeting" and c.when and c.when >= today),
-                   key=lambda c: c.when)[:MEETINGS_MAX]
-    rows = [f"- {c.when} — {c.link}" for c in ahead]
-
-    dated: list[tuple[str, str]] = []
-    for c in cards_:
-        for m in _COMMIT_HEADING.finditer(c.text):
-            nxt = _HEADING.search(c.text, m.end())
-            for b in _BULLET.findall(c.text[m.end(): nxt.start() if nxt else len(c.text)]):
-                line = _SOURCE_SUFFIX.sub("", b).strip()
-                day = next((d for d in sorted(_ISO_DATE.findall(line)) if d >= today), None)
-                if day and line:
-                    dated.append((day, f"- {day} — {line} — {c.link}"))
-    rows += [row for _d, row in sorted(dated)[:COMMITMENTS_MAX]]
-    return rows
-
 
 def _card_rows(cards_: list[Card], kind: str, touched: dict) -> list[str]:
     picked = sorted((c for c in cards_ if c.kind == kind), key=lambda c: _rank(c, touched), reverse=True)
@@ -262,11 +228,24 @@ PINNED_HINT = ("<!-- Yours. Put the links you want at the top of your desk here 
                "this section is hand-edited, and nothing in it is ever regenerated. -->")
 
 
+def _now_epoch(now: Optional[float], today: Optional[str]) -> Optional[float]:
+    """The instant `Now` is evaluated at. `now` wins; `today` means the START of that day, so a
+    caller that only knows a date still gets everything scheduled during it."""
+    if now is not None:
+        return float(now)
+    if not today:
+        return None
+    try:
+        return _dt.datetime.fromisoformat(str(today)).replace(tzinfo=_dt.timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def render_sections(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[dict] = (),
                     touches: Optional[list] = None, home_id: str = "",
-                    today: Optional[str] = None) -> dict:
+                    today: Optional[str] = None, now: Optional[float] = None,
+                    tz: str = "") -> dict:
     """`{key: body}` — the generated body of every section, headings included."""
-    day = today or _dt.date.today().isoformat()
     mounts = list(mounts or [])
     if not mounts:
         mounts = [{"path": str(root), "id": home_id}]
@@ -280,10 +259,14 @@ def render_sections(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[d
             return head + f"\n_{empty}_\n"
         return head + "\n" + "\n".join(rows) + "\n"
 
+    # `Now` is `desk_now`'s answer, verbatim. It is the one section whose CONTENT this module does
+    # not decide — it renders itself, from the same frontmatter facts the timeline reads, so the two
+    # cannot disagree (decision 31 §3).
+    now_body = desk_now.render_now(mounts, now=_now_epoch(now, today), tz=tz,
+                                   home_id=home_id).rstrip("\n")
     return {
         "pinned": f"## Pinned\n\n{PINNED_HINT}\n",
-        "now": block("Now", _now_rows(all_cards, day),
-                     f"Nothing scheduled or committed on or after {day}."),
+        "now": "## Now\n\n" + now_body + "\n",
         "people": block("People", _card_rows(all_cards, "person", touched),
                         "No people on this desk yet."),
         "companies": block("Companies", _card_rows(all_cards, "company", touched),
@@ -328,7 +311,8 @@ def header_for(name: str = "") -> str:
 
 def update_readme(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[dict] = (),
                   touches: Optional[list] = None, home_id: str = "", name: str = "",
-                  today: Optional[str] = None) -> dict:
+                  today: Optional[str] = None, now: Optional[float] = None,
+                  tz: str = "") -> dict:
     """Regenerate the desk README's marked sections. Returns `{path, changed, sections}`.
 
     Idempotent: a desk whose cards and touches have not moved rewrites byte-identical content and
@@ -342,7 +326,7 @@ def update_readme(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[dic
     for key in RETIRED_SECTIONS:
         text = _drop_marked(text, key)
     sections = render_sections(root, mounts=mounts, workspaces=workspaces, touches=touches,
-                               home_id=home_id, today=today)
+                               home_id=home_id, today=today, now=now, tz=tz)
     appended: list[str] = []
     for key, _heading in SECTIONS:
         found = _marker(key, "start") in text and _marker(key, "end") in text

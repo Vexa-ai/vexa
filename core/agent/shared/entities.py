@@ -236,7 +236,7 @@ def _rewrite_links(root, facts, *, name: str, mounts) -> tuple[list, list]:
 # timeline read the same fact instead of two descriptions of it (`shared/desk_now.py` is the
 # reader). Three keys, closed set, ISO-8601 UTC. A closed set on purpose: an open one turns
 # frontmatter into a scratchpad, and the value of these is that a reader knows what it will find.
-DATE_FIELDS = ("scheduled_at", "held_at", "report_delivered_at")
+DATE_FIELDS = ("scheduled_at", "held_at", "report_delivered_at", "due_at")
 
 
 def _as_iso(value) -> str:
@@ -294,11 +294,18 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
     behaviour, byte-identical to before.
 
     ``dates`` records WHEN, in frontmatter, for the keys in ``DATE_FIELDS`` — `scheduled_at`,
-    `held_at`, `report_delivered_at`. It is how the desk README's `Now` section and the timeline
-    stay in agreement (decision 31 §3): both read these fields, neither parses prose. A dates-only
-    call is a real change and is reported as one, but it appends NO dated entry — the page's body
-    is the record of what was learned, and "the report went out" is not a new fact about the
-    meeting, it is a property of it."""
+    `held_at`, `report_delivered_at`, `due_at`. It is how the desk README's `Now` section and the
+    timeline stay in agreement (decision 31 §3): both read these fields, neither parses prose. A
+    dates-only call is a real change and is reported as one, but it appends NO dated entry — the
+    page's body is the record of what was learned, and "the report went out" is not a new fact
+    about the meeting, it is a property of it.
+
+    ``due_at`` is the newest of the four and it exists to close the last prose seam (coordinator
+    ruling, 2026-09-02). A dated commitment — "circulate the charter by the 20th" — used to reach
+    the desk README because a regex found an ISO string under a heading that happened to be called
+    `## Committed`. It now reaches it because THIS call filed it, with a source. The difference is
+    not tidiness: a scraped date cannot be corrected (rewriting the sentence does not move it, and
+    nothing knows the commitment was met), while a filed one is a field the next turn can set."""
     root = Path(root)
     src = str(source or "").strip()
     facts = [str(f).strip() for f in (facts or []) if str(f).strip()]

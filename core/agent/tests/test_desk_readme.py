@@ -12,14 +12,17 @@ Four claims, and the second matters most:
 """
 from __future__ import annotations
 
+import datetime
 import time
 
-from shared import desk_readme
+from shared import desk_now, desk_readme
 from shared.entities import upsert_entity
 from shared.workspace_id import write_workspace_json
 
 DESK_ID = "aaaaaaaaaa"
 GROUP_ID = "bbbbbbbbbb"
+NOW = 1_788_362_400.0                       # 2026-09-02 15:20Z — the same instant test_desk_now uses
+HOUR = 3600.0
 
 
 def _ws(tmp_path, name, wid, kind="desk"):
@@ -42,10 +45,10 @@ def _sections(text: str) -> dict:
     return out
 
 
-def _write(d, mounts=(), workspaces=(), touches=None, today="2026-09-02", name=""):
+def _write(d, mounts=(), workspaces=(), touches=None, today="2026-09-02", name="", now=None):
     return desk_readme.update_readme(d, mounts=mounts or [{"path": str(d), "id": DESK_ID}],
                                      workspaces=workspaces, touches=touches, home_id=DESK_ID,
-                                     name=name, today=today)
+                                     name=name, today=today, now=now)
 
 
 # ── the shape ────────────────────────────────────────────────────────────────────────────────────
@@ -131,8 +134,8 @@ def test_regeneration_replaces_only_between_the_markers(tmp_path):
 def test_it_is_idempotent(tmp_path):
     d = _desk(tmp_path)
     upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting", today="2026-09-02")
-    assert _write(d)["changed"] is True
-    assert _write(d)["changed"] is False
+    assert _write(d, now=NOW)["changed"] is True
+    assert _write(d, now=NOW)["changed"] is False
 
 
 # ── across workspaces ────────────────────────────────────────────────────────────────────────────
@@ -168,35 +171,65 @@ def test_workspaces_are_listed_by_id_link(tmp_path):
     assert "ASWF DNA Project" not in got["workspaces"]     # the name is resolved at read time
 
 
-# ── Now ──────────────────────────────────────────────────────────────────────────────────────────
+# ── Now — ONE implementation, and it is `shared/desk_now.py` ─────────────────────────────────────
+#
+# Coordinator ruling, 2026-09-02: there were two. This module's version scraped a meeting's date out
+# of its title or body and matched `## Committed`-shaped headings for commitments; `desk_now` reads
+# frontmatter facts that `entity_upsert(dates=)` filed. The second is right — a date found in a
+# sentence is whatever a model last typed, so moving a meeting could not move the README — and the
+# first is gone. These tests assert through the seam that survived.
 
 def test_now_leads_with_the_next_meetings_soonest_first(tmp_path):
     d = _desk(tmp_path)
-    for day in ("2026-10-01", "2026-09-15", "2026-01-05"):
-        upsert_entity(d, "meeting", f"DNA TSC {day}", ["Held."], "s", today="2026-09-02")
-    got = _sections(_write(d) and (d / "README.md").read_text())["now"]
-    assert got.index("2026-09-15") < got.index("2026-10-01")
-    assert "2026-01-05" not in got                          # behind us — not "Now"
+    for offset in (30 * 24, 13 * 24, -200 * 24):
+        upsert_entity(d, "meeting", f"DNA TSC {offset}", ["Booked."], "s",
+                      dates={"scheduled_at": NOW + offset * HOUR})
+    got = _sections(_write(d, now=NOW) and (d / "README.md").read_text())["now"]
+    assert got.index("[[DNA TSC 312]]") < got.index("[[DNA TSC 720]]")
+    assert "[[DNA TSC -4800]]" not in got                   # behind us — not "Now"
 
 
-def test_now_carries_dated_commitments_and_names_the_card_they_came_from(tmp_path):
+def test_now_carries_a_commitment_only_when_a_FIELD_carries_its_date(tmp_path):
+    """The seam the ruling closed. The page below says a date under the heading the old scraper
+    matched, and it does not reach `Now`; the one beside it filed `due_at` and does."""
     d = _desk(tmp_path)
-    upsert_entity(d, "meeting", "DNA TSC kickoff", ["Held."], "s", today="2026-09-02")
-    page = d / "kg/entities/meeting/dna-tsc-kickoff.md"
-    page.write_text(page.read_text() + "\n## Committed\n\n- Circulate the charter by 2026-09-20\n"
-                                       "- Something with no date\n")
-    _write(d)
+    out = upsert_entity(d, "meeting", "DNA TSC kickoff", ["Held."], "s",
+                        dates={"held_at": NOW - HOUR, "report_delivered_at": NOW})
+    page = d / out["path"]
+    page.write_text(page.read_text() + "\n## Committed\n\n- Circulate the charter by 2026-09-20\n")
+    upsert_entity(d, "decision", "Sign the CLA", ["SPI asked for the standard shape."], "the call",
+                  dates={"due_at": NOW + 5 * 24 * HOUR})
+    _write(d, now=NOW)
     got = _sections((d / "README.md").read_text())["now"]
-    assert "2026-09-20 — Circulate the charter by 2026-09-20 — [[DNA TSC kickoff]]" in got
-    assert "Something with no date" not in got              # "with dates" is the rule
+    assert "[[Sign the CLA]]" in got and "due " in got
+    assert "Circulate the charter" not in got
+
+
+def test_a_held_meeting_with_no_write_up_is_an_open_commitment(tmp_path):
+    d = _desk(tmp_path)
+    upsert_entity(d, "meeting", "Weekly sync", ["It met."], "the transcript",
+                  dates={"held_at": NOW - 2 * HOUR})
+    got = _sections(_write(d, now=NOW) and (d / "README.md").read_text())["now"]
+    assert "[[Weekly sync]]" in got and "no write-up yet" in got
 
 
 def test_the_meeting_cap_holds(tmp_path):
     d = _desk(tmp_path)
-    for i in range(desk_readme.MEETINGS_MAX + 4):
-        upsert_entity(d, "meeting", f"Sync 2026-10-{i + 1:02d}", ["x"], "s", today="2026-09-02")
-    got = _sections(_write(d) and (d / "README.md").read_text())["now"]
-    assert len([ln for ln in got.splitlines() if ln.startswith("- 2026-10-")]) == desk_readme.MEETINGS_MAX
+    for i in range(desk_now.AHEAD_MAX + 4):
+        upsert_entity(d, "meeting", f"Sync {i:02d}", ["x"], "s",
+                      dates={"scheduled_at": NOW + (i + 1) * 24 * HOUR})
+    got = _sections(_write(d, now=NOW) and (d / "README.md").read_text())["now"]
+    assert len([ln for ln in got.splitlines() if ln.startswith("- ") and " — [[Sync" in ln]) \
+        == desk_now.AHEAD_MAX
+
+
+def test_a_meeting_in_the_group_appears_in_Now_by_id(tmp_path):
+    """`Now` obeys the hub's link rule like every other section."""
+    d, g = _desk(tmp_path), _ws(tmp_path, "grp", GROUP_ID, kind="group")
+    upsert_entity(g, "meeting", "Group standup", ["Booked."], "s",
+                  dates={"scheduled_at": NOW + 2 * HOUR})
+    _write(d, mounts=[{"path": str(d), "id": DESK_ID}, {"path": str(g), "id": GROUP_ID}], now=NOW)
+    assert f"[[ws:{GROUP_ID}/group-standup]]" in _sections((d / "README.md").read_text())["now"]
 
 
 # ── ordering by USE, and the caps ────────────────────────────────────────────────────────────────
@@ -277,4 +310,4 @@ def test_empty_is_said_never_omitted(tmp_path):
     assert "No projects on this desk yet" in got["projects"]
     assert "belongs to no group workspace yet" in got["workspaces"]
     assert "Nothing opened from here yet" in got["recent"]
-    assert "Nothing scheduled or committed" in got["now"]
+    assert "Nothing scheduled." in got["now"]         # `desk_now`'s words, because it is the renderer
