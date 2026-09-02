@@ -1,16 +1,17 @@
-/** F41 — A FILE THE TURN WROTE BECOMES A TAB. Founder ruling 2026-09-02.
+/** F41, AS AMENDED BY PRD DECISION 28 — a file the turn wrote NAVIGATES THE VIEW; it never mints a
+ *  tab.
  *
- *  He created a shared workspace, the agent wrote its README, and the right panel stayed on
- *  `_global/README.md`: the one document the turn had just made was the one thing not on screen.
+ *  F41 was the founder creating a shared workspace, the agent writing its README, and the panel
+ *  staying on `_global/README.md` — the one document the turn had just made was the one thing not
+ *  on screen. The first fix appended a tab. Decision 28 is the correction to that fix: *"we do not
+ *  want to create new tab for every click, tab is only when tab is specifically requested."*
  *
- *  The server emits `{"type":"artifact","workspace":"<slug>","path":"<path>","focus":true}` after a
- *  successful write. Everything below is what the client does with it, at the pure function that
- *  decides — the shell only wires this. */
+ *  So the event still brings the document to the front when it asks to (`focus: true`), and now
+ *  does NOTHING VISIBLE when it does not — where it used to append a tab "quietly behind the
+ *  reader". Seven quiet tabs are not quiet. */
 import { describe, expect, it } from "vitest";
-import { artifactTabEffect, pageForArtifact } from "../roomView";
-import type { Page } from "../types";
+import { artifactViewEffect, pageForArtifact } from "../roomView";
 
-const README: Page = { path: "README.md", slug: "_global", label: "README" };
 const ev = (over: Partial<{ workspace: string; path: string; focus: boolean }> = {}) =>
   ({ workspace: "daily", path: "README.md", focus: true, ...over });
 
@@ -38,42 +39,26 @@ describe("pageForArtifact — the event resolved to a tab", () => {
   });
 });
 
-describe("artifactTabEffect — append always, focus conditionally", () => {
-  it("appends the written file to the tabs the chat already has", () => {
-    const out = artifactTabEffect(ev(), [README], false)!;
-    expect(out.pages.map((p) => `${p.slug ?? ""}|${p.path}`)).toEqual(["_global|README.md", "daily|README.md"]);
+describe("artifactViewEffect — the view moves, a tab is never minted", () => {
+  it("`focus: true` navigates the view to the written file", () => {
+    expect(artifactViewEffect(ev({ focus: true }), false))
+      .toEqual({ view: { path: "README.md", slug: "daily", label: "README" } });
   });
 
-  it("brings it to the front when the event says so", () => {
-    expect(artifactTabEffect(ev({ focus: true }), [README], false)!.focus)
-      .toEqual({ path: "README.md", slug: "daily", label: "README" });
+  it("`focus: false` does NOTHING VISIBLE — this is the decision-28 change", () => {
+    // It used to append a tab behind the reader. That is the accumulation being removed: a turn
+    // that writes four files must not leave four tabs nobody asked for.
+    expect(artifactViewEffect(ev({ focus: false }), false)).toBeNull();
+    expect(artifactViewEffect(ev({}), false)).not.toBeNull();      // the fixture asks for focus
   });
 
-  it("appends WITHOUT focusing when the event does not ask for it", () => {
-    const out = artifactTabEffect(ev({ focus: false }), [README], false)!;
-    expect(out.focus).toBeNull();
-    expect(out.pages).toHaveLength(2);
+  it("a reader who chose their own document during the turn is not interrupted", () => {
+    // their attention beats our suggestion — unchanged from F41
+    expect(artifactViewEffect(ev({ focus: true }), true)).toBeNull();
   });
 
-  /** THE ONE THAT MATTERS. Decision 18's rule one level down: a person who has opened a document is
-   *  reading it, and the agent's own write must not tidy their desk out from under them. */
-  it("NEVER steals a focus the reader chose — the tab still appears, they do not move", () => {
-    const out = artifactTabEffect(ev({ focus: true }), [README], true)!;
-    expect(out.focus).toBeNull();                       // they stay where they are…
-    expect(out.pages).toHaveLength(2);                  // …and the new file is there when they want it
-    expect(out.pages[1].slug).toBe("daily");
-  });
-
-  it("is idempotent — the same file written twice in a turn is ONE tab", () => {
-    const once = artifactTabEffect(ev(), [README], false)!;
-    const twice = artifactTabEffect(ev(), once.pages, false)!;
-    expect(twice.pages).toHaveLength(2);
-    expect(twice.pages).toEqual(once.pages);
-    // …and a re-write of a file already open still brings it forward, rather than doing nothing
-    expect(twice.focus).toEqual(once.pages[1]);
-  });
-
-  it("a write we cannot name honestly changes nothing at all", () => {
-    expect(artifactTabEffect({ path: "../secrets.md", focus: true }, [README], false)).toBeNull();
+  it("an unresolvable write moves nothing", () => {
+    expect(artifactViewEffect({ workspace: "daily", path: "../../etc/passwd", focus: true }, false)).toBeNull();
+    expect(artifactViewEffect({ focus: true }, false)).toBeNull();
   });
 });

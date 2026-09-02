@@ -73,8 +73,13 @@ describe("stored chats migrate for free", () => {
   // the assertion below would pass for the wrong reason. A chat whose tabs are worth migrating is
   // by definition one somebody worked in.
   const stored = (artifacts: unknown[]) => {
+    // PINNED (PRD decision 28): a tab exists only when it was asked for, and `loadChats` collapses
+    // unpinned ones. What is under test in this block is `normalise`'s tolerance of the artifact
+    // SHAPE — a missing `kind`, a meeting kind, a kind nobody recognises — not whether a tab is
+    // retained. Pinning here keeps that subject rather than weakening the assertions.
+    const pinned = (artifacts as Record<string, unknown>[]).map((a) => ({ ...a, pinned: true }));
     localStorage.setItem(CHATS_KEY, JSON.stringify([
-      { id: "c1", label: "c1", workspaces: ["personal"], artifacts, touched: true, createdAt: 1, lastActivityAt: 1 },
+      { id: "c1", label: "c1", workspaces: ["personal"], artifacts: pinned, touched: true, createdAt: 1, lastActivityAt: 1 },
     ]));
     return loadChats().find((c) => c.id === "c1")?.artifacts ?? [];
   };

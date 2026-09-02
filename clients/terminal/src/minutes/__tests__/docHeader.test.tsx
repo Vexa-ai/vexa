@@ -21,15 +21,23 @@ const doc = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
   render(<PagesPanel pages={pages} docPath={PATH} onOpen={() => {}} body={BODY} {...over} />);
 
 describe("doc header — filename prominent, location subdued", () => {
-  it("names the FILE, extension and all, beside where it lives", () => {
+  it("names the FILE, extension and all — and ONLY the file (PRD decision 28)", () => {
+    // The title row used to carry the folder trail beside the name, which the breadcrumb directly
+    // below already shows and can navigate. Founder: *"duplicated paths"*. One path line: the name
+    // belongs here, the path belongs there.
     const { container } = doc();
     expect(container.querySelector("[data-doc-name]")?.textContent).toBe("2026-09-01-vexa-prd.md");
-    expect(container.querySelector("[data-doc-where]")?.textContent).toBe("personal / drafts");
+    expect(container.querySelector("[data-doc-where]")).toBeNull();
   });
 
-  it("a shared workspace shows in the location, not just the folder", () => {
+  it("the path is shown ONCE, by the breadcrumb, and it is the navigable one", () => {
     const { container } = doc({ docSlug: "acme", pages: [{ path: PATH, slug: "acme", label: "prd" }] });
-    expect(container.querySelector("[data-doc-where]")?.textContent).toBe("acme / drafts");
+    // the workspace and every folder are still reachable — as buttons, which is the point of
+    // keeping the breadcrumb rather than the dead text beside the title
+    const crumbs = [...container.querySelectorAll("button")].map((b) => b.textContent);
+    expect(crumbs).toContain("acme");
+    expect(crumbs).toContain("drafts");
+    expect(container.querySelectorAll("[data-doc-where]")).toHaveLength(0);
   });
 
   it("the utilities are grouped in the header, and no longer in the tab strip", () => {

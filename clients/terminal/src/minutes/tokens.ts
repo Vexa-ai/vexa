@@ -7,7 +7,12 @@
 import type { CSSProperties } from "react";
 
 export const T = {
-  railW: 397,        // +60% (founder, 2026-09-01) — 248 left ~90px for a name
+  // F61 (founder, 2026-09-02, screenshot of the minutes chat): *"left sidebar too wide"* — the rail
+  // was taking ~440px of a 2000px window. This REVERSES the +60% widening of 2026-09-01 (248 → 397),
+  // which was measured against a name that no longer needs it: rows truncate with an ellipsis
+  // (Rail.tsx), so width buys a few more characters and costs the chat and the panel real room.
+  // The `<` control still folds it to an icon strip, and that choice persists.
+  railW: 240,
   pagesMin: 240,     // was 300; safe since 3875079b6 made the pages chips ellipsize below 364
   pagesMax: 1600,    // an absolute ceiling only — the real limit is the viewport fraction below
   pagesFrac: 0.6,    // "read a transcript wide" (founder, 2026-09-01): 60% of the viewport

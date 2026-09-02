@@ -66,6 +66,9 @@ export type Listing = { slug?: string; prefix: string; dirs: string[]; files: st
 export function PagesPanel(p: {
   pages: Page[]; docPath: string; docSlug?: string; onOpen: (pg: Page) => void;
   onClose?: (pg: Page) => void;
+  /** decision 28: keep the view as a tab, or drop it. Absent = no pin control rendered. */
+  onTogglePin?: () => void;
+  pinned?: boolean;
   listing?: Listing | null; onNavigate?: (slug: string | undefined, prefix: string) => void;
   canBack?: boolean; canForward?: boolean; onBack?: () => void; onForward?: () => void;
   docKind?: "doc" | "meeting";
@@ -110,7 +113,7 @@ export function PagesPanel(p: {
   // own name, and where it lives. Read off the DOCUMENT, never off the crumb, so a folder listing
   // open in front of it cannot rename the document sitting behind it.
   const docName = p.docPath.split("/").pop() || p.docPath;
-  const docWhere = [p.docSlug ?? "personal", ...p.docPath.split("/").slice(0, -1)].join(" / ");
+
   const doc = !canvas && !listing;   // a document is in front — the only state the header describes
   const save = async () => {
     setSaving(true); setSaveError(null);
@@ -166,11 +169,20 @@ export function PagesPanel(p: {
         {doc && <div style={{ flex: "none", display: "flex", alignItems: "baseline", gap: 8, padding: "9px 20px 8px", borderBottom: "1px solid var(--line)", minWidth: 0 }}>
           <span data-doc-name title={docName}
             style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</span>
-          <span data-doc-where title={docWhere}
-            style={{ ...ty.meta, flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docWhere}</span>
+          {/* ONE PATH LINE (PRD decision 28, founder: *"duplicated paths"*). This span repeated the
+              folder trail that the breadcrumb directly below already shows, and navigates. The name
+              belongs here; the path belongs there. */}
           <span style={{ flex: "1 1 0%", minWidth: 8 }} />
           {p.body !== null && (mode === "view"
             ? <>
+                {p.onTogglePin && (
+                  <button data-doc-act="pin" aria-pressed={!!p.pinned} onClick={p.onTogglePin}
+                    title={p.pinned ? "Unpin this tab" : "Keep this as a tab"}
+                    aria-label={p.pinned ? "Unpin this tab" : "Keep this as a tab"}
+                    style={iconBtn(!!p.pinned)} onMouseEnter={litIcon} onMouseLeave={dimIcon(!!p.pinned)}>
+                    <Icon name={p.pinned ? "check" : "plus"} size={14} />
+                  </button>
+                )}
                 <button data-doc-act="raw" aria-pressed={raw} onClick={() => setRaw((v) => !v)}
                   title={raw ? "Show the rendered document" : "Show the markdown source"} aria-label="Toggle markdown source"
                   style={iconBtn(raw)} onMouseEnter={litIcon} onMouseLeave={dimIcon(raw)}>

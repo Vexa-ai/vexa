@@ -18,7 +18,24 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
  *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
  *  step. `label` is carried rather than recomputed because a phase page's name ("Minutes" vs
  *  "Brief") is a property of the room that produced it, not of the path. */
-export type Artifact = { kind?: "doc" | "meeting"; path: string; slug?: string; label: string };
+export type Artifact = {
+  kind?: "doc" | "meeting"; path: string; slug?: string; label: string;
+  /** WHEN THIS PAGE WAS LAST IN FRONT — the strip is a history bar, ordered by it (decision 28,
+   *  founder amendment: *"ensure these tabs are sorted left to right based on last used — as a
+   *  history bar"*). Absent on a record written before the amendment; the migration stamps one. */
+  at?: number;
+  /** THE READER'S OWN DESK — the strip's first entry, on every chat (decision 26.4 / 28.5).
+   *
+   *  A product DEFAULT, not a pin: nobody asked for it and nobody can `×` it away. It is where the
+   *  view starts when a scaffold names no focus, because a chat that opens on nothing is a chat
+   *  that opens on a blank panel. Ordering puts it left of the pins. */
+  desk?: boolean;
+  /** THIS TAB WAS ASKED FOR (PRD decision 28). A tab exists only because somebody requested it —
+   *  a pin, an explicit open-in-tab, or a scaffold declaring it at open. Navigation does not mint
+   *  one. Unpinned entries are the pre-28 accumulation and the migration in `normalise` removes
+   *  them; nothing writes an unpinned artifact any more. */
+  pinned?: boolean;
+};
 
 /** A tab's identity. Path alone is not enough — `README.md` exists in every workspace.
  *
@@ -40,8 +57,20 @@ export type Chat = {
   label: string;
   meeting?: string;           // the meeting row id this chat is about (string form of MeetingMock.id)
   workspaces: string[];       // the mount set — what a PROJECT used to own
-  artifacts: Artifact[];      // the open tabs (seeded by the room's phase pages and by `?view=`)
-  focus?: string;             // artifactKey() of the tab in front
+  artifacts: Artifact[];      // the PINNED tabs — only what was asked for (decision 28)
+  focus?: string;             // artifactKey() of the tab in front, when the view IS a tab
+  /** THE ONE VIEW SLOT (PRD decision 28, founder: *"tab is only when tab is specifically
+   *  requested"*).
+   *
+   *  What the panel is showing right now. Every navigation REPLACES it — an entity chip, a
+   *  wikilink, a navigator file, a `/w/<id>/<path>` URL, an agent's `artifact` event with
+   *  `focus: true`. None of them appends to `artifacts`.
+   *
+   *  Persisted beside the tabs because it is reading state like they are: reopening a chat should
+   *  put back the document you were looking at, whether or not you had pinned it. Before this, the
+   *  only way the panel could remember a document was to make it a tab — which is precisely how a
+   *  few chip clicks became seven of them. */
+  view?: Artifact;
   /** THE SCAFFOLD THIS CHAT WAS COMPOSED FROM — the kind AND the record's id, in ONE field.
    *
    *  It is what the chat IS, and things that depend on that — the header's flavour, today — read it
@@ -469,6 +498,142 @@ function scaffoldRecord(raw: unknown): { kind: string; id: string } | undefined 
     : undefined;
 }
 
+/** THE STRIP IS A HISTORY BAR (PRD decision 28, founder amendment).
+ *
+ *  Left to right by last used: the page you are on sits at the RIGHT end, the one before it to its
+ *  left, and so on back. Navigating to something already in the strip MOVES it right rather than
+ *  adding a second chip — the strip is where you have been, and you have only been somewhere once
+ *  most recently.
+ *
+ *  PINNED entries — a scaffold's declared `tabs:` and anything the reader pinned — sit at the LEFT
+ *  edge and never age out. They are not history; they are the room's fixtures, and a fixture that
+ *  scrolled away because you read four documents would defeat the point of pinning it.
+ *
+ *  The cap drops the OLDEST UNPINNED. A cap that could evict a pin would make pinning a suggestion.
+ */
+export const HISTORY_CAP = 12;
+
+/** THE STRIP'S ORDER, left to right: the desk · the chat's pins · history oldest → newest.
+ *
+ *  Three tiers, and the reason each sits where it does. The DESK is the product's own first entry
+ *  and belongs to no chat, so it is furthest from the current page. PINS were asked for and must
+ *  not scroll away, so they sit next. Everything else is history, and the page you are on is at the
+ *  right edge because that is where your eye already is. */
+export function orderHistory(list: Artifact[]): Artifact[] {
+  const desk = list.filter((a) => a.desk);
+  const pinned = list.filter((a) => a.pinned && !a.desk);
+  const rest = list.filter((a) => !a.pinned && !a.desk).sort((x, y) => (x.at ?? 0) - (y.at ?? 0));
+  return [...desk, ...pinned, ...rest];
+}
+
+/** THE CHAT'S HOME — the strip's first entry, and it follows where the chat LIVES.
+ *
+ *  A chat over a group is at home in that group, not on the reader's own desk: opening the group's
+ *  dailies and being shown your personal README first would be the panel disagreeing with the
+ *  conversation. So a chat that mounts a group opens on the GROUP's README; a chat that mounts none
+ *  opens on the desk.
+ *
+ *  WHAT COUNTS AS A GROUP is read off the mount set, and the exclusions are the two conventions the
+ *  rest of this file already uses plus one the server's records introduced: `_global` is the
+ *  company tier and is mounted everywhere; `personal` is the client's name for the reader's own
+ *  desk; and `u_*` is the SERVER's name for a person's desk (the scaffold's `workspaces` carries
+ *  `["_global", "u_priya", "grp-showb"]`). Without that third exclusion a person's own desk,
+ *  arriving under its server name, would be mistaken for a group and become the home of every chat
+ *  a scaffold opened. */
+export function homeEntry(workspaces: string[] = []): Artifact {
+  const group = workspaces.find((w) => w && w !== "_global" && w !== "personal" && !/^u_/.test(w));
+  return group
+    ? { path: "README.md", slug: group, label: group, desk: true }
+    : { path: "README.md", label: "Desk", desk: true };
+}
+
+/** Compose a strip with the chat's home at its head. Idempotent, and it never duplicates: a chat
+ *  whose scaffold happened to declare that README keeps ONE entry, promoted to the home tier. */
+export function withHome(list: Artifact[], workspaces: string[] = []): Artifact[] {
+  const h = homeEntry(workspaces);
+  const key = artifactKey(h);
+  const has = list.find((a) => artifactKey(a) === key);
+  const rest = list.filter((a) => artifactKey(a) !== key && !a.desk);
+  return orderHistory([{ ...(has ?? h), ...h, at: has?.at }, ...rest]);
+}
+
+/** Record that `art` is now in front. Dedups by identity, moves it to the right end, and caps —
+ *  evicting the oldest UNPINNED entry, never a pin. Pure: array in, array out. */
+export function touchHistory(list: Artifact[], art: Artifact, now: number, cap = HISTORY_CAP): Artifact[] {
+  const key = artifactKey(art);
+  const prev = list.find((a) => artifactKey(a) === key);
+  // a pin that is navigated to STAYS pinned and stays at the left edge — its `at` still moves, so
+  // unpinning it later drops it into history in the right place rather than at the far left.
+  const next: Artifact = { ...(prev ?? art), ...art, pinned: prev?.pinned, desk: prev?.desk, at: now };
+  const kept = list.filter((a) => artifactKey(a) !== key);
+  const out = orderHistory([...kept, next]);
+  const unpinned = out.filter((a) => !a.pinned && !a.desk);
+  if (unpinned.length <= cap) return out;
+  const evict = new Set(unpinned.slice(0, unpinned.length - cap).map(artifactKey));
+  return out.filter((a) => a.pinned || a.desk || !evict.has(artifactKey(a)));
+}
+
+/** `×` on a chip: forget that entry. Not "close a tab" — the strip is history, and this is the
+ *  reader saying they do not want it remembered. */
+export function forgetHistory(list: Artifact[], key: string): Artifact[] {
+  // the desk is a product default, not something the reader put there, so it is not theirs to
+  // forget — and a strip that could lose its first entry would have no default view to fall back to
+  return list.filter((a) => artifactKey(a) !== key || a.desk);
+}
+
+/** THE HISTORY, READABLE OFF THE RECORD — for the desk README's "Recently opened" (decision 26.4).
+ *
+ *  Newest first, because that is how a "recently opened" list reads; the strip renders the same
+ *  data left-to-right oldest-first. `workspace` is "" for the reader's own desk, matching the
+ *  `artifact` event's convention that an empty slug means "no slug" rather than "unknown". */
+export function chatHistory(c: Chat): { workspace: string; path: string; title: string; at: number }[] {
+  return orderHistory(c.artifacts)
+    .filter((a) => a.kind !== "meeting")
+    .map((a) => ({ workspace: a.slug ?? "", path: a.path, title: a.label, at: a.at ?? 0 }))
+    .sort((x, y) => y.at - x.at);
+}
+
+/** The stored view slot, tolerant of a record written before it existed. */
+function viewOf(r: Partial<Chat>): Artifact | undefined {
+  const v = r.view as Artifact | undefined;
+  if (!v || typeof v !== "object" || typeof v.path !== "string" || !v.path) return undefined;
+  return { ...v, kind: v.kind === "meeting" ? "meeting" : undefined, label: typeof v.label === "string" ? v.label : v.path };
+}
+
+/** THE ONE-TIME COLLAPSE (PRD decision 28, as amended).
+ *
+ *  Before 28 every navigation appended a tab and nothing ever aged out — the founder's screenshot
+ *  was a strip scrolled off the edge. The amendment makes the strip a HISTORY bar, so those entries
+ *  are not junk to be thrown away; they are history that was never ordered or capped. This puts
+ *  them in order and applies the cap.
+ *
+ *    · a record with pinned entries is already post-28 — order it and move on.
+ *    · a pre-28 record has no `at` at all. Stamping every entry the same instant would be a lie
+ *      dressed as data, so they keep their STORED ORDER as their history order (it is the order
+ *      they were appended, which is the order they were opened) and the one that was in FRONT is
+ *      stamped newest, so it lands at the right edge where the reader left it.
+ *    · a SCAFFOLD's declared tabs cannot be told from clicked ones on a pre-28 record, so they are
+ *      pinned: a declared set that silently aged out would be a visible loss, and a couple of extra
+ *      pins on a day-old chat is not.
+ *
+ *  Idempotent: a second pass finds `at` everywhere and only re-orders, which is a no-op. */
+export function collapseUnpinned(c: Chat): Chat {
+  if (!c.artifacts.length) return c;
+  if (c.artifacts.some((a) => a.at !== undefined)) return { ...c, artifacts: orderHistory(c.artifacts) };
+  const frontKey = c.view ? artifactKey(c.view) : c.focus;
+  const stamped = c.artifacts.map((a, i) => ({
+    ...a,
+    pinned: a.pinned || !!c.scaffold,
+    // stored order IS open order; the front page is stamped last so it sits at the right edge
+    at: artifactKey(a) === frontKey ? c.artifacts.length + 1 : i + 1,
+  }));
+  const view = c.view ?? c.artifacts.find((a) => artifactKey(a) === c.focus) ?? c.artifacts[c.artifacts.length - 1];
+  const capped = orderHistory(stamped);
+  const unpinned = capped.filter((a) => !a.pinned);
+  const evict = new Set(unpinned.slice(0, Math.max(0, unpinned.length - HISTORY_CAP)).map(artifactKey));
+  return { ...c, artifacts: capped.filter((a) => a.pinned || !evict.has(artifactKey(a))), view };
+}
+
 function normalise(raw: unknown, now: number): Chat[] {
   if (!Array.isArray(raw)) return [];
   const out: Chat[] = [];
@@ -495,6 +660,7 @@ function normalise(raw: unknown, now: number): Chat[] {
             .map((a) => ({ ...a, kind: a.kind === "meeting" ? ("meeting" as const) : undefined }))
         : [],
       focus: typeof r.focus === "string" && r.focus ? r.focus : undefined,
+      view: viewOf(r),
       // ALL OR NOTHING (F37). A kind with no record id is the stale shape this commit deleted, and
       // re-admitting one here would let a row stored before it resurrect the pre-scaffold admin
       // render on the next load. A half-record is dropped, never repaired — including the bare
@@ -521,7 +687,7 @@ export function loadChats(now = Date.now()): Chat[] {
   if (stored != null) {
     let parsed: unknown = null;
     try { parsed = JSON.parse(stored); } catch { /* corrupt → fall through to seeds */ }
-    return pruneStale(normalise(parsed, now));
+    return pruneStale(normalise(parsed, now).map(collapseUnpinned));
   }
   let legacy: LegacyProject[] = [];
   try { legacy = JSON.parse(localStorage.getItem(PROJECTS_KEY) || "[]") as LegacyProject[]; } catch { legacy = []; }

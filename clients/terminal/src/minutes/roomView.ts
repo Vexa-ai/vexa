@@ -139,32 +139,30 @@ export function pageForArtifact(ev: { workspace?: string; path?: string }): Page
   return { path, slug: slug || undefined, label: (path.split("/").pop() ?? path).replace(/\.md$/i, "") };
 }
 
-/** WHAT AN `artifact` EVENT DOES TO THE OPEN TABS (F41) — the whole decision, as a pure function.
+/** AN AGENT'S WRITE NAVIGATES THE VIEW; IT NEVER MINTS A TAB (PRD decision 28).
  *
- *  Three rules, and the third is the one worth having a test for:
- *    · the tab is APPENDED, idempotently by artifact key — the same file written twice in a turn is
- *      one tab, not two;
- *    · it comes to the FRONT only when the event says `focus: true`;
- *    · …and never over a focus the READER chose. Someone who has opened a document is reading it,
- *      and an agent's write appears in the strip and waits its turn. This is PRD decision 18's rule
- *      one level down — "a second arrival must not tidy their desk out from under them" — and it is
- *      the same rule whether the second arrival is a re-clicked link or the agent's own write.
+ *  This replaces `artifactTabEffect`, which appended one. The founder's screenshot: seven tabs after
+ *  a few chip clicks, and the same path rendered twice. *"we do not want to create new tab for every
+ *  click, tab is only when tab is specifically requested."*
  *
- *  `focus` in the result is the page to bring forward, or null for "append only". The caller decides
- *  nothing; it wires this. */
-export function artifactTabEffect(
+ *  So the rule inverts. The panel has ONE view slot that every navigation REPLACES, and a tab exists
+ *  only because somebody asked for one. An `artifact` event is a navigation like any other:
+ *
+ *    `focus: true`   the turn is saying "look at this" → the view moves.
+ *    `focus: false`  the turn wrote a file it is not asking you to read → NOTHING VISIBLE happens.
+ *                    Previously this appended a tab "quietly behind the reader", which is exactly
+ *                    the accumulation being removed: seven quiet tabs are not quiet.
+ *
+ *  `readerChoseFocus` still wins over `focus: true`: a reader who has deliberately opened something
+ *  during the turn is not interrupted by the agent's write. Their attention beats our suggestion. */
+export function artifactViewEffect(
   ev: { workspace?: string; path?: string; focus?: boolean },
-  pages: Page[],
   readerChoseFocus: boolean,
-): { pages: Page[]; focus: Page | null } | null {
+): { view: Page } | null {
   const pg = pageForArtifact(ev);
   if (!pg) return null;
-  const key = artifactKey(pg);
-  const already = pages.find((x) => artifactKey(x) === key);
-  return {
-    pages: already ? pages : [...pages, pg],
-    focus: ev.focus === true && !readerChoseFocus ? (already ?? pg) : null,
-  };
+  if (ev.focus !== true || readerChoseFocus) return null;
+  return { view: pg };
 }
 
 /** Where App.tsx stashes a `?view=` spec — the URL is cleaned on landing, so the value travels here.
