@@ -20,6 +20,9 @@ import random
 # ACTIVE (founder, 2026-09-02): "retention is active action — is not just 'emails from vexa
 # are coming', it's about emails opening and UI interaction." So `opened` is NOT activity.
 # A person is active on a day only if they opened AND did one of the UI actions below.
+# NOTE: an opt-out reply is NOT here. It is a reply, and it is emphatically not adoption —
+# see the note in this module's history: the provenance A/B scored "I replied 'no minutes'
+# to stop the emails" as an active action and turned a person leaving into a 5.6x win.
 UI_ACTIONS = ["clicked", "replied", "chat_turn", "invited_own_meeting"]
 
 SCHEMA = {
@@ -27,7 +30,10 @@ SCHEMA = {
     "clicked": "bool — did you follow the link into the Vexa chat (false if there was no link)",
     "chat_turn": "bool — once there, did you actually type something to it (false if you "
                  "landed, glanced and left)",
-    "replied": "bool — did you reply to the email itself",
+    "replied": "bool — did you reply to the email itself ASKING FOR SOMETHING or answering "
+               "it. False if your only reply was to opt out.",
+    "opted_out": "bool — did you reply to stop receiving these. This is you LEAVING, not using "
+                 "it; set replied=false if opting out was your only reply.",
     "completed_setup": "bool — did you finish whatever it asked you to finish",
     "invited_own_meeting": "bool — did you, as a result, put Vexa on a meeting YOU own",
     "forwarded": "bool — did you pass it to a colleague",

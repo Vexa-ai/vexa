@@ -23,26 +23,58 @@ import time
 from collections import defaultdict
 
 import judge
+import cohorts
 import personas
 import rig
 
 AGENT_API = os.environ.get("SIM_AGENT_API", "http://127.0.0.1:18500")
 RUN = os.environ.get("SIM_RUN_DIR", os.path.expanduser("~/sim-runs/r1"))
+COHORT = os.environ.get("SIM_COHORT", cohorts.INSIDER)
 
 # How a real mail becomes a touch kind sim.py reasons about.
 # SUBJECT ALONE IS NOT ENOUGH: variant A and variant B of the attendee follow-up carry the
 # IDENTICAL subject line, so a subject-only matcher silently sampled one mail as both and would
 # have reported the two variants as indistinguishable. Each kind names the mailbox it is
 # sourced from — the run that produced it — as well as the subject test.
-SOURCES = [
-    ("prepare",           "Prepare:",            ["sim-dnaA-coord@rehearsal.test",
-                                                  "sim-spi-coord@rehearsal.test",
-                                                  "sim-probe1@rehearsal.test"]),
-    ("minutes",           "Minutes:",            ["sim-dnaA-coord@rehearsal.test",
-                                                  "sim-spi-coord@rehearsal.test"]),
-    ("attendee_shared",   "what it means for you", ["sim-dnaA-eng1@rehearsal.test"]),
-    ("attendee_personal", "what it means for you", ["sim-dnaB-eng1@rehearsal.test"]),
-]
+# Each touch kind is sourced from the mailbox of the run that produced it, AND belongs to a
+# COHORT — the group of people who would actually have been in that meeting.
+#
+# Revolution 1 judged every persona against one ASWF TSC governance meeting. Coordinators,
+# artists and supervisors ignored it and said why: "not my show, not my dailies", "not a word
+# about my shots". That is the instrument attaching the wrong meeting to the wrong person; a
+# touch about a meeting you were not in measures whether people notice they were not there,
+# which they do. So insider personas judge the DNA/TSC mails, production personas judge the
+# dailies mails, and neither is ever shown the other's.
+COHORT_SOURCES = {
+    cohorts.INSIDER: [
+        ("prepare",           "Prepare:",              ["sim-dnaA-coord@rehearsal.test",
+                                                        "sim-probe1@rehearsal.test"]),
+        ("minutes",           "Minutes:",              ["sim-dnaA-coord@rehearsal.test"]),
+        ("attendee_shared",   "what it means for you", ["sim-dnaA-eng1@rehearsal.test"]),
+        ("attendee_personal", "what it means for you", ["sim-dnaB-eng1@rehearsal.test"]),
+    ],
+    cohorts.PRODUCTION: [
+        ("prepare",           "Prepare:",              ["sim-prod-coord@rehearsal.test",
+                                                        "sim-dnaA-coord@rehearsal.test"]),
+        ("minutes",           "Minutes:",              ["sim-prod-coord@rehearsal.test"]),
+        ("attendee_shared",   "what it means for you", ["sim-prod-eng1@rehearsal.test"]),
+        ("attendee_personal", "what it means for you", ["sim-prod-eng2@rehearsal.test",
+                                                        "sim-prod-eng1@rehearsal.test"]),
+    ],
+}
+
+# which personas belong to which cohort, for judging
+PERSONA_COHORT = {
+    "pipeline_engineer": cohorts.INSIDER,
+    "coordinator_under_pressure": cohorts.PRODUCTION,
+    "production_manager": cohorts.PRODUCTION,
+    "supervisor": cohorts.PRODUCTION,
+    "artist": cohorts.PRODUCTION,
+    "control_wary": cohorts.PRODUCTION,
+    "overloaded_exec": cohorts.PRODUCTION,
+}
+
+SOURCES = COHORT_SOURCES[cohorts.INSIDER]
 
 HISTORY_STATES = {
     "fresh": [],
@@ -91,9 +123,11 @@ def harvest(sources=None) -> dict:
     return found
 
 
-def judge_phase(touches: dict, reps: int = 2) -> dict:
+def judge_phase(touches: dict, reps: int = 2, cohort: str | None = None) -> dict:
     jobs, keys = [], []
     for persona in personas.PERSONAS:
+        if cohort and PERSONA_COHORT.get(persona) != cohort:
+            continue                      # never judge a persona on a meeting it was not in
         role, dept = ROLE_FOR.get(persona, ("artist", "Show A"))
         who = FakePerson(persona, role, dept, "Sam Okafor")
         for kind, touch in touches.items():
@@ -208,16 +242,17 @@ def converse(person, uid: str, session: str, opening_prompt: str, max_turns: int
 
 def main():
     os.makedirs(RUN, exist_ok=True)
-    touches = harvest()
+    touches = harvest(COHORT_SOURCES.get(COHORT, SOURCES))
     print("harvested touch kinds:", sorted(touches))
-    json.dump(touches, open(f"{RUN}/touches.json", "w"), indent=1)
+    json.dump(touches, open(f"{RUN}/touches-{COHORT}.json", "w"), indent=1)
     if not touches:
         raise SystemExit("no real touches harvested — nothing to judge")
-    out = judge_phase(touches)
+    out = judge_phase(touches, cohort=COHORT)
     out["harvested"] = sorted(touches)
+    out["cohort"] = COHORT
     out["history_penalty"] = 0.72
     out["fatigue_penalty"] = 0.65
-    json.dump(out, open(f"{RUN}/rates.json", "w"), indent=1)
+    json.dump(out, open(f"{RUN}/rates-{COHORT}.json", "w"), indent=1)
     print(json.dumps(out["table"], indent=1)[:3000])
     print("judge errors:", out["judge_errors"])
 

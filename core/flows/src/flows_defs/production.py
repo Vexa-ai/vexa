@@ -323,7 +323,8 @@ def build(reg: Registry, db) -> None:
         p = ctx.prior["process_meeting"]
         note = _readable(ws_file(ctx.refs["uid"], p["note_path"])
                          or p["summary"])
-        body = (note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
+        body = (_provenance(ctx, ctx.refs["uid"], to_attendee=False)
+                + note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
                 "Reply to this email with corrections or questions — I'll update the workspace "
                 "and answer here. Or open it and talk it through:")
         link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"])
@@ -386,6 +387,45 @@ def build(reg: Registry, db) -> None:
         except Exception:  # noqa: BLE001
             t = datetime.datetime.fromtimestamp(float(start), datetime.timezone.utc)
         return t.strftime("%Y-%m-%d-%H%M")
+
+
+    def _provenance(ctx, uid, to_attendee: bool) -> str:
+        """The two lines that go ABOVE every minutes / follow-up mail.
+
+        From the personas' own stated reasons for ignoring these mails, in revolution 1: an
+        engineer asked where the audio and transcript live and whether there is an API, and got
+        nothing; a coordinator could not work out why a message from a domain they did not
+        recognise was telling them about a meeting. Neither objection is about the minutes. Both
+        are answered in two lines, and both have to come FIRST, because a reader who does not
+        know why they are being written to does not reach the content.
+
+        Line 1 — why this arrived: the meeting they were in, when, and who had Vexa in the room.
+        Line 2 — where the words live, who can read them, and how to stop. `data_statement` is a
+        DEPLOYMENT fact (a studio running this on its own hardware says so in its own words), so
+        it is a flow param with an env fallback, never a sentence baked into the machinery.
+        """
+        import datetime
+        import os
+        title = ctx.refs.get("title") or "your meeting"
+        organizer = ctx.refs.get("organizer") or "the organiser"
+        when = ""
+        start = ctx.refs.get("start")
+        if start:
+            try:
+                when = " on " + datetime.datetime.fromtimestamp(
+                    float(start), datetime.timezone.utc).strftime("%-d %B")
+            except Exception:  # noqa: BLE001
+                when = ""
+        who = (ctx.flow.param("data_statement") if ctx.flow else None) or \
+            os.environ.get("VEXA_FLOWS_DATA_STATEMENT") or \
+            "Vexa runs on this organisation's own servers; the recording and transcript stay there."
+        if to_attendee:
+            first = f"You were in {title}{when}. {organizer} had Vexa in the room, so these are the notes."
+        else:
+            first = f"You had Vexa in {title}{when}."
+        second = (f"{who} These notes are visible to the people who were in the meeting. "
+                  "Reply 'no minutes' and I will stop sending you them.")
+        return first + "\n" + second + "\n\n"
 
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
     def _followup_mode(ctx) -> str:
@@ -452,8 +492,8 @@ def build(reg: Registry, db) -> None:
             body = blocks.get(a) if mode == "personal" else None
             if not body:
                 body = note.strip()
-            body += ("\n\n—\nRecorded by Vexa in " + ctx.refs["title"] +
-                     ". Open it and ask anything about the meeting:")
+            body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + body
+            body += "\n\n—\nOpen it and ask anything about the meeting:"
             try:
                 mid = notify(a, subject, body, link=link)
                 sent.append(a)
