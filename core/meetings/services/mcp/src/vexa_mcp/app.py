@@ -590,6 +590,12 @@ def create_app(
                       this deployment carries, and how their manifests are fetched. `VEXA_MCP_ASSEMBLY_OFF`
                       skips assembly entirely, which is what the fourteen-tool surface tests want.
     """
+    # REFUSE TO BOOT MISCONFIGURED (ADR-0026), the same first move every other adopted service
+    # makes. This service shipped with eleven env keys, no declaration and no preflight — the one
+    # service whose whole job is to be the product's front door was the one nothing checked.
+    from .config_preflight import preflight
+    preflight()
+
     base_url = (gateway_url or os.getenv("GATEWAY_URL") or _DEFAULT_GATEWAY_URL).rstrip("/")
 
     _vexa_env = os.getenv("VEXA_ENV", "development")
@@ -642,7 +648,18 @@ def create_app(
     # --- liveness probe (compose healthcheck) — no auth, no downstream call.
     @app.get("/health", include_in_schema=False)
     async def health():
-        return {"status": "ok", "service": "mcp"}
+        """Liveness, plus the CONFIGURED/NOT_CONFIGURED state of each named capability (ADR-0026).
+
+        A green health check on a service whose ticket sink is unset, or whose assembly reached no
+        domain, is a green light on a product that quietly does less than the operator thinks. The
+        tri-state is computed from the declaration, so it cannot drift from what the keys mean."""
+        body = {"status": "ok", "service": "mcp"}
+        try:
+            from .config_preflight import capability_states
+            body["capabilities"] = capability_states()
+        except Exception:  # noqa: BLE001 — health must answer even if the declaration is unreadable
+            pass
+        return body
 
     # --- validation errors an agent can act on.
     # The stock message is "Input validation error: 'meeting_id' is a required property": it names

@@ -15,7 +15,17 @@ from conftest import API_KEY, FakeGateway
 def test_health_no_auth(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "service": "mcp"}
+    body = r.json()
+    assert body["status"] == "ok" and body["service"] == "mcp"
+
+
+def test_health_states_each_capability(client):
+    """ADR-0026. A green health check on a service whose ticket sink is unset, or whose assembly
+    reached no domain, is a green light on a product that quietly does less than the operator
+    thinks — so the tri-state rides the same response, computed from the declaration."""
+    caps = client.get("/health").json()["capabilities"]
+    assert set(caps) == {"assembly", "private_domains", "ticket_sink"}
+    assert set(caps.values()) <= {"configured", "not_configured", "misconfigured"}
 
 
 # --- auth: fail-closed + the three accepted credential forms -----------------
