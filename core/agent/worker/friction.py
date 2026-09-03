@@ -54,6 +54,20 @@ def _api() -> str:
     return (os.environ.get("VEXA_AGENT_API_SELF_URL") or "http://agent-api:8100").rstrip("/")
 
 
+def fallback_session() -> str:
+    """The best session id available OUTSIDE a turn -- at spawn, before a chat session exists at
+    all (#1510). `spawn_gap` is filed by `mcp_delegation_config`, which runs before the harness and
+    has no `session` parameter of its own to thread; `VEXA_CHAT_SESSION` is only ever set in this
+    container's env for a MESSAGE-triggered dispatch (`dispatch.build_unit_env`), so a scheduled,
+    event or transcription dispatch has none. `VEXA_UNIT_ID` is set on EVERY dispatch and is stable
+    for the life of this container, so it is the honest fallback rather than a made-up string: the
+    flows carrier this record is published onto (`control_plane.publish.publish_friction`, via
+    agent-api's forward) refuses a report with no session at all, so silently filing one with
+    `session=""` is not an option any more."""
+    return (os.environ.get("VEXA_CHAT_SESSION") or os.environ.get("VEXA_UNIT_ID")
+           or "unknown").strip() or "unknown"
+
+
 # ── the rule that rides every turn ───────────────────────────────────────────────────────────────
 
 def friction_preamble() -> str:
