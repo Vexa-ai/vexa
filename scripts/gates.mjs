@@ -1076,9 +1076,31 @@ function liteProgramEnv(program) {
   const envLine = (section.match(/^environment=(.*)$/m) || [])[1] || "";
   return new Set([...envLine.matchAll(/([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]));
 }
-const liteEntrypointExports = () => new Set(
-  [...readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8")
-    .matchAll(/^export ([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]));
+// key -> the entrypoint.sh line that exports it. A Map, not a Set, so check 6 can name file:line;
+// `.has()` keeps it a drop-in for check 3's fallback use.
+const liteEntrypointExports = () => {
+  const lines = readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8").split("\n");
+  const out = new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^export ([A-Z][A-Z0-9_]*)=/);
+    if (m && !out.has(m[1])) out.set(m[1], i + 1);
+  }
+  return out;
+};
+// F130 — the keys deploy/lite/entrypoint.sh exports that NO config.v1-adopted service declares,
+// each naming the program it belongs to. entrypoint.sh is a SHARED surface: its exports land in the
+// environment every supervisord program inherits, so a key cannot be attributed to one service the
+// way a compose `environment:` block or a helm template can. The list is therefore the honest
+// alternative to attributing them wrongly — and, like `surface_only`, it is a backlog: an entry
+// leaves when its program adopts config.v1. Kept TIGHT: a key belonging to an ADOPTED service must
+// be declared, never listed here.
+const CONFIG_LITE_UNADOPTED = {
+  VEXA_PUBLIC_API_URL: "clients/terminal — the browser-visible API base; terminal has not adopted config.v1",
+  TERMINAL_PUBLIC_URL: "clients/terminal — its own public origin; same",
+  NEXTAUTH_SECRET: "clients/terminal — NextAuth's signing secret; same",
+  JWT_SECRET: "clients/terminal — the session secret; same",
+  VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
+};
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in
   const walk = (dir) => {
@@ -1167,11 +1189,31 @@ function gateConfigContract() {
       }
     }
   }
+  // 6. the shared lite entrypoint, surface → declaration (F130). Checks 3 and 4 walk compose, helm
+  //    and the supervisord program env in BOTH directions — but entrypoint.sh was read only in the
+  //    declaration→surface direction (as check 3's fallback), so it was the one surface, in the one
+  //    direction, that nothing walked: a key DELETED from a declaration while the entrypoint still
+  //    exported it left no refusal and no warning, and the operator kept setting a value that
+  //    reached nothing. Attribution is by construction impossible here (see CONFIG_LITE_UNADOPTED),
+  //    so the rule is: SOME adopted service declares it, or it is listed with the program it serves.
+  const declaredAnywhere = new Set();
+  for (const svc of CONFIG_ADOPTED) {
+    const declPath = join(ROOT, svc.decl);
+    if (!existsSync(declPath)) continue;
+    const decl = JSON.parse(readFileSync(declPath, "utf8"));
+    for (const k of decl.keys || []) declaredAnywhere.add(k.key);
+    for (const k of decl.surface_only || []) declaredAnywhere.add(k.key);
+  }
+  for (const [key, line] of entrypointExports) {
+    if (declaredAnywhere.has(key) || CONFIG_SURFACE_ALLOW.has(key) || key in CONFIG_LITE_UNADOPTED) continue;
+    errs.push(`lite: deploy/lite/entrypoint.sh:${line} exports ${key} but no adopted service's config.v1 declares it — declare it on the service that reads it, or list it in CONFIG_LITE_UNADOPTED (scripts/gates.mjs) naming the program it serves`);
+  }
+
   if (errs.length) return fail(["config-contract (ADR-0026) — config.v1 violations:", ...errs.map((e) => "   " + e)]);
   const edges = edgeCount
     ? ` · ${edgeCount} publish edge key(s) carrying ${edgeCarriers.size} carrier(s)${owners ? "" : " (no census — uncrossed)"}`
     : " · no publish edge declared";
-  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities${edges} · declarations ≡ deploy surfaces ≡ code reads`);
+  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities${edges} · ${entrypointExports.size} lite entrypoint export(s) · declarations ≡ deploy surfaces ≡ code reads (both directions, every surface)`);
   return true;
 }
 
