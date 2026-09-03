@@ -1,9 +1,21 @@
-"""The rough-edges loop (PRD decision 33) — shape, dedup, status, the dump, and the two hooks.
+"""The rough-edges loop (PRD decision 33; #1510) — shape, redaction, the publishing route, and the
+two agent-side hooks.
 
-Every test here is offline: the record module is pure, the store's in-memory fallback needs no
-redis, and the API tests drive the FastAPI app directly. The one thing that is NOT asserted is the
-network — `worker.friction.report` is proven not to raise, which is the only property a `finally`
-block around somebody's turn can depend on.
+#1510 retired agent-api's own store (`control_plane/friction.py`'s `FrictionStore`) — the carrier
+is flows' `friction.reported` (`friction-sink-in-flows`), and `POST /api/friction` here is an HTTP
+CLIENT of flows' own `/friction` route (`control_plane/publish.py::post_friction`), for the two
+callers that cannot reach flows directly. It is a CLIENT rather than a second publisher on purpose:
+a carrier has exactly one producing domain (flows), enforced by `gate:config-contract` against
+every service's config.v1 declaration — so this route, and the in-process refused-model-endpoint
+path, both forward onto flows' existing route rather than registering a second one. The route
+tests below assert the QUERY PARAMETERS/headers handed to `post_friction`'s HTTP call — the store's
+own dedup/status-machine/dump tests are gone with it (see `shared/friction.py`'s module docstring
+for why they no longer belong here).
+
+Every test here is offline: the record module is pure, the route tests monkeypatch
+`control_plane.publish.post_friction` so no network is touched, and `worker.friction.report` is
+proven not to raise, which is the only property a `finally` block around somebody's turn can
+depend on.
 """
 from __future__ import annotations
 
@@ -12,9 +24,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from control_plane import friction as store_mod
 from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
+from control_plane import publish as publish_mod
 from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
 from shared import friction as fr
@@ -68,155 +80,102 @@ def test_unknown_context_keys_are_dropped():
     assert "sk-secret" not in json.dumps(rec)
 
 
-# ── dedup ────────────────────────────────────────────────────────────────────────────────────────
-
-def test_dedup_ignores_volatile_ids_inside_the_error():
-    """The same failure carrying a different meeting row is ONE edge, not two."""
-    a = fr.normalize({"kind": "error", "tool": "meeting_transcript",
-                      "context": {"tool": "meeting_transcript",
-                                  "error": "500 while reading meeting 104"}}, now=T0)
-    b = fr.normalize({"kind": "error", "tool": "meeting_transcript",
-                      "context": {"tool": "meeting_transcript",
-                                  "error": "500 while reading meeting 991"}}, now=T0)
-    assert fr.dedup_key(a) == fr.dedup_key(b)
-
-
-def test_dedup_separates_a_different_tool_and_a_different_failure():
-    base = {"kind": "error", "context": {"tool": "bot_say", "error": "404 Not Found"}}
-    other_tool = {"kind": "error", "context": {"tool": "bot_send", "error": "404 Not Found"}}
-    other_err = {"kind": "error", "context": {"tool": "bot_say", "error": "503 upstream down"}}
-    k = fr.dedup_key(fr.normalize(base, now=T0))
-    assert k != fr.dedup_key(fr.normalize(other_tool, now=T0))
-    assert k != fr.dedup_key(fr.normalize(other_err, now=T0))
-
-
-def test_grouping_is_coarser_than_dedup():
-    """Two different failures of one tool are two rows and ONE finding — a fixing agent opens that
-    tool's code once."""
-    rows = [fr.normalize({"kind": "error", "context": {"tool": "bot_say", "error": "404"}}, now=T0),
-            fr.normalize({"kind": "error", "context": {"tool": "bot_say", "error": "503"}}, now=T0)]
-    assert fr.dedup_key(rows[0]) != fr.dedup_key(rows[1])
-    assert fr.group_key(rows[0]) == fr.group_key(rows[1])
-
-
-# ── the status machine ───────────────────────────────────────────────────────────────────────────
-
-def test_a_new_report_is_open_with_a_recurrence_of_one():
-    rec = fr.apply_report(None, fr.normalize({"happened": "x"}, now=T0), now=T0)
-    assert rec["status"] == "open" and rec["recurrence"] == 1 and rec["fix_ref"] == ""
-    assert rec["first_at"] == T0
-
-
-def test_a_repeat_counts_and_keeps_the_first_timestamp():
-    first = fr.apply_report(None, fr.normalize({"happened": "x"}, now=T0), now=T0)
-    again = fr.apply_report(first, fr.normalize({"happened": "x, and now also y"}, now=T0 + 60),
-                            now=T0 + 60)
-    assert again["recurrence"] == 2 and again["status"] == "open"
-    assert again["first_at"] == T0 and again["at"] == T0 + 60
-    assert again["happened"] == "x, and now also y"      # newest wording wins
-
-
-def test_a_report_after_a_fix_flips_to_recurring_and_keeps_the_fix_reference():
-    """The whole reason status exists: a fix that did not hold, and WHICH fix it was."""
-    rec = fr.apply_report(None, fr.normalize({"happened": "x"}, now=T0), now=T0)
-    rec = fr.apply_fix(rec, "abc1234", now=T0 + 10)
-    assert rec["status"] == "fixed" and rec["fix_ref"] == "abc1234"
-    rec = fr.apply_report(rec, fr.normalize({"happened": "x again"}, now=T0 + 20), now=T0 + 20)
-    assert rec["status"] == "recurring"
-    assert rec["fix_ref"] == "abc1234"
-    assert rec["regressed_at"] == T0 + 20
-
-
-def test_a_fix_without_a_reference_is_refused():
-    rec = fr.apply_report(None, fr.normalize({"happened": "x"}, now=T0), now=T0)
-    with pytest.raises(ValueError):
-        fr.apply_fix(rec, "  ")
-
-
-# ── log pointers and the dump ────────────────────────────────────────────────────────────────────
-
-def test_log_pointers_are_derived_and_pasteable():
-    rec = fr.apply_report(None, fr.normalize(
-        {"kind": "error", "context": {"tool": "bot_say", "error": "404"}}, now=T0), now=T0)
-    refs = fr.derived_log_refs(rec)
-    assert refs and refs[0]["container"] == fr.GATEWAY      # bot_* crosses the gateway
-    cmd = fr.log_command(refs[0])
-    assert cmd.startswith("docker logs --since 2026-") and "grep -F 'bot_say'" in cmd
-
-
-def test_a_reporter_supplied_pointer_is_believed():
+def test_a_reporter_supplied_log_pointer_is_believed():
     rec = fr.normalize({"log_refs": [{"container": "worker-abc", "since": "1h", "grep": "boom"}]},
                        now=T0)
-    assert fr.derived_log_refs(rec)[0]["container"] == "worker-abc"
+    assert rec["log_refs"][0]["container"] == "worker-abc"
+    assert fr.normalize({}, now=T0)["log_refs"] == []
 
 
-def test_the_dump_is_in_the_ledgers_finding_shape_and_names_how_to_close():
-    rows = []
-    for err in ("404 Not Found", "404 Not Found", "503 upstream"):
-        rec = fr.apply_report(None, fr.normalize(
-            {"kind": "error", "tried": "speak into the meeting", "happened": f"bot_say → {err}",
-             "context": {"tool": "bot_say", "error": err, "meeting_id": "104"}}, now=T0), now=T0)
-        rec["id"] = f"fr_{len(rows)}"
-        rows.append(rec)
-    md = fr.render_markdown(rows, since="2h", status="open", now=T0)
-    assert "## FR-1 · error · `bot_say`" in md
-    for label in ("**Symptom**", "**Tried**", "**Exact context**", "**Likely cause**",
-                  "**Logs**", "**Repro**"):
-        assert label in md
-    assert "docker logs --since" in md and "grep -F 'bot_say'" in md
-    assert 'friction_fixed(["fr_0"' in md or 'friction_fixed(["fr_2"' in md
-    assert "not a diagnosis" in md          # a likely cause is a candidate, and the dump says so
+# ── control_plane.publish.post_friction — the HTTP client of flows' own route ──────────────────
+
+def test_post_friction_builds_the_query_shape_flows_route_reads(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+
+        class _R:
+            status = 201
+
+            def read(self):
+                return b'{"id": "fr_abc", "recorded": true}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return _R()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://flows:18200")
+    monkeypatch.setenv("VEXA_FLOWS_API_KEY", "test-operator-key")
+    rec = fr.normalize({"subject": "126", "session": "chat-1", "tried": "x", "happened": "y",
+                        "severity": "blocker", "context": {"tool": "bot_say", "meeting_id": "104"}},
+                       now=T0)
+    ok, body = publish_mod.post_friction(rec, deployment="prod-lite", worker_image="vexa-bot:1")
+    assert ok is True and body == {"id": "fr_abc", "recorded": True}
+    assert seen["url"].startswith("http://flows:18200/friction?")
+    assert "session=chat-1" in seen["url"]
+    assert "what_i_tried=x" in seen["url"]
+    assert "what_happened=y" in seen["url"]
+    assert "severity=blocker" in seen["url"]
+    assert "tool=bot_say" in seen["url"]
+    assert "meeting_id=104" in seen["url"]
+    assert "deployment=prod-lite" in seen["url"]
+    assert "worker_image=vexa-bot%3A1" in seen["url"]
+    assert seen["headers"]["x-flows-operator-key"] == "test-operator-key"
+    assert seen["headers"]["x-user-id"] == "126"
 
 
-def test_the_dump_sorts_recurring_first():
-    old = fr.apply_report(None, fr.normalize(
-        {"kind": "error", "context": {"tool": "a", "error": "x"}}, now=T0 + 100), now=T0 + 100)
-    old["recurrence"] = 9
-    regressed = fr.apply_report(None, fr.normalize(
-        {"kind": "error", "context": {"tool": "b", "error": "y"}}, now=T0), now=T0)
-    regressed = fr.apply_fix(regressed, "sha", now=T0)
-    regressed = fr.apply_report(regressed, fr.normalize({"happened": "y"}, now=T0 + 1), now=T0 + 1)
-    groups = fr.group([old, regressed])
-    assert groups[0]["status"] == "recurring"
-    md = fr.render_markdown([old, regressed], now=T0 + 200)
-    assert "**Fix that did not hold** — sha" in md
+def test_post_friction_omits_x_user_id_when_the_record_has_no_subject(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+        raise __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
+            req.full_url, 401, "no subject", {}, None)
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://flows:18200")
+    monkeypatch.setenv("VEXA_FLOWS_API_KEY", "test-operator-key")
+    rec = fr.normalize({"session": "s1", "tried": "x", "happened": "y"}, now=T0)
+    ok, body = publish_mod.post_friction(rec)
+    assert ok is False
+    assert "x-user-id" not in seen["headers"]
 
 
-def test_an_empty_dump_says_so_without_pretending_it_is_an_error():
-    md = fr.render_markdown([], since="1h", now=T0)
-    assert "Nothing filed in this window" in md
+def test_post_friction_is_a_no_op_with_no_flows_domain_configured(monkeypatch):
+    monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
+    rec = fr.normalize({"session": "s1", "tried": "x", "happened": "y"}, now=T0)
+    assert publish_mod.post_friction(rec) == (False, {})
 
 
-# ── the store ────────────────────────────────────────────────────────────────────────────────────
-
-def test_the_store_folds_a_duplicate_into_one_row():
-    st = store_mod.FrictionStore()
-    a = st.file({"kind": "error", "tool": "bot_say", "context": {"error": "404"}}, now=T0)
-    b = st.file({"kind": "error", "tool": "bot_say", "context": {"error": "404"}}, now=T0 + 5)
-    assert a["id"] == b["id"] and b["recurrence"] == 2
-    assert len(st.since(0)) == 1
-
-
-def test_open_includes_recurring_because_that_is_the_most_urgent_work():
-    st = store_mod.FrictionStore()
-    rec = st.file({"kind": "error", "tool": "t", "context": {"error": "e"}}, now=T0)
-    st.fix(rec["id"], "sha", now=T0)
-    assert st.since(0, status="open") == []
-    st.file({"kind": "error", "tool": "t", "context": {"error": "e"}}, now=T0 + 1)
-    rows = st.since(0, status="open")
-    assert len(rows) == 1 and rows[0]["status"] == "recurring"
-    assert st.since(0, status="fixed") == []
+def test_post_friction_never_raises_when_flows_is_unreachable(monkeypatch):
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://flows:18200")
+    monkeypatch.setenv("VEXA_FLOWS_API_KEY", "test-operator-key")
+    rec = fr.normalize({"session": "s1", "tried": "x", "happened": "y"}, now=T0)
+    assert publish_mod.post_friction(rec) == (False, {})
 
 
-def test_since_is_forgiving_and_never_silently_narrows():
-    assert store_mod.parse_since("", now=T0) == 0.0
-    assert store_mod.parse_since("2h", now=T0) == T0 - 7200
-    assert store_mod.parse_since("900", now=T0) == T0 - 900
-    assert store_mod.parse_since("not a time", now=T0) == 0.0        # everything, never a guess
-    assert store_mod.parse_since("2026-09-02T00:00:00Z", now=T0) > 0
+def test_file_friction_report_normalizes_and_forwards(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(publish_mod, "post_friction",
+                        lambda rec, **kw: seen.update(rec=rec) or (True, {"id": "fr_1"}))
+    ok = publish_mod.file_friction_report({"subject": "u_7", "session": "dispatch-u_7",
+                                           "tried": "dispatch a turn",
+                                           "happened": "endpoint refused", "kind": "refusal"})
+    assert ok is True
+    assert seen["rec"]["subject"] == "u_7" and seen["rec"]["session"] == "dispatch-u_7"
+    assert seen["rec"]["happened"] == "endpoint refused"
 
 
-# ── the routes ───────────────────────────────────────────────────────────────────────────────────
+# ── the route ────────────────────────────────────────────────────────────────────────────────────
 
 class _FakeRuntime:
     def spawn(self, workload_id, profile, env):
@@ -232,7 +191,7 @@ class _FakeIdentity:
 
 
 def _app_client(tmp_path):
-    """agent-api over fakes, no redis — the store's in-memory fallback is the point."""
+    """agent-api over fakes, no redis — there is no store any more, so no fallback to prove."""
     root = tmp_path / "workspaces"
     (root / "_global" / "asks").mkdir(parents=True)
     settings = load_settings(workspaces_dir=str(root),
@@ -243,58 +202,97 @@ def _app_client(tmp_path):
     return TestClient(app)
 
 
-def test_a_person_can_file_without_being_identified(tmp_path):
-    """The most valuable report available is the one from a session too broken to have an identity."""
+def test_a_report_with_no_session_is_refused(tmp_path):
+    """Before #1510: the old store had no such rule and filed it anyway with `session=""` — which
+    is precisely the gap the flows carrier exists to close, so the route must refuse it too now
+    that it forwards onto that carrier."""
     c = _app_client(tmp_path)
-    r = c.post("/api/friction", json={"reporter": "person", "kind": "ux",
-                                      "happened": "the panel looked stale"})
+    r = c.post("/api/friction", json={"tried": "x", "happened": "y"})
+    assert r.status_code == 400
+    assert "session" in r.json()["detail"]
+
+
+def test_a_report_with_no_tried_or_happened_is_refused(tmp_path):
+    c = _app_client(tmp_path)
+    assert c.post("/api/friction", json={"session": "s1", "happened": "y"}).status_code == 400
+    assert c.post("/api/friction", json={"session": "s1", "tried": "x"}).status_code == 400
+
+
+def test_a_well_formed_report_forwards_and_returns_flows_own_response(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_post(rec, **kw):
+        seen["rec"] = rec
+        seen["kw"] = kw
+        return True, {"id": "fr_xyz", "recorded": True}
+
+    monkeypatch.setattr(publish_mod, "post_friction", fake_post)
+    c = _app_client(tmp_path)
+    r = c.post("/api/friction", json={"reporter": "person", "session": "chat-42",
+                                      "tried": "opened the page", "happened": "got a 404",
+                                      "kind": "no-page"}, headers={"X-User-Id": "126"})
     assert r.status_code == 201
-    assert r.json()["status"] == "open" and r.json()["known"] is False
+    assert r.json() == {"id": "fr_xyz", "recorded": True}     # exactly flows' own shape, passed through
+    assert seen["rec"]["subject"] == "126" and seen["rec"]["session"] == "chat-42"
+    assert seen["rec"]["tried"] == "opened the page" and seen["rec"]["happened"] == "got a 404"
 
 
-def test_filing_the_same_edge_twice_says_it_is_known(tmp_path):
+def test_a_person_can_file_without_being_identified(tmp_path, monkeypatch):
+    """The most valuable report available is the one from a session too broken to have an
+    identity — unchanged from the store era (`_friction_subject` is BEST-EFFORT, never a refusal).
+    flows' own route may still refuse an unattributed report; the route here does not pre-empt it."""
+    monkeypatch.setattr(publish_mod, "post_friction", lambda rec, **kw: (True, {"id": "fr_1"}))
     c = _app_client(tmp_path)
-    body = {"kind": "error", "tool": "bot_say", "context": {"error": "404"}}
-    first = c.post("/api/friction", json=body).json()
-    second = c.post("/api/friction", json=body).json()
-    assert first["id"] == second["id"]
-    assert second["known"] is True and second["recurrence"] == 2
+    r = c.post("/api/friction", json={"reporter": "person", "session": "s1",
+                                      "tried": "used the terminal", "happened": "it looked stale"})
+    assert r.status_code == 201
 
 
-def test_the_dump_route_returns_markdown_and_the_fix_route_closes(tmp_path):
+def test_deployment_and_worker_image_ride_off_the_raw_body(tmp_path, monkeypatch):
+    """Neither is part of `shared.friction`'s CONTEXT_KEYS shape, so the route must read them off
+    the raw body rather than lose them to `normalize()`'s "everything unknown is dropped" rule."""
+    seen = {}
+    monkeypatch.setattr(publish_mod, "post_friction",
+                        lambda rec, **kw: seen.update(kw=kw) or (True, {"id": "fr_1"}))
     c = _app_client(tmp_path)
-    hdr = {"X-User-Id": "126"}
-    rid = c.post("/api/friction", json={"kind": "no-page", "path": "kg/x.md",
-                                        "happened": "no page here yet"},
-                 headers=hdr).json()["id"]              # the dump is per-subject now (R-E05)
-    md = c.get("/api/friction/dump", headers=hdr)
-    assert md.status_code == 200 and md.headers["content-type"].startswith("text/markdown")
-    assert "FR-1 · no-page" in md.text and rid in md.text
-
-    assert c.post(f"/api/friction/{rid}/fix", json={}, headers=hdr).status_code == 400
-    fixed = c.post(f"/api/friction/{rid}/fix", json={"fix_ref": "PR #1409"}, headers=hdr)
-    assert fixed.status_code == 200 and fixed.json()["status"] == "fixed"
-    assert c.post("/api/friction/nope/fix", json={"fix_ref": "x"}, headers=hdr).status_code == 404
-
-    assert "Nothing filed" in c.get("/api/friction/dump", headers=hdr).text
-    assert c.get("/api/friction/dump?status=fixed", headers=hdr).text.count("FR-1") == 1
+    c.post("/api/friction", json={"session": "s1", "tried": "x", "happened": "y",
+                                  "deployment": "prod-lite", "worker_image": "vexa-bot:0.12.3"})
+    assert seen["kw"]["deployment"] == "prod-lite"
+    assert seen["kw"]["worker_image"] == "vexa-bot:0.12.3"
 
 
-def test_the_dump_json_format_carries_the_same_grouping(tmp_path):
+def test_a_failed_forward_never_breaks_the_route_but_says_so(tmp_path, monkeypatch):
+    """A publish is not a dependency (`control_plane/publish.py`'s own module docstring) — a
+    deployment with no flows domain, or one where flows is briefly down, still returns 201, with
+    an empty id rather than one nothing durable backs."""
+    monkeypatch.setattr(publish_mod, "post_friction", lambda rec, **kw: (False, {}))
     c = _app_client(tmp_path)
-    c.post("/api/friction", json={"kind": "error", "tool": "t", "context": {"error": "e"}},
-           headers={"X-User-Id": "126"})                # the dump is per-subject now (R-E05)
-    body = c.get("/api/friction/dump?format=json", headers={"X-User-Id": "126"}).json()
-    assert body["count"] == 1 and body["findings"][0]["kind"] == "error"
+    r = c.post("/api/friction", json={"session": "s1", "tried": "x", "happened": "y"})
+    assert r.status_code == 201
+    assert r.json() == {"id": "", "recorded": False}
 
 
-def test_reading_the_dump_needs_an_identity_even_though_filing_does_not(tmp_path, monkeypatch):
-    # the L2 harness sets a fallback subject (conftest `_default_subject`); clear it, or every
-    # request is identified and this proves nothing.
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "")
+def test_there_is_no_more_dump_or_fix_route(tmp_path):
+    """A1 (#1510): the old whole-instance dump and the store-backed fix verb no longer exist on
+    agent-api at all — they moved to flows (`friction_so_far`) and the rig (`friction_dump`/
+    `friction_fixed`, #1510's C2/C3)."""
     c = _app_client(tmp_path)
-    assert c.post("/api/friction", json={"happened": "x"}).status_code == 201
-    assert c.get("/api/friction/dump").status_code == 401
+    assert c.get("/api/friction/dump").status_code == 404
+    assert c.post("/api/friction/fr_x/fix", json={"fix_ref": "x"}).status_code == 404
+
+
+def test_no_frictionstore_module_or_live_import_remains():
+    """A4 (#1510): the store module is deleted, and nothing imports it or constructs it."""
+    import pathlib
+
+    agent_root = pathlib.Path(__file__).resolve().parents[1]
+    assert not (agent_root / "control_plane" / "friction.py").exists()
+    for py in agent_root.rglob("*.py"):
+        if "/tests/" in str(py) or py.name == "friction.py":
+            continue
+        text = py.read_text(encoding="utf-8", errors="ignore")
+        assert "import friction as friction_store_mod" not in text, py
+        assert "FrictionStore(" not in text, py
 
 
 # ── the agent side ───────────────────────────────────────────────────────────────────────────────
@@ -354,3 +352,42 @@ def test_reporting_never_raises_into_a_turn(monkeypatch, tmp_path):
     monkeypatch.setenv("VEXA_AGENT_API_SELF_URL", "http://127.0.0.1:1")   # nothing listens
     assert wfr.report({"happened": "boom"}, subject="126", timeout=0.05) is None
     assert "boom" in (tmp_path / "f.jsonl").read_text()      # the file is written FIRST, always
+
+
+# ── the refused-model-endpoint path (in-process, no HTTP hop) ──────────────────────────────────
+
+def test_a_refused_model_endpoint_forwards_with_a_session(monkeypatch):
+    """dispatch.py's `overlay_model_config` → `model_endpoint.refusal_friction` → the `friction`
+    callable (`Dispatcher.attach_friction`, wired to `publish_mod.file_friction_report` in
+    `create_app`, #1510's C1/C5). This is the in-process door — no HTTP hop into agent-api's own
+    route, no store — and it must carry a session exactly like the HTTP route does."""
+    from control_plane import model_endpoint
+    rec = model_endpoint.refusal_friction("http://redis:6379", "not allow-listed",
+                                          subject="u_7", session="dispatch-u_7")
+    assert rec["session"] == "dispatch-u_7" and rec["subject"] == "u_7"
+    seen = {}
+    monkeypatch.setattr(publish_mod, "post_friction",
+                        lambda normalized_rec, **kw: seen.update(rec=normalized_rec) or (True, {}))
+    assert publish_mod.file_friction_report(rec) is True
+    assert seen["rec"]["session"] == "dispatch-u_7"
+
+
+def test_fallback_session_prefers_the_chat_session(monkeypatch):
+    monkeypatch.setenv("VEXA_CHAT_SESSION", "main")
+    monkeypatch.setenv("VEXA_UNIT_ID", "agent-abc")
+    assert wfr.fallback_session() == "main"
+
+
+def test_fallback_session_falls_back_to_the_unit_id_with_no_chat_session(monkeypatch):
+    """#1510: `spawn_gap` is filed before a turn's session exists at all (scheduled/event/
+    transcription dispatches never set VEXA_CHAT_SESSION) -- the flows carrier this record is
+    published onto refuses a report with no session, so there must always be SOMETHING."""
+    monkeypatch.delenv("VEXA_CHAT_SESSION", raising=False)
+    monkeypatch.setenv("VEXA_UNIT_ID", "agent-meet-104")
+    assert wfr.fallback_session() == "agent-meet-104"
+
+
+def test_fallback_session_never_returns_empty(monkeypatch):
+    monkeypatch.delenv("VEXA_CHAT_SESSION", raising=False)
+    monkeypatch.delenv("VEXA_UNIT_ID", raising=False)
+    assert wfr.fallback_session() == "unknown"

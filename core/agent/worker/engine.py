@@ -57,7 +57,8 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
 # Whoever composes that block appends what this returns.
 from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
-from worker.friction import (disbelieved_capability, friction_preamble, mcp_unreachable,
+from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
+                             mcp_unreachable,
                              report as report_friction, scan_turn, spawn_gap)
 
 log = logging.getLogger("agent_api.worker")
@@ -1180,7 +1181,7 @@ def _file_spawn_gap(url: str, token: str) -> None:
     so the ordinary un-delegated dispatch files nothing."""
     try:
         rec = spawn_gap(url=url, token=token, config_written=False,
-                        subject=os.environ.get("VEXA_OWNER", ""))
+                        session=fallback_session(), subject=os.environ.get("VEXA_OWNER", ""))
         if rec:
             report_friction(rec, subject=os.environ.get("VEXA_OWNER", ""))
     except Exception as e:  # noqa: BLE001 — never worth a turn
@@ -1396,7 +1397,8 @@ def run_turn_over_workspace(
             try:
                 report_friction(mcp_unreachable(
                     url=mcp_url, detail=mcp_detail, attempts=len(MCP_PREFLIGHT_DELAYS) + 1,
-                    session=session or "", subject=os.environ.get("VEXA_OWNER", "")),
+                    session=session or fallback_session(),
+                    subject=os.environ.get("VEXA_OWNER", "")),
                     subject=os.environ.get("VEXA_OWNER", ""))
             except Exception as e:  # noqa: BLE001 — a friction report is never worth a turn
                 log.warning("friction: could not file the mcp-unreachable gap (%s)", e)

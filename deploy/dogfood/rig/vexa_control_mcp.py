@@ -4741,28 +4741,33 @@ def workspace_pull(workspace: str = "") -> str:
 
 # ---------------------------------------------------------------- calling home
 CALLHOME_PATCH = True
-def _fdb():
-    """The flows Postgres, for the friction table. Opened per call and closed by GC — this is a
-    low-traffic write path and a pool would be machinery for nothing."""
-    import psycopg
-    url = (HOME / ".storm/dburl").read_text().strip().replace(
-        "postgresql+psycopg://", "postgresql://")
-    return psycopg.connect(url, autocommit=True)
-
-
 FRICTION_LOG = HOME / ".storm/friction.jsonl"
 
 
-def _friction_post(path: str, body: dict, uid: str = ""):
-    """POST to agent-api's friction surface. Returns (status, body) exactly like `_http`.
+def _flows_friction_post(*, session: str, what_i_tried: str, what_happened: str,
+                         severity: str = "annoyance", meeting_id: str = "", tool: str = "",
+                         kind: str = "", uid: str = ""):
+    """POST straight onto flows' own carrier (#1510's C2 — the rig no longer goes through
+    agent-api for friction at all, matching how `friction-sink-in-flows` designed the route to
+    need no agent-domain dependency). flows' `POST /friction` reads plain query parameters, not
+    a JSON body (`flows_integrations/flows_api.py`'s `report_friction` has no `Body(...)`
+    marker on any of them) — the same convention `reactions_list`/`timeline` already use on this
+    surface, so this mirrors `_fkey()` + a query string rather than `_friction_post`'s old
+    JSON-body shape.
 
-    WHY AGENT-API AND NOT THE FLOWS `friction` TABLE THIS FILE USED TO WRITE: the people half of
-    decision 33 ("Report this" in the terminal) posts there, agent-api cannot reach the flows lane
-    (no `~/.storm/dburl` inside a container), the blank script DELETES that table with the rest of
-    the lane, and it has no columns for the context, log pointers, status or fix reference this
-    record needs. The full reasoning is in `core/agent/shared/friction.py`'s module docstring —
-    one store, one owner, and the reasons written down where the record is defined."""
-    return _http("POST", f"{AGENT_API}{path}", {"X-User-Id": uid} if uid else {}, body)
+    `uid` rides as `X-User-Id` beside the operator key, the same pairing `friction_so_far`
+    below uses — an empty `uid` still reaches the route (an anonymous call), and the route
+    itself is what refuses it (401, "this edge cannot attribute a report to nobody"), which
+    this function surfaces as an ordinary failed status rather than swallowing.
+    """
+    q = urllib.parse.urlencode({k: v for k, v in {
+        "session": session, "what_i_tried": what_i_tried, "what_happened": what_happened,
+        "severity": severity, "meeting_id": meeting_id, "tool": tool, "kind": kind,
+    }.items() if v})
+    headers = dict(_fkey())
+    if uid:
+        headers["X-User-Id"] = uid
+    return _http("POST", f"{FLOWS_API}/friction?{q}", headers)
 
 
 # ---------------------------------------------------------------- rehearsal (PRD decision 38)
@@ -4882,16 +4887,22 @@ def rehearse_states() -> str:
 
 
 @mcp.tool()
-def report_friction(what_i_was_doing: str, what_went_wrong: str,
+def report_friction(session: str, what_i_was_doing: str, what_went_wrong: str,
                     what_would_have_helped: str = "", tool: str = "",
                     severity: str = "annoyance",
                     kind: str = "", workspace: str = "", path: str = "",
                     meeting_id: str = "", scaffold_id: str = "", error: str = "") -> str:
-    """Tell us what did not work. NO ACCOUNT NEEDED. Use this freely and often.
+    """Tell us what did not work. Use this freely and often.
 
     You are the only one who can close this loop. We can see that a call failed; we cannot see
     what your person asked for, what you expected, or what you tried instead — and that is the
     part that would fix it. A rough edge you route around silently is one we never learn about.
+
+    `session` is REQUIRED — the chat or meeting session this happened in (whatever id ties this
+    call back to that conversation). #1510: this now posts straight onto flows' own carrier
+    (`POST /friction`), the same door the worker and the terminal's "Report this" land on, and
+    that route refuses a report with no session — the founder's own 13 reports from one live call
+    could not be tied back to it, which is exactly the gap this requirement closes.
 
     Report anything: a tool that did the wrong thing, a description that misled you, a step you
     expected to exist, a refusal you could not act on, documentation that contradicted the
@@ -4900,65 +4911,70 @@ def report_friction(what_i_was_doing: str, what_went_wrong: str,
 
     THE IDS ARE THE HALF THAT MAKES IT FIXABLE. Pass whatever you had — `tool`, `workspace`,
     `path`, `meeting_id`, `scaffold_id`, and the verbatim `error` text. A report without them is
-    still worth filing; a report with them can be reproduced without asking you.
+    still worth filing; a report with them can be reproduced without asking you. `workspace`/
+    `path`/`scaffold_id`/`error` fold into the free-text fields below (flows' own route has no
+    slot for them individually) rather than being dropped.
 
     kind: missing-tool | refusal | no-page | wrong-workspace | unfulfilled | error | ux | other
     (omit it and it is inferred from what you wrote).
     severity: blocker | annoyance | papercut | idea
 
-    Nothing you send is published. It goes to a ledger a human reads."""
+    Works best signed in — an anonymous call still lands in the local ledger below, but cannot
+    reach the durable flows carrier without an account to attribute it to."""
     import time as _t
+    sess = (session or "").strip()
+    if not sess:
+        return json.dumps({"error": "session is required — the chat or meeting session this "
+                                    "happened in; nothing here can be tied back to a "
+                                    "conversation without it"})
     uid = _subject() or ""
+    happened = (what_went_wrong or "")[:900]
+    if error and error not in happened:
+        happened = f"{happened} (error: {error})"[:900]
+    tried = (what_i_was_doing or "")[:900]
+    ctx_bits = [f"{k}={v}" for k, v in
+               (("workspace", workspace), ("path", path), ("scaffold", scaffold_id)) if v]
+    if ctx_bits:
+        tried = f"{tried} [{', '.join(ctx_bits)}]"[:900]
+    sev = severity if severity in ("blocker", "annoyance", "papercut", "idea") else "annoyance"
     rec = {
-        "at": _t.time(),
-        "reporter": "agent",
-        "subject": uid,
-        # NO SESSION ID. The rig is stateless by contract (tests/test_rig_stateless.py: *"nothing
-        # depends on the transport session"*), so the MCP transport's session id is not a fact
-        # about anything — it is empty or meaningless after a restart. The record's `session` is
-        # the CHAT session, which this server does not know; the worker fills it in, and an empty
-        # string here is the honest answer rather than an id that reads as one.
-        "session": "",
-        "kind": kind or "",
-        "tried": (what_i_was_doing or "")[:900],
-        "happened": (what_went_wrong or "")[:900],
-        "would_help": (what_would_have_helped or "")[:900],
-        "severity": severity if severity in ("blocker", "annoyance", "papercut", "idea")
-                    else "annoyance",
-        "context": {k: v for k, v in (("tool", tool), ("workspace", workspace), ("path", path),
-                                      ("meeting_id", meeting_id), ("scaffold_id", scaffold_id),
-                                      ("error", error or what_went_wrong)) if v},
+        "at": _t.time(), "reporter": "agent", "subject": uid, "session": sess,
+        "kind": kind or "", "tried": tried, "happened": happened,
+        "would_help": (what_would_have_helped or "")[:900], "severity": sev,
+        "context": {k: v for k, v in (("tool", tool), ("meeting_id", meeting_id)) if v},
     }
-    # THE FILE FIRST, ALWAYS. It is the fallback, not the store: if the database is
-    # unreachable the report still lands somewhere, and losing feedback because a store was
-    # briefly down is the worst failure available to the one channel that tells us what using
-    # this is like.
+    # THE FILE FIRST, ALWAYS. It is the fallback, not the store: if flows is unreachable (or this
+    # caller has no account to attribute the report to — flows' /friction refuses an unattributed
+    # one) the report still lands somewhere, and losing feedback because a store was briefly down
+    # is the worst failure available to the one channel that tells us what using this is like.
     try:
         with FRICTION_LOG.open("a") as f:
             f.write(json.dumps(rec) + "\n")
-        ok = True
+        wrote_local = True
     except Exception:  # noqa: BLE001
-        ok = False
+        wrote_local = False
 
-    # then the durable store, deduped SERVER-SIDE: the same edge reported twice is one row
-    # carrying the newest wording and a count, not two rows nobody can total.
-    st, body = _friction_post("/api/friction", rec, uid)
-    known, out = False, {}
-    if 200 <= st < 300 and isinstance(body, dict):
-        ok, known, out = True, bool(body.get("known")), body
-    return json.dumps({
-        "recorded": ok,
-        "id": out.get("id", ""),
-        "already_known": known,
-        "occurrences": out.get("recurrence", 1),
+    st, body = _flows_friction_post(session=sess, what_i_tried=tried, what_happened=happened,
+                                    severity=sev, meeting_id=meeting_id, tool=tool, kind=kind,
+                                    uid=uid)
+    published = 200 <= st < 300
+    out = {
+        "recorded": published or wrote_local,
+        "id": (body or {}).get("id", "") if isinstance(body, dict) else "",
+        "published": published,
         "thank_you": "This is the only signal we get about what it is actually like to use "
                      "this. Keep going — do not let it interrupt what you were doing.",
-    })
+    }
+    if not uid:
+        out["note"] = "no account — filed to the local ledger only, not the durable flows carrier"
+    elif not published:
+        out["flows_status"] = st
+    return json.dumps(out)
 
 
 @mcp.tool()
 @_anon_guard
-def friction_so_far() -> str:
+def friction_so_far(since: str = "", limit: int = 40) -> str:
     """Everything reported through report_friction, newest first. NEEDS AN ACCOUNT.
 
     It said "NO ACCOUNT NEEDED" and then called `me()` on the next line (R-D21), so an anonymous
@@ -4966,47 +4982,33 @@ def friction_so_far() -> str:
     rough edge again.
 
     Useful before reporting: if the thing you hit is already here, add what is different about
-    your case rather than filing it again."""
+    your case rather than filing it again. #1510: reads flows' own carrier directly (the same
+    `GET /friction` `friction_so_far` on that side answers) rather than agent-api's now-retired
+    dump route."""
     uid = me()   # account-scoped: this touches shared state
-    st, body = _http("GET", f"{AGENT_API}/api/friction/dump?status=&format=json",
-                     {"X-User-Id": uid})
+    q = urllib.parse.urlencode({"since": since, "limit": max(1, min(int(limit or 40), 200))})
+    headers = dict(_fkey())
+    headers["X-User-Id"] = uid
+    st, body = _http("GET", f"{FLOWS_API}/friction?{q}", headers)
     if 200 <= st < 300 and isinstance(body, dict):
-        return _capped({"count": body.get("count", 0), "reports": body.get("records", [])[:40]},
+        return _capped({"count": body.get("count", 0), "reports": body.get("reports", [])[:40]},
                        12000)
-    # FALLBACKS, in the order that loses least. The legacy flows table still holds everything
-    # filed before the store moved (see `_friction_post`) — it is read, never written — and the
-    # append-only file is the floor, exactly as it is on the write side.
-    rows = []
-    try:
-        for at, uid_, doing, wrong, help_, tool_, sev, filed in _fdb().execute(
-                "SELECT at,uid,doing,wrong,would_help,tool,severity,filed_as "
-                "FROM friction ORDER BY at DESC LIMIT 60").fetchall():
-            rows.append({"at": at, "subject": uid_, "tried": doing, "happened": wrong,
-                         "would_help": help_, "context": {"tool": tool_}, "severity": sev,
-                         "already_filed": filed, "legacy": True})
-    except Exception:  # noqa: BLE001
-        try:
-            rows = [json.loads(x) for x in FRICTION_LOG.read_text().splitlines() if x.strip()]
-            rows.reverse()
-        except Exception:  # noqa: BLE001
-            rows = []
-    return _capped({"count": len(rows), "reports": rows[:40],
-                    "note": f"agent-api answered {st} — these are the legacy/fallback rows"}, 12000)
+    return json.dumps({"error": f"flows-api answered {st}", "detail": str(body)[:300]})
 
 
 @mcp.tool()
 @_anon_guard
 def friction_dump(since: str = "", status: str = "open") -> str:
-    """THE FIXER'S BRIEF: every open rough edge, grouped by likely cause, ready to work.
+    """THE FIXER'S BRIEF: every rough edge across the WHOLE instance, grouped by likely cause.
 
-    This is decision 33 §3 — the thing the whole loop exists to produce. It returns MARKDOWN, in
-    the alpha ledger's finding shape (symptom · exact context · likely cause · log pointers ·
-    repro), deduplicated with occurrence counts, `recurring` first. Hand it to a fixing agent
-    verbatim; it needs no other briefing.
+    #1510: reads flows' `GET /friction` as the operator (the whole-instance view, not just your
+    own — flows_timeline.friction_for_subject's own contract), grouped here by (kind, tool). This
+    replaced the old Redis store's dedup/status-machine renderer — flows admits one row per
+    report with no dedup at admission, so counts here are ROWS, not deduplicated occurrences, and
+    "recurring" is not a status this reports (see the friction.fixed carrier's own census entry).
 
     since: "" (everything) · "2h" · "3d" · an ISO instant.
-    status: "open" (the default — includes `recurring`, which is the most urgent work there is) ·
-            "fixed" · "recurring" · "" for all.
+    status: "open" (the default — everything not fixed) · "fixed" · "" for all.
 
     When you fix something from it, close it: `friction_fixed([ids], "<commit or PR>")`.
 
@@ -5018,13 +5020,49 @@ def friction_dump(since: str = "", status: str = "open") -> str:
                          "are in friction_so_far().")
     if _refused:
         return _refused
-    uid = me()
-    q = f"?since={urllib.parse.quote(since)}&status={urllib.parse.quote(status)}&format=md"
-    st, body = _http("GET", f"{AGENT_API}/api/friction/dump{q}", {"X-User-Id": uid})
-    if not (200 <= st < 300):
-        return json.dumps({"error": f"agent-api answered {st}", "detail": str(body)[:300],
+    q = urllib.parse.urlencode({"since": since, "limit": 200})
+    st, body = _http("GET", f"{FLOWS_API}/friction?{q}", _fkey())
+    if not (200 <= st < 300) or not isinstance(body, dict):
+        return json.dumps({"error": f"flows-api answered {st}", "detail": str(body)[:300],
                            "do": "the dump is unreadable — say so plainly; do not invent one"})
-    return str(body)[:60000]
+    rows = body.get("reports", [])
+    want = str(status or "").strip().lower()
+    if want == "open":
+        rows = [r for r in rows if r.get("status") != "fixed"]
+    elif want:
+        rows = [r for r in rows if r.get("status") == want]
+    return _render_friction_dump(rows, since=since, status=status)
+
+
+def _render_friction_dump(rows: list, *, since: str = "", status: str = "open") -> str:
+    """A small grouped brief over flows' own rows. Groups by (kind, tool) only — the coarser
+    grouping the old renderer also used — and names the newest row per group plus how many others
+    share it, so a fixing agent opens each tool's code once rather than once per row."""
+    if not rows:
+        return json.dumps({"since": since, "status": status, "count": 0, "findings": [],
+                           "note": "Nothing filed in this window. That is a real answer and not "
+                                   "an error — but if you have been running the product and this "
+                                   "is empty, the reporting path itself is the first thing to "
+                                   "check."})
+    groups: dict = {}
+    for r in rows:
+        ctx = r.get("context") or {}
+        groups.setdefault((ctx.get("kind") or "other", ctx.get("tool") or ""), []).append(r)
+    findings = []
+    for (kind, tool), grows in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        grows = sorted(grows, key=lambda r: r.get("at_epoch") or 0, reverse=True)
+        newest = grows[0]
+        findings.append({
+            "kind": kind, "tool": tool or None, "occurrences": len(grows),
+            "status": "fixed" if all(r.get("status") == "fixed" for r in grows) else "open",
+            "newest": {k: newest.get(k) for k in
+                      ("id", "at", "subject", "session", "severity", "tried", "happened",
+                       "context")},
+            "also_ids": [r["id"] for r in grows[1:]],
+            "close_with": f'friction_fixed(["{newest["id"]}", ...], "<commit|PR>")',
+        })
+    return json.dumps({"since": since, "status": status, "count": len(rows),
+                       "findings": findings}, indent=2)[:60000]
 
 
 @mcp.tool()
@@ -5033,9 +5071,9 @@ def friction_fixed(ids: list[str], fix_ref: str) -> str:
     """Close the rough edges a change addressed (decision 33 §4).
 
     `fix_ref` is whatever lets the next reader find the change — a commit sha, a PR url, a branch,
-    or one sentence. Closing is CHEAP and meant to be: a record filed again after a fix flips itself
-    to `recurring`, so a fix that did not hold announces itself instead of hiding. Close what you
-    addressed; do not close what you merely looked at.
+    or one sentence. #1510: closes against flows' own `POST /friction/{id}/fix`, the carrier's
+    close-out half — a record filed through ANY producer (the worker, the terminal, this rig)
+    closes the same way, since they all land on the one carrier now.
 
     OPERATOR ONLY (R-D21), the mutating half of `friction_dump`: it marks records fixed across the
     whole instance, and any signed-in caller could close anybody's."""
@@ -5044,15 +5082,16 @@ def friction_fixed(ids: list[str], fix_ref: str) -> str:
                           "ledger.")
     if _refused:
         return _refused
-    uid = me()
-    if not str(fix_ref or "").strip():
+    ref = str(fix_ref or "").strip()
+    if not ref:
         return json.dumps({"error": "fix_ref is required",
                            "why": "a record marked fixed with nothing to point at is "
                                   "indistinguishable from one somebody wanted off the list"})
     out = []
     for rid in list(ids or [])[:100]:
-        st, body = _friction_post(f"/api/friction/{urllib.parse.quote(str(rid))}/fix",
-                                  {"fix_ref": fix_ref}, uid)
+        q = urllib.parse.urlencode({"fix_ref": ref})
+        st, body = _http("POST", f"{FLOWS_API}/friction/{urllib.parse.quote(str(rid))}/fix?{q}",
+                         _fkey())
         out.append({"id": rid, "ok": 200 <= st < 300,
                     "status": (body or {}).get("status") if isinstance(body, dict) else str(body)[:120]})
     return json.dumps({"closed": sum(1 for r in out if r["ok"]), "results": out})

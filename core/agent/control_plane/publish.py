@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -117,3 +119,87 @@ def claim_refs(subject, claim_id) -> dict:
     """`{uid, claim_id}` — both required by `await_claim`, which fails typed and non-retryable
     without either: *"without both there is nothing to look up and nothing to resolve"*."""
     return {"uid": str(subject), "claim_id": str(claim_id)}
+
+
+# --- friction: a direct HTTP client of flows OWN /friction route (#1510) -------------------
+# NOT the generic /events intake above, and deliberately so. `friction.reported`s producing
+# domain is FLOWS ITSELF -- flows-api's POST /friction admits it in-process, no publish-edge,
+# no config.v1 declaration on that side at all (see the carrier's own census entry in
+# core/flows/contracts/flows.v1/carriers.json) -- and a carrier has exactly ONE producing
+# domain (gate:config-contract enforces this against every service's config.v1 declaration,
+# not only this one's: "a carrier has exactly ONE producing domain, and a second producer is
+# how a consumer that must act once acts twice"). So agent-api's own `POST /api/friction`
+# (`routers/friction.py`) and the refused-model-endpoint path (`Dispatcher.attach_friction`)
+# are HTTP CLIENTS of flows' existing route -- exactly the same shape the rig's
+# `report_friction` already uses (`deploy/dogfood/rig/vexa_control_mcp.py`) -- never a second
+# producer registered anywhere. This reuses the identical VEXA_FLOWS_API_URL/VEXA_FLOWS_API_KEY
+# pair desk.unscaffolded/claim.proposed already declare as a publish edge: same deploy surface,
+# same credential, a different kind of call over it.
+
+FRICTION_TIMEOUT_S = 2.0
+
+
+def post_friction(rec: dict, *, deployment: str = "", worker_image: str = "") -> tuple[bool, dict]:
+    """POST straight onto flows' `/friction` route. Query parameters, not a JSON body --
+    `flows_integrations/flows_api.py`'s `report_friction` has no `Body(...)` marker on any of
+    its arguments, the same convention `reactions_list`/`timeline` already read on this surface.
+    Returns `(published, body)` -- `body` is flows' own response (`{id, recorded}`) when it
+    landed, `{}` otherwise. NEVER raises: a friction report is never worth failing the caller's
+    own request over (the worker's turn, the terminal's "Report this", a refused model
+    endpoint).
+
+    `rec` is `shared.friction`-normalized (`tried`/`happened`/`session`/`severity`/`subject`/
+    `context`). `deployment`/`worker_image` are not part of that shape's CONTEXT_KEYS, so a
+    caller that has them passes them in separately rather than losing them to normalize()'s
+    "everything unknown is dropped" rule.
+    """
+    base = _flows_base()
+    key = _flows_key()
+    if not base or not key:
+        return False, {}          # no flows domain here, or no operator key minted
+    ctx = rec.get("context") or {}
+    params = {k: v for k, v in {
+        "session": rec.get("session") or "",
+        "what_i_tried": rec.get("tried") or "",
+        "what_happened": rec.get("happened") or "",
+        "severity": rec.get("severity") or "annoyance",
+        "meeting_id": ctx.get("meeting_id") or "",
+        "tool": ctx.get("tool") or "",
+        "kind": rec.get("kind") or "",
+        "deployment": deployment,
+        "worker_image": worker_image,
+    }.items() if v}
+    url = f"{base}/friction?{urllib.parse.urlencode(params)}"
+    headers = {"X-Flows-Operator-Key": key}
+    uid = str(rec.get("subject") or "")
+    if uid:
+        headers["X-User-Id"] = uid
+    req = urllib.request.Request(url, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=FRICTION_TIMEOUT_S) as r:  # noqa: S310
+            try:
+                body = json.loads(r.read().decode() or "{}")
+            except (TypeError, ValueError):
+                body = {}
+            return 200 <= r.status < 300, body
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read().decode() or "{}")
+        except Exception:  # noqa: BLE001
+            body = {}
+        return False, body
+    except Exception:  # noqa: BLE001 -- see the module docstring: a publish is not a dependency
+        return False, {}
+
+
+def file_friction_report(record: dict) -> bool:
+    """Normalize a raw friction record (shared.friction's shape) and forward it onto flows' own
+    /friction route -- the in-process counterpart of routers/friction.py's HTTP route, for the
+    one caller that already holds a python dict rather than an HTTP body: a refused model
+    endpoint (model_endpoint.refusal_friction, wired in via Dispatcher.attach_friction -- see
+    #1510's C1/C5, replacing the old FrictionStore.file wiring)."""
+    from shared import friction as friction_mod
+
+    rec = friction_mod.normalize(record)
+    ok, _resp = post_friction(rec)
+    return ok

@@ -689,6 +689,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_UNIT_ID",
+      "class": "defaulted",
+      "default": "(unset \u2014 always stamped per dispatch: build_unit_env's own workload id)",
+      "description": "the stable per-dispatch workload id (`dispatch.dispatch_id`), set on EVERY dispatch unconditionally. #1510: worker/friction.py's `fallback_session()` reads it as the friction carrier's session ref when no chat session exists at all (a scheduled/event/transcription dispatch never sets VEXA_CHAT_SESSION) \u2014 the flows carrier refuses a report with no session, so a stable id here is the honest fallback rather than a made-up string. Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
       "key": "VEXA_ROOM_MEETING",
       "class": "defaulted",
       "default": "(unset \u2014 present only on a post-meeting room dispatch)",

@@ -141,15 +141,20 @@ def refuse_reason(base_url: str, env: Optional[Mapping[str, str]] = None) -> Opt
     return None
 
 
-def refusal_friction(base_url: str, reason: str, *, subject: str = "") -> dict:
+def refusal_friction(base_url: str, reason: str, *, subject: str = "", session: str = "") -> dict:
     """The friction record a refused endpoint files (PRD decision 33). A refusal the person cannot
     see is a turn that silently runs on the wrong model, which is the failure this whole gate is
-    about."""
+    about.
+
+    `session` is the dispatch's own chat session (`shared.units.chat_session`, #1510) — the flows
+    carrier this record is published onto (`control_plane.publish.publish_friction`) refuses a
+    report with no session, so every caller of this function must have one to hand."""
     return {
         "reporter": "agent",
         "kind": "refusal",
         "severity": "blocker",
         "subject": subject,
+        "session": session,
         "tried": "dispatch a workspace turn against the endpoint set in Settings → Models",
         "happened": reason,
         "would_help": (f"either allow-list the host in {ALLOW_ENV} on the deployment, or point "

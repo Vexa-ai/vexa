@@ -224,3 +224,105 @@ def test_friction_is_refused_with_no_credential_at_all(api):
                                         "what_happened": "y", "severity": "annoyance"})
     assert r.status_code == 401
     assert client.get("/friction").status_code == 401
+
+
+# ── #1510's C3 — friction.fixed, the close-out half ─────────────────────────────────────────────
+
+def test_friction_fixed_has_a_registered_flow_in_every_profile():
+    from flows import Registry
+    from flows_defs import production
+
+    reg = Registry()
+    production.build(reg, SqliteDB())
+    matches = reg.match("friction.fixed")
+    assert matches, "no flow reacts to friction.fixed — admit() would create nothing"
+    assert {f.name for f in matches} == {"friction_fix"}
+
+
+def _fixed_row(db, *, fid: str, fix_ref: str = "PR #1409", created=1_788_100_000.0):
+    import json
+    refs = {"friction_id": fid, "fix_ref": fix_ref}
+    db.execute("""INSERT INTO reaction (reaction_id, source_event_id, event_type, subject_refs,
+                                        flow, flow_version, step, status, attempt, next_run_at,
+                                        created_at, updated_at)
+                  VALUES (:rid,:sid,'friction.fixed',:refs,'friction_fix',1,
+                          'record_friction_fixed','admitted',0,0,:c,:c)""",
+               {"rid": f"rfix-{fid}", "sid": f"friction-fix-{fid}",
+                "refs": json.dumps(refs), "c": created})
+
+
+def test_friction_for_subject_folds_a_fixed_row_into_status():
+    db = SqliteDB()
+    _friction_row(db, fid="fr_a")
+    _friction_row(db, fid="fr_b")
+    _fixed_row(db, fid="fr_a")
+    out = {r["id"]: r["status"] for r in friction_for_subject(db, subject="126", identity=_identity)}
+    assert out == {"fr_a": "fixed", "fr_b": "open"}
+
+
+def test_a_report_with_no_matching_fix_stays_open():
+    db = SqliteDB()
+    _friction_row(db, fid="fr_lonely")
+    out = friction_for_subject(db, subject="126", identity=_identity)
+    assert out[0]["status"] == "open"
+
+
+def test_the_operator_with_no_x_user_id_gets_the_whole_instance_not_a_400(api):
+    """`friction_for_subject`'s own docstring has always promised this ("the whole-instance view
+    stays behind the caller's own authorization"); the route never actually let an operator reach
+    it until #1510's C2/C3 needed it for the rig's `friction_dump`."""
+    flows_api, client = api
+    _clear(flows_api)
+    _post(flows_api, client, uid="126", session="s-a", what_i_tried="a", what_happened="b",
+         severity="annoyance")
+    _post(flows_api, client, uid="999", session="s-b", what_i_tried="a", what_happened="b",
+         severity="annoyance")
+    r = client.get("/friction", headers={"X-Flows-Operator-Key": flows_api.API_KEY})
+    assert r.status_code == 200
+    assert sorted(x["session"] for x in r.json()["reports"]) == ["s-a", "s-b"]
+
+
+def test_friction_fixed_requires_the_operator_key(api):
+    flows_api, client = api
+    r = client.post("/friction/fr_x/fix", params={"fix_ref": "PR #1"})
+    assert r.status_code == 401
+
+
+def test_friction_fixed_requires_a_fix_ref(api):
+    flows_api, client = api
+    r = client.post("/friction/fr_x/fix", params={"fix_ref": ""},
+                    headers={"X-Flows-Operator-Key": flows_api.API_KEY})
+    assert r.status_code == 400
+
+
+def test_friction_fixed_closes_a_report_filed_through_any_producer(api):
+    """A3: a report filed through the flows-native route (this fixture's own `_post`) closes
+    exactly the way one filed through agent-api's forward or the rig would — the route does not
+    care where the friction_id came from, only that it names one."""
+    flows_api, client = api
+    _clear(flows_api)
+    posted = _post(flows_api, client, uid="126", session="s1", what_i_tried="a",
+                   what_happened="b", severity="annoyance")
+    fid = posted.json()["id"]
+
+    fix = client.post(f"/friction/{fid}/fix", params={"fix_ref": "PR #1410"},
+                      headers={"X-Flows-Operator-Key": flows_api.API_KEY})
+    assert fix.status_code == 201
+    assert fix.json() == {"id": fid, "status": "fixed", "fix_ref": "PR #1410"}
+
+    got = client.get("/friction", headers=_headers(flows_api, "126")).json()
+    assert got["reports"][0]["status"] == "fixed"
+
+
+def test_fixing_the_same_id_twice_is_a_no_op_not_two_events(api):
+    flows_api, client = api
+    _clear(flows_api)
+    posted = _post(flows_api, client, session="s1", what_i_tried="a", what_happened="b",
+                   severity="annoyance")
+    fid = posted.json()["id"]
+    hdr = {"X-Flows-Operator-Key": flows_api.API_KEY}
+    client.post(f"/friction/{fid}/fix", params={"fix_ref": "PR #1"}, headers=hdr)
+    client.post(f"/friction/{fid}/fix", params={"fix_ref": "PR #1"}, headers=hdr)
+    n = flows_api.db.execute(
+        "SELECT COUNT(*) FROM reaction WHERE event_type = 'friction.fixed'")[0][0]
+    assert n == 1

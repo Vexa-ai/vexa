@@ -67,6 +67,7 @@ from control_plane.workspace_attach import (
     workspace_slot_dir,
 )
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
+from control_plane import publish as publish_mod
 from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_origin, remote_status
 from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
@@ -81,9 +82,7 @@ from control_plane import global_layer
 from control_plane import version as version_mod
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
-from control_plane import friction as friction_store_mod
 from control_plane import model_endpoint
-from shared import friction as friction_mod
 from control_plane import chat_intents
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
@@ -148,21 +147,13 @@ def create_app(
         scaffolds = scaffolds_mod.ScaffoldStore(_redis_for_scaffolds.from_url(redis_url, decode_responses=True))
     else:
         scaffolds = scaffolds_mod.ScaffoldStore()
-    # THE FRICTION STORE (PRD decision 33). Same redis client, same in-memory fallback, and for
-    # the same reasons as the scaffold store — plus one of its own: `shared/friction.py` states why
-    # this record does NOT live in the flows `friction` table the rig has been writing (the people
-    # half posts HERE, and this service cannot reach the flows lane).
-    if redis_url:
-        import redis as _redis_for_friction
-
-        friction = friction_store_mod.FrictionStore(
-            _redis_for_friction.from_url(redis_url, decode_responses=True))
-    else:
-        friction = friction_store_mod.FrictionStore()
-    # A REFUSED model endpoint is friction, not a log line (F84). The dispatcher is built before the
-    # store, so the sink is attached here; a fake dispatcher in a test simply has no such method.
+    # A REFUSED model endpoint is friction, not a log line (F84). #1510's C1/C5: there is no more
+    # store to attach — the sink is `control_plane.publish.file_friction_report`, which
+    # normalizes the raw record and forwards it onto flows' own /friction route, the same door the
+    # HTTP route (`routers/friction.py`) forwards onto. A fake dispatcher in a test simply has no
+    # such method.
     if hasattr(dispatcher, "attach_friction"):
-        dispatcher.attach_friction(friction.file)
+        dispatcher.attach_friction(publish_mod.file_friction_report)
     wsr = reader or WorkspaceReader("/workspaces")
     mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     # THE WORKSPACE REGISTRY (PRD decision 26.1) — id → where that workspace is NOW. Same redis
@@ -988,7 +979,7 @@ def create_app(
         _scaffold_recipient_is=_scaffold_recipient_is, _scaffold_view=_scaffold_view,
         _schedule_source=_schedule_source, _workspace_key=_workspace_key, _ws_here=_ws_here,
         _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, dispatcher=dispatcher,
-        friction=friction, invocations_url=invocations_url, live=live, mindex=mindex,
+        invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
         settings=settings, stream_reader=stream_reader, subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)

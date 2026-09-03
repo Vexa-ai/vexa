@@ -370,7 +370,7 @@ def _allowlisted(model: str, allowlist: str) -> bool:
 
 
 def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = "",
-                         friction=None, subject: str = "") -> None:
+                         friction=None, subject: str = "", session: str = "") -> None:
     """Overlay the subject's effective model config (Settings → Models: user pref > platform
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
@@ -430,7 +430,8 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
         logger.warning("model endpoint REFUSED for subject=%s: %s", subject or "?", refusal)
         if friction is not None:
             try:
-                friction(model_endpoint.refusal_friction(base_url, refusal, subject=subject))
+                friction(model_endpoint.refusal_friction(base_url, refusal, subject=subject,
+                                                        session=session))
             except Exception:  # noqa: BLE001 — a report is never worth a dispatch
                 logger.warning("model endpoint refusal could not be filed as friction")
         return
@@ -601,8 +602,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # Settings → Models (per-user/platform config from admin-api) beats the deployment env
     # defaults stamped above, field-by-field; anything it leaves unset falls through unchanged.
     if model_config:
+        # #1510: the friction carrier requires a session on every report; `chat_session` already
+        # defaults to "main" for a non-message trigger, so this is never empty.
         overlay_model_config(env, model_config, allowlist=settings.model_allowlist,
-                             friction=friction, subject=subject)
+                             friction=friction, subject=subject, session=chat_session(invocation))
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -721,8 +724,9 @@ class Dispatcher:
         return self._settings
 
     def attach_friction(self, file_record) -> None:
-        """Wire the friction sink (``FrictionStore.file``) after construction — the store is built
-        inside ``create_app``, which already holds the dispatcher."""
+        """Wire the friction sink after construction — ``create_app`` builds it (#1510:
+        ``control_plane.publish.publish_friction``, no longer a store's ``.file``) and already
+        holds the dispatcher."""
         self._friction = file_record
 
     def resolve_model_config(self, subject: str) -> Optional[dict]:

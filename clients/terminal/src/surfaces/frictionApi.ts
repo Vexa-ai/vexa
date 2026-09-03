@@ -1,4 +1,4 @@
-/** frictionApi — "Report this" (PRD decision 33 §2).
+/** frictionApi — "Report this" (PRD decision 33 §2; #1510).
  *
  *  Founder: *"we also need to leverage the mcp tool that should collect rough edges — things that
  *  did not work as expected — and dump it in a way that we can just dump that to an agent that
@@ -14,6 +14,12 @@
  *  read; it is wrong here. A failure to report that the product is broken must not itself be an
  *  error dialog on top of the thing the person was already unhappy about — the caller shows
  *  "couldn't send that" beside the field and the text stays put.
+ *
+ *  #1510 CHANGED THE RESPONSE SHAPE. `/api/friction` no longer stores anything to read a count
+ *  back from — it forwards onto the flows carrier (`control_plane.publish`), which is a single
+ *  fact, not a deduplicated row (`shared/friction.py`'s module docstring says why the old status
+ *  machine is gone). `{id, known, recurrence}` is now `{id, recorded}`; there is no more "known,
+ *  Nth report" to say.
  */
 
 /** The human surface, decision 30's shape as far as this client actually knows it. `chat` and
@@ -31,7 +37,13 @@ export type FrictionSurface = {
   quote?: string;
 };
 
-export type FrictionFiled = { id: string; known: boolean; occurrences: number };
+export type FrictionFiled = { id: string; recorded: boolean };
+
+/** The session ref the flows carrier requires (#1510 — `POST /api/friction` refuses a report with
+ *  none). A chat turn's report carries the chat id already; a page report with no chat open (the
+ *  panel header's "Report this", outside any conversation) has nothing else to offer, so it names
+ *  the surface itself rather than sending an empty string the route would refuse. */
+const NO_CHAT_SESSION = "terminal";
 
 /** The surface, read off the chat and whatever tab is active.
  *
@@ -57,7 +69,7 @@ export async function reportFriction(line: string, surface: FrictionSurface): Pr
   if (!text) return null;
   const body = {
     reporter: "person",
-    session: surface.chat || "",
+    session: surface.chat || NO_CHAT_SESSION,
     happened: text,
     tried: surface.at === "turn"
       ? "read this reply in the chat"
@@ -81,17 +93,17 @@ export async function reportFriction(line: string, surface: FrictionSurface): Pr
       body: JSON.stringify(body),
     });
     if (!r.ok) return null;
-    const j = (await r.json()) as { id?: string; known?: boolean; recurrence?: number };
-    return { id: j.id || "", known: !!j.known, occurrences: j.recurrence || 1 };
+    const j = (await r.json()) as { id?: string; recorded?: boolean };
+    return { id: j.id || "", recorded: j.recorded !== false };
   } catch {
     return null;
   }
 }
 
-/** The confirmation, in the fewest words that still say something true. "Known, 4th time" is worth
- *  saying — it tells the person they are not shouting into a void and that the thing is counted. */
+/** The confirmation, in the fewest words that still say something true. #1510: there is no more
+ *  recurrence count to report (flows admits one row per occurrence, not a deduplicated row with a
+ *  counter) — every successful file says the same thing. */
 export function confirmation(filed: FrictionFiled | null): string {
   if (!filed) return "Couldn't send that — try again?";
-  if (filed.known && filed.occurrences > 1) return `Filed — known, ${filed.occurrences} reports.`;
   return "Filed. Thank you.";
 }

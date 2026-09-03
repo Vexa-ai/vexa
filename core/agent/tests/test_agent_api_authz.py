@@ -217,36 +217,33 @@ def test_a_colleagues_desk_is_readable_and_never_writable(world):
 
 # ── R-E04 · `POST /api/friction` let the BODY name the subject ───────────────────────────────────
 
-def test_re04_an_anonymous_report_cannot_be_attributed_to_a_named_user(world):
+def test_re04_an_anonymous_report_cannot_be_attributed_to_a_named_user(world, monkeypatch):
+    """#1510: the route no longer stores anything to read back -- it forwards onto flows' own
+    /friction route (`control_plane.publish.post_friction`). The invariant is unchanged (the
+    SUBJECT IS THE CALLER'S, NEVER THE BODY'S), so it is asserted against the normalized record
+    handed to the (monkeypatched) forward rather than against a dump this service no longer
+    serves."""
     root, _ = world
     c = _client(root)
-    r = c.post("/api/friction", json={"kind": "other", "happened": "x", "subject": "u_jane"})
+    seen = {}
+    from control_plane import publish as publish_mod
+    monkeypatch.setattr(publish_mod, "post_friction",
+                        lambda rec, **kw: seen.update(rec=rec) or (True, {"id": "fr_1"}))
+    r = c.post("/api/friction", json={"session": "s1", "tried": "x", "happened": "y",
+                                      "subject": "u_jane"})
     assert r.status_code == 201
-    rows = c.get("/api/friction/dump", params={"format": "json"}, headers=JANE).json()["records"]
-    assert [x for x in rows if x.get("subject") == "u_jane"] == [], "the body named someone else"
+    assert seen["rec"]["subject"] != "u_jane", "the body named someone else"
+    assert seen["rec"]["subject"] == ""     # no X-User-Id header -> unattributed, never someone else's
 
 
-# ── R-E05 · the dump returned every user's reports to any signed-in caller ───────────────────────
-
-def test_re05_the_dump_is_scoped_to_the_caller(world):
-    root, _ = world
-    c = _client(root)
-    c.post("/api/friction", json={"kind": "other", "happened": "jane's private workspace path"},
-           headers=JANE)
-    c.post("/api/friction", json={"kind": "other", "happened": "mallory's own edge"}, headers=MALLORY)
-
-    mine = c.get("/api/friction/dump", params={"format": "json"}, headers=MALLORY).json()
-    assert "jane's private workspace path" not in str(mine)
-    assert "mallory's own edge" in str(mine)
-
-
-def test_re05_one_user_cannot_close_anothers_record(world):
-    root, _ = world
-    c = _client(root)
-    rid = c.post("/api/friction", json={"kind": "other", "happened": "jane's edge"},
-                 headers=JANE).json()["id"]
-    assert c.post(f"/api/friction/{rid}/fix", json={"fix_ref": "nope"},
-                  headers=MALLORY).status_code in (403, 404)
+# R-E05's two tests (the dump returned every user's reports; one user could close another's
+# record) tested agent-api's OWN store, which #1510 deleted along with the `GET /api/friction/dump`
+# and `POST /api/friction/{id}/fix` routes -- see `tests/test_friction.py::
+# test_there_is_no_more_dump_or_fix_route`. The equivalent scoping now lives on flows-api, which
+# is not this service: `core/flows/tests/test_friction.py::
+# test_friction_so_far_is_scoped_to_the_caller_not_the_instance` covers the read side, and the new
+# `POST /friction/{id}/fix` (#1510's C3) is operator-only end to end -- there is no per-subject
+# "close someone else's record" case left to have, since only the operator may close ANY record.
 
 
 # ── R-E11 · raw exception text on a path that can carry a Redis password ─────────────────────────
