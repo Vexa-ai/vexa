@@ -6,12 +6,18 @@ requires-python = ">=3.11"
 # The ENGINE (src/flows/) imports stdlib only — that is its isolation law, checked by
 # scripts/check-isolation.js. These are what the steps, the flow definitions and the HTTP
 # integrations need, and they are the same wheels the Dockerfile installs.
+# The SAME set core/flows/Dockerfile installs, plus pydantic, which the API imports directly.
+# psycopg is not optional and not lazy: `postgres_db` (flows/db.py:55) calls `create_engine` on a
+# `postgresql+psycopg://` URL, and SQLAlchemy imports the DBAPI right there — so a tree without it
+# cannot even IMPORT flows_api, which is how gate:health found this. Under-declaring a dependency
+# the image installs is the same defect as declaring one nothing uses; both make the manifest a
+# guess. httpx was the latter and is gone — flows reaches services over `urllib` (flows_steps/common).
 dependencies = [
     "fastapi>=0.110,<1",
     "uvicorn[standard]>=0.29,<1",
     "pydantic>=2,<3",
     "sqlalchemy>=2,<3",
-    "httpx>=0.27,<1",
+    "psycopg[binary]>=3,<4",
 ]
 
 [dependency-groups]
