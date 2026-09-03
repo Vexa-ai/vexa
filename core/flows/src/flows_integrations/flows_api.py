@@ -70,7 +70,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
@@ -84,6 +84,7 @@ from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noq
 # the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
 # answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
 # in front of it hid that for as long as the route was operator-only. One name, one thing.
+import config_preflight                                            # noqa: E402
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
                             build_timeline, fetch_meetings, friction_for_subject,
                             reaction_concerns, render_preamble, render_text)
@@ -103,17 +104,30 @@ def _require_api_key() -> str:
     A weak default is worse than no default: it makes an unconfigured deployment look configured
     and it fails no test. So there is no default. A deployment that has not set the variable
     stops here, loudly, rather than serving on a known string.
+
+    THE REFUSAL IS THE SHARED VALIDATOR'S NOW (F-D20 b), not this function's. What stood here was
+    a hand-written pair of `RuntimeError`s carrying their own placeholder list —
+    `("changeme", "change-me", "default", "secret")` — while `config.v1.json`, five directories
+    away and enforced against every deploy surface by `gate:config-contract`, declared this same
+    key `required-explicit` with SEVEN `forbidden_values`. The three the local list was missing
+    (`vexa-internal-secret`, `lite-internal-secret`, `CHANGE-ME`) are precisely the literals a
+    stock deploy supplies, so flows-api booted, green, on a secret published in this repository —
+    F95's own lesson, in the one service that had not learned it: *"one secret with three names
+    has three refusal lists and they drift"*.
+
+    `flows_config.py` even said so out loud — *"nothing under core/flows/src imports the vendored
+    `config_preflight`"* — with the declaration held up by contract tests that drove the validator
+    while the running service never did. It does now, and the declaration is the only list.
+
+    It validates the WHOLE declaration, not this key alone, and that is deliberate: `preflight`
+    names every missing required-explicit key in ONE message rather than a peel-the-onion restart
+    loop, so it is called FIRST, before anything else this module reads. `VEXA_FLOWS_ADMIN_KEY` is
+    the only key whose absence newly stops the boot, and it was already refused at its first use
+    (`flows_steps.common.require_admin_key`), already exported by every start script, and already
+    asserted by `tests/test_config_contract.py`. flows-api declares no probes, so this does no I/O.
     """
-    key = (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError(
-            "VEXA_FLOWS_API_KEY is unset — flows-api refuses to start rather than serve on a "
-            "default. Mint one into a mode-600 file on the deployment host and export it "
-            "from the lane's start script; never put the value in the repo.")
-    if key in ("changeme", "change-me", "default", "secret"):
-        raise RuntimeError(
-            f"VEXA_FLOWS_API_KEY is the placeholder {key!r} — refusing to start.")
-    return key
+    config_preflight.preflight()
+    return (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
 
 
 API_KEY = _require_api_key()
@@ -677,9 +691,29 @@ def _friction_id() -> str:
     return f"fr_{secrets.token_hex(8)}"
 
 
+#: `severity`, AS THE SERVED CONTRACT DESCRIBES IT (F-D20 d). The accepted set lived only in
+#: `FRICTION_SEVERITIES` and in the 400 this handler raises, so the OpenAPI document — the thing
+#: every generated client and every tool manifest is built from — said any string would do, and a
+#: caller learned the four words by sending a fifth and reading the refusal.
+#:
+#: `json_schema_extra`, NOT a `Literal` or an `Enum` type. Those would move the rejection into
+#: FastAPI's own validation, which answers 422 with a pydantic error body — a different status and
+#: a different shape from the 400 this route already returns, carrying `expected` for exactly this
+#: purpose. The contract is what was missing; the refusal was not, and changing it would break
+#: every caller that reads it. One source of truth, `FRICTION_SEVERITIES`, feeding both.
+#:
+#: `kind` has the SAME GAP against `FRICTION_KINDS` and is deliberately not changed here — it is
+#: optional (empty means "infer it from the words"), so its schema needs an enum AND a nullable
+#: empty, which is a contract decision rather than a transcription. Named, not fixed.
+_SEVERITY = Query(default="annoyance",
+                  description="How much this got in the way. One of: "
+                              + ", ".join(FRICTION_SEVERITIES) + ".",
+                  json_schema_extra={"enum": list(FRICTION_SEVERITIES)})
+
+
 @app.post("/friction", status_code=201)
 def report_friction(session: str = "", what_i_tried: str = "", what_happened: str = "",
-                    severity: str = "annoyance", meeting_id: str = "", tool: str = "",
+                    severity: str = _SEVERITY, meeting_id: str = "", tool: str = "",
                     deployment: str = "", worker_image: str = "", kind: str = "",
                     x_user_id: str = Header(default=""),
                     caller: Caller = Depends(subject_or_operator)):

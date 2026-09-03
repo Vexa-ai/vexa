@@ -95,11 +95,17 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, pres
     parked reaction that retried itself into `failed` would be a dropped fact, just slower.
 
     ``present`` (optional) is a PREDICATE ON A DOMAIN NAME — "is this domain deployed?" — asked of
-    every domain a step declared through `@reg.step(needs=…)` BEFORE the body runs. A step whose
-    domain is absent answers `NotPresent`: terminal, no retry, and a `reason` on the reaction
-    saying which domain was missing (PRD decision 40.7). Asked before the body, so the absent
-    door is never knocked on — a step that reached it and caught the connection error would be
-    reporting an outage, which is a different fact with a different remedy.
+    every domain a step declared through `@reg.step(needs=…)` BEFORE the body runs. Asked before
+    the body, so the absent door is never knocked on — a step that reached it and caught the
+    connection error would be reporting an outage, which is a different fact with a different
+    remedy.
+
+    WHAT THE ABSENCE DOES IS THE STEP'S OWN DECLARATION (`@reg.step(absent=…)`, F-D20), because
+    one rule cannot be right for every step: `abort` (the default) answers `NotPresent` and ends
+    the reaction, which is correct for an agent turn and catastrophic for the eight steps standing
+    behind an acknowledgement mail; `skip` records the skip and advances; `degrade` runs the body
+    and tells it. PRD decision 40.7 asks for a product that keeps working with a domain removed,
+    and only the first of the three was ever implemented.
 
     ``gate`` and ``present`` both default to None — no gate, everything present — so every existing
     caller (the fixtures, the storm, the offline suite) is unchanged, and `flows/` still imports
@@ -138,12 +144,26 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, pres
         _fail(db, r, clock, f"unknown step {r.step!r} in {r.flow}@{r.flow_version} — renamed by deploy?")
         return True
     absent = sorted(d for d in registry.needs(r.step) if present is not None and not present(d))
+    # WHAT THE ABSENCE DOES IS THE STEP'S OWN DECLARATION (F-D20). It used to be one rule for
+    # every step — terminal — and that rule silently deleted the rest of the no-agents product:
+    # `invite_intake@3` ended at its third step of nine, so no bot was ever dispatched and no
+    # meeting was ever recorded on a deployment with no agent domain, while the reaction read
+    # `done` and nothing was paged. Absence DEGRADES what depends on the absent domain; it does
+    # not abort what does not. See `Registry.step`'s three policies.
     if absent:
         # BEFORE the effect key is reserved and before the body is entered: there is no effect to
         # record an attempt at, and the step must not get the chance to reach the missing door.
-        out = NotPresent(absent[0], detail=f"this deployment does not run {'/'.join(absent)}")
-        _not_present(db, r, clock, effect_key(r), out)
-        return True
+        aborting = [d for d in absent if registry.absent_policy(r.step, d) == "abort"]
+        if aborting:
+            out = NotPresent(aborting[0],
+                             detail=f"this deployment does not run {'/'.join(aborting)}")
+            _not_present(db, r, clock, effect_key(r), out)
+            return True
+        skipping = [d for d in absent if registry.absent_policy(r.step, d) == "skip"]
+        if skipping:
+            _skipped(db, r, flow, clock, effect_key(r), skipping)
+            return True
+        # everything left is `degrade`: the body runs, and is told through `ctx.absent` below.
     key = effect_key(r)
 
     prior_receipt = receipts.get(db, key)
@@ -155,7 +175,8 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, pres
     receipts.reserve(db, key, r.reaction_id, r.step, clock)          # commit point A
     ctx = StepCtx(reaction=r, effect_key=key,
                   prior=receipts.prior(db, r.reaction_id), clock_now=clock.now(),
-                  scratch=getattr(r, "_scratch", {}) or {}, emit=emit)
+                  scratch=getattr(r, "_scratch", {}) or {}, emit=emit,
+                  absent=frozenset(absent))
     ctx.flow = flow                       # the governing version's definition incl. params
     def _save_scratch() -> None:
         db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
@@ -228,13 +249,48 @@ def _not_present(db: DB, r: Reaction, clock: Clock, key: str, out: NotPresent) -
     agent turn is about the result of that turn.
 
     A confirmed receipt is written for the same reason every other terminal outcome writes one —
-    a redelivery of the same fact must not re-run this and must not answer differently."""
+    a redelivery of the same fact must not re-run this and must not answer differently.
+
+    THIS IS NOW THE `abort` POLICY, not the only policy (F-D20). "The remaining steps are not run"
+    is true of a step that has nothing to degrade to — an agent turn, a bot dispatch — and was
+    false of everything else: see `_skipped` for the branch that keeps the flow moving."""
     receipts.reserve(db, key, r.reaction_id, r.step, clock)
     receipts.confirm(db, key, out.receipt(), None, clock)
     db.execute(
         """UPDATE reaction SET status = 'done', reason = :why, attempt = 0,
                   lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
         {"why": out.reason, "now": clock.now(), "rid": r.reaction_id})
+
+
+def _skipped(db: DB, r: Reaction, flow, clock: Clock, key: str, domains: list) -> None:
+    """DEGRADE AND CONTINUE — the step is passed over, the reaction is not (F-D20).
+
+    Two surfaces are written, because they answer two different questions and neither substitutes
+    for the other:
+
+    * the step's own RECEIPT, confirmed, carrying `skipped: "<domain>:not_present"`. That is what
+      `flows_timeline` reads, so the skip shows up wherever a person looks — and, exactly as for
+      every other terminal outcome, a redelivery of the same fact must not re-run this step and
+      must not answer differently.
+    * the reaction's SCRATCH, under `skipped[<step>]`. That is what a LATER STEP IN THE SAME
+      REACTION reads: `email_minutes` has to know that `process_meeting` never wrote a report, and
+      an absent key in `ctx.prior` cannot tell it whether the step was skipped or simply has not
+      run yet.
+
+    The reaction's own `reason` is deliberately NOT set: `_advance` clears it on every hop, and a
+    reason that survives one step but not the next is worse than no reason at all. The reason for
+    this step lives on this step's receipt, where it stays true.
+    """
+    reason = ", ".join(f"{d}:not_present" for d in domains)
+    receipts.reserve(db, key, r.reaction_id, r.step, clock)
+    receipts.confirm(db, key, {"outcome": "skipped", "domain": domains[0], "skipped": reason,
+                               "detail": f"this deployment does not run {'/'.join(domains)}"},
+                     None, clock)
+    scratch = dict(getattr(r, "_scratch", {}) or {})
+    scratch["skipped"] = {**(scratch.get("skipped") or {}), r.step: reason}
+    db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
+               {"s": dumps(scratch), "rid": r.reaction_id})
+    _advance(db, r, flow, clock)
 
 
 def _advance(db: DB, r: Reaction, flow, clock: Clock) -> None:

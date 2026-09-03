@@ -142,12 +142,14 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # at boot. Decision 18(c) holds either way: the `sops -d` vault path is gone from `emailx.creds`
     # regardless of class. VEXA_FLOWS_DB_URL went the OTHER way and is `required-explicit` — flows
     # without a database is not a deployment — so the `own_database` capability is gone.
-    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls this module’s own
-    # `preflight`, which enforces DOOR_KEYS only , and nothing under core/flows/src imports the vendored
-    # `config_preflight`. But the SHARED validator’s semantics are asserted by flows’ own contract
-    # tests (tests/test_config_contract.py drives `cp.preflight` directly), so `required-explicit`
-    # here is NOT merely documentary: it is the difference between the no-agents profile reading
-    # as capabilities-off and reading as a service that cannot boot.
+    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls BOTH validators —
+    # this module’s own `preflight`, which enforces DOOR_KEYS, and the vendored `config_preflight`,
+    # which enforces the whole `config.v1.json` declaration (F-D20 b). It did not always: this
+    # comment used to end *“and nothing under core/flows/src imports the vendored
+    # config_preflight”*, which was true, and meant flows-api’s own boot refusal was a hand-written
+    # placeholder list three literals shorter than the declared one — so the service booted on
+    # `vexa-internal-secret`. `required-explicit` here was never merely documentary; it is now not
+    # documentary anywhere.
     "VEXA_MAIL_ADDR": (
         "capability", None,
         "the address this deployment's mailbox answers as, and the identity every allow-list is "

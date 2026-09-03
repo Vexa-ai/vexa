@@ -20,8 +20,13 @@ BOT_IMAGE ?= vexa/vexa-bot:dev
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
 ##   DASHBOARD_API_KEY=$$(make -s provision-token ADMIN_TOKEN=<secret>) \
 ##     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+## ADMIN_API_URL is resolved HERE, from this deployment's own .env, because the script has no
+## default any more: it mints a token, and a guessed host port mints it on a neighbouring stack.
+## Same resolution `_access` already does — one deployment, one place that knows its port.
 provision-token:
-	@ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" ./bin/provision-token
+	@APORT=$$(grep -E "^ADMIN_API_PORT=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); APORT=$${APORT:-18057}; \
+	 ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" \
+	 ADMIN_API_URL="$${ADMIN_API_URL:-http://127.0.0.1:$$APORT}" ./bin/provision-token
 
 ## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
 ## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).
