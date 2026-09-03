@@ -191,7 +191,7 @@ def test_paging_walks_next_link_and_then_stops():
 
 # ── the cursor (C1) ──────────────────────────────────────────────────────────────────────────
 def test_first_boot_anchors_at_the_tail_and_never_replays_history():
-    http = FakeHttp(pages={"$orderby=receivedDateTime+desc":
+    http = FakeHttp(pages={"orderby=receivedDateTime+desc":
                            {"value": [{"receivedDateTime": "2026-09-03T09:00:00Z"}]}})
     box = GraphInbox(client(http), lookback_s=0)
     db = db_with_schema()
