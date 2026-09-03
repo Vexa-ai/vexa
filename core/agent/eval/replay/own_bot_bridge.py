@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""own_bot_bridge.py — OUR-OWN-BOT → live-meeting-copilot Integration (inbound watch → fire).
+"""own_bot_bridge.py — OUR-OWN-BOT → live-transcript Integration (inbound watch → fire).
 
 The self-hosted counterpart of vexa_cloud_bridge.py: instead of Vexa Cloud's hosted bot + REST, we run
 our own ``vexaai/vexa-bot`` via the local meeting-api (POST /bots), and the bot publishes its live
@@ -8,10 +8,10 @@ bridge tails that stream with a DEDICATED consumer group (so it never steals fro
 the one meeting it owns:
 
     our bot ──(transcription_segments)──▶ redis ──┬─▶ meeting-api collector (postgres + hash)
-                                                  └─▶ THIS bridge ──(tc:meeting:{native})──▶ copilot
-                       POST /api/meeting/start ─────────────────▶ agent-api dispatch agent-meet-{native}
+                                                  └─▶ THIS bridge ──(tc:meeting:{native})──▶ terminal
+                       (no dispatch — PRD decision 34: the transcript IS the product surface)
 
-A new transcript SOURCE is config, not a new copilot — the canonical Integration primitive. One meeting
+A new transcript SOURCE is config, not a new consumer — the canonical Integration primitive. One meeting
 per process: we filter ``transcription_segments`` by the numeric meeting_id POST /bots returns, and fan
 each COMPLETED segment onto ``tc:meeting:{native_id}`` (skipping live drafts → a clean growing feed).
 
@@ -84,14 +84,7 @@ def main() -> None:
         meeting_id = str(res.get("id") or res.get("meeting_id") or "")
         print(f"[bridge] our bot requested → meeting_id={meeting_id} status={res.get('status')}", flush=True)
 
-    # 2) fire the copilot dispatch (the ONE make_dispatch on the control plane) keyed on native_id
-    started = _req("POST", args.agent_api, "/api/meeting/start", {
-        "platform": platform, "native_id": native_id, "subject": args.subject,
-        "title": f"{platform} · {native_id}",
-    })
-    print(f"[bridge] copilot dispatched → {started.get('unit_id')}", flush=True)
-
-    # 3) tail transcription_segments via a DEDICATED group (never steal from the collector); fan THIS
+    # 2) tail transcription_segments via a DEDICATED group (never steal from the collector); fan THIS
     #    meeting's completed segments onto tc:meeting:{native_id}.
     group, consumer = "ei_copilot_bridge", "bridge-1"
     try:
@@ -125,12 +118,12 @@ def main() -> None:
                 t = p.get("type")
                 if t == "session_end":
                     r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "uid": native_id})})
-                    print("[bridge] session_end → reaping copilot", flush=True)
+                    print("[bridge] session_end", flush=True)
                     return
                 if t != "transcription":
                     continue
-                # Fan BOTH drafts and finals: the agent (serve_meeting) drops completed:false, the
-                # terminal shows them live (dimmed) and upserts on segment_id. We only skip identical
+                # Fan BOTH drafts and finals: the terminal shows drafts live (dimmed) and upserts on
+                # segment_id. We only skip identical
                 # draft re-emits and anything after a segment is finalized.
                 for seg in (p.get("segments") or []):
                     text = (seg.get("text") or "").strip()

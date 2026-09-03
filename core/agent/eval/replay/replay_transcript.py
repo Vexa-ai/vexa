@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""replay_transcript.py — drive the live meeting copilot without a real meeting.
+"""replay_transcript.py — feed a meeting's live wire without a real meeting.
 
 XADDs ``transcript.v1`` Transcription segments onto the meeting's redis Stream ``tc:meeting:{id}`` — the
-same wire the [bot] produces — paced, then a ``session_end``. The live-meeting dispatch's worker
-(``agent_api.worker.serve_meeting``) consumes it by schema, gates, and emits proactive cards on its
-Stream. A scripted Acme-renewal call: a NEW person joins, a TOPIC (SSO/SCIM) lands, and an ACTION item
-appears — so every salience path fires.
+same wire the [bot] produces — paced, then a ``session_end``. The terminal's live view renders it, and
+the agent reads it over the MCP. A scripted Acme-renewal call: a NEW person joins, a TOPIC (SSO/SCIM)
+lands, and an ACTION item appears — so a reader has something to work with.
+
+(It used to drive the in-product meeting COPILOT, which consumed this same wire and emitted proactive
+cards on its own Stream. PRD decision 34 removed that consumer; the wire and this driver are unchanged.)
 
   python -m agent_api.eval.replay.replay_transcript --meeting-id acme-renewal --redis redis://localhost:6379/0
 """

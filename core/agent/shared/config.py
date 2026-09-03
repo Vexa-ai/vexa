@@ -6,14 +6,16 @@ never land in a log line, a repr, or a golden. The control plane reads these onc
 """
 from __future__ import annotations
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """The agent-api boot config. Every field arrives by ``VEXA_*`` env (12-factor)."""
 
-    model_config = SettingsConfigDict(env_prefix="VEXA_", extra="ignore")
+    # ``populate_by_name`` so a field carrying an explicit ``validation_alias`` (below) is still
+    # constructible by its FIELD name — every test builds Settings that way.
+    model_config = SettingsConfigDict(env_prefix="VEXA_", extra="ignore", populate_by_name=True)
 
     # ── Where this service lives ─────────────────────────────────────────────
     agent_api_port: int = Field(default=8100, ge=1, le=65535)
@@ -60,21 +62,19 @@ class Settings(BaseSettings):
     default_template: str = "default"  # light ready-to-go scaffold (README = onboarding-dashboard); override with VEXA_DEFAULT_TEMPLATE=finos for the FINOS KG seed
     # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
     # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
-    # A host path / repo dir; empty = no _global mount (the stack degrades to _system + the active set).
+    # A host path / repo dir. Dispatch fails closed while empty or invalid: _global is mandatory.
     # A live MOUNT (updating this ONE repo propagates to all agents next turn), not a copy-once seed.
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
     global_system_workspace_ref: str = ""
+    # Comma-separated user ids whose workers mount _global READ-WRITE — the admin setup
+    # conversation writes the org tier; everyone else stays ro. Empty = nobody writes.
+    global_admin_subjects: str = ""
+    # The ONE model this product runs (PRD decision 34): the agent harness's. The fields that used
+    # to sit beside it — `meeting_model`, `llm_provider`, `llm_model`, `meeting_idle_timeout_sec`,
+    # `post_meeting_dev_email` — all configured the in-product inference pipeline, which is gone.
     agent_model: str = ""
-    meeting_model: str = ""
-    # ── llm module dials (provider-agnostic; see core/agent/llm/README.md) ────
-    # Non-secret operator config forwarded into workers by dispatch. The SECRETS
-    # (VEXA_LLM_API_KEY / VEXA_LLM_BASE_URL) deliberately have no Settings field — they travel by
-    # runtime credential brokering (docker_backend), same as ANTHROPIC_*.
-    llm_provider: str = ""      # CompletionPort adapter key (openai-compat | anthropic); empty = default
-    llm_model: str = ""         # deployment-default model (free string)
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
-    meeting_idle_timeout_sec: int = Field(default=4 * 60 * 60, ge=60)
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.
@@ -101,14 +101,67 @@ class Settings(BaseSettings):
     meeting_api_url: str = "http://meeting-api:8080"
     # The X-Internal-Secret the admin-api's internal tier checks (same value the gateway uses). SecretStr.
 
+    # ── the scaffold seam (PRD 5.5) — where a person ARRIVES ────────────────
+    # The terminal a scaffold link points at. ONE deployment fact, ONE variable, and deliberately
+    # the SAME name flows already reads (`VEXA_UI_URL`, flows_steps/common.py): a link that names a
+    # host the person cannot reach is worse than no link, and two spellings of the host is how that
+    # happens. Empty means `POST /internal/scaffolds` refuses to mint rather than returning a url
+    # with no origin - the mint is what a step checks before it sends, so it fails LOUDLY here.
+    ui_url: str = ""
+
+    # ── vexa-control MCP seam — the authenticated toolbelt a chat worker gets ─
+    # The MCP endpoint a spawned worker connects to, carrying a short-lived delegation token minted
+    # per dispatch (see shared.delegation). Empty ⇒ no MCP is attached (the pre-delegation behaviour).
+    mcp_url: str = ""
+    # How long that delegation token lives. It only has to outlast ONE turn — the chat worker's warm
+    # window is the real bound — so it is deliberately short: a leaked worker env goes stale on its own.
+    mcp_delegation_ttl_sec: int = 3600
+
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")
     # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
     # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
     dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
-    # Internal-tier shared secret for the admin-api membership-index edge (Lane M).
-    internal_api_secret: SecretStr = SecretStr("")
+    # THE internal-tier shared secret. agent-api both PRESENTS it (Lane M: the admin-api
+    # membership-index edge) and BELIEVES it — ``_internal_caller`` compares this value, and gate 0
+    # of the meeting room is by that code's own statement the trust boundary on who is in the room.
+    #
+    # ONE NAME, and the alias says which. The secret had three spellings across the estate
+    # (``INTERNAL_API_SECRET`` in compose/helm and in admin-api/gateway/meeting-api,
+    # ``VEXA_INTERNAL_API_SECRET`` here and in the terminal, ``VEXA_INTERNAL_SECRET`` in flows), and
+    # that drift is precisely what let the published placeholder ``vexa-internal-secret`` sit on one
+    # refusal list and not the others (F95). The canonical name is the compose/helm secret KEY —
+    # ``INTERNAL_API_SECRET`` — and it wins; the prefixed spelling is read only when the canonical
+    # one is absent, and ``_build_production_app`` logs a deprecation warning when it is.
+    internal_api_secret: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("INTERNAL_API_SECRET", "VEXA_INTERNAL_API_SECRET"),
+    )
+    # admin-api's ADMIN token (``X-Admin-API-Key`` / its ``ADMIN_API_TOKEN``). Needed ONLY to resolve
+    # a meeting participant's ADDRESS to a subject for the post-meeting room, because the one route
+    # that answers that question — ``GET /admin/users/email/{email}`` — sits behind the admin token
+    # and NOT behind the internal-secret tier agent-api already holds.
+    #
+    # This is a BIG credential for a small question: the same token can create users, patch users and
+    # read the whole directory. It is therefore EMPTY BY DEFAULT and the feature degrades to an empty
+    # room without it (never to a guess). The narrow fix is an internal-tier
+    # ``GET /internal/users/by-email/{email}`` on admin-api returning only ``{id}``, at which point
+    # this field can be deleted — see ``control_plane.meeting_room`` and the room resolver in
+    # ``control_plane.api``. Until that route exists, an operator who wants the room opts in here.
+    admin_api_token: SecretStr = SecretStr("")
+    # The symmetric key agent-api signs the worker's MCP DELEGATION token with, and the Vexa control
+    # MCP verifies with (shared.delegation). Empty ⇒ the feature is OFF and no worker is given an MCP
+    # credential at all: a delegation token signed with a zero-length key would verify for anyone who
+    # guessed the format, so "unset" must mean ABSENT, never "signed with nothing".
+    mcp_delegation_secret: SecretStr = SecretStr("")
+    # The ONE server-side key every stored credential is sealed with (control_plane.secret_store): the
+    # user's saved GitHub PAT and every workspace DEPLOY KEY's private half. Empty is NOT "no
+    # encryption" — the store then generates a 0600 key under the secrets root on first use, so a
+    # self-hoster gets encryption without configuring anything. Set this when the key must live OUTSIDE
+    # the data volume (rotating it makes every previously-sealed secret unreadable, which reads as "no
+    # credential saved" — deliberately, so a wrong key never decrypts to garbage).
+    secrets_key: SecretStr = SecretStr("")
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""
