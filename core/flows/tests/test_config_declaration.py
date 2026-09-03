@@ -126,3 +126,20 @@ def test_the_mail_policy_keys_are_declared_together():
                  "VEXA_FLOWS_MAIL_RATE_PER_SENDER", "VEXA_FLOWS_MAIL_RATE_GLOBAL",
                  "VEXA_FLOWS_MAIL_RATE_WINDOW_S", "VEXA_FLOWS_MAIL_BODY_MAX"):
         assert name in cfg.DECLARED
+
+
+def test_the_mail_capability_names_its_keys_in_one_place():
+    """PRD decision 18(c): the mailbox credentials are a capability OF THIS DEPLOYMENT, not a
+    lookup into somebody's private credential store. Grouping the four machine-readably is what
+    makes a half-configured mailbox visible as one thing rather than four rows apart."""
+    assert set(cfg.MAIL_KEYS) <= set(cfg.DECLARED)
+    emailx = (SRC / "flows_steps" / "emailx.py").read_text()
+    for key in cfg.MAIL_KEYS:
+        assert key in emailx, f"{key} is grouped under the mail capability but nothing reads it"
+
+
+def test_every_secret_is_a_declared_key_and_the_password_is_one():
+    """P14. `SECRETS` is a set rather than a fourth class because secrecy is orthogonal to
+    necessity — a capability key can be a credential and a required key can be public."""
+    assert cfg.SECRETS <= set(cfg.DECLARED)
+    assert "VEXA_MAIL_APP_PASSWORD" in cfg.SECRETS

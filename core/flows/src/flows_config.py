@@ -99,8 +99,16 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_MAIL_ADDR": (
         "required-explicit", None,
         "the address this deployment's mailbox answers as. It is also the identity every "
-        "allow-list is anchored on, so an unset value is not a cosmetic gap."),
-    "VEXA_MAIL_APP_PASSWORD": ("capability", None, "the IMAP/SMTP credential paired with VEXA_MAIL_ADDR."),
+        "allow-list is anchored on, so an unset value is not a cosmetic gap. THERE IS NO VAULT "
+        "BEHIND IT: `emailx.creds` used to shell out to `sops -d` against a path in one "
+        "developer's home directory when this was unset (decision 18c)."),
+    "VEXA_MAIL_APP_PASSWORD": (
+        "required-explicit", None,
+        "the IMAP/SMTP credential paired with VEXA_MAIL_ADDR, and a P14 SECRET (see SECRETS "
+        "below): the deploy surface feeds it from a secret store, the service never reads one. "
+        "Required by every transport that logs in, which is every real one — the mail DOUBLE "
+        "names VEXA_MAIL_SMTP_HOST instead and takes no login, which is the only shape in which "
+        "an unset value is a configuration rather than a gap."),
     "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
@@ -148,6 +156,23 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "meeting used to leave ~30 permanent full-scope tokens on the organiser's account (R-B13)."),
     "VEXA_TIMELINE_SCAN_ROWS": ("defaulted", "2000", "how many reaction rows the timeline projection scans."),
 }
+
+
+#: THE CREDENTIALS (P14). A value named here is never logged, never written into a golden, and
+#: never appears in an error message: every refusal below names the KEY, exactly as
+#: `common.require_admin_key` does one file over. It is a SET rather than a fourth class because
+#: secrecy is orthogonal to necessity — `VEXA_FLOWS_TIMELINE_KEY` is a capability AND a secret,
+#: `VEXA_MAIL_ADDR` is required and public. The deploy surface feeds each of these from a secret
+#: store; a service that reads a secret store itself is the shape decision 18(c) removed.
+SECRETS = frozenset({
+    "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
+    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
+    "VEXA_MAIL_APP_PASSWORD",
+})
+
+#: The mail capability's keys, in one place so a half-declared control is visible as one.
+MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
+             "VEXA_MAIL_SMTP_PORT")
 
 
 def _decl(name: str) -> tuple[str, object, str]:
