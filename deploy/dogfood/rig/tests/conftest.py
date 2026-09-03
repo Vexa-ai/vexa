@@ -30,6 +30,9 @@ _STATE = pathlib.Path(tempfile.mkdtemp(prefix="rig-tests-"))
 # Set BEFORE the module is imported: both are read at import time.
 os.environ["VEXA_RIG_STATE_DIR"] = str(_STATE)
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
+# F95 made this fail-closed at import: no default, and the process refuses to start without
+# it. A test value keeps the suite offline — it is never compared against anything real.
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
 os.environ.setdefault("VEXA_MCP_DELEGATION_SECRET", "test-delegation-secret")
 os.environ.setdefault("VEXA_MCP_VIEW_SECRET", "test-view-secret")
 os.environ.setdefault("VEXA_RIG_IMPORT_DIR", str(_STATE / "imports"))
