@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -137,6 +138,8 @@ TIMELINE_KEY = _timeline_key()
 # unconfigured deployment stops HERE rather than at the first post-meeting run.
 flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
 INTERNAL_SECRET = require_internal_secret()
+
+logger = logging.getLogger(__name__)
 
 db = db_from_url(db_url())
 clock = SystemClock()
@@ -493,8 +496,16 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
             out.append({"source_event_id": sid, "title": m.title,
                         "reactions_created": n, "duplicate": n == 0})
         except Exception as e:  # noqa: BLE001 — one bad row must never lose the other nineteen
+            # CodeQL "information exposure through an exception": `str(e)` can carry whatever the
+            # failing row or the failing driver put in the message — a DSN, a header value, a
+            # fragment of somebody else's row — and this response goes to an admin caller, not a
+            # log. The admin gets a TYPED, stable answer (exception class + a fixed code) that is
+            # enough to tell one bad row from another and to file a bug; the full exception,
+            # `source_event_id` included, goes to the server log ONLY, where the operator who can
+            # already read logs can look it up.
+            logger.exception("admit_batch: source_event_id=%s failed", sid)
             out.append({"source_event_id": sid, "title": m.title,
-                        "error": f"{type(e).__name__}: {e}"[:200]})
+                        "error": type(e).__name__, "error_code": "admit_failed"})
     log = {"admitted_by": actor, "submitted": len(batch.meetings),
            "admitted": admitted, "duplicates": dupes,
            "failed": sum(1 for r in out if "error" in r)}
