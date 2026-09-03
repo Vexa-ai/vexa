@@ -227,28 +227,73 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 
 
-# A person's preferences, read from their workspace. The MCP writes this file; steps read it
-# here. Defaults are the floor for someone who has never set anything — the MCP's vocabulary is
-# the source of truth, and it materialises every key the first time a setting is touched.
+# A person's preferences, read from IDENTITY — the one domain flows may depend on.
+#
+# They used to be read from `.settings.json` through `GET {AGENT_API}/api/workspace/file`, which was
+# flows reaching into the agent domain for a fact about a PERSON. Two things were wrong with that
+# and only one was the layering: every mail this engine sends is gated on one of these values, so a
+# deployment without the agent domain did not get "no preferences", it got "mail everybody
+# everything, in UTC". Identity is the only domain everyone may depend on (founder ruling
+# 2026-09-02), and `admin_api.app.person_settings` is now where the vocabulary lives.
+#
+# `bot_name` is NOT here: a bot default is a fact about the bot, and the bot is meetings'.
 _SETTING_DEFAULTS = {
-    "bot_name": "Vexa",
     "mail_minutes": True, "mail_join": False, "mail_rsvp": True, "timezone": "",
     # the prepare-for-this-meeting note, the twin of mail_minutes at the other end of the meeting.
-    # ON like its twin — a loop that ships OFF is a loop nobody sees. NOTE: the control MCP owns
-    # the SETTINGS_VOCAB a person actually edits, and it has no `mail_prep` entry yet, so today
-    # this default IS the switch. That entry is the one thing needed to make it turn-off-able.
     "mail_prep": True,
 }
 
+#: uid -> settings, for the length of one step. A step reads two or three of these in a row and the
+#: values cannot change mid-step; a cache that outlived the process would be a stale preference,
+#: which is the failure this whole move is about.
+_person_settings_cache: dict = {}
+
+
+def person_settings(uid: str) -> dict:
+    """Every setting for one person, from identity. Never raises.
+
+    ON AN UNREACHABLE IDENTITY IT RETURNS THE DEFAULTS, and that direction is deliberate: a mail
+    preference that fails OPEN is a person who gets mail they turned off, one that fails CLOSED is a
+    person who silently stops receiving their minutes. The defaults are the documented answer and
+    they are exactly what somebody who has never touched a setting already gets."""
+    uid = str(uid)
+    hit = _person_settings_cache.get(uid)
+    if hit is not None:
+        return hit
+    out = dict(_SETTING_DEFAULTS)
+    try:
+        code, body = http("GET", f"{ADMIN_API}/internal/users/{uid}/settings",
+                          {"X-Internal-Secret": require_internal_secret()})
+        if code == 200 and isinstance(body, dict):
+            out.update({k: v for k, v in body.items() if k in _SETTING_DEFAULTS})
+    except Exception:  # noqa: BLE001 — a preference read must never fail a reaction
+        pass
+    _person_settings_cache[uid] = out
+    return out
+
+
+#: THE ONE KEY THIS SLICE DID NOT MOVE, and it is a question rather than an oversight.
+#: `bot_name` is a fact about the BOT, and there are already THREE stores for it on this line:
+#: `users.data.calendar_bot_name` (identity → /internal/users/{id}/bot-context → meeting-api's
+#: auto-join), a per-calendar `bot_name` that overrides it (`auto_join.py:152`), and this workspace
+#: file, which only chat-dispatched bots read. Moving it into identity's person settings would make
+#: a FOURTH; pointing this line at bot-context would change which name an existing person's bot
+#: shows up as. Both are the founder's call, so this slice moves the five PERSON facts and leaves
+#: the bot fact exactly where it was — one remaining flows→agent read, named, instead of five.
+_BOT_FACT = "bot_name"
+_BOT_FACT_DEFAULT = "Vexa"
+
 
 def setting(uid: str, key: str):
-    """One preference for one person. Never raises: a missing file means defaults."""
-    import json as _j
-    try:
-        raw = _j.loads(ws_file(uid, ".settings.json") or "{}")
-    except Exception:  # noqa: BLE001
-        raw = {}
-    return raw.get(key, _SETTING_DEFAULTS.get(key))
+    """One preference for one person. Never raises: an unreachable identity means defaults."""
+    if key == _BOT_FACT:
+        import json as _j
+        try:
+            raw = _j.loads(ws_file(uid, ".settings.json") or "{}")
+        except Exception:  # noqa: BLE001
+            raw = {}
+        return raw.get(_BOT_FACT, _BOT_FACT_DEFAULT)
+    return person_settings(uid).get(key, _SETTING_DEFAULTS.get(key))
 
 
 def scaffolded(uid: str, slug: Optional[str] = None) -> bool:
