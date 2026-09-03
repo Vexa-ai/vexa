@@ -60,7 +60,17 @@ FLOWS_OPENAPI = {"paths": {
         "get": {"summary": "Your own filed reports, newest first", "parameters": [
             {"name": "since", "in": "query", "schema": {"type": "string"}},
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    "/flows/{name}/{version}/{action}": {"post": {"summary": "activate | retire", "parameters": []}},
 }}
+FLOWS_OPENAPI["paths"]["/flows"]["post"] = {"summary": "Author a new flow version", "requestBody": {
+    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FlowSubmission"}}}}}
+FLOWS_OPENAPI["components"] = {"schemas": {"FlowSubmission": {
+    "type": "object", "title": "FlowSubmission",
+    "properties": {
+        "name": {"type": "string"}, "on_event": {"type": "string"},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "params": {"type": "object"}, "activate": {"type": "boolean", "default": True}},
+    "required": ["name", "on_event", "steps"]}}}
 
 
 def _discovery(request: httpx.Request) -> httpx.Response:
@@ -89,7 +99,10 @@ def wired():
 
     app = create_app("http://gateway.test", transport=httpx.MockTransport(upstream),
                      assembly_env={"ADMIN_API_URL": "http://identity",
-                                   "FLOWS_API_URL": "http://flows"},
+                                   "FLOWS_API_URL": "http://flows",
+                                   # flows_submit/flow_lifecycle are `auth: admin` — assembly
+                                   # refuses to boot with flows deployed and no operator key held.
+                                   "VEXA_FLOWS_API_KEY": "test-operator-key"},
                      assembly_transport=httpx.MockTransport(_discovery))
     ctx = TestClient(app)
     client = ctx.__enter__()
@@ -187,3 +200,97 @@ def test_an_argument_the_tool_does_not_declare_is_refused_not_dropped(wired):
 
 def test_a_tool_with_no_declared_arguments_publishes_none(wired):
     assert wired.tools["flows_list"].inputSchema.get("properties") == {}
+
+
+# ── 3 · a JSON-body argument reaches the tool (bind.py's requestBody support) ──────────────────────
+#
+# `flows_submit` binds to `POST /flows`, whose input is `FlowSubmission` — a JSON body, not query
+# parameters. The same three questions #1468 C3 asked of query/path arguments, asked here of body
+# ones: published in the tool's schema, forwarded on an actual call, and — the regression check —
+# a body-less tool (`flow_lifecycle`, path parameters only) still works exactly as it always has.
+
+def test_a_json_body_argument_is_published_in_the_tools_schema(wired):
+    props = wired.tools["flows_submit"].inputSchema["properties"]
+    assert set(props) == {"name", "on_event", "steps", "params", "activate"}
+
+
+def test_calling_a_json_body_tool_sends_a_json_body_downstream():
+    """Not the query string — `bind.py` marked these `requestBody`-derived, so `register.py`
+    publishes them as `Body` on this edge's own route, and `fastapi-mcp`'s own call-execution
+    forwards whatever this edge does not declare as a query parameter as the JSON body."""
+    from fastapi.testclient import TestClient as _TC  # local import mirrors `wired`'s own pattern
+
+    seen = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(201, json={"name": "n", "version": 1, "status": "active"})
+
+    app = create_app("http://gateway.test", transport=httpx.MockTransport(upstream),
+                     assembly_env={"ADMIN_API_URL": "http://identity",
+                                   "FLOWS_API_URL": "http://flows",
+                                   "VEXA_FLOWS_API_KEY": "test-operator-key"},
+                     assembly_transport=httpx.MockTransport(_discovery))
+    with _TC(app) as client:
+        head = {"Authorization": "Bearer person-key",
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json"}
+        r = client.post("/mcp", headers=head, json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}}})
+        head["Mcp-Session-Id"] = r.headers["mcp-session-id"]
+        client.post("/mcp", headers=head,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        client.post("/mcp", headers=head, json={
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": {"name": "flows_submit",
+                      "arguments": {"name": "onboarding", "on_event": "person.created",
+                                    "steps": ["scaffold"]}}})
+
+    assert seen, "flows never received the forward"
+    fwd = seen[-1]
+    assert fwd.url.path == "/flows" and fwd.method == "POST"
+    body = json.loads(fwd.content)
+    assert body == {"name": "onboarding", "on_event": "person.created", "steps": ["scaffold"]}
+    # ONLY the declared fields — `params`/`activate` were not passed and do not appear as `null`.
+    assert set(body) == {"name", "on_event", "steps"}
+
+
+def test_flow_lifecycles_path_parameters_still_substitute():
+    """The regression check: an admin-gated, body-less tool binds and forwards exactly as a
+    subject-gated one always has — `bind.py`'s requestBody support changes nothing for a tool that
+    has none. Called by hand rather than through `wired.call(name=...)`: `flow_lifecycle`'s own path
+    parameter IS `name`, which collides with that helper's tool-name argument."""
+    from fastapi.testclient import TestClient as _TC
+
+    seen = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"name": "onboarding", "version": 3, "status": "active"})
+
+    app = create_app("http://gateway.test", transport=httpx.MockTransport(upstream),
+                     assembly_env={"ADMIN_API_URL": "http://identity",
+                                   "FLOWS_API_URL": "http://flows",
+                                   "VEXA_FLOWS_API_KEY": "test-operator-key"},
+                     assembly_transport=httpx.MockTransport(_discovery))
+    with _TC(app) as client:
+        head = {"Authorization": "Bearer person-key",
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json"}
+        r = client.post("/mcp", headers=head, json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}}})
+        head["Mcp-Session-Id"] = r.headers["mcp-session-id"]
+        client.post("/mcp", headers=head,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        client.post("/mcp", headers=head, json={
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": {"name": "flow_lifecycle",
+                      "arguments": {"name": "onboarding", "version": "3", "action": "activate"}}})
+
+    assert seen, "flows never received the forward"
+    assert seen[-1].url.path == "/flows/onboarding/3/activate"
+    assert seen[-1].method == "POST"

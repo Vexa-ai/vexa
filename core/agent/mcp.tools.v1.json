@@ -6,7 +6,7 @@
   "base_url_env": "AGENT_API_URL",
   "served_at": "/.well-known/mcp-tools.json",
   "depends_on": ["identity"],
-  "note": "ADR-0037 / PRD decision 40.5 — the agent domain's first cut at the assembled edge. Four tools today, all GET, because that is what binds: `bind.py` derives a tool's argument schema from its route's OpenAPI `parameters`, and every workspace WRITE route here (`PUT /api/workspace/file`, `POST /api/workspace/entity`, `POST /api/claims`, `POST /api/workspace/shared/new`, `POST /api/workspace/purpose`) takes a single JSON-body parameter (`body: dict = Body(...)` or a Pydantic model), which FastAPI publishes under `requestBody`, not `parameters` — confirmed by dumping this app's own `openapi()`. Declaring them as tools today would either fail `bind.py`'s verification outright or, left undeclared, publish a schema with zero arguments and no way to pass `kind`/`name`/`facts`/etc — 'the worst reply available' by this codebase's own words in register.py, a tool an agent can call and be told it worked while nothing happened. Same class of gap flows' own manifest already lives with (`flows_submit`/`flow_lifecycle` are real FLOWS_API routes, absent from core/flows/mcp.tools.v1.json for the identical reason). Tracked, with the full tool-by-tool breakdown, at the issue this manifest shipped with.",
+  "note": "ADR-0037 / PRD decision 40.5 — the agent domain's cut at the assembled edge. `bind.py` now derives a tool's argument schema from a route's OpenAPI `requestBody` as well as its `parameters`, so a JSON-body route binds when — and only when — FastAPI publishes it against a real pydantic model: `POST /api/workspace/new` (`WorkspaceNewBody`, one named field `name`) is `workspace_new` below. Three JSON-body routes remain UNBINDABLE, for a different reason than before: `PUT /api/workspace/file` (`workspace_write`), `POST /api/workspace/entity` (`entity_upsert`) and `POST /api/claims` (`propose`) each take a bare `body: dict = Body(...)`, which FastAPI publishes as `{\"type\": \"object\", \"additionalProperties\": true}` with NO named `properties` — there is nothing in that shape for `bind.py` to derive a per-argument schema from, or check a manifest's declared arguments against. Closing this gap needs those three routes moved to named pydantic body models in `core/agent/control_plane/routers/workspaces.py` + `api_shared.py` first — an agent-api change, not an assembler one, and out of scope here. Tracked, with the full tool-by-tool breakdown, at the issue this manifest shipped with.",
   "tools": [
     {
       "name": "workspace_tree",
@@ -40,7 +40,16 @@
       "requires": ["identity", "agent"],
       "route": { "method": "GET", "path": "/api/workspace/purpose" },
       "arguments": ["slug"],
-      "note": "Reads the one-line PURPOSE a workspace carries. The SET side (`POST /api/workspace/purpose`) is a `WorkspacePurposeBody` JSON-body route and is not yet bindable — see the manifest-level note above."
+      "note": "Reads the one-line PURPOSE a workspace carries. The SET side (`POST /api/workspace/purpose`) IS bindable now (`WorkspacePurposeBody` is a named pydantic model) but is not wired in as a tool here: it would need a name of its own — this GET's name is already `workspace_purpose` in the worker's allow-list (`core/agent/worker/mcp_tools.v1.json`) — and minting a new one is a worker-capability decision, not an assembler one. Left as the concrete next step in the issue this manifest shipped with."
+    },
+    {
+      "name": "workspace_new",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "agent"],
+      "route": { "method": "POST", "path": "/api/workspace/new" },
+      "arguments": ["name"],
+      "note": "CREATE a brand-new blank workspace, seeded from the template, and add it to the caller's active set. `name` is optional (`WorkspaceNewBody.name`) — omitted, the route mints a unique default label."
     }
   ]
 }

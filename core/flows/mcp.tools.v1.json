@@ -6,6 +6,7 @@
   "base_url_env": "FLOWS_API_URL",
   "served_at": "/.well-known/mcp-tools.json",
   "depends_on": ["identity"],
+  "admin_auth": { "header": "X-Flows-Operator-Key", "key_env": "VEXA_FLOWS_API_KEY" },
   "tools": [
     {
       "name": "flows_list",
@@ -64,6 +65,23 @@
       "route": { "method": "GET", "path": "/friction" },
       "arguments": ["since", "limit"],
       "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+    },
+    {
+      "name": "flows_submit",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows" },
+      "arguments": ["name", "on_event", "steps", "params", "activate"],
+      "note": "Author a new flow version (ADR-0037 / PRD decision 40.5's own registry write). `auth: admin` because `POST /flows` is gated by flows-api's own operator key (flows_api.auth), not the caller's credential — a person's own key 401s here, so the caller's credential does not travel. `steps` must name vocabulary flows-api already knows (`GET /flows`'s own `steps_vocabulary` lists it); an unknown step is a 400 naming it. `activate` defaults true (live within ~10s); false files a draft version."
+    },
+    {
+      "name": "flow_lifecycle",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows/{name}/{version}/{action}" },
+      "note": "`action` is activate | retire on one flow version, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. Same admin gate as flows_submit: flows-api's `auth` dependency, not the caller's own credential."
     }
   ],
   "publishes_events": [
