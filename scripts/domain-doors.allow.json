@@ -1,0 +1,235 @@
+{
+  "contract": "domain-doors.allow.v1",
+  "dated": "2026-09-03",
+  "measured_on": "Vexa-ai/vexa branch minutes-mcp-viewer @ a5ba8e952",
+  "what_this_is": [
+    "The cross-domain doors that are OPEN on the line today. Every entry is a violation of the rule",
+    "gate:domain-doors enforces (PRD decision 46), pinned to path:line, and every entry names the",
+    "ruling that will close it. The list exists so the gate is GREEN on the tip on the day it lands",
+    "and RED the moment a NEW undeclared door appears — a gate that starts red is a gate nobody runs.",
+    "It is checked in BOTH directions: an entry matching no current violation FAILS the gate too, so",
+    "the list cannot rot into a permanent exemption and cannot outlive the code it excuses. Pinning",
+    "path:line also means a door that MOVES turns the gate red — deliberately: a moved door is a",
+    "re-decision, and it gets looked at.",
+    "This list shrinking IS the migration backlog. The only correct direction for it is shorter."
+  ],
+  "entries": [
+    {
+      "site": "core/agent/control_plane/dispatch.py:593",
+      "from": "agent",
+      "to": "flows",
+      "door": "VEXA_FLOWS_API_URL",
+      "ruling": "PRD decision 40.7 + Vexa-ai/vexa#1453 — the door is DECLARED but as class 'defaulted', which asserts flows exists. The entry closes when VEXA_FLOWS_API_URL is reclassed 'capability' with a declared degrade, so an agent-only deployment answers not_present instead of retrying a door that is not there."
+    },
+    {
+      "site": "core/agent/shared/timeline.py:51",
+      "from": "agent",
+      "to": "flows",
+      "door": "VEXA_FLOWS_API_URL",
+      "ruling": "PRD decision 40.7 + Vexa-ai/vexa#1453 — the door is DECLARED but as class 'defaulted', which asserts flows exists. The entry closes when VEXA_FLOWS_API_URL is reclassed 'capability' with a declared degrade, so an agent-only deployment answers not_present instead of retrying a door that is not there."
+    },
+    {
+      "site": "core/agent/control_plane/admin_panel.py:195",
+      "from": "agent",
+      "to": "gateway",
+      "door": "VEXA_GATEWAY_URL",
+      "ruling": "PRD decision 40.7 / the 2026-09-03 architecture pass §1 (agent → gateway 3, 'the meetings edge wearing a hat'). A domain does not front a sibling with the edge: the entry closes when agent declares meetings an OPTIONAL dependency (capability class + degrade) and calls it directly, or receives what it needs as a flows event."
+    },
+    {
+      "site": "core/agent/control_plane/transcription_watcher.py:136",
+      "from": "agent",
+      "to": "gateway",
+      "door": "VEXA_GATEWAY_URL",
+      "ruling": "PRD decision 40.7 / the 2026-09-03 architecture pass §1 (agent → gateway 3, 'the meetings edge wearing a hat'). A domain does not front a sibling with the edge: the entry closes when agent declares meetings an OPTIONAL dependency (capability class + degrade) and calls it directly, or receives what it needs as a flows event."
+    },
+    {
+      "site": "core/agent/control_plane/transcription_watcher.py:178",
+      "from": "agent",
+      "to": "gateway",
+      "door": "VEXA_GATEWAY_URL",
+      "ruling": "PRD decision 40.7 / the 2026-09-03 architecture pass §1 (agent → gateway 3, 'the meetings edge wearing a hat'). A domain does not front a sibling with the edge: the entry closes when agent declares meetings an OPTIONAL dependency (capability class + degrade) and calls it directly, or receives what it needs as a flows event."
+    },
+    {
+      "site": "core/agent/control_plane/dispatch.py:577",
+      "from": "agent",
+      "to": "mcp",
+      "door": "VEXA_MCP_URL",
+      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+    },
+    {
+      "site": "core/agent/control_plane/dispatch.py:583",
+      "from": "agent",
+      "to": "mcp",
+      "door": "VEXA_MCP_URL",
+      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+    },
+    {
+      "site": "core/agent/shared/config.py:115",
+      "from": "agent",
+      "to": "mcp",
+      "door": "MCP_URL",
+      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+    },
+    {
+      "site": "core/agent/worker/engine.py:1105",
+      "from": "agent",
+      "to": "mcp",
+      "door": "VEXA_MCP_URL",
+      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+    },
+    {
+      "site": "core/agent/worker/friction.py:271",
+      "from": "agent",
+      "to": "mcp",
+      "door": "VEXA_MCP_URL",
+      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+    },
+    {
+      "site": "core/agent/control_plane/routers/admin.py:218",
+      "from": "agent",
+      "to": "meetings",
+      "door": "TRANSCRIPTION_SERVICE_URL",
+      "ruling": "PRD decision 40.7 + Vexa-ai/vexa#1453 — the meetings door is reached either undeclared or as class 'defaulted'. The entry closes when it is declared 'capability' with a degrade in core/agent/control_plane/config.v1.json, the #1453 domain_present pattern."
+    },
+    {
+      "site": "core/agent/shared/config.py:101",
+      "from": "agent",
+      "to": "meetings",
+      "door": "MEETING_API_URL",
+      "ruling": "PRD decision 40.7 + Vexa-ai/vexa#1453 — the meetings door is reached either undeclared or as class 'defaulted'. The entry closes when it is declared 'capability' with a degrade in core/agent/control_plane/config.v1.json, the #1453 domain_present pattern."
+    },
+    {
+      "site": "core/agent/shared/config.py:110",
+      "from": "agent",
+      "to": "terminal",
+      "door": "UI_URL",
+      "ruling": "PRD decision 46 — the EDGE mints what a client sees. agent-api holds the terminal's origin so it can mint scaffold links; the entry closes when the link origin is minted at the edge and the domain stops carrying a client's URL."
+    },
+    {
+      "site": "core/flows/src/flows_steps/common.py:88",
+      "from": "flows",
+      "to": "gateway",
+      "door": "VEXA_FLOWS_GATEWAY_URL",
+      "ruling": "PRD decision 40.7 and decision 5 (flows → meetings, 12 call sites via the gateway; architecture pass §1). To be declared an OPTIONAL meetings dependency — capability class + degrade — in a separate PR; that declaration removes this entry."
+    },
+    {
+      "site": "core/flows/src/flows_steps/common.py:204",
+      "from": "flows",
+      "to": "terminal",
+      "door": "VEXA_UI_URL",
+      "ruling": "PRD decision 46 — the EDGE mints what a client sees. flows holds VEXA_UI_URL because every mailed link needs an origin; the entry closes when the origin is minted at the edge."
+    },
+    {
+      "site": "core/flows/src/flows_steps/common.py:90",
+      "from": "flows",
+      "to": "terminal",
+      "door": "UI_URL",
+      "ruling": "PRD decision 46 — the EDGE mints what a client sees. flows holds VEXA_UI_URL because every mailed link needs an origin; the entry closes when the origin is minted at the edge."
+    },
+    {
+      "site": "core/gateway/services/gateway/src/gateway/adapters.py:204",
+      "from": "gateway",
+      "to": "agent",
+      "door": "AGENT_API_URL",
+      "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. agent exports no manifest yet; the entry closes when core/agent ships one declaring base_url_env AGENT_API_URL."
+    },
+    {
+      "site": "core/gateway/services/gateway/src/gateway/adapters.py:202",
+      "from": "gateway",
+      "to": "identity",
+      "door": "ADMIN_API_URL",
+      "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. identity exports no manifest yet; the entry closes when core/identity ships a routes.v1.json / mcp.tools.v1.json declaring base_url_env ADMIN_API_URL, the way core/flows/mcp.tools.v1.json already does."
+    },
+    {
+      "site": "core/gateway/services/gateway/src/gateway/adapters.py:203",
+      "from": "gateway",
+      "to": "meetings",
+      "door": "MEETING_API_URL",
+      "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. meetings exports no manifest yet; the entry closes when core/meetings ships one declaring base_url_env MEETING_API_URL."
+    },
+    {
+      "site": "core/meetings/services/mcp/src/vexa_mcp/discover.py:34",
+      "from": "mcp",
+      "to": "agent",
+      "door": "AGENT_API_URL",
+      "ruling": "PRD decision 40.5 — the MCP service already keys its discovery off DOMAIN_URL_ENV; flows is absent from this list because core/flows/mcp.tools.v1.json declares base_url_env FLOWS_API_URL. The entry closes when agent ships the same manifest."
+    },
+    {
+      "site": "core/meetings/services/mcp/src/vexa_mcp/discover.py:31",
+      "from": "mcp",
+      "to": "identity",
+      "door": "ADMIN_API_URL",
+      "ruling": "PRD decision 40.5 — the MCP service already keys its discovery off DOMAIN_URL_ENV; flows is absent from this list because core/flows/mcp.tools.v1.json declares base_url_env FLOWS_API_URL. The entry closes when identity ships the same manifest."
+    },
+    {
+      "site": "core/meetings/services/mcp/src/vexa_mcp/discover.py:32",
+      "from": "mcp",
+      "to": "meetings",
+      "door": "MEETING_API_URL",
+      "ruling": "PRD decision 40.5 — the MCP service already keys its discovery off DOMAIN_URL_ENV; flows is absent from this list because core/flows/mcp.tools.v1.json declares base_url_env FLOWS_API_URL. The entry closes when meetings ships the same manifest."
+    },
+    {
+      "site": "clients/terminal/src/app/api/admin/overview/route.ts:14",
+      "from": "terminal",
+      "to": "agent",
+      "door": "AGENT_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's admin, auth and version routes are to move behind the gateway; the entry closes when the route is bound in routes.v1 and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/admin/probe/route.ts:13",
+      "from": "terminal",
+      "to": "agent",
+      "door": "AGENT_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's admin, auth and version routes are to move behind the gateway; the entry closes when the route is bound in routes.v1 and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/auth/adminApi.ts:265",
+      "from": "terminal",
+      "to": "agent",
+      "door": "AGENT_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's admin, auth and version routes are to move behind the gateway; the entry closes when the route is bound in routes.v1 and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/version/route.ts:37",
+      "from": "terminal",
+      "to": "agent",
+      "door": "AGENT_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's admin, auth and version routes are to move behind the gateway; the entry closes when the route is bound in routes.v1 and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/admin/settings/[key]/route.ts:16",
+      "from": "terminal",
+      "to": "identity",
+      "door": "VEXA_ADMIN_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's own auth routes call admin-api directly; the entry closes when the identity routes are bound at the gateway and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/auth/adminApi.ts:124",
+      "from": "terminal",
+      "to": "identity",
+      "door": "VEXA_ADMIN_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's own auth routes call admin-api directly; the entry closes when the identity routes are bound at the gateway and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/auth/adminApi.ts:29",
+      "from": "terminal",
+      "to": "identity",
+      "door": "VEXA_ADMIN_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's own auth routes call admin-api directly; the entry closes when the identity routes are bound at the gateway and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/auth/adminApi.ts:86",
+      "from": "terminal",
+      "to": "identity",
+      "door": "VEXA_ADMIN_API_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's own auth routes call admin-api directly; the entry closes when the identity routes are bound at the gateway and the client reads only GATEWAY_URL."
+    },
+    {
+      "site": "clients/terminal/src/app/api/stt/route.ts:28",
+      "from": "terminal",
+      "to": "meetings",
+      "door": "TRANSCRIPTION_SERVICE_URL",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's /api/stt route calls the transcription service directly; the entry closes when that route is bound at the gateway."
+    }
+  ]
+}

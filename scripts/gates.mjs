@@ -5,12 +5,13 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|all]
+ *                                lite-makefile|domain-doors|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -1350,7 +1351,35 @@ function gateLiteMakefile() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+
+// gate:domain-doors (P9, PRD decision 46) — the HTTP twin of gate:graph-py. `gate:graph` bans a
+// cross-domain IMPORT and there are none; every cross-domain edge on this tree is a DOOR — an
+// env-configured base URL plus an HTTP call — and until this gate none of the suite read one. So
+// "identity is the only shared dependency; meetings, agents and flows work independently and in
+// any configuration" (40.7) was a sentence in a PRD, not a property of the code.
+//
+// A domain may name its own door, identity's, and the runtime primitive's. Another domain's door
+// needs a DECLARATION — class `capability` with a degrade in that domain's config contract (the
+// #1453 `domain_present` pattern) — or a PUBLISH edge into flows. The edge and the clients reach a
+// domain only through a declared route binding (routes.v1 / mcp.tools.v1). The rule, the scanner
+// and the reasons live in scripts/check-domain-doors.mjs; the doors already open on the line live
+// in scripts/domain-doors.allow.json, each pinned to path:line and each naming the ruling that
+// closes it — checked in BOTH directions, so a stale entry is a failure and the list cannot rot.
+function gateDomainDoors() {
+  let res;
+  try { res = checkDomainDoors(ROOT); }
+  catch (e) { return fail([`domain-doors: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  const errs = [];
+  for (const v of res.violations)
+    errs.push(`${v.site} — ${v.from} → ${v.to} (${v.door}): ${v.why}`);
+  for (const e of res.stale)
+    errs.push(`STALE allowlist entry: ${e.site} (${e.from} → ${e.to}, ${e.door}) no longer matches any violation — DELETE it from ${DOORS_ALLOW}. The list is the migration backlog, not a permanent exemption.`);
+  if (errs.length) return fail([`domain-doors (P9, PRD decision 46) — undeclared cross-domain doors:`, ...errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:domain-doors — ${res.sites.length} door site(s) · every cross-domain door declared or allowlisted (${res.allowlisted} on the dated backlog in ${DOORS_ALLOW})`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

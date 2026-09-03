@@ -107,6 +107,7 @@ runs them). ("ADD" = gap still open; "retire" = scheduled for removal.)
 | `gate:isolation-py` | every Python sibling-package import is own-module, a declared pyproject dep, or an allowed edge | P2 | `check-isolation-py.mjs --mode=isolation` | **have** (green-on-empty) |
 | `gate:graph` | module graph is acyclic + matches the allowed-edges spec | P3 | `dependency-cruiser` | **have** (green-on-empty; bites as packages land) |
 | `gate:graph-py` | Python cross-package edges are acyclic + allow-listed (the Python twin of the depcruise DAG) | P3 | `check-isolation-py.mjs --mode=graph` | **have** (green-on-empty) |
+| `gate:domain-doors` | every cross-domain HTTP **door** (an env-configured base URL, or a literal `http://<service>:`) is one a domain may open: its own, identity's, the runtime primitive's, one DECLARED optional in its config contract (`capability` class + degrade — the `domain_present` pattern), or a publish edge into flows. The edge and the clients reach a domain only through a declared route binding (`routes.v1` / `mcp.tools.v1`). The doors already open on the line sit in a dated, path:line-pinned allowlist that is checked in BOTH directions — a stale entry fails too, so the backlog can only shrink | P2, P3, P9 | `check-domain-doors.mjs` (+ `domain-doors.allow.json`) | **have** (green-on-empty) |
 | `gate:test-isolation` | no Python test imports a sibling module's internals (the test lane obeys the same P2 boundary as prod) | P2 | `check-isolation-py.mjs --mode=test-isolation` | **have** (green-on-empty) |
 | `gate:exports` | no consumer deep-imports past a module's `index` | P6 | `package.json` `"exports"` + scan | **have** (locks land per-package) |
 | `gate:readme` | every non-ignored directory has a non-empty `README.md` | P12 | tree-walk | **have** |
@@ -137,6 +138,12 @@ runs them). ("ADD" = gap still open; "retire" = scheduled for removal.)
 | `gate:e2e` | offline lane/wire integration (L3) | P8 | subsumed by `gate:compose` (`MOCK_BOT`) + per-package e2e | **have** (alias) |
 | `typecheck` / `gate:standalone` | `tsc` clean against own declared deps | P2 | `tsc --noEmit` (under `gate:node`) | **have** (rides `gate:node`) |
 | `gate:dist-in-sync` | committed `dist/` ≡ clean rebuild of `src/` | — | — | **retire** (workspace tool builds on demand → delete committed `dist/`) |
+
+**Imports were gated; doors were not.** `gate:graph` / `gate:isolation-py` refuse a cross-domain
+*import*, and there are none — while every domain still reached its neighbours over HTTP, because
+the coupling was an env-configured base URL rather than an `import`. `gate:domain-doors` closes that
+half of P2/P3: a contributor can no longer add a dependency between domains without CI naming the
+file, the line, and the declaration that would have made it legitimate.
 
 **Two-layer enforcement.** Locally, a `pre-push` hook (`.githooks/pre-push`, wired by `core.hooksPath` via the root `prepare` script — zero-dependency, per P17) runs `pnpm gates` and blocks any push that isn't green. In CI, `gates.yml` re-runs each gate as its own step so a failure is unambiguous. `git commit` itself runs nothing — the bar is at **push**, not every commit.
 
