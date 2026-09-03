@@ -50,6 +50,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys as _sys
 import time
 from pathlib import Path
 
@@ -107,6 +108,21 @@ LIVE_CAP_S = 6 * 3600
 #: its only reader.
 
 logger = logging.getLogger("flows.production")
+
+#: THIS MODULE OBJECT, captured while it is still the one `sys.modules` names.
+#:
+#: `_register_agent_flows` hands it to `production_agent.build` so the moved steps read their
+#: collaborators — `setting`, `mint_scaffold`, `scaffolded`, `ws_file`, `ag`, `mt`, the event
+#: types — off the SAME namespace the suite's `monkeypatch.setattr(production, …)` writes to.
+#:
+#: `sys.modules[__name__]` AT CALL TIME IS NOT THAT OBJECT, and the difference is not theoretical:
+#: `tests/test_flows_api_service.py` deletes every `flows_defs.*` and `flows_steps.*` entry from
+#: `sys.modules` mid-run, after which the name resolves to a SECOND production module built by the
+#: next import while every test module still holds the first. The fakes then go on one object and
+#: the steps read the other — twelve tests reached a real socket that way before this line existed.
+#: Read during module execution it is unambiguous: the interpreter registers a module in
+#: `sys.modules` BEFORE running its body, so this is always self.
+_SELF = _sys.modules[__name__]
 
 def _repo_root() -> Path:
     # repo checkout: <root>/core/flows/src/flows_defs/production.py → parents[4];
@@ -428,11 +444,9 @@ def _register_agent_flows(reg: Registry, db) -> None:
         return
     import importlib
     import importlib.util
-    import sys
     if importlib.util.find_spec("flows_defs.production_agent") is None:
         return
-    importlib.import_module("flows_defs.production_agent").build(
-        reg, db, home=sys.modules[__name__])
+    importlib.import_module("flows_defs.production_agent").build(reg, db, home=_SELF)
 
 
 def build(reg: Registry, db) -> None:
