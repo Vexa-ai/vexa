@@ -454,6 +454,15 @@ services:
       - VEXA_SYSTEM_WEBHOOK_SECRET=${VEXA_SYSTEM_WEBHOOK_SECRET:-}
       - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
       - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
+      # F168/F181: meetings→flows publish edge (config.v1 publish-edge, meeting_api/events.py) —
+      # meeting-api telling flows a bot it dispatched went active / completed, best-effort and
+      # swallowed on failure, the same as admin-api's onboarding.completed edge just below it in
+      # spirit (this file has no admin-api block above to point at, so: deploy/compose/
+      # docker-compose.yml's admin-api service, FLOWS_API_URL line). Empty here is the no-flows
+      # profile — a deployment with no flows domain still runs meetings exactly as one with a
+      # flows domain does, and the fact stays out of `whats_waiting` rather than the boot refusing.
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}

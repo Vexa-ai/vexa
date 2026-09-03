@@ -430,7 +430,20 @@ def test_the_manifest_only_claims_to_publish_what_this_domain_actually_produces(
 
     The carrier census (`core/flows/contracts/flows.v1/carriers.json`) is where one-owner-per-event
     is enforced repository-wide once it lands; this is the same rule inside the domain, where it is
-    cheaper to be wrong, and it is the check that would have caught it."""
+    cheaper to be wrong, and it is the check that would have caught it.
+
+    F168/F181 moved `meeting.started` / `meeting.completed` out of `claimed` again, the day after
+    this test started requiring `meeting.started` be in it. Both are still true at once: flows'
+    OWN `invite_intake` v3 still runs `emit_started` / `emit_completed` (`_produced()` below still
+    finds both — that code did not change), but `publishes_events` claims a DOMAIN, and
+    `gate:config-contract` (scripts/gates.mjs) requires a manifest's claimed domain to equal the
+    carrier census owner. meeting-api now ALSO publishes both (its own config.v1 publish-edge,
+    `meeting_api/events.py` — the fix for an ad hoc, MCP-dispatched meeting, which ran no
+    `invite_intake` reaction and so told flows nothing at all), and the census now records
+    `meetings` as owner for both — a carrier has exactly one producing domain, on paper, even
+    while flows' code keeps redundantly emitting the same fact under a `source_event_id` that
+    dedups the two producers into one reaction. `handed_off_events` is where that ongoing,
+    deliberately redundant production is written down instead."""
     doc = json.loads((Path(__file__).resolve().parents[1] / "mcp.tools.v1.json").read_text())
     claimed = {e["event"] for e in doc.get("publishes_events") or []}
     produced = _produced()
@@ -438,9 +451,16 @@ def test_the_manifest_only_claims_to_publish_what_this_domain_actually_produces(
         f"declared as published by flows but produced by nothing in core/flows/src: "
         f"{sorted(claimed - produced)}. An event this domain only REACTS to belongs in a flow "
         f"registration, never in publishes_events.")
-    assert "meeting.started" in claimed, "invite_intake v3 emits it — say so where it is read"
     for consumed in ("desk.unscaffolded", "claim.proposed"):
         assert consumed not in claimed, f"{consumed} is the agent domain's to publish"
+    handed_off = {e["event"] for e in doc.get("handed_off_events") or []}
+    assert handed_off == {"meeting.started", "meeting.completed"}, (
+        "the meetings handover (F168/F181) is not recorded where this test expects it")
+    assert handed_off <= produced, (
+        "a handed-off event is not produced by anything in core/flows/src any more — "
+        "invite_intake's redundant emit_started/emit_completed was removed; drop it from "
+        "handed_off_events too, since there is now exactly one producer and nothing to dedupe")
+    assert not (claimed & handed_off), "an event cannot be both currently claimed and handed off"
 
 
 def test_the_manifest_declares_the_tool_with_no_subject_argument():
