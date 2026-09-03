@@ -103,6 +103,21 @@ The only thing that changes between platforms is the `platform` value.
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
       -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://meet.jit.si/MyRoom","bot_name":"Vexa"}'
     ```
+
+    **JaaS/8x8.vc-backed embeds** (e.g. [Brave Talk](https://talk.brave.com)) are also covered:
+    these deployments render the whole conference — prejoin, lobby, media elements — inside a
+    cross-origin `<iframe>` rather than at the page's top level, and the join/admission/capture
+    code checks both. `native_meeting_id` is the room segment from the embed's own URL:
+
+    ```bash
+    curl -X POST "$API_BASE/bots" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://talk.brave.com/MyRoom","bot_name":"Vexa"}'
+    ```
+
+    Pasting a bare Brave Talk link with no `platform` will **not** auto-detect as Jitsi yet — its
+    host isn't in the recognized list ([#1512](https://github.com/Vexa-ai/vexa/issues/1512)/follow-up).
+    Send `platform` and `meeting_url` explicitly, as above, until that lands.
   </Tab>
 </Tabs>
 
