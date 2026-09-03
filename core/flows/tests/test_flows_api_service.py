@@ -54,8 +54,9 @@ finally:
             os.environ[_k] = _v
 
 #: The domain's contribution to the one MCP surface. Named here so a tool cannot leave the manifest
-#: without a test saying so — an assembly that quietly lost one still looks assembled.
-FOUR_TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline"}
+#: without a test saying so — an assembly that quietly lost one still looks assembled. Written out
+#: rather than counted: a count is satisfied by a swap, and the set is the thing that matters.
+TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting"}
 
 
 def _route(path: str):
@@ -107,14 +108,29 @@ def test_nothing_is_registered_after_the_entrypoint_guard():
     assert after.count("\n") < 4, "the guard must be the LAST statement in the module"
 
 
-def test_the_manifest_is_open_and_carries_exactly_the_four_tools():
+def test_the_manifest_is_open_and_carries_exactly_the_tools_this_domain_backs():
     r = _route("/.well-known/mcp-tools.json")
     assert r is not None
     assert not getattr(r, "dependencies", []), "the manifest must stay open — the assembler is not a user"
 
     manifest = flows_api.mcp_tools_manifest()
-    assert {t["name"] for t in manifest["tools"]} == FOUR_TOOLS, manifest["tools"]
+    assert {t["name"] for t in manifest["tools"]} == TOOLS, manifest["tools"]
     assert manifest["domain"] == "flows"
+
+
+def test_every_tool_in_the_manifest_is_a_route_this_process_serves():
+    """The manifest is a CLAIM ABOUT THIS SERVICE, and the assembler refuses to bind one that
+    names a route its own domain does not have. Caught here, where it costs one run, rather than
+    at the assembler's boot — which is where `whats_waiting` was first refused when its route
+    existed in the source and its OpenAPI stub did not."""
+    for tool in flows_api.mcp_tools_manifest()["tools"]:
+        route = tool.get("route")
+        if not route:
+            continue
+        r = _route(route["path"])
+        assert r is not None, f"{tool['name']} names {route['path']}, which this app does not serve"
+        assert route["method"] in (getattr(r, "methods", None) or set()), \
+            f"{tool['name']} names {route['method']} {route['path']}; the app serves {r.methods}"
 
 
 def test_the_bind_address_is_configurable_and_still_defaults_to_loopback():
