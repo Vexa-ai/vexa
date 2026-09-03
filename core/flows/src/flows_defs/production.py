@@ -370,6 +370,104 @@ def _organizer_address(ctx) -> str:
     return address_for_uid(ctx.refs["uid"])
 
 
+def _meeting_date(ctx, uid) -> str:
+    """`{{date}}` — the day the MEETING happened, in the organiser's zone.
+
+    Derived from `_meeting_stamp`, NOT `_their_clock`. `_their_clock` renders a clock time
+    ("14:30 CEST") from an epoch the caller must already hold, and it has no answer at all
+    when refs carry no `start`; the head needs a DATE and has to survive that case.
+    `_meeting_stamp` already owns exactly the rules this needs — refs.start, else the meeting
+    row's start_time, else its created_at; the organiser's timezone, else UTC, never the
+    server's clock — so this reuses it and only reshapes `%Y-%m-%d-%H%M` into prose.
+    Reimplementing that fallback chain here is how the two would drift apart.
+
+    MODULE-LEVEL for the reason `_organizer_address` gives one screen up: `_mail_title` below is
+    a module-level fallback too and needs this exact prose, and a second copy nested in `build()`
+    is how the two would quietly stop agreeing on what "today" means."""
+    import datetime
+    stamp = _meeting_stamp(ctx, uid)
+    try:
+        return datetime.datetime.strptime(stamp[:10], "%Y-%m-%d").strftime("%-d %B %Y")
+    except Exception:  # noqa: BLE001
+        return stamp[:10]
+
+
+def _mail_title(ctx) -> str:
+    """THE ONE TITLE every mail-shaped step in `post_meeting` sends: `email_minutes`,
+    `email_attendees`, `drop_to_attendees`, `_mail_the_recording`, and the two lines
+    `_provenance` puts above every one of them.
+
+    `refs["title"]` is set for every CALENDAR-invited meeting and answers this instantly. An AD
+    HOC meeting carries none — `meeting.completed`'s own refs are `{admitted_by,
+    completion_reason, meeting_id, native, platform, uid}` (`meeting_api.events.
+    meeting_completed_refs`) — because nothing ever named the meeting. `email_minutes` used to
+    index `ctx.refs["title"]` unconditionally at its one call site and died with
+    `KeyError('title')` on exactly this path (F220, 2026-09-03, F212's sibling — the same shape,
+    one ref key over); every OTHER mail-shaped step already guessed `ctx.refs.get("title") or
+    "your meeting"` at its own call site instead, which is four independent spellings of one
+    fallback and a fifth crash waiting in whichever one somebody writes next. This is the one
+    place that guesses now.
+
+    Order:
+      1. `refs["title"]` — an invite named it, or a caller (`_note_path`'s guard, `rsvp_accept`,
+         `ack_by_email`) already required it to exist.
+      2. the meeting ROW's own title, if a later annotation gave it one — `mt.meeting_row` reads
+         `GET /meetings`, whose light list projection carries `data.title` through to
+         `GET /meetings/{id}` unchanged (`collector/projection.py`'s `LIGHT_KEYS`). An ad hoc
+         meeting nobody has annotated yet has none either, so this tier answers less often than
+         it exists for — it is here for the meeting somebody DID name after the fact.
+      3. `"{{Platform}} meeting"`, from `refs.platform` alone — `meeting_completed_refs` always
+         carries it (never `refs["native"]` alone: a bare id reads as noise, not a name). Skipped
+         when platform is missing or the literal placeholder `"unknown"` (row 97's shape, R-B06's
+         own comment above) — a title that says nothing beats one that says the wrong thing.
+      4. `"Meeting on <date>"` — the honest last resort, from the same start-time chain
+         `_meeting_stamp` already owns. Never raises and never returns empty.
+
+    Never "your meeting": that string was every OTHER step's own no-organizer-either guess, not a
+    resolved title, and folding it in here would make a title-shaped mail sentence
+    ("Minutes: your meeting") out of what used to read as an apology.
+
+    STABLE ACROSS ONE REACTION. `email_minutes`, `email_attendees` and `drop_to_attendees` are
+    three separate steps that need the SAME title for the SAME meeting — one that flipped
+    between the tier-2 row read landing and not would put a different subject on the organiser's
+    mail than on the KG entity `drop_to_attendees` files under. Cached in `ctx.scratch` exactly
+    the way `_meeting_stamp` already caches the stamp, and for the same reason (its own docstring,
+    two screens up: two moments ask for this and the row lookup can fail and later succeed)."""
+    # PLAIN FALSY, NOT `.strip()`-empty: every call site this replaces read `ctx.refs.get("title")
+    # or "your meeting"`, which treats a whitespace-only title as PRESENT (Python truthiness), and
+    # `_note_path`'s own `_slug` already turns "   " into "meeting" on its own. Stripping here
+    # would silently re-derive a *different* answer ("Meeting on <date>") for a title
+    # `test_the_title_is_slugified_safely` has always treated as "there, just weird" — the one
+    # sharp edge tier 1 must NOT round off.
+    given = ctx.refs.get("title")
+    if given:
+        return str(given)
+    uid = ctx.refs.get("uid")
+    scratch = getattr(ctx, "scratch", None)
+    key = f"_mail_title:{uid}"
+    if isinstance(scratch, dict) and scratch.get(key):
+        return str(scratch[key])
+    title = ""
+    try:
+        row = mt.meeting_row(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native")) if uid \
+            else None
+    except Exception:  # noqa: BLE001 — a title lookup is never worth failing the mail over
+        row = None
+    if isinstance(row, dict):
+        data = row.get("data")
+        row_title = (data or {}).get("title") if isinstance(data, dict) else None
+        title = str(row_title or "").strip()
+    if not title:
+        platform = str(ctx.refs.get("platform") or "").strip().lower()
+        if platform and platform != "unknown":
+            title = platform.replace("_", " ").title() + " meeting"
+    if not title:
+        title = f"Meeting on {_meeting_date(ctx, uid)}"
+    if isinstance(scratch, dict):
+        scratch[key] = title
+    return title
+
+
 # ── THE TWO SHARED SCAFFOLD RECIPES ───────────────────────────────────────────
 # MODULE-LEVEL for the reason `_slug` / `_meeting_stamp` / `_note_path` give one screen up, plus a
 # second one: they are the only pieces of `build()` that BOTH halves of the split need. Every mail
@@ -1025,7 +1123,7 @@ def build(reg: Registry, db) -> None:
             provenance={"flow": "post_meeting", "step": "email_minutes",
                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                         "minted_by": str(ctx.refs["uid"])})
-        mid = notify(organizer, f"Minutes: {ctx.refs['title']}", body, link=link)
+        mid = notify(organizer, f"Minutes: {_mail_title(ctx)}", body, link=link)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
 
@@ -1049,11 +1147,11 @@ def build(reg: Registry, db) -> None:
                 "There is no written summary of it: this deployment does not run the agent that "
                 "writes them.\n\n—\nRecorded by Vexa\n"
                 "Reply to this email if something here is wrong.")
-        # `.get`, where the branch above indexes. `meeting.completed`'s own refs are
-        # {admitted_by, completion_reason, meeting_id, native, platform, uid} — no `title` — so
-        # the title is only there when an invite put it there, and this is the branch that runs on
-        # the deployment least likely to have had one. `_provenance` already defaults the same way.
-        title = ctx.refs.get("title") or "your meeting"
+        # `_mail_title`, where the branch above indexed unconditionally (F220). `meeting.
+        # completed`'s own refs are {admitted_by, completion_reason, meeting_id, native, platform,
+        # uid} — no `title` — so this is the branch that runs on the deployment least likely to
+        # have had one. `_provenance` resolves the same way, through the same one function.
+        title = _mail_title(ctx)
         mid = notify(organizer, f"Recorded: {title}", body)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs.get('meeting_id')}")
         return Done({"message_id": mid, "degraded": "agent:not_present",
@@ -1100,7 +1198,7 @@ def build(reg: Registry, db) -> None:
         """
         import datetime
         import os
-        title = ctx.refs.get("title") or "your meeting"
+        title = _mail_title(ctx)
         organizer = ctx.refs.get("organizer") or "the organiser"
         when = ""
         start = ctx.refs.get("start")
@@ -1154,23 +1252,9 @@ def build(reg: Registry, db) -> None:
                 f"{box}.\n")
 
 
-    def _meeting_date(ctx, uid) -> str:
-        """`{{date}}` — the day the MEETING happened, in the organiser's zone.
-
-        Derived from `_meeting_stamp`, NOT `_their_clock`. `_their_clock` renders a clock time
-        ("14:30 CEST") from an epoch the caller must already hold, and it has no answer at all
-        when refs carry no `start`; the head needs a DATE and has to survive that case.
-        `_meeting_stamp` already owns exactly the rules this needs — refs.start, else the meeting
-        row's start_time, else its created_at; the organiser's timezone, else UTC, never the
-        server's clock — so this reuses it and only reshapes `%Y-%m-%d-%H%M` into prose.
-        Reimplementing that fallback chain here is how the two would drift apart."""
-        import datetime
-        stamp = _meeting_stamp(ctx, uid)
-        try:
-            return datetime.datetime.strptime(stamp[:10], "%Y-%m-%d").strftime("%-d %B %Y")
-        except Exception:  # noqa: BLE001
-            return stamp[:10]
-
+    # `_meeting_date` moved MODULE-LEVEL (2026-09-03, F220) — `_mail_title` needs it too and a
+    # second copy nested here is how the two stop agreeing on what "today" means. See its
+    # docstring one module up, beside `_organizer_address`.
 
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
     def _followup_on(ctx) -> bool:
@@ -1325,7 +1409,7 @@ def build(reg: Registry, db) -> None:
         try:
             subject, head = mailtext.render("attendee-head", ctx.refs["uid"], {
                 "organizer": ctx.refs.get("organizer") or "the organiser",
-                "meeting": ctx.refs.get("title") or "your meeting",
+                "meeting": _mail_title(ctx),
                 "date": _meeting_date(ctx, ctx.refs["uid"]),
             })
         except KeyError as e:
@@ -1344,7 +1428,7 @@ def build(reg: Registry, db) -> None:
             # means somebody edited the header out of the live file.
             logger.warning("the attendee-head template carries no `subject:` line — falling back "
                            "to the meeting title")
-            subject = ctx.refs.get("title") or "Your meeting"
+            subject = _mail_title(ctx)
         # ONE BODY, BUILT ONCE, FOR EVERYBODY. Nothing inside the loop touches it.
         body = head + "\n\n" + report
         # Durable across retries: a StepError below re-runs this step, and an attendee already
@@ -1609,7 +1693,7 @@ def build(reg: Registry, db) -> None:
             return Done({"dropped": 0, "to": [], "failed": [],
                          "skipped": "there is no report to drop"})
         uid = ctx.refs["uid"]
-        title = ctx.refs.get("title") or "your meeting"
+        title = _mail_title(ctx)
         # `refs["organizer"]` is absent on an AD HOC meeting (F212, 2026-09-03) — `uid` IS the
         # person then, and `_organizer_address` resolves their own address. The room always
         # includes at least this one desk (decision 22a: "the organiser is not special"), so an
