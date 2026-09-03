@@ -22,13 +22,21 @@ REGISTRATION IS CONDITIONAL, AND THE CONDITION IS THE ONE THAT ALREADY EXISTS.
 `needs=("agent",)` step, reading the same configuration key (`VEXA_FLOWS_AGENT_API_URL`) and
 never probing. One signal decides both whether a step body is entered and whether a flow exists.
 
-THE COLLABORATORS ARE READ THROUGH THE MODULE, never bound into this one:
-`production.mint_scaffold`, not `from .production import mint_scaffold`. That is the idiom
+THE COLLABORATORS ARE READ THROUGH THE PRODUCTION MODULE, never bound into this one:
+`p.mint_scaffold`, not `from .production import mint_scaffold`. That is the idiom
 `flows_steps.common.agent_door` states out loud — *"Reads the MODULE attribute so a test can set
 the world with one `monkeypatch.setattr`"* — and here it is load-bearing rather than tidy: the
 suite sets `production.setting`, `production.mint_scaffold`, `production.scaffolded` and
 `production.ws_file` to fakes and then drives these steps, and a `from … import` would have bound
 the real functions past every one of those.
+
+AND `p` IS HANDED IN, not imported. `build(reg, db, home=…)` receives the exact module object whose
+own `build()` is running, because a module-scope `from . import production` resolves
+`sys.modules["flows_defs.production"]` once, at import — and this suite has a test
+(`test_flows_api_service`) that deletes every `flows_defs.*` and `flows_steps.*` entry from
+`sys.modules` mid-run. After it, a re-import produces a SECOND production module: the fakes go on
+the object the test module holds, the steps read the one this file imported, and twelve tests
+reach a real socket instead. Identity has to be given, not looked up.
 
 Laws are `production.py`'s, unchanged: steps never sleep · all state in refs/receipts · replies by
 thread."""
@@ -38,8 +46,6 @@ import json
 
 from flows import Block, Done, Registry, StepCtx, StepError, Wait
 
-from . import production as p
-
 #: Where the claim book lives on a desk. The rig writes it through agent-api's generic file route
 #: (`deploy/dogfood/rig/vexa_control_mcp.py:3396` `propose`), which is also why `claim.proposed`
 #: has no publisher yet: there is no claim-aware route in agent-api to publish it from.
@@ -48,7 +54,14 @@ from . import production as p
 CLAIM_BOOK = "_pending/claims.json"
 
 
-def build(reg: Registry, db) -> None:
+def build(reg: Registry, db, home=None) -> None:
+    # THE PRODUCTION MODULE THESE STEPS READ THROUGH — see the header. `home` is what
+    # `production._register_agent_flows` passes: itself. The fallback exists for a caller that
+    # reaches this module directly, and it is a fallback rather than the rule for the reason above.
+    p = home
+    if p is None:
+        import importlib
+        p = importlib.import_module("flows_defs.production")
     # ── before the meeting ────────────────────────────────────────────────────
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment

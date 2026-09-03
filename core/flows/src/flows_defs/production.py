@@ -413,14 +413,26 @@ def _register_agent_flows(reg: Registry, db) -> None:
     `production_agent.py` outright leaves this module registering the three flows it keeps rather
     than failing to import. A missing OPTIONAL module is a fact about the tree; a broken one is a
     defect, and the two must not look the same — which is why this is `find_spec` and not
-    `except ImportError`."""
+    `except ImportError`.
+
+    IT HANDS OVER *THIS MODULE OBJECT*, and that is not decoration. The other half reads every
+    shared collaborator through it — `setting`, `mint_scaffold`, `scaffolded`, `ws_file`, `ag`,
+    `mt`, and the event types — so that one `monkeypatch.setattr(production, …)` still sets the
+    world for a step that now lives next door. A `from . import production` over there would have
+    resolved `sys.modules["flows_defs.production"]` at ITS import time, and this suite has a test
+    (`test_flows_api_service`) that deletes every `flows_defs.*` and `flows_steps.*` entry from
+    `sys.modules` mid-run — after which a re-import builds a SECOND production module, the fakes go
+    on one object and the steps read the other, and twelve tests reach the network they were told
+    not to. Passing the caller's own object makes the two provably the same one."""
     if not _common.domain_present("agent"):
         return
     import importlib
     import importlib.util
+    import sys
     if importlib.util.find_spec("flows_defs.production_agent") is None:
         return
-    importlib.import_module("flows_defs.production_agent").build(reg, db)
+    importlib.import_module("flows_defs.production_agent").build(
+        reg, db, home=sys.modules[__name__])
 
 
 def build(reg: Registry, db) -> None:
