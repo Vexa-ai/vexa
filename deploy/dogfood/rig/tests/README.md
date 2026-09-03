@@ -66,5 +66,17 @@ and gate 13 with the route it guards
 returns before the dispatch). The `pkill` defect was behavioural — the string was in plain sight and
 looked fine — so reading the file would not have caught it.
 
+## One authentication path (added 2026-09-03, founder ruling)
+
+`test_single_auth_path.py` holds the removal of the `/do` GET bridge and the `token=` call
+argument: no route, no `RIG_MODE`, no tool advertising a `token` parameter, a stray one ignored
+rather than honoured, and — the one most likely to rot — **no instruction string that teaches
+either**. That last gate exists because the copy in this file IS the product: deleting the routes
+while leaving the paragraphs would produce an agent that follows our own documentation into a 404
+and reports Vexa as broken.
+
+The rig is stateless, so a token minted by `confirm_login` authenticates the *next* connection.
+`?c=<token>` is the header-less spelling of the same one credential.
+
 **Assert on the tool, not on the file.** The verbs are being split by owning domain; a test that
 greps this file dies the day it moves, and a test that calls the handler follows it.
