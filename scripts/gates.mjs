@@ -295,13 +295,24 @@ function gateContractVersion() {
 }
 
 // gate:python — pytest in every Python package (a dir with pyproject.toml + tests/)
+//
+// F209: `catch (e) { return fail(...) }` used to sit INSIDE this loop, so the first red package
+// returned immediately and every later package was never even invoked — not run, not skipped,
+// just silently absent from the log. The gate under-reported by construction: this is the
+// mechanism behind #1434's "CI never executed core/flows, lite or the rig" (#1473 fixed the one
+// package that happened to be red, not the loop that stopped after it). Collect every package's
+// result, run the WHOLE population every time, then fail once naming every red package — so one
+// `pnpm gate:python` run shows the real blast radius instead of red → fix → push → discover the
+// next one.
 function gatePython() {
   const pkgs = walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
   if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
+  const failures = [];
   for (const d of pkgs) {
     try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`pytest ${rel(d)}:\n${errText(e)}`]); }
+    catch (e) { failures.push(`pytest ${rel(d)}:\n${errText(e)}`); }
   }
+  if (failures.length) return fail([`${failures.length}/${pkgs.length} package(s) failed pytest:`, ...failures]);
   console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
   return true;
 }
