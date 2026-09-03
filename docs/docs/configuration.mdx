@@ -105,7 +105,7 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 | Variable | Default | Purpose |
 |---|---|---|
 | `ADMIN_TOKEN` | `changeme` | Admin API key (`X-Admin-API-Key`) — mints users and tokens. |
-| `INTERNAL_API_SECRET` | `vexa-internal-secret` | Shared secret for service-to-service calls. |
+| `INTERNAL_API_SECRET` | **none — required** | The internal tier. Services present it as `X-Internal-Secret`; agent-api and admin-api believe it as *authority* (it opens the meeting room and admin-api's `/internal/*` surface), so there is no default and the services refuse to boot without it — or on a published placeholder. Mint one: `openssl rand -hex 32`. Lite mints a per-boot value when unset. |
 | `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
