@@ -53,8 +53,8 @@ Most day-to-day iteration is the second kind: prompt and cadence changes, zero d
 
 Auth is two tiers, because two different callers reach this API:
 
-- **Reading and steering your own** — `GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`
-  and `GET /timeline` also take **your own Vexa credential** (`Authorization: Bearer …` or
+- **Reading and steering your own** — `GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`,
+  `GET /queue/waiting` and `GET /timeline` also take **your own Vexa credential** (`Authorization: Bearer …` or
   `X-API-Key`). The subject is taken from that credential, so you see and steer your own reactions
   and nobody else's — this is what makes those tools work from your own Claude Code over the MCP
   endpoint. A `subject` argument naming somebody else is refused.

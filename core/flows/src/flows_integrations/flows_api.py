@@ -23,14 +23,14 @@ AUTH, TWO TIERS — because two different callers reach this surface and only on
 operator (issue #1468):
 
   * THE SUBJECT-SCOPED ROUTES (`GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`,
-    `GET /timeline`) take EITHER the operator key OR a person's own Vexa credential, as a bearer
-    or `X-API-Key`. With a person's credential the subject is DERIVED from it, through identity's
-    `/internal/validate` — the one resolver, the same one the gateway asks (P23) — and a `subject`
-    argument naming anyone else is refused rather than honoured. The MCP edge forwards the
-    caller's own credential and holds none of its own, so this is what makes those four tools
-    usable by a person at all: before it, the only way to make them answer was to hand the edge
-    the operator key, and the operator key is not a person — it reads every reaction in the
-    instance and cancels any of them.
+    `GET /queue/waiting`, `GET /timeline`) take EITHER the operator key OR a person's own Vexa
+    credential, as a bearer or `X-API-Key`. With a person's credential the subject is DERIVED from
+    it, through identity's `/internal/validate` — the one resolver, the same one the gateway asks
+    (P23) — and a `subject` argument naming anyone else is refused rather than honoured. The MCP
+    edge forwards the caller's own credential and holds none of its own, so this is what makes
+    those five tools usable by a person at all: before it, the only way to make them answer was to
+    hand the edge the operator key, and the operator key is not a person — it reads every reaction
+    in the instance and cancels any of them.
   * THE OPERATOR ROUTES (`POST /flows`, `POST /events`, `POST /events/batch`,
     `POST /flows/{name}/{version}/{action}`) take the operator key and nothing else. They
     configure the machine or admit facts on the instance's behalf; there is no per-person version
@@ -705,31 +705,45 @@ def mcp_tools_manifest():
 import flows_queue as _flows_queue  # noqa: E402
 
 
-@app.get("/queue/waiting", dependencies=[Depends(auth)])
+@app.get("/queue/waiting")
 def queue_waiting(subject: str = "", limit: int = 50,
-                  x_user_id: str = Header(default="")):
+                  x_user_id: str = Header(default=""),
+                  caller: Caller = Depends(subject_or_operator)):
     """WHAT IS WAITING FOR THIS PERSON — pending reactions, with the flow that produced each.
 
-    THE SUBJECT IS THE AUTHENTICATED CALLER'S. `X-User-Id` is what the MCP assembler stamps after
-    it has resolved identity once at the edge, and it WINS over `?subject=`: a caller who names
-    somebody else in a query argument while carrying their own bearer must read their own queue and
-    nobody else's. `?subject=` survives for the unstamped operator read that `GET /reactions`
-    already has, behind the same operator key — and that key is a SERVICE identity, not a person's,
-    which is exactly why the person's identity has to arrive separately.
+    THE SUBJECT IS THE AUTHENTICATED CALLER'S, and there are two ways to be one.
 
-    Behind `auth`, not `timeline_auth`: `VEXA_FLOWS_TIMELINE_KEY` is documented as opening the
-    timeline and nothing else, and quietly widening a key's reach is how a narrow credential stops
-    being narrow.
+    A PERSON authenticates with their own Vexa credential and their subject is resolved from it
+    (issue #1468). Nothing they send can move it: a `subject` argument naming anyone else is 403,
+    and an `X-User-Id` header is ignored outright. That header is a string a caller can type, and
+    it is only ever evidence because the OPERATOR key gates it — a service vouching for a person it
+    resolved. A verified credential is stronger evidence than any header, so it wins.
+
+    THE OPERATOR reads one person's queue on their behalf, and keeps exactly the behaviour this
+    route shipped with: `X-User-Id` is the gateway's answer and outranks `?subject=`, and
+    `?subject=` is the unstamped console read. Neither ever answers with the instance — no subject
+    at all is a 400, because this route answers for ONE person or for nobody.
+
+    The distinction matters because this route is NOT always behind the gateway: reached through
+    the MCP edge it is addressed directly, and that edge stamps no `X-User-Id` at all — it forwards
+    the caller's own credential, which is the whole reason a person's credential has to open the
+    door here.
+
+    Not opened by `VEXA_FLOWS_TIMELINE_KEY`: that key is documented as opening the timeline and
+    nothing else, and quietly widening a key's reach is how a narrow credential stops being narrow.
 
     The answer is DATA plus behavior's words: every sentence a person hears is resolved from
     `behavior/queue/`, read hot, never from this body. See `flows_queue` for why silence there is
     the filter rather than a keyword list here.
     """
-    who = (x_user_id or "").strip() or (subject or "").strip()
+    who = scoped_subject(caller, subject)
+    if caller.is_admin:
+        who = (x_user_id or "").strip() or who
     if not who:
         raise HTTPException(status_code=400, detail=(
-            "no subject — this route answers for ONE person. The edge stamps X-User-Id; an "
-            "operator calling it directly passes ?subject=<uid|email>."))
+            "no subject — this route answers for ONE person. A person is resolved from their own "
+            "credential; an operator passes ?subject=<uid|email>, or the gateway stamps "
+            "X-User-Id."))
     flows = [{"name": f.name, "version": f.version, "on": f.on.name}
              for f in vocab.flows.values()]
     return _flows_queue.waiting(db, subject=who, flows=flows,

@@ -84,8 +84,9 @@ The **operator key** (`X-Flows-Operator-Key`, `VEXA_FLOWS_API_KEY`) is the insta
 route, reads every reaction and steers any of them. It is what configures the machine, and there is
 no per-person version of `POST /flows` or `POST /events`.
 
-A **person's own Vexa credential** opens the four routes that are about a person — `GET /flows`,
-`GET /reactions`, `POST /reactions/{id}/{verb}`, `GET /timeline` — and the subject is derived from
+A **person's own Vexa credential** opens the five routes that are about a person — `GET /flows`,
+`GET /reactions`, `POST /reactions/{id}/{verb}`, `GET /queue/waiting`, `GET /timeline` — and the
+subject is derived from
 that credential by asking identity's `/internal/validate`, the same resolver the gateway asks. Not
 a second resolver: flows is a second caller of the one that already exists. This is what the MCP
 edge needs, because that edge forwards the caller's own credential and holds none of its own — so
