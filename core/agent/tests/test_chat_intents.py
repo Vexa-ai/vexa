@@ -93,6 +93,6 @@ def test_every_intent_kind_has_a_preset_file():
     but silent. These four ship WITH their presets; the test is what notices if one stops."""
     import pathlib
     from control_plane import chat_intents
-    asks = pathlib.Path(__file__).resolve().parents[3] / "deploy/dogfood/asks"
+    asks = pathlib.Path(__file__).resolve().parents[3] / "behavior/asks"
     for kind, preset in chat_intents.INTENT_PRESETS.items():
         assert (asks / f"{preset}.md").is_file(), f"{kind} -> {preset}.md is missing"

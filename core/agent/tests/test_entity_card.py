@@ -234,16 +234,16 @@ def test_the_tool_description_names_only_sections_the_renderer_has():
             assert E.FIELD_SECTION[kind][field] in E.CARD_SECTIONS[kind]
 
 
-def test_the_rig_tool_description_carries_the_generated_section_list():
-    """The rig is a standalone file on the host that imports nothing from agent-api (PRD 3.3), so
-    the sections are a literal there. This is the only thing stopping the two from drifting."""
-    rig = pathlib.Path(__file__).resolve().parents[3] / "deploy/dogfood/rig/vexa_control_mcp.py"
-    doc = rig.read_text()
-    for line in E.tool_sections_text().splitlines():
-        assert line in doc, line
+def test_the_generated_section_list_matches_its_declared_file():
+    """`shared/entity_sections.v1.txt` is what the MCP's `entity_upsert` description must state.
 
-
-# ── the fallback writes the same card ────────────────────────────────────────────────────────────
+    The two things that have to agree live in different trees — the renderer here, the description
+    in the MCP — so they agree through a committed file instead of one importing or parsing the
+    other. This half says the file still matches the generator; the MCP's own suite says its
+    description carries every line."""
+    decl = pathlib.Path(__file__).resolve().parents[1] / "shared" / "entity_sections.v1.txt"
+    body = "\n".join(ln for ln in decl.read_text().splitlines() if not ln.startswith("#"))
+    assert body.strip() == E.tool_sections_text().strip()
 
 def test_the_no_tool_fallback_describes_the_card_and_not_a_log():
     """A dispatch with no delegation token has no `entity_upsert` at all, so the phase writes the
