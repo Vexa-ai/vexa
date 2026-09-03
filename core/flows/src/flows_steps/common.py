@@ -370,6 +370,23 @@ def ensure_platform_user(email: str) -> str:
     return str(u["id"])
 
 
+def address_for_uid(uid: str) -> str:
+    """This platform user's own email address, or "" if the id does not resolve. NEVER creates.
+
+    The reverse of `platform_user_id`: `ensure_user` mints a uid FROM an organiser's address, on
+    the assumption that every meeting starts as a calendar invite naming one. An AD HOC meeting
+    (`POST /bots`, or the MCP tool, with no calendar invite) has no organiser at all —
+    meeting-api's `meeting.completed` publishes only `{admitted_by, completion_reason, meeting_id,
+    native, platform, uid}` (`meeting_api.events.meeting_completed_refs`), because the person who
+    dispatched the bot IS `uid`, by definition, and nothing else names them. A step that needs an
+    address to mail to — every send in this file, and `mint_scaffold`'s `who` refuses anything
+    without an "@" — resolves that address here rather than assuming `refs["organizer"]` exists.
+    """
+    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/{_q(str(uid), safe='')}",
+                   _admin_headers())
+    return str(u["email"]) if code == 200 and isinstance(u, dict) and u.get("email") else ""
+
+
 _KEY_CACHE: dict = {}
 
 
