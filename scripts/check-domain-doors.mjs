@@ -49,13 +49,14 @@
  * themselves are excluded (DECLARATION_FILES): declaring a door is not opening one.
  *
  * THE ALLOWLIST. `scripts/domain-doors.allow.json` carries the doors that are open on the line
- * TODAY, each pinned to `path:line` and each naming the ruling that will close it. It exists so the
+ * TODAY, each keyed on (file, env-key) — never on a line number, which any edit above it moves —
+ * and each naming the ruling that will close it. It exists so the
  * gate is green on the tip on the day it lands and RED the moment a new undeclared door appears —
- * and it is checked in BOTH directions: an entry that no longer matches a real violation is itself
- * a failure, so the list cannot rot into a permanent exemption. Its length is the migration
+ * and it is checked in BOTH directions, and by COUNT: an entry that no longer matches a real
+ * violation is itself a failure, so the list cannot rot into a permanent exemption. Its length is the migration
  * backlog, and the only correct direction for it is shorter.
  */
-import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -211,7 +212,7 @@ export function doorSites(root = DEFAULT_ROOT) {
             const id = `${i + 1}:${owner}:${m[1]}`;
             if (seen.has(id)) continue;
             seen.add(id);
-            sites.push({ site: `${relPath}:${i + 1}`, from: u.unit, kind: u.kind, to: owner, door: m[1], how: "name" });
+            sites.push({ site: `${relPath}:${i + 1}`, path: relPath, line: i + 1, from: u.unit, kind: u.kind, to: owner, door: m[1], how: "name" });
           }
         }
         if (TOP_LEVEL_RE.test(line)) inClass = CLASS_OPEN_RE.test(line);
@@ -222,7 +223,7 @@ export function doorSites(root = DEFAULT_ROOT) {
           const id = `${i + 1}:${owner}:${key}`;
           if (owner && !seen.has(id)) {
             seen.add(id);
-            sites.push({ site: `${relPath}:${i + 1}`, from: u.unit, kind: u.kind, to: owner, door: key, how: "field" });
+            sites.push({ site: `${relPath}:${i + 1}`, path: relPath, line: i + 1, from: u.unit, kind: u.kind, to: owner, door: key, how: "field" });
           }
         }
         LITERAL_RE.lastIndex = 0;
@@ -231,7 +232,7 @@ export function doorSites(root = DEFAULT_ROOT) {
           const id = `${i + 1}:${owner}:http`;
           if (seen.has(id)) continue;
           seen.add(id);
-          sites.push({ site: `${relPath}:${i + 1}`, from: u.unit, kind: u.kind, to: owner, door: `http://${m[1]}:`, how: "literal" });
+          sites.push({ site: `${relPath}:${i + 1}`, path: relPath, line: i + 1, from: u.unit, kind: u.kind, to: owner, door: `http://${m[1]}:`, how: "literal" });
         }
       }
     }
@@ -338,9 +339,19 @@ export function judge(site, ctx) {
       return `unknown door owner '${to}'`;
     const decl = ctx.declared(from).get(door);
     if (decl && decl.cls === "capability" && decl.degrade) return null;   // #1453 domain_present
-    if (to === "flows" && ctx.publishes.has(from)) return null;           // a PUBLISH edge
-    if (decl) return `${door} is declared '${decl.cls}' in ${ctx.contractPath(from)} — a cross-domain door must be class 'capability' with a declared degrade (the #1453 domain_present pattern), so an absent ${to} domain answers not_present instead of being knocked on`;
-    return `undeclared cross-domain door to ${to} — declare ${door} in ${ctx.contractPath(from)} as class 'capability' with a degrade, or publish an event into flows (publishes_events in ${from}/mcp.tools.v1.json)`;
+    // A PUBLISH IS NOT A DEPENDENCY (ADR-0037: "an event published into flows is never a
+    // dependency"; PRD 42.2). A dependency is a call whose answer the caller needs; a publish is a
+    // fact handed over best-effort and swallowed, so an absent target changes nothing but where the
+    // fact lands. Two spellings, both accepted: `publish-edge` on the KEY in the service's config.v1
+    // (#1476 — the class exists precisely so a publish target has a declaration that does not mean
+    // "this service needs this value", and gate:config-contract checks its `publishes_events`
+    // carriers against core/flows/contracts/flows.v1/carriers.json), and `publishes_events` on the
+    // DOMAIN's mcp.tools.v1 manifest. Without this, the sanctioned way for two domains to couple
+    // would fail the very gate that exists to keep them apart.
+    if (decl && decl.cls === "publish-edge") return null;
+    if (to === "flows" && ctx.publishes.has(from)) return null;
+    if (decl) return `${door} is declared '${decl.cls}' in ${ctx.contractPath(from)} — a cross-domain door must be class 'capability' with a declared degrade (the #1453 domain_present pattern), or 'publish-edge' if this service only HANDS FACTS to ${to} and needs no answer, so an absent ${to} domain answers not_present instead of being knocked on`;
+    return `undeclared cross-domain door to ${to} — declare ${door} in ${ctx.contractPath(from)} as class 'capability' with a degrade (a dependency), or class 'publish-edge' with its carriers (a fact handed over, needing no answer), or publish an event into flows (publishes_events in ${from}/mcp.tools.v1.json)`;
   }
 
   if (kind === "edge") {
@@ -364,6 +375,19 @@ export function judge(site, ctx) {
 // ── the allowlist ────────────────────────────────────────────────────────────────────────────
 export const ALLOW_PATH = "scripts/domain-doors.allow.json";
 
+// THE KEY IS `path` + `door`, AND THE LINE IS INFORMATIONAL. Keying on `path:line` was wrong in a
+// way only the merge queue could show: PR #1473 inserted four lines above `core/agent/worker/
+// engine.py:1105`, and the gate then told the merger that a door nobody had touched was an
+// undeclared violation AND that its allowlist entry was stale — two false accusations from one
+// unrelated edit. A line number is not an identity; it is a coordinate that any edit above it
+// moves. The pair (file, env-key) is the door.
+//
+// Multiplicity is still checked, so re-keying costs nothing in strictness: N entries for a
+// (path, door) cover exactly N violations. A NEW door of the same name in the same file makes the
+// count exceed the entries and turns the gate red; a REMOVED one leaves a surplus entry and turns
+// it red too. So the list still cannot rot — it just no longer reacts to whitespace.
+const allowKey = (e) => `${e.path}|${e.door}`;
+
 export function loadAllowlist(root = DEFAULT_ROOT) {
   const p = join(root, ALLOW_PATH);
   if (!existsSync(p)) return { entries: [] };
@@ -385,8 +409,8 @@ export function checkDomainDoors(root = DEFAULT_ROOT) {
     publishes: publishers(root),
   };
   const allow = loadAllowlist(root);
-  const allowByKey = new Map();
-  for (const e of allow.entries || []) allowByKey.set(`${e.site}|${e.door}`, e);
+  const allowCount = new Map();      // path|door -> how many violations this list excuses
+  for (const e of allow.entries || []) allowCount.set(allowKey(e), (allowCount.get(allowKey(e)) || 0) + 1);
 
   // One LINE reaching one domain is ONE door, however many names it spells it with:
   // `AGENT_API = flows_config.get("VEXA_FLOWS_AGENT_API_URL")` names the constant and the declared
@@ -399,20 +423,66 @@ export function checkDomainDoors(root = DEFAULT_ROOT) {
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push({ ...s, why: judge(s, ctx) });
   }
-  const violations = [];
-  const allowedOff = new Set();
+  const refused = [];
   for (const members of groups.values()) {
     if (members.some((m) => !m.why)) continue;                       // the rule allows this door
-    const covered = members.find((m) => allowByKey.has(`${m.site}|${m.door}`));
-    if (covered) { allowedOff.add(`${covered.site}|${covered.door}`); continue; }
-    violations.push(members[0]);
+    refused.push(members[0]);
   }
-  const stale = (allow.entries || []).filter((e) => !allowedOff.has(`${e.site}|${e.door}`));
-  return { sites, violations, stale, allowlisted: allowedOff.size, allow };
+  // Spend the allowance per (path, door): the first N refusals of a pair are excused by its N
+  // entries, any beyond that are violations, and any entries left unspent are stale.
+  const budget = new Map(allowCount);
+  const violations = [];
+  let allowlisted = 0;
+  for (const r of refused.sort((a, b) => a.site.localeCompare(b.site))) {
+    const k = `${r.path}|${r.door}`;
+    const left = budget.get(k) || 0;
+    if (left > 0) { budget.set(k, left - 1); allowlisted++; continue; }
+    violations.push(r);
+  }
+  const stale = [];
+  for (const e of allow.entries || []) {
+    const k = allowKey(e);
+    const left = budget.get(k) || 0;
+    if (left > 0) { budget.set(k, left - 1); stale.push(e); }
+  }
+  return { sites, violations, stale, allowlisted, allow, refused };
 }
 
-// CLI: `node scripts/check-domain-doors.mjs [--json|--sites]`
+/**
+ * Rewrite the allowlist's INFORMATIONAL `line` fields to where each excused door sits today.
+ * Never changes which doors are excused — matching is on (path, door) and this touches neither.
+ * It exists so the file stays readable as the tree moves, without a line number ever being able to
+ * fail a gate again.
+ */
+export function refreshAllowlist(root = DEFAULT_ROOT) {
+  const { refused, allow } = checkDomainDoors(root);
+  const byPair = new Map();
+  for (const r of refused) {
+    const k = `${r.path}|${r.door}`;
+    if (!byPair.has(k)) byPair.set(k, []);
+    byPair.get(k).push(r.line);
+  }
+  for (const v of byPair.values()) v.sort((a, b) => a - b);
+  const taken = new Map();
+  let changed = 0;
+  for (const e of allow.entries || []) {
+    const k = `${e.path}|${e.door}`;
+    const n = taken.get(k) || 0;
+    const line = (byPair.get(k) || [])[n];
+    taken.set(k, n + 1);
+    if (line && line !== e.line) { e.line = line; changed++; }
+  }
+  writeFileSync(join(root, ALLOW_PATH), JSON.stringify(allow, null, 2) + "\n");
+  return changed;
+}
+
+// CLI: `node scripts/check-domain-doors.mjs [--json|--sites|--refresh]`
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  if (process.argv.includes("--refresh")) {
+    const n = refreshAllowlist();
+    console.log(`refreshed ${n} informational line number(s) in ${ALLOW_PATH}`);
+    process.exit(0);
+  }
   const res = checkDomainDoors();
   if (process.argv.includes("--sites")) {
     for (const s of res.sites) console.log(`${s.from} → ${s.to}  ${s.door}  ${s.site}  [${s.how}]`);

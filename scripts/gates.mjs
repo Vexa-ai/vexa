@@ -1416,7 +1416,7 @@ function gateDomainDoors() {
   for (const v of res.violations)
     errs.push(`${v.site} — ${v.from} → ${v.to} (${v.door}): ${v.why}`);
   for (const e of res.stale)
-    errs.push(`STALE allowlist entry: ${e.site} (${e.from} → ${e.to}, ${e.door}) no longer matches any violation — DELETE it from ${DOORS_ALLOW}. The list is the migration backlog, not a permanent exemption.`);
+    errs.push(`STALE allowlist entry: ${e.door} in ${e.path} (${e.from} → ${e.to}) no longer matches any violation — DELETE it from ${DOORS_ALLOW}. The list is the migration backlog, not a permanent exemption.`);
   if (errs.length) return fail([`domain-doors (P9, ADR-0037) — undeclared cross-domain doors:`, ...errs.map((e) => "   " + e)]);
   console.log(`  ✓ gate:domain-doors — ${res.sites.length} door site(s) · every cross-domain door declared or allowlisted (${res.allowlisted} on the dated backlog in ${DOORS_ALLOW})`);
   return true;

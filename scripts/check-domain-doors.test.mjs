@@ -109,6 +109,78 @@ test("a PUBLISH edge passes — a domain that declares publishes_events may reac
   } finally { rmSync(yes, { recursive: true, force: true }); rmSync(no, { recursive: true, force: true }); }
 });
 
+test("a PUBLISH EDGE declared on the KEY passes — a publish is not a dependency", () => {
+  // #1476 landed `FLOWS_API_URL` on admin-api as class `publish-edge`: identity TELLS flows a person
+  // finished onboarding, best-effort, and needs no answer. ADR-0037 — "an event published into flows
+  // is never a dependency" — so the class must satisfy this gate. It did not, and the merged tree
+  // went red on the one edge the architecture explicitly sanctions.
+  const decl = (cls, extra = {}) => JSON.stringify({
+    contract: "config.v1", service: "admin-api",
+    keys: [{ key: "FLOWS_API_URL", class: cls, description: "flows' intake", ...extra }],
+  });
+  const build = (cls, extra) => fixture({
+    "core/identity/services/admin-api/src/admin_api/config.v1.json": decl(cls, extra),
+    "core/identity/services/admin-api/src/admin_api/app/events.py":
+      'import os\n\nFLOWS = os.getenv("FLOWS_API_URL", "")\n',
+  });
+  const pub = build("publish-edge", { publishes_events: ["onboarding.completed"] });
+  const dep = build("defaulted", { default: "http://flows-api:18200" });
+  try {
+    assert.deepEqual(checkDomainDoors(pub).violations, [],
+      "class 'publish-edge' is the sanctioned declaration for a fact handed over");
+    const off = checkDomainDoors(dep).violations;
+    assert.equal(off.length, 1, "the same door declared as a NEED is still a dependency");
+    assert.match(off[0].why, /'publish-edge'/, "the refusal must name the class that would allow it");
+  } finally { rmSync(pub, { recursive: true, force: true }); rmSync(dep, { recursive: true, force: true }); }
+});
+
+test("an edit ABOVE a door does not stale its allowlist entry (the #1473 shape)", () => {
+  // PR #1473 inserted four lines above core/agent/worker/engine.py:1105 and the gate accused the
+  // merger twice over one untouched door: a new violation AND a stale entry. The key is (file,
+  // env-key); `line` is informational and may never fail anything.
+  const src = (pad) => "#\n".repeat(pad) + 'import os\n\nB = os.getenv("MEETING_API_URL", "")\n';
+  const allow = JSON.stringify({
+    contract: "domain-doors.allow.v1", dated: "2026-09-03",
+    entries: [{ path: "core/flows/src/steps.py", door: "MEETING_API_URL", line: 3,
+                from: "flows", to: "meetings", ruling: "a ruling long enough to name what closes it" }],
+  });
+  const build = (pad) => fixture({
+    "scripts/domain-doors.allow.json": allow,
+    "core/flows/src/flows_config.py": FLOWS_CONTRACT,
+    "core/flows/src/steps.py": src(pad),
+  });
+  const before = build(0);
+  const after = build(4);      // four lines inserted above, exactly #1473's edit
+  try {
+    for (const [name, root] of [["unmoved", before], ["moved down four lines", after]]) {
+      const r = checkDomainDoors(root);
+      assert.deepEqual(r.violations, [], `${name}: the excused door must stay excused`);
+      assert.deepEqual(r.stale, [], `${name}: its entry must not go stale`);
+      assert.equal(r.allowlisted, 1);
+    }
+    // …and the strictness is intact: a SECOND door of the same name in that file is not excused.
+    const twice = fixture({
+      "scripts/domain-doors.allow.json": allow,
+      "core/flows/src/flows_config.py": FLOWS_CONTRACT,
+      "core/flows/src/steps.py": 'import os\n\nA = os.getenv("MEETING_API_URL", "")\nB = os.getenv("MEETING_API_URL", "")\n',
+    });
+    try {
+      const r = checkDomainDoors(twice);
+      assert.equal(r.violations.length, 1, "one entry excuses one door, not every door of that name");
+      assert.equal(r.allowlisted, 1);
+    } finally { rmSync(twice, { recursive: true, force: true }); }
+    // …and an entry whose door is gone is still stale.
+    const gone = fixture({
+      "scripts/domain-doors.allow.json": allow,
+      "core/flows/src/flows_config.py": FLOWS_CONTRACT,
+      "core/flows/src/steps.py": "import os\n",
+    });
+    try {
+      assert.equal(checkDomainDoors(gone).stale.length, 1, "the list still cannot rot");
+    } finally { rmSync(gone, { recursive: true, force: true }); }
+  } finally { rmSync(before, { recursive: true, force: true }); rmSync(after, { recursive: true, force: true }); }
+});
+
 test("the edge forwards only through a declared route binding", () => {
   const root = fixture({
     "core/flows/mcp.tools.v1.json": JSON.stringify({
@@ -168,8 +240,9 @@ test("every allowlist entry still matches a real violation (a stale entry is a f
   assert.deepEqual(stale, [], "allowlist entries that no longer match a violation must be deleted");
   assert.equal(allowlisted, (allow.entries || []).length);
   for (const e of allow.entries || []) {
-    assert.ok(e.ruling && e.ruling.length > 40, `${e.site}: every entry names the ruling that closes it`);
-    assert.match(e.site, /^[\w./[\]-]+:\d+$/, `${e.site}: entries are pinned to path:line`);
+    assert.ok(e.ruling && e.ruling.length > 40, `${e.path}: every entry names the ruling that closes it`);
+    assert.ok(e.path && e.door, `${JSON.stringify(e)}: entries are keyed on (path, door)`);
+    assert.ok(!("site" in e), `${e.path}: no entry may carry a path:line key — a line number is not an identity`);
   }
 });
 
