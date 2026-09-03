@@ -439,6 +439,14 @@ def create_app(
             return Path(primary.path) if primary else (wsr.root / subject)
         for m in mounts:
             if m.slug == target:
+                # A MOUNTED MATCH IS NOT THE SAME AS A WRITABLE ONE. `shared_active_mounts` mounts
+                # a viewer's workspace too (`write=False`) — read this far unguarded, `write=True`
+                # returned it anyway, so any viewer of any currently-active shared workspace could
+                # write to it via this path, role checked nowhere. Fall through instead of
+                # returning: the ownership check below re-derives the real role authoritatively
+                # and gives the correct 403 for exactly this subject.
+                if write and not m.write:
+                    break
                 return Path(m.path)
         # ANOTHER PERSON'S DESK — readable, never writable (the ruling above). The registry is asked
         # rather than the directory layout, so this can only ever resolve something that IS a desk:
@@ -448,6 +456,29 @@ def create_app(
             rec = workspace_registry.by_slug(target)
             if rec and rec.get("kind") == "desk":
                 d = Path(str(rec.get("dir") or ""))
+                if d.is_dir():
+                    return d
+        # OWNERSHIP, NOT MOUNT STATE (F196/F198/F200). The active set built above is a per-session
+        # DISPLAY toggle — `shared_active_mounts` drops a workspace the subject switched off
+        # (`hidden_shared_set`) even though their membership is unchanged — so a write to a shared
+        # workspace the caller genuinely owns or contributes to 403'd here whenever it happened not
+        # to be "on" for THIS mount set, the identical answer a stranger gets. The docstring above
+        # already promises "authorized... by construction: own actives + shared_active_mounts over
+        # their memberships" — which only holds if membership and mount state can never diverge, and
+        # `hidden_shared_set` is exactly a way they do.
+        #
+        # The authoritative answer is one call away and already the pattern this module uses
+        # correctly elsewhere: `_require_shared_write` (this file, the parallel MANAGEMENT-write
+        # gate) calls the same `require_role`, which reads `policy/members.json` directly — the
+        # same authority `shared_active_mounts` itself defers to via `is_member`, just not gated on
+        # whether the workspace happens to be mounted right now.
+        if write and target and subject:
+            try:
+                membership_mod.require_role(wsr.root, target, subject, "contributor")
+            except MembershipError:
+                pass  # not a member, or below contributor — the 403 below is the real answer
+            else:
+                d = membership_mod._ws_dir(wsr.root, target)
                 if d.is_dir():
                     return d
         raise HTTPException(status_code=403, detail="not authorized for this workspace")

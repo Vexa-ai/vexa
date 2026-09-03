@@ -60,8 +60,22 @@ class EntityRefused(ValueError):
 
 
 def slugify(name: str) -> str:
-    """kebab-case ascii, the shape the templates promise (``id: <slug>`` matches the filename)."""
-    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode()
+    """kebab-case ascii, the shape the templates promise (``id: <slug>`` matches the filename).
+
+    ONE SLUGIFIER, and the whole point of it being one is that every caller lands on the SAME
+    filename for the same name (F200). An apostrophe is DROPPED, never turned into a hyphen: "Keith
+    O'Donnell" is "keith-odonnell", not "keith-o-donnell" — measured live, `entity_upsert` produced
+    the hyphenated form for a page that already existed under the dropped one (a human/agent typing
+    the filename by hand, via `workspace_write`, naturally wrote it without the hyphen), so the two
+    calls disagreed on this person's slug and a second page was created for the first one's subject.
+    Treating the apostrophe as an ordinary separator character is what did it: every OTHER
+    non-alnum run still becomes one hyphen, so a name is never assembled by both rules at once."""
+    # Apostrophe (straight/curly) stripped BEFORE the ascii-encode: NFKD has no compatibility
+    # decomposition for the curly form (U+2019) to an ascii base character, so `encode("ascii",
+    # "ignore")` would already have silently dropped it by the time a `.replace()` after that step
+    # could ever see it — leaving the straight apostrophe as the only one actually handled.
+    raw = str(name or "").replace("'", "").replace("’", "")
+    s = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
     return s[:80]
 

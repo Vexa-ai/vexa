@@ -25,6 +25,7 @@ import json
 import pathlib
 import logging
 import os
+import re
 import shutil
 import time
 import urllib.error
@@ -186,6 +187,58 @@ def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
             return
         except OSError:
             continue
+
+
+# ── the imperative gate (F162, ledger 2026-09-02 14:17Z-14:30Z) ────────────────────────────────────
+# Ledger entries F161/F162/F166/F169: in a live-meeting copilot chat the founder wrote "send bot"
+# FOUR TIMES. The turn answered each with a workspace `propose` call (Objective/membership
+# questions), a WebSearch, a WebFetch — never `bot_send`. Two causes were found; this fixes the
+# worker-side one (the other is a `bots_running` state-truth fix in the rig, not this file): the
+# composed prompt put the person's own words LAST, after the mounts/entity/global-context
+# preambles below — and those preambles themselves nudge the model toward onboarding ("ASK the user
+# their name early") and proactive `propose` behaviour. An explicit operational imperative buried
+# under six preambles' worth of onboarding/propose framing lost to that framing, repeatedly.
+#
+# This preamble ships FIRST — before every other concern in `run_turn_over_workspace`'s composed
+# prompt, including the MCP-status note — so an imperative is the first thing the model reads, not
+# the last. It fires on the person's OWN words only (`prompt`, not the preamble text that follows),
+# to avoid ever matching itself or another preamble's prose.
+_IMPERATIVE_PATTERNS: tuple[tuple["re.Pattern[str]", str, str], ...] = (
+    (re.compile(r"\bsend\s+(the\s+)?bot\b", re.I), "bot_send", "send the bot"),
+    (re.compile(r"\bschedule\s+(the\s+)?bot\b", re.I), "bot_schedule", "schedule the bot"),
+    (re.compile(r"\bjoin\s+(the\s+)?(meeting|call)\b", re.I), "bot_send", "join the meeting"),
+    (re.compile(r"\bstop\s+record(ing)?\b", re.I), "bot_stop", "stop recording"),
+    (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "bot_stop", "stop the bot"),
+)
+
+
+def imperative_preamble(prompt: str) -> str:
+    """If the person's own message names an operational imperative — send/stop/schedule the bot,
+    join, stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
+    concern the rest of the composed prompt carries. Empty string when nothing matches: an ordinary
+    chat turn gets no extra framing at all."""
+    matched: list[tuple[str, str]] = []
+    seen_tools: set[str] = set()
+    for pat, tool, phrase in _IMPERATIVE_PATTERNS:
+        if pat.search(prompt or "") and tool not in seen_tools:
+            matched.append((tool, phrase))
+            seen_tools.add(tool)
+    if not matched:
+        return ""
+    lines = [
+        "## An operational imperative is in this message — act on it FIRST",
+        "",
+        "The person's own words below name at least one of: send/stop/schedule the bot, join the "
+        "meeting, stop recording. Call the matching tool NOW, before any onboarding question, any "
+        "`propose` call, any web search, and before the write-back phase. Answer with what the tool "
+        "actually returned — never a scaffold question, a search, or a description of what you would "
+        "do, in its place.",
+        "",
+    ]
+    for tool, phrase in matched:
+        lines.append(f"- \"{phrase}\" -> call `{tool}` first.")
+    lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 def voice_preamble() -> str:
@@ -506,12 +559,74 @@ _ENTITY_FILE_SHAPE = entity_file_shape()
 # person sent meanwhile queued behind it. Finding names is a regex over text the turn already
 # produced; only the FACTS need a model. So the list arrives already made (`missing_names`), the
 # phase is told to take it in order, and a turn whose names all have pages never reaches a model.
-def writeback_prompt(candidates: list[str]) -> str:
+def desk_mounts(mounts: "list[dict] | None" = None) -> "tuple[dict | None, list[dict]]":
+    """`(the desk, the group workspaces)` out of a mount set — whose README is maintained, and what
+    the `## Workspaces` section lists.
+
+    The DESK is the writable primary mount: a person's own workspace, the one the panel opens by
+    default. Groups are the other writable non-system mounts. `_global` is neither — it is the
+    organisation tier, read-only, and nobody's desk.
+
+    MOVED UP, ahead of `writeback_prompt` (which now calls it via `_writeback_workspace_note`):
+    `WRITEBACK_PROMPT = writeback_prompt(...)` a few dozen lines down runs at IMPORT time, so
+    `desk_mounts` has to already be bound in the module namespace by the time that line executes —
+    definition order matters here in a way it does not for a function only ever called later."""
+    ms = [m for m in (mounts if mounts is not None else active_mounts()) if isinstance(m, dict)]
+    normal = [m for m in ms if m.get("write", True) and m.get("role") not in ("global", "system")
+              and m.get("slug") not in ("_global", "_system")]
+    desk = next((m for m in normal if m.get("primary")), None)
+    groups = [m for m in normal if m is not desk]
+    return desk, groups
+
+
+def _writeback_workspace_note(mounts: "list[dict] | None" = None) -> str:
+    """WHERE these pages belong, named — never left for the model to guess (F196/F198/F200).
+
+    `entity_upsert` writes to the caller's personal desk unless `slug=` names a mount explicitly,
+    and nothing about the call shape hints that a slug exists to pass. Measured live: a turn spent
+    entirely inside one shared workspace (`zenith-c172ae`) still had the phase write three pages to
+    the personal desk instead — and a second turn, told the desk's `slug`, still 403'd because
+    `entity_upsert` had defaulted the wrong way once already and the model saw no reason to name it
+    explicitly this time either. The fix is not a smarter default; it is saying the slug out loud.
+
+    Exactly one writable shared workspace is the common case this turn is trying to fix and the
+    only one safe to give an instruction rather than a menu — naming ANY slug when more than one is
+    active would be a guess, and the phase must never guess which one a name belongs to."""
+    # `desk_mounts` already keeps only the writable, non-system/global mounts (its own `normal`
+    # filter reads `m.get("write", True)`) — `groups` needs no second filter here.
+    desk, groups = desk_mounts(mounts)
+    if not groups:
+        return ""
+    if len(groups) == 1:
+        g = groups[0]
+        slug = g.get("slug") or g.get("id") or ""
+        label = g.get("name") or slug
+        return (
+            f"\nTHIS TURN IS IN THE SHARED WORKSPACE `{slug}`" + (f" ({label})" if label != slug else "")
+            + f" — pass `slug=\"{slug}\"` explicitly on every `entity_upsert` call below so each "
+            "page lands there, not on your personal desk (which is where a call with no `slug` "
+            "goes). Only leave `slug` off for something that is genuinely personal and not part "
+            "of this shared work.\n"
+        )
+    listed = ", ".join(f"`{g.get('slug') or g.get('id')}`" for g in groups)
+    return (
+        f"\nMORE THAN ONE SHARED WORKSPACE IS ACTIVE ({listed}). A call to `entity_upsert` with no "
+        "`slug` lands on your personal desk, never on one of these — pass `slug=\"<the one this "
+        "name belongs to>\"` explicitly for every name that is shared work, and leave it off only "
+        "for something genuinely personal.\n"
+    )
+
+
+def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) -> str:
     """The phase's one model call, with the work already identified.
 
     No "list what you learned" step survives here: that step was both the slow half and the half
     that hesitated. The names are given, in order, and the only question left is what this turn can
-    honestly say about each and where it read it."""
+    honestly say about each and where it read it.
+
+    ``mounts`` defaults to the dispatch's own active set (``active_mounts()``) — passed explicitly
+    at the call site so the workspace this phase names is provably the SAME set the turn itself
+    saw, not a second read that could disagree with it."""
     named = "\n".join(f"- {c}" for c in candidates)
     return (
         MACHINERY_MARK + " " + WRITEBACK_MARK
@@ -521,7 +636,8 @@ def writeback_prompt(candidates: list[str]) -> str:
         + named + "\n\n"
         "Give each one a page, in the order listed, with `entity_upsert(kind, name, ...)` — one call "
         "per name, starting immediately, no preamble and no re-reading. `kind` is one of person, "
-        "company, meeting, project, decision.\n\n"
+        "company, meeting, project, decision.\n"
+        + _writeback_workspace_note(mounts) + "\n"
         # Decision 24.6. The founder's word for a page written as a stack of dated bullets was
         # "flat", and the tool grew `summary`/`fields`/`section` so it need not be. The phase is
         # where most pages are born, so if the phase does not use them nothing else will.
@@ -561,21 +677,6 @@ WRITEBACK_PROMPT = writeback_prompt(["<the names the pre-pass found>"])
 # verb itself. Deliberately NOT the research tools: this phase records what the turn already learned,
 # and a phase that can go and look things up is a second turn wearing a bookkeeping name.
 WRITEBACK_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
-
-
-def desk_mounts(mounts: "list[dict] | None" = None) -> "tuple[dict | None, list[dict]]":
-    """`(the desk, the group workspaces)` out of a mount set — whose README is maintained, and what
-    the `## Workspaces` section lists.
-
-    The DESK is the writable primary mount: a person's own workspace, the one the panel opens by
-    default. Groups are the other writable non-system mounts. `_global` is neither — it is the
-    organisation tier, read-only, and nobody's desk."""
-    ms = [m for m in (mounts if mounts is not None else active_mounts()) if isinstance(m, dict)]
-    normal = [m for m in ms if m.get("write", True) and m.get("role") not in ("global", "system")
-              and m.get("slug") not in ("_global", "_system")]
-    desk = next((m for m in normal if m.get("primary")), None)
-    groups = [m for m in normal if m is not desk]
-    return desk, groups
 
 
 def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
@@ -1316,7 +1417,11 @@ def run_turn_over_workspace(
         "attached this turn. Do not claim to have created, read, or changed anything through them; "
         "tell the person plainly that the connection is down. It reattaches fresh next turn.\n\n"
     )
-    turn_prompt = (mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
+    # F162 — the imperative gate goes FIRST, ahead of even the MCP-status note: see its definition
+    # for the ledger incident this closes (four unanswered "send bot"s, lost under six preambles'
+    # worth of onboarding/propose framing).
+    turn_prompt = (imperative_preamble(prompt)
+                   + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
                    + mounts_preamble(mounts)
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
@@ -1653,8 +1758,11 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # here: `writeback_candidates` refuses the subject's own desk as a target while a room is
         # open (F103), so the pre-pass returns an empty list and gate 4 declines. On a `#group:`
         # meeting the group's desk IS a legitimate target and the phase still runs against it.
+        # `active_mounts()` PASSED EXPLICITLY (F196/F198/F200) — the same call `writeback_
+        # candidates` used moments earlier to decide which desk(s) had anything missing, so the
+        # workspace this prompt names cannot silently be a second, disagreeing read of it.
         writeback=lambda candidates: run_turn_over_workspace(
-            work, writeback_prompt(candidates), model=model,
+            work, writeback_prompt(candidates, active_mounts()), model=model,
             allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
             mcp_config=mcp_cfg, harness=chat_harness),
         start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
