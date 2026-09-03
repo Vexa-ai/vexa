@@ -19,8 +19,25 @@
                                     Read-only, and it takes the operator key OR the narrower
                                     VEXA_FLOWS_TIMELINE_KEY (see `_timeline_key`).
 
-Auth: X-Flows-Admin-Key (env VEXA_FLOWS_API_KEY). NEVER accepts code — steps are reviewed Python
-in the image; this API composes them (the n8n line we do not cross).
+AUTH, TWO TIERS — because two different callers reach this surface and only one of them is an
+operator (issue #1468):
+
+  * THE SUBJECT-SCOPED ROUTES (`GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`,
+    `GET /timeline`) take EITHER the operator key OR a person's own Vexa credential, as a bearer
+    or `X-API-Key`. With a person's credential the subject is DERIVED from it, through identity's
+    `/internal/validate` — the one resolver, the same one the gateway asks (P23) — and a `subject`
+    argument naming anyone else is refused rather than honoured. The MCP edge forwards the
+    caller's own credential and holds none of its own, so this is what makes those four tools
+    usable by a person at all: before it, the only way to make them answer was to hand the edge
+    the operator key, and the operator key is not a person — it reads every reaction in the
+    instance and cancels any of them.
+  * THE ADMIN ROUTES (`POST /flows`, `POST /events`, `POST /events/batch`,
+    `POST /flows/{name}/{version}/{action}`) take the operator key and nothing else. They
+    configure the machine or admit facts on the instance's behalf; there is no per-person version
+    of either.
+
+NEVER accepts code — steps are reviewed Python in the image; this API composes them (the n8n line
+we do not cross).
 
 THE INSTANCE GATE cuts across this surface in three different ways, and the difference is the
 point (see `flows_integrations/instance_gate.py`):
@@ -53,9 +70,16 @@ import flows_config  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
 from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
+from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noqa: E402
+                                              SubjectUnknown, resolve)
+# ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
+# the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
+# answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
+# in front of it hid that for as long as the route was operator-only. One name, one thing.
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
-                            build_timeline, fetch_meetings, list_reactions, reaction_concerns,
+                            build_timeline, fetch_meetings, reaction_concerns,
                             render_preamble, render_text)
+from flows_timeline import list_reactions as reactions_for  # noqa: E402
 
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
@@ -138,11 +162,91 @@ def auth(x_flows_admin_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
 
 
-def timeline_auth(x_flows_admin_key: str = Header(default="")) -> None:
-    """The operator key opens everything, including this. The timeline key opens only this."""
-    if _same_key(x_flows_admin_key, API_KEY) or _same_key(x_flows_admin_key, TIMELINE_KEY):
-        return
-    raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
+def _bearer(authorization: str, x_api_key: str) -> str:
+    """The caller's own Vexa credential, in either spelling of the ONE authentication path.
+
+    `X-API-Key` is what the MCP edge forwards (`vexa_mcp/register.py`) and what the gateway
+    resolves; `Authorization: Bearer` is what an MCP client sets. Same credential, two headers on
+    the way here, and no third path: nothing is read from a query string or an argument (PRD 40.8).
+    """
+    key = (x_api_key or "").strip()
+    if key:
+        return key
+    auth = (authorization or "").strip()
+    if not auth:
+        return ""
+    scheme, _, token = auth.partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
+def subject_or_operator(x_flows_admin_key: str = Header(default=""),
+                        authorization: str = Header(default=""),
+                        x_api_key: str = Header(default="")) -> Caller:
+    """WHO IS CALLING — the operator, or one person. The dependency of every subject-scoped route.
+
+    The operator key is checked first and short-circuits: it is a local constant-time comparison,
+    it is what every existing caller sends, and it must keep working while identity is down.
+    """
+    if _same_key(x_flows_admin_key, API_KEY):
+        return Caller(kind="admin")
+    token = _bearer(authorization, x_api_key)
+    if not token:
+        raise HTTPException(status_code=401, detail=(
+            "this route needs your Vexa credential (Authorization: Bearer …, or X-API-Key), "
+            "or the operator key in X-Flows-Admin-Key"))
+    try:
+        return resolve(token, secret=INTERNAL_SECRET)
+    except SubjectUnknown:
+        raise HTTPException(status_code=401, detail="that credential does not identify anyone")
+    except IdentityUnavailable as e:
+        # 503, NEVER 401. We did not reach a verdict on the credential — see subject_auth.
+        raise HTTPException(status_code=503, detail=(
+            f"identity could not answer who you are ({e}) — this is our side, not your key"))
+
+
+def timeline_reader(x_flows_admin_key: str = Header(default=""),
+                    authorization: str = Header(default=""),
+                    x_api_key: str = Header(default="")) -> Caller:
+    """`GET /timeline` alone: the narrow read-only key opens it, as well as the two tiers above."""
+    if TIMELINE_KEY and _same_key(x_flows_admin_key, TIMELINE_KEY):
+        return Caller(kind="admin")
+    return subject_or_operator(x_flows_admin_key, authorization, x_api_key)
+
+
+def scoped_subject(caller: Caller, requested: str) -> str:
+    """The subject these rows are about — derived, never asserted.
+
+    For the OPERATOR nothing changes: `subject` is whatever they asked for, including nothing,
+    which is the unscoped console read this surface has always served.
+
+    For a PERSON the subject is who their credential says they are. A `subject` argument is still
+    accepted, because the tool schema advertises one and a client that holds its own uid or address
+    will send it — but only as a spelling of themselves. Anything else is 403 rather than silently
+    overridden: an argument quietly ignored is the same defect as one quietly dropped, and here it
+    would be the difference between "here is your queue" and "here is someone else's".
+    """
+    asked = str(requested or "").strip()
+    if caller.is_admin:
+        return asked
+    if asked and asked.lower() not in caller.names:
+        raise HTTPException(status_code=403, detail={
+            "not_your_subject": asked,
+            "you_are": caller.uid,
+            "note": ("the subject is derived from your credential — send no subject, or your own "
+                     "platform id or address")})
+    return caller.uid
+
+
+def _as_me(caller: Caller):
+    """The identity resolver to hand the model for a subject caller: the pair we already hold.
+
+    `flows_timeline` otherwise asks admin-api to turn a uid into an address, which for this caller
+    is a second hop for a fact `/internal/validate` already returned — and one more thing that can
+    be down in the middle of a read.
+    """
+    if caller.is_admin:
+        return None
+    return lambda _subject: (caller.uid, caller.email)
 
 
 @app.get("/health")
@@ -199,8 +303,8 @@ class FlowSubmission(BaseModel):
     activate: bool = True
 
 
-@app.get("/flows", dependencies=[Depends(auth)])
-def list_flows():
+@app.get("/flows")
+def list_flows(caller: Caller = Depends(subject_or_operator)):
     code_flows = [{"name": f.name, "version": f.version, "on": f.on.name,
                    "steps": list(f.steps), "source": "image", "status": "active"}
                   for f in vocab.flows.values()]
@@ -373,51 +477,56 @@ def set_flow_status(name: str, version: int, action: str):
     return {"name": name, "version": version, "status": st}
 
 
-@app.get("/reactions", dependencies=[Depends(auth)])
-def list_reactions(status: Optional[str] = None, subject: str = ""):
-    """The operator projection — and, with ``subject``, ONE PERSON'S share of it.
+@app.get("/reactions")
+def list_reactions(status: Optional[str] = None, subject: str = "",
+                   caller: Caller = Depends(subject_or_operator)):
+    """ONE PERSON'S share of the reaction queue — or, for the operator, the whole projection.
 
-    ``subject`` (a platform uid or an email address) is what makes this route usable by a
-    per-person surface. Without it the control MCP was fanning the whole instance's reactions into
-    every signed-in user's queue: `whats_waiting` reported other tenants' flow names, step names
-    and failure reasons as this person's work, and `reactions_list` handed out every reaction id
-    instance-wide — which is also how `reaction_signal` could cancel a stranger's pending join
-    (R-D07, R-D12).
+    Unscoped, this route was fanning the entire instance's reactions into every signed-in user's
+    queue: `whats_waiting` reported other tenants' flow names, step names and failure reasons as
+    this person's work, and `reactions_list` handed out every reaction id instance-wide — which is
+    also how `reaction_signal` could cancel a stranger's pending join (R-D07, R-D12).
+
+    The subject is now DERIVED from the caller's own credential rather than asserted as an
+    argument (issue #1468). An operator still reads any subject, or none.
 
     Scoping reuses `flows_timeline`'s pair — the uid AND the email — for the reason that module
     documents: the invite lineage carries an organizer address and no uid, the completed lineage
     carries a uid and no address, and matching on one of them silently returns half the rows.
     """
-    subj = (subject or "").strip()
-    rows = list_reactions(db, subject=subj, status=status or "")
+    subj = scoped_subject(caller, subject)
+    rows = reactions_for(db, subject=subj, status=status or "", identity=_as_me(caller))
     if rows is None:
         return {"reactions": [], "subject": subj, "unresolved": True}
-    return {"reactions": [
+    return {"subject": subj, "reactions": [
         {"id": r["reaction_id"], "flow": f"{r['flow']}@{r['flow_version']}", "step": r["step"],
          "status": r["status"], "attempt": r["attempt"], "reason": r["reason"],
          "next_run_at": r["next_run_at"]}
         for r in rows]}
 
 
-@app.post("/reactions/{reaction_id}/{verb}", dependencies=[Depends(auth)])
+@app.post("/reactions/{reaction_id}/{verb}")
 def signal_reaction(reaction_id: str, verb: str, subject: str = "",
-                    x_actor: str = Header(default="api"), body: dict = Body(default={})):
-    """Steer one reaction — and, with `subject`, only if it is THAT PERSON'S (R-D07).
+                    x_actor: str = Header(default="api"), body: dict = Body(default={}),
+                    caller: Caller = Depends(subject_or_operator)):
+    """Steer one reaction — and, for a person, only if it is THEIRS (R-D07).
 
-    The verbs post with the lane's admin key, so before `subject` existed the caller's identity
-    never reached this decision: the control MCP handed every signed-in user every reaction id and
-    then let them `cancel` any of it. Ownership is the right question here rather than operator
-    authority — a person stopping the join they scheduled with `bot_schedule` is the ordinary path,
-    and an admin-only gate would close it to fix an unusual one.
+    Ownership is the right question here rather than operator authority: a person stopping the join
+    THEY scheduled with `bot_schedule` is the ordinary path, and an admin-only gate would close it
+    to fix an unusual one.
 
-    Omitting `subject` keeps the unscoped operator behaviour this route has always had: it is
-    already behind the operator key, and the admin console steers reactions it does not own.
+    The check used to run only when the CALLER passed `subject`, which meant a caller who simply
+    omitted it got the unscoped behaviour — and every caller reached this route holding the same
+    operator key, so nobody's identity ever reached this decision. Now a person's subject comes
+    from their credential and the check always runs; an operator with no subject keeps the unscoped
+    console behaviour, because the admin console steers reactions it does not own.
     """
     fns = {"retry": retry, "resume": resume, "cancel": cancel, "wake": wake}
     if verb not in fns:
         raise HTTPException(status_code=404, detail="retry | resume | cancel | wake")
-    if str(subject or "").strip():
-        owns = reaction_concerns(db, reaction_id, subject=subject.strip())
+    subj = scoped_subject(caller, subject)
+    if subj:
+        owns = reaction_concerns(db, reaction_id, subject=subj, identity=_as_me(caller))
         if owns == REACTION_MISSING:
             raise HTTPException(status_code=404, detail="no such reaction")
         if owns != REACTION_FOUND:
@@ -430,9 +539,10 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
     return {verb: True}
 
 
-@app.get("/timeline", dependencies=[Depends(timeline_auth)])
+@app.get("/timeline")
 def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 20,
-             meetings: bool = True, format: str = "json"):
+             meetings: bool = True, format: str = "json",
+             caller: Caller = Depends(timeline_reader)):
     """ONE PERSON'S DAY, IN ORDER — PRD decision 31.
 
     Founder, 2026-09-02: *"does the agent have temporal awareness of the last events and future
@@ -445,6 +555,9 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     scopes, because the invite lineage carries an organizer and no uid while the completed lineage
     carries a uid and, without the resolution, nothing to match an address on. Scoping on one of
     them silently returns half a day — see `flows_timeline.model.concerns`.
+
+    A PERSON does not send it: their subject is derived from their own credential, and one naming
+    anyone else is refused (issue #1468). An operator still asks about whoever they name.
 
     `since` / `until` take epoch seconds or ISO-8601; the default window straddles NOW (14 days
     back, 30 forward) because half of what decision 31 asks for is in the future. `limit` keeps the
@@ -464,7 +577,7 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     about one meeting, and the zone is a fact about the person, which this service can read and a
     worker container cannot.
     """
-    subj = (subject or "").strip()
+    subj = scoped_subject(caller, subject)
     if not subj:
         raise HTTPException(status_code=400,
                             detail="subject is required: a platform uid, or an email address")
@@ -474,7 +587,8 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
             "expected": "a platform uid (digits) or an email address"})
     out = build_timeline(db, subj, since=since or None, until=until or None,
                          limit=max(1, min(int(limit or 20), 200)),
-                         meetings=fetch_meetings if meetings else None)
+                         meetings=fetch_meetings if meetings else None,
+                         identity=_as_me(caller))
     if out.get("unresolved"):
         raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
     shape = (format or "json").strip().lower()

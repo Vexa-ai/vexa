@@ -72,7 +72,7 @@ def rows():
                                      flow, flow_version, step, status, attempt, next_run_at,
                                      reason, created_at, updated_at)
                VALUES (:rid,:sid,'meeting.completed',:refs,'post_meeting',1,'email_minutes',
-                       'waiting',0,0,NULL,:c,:c)""",
+                       'admitted',0,0,NULL,:c,:c)""",
             {"rid": rid, "sid": f"{rid}::post_meeting", "refs": json.dumps(refs), "c": T0})
     yield
     fa.db.execute("DELETE FROM reaction")
@@ -167,7 +167,7 @@ def test_another_persons_bearer_sees_none_of_the_first_persons_rows(client, iden
 def test_cancelling_a_reaction_that_is_not_yours_is_refused(client, identity):
     r = client.post("/reactions/r-ben/cancel", headers=bearer("anna-key"), json={})
     assert r.status_code == 403, r.text
-    assert fa.db.execute("SELECT status FROM reaction WHERE reaction_id='r-ben'")[0][0] == "waiting"
+    assert fa.db.execute("SELECT status FROM reaction WHERE reaction_id='r-ben'")[0][0] == "admitted"
 
 
 def test_cancelling_your_own_reaction_works(client, identity):

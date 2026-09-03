@@ -76,6 +76,25 @@ correct behaviour and not a gap in the queue.
 resolved private-mount-first and read hot, and a pending reaction behavior says nothing about is
 counted rather than spoken. `behavior/queue/README.md` is the contract.
 
+## Two tiers at the door
+
+`flows-api` answers to two kinds of caller and the difference is who the answer is about.
+
+The **operator key** (`X-Flows-Admin-Key`, `VEXA_FLOWS_API_KEY`) is the instance: it opens every
+route, reads every reaction and steers any of them. It is what configures the machine, and there is
+no per-person version of `POST /flows` or `POST /events`.
+
+A **person's own Vexa credential** opens the four routes that are about a person — `GET /flows`,
+`GET /reactions`, `POST /reactions/{id}/{verb}`, `GET /timeline` — and the subject is derived from
+that credential by asking identity's `/internal/validate`, the same resolver the gateway asks. Not
+a second resolver: flows is a second caller of the one that already exists. This is what the MCP
+edge needs, because that edge forwards the caller's own credential and holds none of its own — so
+without it the only way to make flows' four tools answer was to hand the edge the operator key, and
+the operator key is not a person.
+
+An unreachable identity answers **503**, never 401: not being able to ask who somebody is has not
+established that their credential is bad.
+
 ## Configuration
 
 Every environment key this brick reads is declared once in `src/flows_config.py`, with its class

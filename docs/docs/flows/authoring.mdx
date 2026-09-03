@@ -51,5 +51,16 @@ Most day-to-day iteration is the second kind: prompt and cadence changes, zero d
 | `GET /reactions?status=…` | the operator projection: what happened, why, what's waiting |
 | `POST /reactions/{id}/retry` · `resume` · `cancel` | the signal verbs — audited rows, never shell surgery |
 
-Auth: `X-Flows-Admin-Key`. New events always select the **newest active version** of each flow;
-running reactions are never migrated.
+Auth is two tiers, because two different callers reach this API:
+
+- **Reading and steering your own** — `GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`
+  and `GET /timeline` also take **your own Vexa credential** (`Authorization: Bearer …` or
+  `X-API-Key`). The subject is taken from that credential, so you see and steer your own reactions
+  and nobody else's — this is what makes those tools work from your own Claude Code over the MCP
+  endpoint. A `subject` argument naming somebody else is refused.
+- **Changing the machine** — `POST /flows`, `POST /flows/{name}/{v}/{action}`, `POST /events` and
+  `POST /events/batch` take the operator key `X-Flows-Admin-Key` and nothing else. The operator key
+  also opens everything above, unscoped, which is the admin console's view.
+
+New events always select the **newest active version** of each flow; running reactions are never
+migrated.
