@@ -49,7 +49,15 @@ from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
 from flows_steps import meeting as mt
 from flows_steps import mailtext
-from flows_steps.common import (UI_URL, ensure_platform_user, mint_scaffold, platform_user_id,
+# NOT `from … import UI_URL`. That name is a REQUIRED-EXPLICIT door served by `common`'s PEP-562
+# `__getattr__`, so importing it resolves the door AT IMPORT — the exact thing `_door` resolves at
+# access time to avoid ("a constant binds whatever the environment said at import"). One
+# `from … import` undid that for this whole module and made a step-time link URL decide whether
+# flows-api can BOOT: on the compose network it crash-looped with `VEXA_UI_URL is unset` before it
+# could serve /health or its tool manifest. Read through the module, at the use site, where the
+# refusal is still loud and is about the link it would have composed.
+from flows_steps import common as _common
+from flows_steps.common import (ensure_platform_user, mint_scaffold, platform_user_id,
                                 scaffolded, setting, ws_file)
 from flows_steps.notify import notify
 
@@ -796,7 +804,7 @@ def build(reg: Registry, db) -> None:
             if end != -1:
                 body = rest[end + 4:]
         body = re.sub(r"\[([^\]]+)\]\((/[^)]*)\)",
-                      lambda m: m.group(1) + ": " + UI_URL + m.group(2), body)
+                      lambda m: m.group(1) + ": " + _common.UI_URL + m.group(2), body)
         body = re.sub(r"\[\[([^\]]+)\]\]", r"\1", body)
         return body.strip()
 
