@@ -102,6 +102,36 @@ def test_only_a_completed_document_opens_the_gate(monkeypatch):
     assert calls[0]["headers"]["X-Admin-API-Key"] == "a-real-admin-key"
 
 
+# ── 1b. F-D15: the agent domain absent ── the gate opens by construction, never by probe ─────
+def test_agent_domain_absent_opens_the_gate_with_no_admin_api_call(monkeypatch):
+    """A no-agents deployment has no onboarding wizard (agent-api's `POST /api/global/ready` is
+    the ONLY writer of the company layer), so without this branch a fresh no-agents instance would
+    admit every invite and park it FOREVER — nothing in that profile could ever satisfy the gate.
+    Presence is read the same way every `needs=("agent",)` step already reads it: a configuration
+    fact, never a probe, so the gate must not even ask admin-api when the domain is absent."""
+    monkeypatch.setattr(common, "AGENT_API", "")
+    exploded = []
+
+    def explode(*_a, **_k):
+        exploded.append(1)
+        raise AssertionError("must not read admin-api when the agent domain is not deployed")
+
+    monkeypatch.setattr(common, "http", explode)
+    assert gate.gate_state() == "completed"
+    assert gate.company_layer_ready() is True
+    assert exploded == []
+
+
+def test_agent_domain_present_is_byte_for_byte_unchanged(monkeypatch):
+    """The sibling assertion: when the agent domain IS deployed, this change must not touch the
+    existing fail-closed behaviour — a row that is not `completed` still blocks, exactly as today."""
+    monkeypatch.setattr(common, "AGENT_API", "http://agent-api:8000")
+    fake, calls = _http((200, {"admin_exists": True, "global_setup": "missing", "company": None}))
+    monkeypatch.setattr(common, "http", fake)
+    assert gate.gate_state() == "missing"
+    assert len(calls) == 1
+
+
 # ── 2. the cache ─────────────────────────────────────────────────────────────────────────────
 def test_the_answer_is_cached_so_tick_cannot_poll_admin_api_to_death(monkeypatch):
     fake, calls = _http((200, {"global_setup": "completed"}))

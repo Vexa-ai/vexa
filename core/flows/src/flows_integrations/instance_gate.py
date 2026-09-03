@@ -11,6 +11,14 @@ So this module answers exactly one question — "may work run?" — and it answe
 them read `missing`, because none of them is evidence that setup finished. The only thing that
 opens the gate is admin-api saying, in so many words, `global_setup == "completed"`.
 
+ONE EXCEPTION, and it is by construction rather than a probe (F-D15, ADR-0037 / PRD decision
+40.7): the company layer is a feature OF the agent domain — its only writer is agent-api's
+onboarding wizard (`POST /api/global/ready`) — so a deployment that does not run the agent
+domain (`flows_steps.common.domain_present("agent")` is `False`) has no wizard that could ever
+satisfy this gate. Without this exception a fresh no-agents instance admits every invite and
+parks it FOREVER, indistinguishable from a broken product. When the agent domain IS deployed,
+nothing below changes: fail-closed until the wizard commits.
+
     GET {VEXA_FLOWS_ADMIN_API_URL}/admin/instance     header X-Admin-API-Key
       -> {"admin_exists": bool, "global_setup": "completed" | "missing", "company": str | null}
 
@@ -81,6 +89,18 @@ def _read() -> Tuple[str, str]:
     override = (os.environ.get("VEXA_FLOWS_INSTANCE_GATE") or "").strip().lower()
     if override in ("completed", "missing"):
         return override, f"VEXA_FLOWS_INSTANCE_GATE={override} (test/dev override, no http read)"
+
+    # F-D15 (ADR-0037 / PRD decision 40.7 — a capability absent degrades, it does not park): the
+    # ONLY writer of the company layer today is agent-api's onboarding wizard (POST
+    # /api/global/ready -> PUT /internal/settings/global_setup). A deployment that does not run
+    # the agent domain has no wizard, so without this check a fresh no-agents instance admits every
+    # invite and parks it FOREVER — nothing in that profile can ever satisfy the gate. Presence is
+    # the same signal every `needs=("agent",)` step already reads (`common.domain_present`), so
+    # this is not a new concept: the company layer is a feature OF the agent domain, and when that
+    # domain is not deployed there is no company layer to gate behind. When the agent domain IS
+    # present, behaviour is byte-for-byte unchanged below — fail-closed until the wizard commits.
+    if not common.domain_present("agent"):
+        return "completed", "no agent domain: company layer gate open (F-D15 / ADR-0037)"
 
     url = f"{common.ADMIN_API.rstrip('/')}/admin/instance"
     try:
