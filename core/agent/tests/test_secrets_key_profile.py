@@ -102,7 +102,8 @@ def test_the_key_is_settable_on_every_shipped_deployment_surface():
     surfaces = {
         "compose": root / "deploy/compose/docker-compose.yml",
         ".env.example": root / "deploy/compose/.env.example",
-        "helm values": root / "deploy/helm/charts/vexa/values.yaml",
+        "helm secret": root / "deploy/helm/charts/vexa/templates/secret.yaml",
+        "helm agent-api env": root / "deploy/helm/charts/vexa/templates/deployment-agent-api.yaml",
     }
     missing = [name for name, p in surfaces.items()
                if not p.is_file() or "VEXA_SECRETS_KEY" not in p.read_text()]

@@ -46,6 +46,11 @@ global:
 # VEXA_SERVICE_AUTHORITY_SECRET, VEXA_SYSTEM_WEBHOOK_SECRET, VEXA_DISPATCH_SIGNING_KEY,
 # VEXA_BOT_API_KEY, ANTHROPIC_API_KEY,
 # ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN.
+# The deployment profile, the same word the mcp and transcription services read. Anything but
+# `production` (including unset) is a development posture; `production` makes an empty
+# `secrets.secretsKey` a boot refusal instead of a silently generated key (R-E08).
+vexaEnv: "development"
+
 secrets:
   existingSecretName: ""
   adminApiToken: "CHANGE_ME"        # admin-api auth + MeetingToken signing (== meeting-api ADMIN_TOKEN)
@@ -57,6 +62,11 @@ secrets:
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
+  secretsKey: ""                    # agent-api credential store (saved PATs + deploy-key private
+                                    # halves). Empty → a key is generated INSIDE the workspaces
+                                    # volume beside the ciphertext, which is not encryption at rest
+                                    # against a stolen volume (R-E08); with vexaEnv=production an
+                                    # empty value is a refusal — `openssl rand -hex 32`
   # Model-provider auth (config.v1 `model_inference` capability, ADR-0026). ANTHROPIC_AUTH_TOKEN +
   # ANTHROPIC_BASE_URL are the OpenRouter/subscription pair (compose sources them from .env as a
   # single source of truth — here they live in the Secret). claudeCodeOauthToken

@@ -100,6 +100,16 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_BOT_API_KEY
                   optional: true
+            # The credential store's key, and the profile that decides whether it may be absent
+            # (R-E08). See values.yaml `secrets.secretsKey`.
+            - name: VEXA_SECRETS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_SECRETS_KEY
+                  optional: true
+            - name: VEXA_ENV
+              value: {{ .Values.vexaEnv | default "development" | quote }}
             - name: VEXA_AGENT_DEFAULT_SUBJECT
               value: {{ .Values.agentApi.defaultSubject | default "u_live" | quote }}
             - name: VEXA_AGENT_MODEL

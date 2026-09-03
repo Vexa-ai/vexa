@@ -36,7 +36,7 @@ import os
 import re
 import secrets as _secrets
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,37 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}(/[A-Za-z0-9_.@-]{1,128})*$")  # 
 
 
 ENV_KEY_NAME = "VEXA_SECRETS_KEY"   # the operator-supplied key (declared in config.v1.json)
+#: The deployment profile, spelled the way this repository already spells it
+#: (`transcription/main.py:154`, `vexa_mcp/app.py:587`): unset means `development`, and only the
+#: exact word `production` is production.
+ENV_PROFILE_NAME = "VEXA_ENV"
+
+
+class SecretStoreUnconfigured(RuntimeError):
+    """A production deployment that never gave the store a key to seal with (R-E08).
+
+    Raised on the WRITE path only. The docstring at the top of this module is honest that a
+    generated key sits beside the ciphertext and therefore defends a stray read and not a stolen
+    volume — but `VEXA_SECRETS_KEY` appeared in no compose file, no `.env.example` and no helm
+    values, so **no shipped deployment set it** and every deployment quietly took the weaker
+    property while the documentation asserted the stronger one. In production that is now a refusal
+    naming the fix, because a security claim nobody can act on is worse than no claim."""
+
+
+UNCONFIGURED_SENTENCE = (
+    "the credential store has no key to seal with: set VEXA_SECRETS_KEY (`openssl rand -hex 32`) "
+    "on this deployment. A key generated here would sit in the same directory as the ciphertext, "
+    "which is not encryption at rest in any sense worth claiming — outside production it is "
+    "generated with a warning instead."
+)
+
+
+def is_production(env: "Mapping[str, str] | None" = None) -> bool:
+    """Is this a production deployment? Only the exact word counts — `staging`, `dev`, a typo and an
+    unset value are all "not production", so a box nobody declared never fails closed on a property
+    it never claimed."""
+    src = os.environ if env is None else env
+    return str(src.get(ENV_PROFILE_NAME, "development") or "").strip().lower() == "production"
 
 
 def configured_key(explicit: str = "") -> str:
@@ -103,10 +134,21 @@ def master_key(root: str | Path, configured: str = "") -> bytes:
     there (32 random bytes, ``0600``) the first time anything is stored. Generation is racy-safe: a
     concurrent writer's file wins on re-read, so two boots cannot end up with two keys.
 
-    **Only the WRITE path may call this.** Reads go through ``read_key`` — see its docstring."""
+    **Only the WRITE path may call this.** Reads go through ``read_key`` — see its docstring.
+
+    IN PRODUCTION IT REFUSES rather than generating (R-E08): see ``SecretStoreUnconfigured``. Outside
+    production it generates and says so, every time, at WARNING — the store's honest level of
+    protection is a thing an operator should have to read past, not discover from a docstring."""
     existing = read_key(root, configured)
     if existing is not None:
         return existing
+    if is_production():
+        raise SecretStoreUnconfigured(UNCONFIGURED_SENTENCE)
+    log.warning(
+        "%s is unset, so the credential store is generating a key UNDER %s — beside the ciphertext "
+        "it seals. That defends a stray read, not a stolen volume or a backup. Acceptable in "
+        "development; in production this is a refusal. Set %s to hold the key outside the data "
+        "volume.", ENV_KEY_NAME, secrets_dir(root), ENV_KEY_NAME)
     kf = secrets_dir(root) / MASTER_KEY_FILENAME
     kf.parent.mkdir(parents=True, exist_ok=True)
     fresh = base64.b64encode(_secrets.token_bytes(32))
@@ -197,8 +239,12 @@ def put(root: str | Path, name: str, value: Optional[str], *, key_env: str = "")
         except FileNotFoundError:
             pass
         return False
+    # THE KEY FIRST, BEFORE ANY DISK IS TOUCHED. A production refusal (R-E08) that had already
+    # created the store directory would leave the deployment looking half-configured to the next
+    # reader — and the whole point of the refusal is that nothing about this store is half-done.
+    key = master_key(root, key_env)
     p.parent.mkdir(parents=True, exist_ok=True)
-    envelope = seal(val, master_key(root, key_env))
+    envelope = seal(val, key)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
     tmp.write_text(envelope, encoding="utf-8")
     _harden(tmp)

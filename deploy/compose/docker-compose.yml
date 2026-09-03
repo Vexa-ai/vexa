@@ -265,6 +265,18 @@ services:
       # Unset reads as "unknown" and the bar simply never fires (PRD decision 39).
       - VEXA_BUILD_SHA=${VEXA_BUILD_SHA:-${IMAGE_TAG:-dev}}
       - VEXA_WORKSPACES_DIR=/workspaces
+      # THE CREDENTIAL STORE'S KEY, and the profile that decides whether it may be absent (R-E08).
+      # `secret_store` seals saved PATs and per-workspace deploy-key private halves. With no key it
+      # GENERATES one under `<workspaces>/.secrets/`, beside the ciphertext it seals — which defends
+      # a stray read and not a stolen volume or a backup, and the module has always said so. It was
+      # settable nowhere, so no deployment ever set it and every deployment quietly took the weaker
+      # property. Mint one (`openssl rand -hex 32`) to hold the key outside the data volume.
+      #
+      # VEXA_ENV is the same profile word the mcp and transcription services already read: unset or
+      # anything but `production` keeps the generated key (with a warning on every boot that needs
+      # it); `production` makes an unset VEXA_SECRETS_KEY a refusal naming the fix.
+      - VEXA_SECRETS_KEY=${VEXA_SECRETS_KEY:-}
+      - VEXA_ENV=${VEXA_ENV:-development}
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001

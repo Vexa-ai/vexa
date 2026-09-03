@@ -441,10 +441,23 @@
     {
       "key": "VEXA_SECRETS_KEY",
       "class": "defaulted",
-      "default": "(empty \u2014 a 0600 key is generated under the workspaces secrets root on first use)",
+      "default": "(empty \u2014 outside production a 0600 key is generated under the workspaces secrets root on first use, with a warning; in production an empty value is a boot refusal)",
       "secret": true,
-      "description": "server-side key the credential store seals with (saved GitHub PAT + per-workspace deploy-key private halves); set it to hold the key outside the data volume",
-      "targets": []
+      "description": "server-side key the credential store seals with (saved GitHub PAT + per-workspace deploy-key private halves). EMPTY GENERATES ONE BESIDE THE CIPHERTEXT, under the workspaces secrets root \u2014 enough against a stray read, nothing against a stolen volume or a backup. It was settable on no deployment surface, so no deployment ever set it and every deployment quietly took the weaker property while the docs asserted the stronger one (R-E08). It is on compose and helm now, and with VEXA_ENV=production an unset value is a refusal naming the fix rather than a silent downgrade",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_ENV",
+      "class": "defaulted",
+      "default": "development",
+      "description": "the deployment profile, spelled as the mcp and transcription services already spell it (`transcription/main.py`, `vexa_mcp/app.py`): anything but the exact word `production`, including unset, is a development posture. agent-api reads it in ONE place \u2014 the credential store, where production turns an unset VEXA_SECRETS_KEY from a generated key beside the ciphertext into a refusal (R-E08)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_MCP_DELEGATION_TTL_SEC",

@@ -214,7 +214,10 @@ def test_the_qwen_lane_dials_are_declared():
 # +1 on `flows-delivery`: VEXA_ROOM_MEETING, the post-meeting room signal the worker reads to
 # keep decision 22 (no desk write-back, no README refresh, no bot verbs on a finished meeting —
 # F103/F104). The widened scan this file's sibling test performs is what caught it undeclared.
-EXPECTED_DECLARED_KEYS = 87
+# 87 since VEXA_ENV was declared beside VEXA_SECRETS_KEY (R-E08): the profile word decides whether
+# an unset store key is a generated one or a boot refusal, so the two are read together and are
+# declared together.
+EXPECTED_DECLARED_KEYS = 88
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():
