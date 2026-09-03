@@ -27,7 +27,7 @@ Each adopted service ships a `config.v1.json` next to its code (vendored into it
 | `capability` | never blocks boot | the named capability's **tri-state** is computed from the env: `configured` / `not_configured` / `misconfigured` (mode=all: some-but-not-all member keys set; mode=any: alternative paths, ≥1 suffices). Capability-gated endpoints consult `capability_state(...)` and fail loud with a typed, actionable error; `/health` carries a `capabilities` object (ADDITIVE) |
 
 **`publish-edge` exists because the sanctioned coupling mechanism was failing its own gate.**
-A domain that hands a fact to flows reads `FLOWS_API_URL`, and every env read must be declared — but
+A domain that hands a fact to flows reads `VEXA_FLOWS_API_URL`, and every env read must be declared — but
 the three original classes all describe a value the service *needs*: `required-explicit` refuses the
 boot without it, `defaulted` supplies one, `capability` gates endpoints on it. Declaring a publish
 target as any of them asserts that **the publisher depends on the consumer**, which is the one thing

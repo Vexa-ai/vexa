@@ -17,10 +17,10 @@ A PUBLISH EDGE IS NOT A DEPENDENCY:
     domain runs meetings exactly as one with a flows domain does, and so does one where flows is
     down or slow — that is a PROFILE, not a degraded state.
 
-So `VEXA_FLOWS_API_URL` / `VEXA_FLOWS_API_KEY` are declared as a `publish-edge` in `config.v1.json`
-(mirroring agent-api's own spelling of the URL key — identity's admin-api spells it bare
-`FLOWS_API_URL`; the two publishers that already exist do not even agree with each other, which is
-worth fixing in its own change, not this one).
+So `VEXA_FLOWS_API_URL` / `VEXA_FLOWS_API_KEY` are declared as a `publish-edge` in `config.v1.json`,
+matching agent-api's own spelling of the URL key (identity's admin-api spelled it bare
+`FLOWS_API_URL` until F208, which aligned it to the name the other two publishers already used; the
+bare name is still honoured there for one release, with a boot warning).
 
 THE SOURCE_EVENT_ID MATCHES FLOWS' OWN SCHEME ON PURPOSE (`live-<meeting_id>` / `done-<meeting_id>`
 — see `meeting_started_source_id` / `meeting_completed_source_id`), not a meeting-api-flavoured

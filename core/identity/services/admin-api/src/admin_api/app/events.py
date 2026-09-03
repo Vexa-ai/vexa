@@ -12,11 +12,14 @@ A PUBLISH EDGE IS NOT A DEPENDENCY, and that distinction is the whole design of 
   * a PUBLISH is a fact handed over. It is best-effort, bounded, and swallowed. A deployment with no
     flows domain still onboards people; so does one where flows is down or slow.
 
-So `FLOWS_API_URL` on this service is declared as a publish edge in `config.v1.json`, and
+So `VEXA_FLOWS_API_URL` on this service is declared as a publish edge in `config.v1.json`, and
 `gate:domain-doors` reads it as one: the rule is *a domain's doors are identity, runtime and itself*
 for CALLS, and a publish is not a call. Without that distinction the sanctioned coupling mechanism
 would fail its own gate, and the only way to satisfy the gate would be to stop telling anyone
-anything.
+anything. Spelled bare `FLOWS_API_URL` until F208 — the only one of the three flows publishers not
+carrying the `VEXA_` prefix this repo uses for its own keys, while meeting-api and agent-api already
+did. `_flows_base()` below still reads the old name for one release, with a boot warning naming the
+new one (`__main__.build_production_app`).
 
 WHAT MAY NEVER HAPPEN is the reverse of a dropped publish: onboarding completing without the fact
 being recorded. That is a person who is signed in and has no seat, and nobody finds out until an
@@ -48,8 +51,39 @@ DEFAULT_SEAT = "member"
 TIMEOUT_S = 2.0
 
 
+#: The canonical name (config.v1.json, F208) — matches meeting-api's and agent-api's own
+#: config.v1.json spelling of the same publish-edge key.
+FLOWS_API_URL_ENV = "VEXA_FLOWS_API_URL"
+#: Honoured for one release, with a boot warning (`__main__.build_production_app`). This is the
+#: name every deployment set before F208, when admin-api was the one flows publisher spelling the
+#: key bare while meeting-api and agent-api already carried the `VEXA_` prefix.
+FLOWS_API_URL_ENV_DEPRECATED = ("FLOWS_API_URL",)
+
+
 def _flows_base() -> str:
-    return (os.getenv("FLOWS_API_URL") or "").rstrip("/")
+    base = (os.getenv(FLOWS_API_URL_ENV) or "").rstrip("/")
+    if base:
+        return base
+    for legacy in FLOWS_API_URL_ENV_DEPRECATED:
+        legacy_base = (os.getenv(legacy) or "").rstrip("/")
+        if legacy_base:
+            return legacy_base
+    return ""
+
+
+def deprecated_flows_url_env_in_use(env: Optional[dict] = None) -> Optional[str]:
+    """The deprecated env var name this process would fall back to, or None.
+
+    A pure check — this module never logs itself (`_flows_base` is called on every onboarding, and
+    a warning per request would be noise); `__main__.build_production_app` calls this once at boot
+    and logs it there, the same split `config_preflight.preflight()` already uses."""
+    env = os.environ if env is None else env
+    if (env.get(FLOWS_API_URL_ENV) or "").strip():
+        return None
+    for legacy in FLOWS_API_URL_ENV_DEPRECATED:
+        if (env.get(legacy) or "").strip():
+            return legacy
+    return None
 
 
 def _flows_key() -> str:

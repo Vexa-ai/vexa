@@ -174,7 +174,8 @@ def test_the_carrier_the_route_publishes_is_the_one_identity_owns_in_the_census(
 def test_it_fires_with_no_flows_domain_and_no_agent_domain(client, monkeypatch):
     """THE POINT OF MOVING IT HERE. The publish is attempted whatever else is deployed; with no
     flows it is dropped, and onboarding still completes. No agent code is on the path at all."""
-    monkeypatch.delenv("FLOWS_API_URL", raising=False)
+    monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
+    monkeypatch.delenv("FLOWS_API_URL", raising=False)  # F208 deprecated fallback
     monkeypatch.delenv("AGENT_API_URL", raising=False)
     r = _create(client, "alone@vexa.ai")
     assert r.status_code in (200, 201), r.text
@@ -195,5 +196,5 @@ def test_a_publish_that_fails_never_fails_the_person(client, monkeypatch):
 def test_the_publisher_itself_swallows_everything(monkeypatch):
     """Asserted on the publisher, not only through the route: the next caller of `publish` gets the
     same guarantee without having to know to wrap it."""
-    monkeypatch.setenv("FLOWS_API_URL", "http://127.0.0.1:9")   # nothing listens
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://127.0.0.1:9")   # nothing listens
     assert events_mod.publish("onboarding.completed", "x", {"subject": "1"}) is False

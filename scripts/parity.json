@@ -172,6 +172,29 @@
       ]
     },
     {
+      "id": "flows-publish-edge-url-key",
+      "fact": "the env var name each publisher spells the flows publish-edge base-URL key with",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "VEXA_FLOWS_API_URL — the VEXA_ prefix is this repo's own convention for its own keys",
+      "how_to_agree": "declare the key as VEXA_FLOWS_API_URL in the service's config.v1.json and read it under that name in the reader Python module",
+      "why": "F208 — a dogfood stage worker had to open each publisher's config.v1.json in turn to learn what to set, because identity's admin-api spelled the key bare (FLOWS_API_URL) while meeting-api and agent-api already carried the VEXA_ prefix; meeting-api's own declaration said as much in its description ('the two publishers that already exist do not even agree with each other'). Fixed by aligning admin-api to the spelling the other two already used (its bare name is still read for one release, with a boot warning); this fact is what keeps a fourth publisher — or a slip back — from reopening the gap.",
+      "sites": [
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\":\\s*\"([A-Za-z_]*FLOWS[A-Za-z_]*URL)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"key\":\\s*\"([A-Za-z_]*FLOWS[A-Za-z_]*URL)\""
+        },
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\":\\s*\"([A-Za-z_]*FLOWS[A-Za-z_]*URL)\""
+        }
+      ]
+    },
+    {
       "id": "entity-slug",
       "fact": "the slug that turns an entity's name into its filename",
       "kind": "literal",
