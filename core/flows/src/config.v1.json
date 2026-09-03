@@ -22,9 +22,8 @@
     },
     {
       "key": "VEXA_FLOWS_DB_URL",
-      "class": "capability",
-      "description": "The engine's Postgres DSN. Unset falls back to the dogfood container lookup in `flows_steps.common.db_url`, which exists for the rig and never for a deployment — so a deployment always sets it.",
-      "capability": "own_database",
+      "class": "required-explicit",
+      "description": "The engine's Postgres DSN — the two tables the whole engine is. REQUIRED-EXPLICIT, not a capability: flows without a database is not a deployment, so there is nothing optional to be tri-stated. It used to fall back to a dogfood container lookup in `flows_steps.common.db_url`; a guessed DSN on a host running more than one stack does not fail, it addresses somebody else's data (decision 18d). `sqlite://` is the offline dialect the suite and gate:health run on.",
       "targets": [
         "compose"
       ]
@@ -333,10 +332,6 @@
     }
   ],
   "capabilities": {
-    "own_database": {
-      "description": "The engine addressing its own Postgres by DSN rather than by looking up a container on the docker host.",
-      "when_unconfigured": "`common.db_url` falls back to the dogfood container lookup, which resolves on the rig box and nowhere else — so a deployment that leaves this unset fails at its first query, not at boot."
-    },
     "timeline_read_key": {
       "description": "A narrower credential for `GET /timeline` than the operator key.",
       "when_unconfigured": "The timeline stays readable, by the operator key only."

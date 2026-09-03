@@ -82,7 +82,11 @@ def test_the_no_agents_profile_is_configured_not_broken():
     adapter must read as two capabilities that are OFF — never as a service that cannot boot."""
     env = {"VEXA_FLOWS_API_KEY": "k", "VEXA_FLOWS_ADMIN_KEY": "a", "INTERNAL_API_SECRET": "s",
            "VEXA_FLOWS_ADMIN_API_URL": "http://admin-api:8001",
-           "VEXA_FLOWS_GATEWAY_URL": "http://gateway:8000"}
+           "VEXA_FLOWS_GATEWAY_URL": "http://gateway:8000",
+           # A DEPLOYMENT, so it names its database: #1483 made the DSN `required-explicit`
+           # (flows without a database is not a deployment). What this test asserts is
+           # unchanged — agent, terminal and mailbox read OFF and the service still boots.
+           "VEXA_FLOWS_DB_URL": "sqlite://"}
     cp.preflight(env)                                  # must not raise
     assert cp.capability_state("agent_domain", env) == "not_configured"
     assert cp.capability_state("terminal_link", env) == "not_configured"
@@ -114,7 +118,10 @@ def test_the_published_placeholders_are_refused_by_name_never_by_value(placehold
     env = {"VEXA_FLOWS_API_KEY": "k", "VEXA_FLOWS_ADMIN_KEY": "a",
            "INTERNAL_API_SECRET": placeholder,
            "VEXA_FLOWS_ADMIN_API_URL": "http://admin-api:8001",
-           "VEXA_FLOWS_GATEWAY_URL": "http://gateway:8000"}
+           "VEXA_FLOWS_GATEWAY_URL": "http://gateway:8000",
+           # Named so the MISSING-key refusal cannot fire first and mask the placeholder one
+           # this test is about (the DSN became `required-explicit` in #1483).
+           "VEXA_FLOWS_DB_URL": "sqlite://"}
     with pytest.raises(cp.ConfigError) as refused:
         cp.preflight(env)
     assert "INTERNAL_API_SECRET" in str(refused.value)

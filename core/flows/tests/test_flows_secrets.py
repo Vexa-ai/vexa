@@ -289,5 +289,9 @@ def test_the_smtp_password_is_declared_a_credential(monkeypatch):
     """P14: a value in `SECRETS` is never logged, never goldened, and is fed from a secret store by
     the deploy surface — not read out of one by the service itself."""
     assert "VEXA_MAIL_APP_PASSWORD" in flows_config.SECRETS
-    assert flows_config.DECLARED["VEXA_MAIL_APP_PASSWORD"][0] == "required-explicit"
-    assert flows_config.DECLARED["VEXA_MAIL_ADDR"][0] == "required-explicit"
+    # SECRECY IS ORTHOGONAL TO NECESSITY (the contract schema says so): the pair is
+    # `capability` under `mailbox`, because a deployment may not mail at all. The password
+    # is required WITHIN the capability — `all` mode makes a set address with no password
+    # misconfigured — which is the check that matters, and it is still a P14 secret either way.
+    assert flows_config.DECLARED["VEXA_MAIL_APP_PASSWORD"][0] == "capability"
+    assert flows_config.DECLARED["VEXA_MAIL_ADDR"][0] == "capability"

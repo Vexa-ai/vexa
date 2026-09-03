@@ -118,27 +118,32 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 
     # ── the mailbox: which inbox, and what it will answer ───────────────────
     "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (real) or `mailpit` (the dev double)."),
-    # `required-explicit` for the two keys below as of #1483 (decision 18c): every real transport
-    # logs in. The mail DOUBLE names VEXA_MAIL_SMTP_HOST instead and takes no login — the one shape
-    # where unset is a configuration rather than a gap. SMTP_HOST, the agent door and the link port
-    # stay `capability`. The mechanism the previous note warned about still holds and is still
-    # latent: flows’ own `preflight` enforces DOOR_KEYS only, and nothing under core/flows/src
-    # imports the vendored `config_preflight`, so the class here is documentary for flows’ OWN
-    # boot — it becomes "refuse to boot" the day flows boots through the shared validator, over a
-    # key only the mailbox lane reads.
+    # `capability`, not `required-explicit` — the ruling on the #1479 x #1483 collision (P14: a
+    # capability is optional BY DEFINITION, and a deployment may carry no mail intake at all). The
+    # pair stays grouped under `mailbox` in `all` mode, so a set address with no password is
+    # MISCONFIGURED — which is the check #1483 wanted, enforced inside the capability rather than
+    # at boot. Decision 18(c) holds either way: the `sops -d` vault path is gone from `emailx.creds`
+    # regardless of class. VEXA_FLOWS_DB_URL went the OTHER way and is `required-explicit` — flows
+    # without a database is not a deployment — so the `own_database` capability is gone.
+    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls this module’s own
+    # `preflight`, which enforces DOOR_KEYS only , and nothing under core/flows/src imports the vendored
+    # `config_preflight`. But the SHARED validator’s semantics are asserted by flows’ own contract
+    # tests (tests/test_config_contract.py drives `cp.preflight` directly), so `required-explicit`
+    # here is NOT merely documentary: it is the difference between the no-agents profile reading
+    # as capabilities-off and reading as a service that cannot boot.
     "VEXA_MAIL_ADDR": (
-        "required-explicit", None,
-        "the address this deployment's mailbox answers as. It is also the identity every "
-        "allow-list is anchored on, so an unset value is not a cosmetic gap. THERE IS NO VAULT "
-        "BEHIND IT: `emailx.creds` used to shell out to `sops -d` against a path in one "
+        "capability", None,
+        "the address this deployment's mailbox answers as, and the identity every allow-list is "
+        "anchored on. Unset = no mail intake; set without VEXA_MAIL_APP_PASSWORD is the "
+        "half-configured mailbox the capability's `all` mode calls misconfigured. THERE IS NO "
+        "VAULT BEHIND IT: `emailx.creds` used to shell out to `sops -d` against a path in one "
         "developer's home directory when this was unset (decision 18c)."),
     "VEXA_MAIL_APP_PASSWORD": (
-        "required-explicit", None,
+        "capability", None,
         "the IMAP/SMTP credential paired with VEXA_MAIL_ADDR, and a P14 SECRET (see SECRETS "
         "below): the deploy surface feeds it from a secret store, the service never reads one. "
-        "Required by every transport that logs in, which is every real one — the mail DOUBLE "
-        "names VEXA_MAIL_SMTP_HOST instead and takes no login, which is the only shape in which "
-        "an unset value is a configuration rather than a gap."),
+        "Required WITHIN the capability, not at boot: `mailbox` is `all` mode, so a set address "
+        "with no password is misconfigured rather than optional."),
     "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),

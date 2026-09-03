@@ -263,13 +263,25 @@ def test_production_imports_with_no_behavior_prompts_on_disk(monkeypatch):
     """THE IMPORT. Red before decision 18(a): the reload raised FileNotFoundError at module scope,
     from `ONBOARD_KICKOFF = _prompt("onboard-person.md")`."""
     import importlib
+    import sys
+    # IMPORT FRESH, never `reload`. `importlib.reload` requires the module object passed to it to
+    # still BE the entry in sys.modules, and a sibling suite (tests/test_flows_api_service.py)
+    # deletes `flows_defs.production` from sys.modules — so reload turned this invariant into an
+    # order-dependent ImportError that says nothing about prompts. Dropping the entry and importing
+    # re-executes module scope, which is the thing under test, and leaves the shared module object
+    # other test modules already hold untouched.
     _blind_to_the_prompt_tree(monkeypatch)
+    saved = sys.modules.get("flows_defs.production")
+    sys.modules.pop("flows_defs.production", None)
     try:
-        importlib.reload(production)                      # must not raise
-        assert callable(production.build)
+        fresh = importlib.import_module("flows_defs.production")   # must not raise
+        assert callable(fresh.build)
     finally:
         monkeypatch.undo()
-        importlib.reload(production)                      # leave the module as the suite found it
+        if saved is not None:                             # leave sys.modules as the suite found it
+            sys.modules["flows_defs.production"] = saved
+        else:
+            sys.modules.pop("flows_defs.production", None)
 
 
 def test_a_missing_prompt_is_a_typed_absence_at_read_time(monkeypatch):
