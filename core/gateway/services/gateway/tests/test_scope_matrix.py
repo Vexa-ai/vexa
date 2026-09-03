@@ -25,7 +25,7 @@ import gateway.app as app_module
 from gateway import ROUTE_SCOPES, UNSCOPED_ROUTES, create_app, undeclared_routes
 from gateway import app as gateway_app
 from gateway import routes_manifest
-from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
+from conftest import AGENT_CARRIED, VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis, needs_agent
 
 AUTH = {"x-api-key": VALID_KEY}
 
@@ -122,8 +122,25 @@ CASES = [
 
 SCOPES = ["bot", "tx", "browser"]
 
+# CASES IS THE FULL PRODUCT'S DECLARATION LIST AND STAYS WHOLE — it is reviewed once, above, and a
+# list that shrinks with the tree is a list that cannot catch a row going missing. What varies is
+# which rows THIS BUILD can exercise: a build with no agent manifest serves no /agent route, so
+# those rows are marked `needs_agent` and pytest reports them SKIPPED, with the reason, instead of
+# vanishing from the count.
+def _agent_row(template):
+    return template.startswith("/agent")
+
+
+#: The rows this build actually serves. Used by the tests that sweep every route, so their
+#: expectation is DERIVED from the tree rather than asserted against a table it does not have.
+#: Without this, `test_a_bot_and_tx_key_reaches_every_route` passes vacuously in a no-agent build:
+#: it asserts `!= 403`, and an absent route answers 404.
+CARRIED_CASES = [c for c in CASES if AGENT_CARRIED or not _agent_row(c[2])]
+
 MATRIX = [
-    (method, url, template, scope)
+    pytest.param(method, url, template, scope,
+                 marks=[needs_agent] if _agent_row(template) else [],
+                 id=f"{method} {url} [{scope}]")
     for method, url, template in CASES
     for scope in SCOPES
 ]
@@ -145,10 +162,7 @@ def _request(client, method, url):
     return client.request(method, url, headers=AUTH, json=body)
 
 
-@pytest.mark.parametrize(
-    "method,url,template,scope", MATRIX,
-    ids=[f"{m} {u} [{s}]" for m, u, _t, s in MATRIX],
-)
+@pytest.mark.parametrize("method,url,template,scope", MATRIX)
 def test_scope_matrix(method, url, template, scope):
     """Every protected route × every single-scope key → allow or deny, per ROUTE_SCOPES.
 
@@ -172,7 +186,7 @@ def test_browser_only_key_reaches_no_route_at_all():
     ``POST /bots``, which really did schedule a container on staging.
     """
     client = _client(["browser"])
-    for method, url, _template in CASES:
+    for method, url, _template in CARRIED_CASES:
         assert _request(client, method, url).status_code == 403, f"{method} {url} let a browser key in"
 
 
@@ -212,7 +226,7 @@ def test_a_bot_and_tx_key_reaches_every_route():
     """The shape every real key has (the terminal mints bot+tx+browser; the docs' own mint example
     is bot+tx) is unaffected end to end — no route in the matrix regresses to 403."""
     client = _client(["bot", "tx"])
-    for method, url, _template in CASES:
+    for method, url, _template in CARRIED_CASES:
         assert _request(client, method, url).status_code != 403, f"{method} {url} regressed"
 
 
@@ -286,8 +300,13 @@ def test_an_undeclared_route_cannot_be_built(monkeypatch):
 
 def test_matrix_covers_every_declared_route():
     """The matrix above is exhaustive over ROUTE_SCOPES — no declaration goes unexercised, and no
-    stale CASES row survives a route being removed."""
-    covered = {(method, template) for method, _url, template in CASES}
+    stale CASES row survives a route being removed.
+
+    Both sides are read from the same build: `ROUTE_SCOPES` is what this build publishes, and
+    `CARRIED_CASES` is the rows it can exercise. So this stays an EXACT equality in a build that
+    fronts four domains (62 rows) as much as in one that fronts five (69) — it never degrades to a
+    subset check, which would be the one way for a declaration to go unexercised unnoticed."""
+    covered = {(method, template) for method, _url, template in CARRIED_CASES}
     assert covered == set(ROUTE_SCOPES), (
         f"declared but unexercised: {sorted(set(ROUTE_SCOPES) - covered)}; "
         f"exercised but undeclared: {sorted(covered - set(ROUTE_SCOPES))}"
