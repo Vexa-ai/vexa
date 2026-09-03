@@ -127,6 +127,48 @@ describe("minutes live view — the raw transcript, and nothing else (PRD decisi
     expect(container.textContent).not.toContain("VEXA_LLM_BASE_URL");
   });
 
+  // ── R-C04 · the transcript is not edited ───────────────────────────────────────────────────
+  // Decision 34 deleted the in-product inference pipeline; two of its call sites survived in the
+  // segment mappers (`useMeeting.ts`), so every live, durable and fallback line was still being
+  // rewritten by `cleanTranscriptText`'s `DOMAIN_CORRECTIONS` table on its way to the screen —
+  // `Entropic`→`Anthropic`, `Cloud Code`→`Claude Code`, `Yalna Kunz`→`Yann LeCun` — with nothing
+  // marking the substitution, in the artefact a pilot treats as the record of what was said.
+  //
+  // The words below are the table's own entries, which is the point: they are the ones a passing
+  // test cannot be passing by accident.
+  const SAID = "Entropic ships Cloud Code, and Yalna Kunz disagrees with Deep Sea.";
+
+  it("a LIVE line reaches the screen exactly as it was said", async () => {
+    meetingsState = [meetingRow(true)];
+    liveState = { transcript: [{ id: "s1", speaker: "Jane", text: SAID, t: 1, completed: true }] };
+    await renderCanvas();
+
+    expect(container.textContent).toContain(SAID);
+    expect(container.textContent).not.toContain("Anthropic");
+    expect(container.textContent).not.toContain("Claude Code");
+    expect(container.textContent).not.toContain("Yann LeCun");
+    expect(container.textContent).not.toContain("DeepSeek");
+  });
+
+  it("a DURABLE line reaches the screen exactly as it was said", async () => {
+    meetingsState = [meetingRow(false)];
+    durableState.lines = [{ speaker: "Jane", text: SAID, t: 1 }];
+    await renderCanvas();
+
+    expect(container.textContent).toContain(SAID);
+    expect(container.textContent).not.toContain("Anthropic");
+  });
+
+  it("the live caption is the line, not a rewrite of it", async () => {
+    // `latestCaption` is what a viewer reads while a line is still being spoken — the same words,
+    // one render earlier, and therefore the same rule.
+    meetingsState = [meetingRow(true)];
+    liveState = { transcript: [{ id: "s1", speaker: "Jane", text: SAID, t: 1, completed: false }] };
+    await renderCanvas();
+
+    expect(container.textContent).toContain(SAID);
+  });
+
   it("the state card names the BOT, never the product's work", async () => {
     // At the door: the bot is on its way in and nothing has been heard. This window used to render
     // nothing at all, and the one after it read "Waiting for transcript — no new lines for 24s".

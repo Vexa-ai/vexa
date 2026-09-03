@@ -666,6 +666,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_ROOM_MEETING",
+      "class": "defaulted",
+      "default": "(unset \u2014 present only on a post-meeting room dispatch)",
+      "description": "the meeting this dispatch is the POST-MEETING RUN for, stamped when a room was authorised and absent on every other dispatch. Runtime-injected per dispatch, never a deploy surface. The worker reads it for the three things decision 22 says a room run must not do: no entity write-back and no desk-README refresh against the subject's own desk (both committed there, moved HEAD, and failed the meeting on process_meeting's own detector \u2014 F103), and no bot verbs in the MCP allow-set for a meeting that is over (F104). A POSITIVE signal rather than an inference from the mount set, because a room whose other attendees have no desks yet resolves to zero room mounts \u2014 the small-team case \u2014 so the mount shape answers 'not a room run' on a run that is one",
+      "targets": []
+    },
+    {
       "key": "VEXA_START",
       "class": "defaulted",
       "default": "{}",

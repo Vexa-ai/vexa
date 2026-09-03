@@ -211,7 +211,10 @@ def test_the_qwen_lane_dials_are_declared():
 # gained while that branch was open: INTERNAL_API_SECRET (the security hotfix, PR #1424) and
 # VEXA_BUILD_SHA (the version bar, PR #1422). The union is duplicate-free and drops nothing
 # from either side.
-EXPECTED_DECLARED_KEYS = 86
+# +1 on `flows-delivery`: VEXA_ROOM_MEETING, the post-meeting room signal the worker reads to
+# keep decision 22 (no desk write-back, no README refresh, no bot verbs on a finished meeting —
+# F103/F104). The widened scan this file's sibling test performs is what caught it undeclared.
+EXPECTED_DECLARED_KEYS = 87
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():
