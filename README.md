@@ -266,9 +266,9 @@ curl -X POST "$API_BASE/agent/events" -H "X-API-Key: $API_KEY" -H "Content-Type:
        "plan":{"prompt":"Triage this email into tasks; propose a record for each action item and a draft reply."}}'
 ```
 
-> **Live-meeting copilot** — cards for people, decisions, and action items *during* the call
-> (`POST /agent/meeting/start` → stream `GET /agent/meeting/stream`) — is on the roadmap; see
-> [Status](#️-status--roadmap).
+> **During the call** — stream the live transcript with `GET /agent/meeting/stream` and ask your
+> agent about it in the chat. Vexa runs no model of its own during a meeting: there is one
+> intelligence and it is your agent. See [Status](#️-status--roadmap).
 
 ---
 
@@ -429,9 +429,10 @@ at `/mcp` for agent clients ([docs](https://docs.vexa.ai/vexa-mcp)). Full refere
 **[docs.vexa.ai](https://docs.vexa.ai)**.
 
 > **v0.12 note:** live bot-control — `PUT /bots/{…}/config` (change language/task mid-call) and
-> `POST /bots/{…}/speak` (TTS into the call) — plus the live-meeting copilot (`/agent/meeting/*`) and
-> WebSocket streaming are not yet wired in the open-core stack and return `404` today. Send-a-bot, stop,
-> status, transcripts, recordings, agent chat, routines, and events are live.
+> `POST /bots/{…}/speak` (TTS into the call) — plus WebSocket streaming are not yet wired in the
+> open-core stack and return `404` today. So do `POST /agent/meeting/{start,process}`, the removed
+> in-product meeting copilot. Send-a-bot, stop, status, transcripts, recordings, the live transcript
+> feed, agent chat, routines, and events are live.
 
 ---
 
@@ -450,7 +451,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 | **Agent chat / routines / events over your workspace** | ✅ Built & proven live |
 | Workspace — git Markdown / OKF `kg/` bundle | 🟡 core proven; bucket-backed store landing |
 | **Runtime — Kubernetes backend** (Pod per dispatch) | ✅ Lifecycle + per-mount isolation; Helm in `deploy/helm` |
-| Live-meeting copilot (cards as the call runs) | 🔵 Next |
+| Live transcript feed as the call runs (+ agent chat over it) | ✅ Built & proven live |
 | Calendar sync (ICS) · planned meetings · scheduled auto-join | ✅ Production |
 | Shared workspaces & shared meetings (invites, real-time feed) | ✅ Built & proven live |
 | Agent chat during a live meeting (live transcript + workspace in context) | ✅ Built & proven live |
