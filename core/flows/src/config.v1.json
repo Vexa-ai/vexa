@@ -102,8 +102,9 @@
     },
     {
       "key": "VEXA_FLOWS_GATEWAY_URL",
-      "class": "required-explicit",
-      "description": "The meetings gateway, on the same terms.",
+      "class": "capability",
+      "description": "The meetings domain, reached through the gateway. UNSET MEANS THE MEETINGS DOMAIN IS NOT DEPLOYED (PRD decision 40.7 + decision 5) — a supported shape of deployment, not a misconfiguration, which is exactly what the `capability` class means. `required-explicit` was a refusal to BOOT: preflight named this door and exited before anything about meetings was asked, so flows+identity with no meetings could not start at all. The key still says GATEWAY because flows reaches meetings through the edge today; that hop is ADR-0037's to close and is not this class change.",
+      "capability": "meetings",
       "targets": [
         "compose"
       ]
@@ -380,6 +381,10 @@
       "description": "Harness overrides used by the dogfood rig and the offline suites.",
       "mode": "any",
       "when_unconfigured": "The real instance gate and the real transcript. This is the deployment state."
+    },
+    "meetings": {
+      "description": "This deployment carries the meetings domain — scheduling a bot into a call and reading back what it recorded (PRD decision 40.7; decision 5 for meetings).",
+      "when_unconfigured": "The meetings domain is not deployed. Flows still boots, still admits facts and still serves its queue; every flow step that would schedule or read a bot answers `meetings:not_present` — terminal, with the reason on the reaction, never a retry loop against a door that is not there."
     }
   },
   "surface_only": [

@@ -101,6 +101,37 @@ once per process; a caller sending both is answered on the new one.
 An unreachable identity answers **503**, never 401: not being able to ask who somebody is has not
 established that their credential is bad.
 
+## Meetings is optional, and so is the agent domain
+
+Two of the three domains flows can reach are **capability** doors, and their absence is a shape of
+deployment rather than a misconfiguration (PRD decision 40.7; decision 5 for meetings, agreed by
+the founder). Unset means *that domain is not deployed*: the process boots, admits facts and serves
+its queue, and the steps that would have reached the absent domain answer `<domain>:not_present` —
+terminal, with the reason on the reaction, never a retry loop against a door that is not there.
+
+| domain | key | steps that declare it |
+|---|---|---|
+| agent | `VEXA_FLOWS_AGENT_API_URL` | thirteen, listed in `tests/test_no_agents.py` |
+| meetings | `VEXA_FLOWS_GATEWAY_URL` | `await_start` · `dispatch_bot` · `run_meeting` · `process_meeting` · `email_minutes` · `email_attendees` · `drop_to_attendees` · `prepare_meeting` |
+
+**Presence is a configuration fact, never a probe.** A health check would make *"meeting-api is
+restarting"* and *"there is no meeting-api"* the same answer, and only the second is a supported
+product — the first is an outage, and it keeps the retry path it has always had.
+
+Two things a reader should not have to discover. The meetings key still says **GATEWAY** because
+flows reaches meetings *through the edge* today, which ADR-0037 forbids and which is a separate
+change: the gateway resolves the caller's key and enriches every forward with the user's scopes,
+workspaces and **limits**, and `POST /bots` enforces the per-user concurrent-bot cap out of that
+last one — so calling meeting-api directly is not a rename. And the door resolves **at access**,
+never at import (`flows_steps.common.meetings_door`): `from .common import GATEWAY` used to run the
+refusal while `flows_steps/meeting.py` was still loading, so an unset door was an ImportError for
+the whole step vocabulary, including every step with no interest in meetings.
+
+**The class change does not close flows' `gate:domain-doors` entry, and the gate is right.** That
+gate refuses a domain naming an EDGE before it looks at any class, so the entry closes on the
+de-hop above and on nothing else; `scripts/domain-doors.allow.json` now says so, in place of a
+ruling that promised this change would close it.
+
 ## Configuration
 
 Every environment key this brick reads is declared once in `src/flows_config.py`, with its class

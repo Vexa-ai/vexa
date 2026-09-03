@@ -125,15 +125,15 @@
     {
       "path": "core/flows/src/flows_steps/common.py",
       "door": "VEXA_FLOWS_GATEWAY_URL",
-      "line": 88,
+      "line": 34,
       "from": "flows",
       "to": "gateway",
-      "ruling": "PRD decision 40.7 and decision 5 (flows → meetings, 12 call sites via the gateway; architecture pass §1). To be declared an OPTIONAL meetings dependency — capability class + degrade — in a separate PR; that declaration removes this entry."
+      "ruling": "PRD decision 40.7 and decision 5 (flows → meetings, 12 call sites via the gateway; architecture pass §1). THE CAPABILITY DECLARATION HAS LANDED and this entry did NOT close with it — the previous ruling promised it would, and the checker cannot honour that. VEXA_FLOWS_GATEWAY_URL is now class 'capability' with a declared degrade (flows_config.py, config.v1.json capability 'meetings'), and eight production steps answer meetings:not_present — but judge() refuses a DOMAIN naming an EDGE unconditionally, before it ever looks at the class: the capability escape hatch is a domain→domain rule, and doorOwner() resolves this key to the gateway. THE ENTRY CLOSES ON THE DE-HOP, not on a class. And the de-hop is not a rename: the gateway resolves the caller's key and enriches every forward with X-User-Id, X-User-Scopes, X-User-Workspaces and X-User-Limits, and meeting-api's POST /bots derives the per-user concurrent-bot cap from the last of those (core/meetings/services/meeting-api/src/meeting_api/bot_spawn/router.py:208 _resolve_max_concurrent). Calling meeting-api directly without carrying those forward drops the cap silently, so this entry closes only when that enrichment has a home."
     },
     {
       "path": "core/flows/src/flows_steps/common.py",
       "door": "UI_URL",
-      "line": 90,
+      "line": 139,
       "from": "flows",
       "to": "terminal",
       "ruling": "PRD decision 46 — the EDGE mints what a client sees. flows holds VEXA_UI_URL because every mailed link needs an origin; the entry closes when the origin is minted at the edge."
@@ -141,7 +141,7 @@
     {
       "path": "core/flows/src/flows_steps/common.py",
       "door": "VEXA_UI_URL",
-      "line": 204,
+      "line": 253,
       "from": "flows",
       "to": "terminal",
       "ruling": "PRD decision 46 — the EDGE mints what a client sees. flows holds VEXA_UI_URL because every mailed link needs an origin; the entry closes when the origin is minted at the edge."
@@ -149,7 +149,7 @@
     {
       "path": "core/gateway/services/gateway/src/gateway/adapters.py",
       "door": "AGENT_API_URL",
-      "line": 204,
+      "line": 209,
       "from": "gateway",
       "to": "agent",
       "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. agent exports no manifest yet; the entry closes when core/agent ships one declaring base_url_env AGENT_API_URL."

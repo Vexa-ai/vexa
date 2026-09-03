@@ -177,8 +177,13 @@ def fetch_meetings(uid: str) -> list[dict]:
     if not uid:
         return []
     try:
-        from flows_steps.common import GATEWAY, http
-        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": _user_key(uid)})
+        from flows_steps.common import http, meetings_door
+        # `meetings_door()` raises `MeetingsDomainAbsent` where the domain is not deployed, and it
+        # lands in the same `except` as a gateway hiccup — deliberately one policy, not two: for a
+        # READ whose contract is already "degrade, never empty", an absent domain and an
+        # unreachable one produce the same honest answer (no meetings in the window). The
+        # distinction that matters is on the WRITE side, where a step must not knock at all.
+        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": _user_key(uid)})
     except Exception:  # noqa: BLE001 — see docstring
         _KEY_CACHE.pop(uid, None)          # a rejected key is the likeliest cause; re-mint next call
         return []

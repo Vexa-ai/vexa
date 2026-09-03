@@ -485,9 +485,14 @@ def build(reg: Registry, db) -> None:
                  {**ctx.refs, "uid": ctx.prior["ensure_user"]["uid"]})
         return Done({})
 
-    reg.step(mt.await_start)
-    reg.step(mt.dispatch_bot)
-    reg.step(mt.run_meeting)
+    # THE THREE THAT ARE THE MEETING (PRD decision 40.7 + decision 5). They wait for a call to
+    # start, put a bot in it, and read back what it recorded — there is nothing to degrade to and
+    # nothing to fake, so a deployment with no meetings domain answers `meetings:not_present` and
+    # the reaction ends there, carrying the reason. Declared at registration rather than checked in
+    # the body, for the reason `Registry.step` gives: a body that has to remember to ask cannot be
+    # enumerated, and the next step somebody adds will not remember.
+    for _fn in (mt.await_start, mt.dispatch_bot, mt.run_meeting):
+        reg.step(needs=("meetings",))(_fn)
 
     @reg.step
     def emit_completed(ctx: StepCtx):
@@ -600,7 +605,8 @@ def build(reg: Registry, db) -> None:
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
-    @reg.step(needs=("agent",))
+    # ALSO REACHES MEETINGS — reads the room order, the meeting row and the transcript (`mt.room_order`, `mt.meeting_row`, `mt.transcript_text`).
+    @reg.step(needs=("agent", "meetings"))
     def process_meeting(ctx: StepCtx):
         """ONE REAL AGENT TURN on session meet-<id>, producing ONE SHARED ARTEFACT: the meeting's
         report, the same words for everybody who was in the room.
@@ -817,7 +823,8 @@ def build(reg: Registry, db) -> None:
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
-    @reg.step(needs=("agent",))
+    # ALSO REACHES MEETINGS — stamps the meeting's date and mints the link's refs (`_meeting_stamp` → `mt.meeting_start`).
+    @reg.step(needs=("agent", "meetings"))
     def email_minutes(ctx: StepCtx):
         """Send the committed note VERBATIM in the body + the feedback ask + ONE link into the
         minutes terminal, already primed on this meeting. Cannot run before the commit: its input
@@ -1047,7 +1054,8 @@ def build(reg: Registry, db) -> None:
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
-    @reg.step(needs=("agent",))
+    # ALSO REACHES MEETINGS — reads the meeting row and mints a transcript share per attendee (`mt.meeting_row`, `mt.mint_transcript_share`).
+    @reg.step(needs=("agent", "meetings"))
     def email_attendees(ctx: StepCtx):
         """Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click
         composes. Cannot run before the note: its input is process_meeting's receipt.
@@ -1338,7 +1346,8 @@ def build(reg: Registry, db) -> None:
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
-    @reg.step(needs=("agent",))
+    # ALSO REACHES MEETINGS — stamps the meeting's day and its scaffold refs (`_meeting_stamp` → `mt.meeting_start`).
+    @reg.step(needs=("agent", "meetings"))
     def drop_to_attendees(ctx: StepCtx):
         """The meeting's ARTEFACT into every desk in the room — the organiser's included. Plain
         code, no agent turn, no LLM (founder decisions 20 and 22).
@@ -1476,7 +1485,8 @@ def build(reg: Registry, db) -> None:
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
-    @reg.step(needs=("agent",))
+    # ALSO REACHES MEETINGS — ensures the meeting row exists before the call (`mt.ensure_meeting_row`).
+    @reg.step(needs=("agent", "meetings"))
     def prepare_meeting(ctx: StepCtx):
         """The front door of the loop whose back door is email_minutes: one short note asking
         whether they want to walk in ready, carrying `?ask=prep&meeting=<ref>`.

@@ -20,7 +20,12 @@ import pytest
 
 #: Every door, and what its declaration class must be.
 DOORS = {
-    "VEXA_FLOWS_GATEWAY_URL": "required-explicit",
+    # THE MEETINGS DOMAIN (PRD decision 40.7 + decision 5, founder-agreed). `required-explicit`
+    # made an OPTIONAL domain a condition of booting: a flows deployment that runs the mail lane
+    # and the queue with no meetings exited at the preflight, before anything about meetings was
+    # asked. Unset is a deployment that runs no meetings domain, and the eight steps that would
+    # schedule or read a bot answer `meetings:not_present` — see tests/test_no_meetings.py.
+    "VEXA_FLOWS_GATEWAY_URL": "capability",
     "VEXA_FLOWS_ADMIN_API_URL": "required-explicit",
     # THE LINK PORT, not a service flows calls (PRD decision 4). `required-explicit` made a
     # step-time link decide whether the process could BOOT — flows-api crash-looped on the compose
