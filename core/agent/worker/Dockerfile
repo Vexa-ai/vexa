@@ -40,6 +40,12 @@ COPY core/agent/worker ./worker
 COPY core/agent/llm ./llm
 COPY core/agent/shared ./shared
 COPY core/agent/contracts ./contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). worker/engine.py imports them
+# as `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
 # The registry of per-person workspace templates the worker seeds new workspaces from (Phase 3) +
 # the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY behavior/workspaces ./workspace-seeds
@@ -47,7 +53,7 @@ COPY core/agent/tools-seed ./tools-seed
 
 # The sealed contracts loaded BY PATH at import (walk-up resolves repo_root == /app).
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json  ./meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json  ./workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json

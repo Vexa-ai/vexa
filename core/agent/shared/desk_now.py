@@ -49,8 +49,8 @@ from typing import Iterable, Optional
 # ONE closed set, defined where it is written and imported where it is read. Two copies of a
 # frontmatter contract is the same drift in miniature: the writer gains a key, the reader never
 # hears about it, and the section quietly stops showing a whole class of fact.
-from shared.entities import DATE_FIELDS, ENTITIES_DIR, KINDS, split_frontmatter
-from shared.links import format_ref
+from workspaces.shared.entities import DATE_FIELDS, ENTITIES_DIR, KINDS, split_frontmatter
+from workspaces.shared.links import format_ref
 
 MEETING_KIND = "meeting"
 

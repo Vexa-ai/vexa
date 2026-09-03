@@ -3880,18 +3880,24 @@ def meeting_transcript(meeting_url: str = "", tail: int = 80, since: str = "",
 
 # ── the transcript as a clickable surface (PRD decision 35) ───────────────────────────────────────
 #
-# `shared/terms.py` + `shared/entities.py` are PURE and stdlib-only, so the rig imports them from the
-# checkout it is served out of rather than re-implementing the extractor here. Two extractors would
-# drift the first time either was tuned, and the drift would show up as a chip that opens nothing.
-# `VEXA_AGENT_SRC` names the tree, the same way `VEXA_FLOWS_SRC` names the flows engine; the default
-# is this file's own repo, so an unconfigured rig works.
+# `shared/terms.py` is PURE and stdlib-only, so the rig imports it from the checkout it is served
+# out of rather than re-implementing the extractor here. Two extractors would drift the first time
+# either was tuned, and the drift would show up as a chip that opens nothing. `VEXA_AGENT_SRC` names
+# the tree, the same way `VEXA_FLOWS_SRC` names the flows engine; the default is this file's own
+# repo, so an unconfigured rig works.
 AGENT_SRC = os.environ.get("VEXA_AGENT_SRC") or str(pathlib.Path(__file__).resolve().parents[3] / "core" / "agent")
+# `shared.terms` imports `workspaces.shared.entities` (PRD decision 47, step 2 — the extractor's
+# entity/slug helpers moved to their own domain), so the rig needs `core/` on the path too, one
+# level above AGENT_SRC — not just `core/agent`.
+CORE_SRC = str(pathlib.Path(AGENT_SRC).resolve().parent)
 
 
 def _terms_mod():
     import sys
     if AGENT_SRC not in sys.path:
         sys.path.insert(0, AGENT_SRC)
+    if CORE_SRC not in sys.path:
+        sys.path.insert(0, CORE_SRC)
     from shared import terms as _t  # noqa: PLC0415 — a deployment input, not an import-time dep
     return _t
 

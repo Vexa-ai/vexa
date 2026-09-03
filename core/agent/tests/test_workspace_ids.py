@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from control_plane import workspace_ids as ids
-from shared import workspace_id as wsid
+from workspaces.shared import workspace_id as wsid
 
 
 def _ws(root: Path, name: str, *, members: bool = False) -> Path:

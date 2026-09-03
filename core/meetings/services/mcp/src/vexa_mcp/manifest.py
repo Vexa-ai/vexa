@@ -48,7 +48,7 @@ CONTRACT = "mcp.tools.v1"
 # reintroduces one on purpose.
 CREDENTIAL_ARGUMENTS = {"token", "api_key", "apikey", "key", "access_token", "bearer",
                         "credential", "password", "secret"}
-DOMAINS = {"meetings", "identity", "flows", "agent", "gateway", "rehearse", "billing"}
+DOMAINS = {"meetings", "identity", "flows", "agent", "gateway", "rehearse", "billing", "workspaces"}
 IDENTITIES = {"user", "admin", "operator", "none"}
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 

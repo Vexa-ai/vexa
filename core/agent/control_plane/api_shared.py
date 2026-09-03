@@ -36,7 +36,7 @@ from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
 from shared import units
-from shared import entities as entities_mod
+from workspaces.shared import entities as entities_mod
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import workspace_ids as ids_mod
@@ -72,7 +72,7 @@ from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import workspace_credentials as wcreds
 from control_plane import repo_ref
 from shared.git_redaction import redact as redact_secrets
-from shared import workspace_paths as wpaths
+from workspaces.shared import workspace_paths as wpaths
 from control_plane import global_layer
 from control_plane import version as version_mod
 from control_plane import system_mounts

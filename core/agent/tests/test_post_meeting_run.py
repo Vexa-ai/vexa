@@ -205,7 +205,7 @@ def test_the_group_desk_is_still_a_write_back_target(monkeypatch):
 
     monkeypatch.setenv("VEXA_ROOM_MEETING", "97")
     roots_seen = []
-    monkeypatch.setattr("shared.entities.missing_names",
+    monkeypatch.setattr("workspaces.shared.entities.missing_names",
                         lambda roots, texts: roots_seen.extend(str(r) for r in roots) or ["Priya"])
     out = engine.writeback_candidates(["Priya Raman joined"], [DESK, GROUP, ROOM, SYSTEM])
 
@@ -219,7 +219,7 @@ def test_off_a_room_run_the_phase_targets_the_desk_exactly_as_before(monkeypatch
 
     monkeypatch.delenv("VEXA_ROOM_MEETING", raising=False)
     roots_seen = []
-    monkeypatch.setattr("shared.entities.missing_names",
+    monkeypatch.setattr("workspaces.shared.entities.missing_names",
                         lambda roots, texts: roots_seen.extend(str(r) for r in roots) or [])
     engine.writeback_candidates(["Priya Raman joined"], [DESK, SYSTEM])
 

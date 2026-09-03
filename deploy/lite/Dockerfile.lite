@@ -193,10 +193,15 @@ COPY core/agent/control_plane   /app/agent/control_plane
 COPY core/agent/worker          /app/agent/worker
 COPY core/agent/llm             /app/agent/llm
 COPY core/agent/contracts       /app/agent/contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2) — both control_plane and
+# worker import them as `workspaces.shared.<module>`.
+COPY core/workspaces/__init__.py /app/agent/workspaces/__init__.py
+COPY core/workspaces/shared     /app/agent/workspaces/shared
 COPY behavior/workspaces /app/agent/workspace-seeds
 COPY core/agent/tools-seed      /app/agent/tools-seed
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json /app/agent/meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json      /app/agent/agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json /app/agent/workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json            /app/agent/agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                /app/agent/agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json          /app/agent/agent/contracts/routine.v1/routine.schema.json

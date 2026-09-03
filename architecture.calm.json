@@ -508,11 +508,11 @@
    "unique-id": "workspace.v1",
    "node-type": "contract",
    "name": "workspace.v1",
-   "description": "workspace.v1 — sealed/published contract (agent)",
+   "description": "workspace.v1 — sealed/published contract (workspaces)",
    "metadata": [
     {
-     "path": "core/agent/contracts/workspace.v1",
-     "domain": "agent"
+     "path": "core/workspaces/contracts/workspace.v1",
+     "domain": "workspaces"
     }
    ]
   },
@@ -1304,7 +1304,6 @@
       "task.v1",
       "tool.v1",
       "unit.v1",
-      "workspace.v1",
       "agent-worker",
       "out-stream",
       "unit-in",

@@ -210,8 +210,8 @@ def _elsewhere_index(root, mounts) -> dict:
 
     Skips a mount with no identity file rather than raising: a workspace the migration has not
     reached is one that cannot yet be linked to by id, and a turn must still be able to write."""
-    from shared.links import entity_slug_index
-    from shared.workspace_id import workspace_id_of
+    from workspaces.shared.links import entity_slug_index
+    from workspaces.shared.workspace_id import workspace_id_of
 
     here = Path(root).resolve()
     out: dict = {}
@@ -237,7 +237,7 @@ def _rewrite_links(root, facts, *, name: str, mounts) -> tuple[list, list]:
     elsewhere = _elsewhere_index(root, mounts)
     if not elsewhere:
         return list(facts), []
-    from shared.links import rewrite_cross_workspace
+    from workspaces.shared.links import rewrite_cross_workspace
 
     here = known_slugs(root) | {slugify(name)}   # the page being written counts as HERE, before it exists
     out, all_rewrites = [], []

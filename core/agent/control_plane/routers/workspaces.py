@@ -39,8 +39,8 @@ from control_plane.workspace_publish import (
 from control_plane.workspace_purpose import read_purpose, write_purpose
 from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 from pathlib import Path
-from shared import entities as entities_mod
-from shared import workspace_paths as wpaths
+from workspaces.shared import entities as entities_mod
+from workspaces.shared import workspace_paths as wpaths
 from shared.git_redaction import redact as redact_secrets
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional

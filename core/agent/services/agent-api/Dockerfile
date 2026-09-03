@@ -40,6 +40,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git openssh-cli
 COPY core/agent/shared ./shared
 COPY core/agent/control_plane ./control_plane
 COPY core/agent/contracts ./contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). control_plane imports them as
+# `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
 # workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY behavior/workspaces ./workspace-seeds
@@ -48,7 +54,7 @@ COPY behavior/workspaces ./workspace-seeds
 # walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves
 # `meetings/contracts/...` and `agent/contracts/...` (repo_root == /app).
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json  ./meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json  ./workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json

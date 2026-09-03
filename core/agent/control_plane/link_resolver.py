@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Optional
 
 from control_plane import workspace_ids as ids_mod
-from shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
-from shared.links import Ref, canonical_url, parse_ref
-from shared.workspace_paths import PathRefused, is_inside, relative_parts
+from workspaces.shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
+from workspaces.shared.links import Ref, canonical_url, parse_ref
+from workspaces.shared.workspace_paths import PathRefused, is_inside, relative_parts
 
 # Titles a resolver may show for a page it is not allowed to open. Deriving one from the ref is the
 # ONLY honest option: the id `olga-avramenko` becomes "Olga Avramenko", which is what the writer
@@ -60,7 +60,7 @@ def escapes(target: str) -> bool:
     client would then hand to the file endpoint, where the same string gets a second chance.
 
     THE TEXTUAL half only, because this answers about a ref before any workspace root is known;
-    ``_find`` re-asks ``shared.workspace_paths`` with the root so a SYMLINK out is caught too. The
+    ``_find`` re-asks ``workspaces.shared.workspace_paths`` with the root so a SYMLINK out is caught too. The
     version this replaces counted ``..`` segments and nothing else — and ``Path("/ws") / "/etc/passwd"``
     is ``/etc/passwd``, an absolute path DISCARDING the root, which is how ``[[ws:<id>//etc/passwd]]``
     read a host file and echoed its path back to the caller (R-A06)."""
@@ -83,7 +83,7 @@ def _find(root: Path, ref: Ref) -> Optional[str]:
         if not is_inside(root, ref.target):
             return None
         return ref.target if (root / ref.target).is_file() else None
-    from shared.entities import slugify
+    from workspaces.shared.entities import slugify
 
     slug = slugify(ref.target) if ref.form == "title" else ref.target
     for kind in KINDS:

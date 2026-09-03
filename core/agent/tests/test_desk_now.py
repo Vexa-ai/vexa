@@ -11,7 +11,7 @@ import datetime
 import pytest
 
 from shared import desk_now
-from shared.entities import EntityRefused, upsert_entity
+from workspaces.shared.entities import EntityRefused, upsert_entity
 
 UTC = datetime.timezone.utc
 NOW = 1_788_362_400.0                       # 2026-09-02 15:20Z

@@ -10,7 +10,7 @@ budget, and the measurement was reporting the cost of the path production does n
 So the harness serves the tool itself. No rig, no HTTP, no running stack, no dependency: MCP stdio
 is newline-delimited JSON-RPC 2.0 over a pipe, and the three methods a tool server needs are
 `initialize`, `tools/list` and `tools/call`. The implementation behind it is the SAME
-`shared.entities.upsert_entity` the endpoint calls, so what this measures is what ships.
+`workspaces.shared.entities.upsert_entity` the endpoint calls, so what this measures is what ships.
 
 It is a measuring instrument and is never part of a deployment: nothing imports it, and it writes
 only into the workspace directory it is given.
@@ -23,9 +23,10 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))          # core/agent
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))          # core — for workspaces.shared
 
-from shared.entities import (CARD_SECTIONS, EntityRefused, KINDS,  # noqa: E402
+from workspaces.shared.entities import (CARD_SECTIONS, EntityRefused, KINDS,  # noqa: E402
                              tool_sections_text, upsert_entity, write_index)
 
 WORKSPACE = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()

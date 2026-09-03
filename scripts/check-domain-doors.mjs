@@ -89,6 +89,7 @@ export const UNITS = [
   { unit: "identity", kind: "domain", root: "core/identity" },
   { unit: "meetings", kind: "domain", root: "core/meetings" },
   { unit: "flows", kind: "domain", root: "core/flows" },
+  { unit: "workspaces", kind: "domain", root: "core/workspaces" },
   { unit: "agent", kind: "domain", root: "core/agent" },
   { unit: "gateway", kind: "edge", root: "core/gateway" },
   { unit: "runtime", kind: "primitive", root: "core/runtime" },

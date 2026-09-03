@@ -55,8 +55,8 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from shared import desk_now
-from shared.entities import _DATED_HEADING, ENTITIES_DIR, KINDS, split_frontmatter
-from shared.links import format_ref
+from workspaces.shared.entities import _DATED_HEADING, ENTITIES_DIR, KINDS, split_frontmatter
+from workspaces.shared.links import format_ref
 
 README = "README.md"
 

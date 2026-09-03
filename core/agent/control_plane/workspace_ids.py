@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from shared.gitenv import scrubbed_git_env
-from shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
+from workspaces.shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
                                  ensure_workspace_json, is_workspace_id, read_touches,
                                  read_workspace_json, write_workspace_json)
 

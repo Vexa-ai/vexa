@@ -16,7 +16,7 @@ import random
 
 import pytest
 
-from shared import entities as E
+from workspaces.shared import entities as E
 
 
 def page(body: str) -> str:

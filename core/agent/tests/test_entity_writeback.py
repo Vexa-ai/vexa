@@ -153,7 +153,7 @@ def test_a_phase_that_raises_never_costs_the_person_their_turn(monkeypatch):
 # ── the index in context ─────────────────────────────────────────────────────────────────────────
 
 def test_every_dispatch_carries_the_rule_and_the_index(tmp_path):
-    from shared import entities as E
+    from workspaces.shared import entities as E
     desk = tmp_path / "desk-1"
     desk.mkdir()
     E.upsert_entity(desk, "person", "Olga Avramenko", ["Chairs the TSC."], "the call",
@@ -169,7 +169,7 @@ def test_every_dispatch_carries_the_rule_and_the_index(tmp_path):
 def test_the_index_renders_live_when_the_file_has_never_been_written(tmp_path):
     """A first dispatch into a workspace nobody has upserted must still see what it holds — being
     told 'nothing exists' when three pages do is how a duplicate page gets created."""
-    from shared import entities as E
+    from workspaces.shared import entities as E
     desk = tmp_path / "desk-2"
     E.upsert_entity(desk, "company", "Vexa", ["Ships a meeting bot."], "the README")
     assert not (desk / "kg" / "INDEX.md").exists()

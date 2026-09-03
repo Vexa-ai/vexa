@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from shared import workspace_paths as wpaths
+from workspaces.shared import workspace_paths as wpaths
 
 
 def _tool_op(name: str, args: Optional[dict] = None) -> dict:

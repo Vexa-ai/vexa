@@ -198,11 +198,11 @@
       "id": "entity-slug",
       "fact": "the slug that turns an entity's name into its filename",
       "kind": "literal",
-      "decision": "WHICH SLUG THE SERVER WRITES AND EVERY CLIENT MUST REPRODUCE. Two live answers today, and they are not cosmetic: core/agent/shared/entities.py NFKD ascii-folds first, so \"Zoe Muller\" with a diaeresis and an umlaut becomes zoe-muller; every one of the other eight implementations produces zo-m-ller. The server writes the first filename and the terminal's wikilink chip looks for the second, so the chip never resolves for a non-ASCII name. Also open, and separate: the length cap is 80 (entities.py), 60 (production.py), 40 (workspace_attach.py) or absent (all TypeScript), and the empty-input fallback is \"\", \"shared\", \"untitled\", \"meeting\" or \"unknown\" depending on which one ran.",
+      "decision": "WHICH SLUG THE SERVER WRITES AND EVERY CLIENT MUST REPRODUCE. Two live answers today, and they are not cosmetic: core/workspaces/shared/entities.py NFKD ascii-folds first, so \"Zoe Muller\" with a diaeresis and an umlaut becomes zoe-muller; every one of the other eight implementations produces zo-m-ller. The server writes the first filename and the terminal's wikilink chip looks for the second, so the chip never resolves for a non-ASCII name. Also open, and separate: the length cap is 80 (entities.py), 60 (production.py), 40 (workspace_attach.py) or absent (all TypeScript), and the empty-input fallback is \"\", \"shared\", \"untitled\", \"meeting\" or \"unknown\" depending on which one ran.",
       "why": "Nine non-test implementations, not the four the survey first claimed. The manifest records each verbatim so no tenth appears quietly and no existing one moves without someone writing down that it moved. NOT a candidate for mechanical unification: the fix is that the server RETURNS the slug it wrote (entity_upsert), which is a product decision about an API, and picking one of the nine here would make one of the two current filenames permanent.",
       "sites": [
         {
-          "path": "core/agent/shared/entities.py",
+          "path": "core/workspaces/shared/entities.py",
           "pattern": "re\\.sub\\(r\"(\\[\\^a-zA-Z0-9\\]\\+)\""
         },
         {
@@ -233,7 +233,7 @@
         {
           "value": "[^a-zA-Z0-9]+",
           "sites": [
-            "core/agent/shared/entities.py"
+            "core/workspaces/shared/entities.py"
           ]
         },
         {
@@ -259,7 +259,7 @@
       "why": "Two declarations, five kinds against four, sharing only person and company. shared/governance.py's path gate accepts any kind segment, so a terminal-written topic path passes governance and fails later in entity_rel_path — the disagreement surfaces as far as possible from where it was made.",
       "sites": [
         {
-          "path": "core/agent/shared/entities.py",
+          "path": "core/workspaces/shared/entities.py",
           "pattern": "^KINDS = \\(([^)]*)\\)"
         },
         {
@@ -272,7 +272,7 @@
         {
           "value": "company · decision · meeting · person · project",
           "sites": [
-            "core/agent/shared/entities.py"
+            "core/workspaces/shared/entities.py"
           ]
         },
         {

@@ -16,8 +16,8 @@ import datetime
 import time
 
 from shared import desk_now, desk_readme
-from shared.entities import upsert_entity
-from shared.workspace_id import write_workspace_json
+from workspaces.shared.entities import upsert_entity
+from workspaces.shared.workspace_id import write_workspace_json
 
 DESK_ID = "aaaaaaaaaa"
 GROUP_ID = "bbbbbbbbbb"

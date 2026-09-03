@@ -47,7 +47,6 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   contract task.v1
   contract tool.v1
   contract unit.v1
-  contract workspace.v1
   service agent-worker
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in

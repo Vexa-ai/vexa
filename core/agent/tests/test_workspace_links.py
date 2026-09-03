@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 from control_plane import link_resolver, workspace_ids as ids
-from shared import links
-from shared.entities import upsert_entity
-from shared.workspace_id import write_workspace_json
+from workspaces.shared import links
+from workspaces.shared.entities import upsert_entity
+from workspaces.shared.workspace_id import write_workspace_json
 
 
 # ── the grammar ──────────────────────────────────────────────────────────────────────────────────

@@ -24,8 +24,8 @@ from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader
 from shared import git_redaction
 from shared.config import load_settings
-from shared.entities import upsert_entity
-from shared.workspace_paths import PathRefused, resolve_inside
+from workspaces.shared.entities import upsert_entity
+from workspaces.shared.workspace_paths import PathRefused, resolve_inside
 
 
 class _FakeRuntime:
