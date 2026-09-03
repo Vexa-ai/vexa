@@ -19,6 +19,7 @@ exercises:
 """
 import hmac
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -33,6 +34,7 @@ from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
                              Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
+from . import events as events_mod
 from . import person_settings as person_settings_mod
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
@@ -442,11 +444,46 @@ def create_app() -> FastAPI:
         if existing:
             response.status_code = status.HTTP_200_OK
             return UserResponse.model_validate(existing)
+        # ── the one point a person enters ────────────────────────────────────────────────────
+        # FIVE independent paths onboard somebody — the control MCP's sign-in verbs, its OAuth door,
+        # its shared account_for helper, the terminal's own auth, and the flows mail door when an
+        # invite arrives from a stranger. They look like five places to publish `onboarding.completed`
+        # and they are not: all five create the account HERE. The single point they already share is
+        # where the fact belongs, which is why nothing else had to be refactored to make it true.
+        #
+        # The STAMP is written in the same transaction as the account, so the record that this person
+        # was onboarded survives a publish that never lands — a later sweep can replay from it. That
+        # ordering is the whole exactly-once guarantee: it holds against a replay, a restore, and a
+        # second producer somebody adds later without reading this comment.
         u = User(email=user_in.email, name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
+        u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
         db.add(u)
         await db.commit()
         await db.refresh(u)
+        # FIRE-AND-FORGET. Identity tells flows; it does not ask it. A deployment with no flows
+        # domain still onboards people, and so does one where flows is down — the publisher swallows
+        # everything and the person is already committed above.
+        # Guarded HERE as well as inside the publisher, and neither one alone is load-bearing: the
+        # publisher swallows transport failures, this swallows a publisher that changes shape. The
+        # thing being protected is a person's sign-in, and it must not depend on anyone remembering.
+        #
+        # `org` IS EMPTY, AND IT IS PRESENT. Identity holds no organisation for a person — there is
+        # no org column, no org field on the create body, and no org anywhere in this service — so
+        # the honest value is the empty one. It is emitted rather than omitted because a consumer
+        # that finds the key missing cannot tell "identity has no org for them" from "identity did
+        # not look", and would go and infer one from the email domain: a second place the answer
+        # lives, which is what stating every ref exists to prevent. The earlier shape here read
+        # `u.data.get("org")` on the dict assigned two lines above, so it was never anything but
+        # None while LOOKING like a lookup — the worst version of this, because it reads as though
+        # somebody checked.
+        try:
+            events_mod.publish(
+                events_mod.EVENT_ONBOARDING_COMPLETED,
+                events_mod.onboarding_source_id(u.id),
+                events_mod.onboarding_refs(u.id, events_mod.NO_ORG, events_mod.DEFAULT_SEAT))
+        except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+            pass
         response.status_code = status.HTTP_201_CREATED
         return UserResponse.model_validate(u)
 

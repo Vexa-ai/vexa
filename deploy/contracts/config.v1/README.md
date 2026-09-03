@@ -17,13 +17,27 @@ canonical shared boot validator every adopted service vendors verbatim).
 ## The declaration
 
 Each adopted service ships a `config.v1.json` next to its code (vendored into its image), declaring
-**every environment key it consumes**, one of three classes:
+**every environment key it consumes**, one of four classes:
 
 | class | boot behavior | runtime behavior |
 |---|---|---|
 | `required-explicit` | unset/empty ⇒ `preflight()` raises `ConfigError` naming every missing key — the deploy **refuses to boot** | n/a (it booted, so it is set) |
 | `defaulted` | nothing to enforce — the documented `default` applies | n/a |
+| `publish-edge` | never blocks boot | the key addresses (or authenticates to) another domain this service **hands facts to**, listed in `publishes_events`. Unset ⇒ that domain is not deployed here, the facts are dropped, and nothing else changes |
 | `capability` | never blocks boot | the named capability's **tri-state** is computed from the env: `configured` / `not_configured` / `misconfigured` (mode=all: some-but-not-all member keys set; mode=any: alternative paths, ≥1 suffices). Capability-gated endpoints consult `capability_state(...)` and fail loud with a typed, actionable error; `/health` carries a `capabilities` object (ADDITIVE) |
+
+**`publish-edge` exists because the sanctioned coupling mechanism was failing its own gate.**
+A domain that hands a fact to flows reads `FLOWS_API_URL`, and every env read must be declared — but
+the three original classes all describe a value the service *needs*: `required-explicit` refuses the
+boot without it, `defaulted` supplies one, `capability` gates endpoints on it. Declaring a publish
+target as any of them asserts that **the publisher depends on the consumer**, which is the one thing
+it must not do, and the reason identity can be the domain everyone else depends on. A dependency is
+a call whose answer the caller needs; a publish is a fact handed over, best-effort and swallowed.
+The class says that, and `publishes_events` names the carriers — each of which must be registered in
+`core/flows/contracts/flows.v1/carriers.json` **owned by the declaring service's domain**, so
+"who publishes this fact" is answerable from a declaration instead of from grep, and one carrier
+keeps exactly one producer. A `publish-edge` key may not carry a `default`: a fallback address to
+publish to, invented by us, in a deployment that deliberately runs no such domain.
 
 Extra fields: `secret` (a credential, P14 — never logged/goldened), `targets` (which deploy
 surfaces plumb the key — `compose`/`helm`/`lite`; **empty array** = an in-code dial deliberately not
@@ -112,7 +126,10 @@ For every adopted service (meeting-api · runtime · agent-api — the three pla
    `surface_only` with a reason) — a tight infra allowlist (`PYTHONPATH` etc.) is documented in the
    gate;
 5. **undeclared-read scan:** every literal `os.getenv` / `os.environ` read in the service's source
-   names a declared key.
+   names a declared key;
+6. **publish edges → the carrier census:** every carrier a `publish-edge` key names is registered in
+   `core/flows/contracts/flows.v1/carriers.json`, owned by the declaring service's domain. Green on
+   an absent census. Without this, `publishes_events` would be a comment.
 
 ## Adopters
 

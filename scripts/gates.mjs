@@ -930,6 +930,15 @@ function gateDataflow() {
 //      declaration's `surface_only` list with a reason) — only process-plumbing vars are allowlisted;
 //   5. undeclared-read scan: every literal os.getenv/os.environ read in the service's source names a
 //      declared key (so a new env read MUST land in the declaration — the SSOT — to pass CI).
+//   6. publish edges: a `publish-edge` key names the carriers it hands over (class `publish-edge`,
+//      field `publishes_events`), and each must be registered in the flows carrier census OWNED BY
+//      THIS SERVICE'S DOMAIN. A PUBLISH EDGE IS NOT A DEPENDENCY — a dependency is a call whose
+//      answer the caller needs, a publish is a fact handed over best-effort and swallowed — and
+//      without this check the sanctioned way for two domains to couple has no declaration that
+//      says so: the only classes available all mean "this service needs this value", so declaring
+//      a publish target as one of them would assert the publisher depends on the consumer, which
+//      is the one thing it must not do. The census makes `publishes_events` load-bearing rather
+//      than a comment: one producing domain per carrier, checkable.
 const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // process-plumbing vars a surface may set without a declaration entry (kept TIGHT + documented):
 // interpreter/runtime wiring only, never product config.
@@ -941,6 +950,21 @@ const CONFIG_READ_RES = [
   /os\.environ\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g,
   /os\.environ\.setdefault\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
 ];
+// The flows carrier census — the registry a publish edge's `publishes_events` is checked against.
+// GREEN-ON-EMPTY: no census yet ⇒ publish edges are still declared and still schema-checked, they
+// are simply not cross-referenced (the same rule every other gate here follows).
+const CARRIER_CENSUS = join(ROOT, "core", "flows", "contracts", "flows.v1", "carriers.json");
+function carrierOwners() {
+  if (!existsSync(CARRIER_CENSUS)) return null;
+  const owners = new Map();
+  for (const c of JSON.parse(readFileSync(CARRIER_CENSUS, "utf8")).carriers || []) owners.set(c.event, c.owner);
+  return owners;
+}
+// A service's DOMAIN is the tree it lives in — `core/identity/services/admin-api/…` → identity.
+// Derived rather than tabulated: a second table of which service is which domain is a second place
+// the answer lives, and the path already says it.
+const serviceDomain = (declPath) => declPath.split("/")[1];
+
 const CONFIG_ADOPTED = [
   {
     service: "meeting-api",
@@ -1064,7 +1088,9 @@ function gateConfigContract() {
   const envExample = dotEnvExampleKeys();
   const entrypointExports = liteEntrypointExports();
   const errs = [];
-  let keyCount = 0, capCount = 0;
+  const owners = carrierOwners();
+  const edgeCarriers = new Set();
+  let keyCount = 0, capCount = 0, edgeCount = 0;
   for (const svc of CONFIG_ADOPTED) {
     const declPath = join(ROOT, svc.decl);
     if (!existsSync(declPath)) { errs.push(`${svc.service}: declaration missing (${svc.decl})`); continue; }
@@ -1107,9 +1133,26 @@ function gateConfigContract() {
       if (!declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
         errs.push(`${svc.service}: undeclared env read ${key} at ${where} — add it to ${svc.decl}`);
     }
+    // 6. publish edges → the carrier census (one producing domain per carrier)
+    const domain = serviceDomain(svc.decl);
+    for (const k of (decl.keys || []).filter((x) => x.class === "publish-edge")) {
+      edgeCount++;
+      for (const ev of k.publishes_events || []) {
+        edgeCarriers.add(ev);
+        if (!owners) continue;                       // green-on-empty: no census to check against
+        if (!owners.has(ev)) {
+          errs.push(`${svc.service}: ${k.key} publishes ${ev}, which is in no carrier census — register it in ${rel(CARRIER_CENSUS)} (owner, refs, cardinality), or stop publishing it`);
+        } else if (owners.get(ev) !== domain) {
+          errs.push(`${svc.service}: ${k.key} publishes ${ev}, but the census records it as owned by '${owners.get(ev)}' and this service is '${domain}' — a carrier has exactly ONE producing domain, and a second producer is how a consumer that must act once acts twice`);
+        }
+      }
+    }
   }
   if (errs.length) return fail(["config-contract (ADR-0026) — config.v1 violations:", ...errs.map((e) => "   " + e)]);
-  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities · declarations ≡ deploy surfaces ≡ code reads`);
+  const edges = edgeCount
+    ? ` · ${edgeCount} publish edge key(s) carrying ${edgeCarriers.size} carrier(s)${owners ? "" : " (no census — uncrossed)"}`
+    : " · no publish edge declared";
+  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities${edges} · declarations ≡ deploy surfaces ≡ code reads`);
   return true;
 }
 
