@@ -353,7 +353,12 @@ def test_every_room_field_flows_sends_is_declared_in_agent_apis_ChatBody():
     import re
 
     here = pathlib.Path(__file__).resolve()
-    root = next(p for p in here.parents if (p / "core" / "agent").is_dir())
+    # ANCHOR ON OUR OWN TREE, never on the tree we are checking. This used to search upward for
+    # `core/agent` and take the first hit — so in a checkout that does not carry agent-api the
+    # generator raised StopIteration and the guard died as an ERROR, in a deployment where its
+    # absence is correct: the no-agents product (PRD decision 40.6) is gateway + meetings + flows
+    # + identity, and the by-need cut (decision 43) does not ship the agent domain's source.
+    root = next(p for p in here.parents if (p / "core" / "flows").is_dir())
     # SEARCH THE CONTROL PLANE, not one file. `ChatBody` lived in `api.py` until agent-api split
     # that module into `control_plane/routers/` plus `api_shared.py` (PR #1459); the request models
     # moved with it. Pinning the filename made this guard fail closed on a pure refactor — correct,
@@ -361,6 +366,13 @@ def test_every_room_field_flows_sends_is_declared_in_agent_apis_ChatBody():
     # is exactly what let the 2026-09-02 mismatch through. Finding the class wherever it lives keeps
     # the check crude (still a regex over source, still no import) and keeps it ALIVE across moves.
     plane = root / "core" / "agent" / "control_plane"
+    if not plane.is_dir():
+        # SKIPPED, NOT PASSED, and with the reason named: a cross-domain guard that quietly
+        # answered green in a tree where it checked nothing would be worse than no guard — it
+        # would report agreement between two services when only one of them is here. Where the
+        # source IS present the guard runs exactly as before; nothing about it is softened.
+        pytest.skip(f"agent-api source is not in this tree ({plane} absent) — the room contract "
+                    "cannot be read off a service this checkout does not carry")
     src = ""
     for cand in sorted(plane.rglob("*.py")):
         text = cand.read_text()
