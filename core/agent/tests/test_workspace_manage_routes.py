@@ -71,7 +71,12 @@ def test_git_remote_status_reports_ahead_after_a_local_commit(tmp_path):
     c = _client(tmp_path)
     body = c.get("/api/workspace/git-remote-status", headers=H).json()
     assert body["has_home"] is True and body["remote"] == "origin"
-    assert body["ahead"] == 1 and body["behind"] == 0 and body["tracked"] is True
+    # TWO, not one. Booting the app runs the workspace-id migration, which writes and COMMITS
+    # `.vexa/workspace.json` into every workspace (PRD decision 26.1). That commit is deliberate: a
+    # clone carries only TRACKED files, and an attached repo stays the same workspace precisely
+    # because its id is in the repo — so a workspace with a home is one commit ahead of it after
+    # the first boot that migrates it, and the next push carries the identity with it.
+    assert body["ahead"] == 2 and body["behind"] == 0 and body["tracked"] is True
 
 
 def test_manage_is_scoped_to_the_header_identity(tmp_path):
@@ -94,9 +99,10 @@ def test_purpose_roundtrip_via_routes(tmp_path):
 
 def test_push_via_route_fast_forwards(tmp_path):
     ws = _seed_primary(tmp_path, "u_jane", with_origin=True)
-    (ws / "note.md").write_text("local\n"); _run(ws, "add", "-A"); sha = None
-    _run(ws, "commit", "-q", "-m", "local"); sha = _run(ws, "rev-parse", "HEAD")
-    c = _client(tmp_path)
+    (ws / "note.md").write_text("local\n"); _run(ws, "add", "-A")
+    _run(ws, "commit", "-q", "-m", "local")
+    c = _client(tmp_path)                    # boot: the workspace-id migration commits the identity
+    sha = _run(ws, "rev-parse", "HEAD")      # …so HEAD is read AFTER it, not before
     r = c.post("/api/workspace/push", headers=H, json={"token": "ghp_x"})
     assert r.status_code == 200, r.text
     assert r.json()["head_sha"] == sha

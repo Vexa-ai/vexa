@@ -5,14 +5,19 @@ internals and guards against path traversal (a read path can never escape the su
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
+from shared import workspace_paths as wpaths
 
-def _tool_op(name: str) -> dict:
+
+def _tool_op(name: str, args: Optional[dict] = None) -> dict:
     """Classify a claude tool name into one of the terminal's op labels (read/search/edit/git/web/tool).
-    Mirrors the frontend ``toolOp`` so the loaded history reads the same as a live turn."""
+    Mirrors the frontend ``toolOp`` so the loaded history reads the same as a live turn — including the
+    touched ``file`` (+``wrote``) that powers the transcript's actionable file chips."""
     t = (name or "").lower()
     if any(k in t for k in ("read", "cat", "open")) and "edit" not in t:
         label = "read"
@@ -26,7 +31,12 @@ def _tool_op(name: str) -> dict:
         label = "web"
     else:
         label = "tool"
-    return {"label": label}
+    op = {"label": label}
+    fp = (args or {}).get("file_path")
+    if isinstance(fp, str) and fp:
+        op["file"] = fp
+        op["wrote"] = label == "edit"
+    return op
 
 
 def _block_text(content) -> str:
@@ -44,6 +54,128 @@ def _block_text(content) -> str:
 # unconditionally. Everything else dot-prefixed (`.claude` + any dotfile/dotdir) is hidden by
 # default but surfaced when the caller opts in via ``hidden=True``.
 _ALWAYS_HIDDEN = {".git"}
+
+# TEMPLATES ARE NOT RECORDS. `kg/templates/` holds the SHAPE of an entity — a skeleton with
+# `<Full Name>` where a name goes — and every prose file in the workspace says it is never
+# knowledge. Nothing enforced that: the shapes carry conformant `type/id/title` frontmatter, and
+# `tree_at` is the single enumerator behind the Files tree, the MCP `workspace_tree`, the client's
+# link resolver and its find-file index, so an agent asked "what meetings do I have" could read one
+# and answer with it. The founder's rule is that the SYSTEM must know a template is a template.
+#
+# Two tests, because both are needed: the PATH covers the shipped files before anyone edits their
+# frontmatter, and the `template: true` FLAG covers a shape copied anywhere else. `hidden=True`
+# still shows them — a human browsing deliberately is not the failure mode.
+_RESERVED_PREFIXES = ("kg/templates/",)
+_TEMPLATE_FM = re.compile(r"^(?:template|example):\s*true\b", re.M)
+
+# Hiding a shape from every ENUMERATOR is only half of it — `read` is a second door, and it was
+# open: `GET /api/workspace/file` and the MCP `workspace_read` take a path the agent supplies, so a
+# shape it saw quoted anywhere (a prose file, an earlier reply, a guess) still came back as plain
+# markdown with conformant `type/id/title` frontmatter and read exactly like a record.
+#
+# The answer is NOT a refusal: creating an entity legitimately means looking at its shape first.
+# It is that the bytes must announce what they are, before the frontmatter, in the same read.
+_TEMPLATE_BANNER = (
+    "TEMPLATE — THIS IS THE SHAPE OF AN ENTITY, NOT A RECORD.\n"
+    "Nothing below is a real person, company or meeting: the angle-bracket fields are blanks.\n"
+    "Never cite it, never name it, never list or count it as prior context, and never copy a\n"
+    "placeholder value into an answer. Read it only to learn the shape you are about to fill.\n"
+    "\n"
+)
+
+
+# ── WHAT THE PERSON SAID, AND WHAT THE MACHINE SAID (F47/F51) ────────────────────────────────────
+#
+# A transcript line is the prompt the harness was GIVEN, not the sentence somebody typed: the worker
+# prepends voice/kg-links/mounts/entity-index/global-context preambles and the control plane folds
+# its grounding in front of that. Until now the terminal reconstructed the human half by STRIPPING
+# all of it — a sentinel cut when one was present, else regexes matched against the preambles'
+# wording — and on 2026-09-02 a changed preamble set made every stored turn in the founder's chat
+# render as a grey USER bubble full of machinery with his own sentence at the bottom.
+#
+# So the worker now writes the human half down as its own field beside the continuity pointer
+# (``worker/engine.py`` ``record_user_text`` → ``.claude/sessions/<session>.turns.jsonl``, one JSON
+# object per turn: the sha256 of the exact composed prompt, and the person's words). This reader
+# looks the stored prompt up by that digest and serves ``user_text`` alongside ``text``. It reads no
+# English and knows nothing about preambles; a turn with no record simply carries no ``user_text``,
+# and the terminal's strip stays as the fallback for everything written before the field existed.
+_TURNS_SIDECAR = "{session}.turns.jsonl"
+
+# The write-back phase runs in the SAME harness session as the turn it follows, so its prompt and
+# its reply are in this transcript. The phase declares itself with this mark (``engine.WRITEBACK_MARK``
+# — duplicated, not imported: the worker ships in its own image; ``tests/test_user_text_field.py``
+# pins the two literals together). Everything from a marked prompt until the next thing a person
+# actually said is bookkeeping the founder was never meant to read back as his own conversation.
+PHASE_MARK = "[vexa-phase:writeback]"
+
+# The harness's own auto-continue. It is a user line nobody typed — the runner nudging a turn that
+# stopped early — and it rendered as a grey USER bubble reading "Continue from where you left off."
+# Dropping it WITHOUT flushing the open agent turn also re-joins the answer it interrupted, which is
+# what the reader was always meant to show: one reply, not two halves with machinery between them.
+_HARNESS_CONTINUE = "Continue from where you left off."
+
+
+def _user_text_index(roots: "list[Path]", session: str) -> list[dict]:
+    """Every ``{key, user_text}`` record the worker wrote for this thread, oldest first.
+
+    Searched across the same roots the pointer and transcript are, because a thread that MOVED
+    anchors leaves them apart. Tolerant like everything else here: an unreadable or malformed
+    sidecar yields no records, and history degrades to the terminal's fallback strip."""
+    out: list[dict] = []
+    for ws in roots:
+        f = ws / ".claude" / "sessions" / _TURNS_SIDECAR.format(session=session)
+        try:
+            if not f.is_file():
+                continue
+            raw = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(rec, dict) and isinstance(rec.get("user_text"), str) and rec.get("key"):
+                out.append(rec)
+    return out
+
+
+# THE SEED'S BLANKS ARE NOT FACTS EITHER (F53). Workspaces created before the template-free seed
+# still hold its README and dashboard skeletons, whose fields read `(unset)`. Those pages carry no
+# frontmatter at all, so the `template: true` rule above cannot reach them — and an agent reported
+# "the project's objective is still `(unset)`" to the founder as though it had learned something.
+#
+# It cannot be fixed by re-seeding: those workspaces exist, they are the users', and nobody is going
+# to rewrite them. So the page announces itself IN THE SAME READ, exactly as a template does. Unlike
+# a template it stays VISIBLE in the tree — it is a real page of theirs waiting to be filled in, not
+# a shape that should never have been enumerable — and the banner says what to do with a blank.
+_UNSET_MARKER = "(unset)"
+_UNFILLED_BANNER = (
+    "UNFILLED — THIS PAGE IS STILL THE SEED'S SKELETON WHERE IT SAYS `(unset)`.\n"
+    "Each `(unset)` is a BLANK nobody has filled in yet, never a value. Never report one as an\n"
+    "answer ('the objective is (unset)') and never copy one into a record: say the thing is not\n"
+    "recorded yet, and offer to fill it in from what this turn knows.\n"
+    "\n"
+)
+
+
+def _is_template_doc(p: Path) -> bool:
+    """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it."""
+    if p.suffix.lower() != ".md":
+        return False
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(800)
+    except OSError:
+        return False
+    if not head.startswith("---"):
+        return False
+    end = head.find("\n---", 3)
+    return bool(_TEMPLATE_FM.search(head if end == -1 else head[:end]))
+
 
 # Commit authors that are platform/seed PLUMBING, not a member's agent — classified ``system`` so the
 # activity feed never mistakes a policy or seed commit for a member push. The per-mount turn-commit stamps
@@ -101,7 +233,10 @@ class WorkspaceReader:
             if not hidden and any(part.startswith(".") for part in parts):
                 continue
             if p.is_file():
-                out.append(str(p.relative_to(ws)))
+                rel = str(p.relative_to(ws))
+                if not hidden and (rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(p)):
+                    continue
+                out.append(rel)
         return out
 
     def read(self, subject: str, path: str) -> Optional[str]:
@@ -109,12 +244,25 @@ class WorkspaceReader:
         return self.read_at(self._ws(subject), path)
 
     def read_at(self, base: Path, path: str) -> Optional[str]:
-        """The text at ``path`` within the ``base`` workspace dir, or None if absent. Traversal-guarded."""
+        """The text at ``path`` within the ``base`` workspace dir, or None if absent. Traversal-guarded.
+
+        A template (by reserved PATH or by ``template: true`` FLAG — the same two tests ``tree_at``
+        applies) comes back with ``_TEMPLATE_BANNER`` prepended, so a shape can never be read as a
+        record. Deliberately not a refusal: the shape is what you consult to write a real entity."""
         ws = self._guard_under_root(base)
-        f = (ws / path).resolve()
-        if ws not in f.parents:  # the resolved path must stay inside the workspace
-            raise ValueError("invalid path")
-        return f.read_text() if f.exists() and f.is_file() else None
+        try:
+            f = wpaths.resolve_inside(ws, path)   # absolute · `..` · symlink-out · `.git`/`.vexa`
+        except wpaths.PathRefused as exc:
+            raise ValueError(str(exc)) from None
+        if not (f.exists() and f.is_file()):
+            return None
+        text = f.read_text()
+        rel = f.relative_to(ws).as_posix()
+        if rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(f):
+            return _TEMPLATE_BANNER + text
+        if _UNSET_MARKER in text:
+            return _UNFILLED_BANNER + text
+        return text
 
     def _session_id(self, ws: Path, session: str) -> Optional[str]:
         """The claude sessionId for a thread, read from its continuity pointer
@@ -211,12 +359,43 @@ class WorkspaceReader:
 
         turns: list[dict] = []
         cur_agent: Optional[dict] = None  # the open agent turn we accumulate text/ops onto
+        # The person's own words for each turn, keyed by the digest of the composed prompt (F47).
+        records = _user_text_index(roots, session)
+        by_key = {r["key"]: r["user_text"] for r in records}
+        unused = list(records)
+        # Are we inside a write-back phase exchange (F51)? Set by a marked prompt, cleared by the
+        # next thing a person actually said. While it is on, the agent's replies are bookkeeping.
+        in_phase = False
 
         def flush_agent() -> None:
             nonlocal cur_agent
-            if cur_agent is not None:
-                turns.append(cur_agent)
-                cur_agent = None
+            if cur_agent is None:
+                return
+            open_turn, cur_agent = cur_agent, None
+            if in_phase:
+                return  # the phase's reply — nobody was ever shown it, and nobody asked for it
+            # An agent turn with neither prose nor a single operation is not a turn: it is the
+            # residue of a beat that produced nothing, and it rendered as an empty grey card.
+            if not open_turn["text"].strip() and not open_turn["ops"]:
+                return
+            turns.append(open_turn)
+
+        def human_words(stored: str) -> Optional[str]:
+            """What the person typed for a stored prompt, or None if nothing recorded it.
+
+            Exact first: the digest of the bytes the harness was handed. The suffix pass behind it
+            is belt — it costs one comparison and it survives a harness that ever decorates the
+            prompt on its way into the transcript — and it is still a MACHINE test (is this recorded
+            string the tail of that stored one), never a reading of what either says."""
+            hit = by_key.get(hashlib.sha256(stored.encode("utf-8")).hexdigest())
+            if hit is not None:
+                return hit
+            for rec in unused:
+                ut = rec["user_text"]
+                if ut and stored.endswith(ut):
+                    unused.remove(rec)
+                    return ut
+            return None
 
         for line in raw.splitlines():
             line = line.strip()
@@ -243,9 +422,24 @@ class WorkspaceReader:
                 if is_tool_result:
                     continue
                 text = _block_text(content)
-                if text.strip():
-                    flush_agent()
-                    turns.append({"role": "user", "text": text})
+                if not text.strip():
+                    continue
+                # The harness nudging itself is not speech (F51). No flush: the open agent turn keeps
+                # accumulating, so the answer this interrupted comes back as ONE reply.
+                if text.strip() == _HARNESS_CONTINUE:
+                    continue
+                flush_agent()
+                if PHASE_MARK in text:
+                    in_phase = True   # …and everything the agent says until the next real prompt
+                    continue
+                in_phase = False
+                turn: dict = {"role": "user", "text": text}
+                # `user_text` is the person's own words as a FIELD; `text` stays the stored prompt so
+                # a record written before the field existed still reaches the terminal's fallback.
+                said = human_words(text)
+                if said is not None:
+                    turn["user_text"] = said
+                turns.append(turn)
             elif kind == "assistant":
                 if not isinstance(content, list):
                     continue
@@ -254,7 +448,7 @@ class WorkspaceReader:
                 cur_agent["text"] += _block_text(content)
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "tool_use":
-                        cur_agent["ops"].append(_tool_op(b.get("name", "")))
+                        cur_agent["ops"].append(_tool_op(b.get("name", ""), b.get("input") if isinstance(b.get("input"), dict) else None))
             # all other line kinds (queue-operation/last-prompt/custom-title/mode/attachment/system …) are meta — skip
         flush_agent()
         return turns
@@ -358,6 +552,13 @@ class WorkspaceReader:
         from shared.gitenv import scrubbed_git_env
 
         base = self._guard_under_root(base)
+        if path is not None:
+            # The path is a PATHSPEC handed to `git show` — the same caller-supplied string every
+            # other route guards, and `git show <sha> -- ../x` reads out of the workspace.
+            try:
+                wpaths.resolve_inside(base, path)
+            except wpaths.PathRefused as exc:
+                raise ValueError(str(exc)) from None
         if not (base / ".git").exists() or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
             return {"sha": sha, "path": path, "diff": "", "truncated": False}  # bad sha never hits git
         args = ["git", "-C", str(base), "show", "--no-color", "--format=", sha]

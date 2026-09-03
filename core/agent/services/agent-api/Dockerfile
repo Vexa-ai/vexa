@@ -26,10 +26,13 @@ COPY core/agent/pyproject.toml core/agent/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-default-groups --group control-plane
 
-# git only (the control plane reads workspace git state via workspace_reader). NO claude-code / node here:
+# git + openssh-client. The control plane reads workspace git state via workspace_reader, and LOADS an
+# existing repo into a workspace over git's SSH transport: `ssh` is the binary git shells out to for an
+# ssh:// remote, and `ssh-keygen` mints the per-workspace deploy key (control_plane/deploy_keys.py) that
+# makes loading a private repo possible without anybody pasting a token. NO claude-code / node here:
 # agents never run in the control plane — the claude turn runs in the separate `vexa-agent` WORKER image
 # (core/agent/worker/Dockerfile). This is the payoff of the control-plane ⊥ worker split (a lean image).
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The control-plane packages (NO worker): control_plane + shared + contracts, copied to /app so
@@ -39,7 +42,7 @@ COPY core/agent/control_plane ./control_plane
 COPY core/agent/contracts ./contracts
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
 # workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
-COPY core/agent/workspace-seeds ./workspace-seeds
+COPY behavior/workspaces ./workspace-seeds
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves

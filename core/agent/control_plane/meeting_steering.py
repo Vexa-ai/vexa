@@ -6,7 +6,7 @@ A chat grounded in a meeting behaves differently by the meeting's lifecycle phas
   prep  (intent: idle/scheduled)      — no transcript exists; steer toward preparation
         (agenda, attendee research, a brief written into the bound workspace).
   live  (requested→active→stopping)   — fold the live transcript; answer from it.
-  post  (completed/failed/stopped)    — fold the PROCESSED notes (cleaned transcript);
+  post  (completed/failed/stopped)    — fold the recorded transcript;
         steer toward recap, decisions, action items, follow-ups.
 
 The templates below are the hardcoded FALLBACK. The governed control surface is the
@@ -65,9 +65,10 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "Research PROACTIVELY: when workspace knowledge is thin, search public sources (the web) for "
         "the attendees, their organizations, and the topic without waiting to be asked — and mark "
         "what is public-sourced vs. confirmed by the user. Ground every claim in workspace "
-        "knowledge or named public sources; say plainly when you don't have prior context. Seeded EXAMPLE entities "
-        "(frontmatter `example: true` — e.g. the shipped Jane Liu / Acme Corp demo) exist only to "
-        "show how knowledge is kept: never cite them as records or count them as prior context. "
+        "knowledge or named public sources; say plainly when you don't have prior context. Entity SHAPES "
+        "(anything under `kg/templates/`, or frontmatter `template: true` / `example: true`) exist only "
+        "to show how knowledge is kept: never cite them as records, never name them, and never count "
+        "them as prior context — if you hold nothing on this meeting, say exactly that. "
         "If you don't yet know who the user is (no `self: true` person entity), ask — and invite "
         "them to share a LinkedIn profile or a short intro so the brief and future knowledge are "
         "tailored to them; if their calendar is synced, infer what you can from their schedule "
@@ -81,7 +82,12 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "post": (
         "The meeting \"{title}\" ({platform}/{native}) has ended{failed}. Its {source} is below — "
         "answer from it. Default moves: recap what was decided, extract action items with owners, "
-        "and draft follow-ups on request. Don't paste the transcript back verbatim.\n\n"
+        "and draft follow-ups on request. Don't paste the transcript back verbatim. When you write or "
+        "update this meeting's note under kg/entities/meeting/, add a markdown link to THIS session's "
+        "recording & transcript to the note's YAML frontmatter `recording:` field — "
+        "`recording: [▶ Recording & transcript](/?meeting={meeting_id})`. If you are CONTINUING an existing "
+        "note (an earlier session of this same meeting), KEEP the earlier links in that field and ADD this "
+        "one after them — a meeting can have several recorded sessions.\n\n"
         "<transcript>\n{transcript}\n</transcript>\n\n"
     ),
     # Ambient terminal-state digest (context bundle): one steering sentence AFTER the

@@ -23,9 +23,20 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
-# The compose-mounted subscription credential file (same :ro mount the runtime probes; the
-# docker backend mounts the same host path into workers at /root/.claude/.credentials.json).
-CREDS_PATH = "/var/lib/vexa/host-claude-credentials"
+from control_plane import model_endpoint
+from shared.host_claude import LEGACY_CREDENTIALS_MOUNT, credentials_path
+
+# The compose-mounted subscription credential (same mounts the runtime probes; the docker backend
+# brokers the same host file into workers at /root/.claude/.credentials.json).
+#
+# NOT a resolved path — deliberately. This used to be
+#     CREDS_PATH = "/var/lib/vexa/host-claude-credentials"
+# bound straight into `def test_subscription_credentials(creds_path=CREDS_PATH)`, i.e. decided ONCE
+# at import. Under the old single-FILE bind that also pinned an inode, so a token the claude CLI
+# had already refreshed on the host stayed invisible until the container was recreated — 32h of
+# "Not logged in" on the dogfood stack. `credentials_path()` re-resolves per call and prefers the
+# DIRECTORY mount; see shared/host_claude.py for the mechanics.
+CREDS_PATH = LEGACY_CREDENTIALS_MOUNT
 
 # The macOS remedy, verbatim — the error message must carry the fix (fail loud AND helpful).
 KEYCHAIN_REFRESH = ('security find-generic-password -s "Claude Code-credentials" -w '
@@ -68,9 +79,14 @@ def _result(ok: bool, summary: str, **extra) -> dict:
 
 # ── models ────────────────────────────────────────────────────────────────────────────────────
 
-def test_subscription_credentials(creds_path: str = CREDS_PATH, *, now: Optional[float] = None) -> dict:
+def test_subscription_credentials(creds_path: Optional[str] = None, *, now: Optional[float] = None) -> dict:
     """The mounted credentials file: present → parseable → unexpired. Expiry IS the recurring
-    local failure (stale Keychain export), so the failure message ships the exact remedy."""
+    local failure (stale Keychain export), so the failure message ships the exact remedy.
+
+    ``creds_path=None`` resolves the mount FRESH on every call (directory mount first, legacy file
+    mount second). A default argument would be evaluated once at import — which is precisely how
+    this surface kept reporting a token that the host had already refreshed."""
+    creds_path = creds_path or credentials_path()
     if not os.path.isfile(creds_path):
         # docker turns a MISSING host path into an empty dir — same failure, same message.
         return _result(False, "No subscription credentials mounted "
@@ -98,24 +114,52 @@ def test_subscription_credentials(creds_path: str = CREDS_PATH, *, now: Optional
 
 
 def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
-                         post: HttpPost = _post) -> dict:
+                         post: HttpPost = _post, extra_body: str = "") -> dict:
     """A REAL 1-token completion against the configured endpoint. Anthropic-style first
     (``/v1/messages``), OpenAI-compat fallback (``/v1/chat/completions``) on 404/405 — the two
-    dialects the dispatch overlay brokers (ANTHROPIC_* vs VEXA_LLM_*)."""
+    dialects a custom endpoint may speak.
+
+    ``extra_body`` is sent on the openai-compat attempt exactly as a real turn sends it. Testing
+    WITHOUT it would be the worst kind of green: a self-hosted Qwen answers 200 to a ping in
+    thinking mode and then returns no valid JSON in production, so a test that omitted the field
+    would certify a configuration that cannot work."""
     base = base_url.rstrip("/")
     if not base:
         return _result(False, "Custom mode but no Base URL set.")
-    model = model or "claude-haiku-4-5-20251001"
+    # THE SAME GATE THE DISPATCH APPLIES (F84 · F93). A Test button that greens an endpoint the
+    # dispatch will refuse is worse than no button: it tells the operator the configuration works
+    # and the turn then silently runs on the deployment's own model. One predicate, both surfaces.
+    refusal = model_endpoint.refuse_reason(base)
+    if refusal:
+        return _result(False, f"Refused before any request was made: {refusal}")
+    # A base URL may or may not already carry the /v1 suffix — both spellings are common and the
+    # completion adapter accepts either (it posts {base}/chat/completions). Appending a second /v1
+    # produced /v1/v1/... against a real vLLM: a 404 that reads as "endpoint broken" when the
+    # configuration was fine. Normalise once, here.
+    root = base[:-3].rstrip("/") if base.endswith("/v1") else base
+    if not model:
+        # MODEL-AGNOSTIC: no vendor default. Guessing a model name is a coin-flip that fails as a
+        # confusing 400/404 from someone else's endpoint ("model not found: claude-…" from a vLLM
+        # serving Qwen). Say what is missing instead.
+        return _result(False, "Custom mode but no model set — name the model this endpoint serves.")
     auth = {"x-api-key": api_key, "Authorization": f"Bearer {api_key}",
             "anthropic-version": "2023-06-01"}
     try:
-        status, body = post(f"{base}/v1/messages",
+        status, body = post(f"{root}/v1/messages",
                             {"model": model, "max_tokens": 1,
                              "messages": [{"role": "user", "content": "ping"}]}, auth)
         if status in (404, 405):  # not an anthropic dialect — try openai-compat
-            status, body = post(f"{base}/v1/chat/completions",
-                                {"model": model, "max_tokens": 1,
-                                 "messages": [{"role": "user", "content": "ping"}]}, auth)
+            oai: dict = {"model": model, "max_tokens": 1,
+                         "messages": [{"role": "user", "content": "ping"}]}
+            if extra_body.strip():
+                try:
+                    parsed = json.loads(extra_body)
+                except ValueError as exc:
+                    return _result(False, f"Extra body is not valid JSON: {exc}")
+                if not isinstance(parsed, dict):
+                    return _result(False, "Extra body must be a JSON object.")
+                oai = {**parsed, **oai}  # reserved keys always win, as in the adapter
+            status, body = post(f"{root}/v1/chat/completions", oai, auth)
     except Exception as exc:  # DNS, refused, TLS, timeout — the endpoint itself is the problem
         return _result(False, f"Endpoint unreachable: {exc}")
     if status in (401, 403):
@@ -129,24 +173,37 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
 
 
 def run_models_test(config: dict, env: Optional[dict] = None,
-                    creds_path: str = CREDS_PATH, post: HttpPost = _post) -> dict:
+                    creds_path: Optional[str] = None, post: HttpPost = _post) -> dict:
     """The EFFECTIVE model credential test — same resolution the dispatch overlay applies
     (Settings user > global config already collapsed by admin-api; env is the floor)."""
     env = env if env is not None else dict(os.environ)
     mode = (config.get("mode") or "").strip()
-    base_url = (config.get("base_url") or "").strip() or env.get("ANTHROPIC_BASE_URL", "")
-    api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
-        or env.get("ANTHROPIC_API_KEY", "")
+    # `custom_base_url` is the dispatch overlay's OWN inertness rule, imported rather than restated
+    # (F93): `mode=custom` with no base_url is inert, and such a turn really does run on the
+    # deployment's endpoint — so that is what this button must probe.
+    cfg_url = model_endpoint.custom_base_url(config)
+    base_url = cfg_url or env.get("ANTHROPIC_BASE_URL", "")
+    if cfg_url:
+        # A CUSTOM ENDPOINT CARRIES THE SUBJECT'S OWN KEY AND NOTHING ELSE (F84). The dispatch now
+        # stamps the empty string rather than letting the deployment's brokered token be backfilled
+        # onto a foreign host — so falling back to that token here would green an endpoint the turn
+        # reaches unauthenticated, which is precisely the "certifies a config the turn will not
+        # use" failure.
+        api_key = (config.get("api_key") or "").strip()
+    else:
+        api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
+            or env.get("ANTHROPIC_API_KEY", "")
     if mode == "custom" or (not mode and base_url and api_key):
-        out = test_custom_endpoint(base_url, api_key, (config.get("model") or "").strip(),
-                                   post=post)
+        out = test_custom_endpoint(
+            base_url, api_key, (config.get("model") or "").strip(), post=post,
+            extra_body=(config.get("extra_body") or "").strip(),
+        )
         out["mode"] = "custom"
     else:
         out = test_subscription_credentials(creds_path)
         out["mode"] = "subscription"
     # Non-secret provenance so the UI can say WHAT was tested.
-    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "meeting_model",
-                                                              "base_url") and v}
+    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "base_url") and v}
     return out
 
 

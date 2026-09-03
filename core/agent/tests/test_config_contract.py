@@ -5,6 +5,9 @@ model_inference), and the ADDITIVE /health rows next to the existing dispatcher 
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -38,17 +41,72 @@ def test_declaration_loads_and_is_internally_consistent():
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
 
+def _env_names(field_name, field):
+    """Every env var this Settings field actually reads — the VEXA_ prefix by default, or the
+    explicit `validation_alias` choices where a field carries one (F95: `internal_api_secret` reads
+    the canonical `INTERNAL_API_SECRET` first and the prefixed spelling as a deprecated fallback)."""
+    alias = getattr(field, "validation_alias", None)
+    choices = getattr(alias, "choices", None)
+    if choices:
+        return [str(c) for c in choices]
+    if isinstance(alias, str):
+        return [alias]
+    return [f"VEXA_{field_name.upper()}"]
+
+
 def test_every_settings_field_is_declared():
     """pydantic-settings reads env by field name (VEXA_ prefix) — invisible to the gate's literal
     os.getenv scanner, so THIS test holds the sync: a new Settings field must land in the
-    declaration (the SSOT) to pass."""
+    declaration (the SSOT) to pass. A field carrying an explicit alias must have EVERY spelling it
+    accepts declared, or one name of a secret drifts out of the contract while the other stays in —
+    which is precisely the shape F95 arrived in."""
     declared = {k["key"] for k in cp.load_declaration()["keys"]}
-    for field in Settings.model_fields:
-        env_name = f"VEXA_{field.upper()}"
-        assert env_name in declared, (
-            f"Settings.{field} reads {env_name} but config.v1.json does not declare it — "
-            "add it to core/agent/control_plane/config.v1.json"
-        )
+    for field_name, field in Settings.model_fields.items():
+        for env_name in _env_names(field_name, field):
+            assert env_name in declared, (
+                f"Settings.{field_name} reads {env_name} but config.v1.json does not declare it — "
+                "add it to core/agent/control_plane/config.v1.json"
+            )
+
+
+def test_internal_secret_has_one_canonical_name_and_a_deprecated_alias(monkeypatch):
+    """F95 — one secret had three names, and each name grew its own refusal list.
+
+    The canonical name is the compose/helm secret KEY, `INTERNAL_API_SECRET`, the same name
+    admin-api, gateway and meeting-api read. The prefixed spelling still resolves so an operator
+    mid-upgrade is warned rather than silently dropped into an unauthenticated internal tier — but
+    it must never WIN over the canonical one, or a stale export quietly shadows the real value."""
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
+    monkeypatch.setenv("VEXA_INTERNAL_API_SECRET", "deprecated")
+    assert load_settings().internal_api_secret.get_secret_value() == "deprecated"
+
+    monkeypatch.setenv("INTERNAL_API_SECRET", "canonical")
+    assert load_settings().internal_api_secret.get_secret_value() == "canonical"
+
+    monkeypatch.delenv("VEXA_INTERNAL_API_SECRET", raising=False)
+    assert load_settings().internal_api_secret.get_secret_value() == "canonical"
+
+    # Constructing by FIELD name still works — every other test in this tree builds Settings that
+    # way, and an alias that broke it would have been a silent test-only regression.
+    assert load_settings(internal_api_secret="explicit").internal_api_secret\
+        .get_secret_value() == "explicit"
+
+
+def test_preflight_refuses_a_secretless_or_placeheld_internal_tier():
+    """agent-api both PRESENTS the internal secret and BELIEVES it — `_internal_caller` compares
+    this value, and the meeting room's gate 0 is by that code's own statement the trust boundary on
+    who is in the room. Unset used to mean `_internal_caller` simply returned False, which is a
+    half-configured tier nobody can see; a PUBLISHED placeholder is worse, because it is that tier
+    handed to every reader of the repository (F95)."""
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({})
+    assert "INTERNAL_API_SECRET" in str(ei.value)
+    for placeholder in ("vexa-internal-secret", "lite-internal-secret", "changeme"):
+        with pytest.raises(cp.ConfigError) as ei:
+            cp.preflight({"INTERNAL_API_SECRET": placeholder})
+        assert "INTERNAL_API_SECRET" in str(ei.value)
+        assert placeholder not in str(ei.value), "a refusal must never echo the value"
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
 
 
 def test_capability_tri_states():
@@ -60,9 +118,13 @@ def test_capability_tri_states():
     assert cp.capability_states({"ANTHROPIC_AUTH_TOKEN": "tok"})["model_inference"] == cp.CONFIGURED
 
 
-def test_preflight_has_no_required_keys_and_reports_rows(monkeypatch):
+def test_preflight_reports_capability_rows(monkeypatch):
+    """agent-api used to have NO required-explicit key, and this test was named for that fact. F95
+    gave it one — INTERNAL_API_SECRET, which it both presents and believes — so the environment now
+    has to carry it before the capability rows can be reached at all."""
     for k in ("VEXA_BOT_API_KEY", "HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
     report = cp.preflight()
     assert report["service"] == "agent-api"
     assert report["capabilities"]["bot_gateway"]["state"] == cp.NOT_CONFIGURED
@@ -92,3 +154,78 @@ def test_health_degraded_path_still_carries_rows():
     body = r.json()
     assert body["status"] == "degraded"
     assert "capabilities" in body
+
+
+# ── the WORKER and the HARNESS are part of this service's config surface (F91 · F93) ─────────────
+
+_ENV_READ = re.compile(r"""os\.(?:getenv|environ\.get|environ\.setdefault)\(\s*["']([A-Z][A-Z0-9_]*)["']"""
+                       r"""|os\.environ\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]""")
+
+#: Process plumbing a module may read without a declaration — the same tight list gate:config-contract
+#: keeps (CONFIG_SURFACE_ALLOW). Interpreter/runtime wiring only, never product config.
+_PLUMBING = {"PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ",
+             "HOME", "TMPDIR"}
+
+
+def _env_reads(*dirs: str) -> dict[str, str]:
+    root = Path(__file__).resolve().parents[1]
+    found: dict[str, str] = {}
+    for d in dirs:
+        for path in sorted((root / d).rglob("*.py")):
+            if "tests" in path.parts or "__pycache__" in path.parts:
+                continue
+            for m in _ENV_READ.finditer(path.read_text(encoding="utf-8")):
+                found.setdefault(m.group(1) or m.group(2), str(path.relative_to(root)))
+    return found
+
+
+def test_every_env_read_in_the_harness_and_the_worker_is_declared():
+    """F91. gate:config-contract scanned only `control_plane` + `shared`, so every dial the TURN
+    actually runs on was invisible to the contract — `VEXA_LLM_EXTRA_BODY`, whose absence fails
+    silently (the turn runs with thinking on), was declared nowhere at all. agent-api does not read
+    these itself; it STAMPS them into every worker spec env, which is exactly why they are its
+    config surface. This is the Python-side twin of the widened gate scan: either alone can be
+    edited away, both cannot be by accident."""
+    declared = {k["key"] for k in cp.load_declaration()["keys"]}
+    for key, where in sorted(_env_reads("llm", "worker").items()):
+        assert key in declared or key in _PLUMBING, (
+            f"{where} reads {key} but config.v1.json does not declare it — add it to "
+            "core/agent/control_plane/config.v1.json"
+        )
+
+
+def test_the_qwen_lane_dials_are_declared():
+    """Named one by one because these are the keys whose absence is SILENT: a mis-stamped
+    extra_body leaves thinking on and the turn merely returns nothing parseable."""
+    declared = {k["key"] for k in cp.load_declaration()["keys"]}
+    assert {"VEXA_LLM_BASE_URL", "VEXA_LLM_API_KEY", "VEXA_LLM_MODEL", "VEXA_LLM_EXTRA_BODY",
+            "VEXA_AGENT_MODEL", "VEXA_AGENT_STREAM", "VEXA_AGENT_MAX_TOOL_CALLS",
+            "VEXA_AGENT_MAX_TURN_SEC", "VEXA_AGENT_CONTEXT_TOKENS", "VEXA_MOUNTS",
+            "VEXA_RUNNER"} <= declared
+
+
+#: The number gate:config-contract PRINTS. It used to be compared to nothing, so it could move by
+#: any amount — a key silently dropped from the declaration reads as a smaller, equally green line
+#: (F93). Bump this deliberately, in the same commit that adds or removes a key.
+# 84 on `harness-hardening` (which declared the 22 llm/worker keys), plus the two the line
+# gained while that branch was open: INTERNAL_API_SECRET (the security hotfix, PR #1424) and
+# VEXA_BUILD_SHA (the version bar, PR #1422). The union is duplicate-free and drops nothing
+# from either side.
+# +1 on `flows-delivery`: VEXA_ROOM_MEETING, the post-meeting room signal the worker reads to
+# keep decision 22 (no desk write-back, no README refresh, no bot verbs on a finished meeting —
+# F103/F104). The widened scan this file's sibling test performs is what caught it undeclared.
+# 87 since VEXA_ENV was declared beside VEXA_SECRETS_KEY (R-E08): the profile word decides whether
+# an unset store key is a generated one or a boot refusal, so the two are read together and are
+# declared together.
+EXPECTED_DECLARED_KEYS = 88
+
+
+def test_the_declared_key_count_is_asserted_not_merely_printed():
+    decl = cp.load_declaration()
+    assert len(decl["keys"]) == EXPECTED_DECLARED_KEYS, (
+        f"agent-api declares {len(decl['keys'])} keys, this tripwire expects "
+        f"{EXPECTED_DECLARED_KEYS}. If the change is intended, update EXPECTED_DECLARED_KEYS here "
+        "in the same commit — the gate prints this number and comparing it to nothing is how a "
+        "dropped declaration stays green."
+    )
+    assert len({k["key"] for k in decl["keys"]}) == len(decl["keys"]), "a key is declared twice"

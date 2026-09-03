@@ -19,14 +19,58 @@ import time
 from typing import Optional
 
 import contracts
-from control_plane.workspace_attach import active_workspaces, shared_active_mounts
+from control_plane.workspace_attach import SEED_SLOT, active_workspaces, shared_active_mounts
+from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
+from control_plane import global_layer
+from control_plane import model_endpoint
+from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
+from shared import delegation
 from shared.ports import IdentityPort, RuntimePort
+from shared import units
 from shared.units import chat_session, dispatch_id, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
+
+
+def _ensure_workspace_exists(settings: Settings, subject: str) -> bool:
+    """Make sure this subject HAS a workspace directory before we ask the runtime to mount it.
+
+    The seeding seam is documented as lazy — "seeded on first turn" — but it can never run,
+    because the worker BIND-MOUNTS ``<root>/<subject>`` and the runtime refuses to start a
+    container whose bind source does not exist:
+
+        docker start vexa-worker-75-chat-meet-32 failed (404): cannot access path
+        /var/lib/docker/volumes/..._agent-workspaces/_data/75: no such file or directory
+
+    which surfaces to the caller as a bare ``500 Internal Server Error`` from ``/api/chat``.
+    In practice the directory only ever existed because the EMAIL ONBOARDING flow called
+    ``POST /api/workspace/init`` explicitly. Every path that reaches a chat WITHOUT going
+    through that flow therefore 500s on its very first turn — and the most important such path
+    is the one the growth loop is built on: an attendee who presses the button in a meeting
+    follow-up is a brand-new platform user, has never onboarded, and lands on an error.
+
+    Idempotent and fail-soft: an existing workspace is untouched, and a seeding failure logs
+    and lets the spawn proceed exactly as before rather than turning a degraded turn into no
+    turn at all.
+    """
+    try:
+        from pathlib import Path
+
+        from shared.seeding import resolve_seed_dir, seed_workspace
+        ws = Path(settings.workspaces_dir) / str(subject)
+        if (ws / ".git").exists():
+            return False
+        seed_workspace(ws, resolve_seed_dir(
+            getattr(settings, "default_template", None),
+            seeds_root=getattr(settings, "workspace_seeds_dir", None)))
+        logger.info("dispatch SEEDED workspace for subject=%s (first turn, never onboarded)", subject)
+        return True
+    except Exception:  # noqa: BLE001 — never let this be the reason a turn does not happen
+        logger.warning("workspace ensure failed for subject=%s — spawning anyway", subject, exc_info=True)
+        return False
 
 
 def build_active_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None) -> list[dict]:
@@ -38,9 +82,12 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
     Deterministic (primary first), generalizes to N mounts. A subject with no activated extras yields
     exactly the private baseline — identical to today's single-workspace behavior.
 
-    ``memberships`` (Lane A) = the subject's ``users.data.memberships[]`` index (the dispatcher resolves it
-    once and passes the data in). When present, the SHARED workspaces the subject is a member of are
-    appended after their private set, WRITABLE per the member's role (contributor/owner → rw, viewer → ro).
+    ``memberships`` (Lane A) = the subject's ``users.data.memberships[]`` index rows (the dispatcher
+    resolves them once and passes the data in); ``None`` = Lane A off (no index wired) — no shared mounts.
+    When non-None (an empty list included), the rows are UNIONed with the authoritative
+    ``policy/members.json`` scan, so a dead or incomplete index cannot silently drop a locally-held grant
+    from the mount set; the SHARED workspaces the subject is a member of are then appended after their
+    private set, WRITABLE per the member's role (contributor/owner → rw, viewer → ro).
     NOTE: concurrent shared writes are not yet serialized (Lane W) — sequential attributed writes work
     (author = principal, via the per-mount commit path); true concurrency-safety lands with the writer.
 
@@ -63,12 +110,16 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
              "purpose": read_purpose(m.path)}
             for m in mounts
         ]
-    if not memberships:
+    if memberships is None:
         return private
     # Lane A: append the shared workspaces the subject is a member of — WRITABLE per role (contributor/owner
-    # write; viewer read-only). A shared-mount hiccup must never break the dispatch → fall soft.
+    # write; viewer read-only). The passed rows are the INDEX's view and may be incomplete (the lost-write
+    # incident) — union in the authoritative policy/members.json scan, which only ever ADDS candidates;
+    # shared_active_mounts still re-checks the role authoritatively per workspace. A shared-mount hiccup
+    # must never break the dispatch → fall soft.
+    rows, _ = reconciled_memberships(root, subject, lambda _subject: memberships)
     try:
-        shared = shared_active_mounts(root, subject, memberships)
+        shared = shared_active_mounts(root, subject, rows)
     except Exception:  # noqa: BLE001
         logger.warning("shared-mount resolution failed for subject=%s — mounting private workspaces only", subject)
         shared = []
@@ -79,33 +130,210 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
     ]
 
 
-def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None) -> list[dict]:
+def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None,
+                    room: Optional[dict] = None,
+                    scaffold_workspaces: Optional[list[str]] = None) -> list[dict]:
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
-      1. ``_global``  GLOBAL SYSTEM  — platform-owned, READ-ONLY, ALWAYS mounted (when configured +
-                      present; absent → skipped + logged). Behaviour/skills/tools. Agents never write it.
+      1. ``_global``  GLOBAL SYSTEM  — platform-owned and ALWAYS mounted. Missing configuration fails
+                      the dispatch closed; a worker never runs without organisation context.
       2. active set   NORMAL private + shared workspaces — READ-WRITE (the additive set, WP-A2.1).
       3. ``_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Create-if-absent (thin
                       template). Chats migrate here in a later WP.
 
-    Order: ``[_global?, *active, _system]``. ``_global`` (RO) and ``_system`` (RW) are ALWAYS present
-    (barring an unconfigured/absent _global); the normal active workspaces sit between them. Both system
-    tiers fail SOFT into the active set so a dispatch never dies on system-mount resolution — but a
-    system-tier failure is LOGGED loudly (it degrades the model's base behaviour / private memory)."""
+    Order: ``[_global, *active, *room, _system]``. The normal active workspaces sit between the system
+    tiers. ``_global`` fails CLOSED because organisation context is a hard invariant; ``_system``
+    remains fail-soft so a private-memory storage fault cannot suppress the user's turn.
+
+    ── THE ROOM (tier 2b, additive) ────────────────────────────────────────────────────────────────
+    ``room`` (``{"meeting_id", "subjects": [...]}``) is the post-meeting MEETING ROOM: the OTHER
+    attendees of one meeting, whose own workspaces this turn may READ. It is resolved SERVER-SIDE by
+    the caller of this function (``api._resolve_room`` — meeting entitlement + owner check + the
+    meeting's reader roster) and is NEVER anything a request body asserted; see
+    ``control_plane/meeting_room.py`` for the three gates.
+
+    Room entries are appended AFTER the subject's own active set and BEFORE ``_system``, so the
+    existing order/semantics are untouched: with ``room=None`` (every dispatch that names no meeting)
+    the stack is byte-identical to before. They are always ``write: False`` (the runtime binds them
+    ``:ro``) and ``primary: False``, they can never shadow or duplicate a path the subject's own set
+    already holds, and no other subject's ``_system`` is reachable through them.
+
+    DECISION 22 — A ROOM RUN WRITES NO DESK. The run reads desks and writes ONE shared artefact whose
+    home is the meeting row; flows distributes it into every attendee's desk afterwards, organizer
+    included, nobody special.
+
+    THE ROOM IS THE OTHER ATTENDEES' DESKS, AND ONLY THOSE (ruling 2026-09-02, correcting this
+    docstring). This code used to read "not the organizer's either" as a mount-mode instruction and
+    demote the SUBJECT'S OWN desk to ``write: False`` as well. That is not a narrowing, it is a
+    broken turn: the worker writes its delegation credential to ``<cwd>/.claude``, the cwd IS the
+    subject's own desk when the meeting has no group, and the spawn therefore died on
+    ``OSError: [Errno 30] Read-only file system: '/workspaces/129/.claude'`` before reaching the
+    model — every post-meeting turn for every non-admin subject, invisible because the instance's
+    only admin is the founder. Whether the turn WRITES a desk is enforced where it belongs, by
+    ``process_meeting``'s HEAD-before/HEAD-after check, not by taking away a mount mode the runtime
+    needs to start at all.
+
+    So in room mode: the ROOM entries are ``write: False`` (they always were, where they are
+    appended below), the subject's own desk KEEPS its write bit, and the subject's OTHER activated
+    workspaces are still demoted — they are neither the room nor the subject's own desk, and a run
+    scoped to one meeting has no business writing them. The GROUP DESK, when the meeting is bound to
+    a shared workspace and the subject is a contributor/owner, keeps its write bit AND becomes the
+    turn's cwd (``primary``), because that desk is the room's shared state and the run maintains it.
+    ``_system`` is NOT a desk and stays read-write — chat continuity anchors there
+    (``worker/engine._continuity_root``), and taking it away would break the turn, not narrow it.
+
+    ── THE SCAFFOLD (PRD 5.5) ─────────────────────────────────────────────────────────────────────
+    ``scaffold_workspaces`` is the mount list a SCAFFOLD RECORD states (agent-api resolved the
+    record and checked it belongs to this subject before passing it here — it never arrives from
+    a request body). It does two things and deliberately not a third:
+
+      * it ORDERS the middle tier, scaffold-named workspaces first, so the turn's cwd and the
+        worker's reading order are the ones the link was composed for;
+      * it ADDS a named workspace the subject has not activated — the meeting's group desk, most
+        often — resolved through ``group_desk_mount``, which asks the workspace's own
+        ``policy/members.json`` whether this subject may write it. Naming a slug is not a grant.
+
+    It does NOT REMOVE anything. For a human chat ``workspaces[]`` is ATTENTION, not permission
+    (PRD 7: "soft for a human, hard for a run") — a person's other desks stay mounted, because a
+    chat restores what was in focus and never a sandbox. The hard isolation axis is ``room``,
+    above, and it is a different argument on purpose so the two can never be confused."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
-    # Tier 1 — GLOBAL SYSTEM (read-only), when configured + present. Absent → skip (the stack still runs).
-    try:
-        g = global_mount(settings, settings.workspaces_dir)
-        if g is not None:
-            stack.append(g)
-    except Exception:  # noqa: BLE001 — a bad _global must never break a dispatch; run without it
-        logger.warning("global-system (_global) mount resolution failed — running the turn without it")
+    # Tier 1 — GLOBAL SYSTEM. Fail before spawn rather than silently run an under-grounded agent.
+    # The INSTANCE ADMIN receives the one sanctioned read-write setup mount: their setup
+    # conversation is the only writer the organisation tier has. The role is `users.data.is_admin`,
+    # claimed at first sign-in and asked of admin-api (global_layer.is_admin, which keeps the env
+    # allow-list as an operator override and fails CLOSED when it cannot resolve the role) — an env
+    # list could never have been the definition, because the admin does not exist yet when the
+    # deployment env is written.
+    g = global_mount(settings, settings.workspaces_dir)
+    if global_layer.is_admin(settings, str(subject)):
+        g = {**g, "write": True}
+    stack.append(g)
 
-    # Tier 2 — the NORMAL active set (private baseline + activated extras).
+    # Tier 2 — the NORMAL active set (private baseline + activated extras). In ROOM mode the
+    # subject's OTHER activated workspaces are demoted to read-only; the subject's OWN desk and the
+    # meeting's group desk are not (see DECISION 22 in the docstring — the room is the other
+    # attendees' desks, and those are appended below already read-only).
+    if room:
+        group = str(room.get("group_workspace_id") or "")
+        # THE SUBJECT'S OWN DESK keeps its write bit — the runtime needs a writable cwd to start at
+        # all (F59). Their OTHER activated workspaces are still demoted: those are neither the room
+        # nor the subject's own desk, and a run scoped to one meeting has no business writing them.
+        #
+        # ...UNLESS THE MEETING HAS A GROUP DESK THIS SUBJECT MAY WRITE, and then the reason for
+        # the write bit is gone: that desk becomes `primary` twenty lines down, so IT is the cwd
+        # the runtime needs, and decision 22's group half says in as many words that it is "the one
+        # desk you write to in this turn". Leaving the organiser's own desk writable beside it left
+        # a second writable content desk in a run whose whole contract is that it writes no desk —
+        # and something did write it: the entity write-back phase (decision 24) authors pages into
+        # every writable mount after every turn, which moved HEAD and tripped this step's own
+        # decision-22 detector on every `#group:` meeting (F103). The narrowing is applied AFTER
+        # the group mount is resolved below, because until then we do not know whether the subject
+        # can actually write it — a viewer's group desk must not cost them their cwd.
+        if group and not any(m.get("slug") == group for m in active):
+            # The meeting names a group the subject has not activated — resolve it directly through
+            # the authoritative Lane-A seam so the run can maintain the group's memory. Membership
+            # and the write bit are decided THERE, from policy/members.json, not here.
+            g_mount = group_desk_mount(settings.workspaces_dir, subject, group)
+            if g_mount is not None:
+                active.append(dict(g_mount))
+        # Now the demotion, with the group's write bit known. `writable_group` is the predicate the
+        # comment above turns on: with one, the subject's own desk joins the read-only room; with
+        # none, it keeps write and primary exactly as F59 requires.
+        writable_group = bool(group) and any(
+            m.get("slug") == group and m.get("write") for m in active)
+        active = [
+            dict(m) if ((m.get("primary") and not writable_group)
+                        or (group and m.get("slug") == group))
+            else {**m, "write": False, "primary": False}
+            for m in active]
+    # THE CWD, STATED rather than reached by elimination. The group desk takes it when the meeting
+    # has one AND this subject may actually write it; otherwise the subject's own desk keeps it.
+    #
+    # `_worker_cwd` picks the first `primary`, else the first writable non-system mount, else the
+    # baseline home. Under the old blanket demotion NOTHING was primary and nothing was writable, so
+    # the cwd arrived through that last fallback — the baseline home, mounted read-only — and the
+    # worker died on `mkdir`. Deciding it here means a viewer's group desk (readable, not writable)
+    # can never become the cwd either, which is the same bug through a quieter door.
+    if room:
+        _g = str(room.get("group_workspace_id") or "")
+        _gm = next((m for m in active if _g and m.get("slug") == _g and m.get("write")), None)
+        if _gm is not None:
+            for m in active:
+                m["primary"] = m is _gm
+    # THE SCAFFOLD'S ORDER + ITS ONE ADDITION (see the docstring). Fails SOFT in both halves: a
+    # scaffold naming a workspace that cannot be resolved costs an ordering, never the turn.
+    if scaffold_workspaces:
+        wanted = [str(w).strip() for w in scaffold_workspaces
+                  if str(w).strip() and str(w).strip() not in (GLOBAL_SLUG, SYSTEM_SLUG)]
+        # A SCAFFOLD NAMES THE RECIPIENT'S OWN DESK BY THEIR SUBJECT ID, because at mint time
+        # that is the only handle the minter has — flows knows an address and a uid, never a
+        # slot name. On the store the same desk is the SEED SLOT (`workspace_attach.SEED_SLOT`,
+        # resolving in place at `<root>/<subject>`), so a literal slug comparison would miss it,
+        # then send it to `group_desk_mount`, which would correctly refuse a private desk and
+        # log it as a missing group. Two names for one desk, resolved here, once.
+        own = {str(subject), SEED_SLOT}
+        own_path = f"{settings.workspaces_dir}/{subject}"
+
+        def _is(mount: dict, want: str) -> bool:
+            return mount.get("slug") == want or (want in own and mount.get("path") == own_path)
+
+        for want in wanted:
+            if any(_is(m, want) for m in active):
+                continue
+            if want in own:
+                # Their own desk is the private baseline by construction; if it is not in the
+                # active set the person switched it OFF, and a link does not switch it back on.
+                continue
+            try:
+                extra_mount = group_desk_mount(settings.workspaces_dir, subject, want)
+            except Exception:  # noqa: BLE001
+                extra_mount = None
+            if extra_mount is not None:
+                active.append(extra_mount)
+
+        def _rank(mount: dict) -> int:
+            for i, want in enumerate(wanted):
+                if _is(mount, want):
+                    return i
+            return len(wanted)
+        active = sorted(active, key=_rank)
+        logger.info("dispatch SCAFFOLD MOUNTS subject=%s wanted=%s mounted=%s",
+                    subject, wanted, [m.get("slug") for m in active])
     stack.extend(active)
+
+    # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
+    # upstream). Fails SOFT: a room that cannot be materialized degrades the post-meeting turn's
+    # context, and must never be the reason the turn does not happen.
+    if room:
+        try:
+            taken = {m["path"] for m in stack if m.get("path")}
+            extra, audit = resolve_desks(
+                settings.workspaces_dir, room.get("ordered") or [],
+                lookup=room.get("lookup") or (lambda _address: None),
+                meeting_id=str(room.get("meeting_id") or ""),
+                cap=room.get("read_max"), taken_paths=taken)
+            stack.extend(extra)
+            # OBSERVABILITY — a silent widening of what an agent may read is the thing that must
+            # never happen. THE AUDIT LINE. One row per participant — address, subject, and WHY (matched-and-spoke
+            # / unmatched-invite-order / skipped-no-subject / skipped-no-desk / skipped-over-cap).
+            # This is how anyone ever answers "which desks could that run read, and why those?" —
+            # a widening that cannot be reconstructed afterwards is a widening nobody can audit.
+            logger.info(
+                "dispatch ROOM MOUNTS subject=%s meeting=%s source=%s mounted=%s read_only=%s "
+                "group_desk=%s writable_desks=%s audit=%s",
+                subject, room.get("meeting_id"), room.get("source") or "-",
+                [m["slug"] for m in extra], all(m.get("write") is False for m in extra),
+                room.get("group_workspace_id") or "-",
+                [m["slug"] for m in stack if m.get("write") and m.get("role") not in ("global", "system")],
+                audit,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("room mount resolution failed for subject=%s meeting=%s — running without "
+                           "the room", subject, (room or {}).get("meeting_id"), exc_info=True)
 
     # Tier 3 — PRIVATE SYSTEM (read-write), always present (create-if-absent). A failure here degrades the
     # user's durable private-system memory — log loudly but never abort the dispatch.
@@ -118,7 +346,7 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
 
 # ── model-auth passthrough (the k8s/helm credential seam) ────────────────────
 # The worker needs a MODEL credential, and delivery used to differ by substrate: the docker backend
-# brokers creds itself (the HOST_CLAUDE_CREDENTIALS bind-mount + copying ANTHROPIC_*/VEXA_LLM_* from
+# brokers creds itself (the HOST_CLAUDE_CREDENTIALS bind-mount + copying ANTHROPIC_* from
 # the runtime service env), but the k8s and process backends deliver ONLY this spec env — so a helm
 # worker booted with no credential at all (claude CLI: "Not logged in" → chat "Model inference
 # error"). agent-api therefore stamps an EXPLICIT allowlist from its own environment into every
@@ -126,12 +354,13 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
 # each entry is a var a core/agent/llm adapter (or the claude CLI itself) actually reads.
 MODEL_AUTH_ENV_ALLOWLIST = (
     "CLAUDE_CODE_OAUTH_TOKEN",  # claude CLI subscription OAuth — the env twin of the docker credentials mount
-    "ANTHROPIC_API_KEY",        # claude CLI + the llm/ completion adapters (last-resort fallback)
-    "ANTHROPIC_AUTH_TOKEN",     # claude CLI gateway/OpenRouter token; llm/ adapters fall back to it
-    "ANTHROPIC_BASE_URL",       # claude CLI gateway endpoint; openai_compat base-url fallback
-    "VEXA_LLM_API_KEY",         # llm/ completion adapters' first-class credential (deliberately no Settings field)
-    "VEXA_LLM_BASE_URL",        # llm/ completion adapters' first-class endpoint (pairs with the key above)
+    "ANTHROPIC_API_KEY",        # claude CLI (last-resort fallback)
+    "ANTHROPIC_AUTH_TOKEN",     # claude CLI gateway/OpenRouter token
+    "ANTHROPIC_BASE_URL",       # claude CLI gateway endpoint
 )
+# The list used to carry three more — VEXA_LLM_API_KEY / _BASE_URL / _EXTRA_BODY — the completion
+# provider's credential, endpoint and dialect escape hatch. PRD decision 34 removed the pipeline
+# that called it, so a worker needs exactly one model credential: the agent harness's.
 
 
 def _allowlisted(model: str, allowlist: str) -> bool:
@@ -140,16 +369,17 @@ def _allowlisted(model: str, allowlist: str) -> bool:
     return not allowed or model in allowed
 
 
-def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = "") -> None:
+def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = "",
+                         friction=None, subject: str = "") -> None:
     """Overlay the subject's effective model config (Settings → Models: user pref > platform
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
 
-    ``mode: custom`` points BOTH call shapes at the supplied gateway (an Anthropic-/OpenAI-
-    compatible endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model): the
-    claude-code harness via ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN`` and the completion
-    adapters via ``VEXA_LLM_PROVIDER=openai-compat`` + ``VEXA_LLM_BASE_URL``/``VEXA_LLM_API_KEY``.
-    ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
+    ``mode: custom`` points the agent harness at the supplied gateway (an Anthropic-compatible
+    endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model) via
+    ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN``. ONE endpoint, stamped once: the openai-agent
+    harness (decision 37) reads these same two as its documented fallbacks, so there is no second
+    pair in a second dialect — which is what decision 34 removed and must stay removed. ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
     Claude Code subscription / deployment key — and only the model names apply.
 
     Dispatch-stamped values WIN downstream (the runtime copies its own env only for keys absent
@@ -158,16 +388,9 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     a stale pref must not brick a turn."""
     model = (config.get("model") or "").strip()
     if model and _allowlisted(model, allowlist):
-        env["VEXA_AGENT_MODEL"] = model     # harness turns (chat/docs/routines)
-        env["VEXA_LLM_MODEL"] = model       # completion beats' default (meeting_model beats it)
+        env["VEXA_AGENT_MODEL"] = model     # harness turns — the ONE model this product runs
     elif model:
         logger.warning("model %r not in VEXA_MODEL_ALLOWLIST — using deployment default", model)
-    meeting_model = (config.get("meeting_model") or "").strip()
-    if meeting_model and _allowlisted(meeting_model, allowlist):
-        env["VEXA_MEETING_MODEL"] = meeting_model
-    elif meeting_model:
-        logger.warning("meeting model %r not in VEXA_MODEL_ALLOWLIST — using deployment default",
-                       meeting_model)
     # Reasoning-effort pin for the claude-code harness (Settings → Models "effort"). Empty ⇒ unset ⇒
     # the CLI's own default (no flag on the argv); an explicit value reaches the worker env and the
     # harness passes it through as --effort. Backends that validate the OpenAI-compatible
@@ -176,18 +399,60 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     effort = (config.get("effort") or "").strip()
     if effort:
         env["VEXA_AGENT_EFFORT"] = effort
-    if (config.get("mode") or "").strip() != "custom":
-        return
-    base_url = (config.get("base_url") or "").strip()
+    # THE HARNESS, per subject (PRD decision 37 + 38). `VEXA_RUNNER` was a deployment-wide dial, so
+    # trying a different harness meant changing it for everybody — which is exactly what a
+    # rehearsal must never do. Here it is one more field of the SAME per-subject config the model
+    # and the endpoint already ride, so `openai-agent` against a local Qwen can be pinned to one
+    # scratch subject while every other person on the instance keeps the deployment's default.
+    #
+    # An unknown name is DROPPED, never an error, and the drop is logged: identical to the model
+    # allowlist above, and for the identical reason — a stale pref must not brick a turn. The known
+    # set is `shared.units.RUNNERS`, which `llm/tests/test_registry.py` proves equal to the runner
+    # registry itself; admin-api stores the slug with no vocabulary of its own, so there is exactly
+    # one list and one test holding it to the code that implements it.
+    runner = (config.get("runner") or "").strip()
+    if runner and runner in units.RUNNERS:
+        env["VEXA_RUNNER"] = runner
+    elif runner:
+        logger.warning("runner %r is not a known harness (%s) — using the deployment default",
+                       runner, sorted(units.RUNNERS))
+    base_url = model_endpoint.custom_base_url(config)
     api_key = (config.get("api_key") or "").strip()
     if not base_url:
-        return  # custom mode without an endpoint is inert — deployment credentials still apply
+        # Not custom, or custom with no endpoint — inert either way; deployment credentials apply.
+        return
+    # THE OPERATOR GATE (F84). A subject-supplied URL is an outbound destination chosen by a
+    # non-operator, so it is refused unless the deployment allow-lists its host. The refusal is
+    # LOUD — a log line and a friction record — because a silently-ignored endpoint runs the turn on
+    # the deployment's own model and looks like it worked.
+    refusal = model_endpoint.refuse_reason(base_url)
+    if refusal:
+        logger.warning("model endpoint REFUSED for subject=%s: %s", subject or "?", refusal)
+        if friction is not None:
+            try:
+                friction(model_endpoint.refusal_friction(base_url, refusal, subject=subject))
+            except Exception:  # noqa: BLE001 — a report is never worth a dispatch
+                logger.warning("model endpoint refusal could not be filed as friction")
+        return
     env["ANTHROPIC_BASE_URL"] = base_url
-    env["VEXA_LLM_PROVIDER"] = "openai-compat"
-    env["VEXA_LLM_BASE_URL"] = base_url
-    if api_key:
-        env["ANTHROPIC_AUTH_TOKEN"] = api_key
-        env["VEXA_LLM_API_KEY"] = api_key
+    # ALWAYS THE SUBJECT'S OWN CREDENTIAL — the empty string included (F84, SECURITY). The backfill
+    # at the end of `build_unit_env` fills every MODEL_AUTH_ENV_ALLOWLIST key that is still ABSENT
+    # from agent-api's own environment; an explicit "" is not absent. Stamping only a non-empty key
+    # therefore paired the DEPLOYMENT's brokered token with the SUBJECT's endpoint whenever the
+    # subject supplied a URL and no key. Every credential the harness or the claude CLI would put on
+    # that request is pinned here, so a custom endpoint can only ever receive what its own owner set.
+    env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    env["ANTHROPIC_API_KEY"] = api_key
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = ""    # the subscription token has ONE legitimate destination
+    # THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT. Endpoint, credential and model all reach
+    # the openai-agent harness through the ANTHROPIC_*/VEXA_AGENT_MODEL keys above (see
+    # `llm/openai_agent.py` — `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL`, and so on). `extra_body`
+    # has no such fallback, and a self-hosted Qwen returns nothing parseable without
+    # {"chat_template_kwargs":{"enable_thinking":false}} — so a per-subject value has to be
+    # stamped under its own name or the admin-api field that writes it does nothing.
+    extra_body = (config.get("extra_body") or "").strip()
+    if extra_body:
+        env["VEXA_LLM_EXTRA_BODY"] = extra_body
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
@@ -206,9 +471,20 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
     return normal["path"] if normal else f"{root}/{subject}"
 
 
+def _start_with_nonce(start: dict, nonce: str) -> dict:
+    """`start`, with the delivery nonce on its entrypoint. A COPY — the caller's dict is untouched."""
+    ep = (start or {}).get("entrypoint")
+    if not nonce or not isinstance(ep, dict):
+        return start
+    return {**start, "entrypoint": {**ep, "nonce": nonce}}
+
+
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
                    memberships: Optional[list[dict]] = None,
-                   model_config: Optional[dict] = None) -> dict[str, str]:
+                   model_config: Optional[dict] = None,
+                   room: Optional[dict] = None,
+                   scaffold_workspaces: Optional[list[str]] = None,
+                   entry_nonce: str = "", friction=None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -219,7 +495,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
     # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
-    mounts = build_mount_set(settings, subject, memberships)
+    mounts = build_mount_set(settings, subject, memberships, room=room,
+                             scaffold_workspaces=scaffold_workspaces)
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -230,7 +507,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_UNIT_OUT_TOPIC": output_topic(unit_id),
         "VEXA_UNIT_IN_TOPIC": input_topic(unit_id),
         "VEXA_WORKSPACES": json.dumps(invocation["workspaces"]),  # the granted [{id,mode}] list to mount
-        "VEXA_START": json.dumps(invocation["start"]),            # entrypoint(inline|path) | session(ref)
+        # The entrypoint carries the same nonce as its pre-delivered stream copy, so the worker can
+        # skip exactly that one entry at boot and drain everything else waiting. Copied, never
+        # mutated in place: `invocation` belongs to the caller.
+        "VEXA_START": json.dumps(_start_with_nonce(invocation["start"], entry_nonce)),
         "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
         "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
         "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts),  # the worker's cwd — the primary baseline, or (if it's switched off) the first active normal workspace
@@ -238,6 +518,20 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
+    # THE ROOM, STATED TO THE WORKER. Present exactly when this dispatch is a post-meeting room
+    # run, absent on every other dispatch — a POSITIVE signal we always emit, never an inference
+    # from the mount shape. The worker cannot derive it: a room whose other attendees have no desks
+    # yet resolves to zero `role: "room"` mounts, which is precisely the small-team case, so
+    # "are there room mounts?" answers `no` on a run that IS one.
+    #
+    # It is read for two things the room run must not do, both of them decision 22 ("the run reads
+    # desks and writes ONE shared artefact whose home is the meeting row"):
+    #   * the entity write-back phase does not run (it authored pages into the organiser's desk
+    #     after every post-meeting turn, moved HEAD, and tripped the detector — F103);
+    #   * the bot verbs leave the toolbelt (a turn about a meeting that is over cannot usefully
+    #     stop a bot, and it filed four `bot_stop` calls trying — F104).
+    if room and room.get("meeting_id"):
+        env["VEXA_ROOM_MEETING"] = str(room["meeting_id"])
     # Attribution (D4 / WP-A1.2): the per-mount turn commit is authored by the dispatch PRINCIPAL (the
     # authenticated human whose input drives the turn), committer stays the platform. Until membership/
     # sharing lands (later WPs) the principal IS the subject; a caller that already resolved a distinct
@@ -249,22 +543,66 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     env["VEXA_PRINCIPAL_EMAIL"] = (
         os.environ.get("VEXA_PRINCIPAL_EMAIL") or principal.get("email") or f"{subject}@vexa.local"
     )
+    # ── the worker's AUTHENTICATED toolbelt (shared.delegation) ──────────────────────────────────
+    # The dispatch is the only place that knows BOTH who this turn acts for and why it fired, so it is
+    # the only place that can mint a credential saying exactly that. The worker receives a short-lived,
+    # scoped, revocable delegation token — never a durable user credential — and attaches it to the
+    # vexa-control MCP. REGIME comes from the trigger: `message` is a human turn (soft scope: everything
+    # already theirs, because a person is watching and can correct it); anything else fired unwatched
+    # and carries the HARD isolation set — the exact workspaces this dispatch was granted.
+    #
+    # Fails SOFT and SILENT-BY-DESIGN: no secret or no endpoint ⇒ no token, and the worker runs exactly
+    # as it did before delegation existed. A mint that RAISES, though, is a dispatcher bug (a bad regime/
+    # scope combination), and it is logged rather than swallowed — an unauthenticated worker that was
+    # supposed to be authenticated looks, from the chat, exactly like an MCP with nothing to say.
+    mcp_secret = settings.mcp_delegation_secret.get_secret_value()
+    if mcp_secret and settings.mcp_url:
+        regime = delegation.regime_for_trigger(invocation["trigger"])
+        # Human ⇒ "*" (soft focus over the subject's own account). Autonomous ⇒ the granted workspace
+        # ids, verbatim from the invocation — the dispatch's isolation set is already the right answer.
+        scope_ws = "*" if regime == "human" else [
+            str(w.get("id")) for w in (invocation.get("workspaces") or []) if w.get("id")
+        ]
+        # THE ROOM IS DELIBERATELY ABSENT FROM THIS SCOPE, and that is the security answer, not an
+        # omission. The delegation scope is a CEILING ON THE ACCOUNT (`delegation.scope_allows_workspace`:
+        # `"*"` "allows everything the ACCOUNT already allows … the rig still applies its own per-uid
+        # ownership checks underneath"), so naming another attendee's workspace here would be asking the
+        # control MCP to hand THIS uid a workspace it does not own — inert if the rig is correct, and a
+        # genuine widening of the person's account reach if it ever is not. The room is a MOUNT-level read
+        # grant made by the dispatcher and enforced by the container's mount table (`write: False` → a
+        # `:ro` bind), which is a narrower mechanism than a credential and needs no credential change.
+        # Net effect on the token: identical bytes to a room-less dispatch — same `sub`, same `regime`,
+        # same `workspaces` — asserted by tests/test_meeting_room.py.
+        try:
+            env["VEXA_MCP_URL"] = settings.mcp_url
+            env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
+                mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
+                ttl_sec=settings.mcp_delegation_ttl_sec,
+            )
+        except ValueError:
+            env.pop("VEXA_MCP_URL", None)
+            logger.exception("mcp delegation mint refused for subject=%s regime=%s — worker runs "
+                             "WITHOUT the vexa MCP", subject, regime)
+    # Temporal awareness (PRD decision 31 §1): the worker builds its own `now / last / next` block
+    # from flows-api's read-only timeline route, so it needs that route's address and a key. Passed
+    # through from THIS process's environment rather than from settings, and only when it is there:
+    # a deployment that has minted no timeline key gets no block, which is the correct default —
+    # `VEXA_FLOWS_API_KEY` is the OPERATOR key (it submits and activates flows), and putting it in
+    # a worker container to read a list of times would widen its reach by one container per turn.
+    # Mint `VEXA_FLOWS_TIMELINE_KEY` instead; `flows_api._timeline_key` accepts only that route.
+    for _var in ("VEXA_FLOWS_API_URL", "VEXA_FLOWS_TIMELINE_KEY"):
+        if os.environ.get(_var):
+            env[_var] = os.environ[_var]
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
-    if settings.meeting_model:
-        env["VEXA_MEETING_MODEL"] = settings.meeting_model
-    # llm-module dials (non-secret): completion provider + deployment-default model + the optional
-    # operator model gate. The SECRETS (VEXA_LLM_API_KEY/BASE_URL) are brokered by the runtime.
-    if settings.llm_provider:
-        env["VEXA_LLM_PROVIDER"] = settings.llm_provider
-    if settings.llm_model:
-        env["VEXA_LLM_MODEL"] = settings.llm_model
+    # The optional operator model gate.
     if settings.model_allowlist:
         env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist
     # Settings → Models (per-user/platform config from admin-api) beats the deployment env
     # defaults stamped above, field-by-field; anything it leaves unset falls through unchanged.
     if model_config:
-        overlay_model_config(env, model_config, allowlist=settings.model_allowlist)
+        overlay_model_config(env, model_config, allowlist=settings.model_allowlist,
+                             friction=friction, subject=subject)
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -273,48 +611,17 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         # The engine's own default is a tight 120s; chat stamps the (longer) configured window so a
         # follow-up message lands on the WARM worker (no container/CLI cold start).
         env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.chat_idle_timeout_sec)
-    # A live meeting dispatch consumes the meeting's transcript.v1 Stream (the meetings⊥agent seam).
+    # Chat GROUNDED in a live meeting (cookbook #1): the meeting-scoped tool needs the native id +
+    # platform to target meetings' published /transcripts.
+    #
+    # A `meeting` context carrying a `meeting_id` used to take a FIRST branch here and build a whole
+    # second dispatch shape: VEXA_TRANSCRIPT_STREAM + the meeting facts, for a worker that tailed the
+    # transcript and ran completion beats over it. PRD decision 34 removed that worker, and
+    # transcription_watcher no longer mints the dispatch, so the branch had no producer and no
+    # consumer left.
     ctx = invocation.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
-    if meeting and meeting.get("meeting_id"):
-        # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
-        # (``numeric_meeting_id`` — unique per meeting run), NOT the native meeting id. The native id
-        # is NOT unique: it collides across DIFFERENT users of the same meeting link (a shared
-        # ``tc:meeting:{native}`` LEAKED one tenant's transcript to another) AND across ONE user's
-        # repeated rows (wrong-row hydration). ``meeting['meeting_id']`` is the routing key the watcher
-        # froze (the native id today); the row id rides SEPARATELY as ``numeric_meeting_id``. Key the
-        # carrier by the row id when known, falling back to the routing key only for a meeting that
-        # never resolved a row id (surfaced under its own key, still isolated per that key).
-        row_id = meeting.get("numeric_meeting_id") or meeting["meeting_id"]
-        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{row_id}"
-        env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.meeting_idle_timeout_sec)
-        # Carry the meeting facts the post-meeting WRITE turn stamps into the kg entity frontmatter.
-        # VEXA_MEETING_ID is the human-readable NATIVE id (nuance #1: the readable kg doc name
-        # ``kg/entities/meeting/{native}.md`` must survive even though the carriers key by row id).
-        # The watcher now routes by the ROW id (``meeting_id`` == row id) and carries the native
-        # SEPARATELY as ``native_id`` for display; older callers (``/api/meeting/start|process``) still
-        # pass the native as ``meeting_id``. Prefer the explicit ``native_id`` hint, falling back to
-        # ``meeting_id`` (native there) — never the numeric row id, which is unreadable.
-        display_native = meeting.get("native_id") or meeting["meeting_id"]
-        env["VEXA_MEETING_ID"] = str(display_native)
-        if meeting.get("session_uid"):
-            env["VEXA_MEETING_SESSION_UID"] = str(meeting["session_uid"])
-        if meeting.get("platform"):
-            env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
-        if meeting.get("transcript_start_id"):
-            env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
-        if meeting.get("numeric_meeting_id"):
-            # The meetings-domain ROW id (unique per meeting run). The worker keys its
-            # processed-notes stream AND its transcript-consume stream by it
-            # (tc:/proc:meeting:{numeric}) so a re-sent bot on the same native link — or a DIFFERENT
-            # tenant on the same link — can never mix/clobber/read another meeting's data. The
-            # meeting-api db-writer (which knows its own row ids) drains proc:meeting:{numeric} into the
-            # meeting row's data JSONB for durability.
-            env["VEXA_MEETING_NUMERIC_ID"] = str(meeting["numeric_meeting_id"])
-    elif meeting and meeting.get("native_id"):
-        # Chat GROUNDED in a live meeting (cookbook #1): no numeric meeting_id, but the meeting-scoped
-        # tool needs the native id + platform to target meetings' published /transcripts. (The
-        # serve_meeting path keys on meeting_id above; this is the chat-grounding seam.)
+    if meeting and meeting.get("native_id"):
         env["VEXA_MEETING_NATIVE_ID"] = str(meeting["native_id"])
         if meeting.get("platform"):
             env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
@@ -366,6 +673,19 @@ def _without_chat_session(invocation: dict) -> dict:
     return clean
 
 
+# Distinguishes "nothing to deliver" (None) from "the delivery was attempted and failed", which
+# only the caller can turn into a verdict — it depends on whether the worker is warm.
+_DELIVERY_FAILED = object()
+
+
+class WarmDeliveryFailed(RuntimeError):
+    """A chat turn could not be handed to its worker.
+
+    Raised rather than swallowed because for a WARM unit the pre-delivery XADD is the only delivery
+    there is: returning quietly loses the person's words behind a 200. The caller turns this into an
+    error the client can show and the person can retry."""
+
+
 class Dispatcher:
     """Turns a ``unit.v1`` dispatch into a runtime.v1 agent workload — the one path every trigger funnels
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
@@ -389,11 +709,21 @@ class Dispatcher:
         # AdminApiModelConfig — user pref > platform setting over the admin-api internal edge).
         # None → deployment env defaults only, exactly as before.
         self._model_config = model_config
+        # PRD decision 33: where a REFUSED model endpoint is filed (F84). A callable taking the raw
+        # friction record — `create_app` attaches the store's `file` once it has built it. None (a
+        # test, a dispatcher built without an app) logs the refusal and files nothing; the refusal
+        # itself never depends on the sink.
+        self._friction = None
         self.dispatched: list[dict] = []  # observability — the dispatches that fired
 
     @property
     def settings(self) -> Settings:
         return self._settings
+
+    def attach_friction(self, file_record) -> None:
+        """Wire the friction sink (``FrictionStore.file``) after construction — the store is built
+        inside ``create_app``, which already holds the dispatcher."""
+        self._friction = file_record
 
     def resolve_model_config(self, subject: str) -> Optional[dict]:
         """The subject's effective Settings → Models config (user pref > platform setting).
@@ -407,8 +737,16 @@ class Dispatcher:
             logger.warning("model-config lookup failed for subject=%s — treating as env defaults", subject)
             return None
 
-    def dispatch(self, invocation: dict) -> str:
+    def dispatch(self, invocation: dict, *, room: Optional[dict] = None,
+                 scaffold_workspaces: Optional[list[str]] = None) -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
+
+        ``room`` is the post-meeting MEETING ROOM — ``{meeting_id, subjects[], source}`` — already
+        RESOLVED AND AUTHORISED by the caller (``api._resolve_room``). It is a dispatcher argument
+        rather than a field of the invocation on purpose: ``unit.v1`` is a sealed wire contract
+        (``additionalProperties: false``), and more importantly the room must never be able to
+        arrive from anywhere a request body can reach. ``None`` (every other trigger and every
+        chat that names no meeting) leaves the dispatch byte-identical to before.
 
         ``context.session`` (the chat conversation thread) is an agent-api routing hint, not part of the
         published unit.v1 wire contract — it is stripped before the schema check so the envelope stays
@@ -422,21 +760,30 @@ class Dispatcher:
         )
         # Lane A: resolve the subject's shared memberships once (fail soft — a membership-index hiccup must
         # never break a dispatch; the private stack still mounts). Passed as data into the mount builder.
+        # Enumeration reconciles BOTH stores (index ∪ policy/members.json) so a dead or incomplete index
+        # cannot silently drop a shared workspace from the mount set — the reconciler never raises and
+        # logs the degraded leg out loud. None (no index wired) still means Lane A off.
         memberships = None
         if self._membership_index is not None:
-            try:
-                memberships = self._membership_index.list(identity["subject"])
-            except Exception:  # noqa: BLE001
-                logger.warning("membership-index lookup failed for subject=%s — dispatching private mounts only",
-                               identity["subject"])
+            memberships, _ = reconciled_memberships(
+                self._settings.workspaces_dir, identity["subject"], self._membership_index.list)
         # Settings → Models: resolve the subject's effective model config (fail soft — a down
         # identity service must never block a turn; the deployment env defaults still dispatch).
         # NOTE: /api/chat gates message-triggers upstream (credential preflight) — this path stays
         # ungated so async triggers (scheduled/event/transcription) never lose a dispatch; their
         # credential-less failure mode is the clean rewritten done frame (llm/errors taxonomy).
         model_config = self.resolve_model_config(identity["subject"])
+        # ONE NONCE, TWO COPIES. A cold spawn receives this prompt twice — as its entrypoint (in
+        # VEXA_START, serialised into the env right below) and as the pre-delivered stream entry —
+        # and the worker must skip exactly the one it is about to run. Computed HERE because the env
+        # is built before pre-delivery: stamping it inside _predeliver mutated a dict that had
+        # already been serialised, so it reached nobody and leaked across callers.
+        entry_nonce = f"{uid}:{time.time_ns()}"
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
-                             model_config=model_config)
+                             entry_nonce=entry_nonce,
+                             model_config=model_config, room=room,
+                             scaffold_workspaces=scaffold_workspaces,
+                             friction=self._friction)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the
@@ -450,13 +797,28 @@ class Dispatcher:
         #     entrypoint (no double turn).
         # A watchdog then waits for the worker's turn-accepted ack and respawns once if the worker
         # exited in the XADD↔idle-exit race window without taking the message.
-        delivery = self._predeliver(uid, invocation) if invocation["trigger"] == "message" else None
+        # The mount must exist before the runtime is asked to bind it (see the helper).
+        _ensure_workspace_exists(self._settings, identity["subject"])
+        delivery = (self._predeliver(uid, invocation, entry_nonce)
+                    if invocation["trigger"] == "message" else None)
+        if delivery is _DELIVERY_FAILED:
+            # The XADD failed. If the worker is GONE the spawn below re-runs this prompt as its
+            # entrypoint and nothing is lost; if it is ALIVE the spawn is a touch and the person's
+            # words reached nobody. Refuse loudly in that case rather than answer 200 and stream the
+            # turn already running — see _predeliver for what that cost.
+            if self._workload_gone(uid):
+                delivery = None
+            else:
+                raise WarmDeliveryFailed(
+                    f"unit {uid} is running and its turn could not be delivered")
         acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
         logger.info(
-            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s",
+            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s room=%s "
+            "scaffold_mounts=%s",
             acked, invocation["trigger"], identity["subject"], identity["launcher"], delivery is not None,
+            (room or {}).get("meeting_id") or "-", scaffold_workspaces or "-",
         )
         return acked
 
@@ -491,24 +853,48 @@ class Dispatcher:
         self._warm_stream = None
         self._warm_retry_at = time.monotonic() + 60.0
 
-    def _predeliver(self, uid: str, invocation: dict) -> Optional[str]:
+    def _predeliver(self, uid: str, invocation: dict, nonce: str) -> Optional[str]:
         """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
-        out-stream TAIL id the watchdog reads the ack from (None = warm path unavailable)."""
+        out-stream TAIL id the watchdog reads the ack from.
+
+        Returns None ONLY when there is nothing to deliver (a session-only start has no inline
+        prompt). A delivery that was attempted and FAILED raises — see below.
+
+        ⚠ WHY THIS RAISES NOW (2026-09-02, the founder's own chat). It used to swallow every failure
+        with "warm delivery must never break a dispatch — relying on the spawn path". That reasoning
+        holds for a COLD unit, where the spawn really does carry the prompt as its entrypoint. It is
+        false for a WARM one: `spawn` on a live unit is a touch, there is no entrypoint, and this
+        XADD is the ONLY delivery the message will ever get. So a swallowed failure meant the words
+        were gone while `POST /api/chat` answered 200 and streamed the turn already running — the
+        person watched a reply appear and reasonably believed it was to what they had just sent.
+
+        He sent "and share it with dmitry@vexa.ai" twice into a busy session. Both returned 200,
+        neither became a turn, and nothing anywhere recorded a loss. A 200 that drops the message is
+        strictly worse than an error: an error he can retry, a silent drop he cannot even see."""
         prompt = ((invocation.get("start") or {}).get("entrypoint") or {}).get("inline")
         if not prompt:
             return None  # session-only starts have no inline prompt to deliver
         r = self._redis()
         if r is None:
+            # NOT a delivery failure — a topology without redis (tests, the process backend) has no
+            # warm path at all, and there the spawn genuinely carries the prompt as its entrypoint.
+            # The distinction is the whole correction: "there is no warm path here" is a property of
+            # the deployment, "the XADD failed" is an accident on a deployment that has one. Only the
+            # second can lose a person's words, and only the second raises.
             return None
-        nonce = f"{uid}:{time.time_ns()}"
         try:
             entries = r.xrevrange(output_topic(uid), count=1)
             tail = entries[0][0] if entries else "0-0"
             r.xadd(input_topic(uid), {"turn": json.dumps({"type": "message", "prompt": prompt, "nonce": nonce})})
-        except Exception:  # noqa: BLE001 — warm delivery must never break a dispatch
-            logger.warning("warm pre-delivery failed for unit=%s — relying on the spawn path", uid)
+        except Exception as exc:  # noqa: BLE001
+            # WHETHER THIS LOSES THE TURN DEPENDS ON THE UNIT, so the decision is the caller's.
+            # Cold unit: the spawn carries this same prompt as its entrypoint and nothing is lost —
+            # which is the case in every test topology, where redis is configured but unreachable.
+            # Warm unit: `spawn` is a touch, there is no entrypoint, and this XADD was the only
+            # delivery the message would ever get. `dispatch` knows which, and raises there.
+            logger.warning("warm pre-delivery failed for unit=%s: %s", uid, exc)
             self._warm_fail()
-            return None
+            return _DELIVERY_FAILED
         return tail
 
     def _workload_gone(self, uid: str) -> bool:
