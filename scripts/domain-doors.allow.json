@@ -19,6 +19,14 @@
   ],
   "entries": [
     {
+      "path": "core/identity/services/admin-api/src/admin_api/app/events.py",
+      "door": "FLOWS_API_URL",
+      "line": 60,
+      "from": "identity",
+      "to": "flows",
+      "ruling": "F208 — the retired bare spelling, kept as a one-release deprecated-fallback literal in FLOWS_API_URL_ENV_DEPRECATED (config.v1.json now declares only VEXA_FLOWS_API_URL, matching meeting-api and agent-api). Not a new door: _flows_base() reads it only when VEXA_FLOWS_API_URL is unset, for an unmigrated deployment, and __main__.build_production_app() warns at boot when it fires. The entry closes when the fallback tuple is deleted next release."
+    },
+    {
       "path": "core/agent/control_plane/admin_panel.py",
       "door": "VEXA_GATEWAY_URL",
       "line": 195,
@@ -69,7 +77,7 @@
     {
       "path": "core/agent/worker/engine.py",
       "door": "VEXA_MCP_URL",
-      "line": 1109,
+      "line": 1112,
       "from": "agent",
       "to": "mcp",
       "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
@@ -77,7 +85,7 @@
     {
       "path": "core/agent/worker/friction.py",
       "door": "VEXA_MCP_URL",
-      "line": 271,
+      "line": 272,
       "from": "agent",
       "to": "mcp",
       "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."

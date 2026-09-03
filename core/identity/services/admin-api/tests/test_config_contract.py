@@ -61,10 +61,10 @@ def test_preflight_refuses_the_published_placeholder():
 def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     """PRD decision 42 item 2 — A PUBLISH EDGE IS NOT A DEPENDENCY, proven at the boot layer.
 
-    admin-api reads FLOWS_API_URL and VEXA_FLOWS_API_KEY to hand `onboarding.completed` to flows.
-    Every env read must be declared (check 5 of gate:config-contract), and the three classes that
-    existed before this all describe a value the service NEEDS: required-explicit refuses the boot
-    without it, defaulted supplies one, capability gates endpoints on it. Declaring a publish
+    admin-api reads VEXA_FLOWS_API_URL and VEXA_FLOWS_API_KEY to hand `onboarding.completed` to
+    flows. Every env read must be declared (check 5 of gate:config-contract), and the three classes
+    that existed before this all describe a value the service NEEDS: required-explicit refuses the
+    boot without it, defaulted supplies one, capability gates endpoints on it. Declaring a publish
     target as any of them asserts that the publisher depends on the consumer — the one thing it
     must not do, and the reason identity can be the domain everyone else depends on.
 
@@ -73,8 +73,8 @@ def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     exactly as one that does. The facts are dropped; nothing else changes."""
     decl = cp.load_declaration()
     by_key = {k["key"]: k for k in decl["keys"]}
-    edge = by_key.get("FLOWS_API_URL")
-    assert edge, "FLOWS_API_URL is read in app/events.py and must be declared"
+    edge = by_key.get("VEXA_FLOWS_API_URL")
+    assert edge, "VEXA_FLOWS_API_URL is read in app/events.py and must be declared"
     assert edge["class"] == "publish-edge"
     assert edge["publishes_events"] == ["onboarding.completed"]
     assert "default" not in edge, "a fallback address to publish to, invented by us — absent means absent"
@@ -84,5 +84,18 @@ def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
 
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
-    assert not ({"FLOWS_API_URL", "VEXA_FLOWS_API_KEY"} & required), \
+    assert not ({"VEXA_FLOWS_API_URL", "VEXA_FLOWS_API_KEY"} & required), \
         "a publish edge became a boot requirement — identity would now depend on flows"
+
+
+def test_the_flows_url_key_matches_meeting_api_and_agent_api():
+    """F208 — the flows publish-edge URL key must be spelled the same way admin-api, meeting-api
+    and agent-api already declare it, or a deployer is back to reading three files to learn what to
+    set. Pinned properly for drift across all three by scripts/parity.json's
+    flows-publish-edge-url-key fact (gate:fact-parity); this is the admin-api-local half."""
+    decl = cp.load_declaration()
+    by_key = {k["key"]: k for k in decl["keys"]}
+    assert "FLOWS_API_URL" not in by_key, \
+        "the bare name is retired from the declaration — app/events.py still reads it for one " \
+        "release as a deprecated fallback, but it is not a first-class declared key"
+    assert by_key["VEXA_FLOWS_API_URL"]["class"] == "publish-edge"

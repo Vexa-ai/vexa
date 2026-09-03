@@ -112,10 +112,10 @@
    "description": "log verbosity"
   },
   {
-   "key": "FLOWS_API_URL",
+   "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],
-   "description": "flows' intake, told that a person finished onboarding. IDENTITY TELLS FLOWS; IT DOES NOT ASK IT — the publish is best-effort, bounded at 2s and swallowed, so a deployment with no flows domain onboards people exactly as one with a flows domain does, and so does one where flows is simply down. Unset is therefore not a degraded state, it is a profile. The fact itself is stamped on the person in the same transaction as the account, so the record survives a publish that never lands (app/events.py, app/main.py POST /admin/users).",
+   "description": "flows' intake, told that a person finished onboarding. IDENTITY TELLS FLOWS; IT DOES NOT ASK IT — the publish is best-effort, bounded at 2s and swallowed, so a deployment with no flows domain onboards people exactly as one with a flows domain does, and so does one where flows is simply down. Unset is therefore not a degraded state, it is a profile. The fact itself is stamped on the person in the same transaction as the account, so the record survives a publish that never lands (app/events.py, app/main.py POST /admin/users). Spelled bare FLOWS_API_URL until F208 — the only one of the three flows publishers not carrying the VEXA_ prefix this repo uses for its own keys; app/events.py still reads that name for one release, with a boot warning, so an unmigrated deployment keeps publishing.",
    "targets": ["compose"]
   },
   {
