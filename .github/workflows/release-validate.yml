@@ -93,6 +93,7 @@ on:
           - vexaai/v012-gateway
           - vexaai/v012-mcp
           - vexaai/v012-terminal
+          - vexaai/v012-flows
           - vexaai/vexa-bot
           - vexaai/vexa-lite
       validation_leg:
@@ -118,6 +119,7 @@ env:
     vexaai/v012-gateway
     vexaai/v012-mcp
     vexaai/v012-terminal
+    vexaai/v012-flows
     vexaai/vexa-bot
     vexaai/vexa-lite
 
@@ -404,6 +406,11 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
+              # One image, three entrypoints (worker · mailbox · api) selected by command — so the
+              # identity claim is that all three import, plus the MCP tool manifest flows_api serves
+              # from /.well-known/mcp-tools.json (absent ⇒ that route 503s and the assembled MCP
+              # surface silently loses this domain's tools).
+              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
@@ -761,6 +768,7 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
+              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
                 echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"
