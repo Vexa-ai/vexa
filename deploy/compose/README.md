@@ -46,6 +46,14 @@ unconfigured deployment look configured), and it will refuse to compose a mailed
 terminal. Every key it reads is declared in `core/flows/src/config.v1.json` and checked against
 this file by `gate:config-contract`.
 
+**The instance gate and the no-agents profile (F-D15).** Flows will not act on the world until
+an admin has committed the company layer (`global_setup`) — but the only writer of that layer
+is agent-api's onboarding wizard. Leave `VEXA_FLOWS_AGENT_API_URL` unset (no-agents profile)
+and the gate opens BY CONSTRUCTION, since there is no wizard that could ever satisfy it; set it
+(the full profile) and the gate stays fail-closed until the wizard runs, or an operator commits
+it by hand over `PUT /admin/instance/global-setup` (admin-key gated, same row as the wizard's
+own write).
+
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
 `/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:v012`, published — a

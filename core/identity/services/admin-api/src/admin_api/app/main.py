@@ -1056,6 +1056,48 @@ def create_app() -> FastAPI:
         _check_internal(request)
         return await _instance_state(db)
 
+    @app.put("/admin/instance/global-setup", include_in_schema=False,
+             dependencies=[Depends(verify_admin_token)])
+    async def set_global_setup_admin(payload: dict, db: AsyncSession = Depends(get_db)):
+        """F-D15: the OPERATOR door onto the row `POST /api/global/ready` writes over the internal
+        edge (`PUT /internal/settings/global_setup`) -- for the profile that has no wizard to call
+        it. agent-api's onboarding wizard is the ONLY writer today (see the comment on
+        `_GLOBAL_SETUP_FIELDS` above), so a no-agents deployment -- no agent-api at all -- had no
+        way to commit the company layer short of the internal secret, which an operator holding
+        only the admin key should never need for a routine setup step. Same row, same fields, same
+        fail-closed reader (`global_setup_state`); this is a second DOOR onto it, gated by the
+        credential this tier already authenticates every other `/admin/*` route with, not a second
+        definition of the gate.
+
+        `company` is required -- the whole point of the layer is naming who this Vexa serves, and a
+        commit with no company would open the gate on a document that still answers nothing.
+        `state` defaults to "completed" (the only value `global_setup_state` recognises) and
+        `completed_at` defaults to now if the caller does not supply one."""
+        fields = SETTING_KEYS["global_setup"]
+        update = {f: payload.get(f) for f in fields if f in payload}
+        if payload and not update:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=(f"none of {sorted(payload)} is a field of 'global_setup'. "
+                        f"Known fields: {list(fields)}"))
+        if not str(update.get("company") or "").strip():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="company is required to commit the global setup layer")
+        if not str(update.get("state") or "").strip():
+            update["state"] = GLOBAL_SETUP_COMPLETED
+        if not str(update.get("completed_at") or "").strip():
+            update["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        cleaned = _validate_config_fields(update, kind="global_setup")
+        row = await db.get(PlatformSetting, "global_setup")
+        merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)
+        if row is None:
+            row = PlatformSetting(key="global_setup", value=merged)
+        else:
+            row.value = merged
+        db.add(row)
+        await db.commit()
+        return {"key": "global_setup", "value": merged}
+
     @app.get("/admin/instance", include_in_schema=False,
              dependencies=[Depends(verify_admin_token)])
     async def instance_status_admin(db: AsyncSession = Depends(get_db)):
