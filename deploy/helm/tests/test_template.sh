@@ -345,4 +345,63 @@ else
   echo "  FAIL: ensure-db initContainer missing under the default flows.databaseName"; fail=1
 fi
 
+# ── the flows tier is PUBLISHABLE: {repository, tag}, not a flat string ────────────────────────
+# Until 2026-09-03 flows.image was ONE string ("vexaai/v012-flows:dev"). Two consequences, both
+# only visible from outside the repo:
+#   (a) it was the single component that ignored global.imageTag, so a release-pinned render still
+#       pulled a mutable :dev tag for the Minutes product;
+#   (b) the channel publisher pins components by merging {<component>: {image: {tag: <ref>}}} over
+#       values.yaml. Merging a map over a string REPLACES it — repository vanishes and the pin
+#       cannot be expressed at all, which is why the enterprise station gate refused every chart
+#       carrying flows as unpinned (S8) no matter what the publisher did.
+# These four assertions are the shape check. Against the flat-string chart the first three fail.
+FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set global.imageTag=vPINNED --show-only templates/flows.yaml)"
+flows_pinned_count="$(grep -cE '^\s+image: "vexaai/v012-flows:vPINNED"$' <<< "$FLOWS_PINNED" || true)"
+if [ "$flows_pinned_count" -eq 6 ]; then
+  echo "  OK: all 6 flows containers follow global.imageTag ($flows_pinned_count)"
+else
+  echo "  FAIL: flows containers following global.imageTag — want 6 got $flows_pinned_count"; fail=1
+fi
+# The publisher's exact pin shape: `flows.image.tag` set to "<version>@sha256:<digest>". This is
+# the addressability proof — a flat string has no .tag to set.
+PIN_REF='v0.12.27@sha256:1111111111111111111111111111111111111111111111111111111111111111'
+FLOWS_DIGEST="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set "flows.image.tag=$PIN_REF" --show-only templates/flows.yaml)"
+digest_count="$(grep -cE "^\s+image: \"vexaai/v012-flows:${PIN_REF//./\\.}\"$" <<< "$FLOWS_DIGEST" || true)"
+if [ "$digest_count" -eq 6 ]; then
+  echo "  OK: publisher pin shape flows.image.tag=<version>@sha256 reaches all 6 containers ($digest_count)"
+else
+  echo "  FAIL: flows.image.tag digest pin reached $digest_count of 6 containers"; fail=1
+fi
+# The default (unpinned) render must name a repository and a tag, never a mutable :dev.
+if grep -qE '^\s+image: "vexaai/v012-flows:dev"$' <<< "$FLOWS_DEFAULT"; then
+  echo "  FAIL: flows default image is still the mutable :dev tag"; fail=1
+else
+  echo "  OK: flows default image is not :dev"
+fi
+if grep -qE '^\s+image: "vexaai/v012-flows:v012"$' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: flows default image is repository:tag at the component default (v012)"
+else
+  echo "  FAIL: flows default image is not vexaai/v012-flows:v012"; fail=1
+fi
+
+# ── S6: the ensure-db initContainer is a container and must declare its resources ──────────────
+# It declared NONE — 12 findings (4 per flows Deployment: cpu/memory × requests/limits) on the
+# enterprise station gate, and the #1005 failure shape in a namespace with a small LimitRange
+# default. Assert every one of the three ensure-db blocks carries all four numbers.
+init_res=0
+for i in 1 2 3; do
+  blk="$(awk -v n="$i" '/- name: ensure-db/{c++} c==n{print} c==n && /^      containers:/{exit}' <<< "$FLOWS_DEFAULT")"
+  if grep -q 'requests: {cpu: 50m, memory: 96Mi}' <<< "$blk" \
+    && grep -q 'limits: {cpu: 250m, memory: 256Mi}' <<< "$blk"; then
+    init_res=$((init_res+1))
+  fi
+done
+if [ "$init_res" -eq 3 ]; then
+  echo "  OK: all 3 ensure-db initContainers declare cpu+memory requests AND limits (S6)"
+else
+  echo "  FAIL: only $init_res of 3 ensure-db initContainers declare resources (S6, 12 findings)"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
