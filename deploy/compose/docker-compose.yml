@@ -800,7 +800,7 @@ services:
       # every interface of that box the day it merged.
       - VEXA_FLOWS_API_HOST=0.0.0.0
       - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
-      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-vexa}
+      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
       # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
       # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
       # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
