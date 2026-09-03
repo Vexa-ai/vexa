@@ -16,7 +16,9 @@ from urllib.parse import parse_qs, urlparse
 
 import flows_defs.production as production
 import flows_steps.common as common
+import flows_steps.mailtext as mailtext
 import flows_steps.notify as notify_mod
+import flows_config
 import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
 
@@ -105,6 +107,19 @@ def scaffolds(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def _no_admin_mail_override(monkeypatch):
+    """THE MAIL READER IS STUBBED, and it has to be said out loud rather than assumed.
+
+    `mailtext.render` reads `_global/mail/<name>.md` through agent-api and falls back to the baked
+    default when there is none — which is the world every test in this file asserts. Nothing here
+    stubbed it, so the read went out over HTTP; it passed because the old
+    `VEXA_FLOWS_AGENT_API_URL` default found a DIFFERENT deployment's agent-api on that port and
+    its 404 read as "no override". A test that is green because of a neighbouring stack is the
+    same defect as the admin-api smoke this branch is about, one file along. `None` = no override."""
+    monkeypatch.setattr(mailtext, "ws_file", lambda *_a, **_k: None)
+
+
 def teardown_function():
     notify_mod.use(None)                      # never leak a fake channel into a later test
 
@@ -132,25 +147,41 @@ def test_channel_is_env_selected_and_refuses_what_it_cannot_do():
     assert notify_mod.channel().name == "smtp"          # the default is still the real one
 
 
-def test_ui_url_comes_from_the_environment():
-    os.environ["VEXA_UI_URL"] = "https://app.example.test/"
-    try:
-        reloaded = importlib.reload(common)
-        assert reloaded.UI_URL == "https://app.example.test"          # trailing slash normalised
-        assert reloaded.ui_link(ask="prep", meeting=7) == \
-            "https://app.example.test/?ask=prep&meeting=7"
-        assert reloaded.ui_link(ask="prep", meeting="") == "https://app.example.test/?ask=prep"
-    finally:
-        os.environ.pop("VEXA_UI_URL", None)
-        importlib.reload(common)
-        importlib.reload(production)
+def test_ui_url_comes_from_the_environment(monkeypatch):
+    """…and now at ACCESS time, not at import.
+
+    This used to `importlib.reload(common)` to see a new value, because `UI_URL` was a module
+    constant bound to whatever the environment said the first time anything imported it. That is
+    the mechanism behind the 2026-09-03 finding one door along: a process that never declared
+    `VEXA_FLOWS_ADMIN_API_URL` still had one, bound at import from a localhost default, pointing at
+    a different deployment on the same host. No reload here any more — the door is resolved when it
+    is used, which is also why an unnamed one can refuse at the moment it would have been wrong."""
+    monkeypatch.setenv("VEXA_UI_URL", "https://app.example.test/")
+    assert common.UI_URL == "https://app.example.test"                # trailing slash normalised
+    assert common.ui_link(ask="prep", meeting=7) == "https://app.example.test/?ask=prep&meeting=7"
+    assert common.ui_link(ask="prep", meeting="") == "https://app.example.test/?ask=prep"
+
+    monkeypatch.setenv("VEXA_UI_URL", "https://second.example.test")
+    assert common.UI_URL == "https://second.example.test"             # no reload, no stale binding
+
+    monkeypatch.delenv("VEXA_UI_URL")
+    with pytest.raises(flows_config.ConfigError):
+        _ = common.UI_URL                                             # unnamed → refuse, never guess
 
 
 # ── the two meeting mails ────────────────────────────────────────────────────────────────────
 def test_email_minutes_carries_the_composed_review_link(monkeypatch, scaffolds):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting", lambda uid, key: True)
-    monkeypatch.setattr(production, "ws_file", lambda uid, path: "## Decided\n- ship it\n")
+    _report = lambda *_a, **_k: "## Decided\n- ship it\n"                    # noqa: E731
+    monkeypatch.setattr(production, "ws_file", _report)
+    # …AND `mailtext`, which binds its own `ws_file` — the rule `test_attendee_mail_shape` already
+    # states. Without it these tests reached agent-api for the mail head, and they were GREEN only
+    # because the old `http://localhost:18100` default found a DIFFERENT deployment's agent-api
+    # listening on that port, whose 404 read as "no admin override, use the baked default". The
+    # same class of accident as the admin-api smoke this branch is about; it surfaced the moment
+    # the door stopped defaulting to a neighbour.
+    monkeypatch.setattr(mailtext, "ws_file", _report)
     out = reg.steps["email_minutes"](_ctx(
         {"uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync", "meeting_id": 41},
         {"process_meeting": {"report": "## Decided\n- ship it", "group": ""}}))
@@ -269,7 +300,15 @@ ATTENDEE_PRIOR = {"process_meeting": {"report": "## Decided\n- ship it", "group"
 
 def _attendee_rig(monkeypatch, *, mint, row=None):
     reg, ch = _rig()
-    monkeypatch.setattr(production, "ws_file", lambda uid, path: "## Decided\n- ship it\n")
+    _report = lambda *_a, **_k: "## Decided\n- ship it\n"                    # noqa: E731
+    monkeypatch.setattr(production, "ws_file", _report)
+    # …AND `mailtext`, which binds its own `ws_file` — the rule `test_attendee_mail_shape` already
+    # states. Without it these tests reached agent-api for the mail head, and they were GREEN only
+    # because the old `http://localhost:18100` default found a DIFFERENT deployment's agent-api
+    # listening on that port, whose 404 read as "no admin override, use the baked default". The
+    # same class of accident as the admin-api smoke this branch is about; it surfaced the moment
+    # the door stopped defaulting to a neighbour.
+    monkeypatch.setattr(mailtext, "ws_file", _report)
     monkeypatch.setattr(production.mt, "meeting_row",
                         lambda uid, mid, native=None: row if row is not None
                         else {"id": 97, "platform": "unknown", "native_meeting_id": ""})

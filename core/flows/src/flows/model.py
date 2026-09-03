@@ -55,6 +55,44 @@ class Block:
     deadline_s: Optional[float] = None    # relative escalation window → failed
 
 
+@dataclass
+class NotPresent:
+    """A DOMAIN THIS STEP NEEDS IS NOT DEPLOYED — terminal, and not a failure (PRD decision 40.7).
+
+    *"We want agents service be optional, all domains must work independently and in any
+    configuration… meetings, agents and flows — independently and together in any configuration."*
+    A `no-agents` deployment (decision 40.6: gateway + meetings + flows + identity) still receives
+    meeting-completed facts and still runs the post-meeting flow; the steps in it that would
+    dispatch an agent turn have nothing to dispatch to.
+
+    Why it is its own result rather than any of the three that existed:
+
+    * not `StepError` — nothing is broken, and a retryable error would knock on the missing door
+      every ten minutes forever, which is the exact shape 40.7 exists to remove;
+    * not `Block` — a block waits for a human or an external signal to arrive, and no signal is
+      coming: the domain is absent by deployment, not by timing;
+    * not a bare `Done` — an outcome that reads as success is a SILENT SKIP, and an operator
+      looking at a completed reaction could not tell that the report was never written.
+
+    So: the reaction reaches `done` (nothing retries, nothing is left leased), and it carries
+    `reason` saying which domain was absent — which is what puts it in front of a person through
+    the same projection every other reason travels on."""
+
+    domain: str
+    detail: str = ""
+    result: dict = field(default_factory=dict)
+
+    @property
+    def reason(self) -> str:
+        base = f"{self.domain}:not_present"
+        return f"{base} — {self.detail}" if self.detail else base
+
+    def receipt(self) -> dict:
+        """What the effect receipt records: the outcome is data, not prose to be re-parsed."""
+        return {"outcome": "not_present", "domain": self.domain,
+                **({"detail": self.detail} if self.detail else {}), **self.result}
+
+
 class StepError(Exception):
     """A retryable step failure: backoff via next_run_at, bounded by max attempts."""
 

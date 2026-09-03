@@ -8,11 +8,11 @@ import urllib.parse
 
 from flows import Done, StepCtx, StepError, Wait
 
-from .common import AGENT_API, http, require_internal_secret, scaffolded, ws_file
+from .common import agent_door, http, require_internal_secret, scaffolded, ws_file
 
 
 def history(uid: str, session: str) -> list:
-    code, hist = http("GET", f"{AGENT_API}/api/sessions/{urllib.parse.quote(session)}/history",
+    code, hist = http("GET", f"{agent_door()}/api/sessions/{urllib.parse.quote(session)}/history",
                       {"X-User-Id": uid})
     if isinstance(hist, dict):
         hist = hist.get("turns", [])          # the endpoint wraps: {"turns": [...]}
@@ -61,7 +61,7 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
         if room.get("read_max"):
             body["room_read_max"] = int(room["read_max"])
     try:
-        http("POST", f"{AGENT_API}/api/chat", headers, body, timeout=3)
+        http("POST", f"{agent_door()}/api/chat", headers, body, timeout=3)
     except Exception:  # noqa: BLE001 — stream-open timeout: the turn IS running
         pass
     return base
@@ -97,7 +97,7 @@ def workspace_init(uid: str) -> dict:
     call 404'd" the same observable event: the next step then wrote into, or read out of, a
     directory that is not a git repo, and the failure surfaced somewhere with no information
     about its cause."""
-    code, body = http("POST", f"{AGENT_API}/api/workspace/init", {"X-User-Id": uid}, {})
+    code, body = http("POST", f"{agent_door()}/api/workspace/init", {"X-User-Id": uid}, {})
     if not _ok(code):
         raise StepError(f"workspace init for {uid}: HTTP {code} — {str(body)[:200]}")
     return body if isinstance(body, dict) else {}
@@ -112,7 +112,7 @@ def head_sha(uid: str) -> str:
     failed read compares equal to a failed read and the detector stays silent rather than
     failing a meeting on its own blind spot."""
     try:
-        code, body = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid}, None)
+        code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
     except Exception:  # noqa: BLE001 — a probe never costs the caller its step
         return ""
     if not _ok(code) or not isinstance(body, dict):
@@ -126,7 +126,7 @@ def head_sha(uid: str) -> str:
 def head_subjects(uid: str, limit: int = 3) -> list:
     """The newest commit subjects on a desk — for naming, in a failure, exactly what landed."""
     try:
-        code, body = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid}, None)
+        code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
     except Exception:  # noqa: BLE001
         return []
     if not _ok(code) or not isinstance(body, dict):
@@ -152,7 +152,7 @@ def workspace_write(uid: str, path: str, content: str) -> None:
 
     A non-2xx RAISES: a write that silently did not land leaves the workspace disagreeing with a
     mail that has already gone out, and nobody would ever learn that from a return value."""
-    code, body = http("PUT", f"{AGENT_API}/api/workspace/file", {"X-User-Id": uid},
+    code, body = http("PUT", f"{agent_door()}/api/workspace/file", {"X-User-Id": uid},
                       {"path": path, "content": content})
     if not _ok(code):
         raise StepError(f"workspace write {path!r} for {uid}: HTTP {code} — {str(body)[:200]}")
