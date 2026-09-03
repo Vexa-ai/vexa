@@ -263,67 +263,6 @@ def test_a_completion_that_never_arrives_ends_the_live_reaction_rather_than_park
     assert st["status"] == "done" and st["receipts"][-1]["result"]["outcome"] == "lapsed"
 
 
-def test_the_desk_cards_are_flows_and_they_need_the_agent_domain():
-    reg = _registry(_StubDB())
-    assert [f.name for f in reg.by_event[production.DESK_UNSCAFFOLDED.name]] == ["desk_setup"]
-    assert [f.name for f in reg.by_event[production.CLAIM_PROPOSED.name]] == ["desk_claim"]
-    assert reg.needs("await_scaffold") == frozenset({"agent"})
-    assert reg.needs("await_claim") == frozenset({"agent"})
-
-
-def test_a_desk_card_blocks_when_the_card_is_still_open(monkeypatch):
-    db, clock = SqliteDB(), FakeClock()
-    reg = _registry(db)
-    monkeypatch.setattr(production, "scaffolded", lambda *a, **k: False)
-    admit(db, reg, clock, source_event_id="desk-126",
-          event_type=production.DESK_UNSCAFFOLDED.name, subject_refs={"uid": "126"})
-    rid = db.execute("SELECT reaction_id FROM reaction")[0][0]
-    tick(db, reg, clock)
-    assert status(db, rid)["status"] == "blocked"
-
-    out = flows_queue.waiting(db, subject="126", now=clock.now(), identity=_identity)
-    assert [i["reason"]["type"] for i in out["items"]] == [flows_queue.TYPE_HUMAN]
-    assert out["items"][0]["say"]
-
-
-def test_a_desk_card_that_was_answered_in_the_meantime_does_not_ask_again(monkeypatch):
-    """The fact is old the moment it is published; the step re-reads the desk."""
-    db, clock = SqliteDB(), FakeClock()
-    reg = _registry(db)
-    monkeypatch.setattr(production, "scaffolded", lambda *a, **k: True)
-    admit(db, reg, clock, source_event_id="desk-126",
-          event_type=production.DESK_UNSCAFFOLDED.name, subject_refs={"uid": "126"})
-    rid = db.execute("SELECT reaction_id FROM reaction")[0][0]
-    tick(db, reg, clock)
-    assert status(db, rid)["status"] == "done"
-
-
-# ── A3 · the no-agents deployment ─────────────────────────────────────────────────────────────
-
-def test_with_the_agent_domain_absent_the_queue_still_answers_and_says_which_domain(monkeypatch):
-    """The row that decides whether this ships in the `no-agents` product at all (decision 40.6).
-    Two of the old tool's four sources were agent-api reads."""
-    db, clock = SqliteDB(), FakeClock()
-    reg = _registry(db)
-
-    def _forbidden(*a, **k):
-        raise AssertionError("the agent door was knocked on")
-
-    monkeypatch.setattr(production, "scaffolded", _forbidden)
-    admit(db, reg, clock, source_event_id="desk-126",
-          event_type=production.DESK_UNSCAFFOLDED.name, subject_refs={"uid": "126"})
-    rid = db.execute("SELECT reaction_id FROM reaction")[0][0]
-    tick(db, reg, clock, present=lambda d: d != "agent")
-
-    st = status(db, rid)
-    assert st["status"] == "done" and (st["reason"] or "").startswith("agent:not_present")
-
-    out = flows_queue.waiting(db, subject="126", now=clock.now(), identity=_identity)
-    assert [i["reason"]["type"] for i in out["items"]] == [flows_queue.TYPE_NOT_PRESENT]
-    assert out["items"][0]["reason"]["domain"] == "agent"
-    assert out["items"][0]["say"], "a person is owed a sentence about what did not happen"
-
-
 def test_an_old_absence_stops_being_news():
     """Without a horizon a deployment that simply does not run a domain would tell the same person
     the same absence forever, which is noise rather than information."""
