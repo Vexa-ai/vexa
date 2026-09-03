@@ -43,7 +43,7 @@ Three host processes over the stack's Postgres: `flows_worker`, the mailbox inte
 The state **is** the debugger:
 
 ```bash
-curl -s -H "X-Flows-Admin-Key: …" "http://localhost:18200/reactions?status=failed"
+curl -s -H "X-Flows-Operator-Key: …" "http://localhost:18200/reactions?status=failed"
 ```
 
 - `reaction` — where and why: step, status, attempt, `reason`, `next_run_at` (what it's waiting

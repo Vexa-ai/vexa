@@ -466,8 +466,11 @@ services:
 
   gateway:
     build:
-      context: ../../core/gateway/services/gateway
-      dockerfile: Dockerfile
+      # THE REPO ROOT, like meeting-api and agent-api. The edge reads each domain's
+      # routes.v1.json BY PATH at import (routes_manifest.py), so the image must carry the
+      # manifests of the domains it fronts; a context scoped to the service cannot reach them.
+      context: ../..
+      dockerfile: core/gateway/services/gateway/Dockerfile
     image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${API_GATEWAY_HOST_PORT:-18056}:8000"
@@ -479,6 +482,12 @@ services:
       # NOT a depends_on: mcp itself depends on the gateway (GATEWAY_URL), and compose refuses a
       # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
       - MCP_URL=http://mcp:8010
+      # THE AGENT DOMAIN'S PRESENCE SIGNAL (PRD 40.6 / 40.7). This full profile runs agents, so it
+      # names the door and the edge fronts `/agent/*`. The `no-agents` profile leaves it EMPTY —
+      # the gateway then registers no /agent route and assembles no agent rows into its scope
+      # table, so a request there is 404 rather than a 401 about a route this stack does not have.
+      # It was a CODE default before, which made a deployment unable to say it has no agents.
+      - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}

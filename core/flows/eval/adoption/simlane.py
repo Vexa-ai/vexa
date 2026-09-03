@@ -39,7 +39,7 @@ def _req(method: str, path: str, body=None, timeout=30):
     req = urllib.request.Request(API + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
     req.add_header("content-type", "application/json")
-    req.add_header("X-Flows-Admin-Key", KEY)
+    req.add_header("X-Flows-Operator-Key", KEY)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode()
