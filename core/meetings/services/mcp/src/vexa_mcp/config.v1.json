@@ -82,6 +82,16 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_API_KEY",
+      "class": "capability",
+      "capability": "assembly",
+      "secret": true,
+      "description": "flows' own operator key, forwarded as X-Flows-Operator-Key on the two admin-gated tools (flows_submit, flow_lifecycle — core/flows/mcp.tools.v1.json's `auth: admin`). Their doors read ONLY this key, never the caller's own credential, so unset alongside a set FLOWS_API_URL is a deployment whose facts assembly refuses to publish (manifest.py's admin-key check fails the boot) rather than list two tools their own door would 401.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "AGENT_API_URL",
       "class": "capability",
       "capability": "assembly",

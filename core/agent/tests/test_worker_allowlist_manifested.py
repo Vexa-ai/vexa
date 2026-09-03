@@ -13,16 +13,23 @@ uses to find them) plus MCP's fourteen built-in tools, which this test does not 
 none of them collide with the allow-list's own 24.
 
 TODAY THE UNION IS SMALLER THAN THE ALLOW-LIST, on purpose and by name — GAP below is that
-migration backlog, exactly as `scripts/domain-doors.allow.json` tracks the doors still open. Three
-kinds of entry, and the note beside each says which:
+migration backlog, exactly as `scripts/domain-doors.allow.json` tracks the doors still open. `bind.py`
+now derives an argument's schema from a route's OpenAPI `requestBody` as well as its `parameters`
+(the assembler issue this manifest and `core/flows/mcp.tools.v1.json` shipped beside), which moved
+`flow_lifecycle`, `flows_submit` and `workspace_new` OUT of this backlog — three kinds of entry
+remain, and the note beside each says which:
 
-  * flows/meetings tools with a real backing route this manifest never touches (`flow_lifecycle`,
-    `flows_submit` are FLOWS_API routes; `meetings_list`, `bot_send`, `bot_stop`,
-    `meeting_transcript`, `transcript_terms`, `meeting_info` are meeting-api routes reached through
-    the gateway) — another domain's manifest to write, not this one's;
-  * agent-api routes that exist but are not yet bindable — `workspace_write`, `entity_upsert`,
-    `propose`, `workspace_new` all take a single JSON-body parameter, which `bind.py` cannot derive
-    an argument schema for today (see `core/agent/mcp.tools.v1.json`'s own top-level `note`);
+  * meetings tools with a real backing route this manifest never touches (`meetings_list`,
+    `bot_send`, `bot_stop`, `meeting_transcript`, `transcript_terms`, `meeting_info` are meeting-api
+    routes reached through the gateway) — another domain's manifest to write, not this one's;
+  * agent-api routes that exist but are STILL not bindable, for a narrower reason than before —
+    `workspace_write`, `entity_upsert`, `propose` each take a bare `body: dict = Body(...)`, which
+    FastAPI publishes with NO named `properties` (`{"type": "object", "additionalProperties": true}`)
+    — there is nothing there for `bind.py` to derive a schema from, unlike `workspace_new`'s
+    `WorkspaceNewBody` or flows' `FlowSubmission`, which are named pydantic models. Closing this one
+    needs those three routes moved to named body models in
+    `core/agent/control_plane/routers/workspaces.py` + `api_shared.py` first (see
+    `core/agent/mcp.tools.v1.json`'s own top-level `note`);
   * genuinely no server home yet — `validate`, `mark_scaffolded`, `company_context` are explicitly
     scoped OUT of `control_plane/claims.py` ("remain the rig's for now"); `vexa_overview` reads a
     public docs URL directly; `start_onboarding` is the rig's own onboarding/mail flow.
@@ -46,8 +53,7 @@ MANIFEST_GLOBS = ["core/*/mcp.tools.v1.json", "core/*/services/*/mcp.tools.v1.js
 GAP = {
     "meeting_transcript", "meetings_list", "bot_send", "bot_stop", "meeting_info",   # meetings domain
     "transcript_terms",                                                             # meetings domain
-    "flow_lifecycle", "flows_submit",                                               # flows domain
-    "workspace_write", "entity_upsert", "propose", "workspace_new",                 # agent: not yet bindable
+    "workspace_write", "entity_upsert", "propose",                                  # agent: untyped dict body
     "validate", "mark_scaffolded", "company_context",                               # agent: no server home
     "vexa_overview", "start_onboarding",                                            # agent: no server home
 }

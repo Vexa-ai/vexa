@@ -35,6 +35,17 @@ So the signature is BUILT — one query parameter per path parameter (required: 
 addressed without them) and one per declared argument (optional, carrying the owning route's own
 type and description). It also re-arms the app-wide unknown-argument guard, which reads a route's
 declared query parameters and would otherwise refuse every argument to every assembled tool.
+
+A DECLARED ARGUMENT THAT CAME FROM `requestBody` (`bind.BoundTool.body_params`) is published as a
+`Body(..., embed=True)` parameter instead of `Query`, so THIS edge's own OpenAPI shows it under
+`requestBody` rather than `parameters` — which is what tells `fastapi-mcp`'s own call-execution
+(`_execute_api_tool`) to send it as a JSON body field rather than a query string parameter when an
+agent calls the tool. `embed=True` on every one of them, regardless of count, because FastAPI's rule
+for a SINGLE singular `Body` parameter is to treat the whole request body AS that one value —
+`{"name": "x"}` becomes bare `"x"` — and every body model bound here (`WorkspaceNewBody`, one field)
+would silently hit exactly that rule without it. Multiple `Body` parameters already embed by
+themselves; passing it unconditionally keeps the one-field and many-field cases identical rather
+than depending on a count nobody is watching.
 """
 from __future__ import annotations
 
@@ -43,14 +54,18 @@ import os
 from typing import Dict, List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .bind import BoundTool
 
 #: JSON Schema type -> the Python annotation FastAPI needs to publish it again. Anything else is a
-#: string: a wrong-but-honest type is recoverable, a guessed structure is not.
-_PY_TYPE = {"integer": int, "number": float, "boolean": bool, "string": str}
+#: string: a wrong-but-honest type is recoverable, a guessed structure is not. `array`/`object` cover
+#: the requestBody-derived fields query parameters never needed (`FlowSubmission.steps: list[str]`,
+#: `.params: dict`) — a query-origin field never publishes either shape, so widening the map here
+#: changes nothing for a query-declared argument.
+_PY_TYPE = {"integer": int, "number": float, "boolean": bool, "string": str,
+           "array": list, "object": dict}
 
 
 def _caller_key(request: Request) -> str:
@@ -97,7 +112,10 @@ def _signature(bt: BoundTool) -> inspect.Signature:
 
     Path parameters are REQUIRED and declared arguments are optional, which is what the owning route
     already says: `/reactions/{reaction_id}/{verb}` cannot be addressed without both, and every
-    declared argument is a query parameter with a default.
+    declared argument is optional, carrying the owning route's own type and description — as a query
+    parameter, unless `bind.py` derived it from the route's `requestBody`, in which case it is a
+    `Body` parameter instead so this edge's own OpenAPI keeps the same query/body split the owning
+    route has (see the module docstring for why `embed=True` is unconditional).
     """
     params = [inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request)]
     for name in bt.path_params:
@@ -107,10 +125,12 @@ def _signature(bt: BoundTool) -> inspect.Signature:
     for name, schema in bt.parameters.items():
         if name in bt.path_params:
             continue
-        params.append(inspect.Parameter(
-            name, inspect.Parameter.KEYWORD_ONLY,
-            annotation=Optional[_PY_TYPE.get(str(schema.get("type")), str)],
-            default=Query(None, description=schema.get("description") or None)))
+        annotation = Optional[_PY_TYPE.get(str(schema.get("type")), str)]
+        description = schema.get("description") or None
+        default = (Body(None, embed=True, description=description) if name in bt.body_params
+                  else Query(None, description=description))
+        params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY,
+                                        annotation=annotation, default=default))
     return inspect.Signature(params)
 
 
@@ -119,19 +139,21 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
     method = bt.tool.route["method"]
     template = bt.tool.route["path"]
     declared = tuple(n for n in bt.parameters if n not in bt.path_params)
+    body_declared = tuple(n for n in declared if n in bt.body_params)
+    query_declared = tuple(n for n in declared if n not in bt.body_params)
     path_params = tuple(bt.path_params)
 
     async def endpoint(*, request: Request, **argument):
         key = _caller_key(request)
         if key == "" and bt.tool.identity != "none":
             raise HTTPException(status_code=401, detail="this tool needs your Vexa credential")
-        body = {}
+        raw_body = {}
         if method in ("POST", "PUT", "PATCH"):
             try:
-                body = await request.json()
+                raw_body = await request.json()
             except Exception:  # noqa: BLE001 — an empty body is a legitimate call
-                body = {}
-        body = body if isinstance(body, dict) else {}
+                raw_body = {}
+        raw_body = raw_body if isinstance(raw_body, dict) else {}
 
         path = template
         for name in path_params:
@@ -142,10 +164,23 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
                 raise HTTPException(status_code=422, detail=f"{bt.name} needs {name}")
             path = path.replace("{" + name + "}", str(value))
 
-        params = {n: argument[n] for n in declared if argument.get(n) is not None}
-        for n in declared:
-            if n not in params and n in body:
-                params[n] = body.pop(n)
+        params = {n: argument[n] for n in query_declared if argument.get(n) is not None}
+        for n in query_declared:
+            if n not in params and n in raw_body:
+                params[n] = raw_body.pop(n)
+
+        # A TYPED body (bind.py derived it from the route's own `requestBody`): only the DECLARED
+        # fields travel — the manifest's promise, kept both ways. Anything else the caller sent is
+        # dropped here, never guessed at, same as an undeclared query argument always was.
+        #
+        # No declared body fields at all (every tool before this change, and every path-only verb
+        # like `reaction_signal` today): the caller's raw JSON passes through untouched, exactly as
+        # it always has — `signal_reaction`'s own `body: dict = Body(default={})` is the freeform
+        # shape this preserves.
+        if body_declared:
+            body = {n: argument[n] for n in body_declared if argument.get(n) is not None}
+        else:
+            body = raw_body
 
         try:
             async with httpx.AsyncClient(timeout=10, transport=transport) as client:

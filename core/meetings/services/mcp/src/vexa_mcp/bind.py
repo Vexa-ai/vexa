@@ -16,6 +16,17 @@ Two failures fail the boot:
 
 Path parameters are arguments without being declared: `/reactions/{id}/{verb}` cannot be called
 without them, and a manifest that had to restate them would be a second place to write the route.
+
+AN ARGUMENT'S SCHEMA CAN COME FROM TWO PLACES ON THE SAME OPERATION, and both are read here: OpenAPI
+`parameters` (query/path — the mechanism above already ran on) and OpenAPI `requestBody` (a route
+whose input is a JSON body — `PUT`/`POST` with a pydantic model, published under
+`content.application/json.schema`, `$ref`-resolved against the domain's own `components.schemas`).
+A body schema with no NAMED properties — `body: dict = Body(...)`, which FastAPI publishes as
+`{"type": "object", "additionalProperties": true}` with nothing under `properties` — has nothing to
+derive, exactly as if the route took no body at all: a manifest cannot declare an argument against
+it and every such argument fails the same "does not take" check a bad query argument would.
+`BoundTool.body_params` names which declared arguments came from the body rather than the query
+string, so `register.py` knows which half of the forward each argument belongs to.
 """
 from __future__ import annotations
 
@@ -34,6 +45,9 @@ class BoundTool:
     description: str
     parameters: Dict[str, dict] = field(default_factory=dict)
     path_params: tuple = ()
+    #: the subset of `parameters` (excluding path_params) that travel in the JSON request body
+    #: rather than the query string — derived from the route's OpenAPI `requestBody`, not asserted.
+    body_params: tuple = ()
 
     @property
     def name(self) -> str:
@@ -46,6 +60,37 @@ def _operation(openapi: dict, method: str, path: str) -> dict | None:
         return None
     op = item.get(method.lower())
     return op if isinstance(op, dict) else None
+
+
+def _resolve_ref(schema: dict, openapi: dict) -> dict:
+    """One level of `$ref` resolution against this domain's own `components.schemas` — enough for
+    every body model here, which is a flat pydantic `BaseModel` and never one that nests a `$ref` at
+    its own top level. A schema with no `$ref` is returned unchanged."""
+    if not isinstance(schema, dict):
+        return {}
+    ref = schema.get("$ref")
+    if not ref:
+        return schema
+    name = str(ref).rsplit("/", 1)[-1]
+    return dict((openapi.get("components") or {}).get("schemas", {}).get(name) or {})
+
+
+def _body_params(op: dict, openapi: dict) -> Dict[str, dict]:
+    """The route's JSON request-body fields, by name -> schema — the `requestBody` twin of
+    `parameters`. A body with no named `properties` (the untyped `body: dict = Body(...)` shape)
+    contributes nothing, exactly as a route with no `requestBody` at all would — there is no field
+    here for a manifest to declare an argument against."""
+    rb = op.get("requestBody")
+    if not isinstance(rb, dict):
+        return {}
+    content = (rb.get("content") or {}).get("application/json")
+    if not isinstance(content, dict):
+        return {}
+    schema = _resolve_ref(dict(content.get("schema") or {}), openapi)
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return {}
+    return {name: dict(prop_schema or {}) for name, prop_schema in props.items()}
 
 
 def verify(assembly: Assembly, openapi_by_domain: Dict[str, dict]) -> List[BoundTool]:
@@ -69,16 +114,27 @@ def verify(assembly: Assembly, openapi_by_domain: Dict[str, dict]) -> List[Bound
         # The DESCRIPTION travels with the schema. It is the owning route's own words about that
         # argument, and it is the only thing an agent reads before deciding what to put there —
         # dropping it publishes a typed blank.
-        params = {}
-        for spec in (op.get("parameters") or []):
-            if not spec.get("name"):
+        query_params = {}
+        for pspec in (op.get("parameters") or []):
+            if not pspec.get("name"):
                 continue
-            schema = dict(spec.get("schema") or {})
-            if spec.get("description") and "description" not in schema:
-                schema["description"] = spec["description"]
-            params[spec["name"]] = schema
+            schema = dict(pspec.get("schema") or {})
+            if pspec.get("description") and "description" not in schema:
+                schema["description"] = pspec["description"]
+            query_params[pspec["name"]] = schema
+        body_params = _body_params(op, spec)
+        # ONE ROUTE, ONE PLACE TO LOOK AN ARGUMENT UP. A name published in both `parameters` and
+        # `requestBody` is an OpenAPI shape this design has no rule for — refusing it is cheaper
+        # than guessing which half of the forward it belongs to.
+        collision = set(query_params) & set(body_params)
+        if collision:
+            raise ManifestError(
+                f"{tool.domain}/{tool.name}: {method} {path} names {sorted(collision)} in both its "
+                "query parameters and its JSON body — one route, one place to look an argument up")
+        params = {**query_params, **body_params}
         path_params = tuple(_PATH_PARAM.findall(path))
         declared = {}
+        declared_body = []
         for arg in tool_arguments(tool):
             if arg in path_params:
                 continue
@@ -88,11 +144,14 @@ def verify(assembly: Assembly, openapi_by_domain: Dict[str, dict]) -> List[Bound
                     f"{method} {path} does not take — an argument the route ignores is a success "
                     "the agent reports for something that did not happen")
             declared[arg] = params[arg]
+            if arg in body_params:
+                declared_body.append(arg)
         out.append(BoundTool(
             tool=tool,
             description=str(op.get("summary") or op.get("description") or "").strip(),
             parameters=declared,
             path_params=path_params,
+            body_params=tuple(declared_body),
         ))
     return out
 

@@ -907,6 +907,15 @@ services:
       # docker bridge address came to be the answer. Override to point at a flows elsewhere;
       # set it empty to run a deployment that genuinely does not carry the domain.
       - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # flows_submit / flow_lifecycle are `auth: admin` (core/flows/mcp.tools.v1.json): flows-api's
+      # own `POST /flows` and `POST /flows/{name}/{version}/{action}` are gated by ITS operator key
+      # (flows_api.auth), not the caller's credential, so THIS service needs its own copy to forward
+      # — the same key flows-api itself holds, below. Unset (the default) is a legitimate "this
+      # deployment does not author flows through the edge" — but if FLOWS_API_URL names a live flows
+      # and this is empty, assembly REFUSES to boot rather than list two tools their own door would
+      # 401 (manifest.py's `assemble()`; the rule pre-dates these two tools, they are its first
+      # payer).
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # A private deployment mounts its own manifests here — billing, seats, entitlement — and they
       # are assembled exactly like the OSS ones, competing for names in the same space so a mount
       # can collide but never shadow. EMPTY IS THE OSS PRODUCT, exactly.

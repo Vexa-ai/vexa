@@ -167,15 +167,23 @@ def test_a_none_tool_sends_no_credential_at_all():
 
 # ── the manifest in this repository declares it ─────────────────────────────────────────────────
 
-def test_every_flows_tool_declares_the_subjects_credential():
-    """Which is the whole point: flows' door now takes the person's own credential (C1), so the
-    edge forwarding it is correct rather than a guess that happened to be wrong. Asserted over
-    WHATEVER the manifest holds, not a list written here — a fifth tool added by another change is
-    exactly the case a hard-coded list would miss."""
+def test_every_flows_tool_declares_the_credential_its_own_door_actually_reads():
+    """Most of flows' doors take the person's own credential (C1) — `subject_or_operator` on
+    `/reactions`, `/timeline`, `/friction`, `GET /flows` — so those tools are `auth: subject`, and
+    the edge forwarding it is correct rather than a guess that happened to be wrong.
+
+    `flows_submit` and `flow_lifecycle` are the one real exception, not a drift: `POST /flows` and
+    `POST /flows/{name}/{version}/{action}` are gated by flows-api's own plain `auth` dependency,
+    which checks ONLY the operator key (`VEXA_FLOWS_API_KEY`) — a caller's own credential 401s
+    there, so `auth: subject` would publish a tool this edge could list and never actually call on
+    the caller's behalf. Asserted over WHATEVER the manifest holds beyond this one named exception,
+    not a list written here — a further tool added by another change silently drifting to `admin`
+    is exactly the case a hard-coded exception set would miss."""
     import json
     import pathlib
     doc = json.loads((pathlib.Path(__file__).resolve().parents[5]
                       / "core/flows/mcp.tools.v1.json").read_text())
     assert doc["tools"], "the flows manifest declares no tools"
+    admin_gated = {"flows_submit", "flow_lifecycle"}
     assert {t["name"]: t.get("auth") for t in doc["tools"]} == {
-        t["name"]: "subject" for t in doc["tools"]}
+        t["name"]: ("admin" if t["name"] in admin_gated else "subject") for t in doc["tools"]}

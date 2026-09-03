@@ -6,13 +6,15 @@ Mirrors `test_assembled_surface.py` (flows): the manifest used here is THE FILE 
 
 `AGENT_OPENAPI` below is a fixture, not agent-api's live spec — but every path/method/parameter in
 it is copied from a real `app.openapi()` dump of `control_plane.api.create_app(...)` (verified by
-hand when this file was written: `GET /api/workspace/tree`, `/api/workspace/file`,
-`/api/workspace/shared`, `/api/workspace/purpose` all publish exactly these query parameters). The
-five workspace WRITE routes (`PUT /api/workspace/file`, `POST /api/workspace/entity`,
-`POST /api/claims`, `POST /api/workspace/shared/new`, `POST /api/workspace/purpose`) are
-deliberately NOT tools yet — they take a single JSON-body parameter, which FastAPI publishes under
-`requestBody`, not `parameters`, so `bind.py` cannot derive an argument schema for them today. Same
-class of gap flows' own manifest already carries (`flows_submit`/`flow_lifecycle`).
+hand: `GET /api/workspace/tree`, `/api/workspace/file`, `/api/workspace/shared`,
+`/api/workspace/purpose` publish exactly these query parameters, and `POST /api/workspace/new`
+publishes `requestBody` -> `$ref: WorkspaceNewBody`, one named field `name`, exactly as dumped).
+
+Three workspace WRITE routes (`PUT /api/workspace/file`, `POST /api/workspace/entity`,
+`POST /api/claims`) are still deliberately NOT tools: each takes a bare `body: dict = Body(...)`,
+which FastAPI publishes as `{"type": "object", "additionalProperties": true}` with no named
+`properties` — there is nothing there for `bind.py` to derive a schema from, unlike `WorkspaceNewBody`
+and flows' `FlowSubmission`, which are named pydantic models and DO bind (see `core/agent/mcp.tools.v1.json`'s own top-level `note`).
 """
 from __future__ import annotations
 
@@ -39,7 +41,12 @@ AGENT_OPENAPI = {"paths": {
     "/api/workspace/purpose": {"get": {"summary": "Read a workspace's PURPOSE one-liner",
                                        "parameters": [
         {"name": "slug", "in": "query", "schema": {"type": "string"}}]}},
+    "/api/workspace/new": {"post": {"summary": "Ws New", "requestBody": {"content": {
+        "application/json": {"schema": {"$ref": "#/components/schemas/WorkspaceNewBody"}}}}}},
 }}
+AGENT_OPENAPI["components"] = {"schemas": {"WorkspaceNewBody": {
+    "type": "object", "title": "WorkspaceNewBody",
+    "properties": {"name": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Name"}}}}}
 
 BUILT_IN = 14
 
@@ -103,10 +110,11 @@ def test_no_assembled_agent_tool_takes_a_credential_argument():
         assert not (props & banned), f"{t.name} takes {sorted(props & banned)}"
 
 
-def test_agent_beside_flows_is_twentyone_plus_the_agent_tools():
-    """The seam this manifest closes: today the assembled edge serves 21 tools with the agent
-    domain PRESENT but none of the agent's own (14 built-in + flows' 7). Wiring this manifest in
-    brings that to 21 + len(agent's tools) once flows is deployed too — the number the issue that
+def test_agent_beside_flows_is_twentythree_plus_the_agent_tools():
+    """The seam this manifest closes: the assembled edge serves 23 tools with the agent domain
+    PRESENT but none of the agent's own (14 built-in + flows' 9 — 7 query/path tools plus
+    `flows_submit`/`flow_lifecycle`, now bindable via `requestBody`). Wiring this manifest in
+    brings that to 23 + len(agent's tools) once flows is deployed too — the number the issue that
     shipped this file names as N."""
     flows_manifest_path = REPO / "core" / "flows" / "mcp.tools.v1.json"
     flows_manifest = json.loads(flows_manifest_path.read_text())
@@ -132,7 +140,17 @@ def test_agent_beside_flows_is_twentyone_plus_the_agent_tools():
             "get": {"summary": "friction_so_far", "parameters": [
                 {"name": "since", "in": "query", "schema": {"type": "string"}},
                 {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+        "/flows/{name}/{version}/{action}": {"post": {"summary": "flow_lifecycle", "parameters": []}},
     }}
+    flows_openapi["paths"]["/flows"]["post"] = {"summary": "flows_submit", "requestBody": {
+        "content": {"application/json": {
+            "schema": {"$ref": "#/components/schemas/FlowSubmission"}}}}}
+    flows_openapi["components"] = {"schemas": {"FlowSubmission": {
+        "type": "object", "title": "FlowSubmission",
+        "properties": {
+            "name": {"type": "string"}, "on_event": {"type": "string"},
+            "steps": {"type": "array", "items": {"type": "string"}},
+            "params": {"type": "object"}, "activate": {"type": "boolean", "default": True}}}}}
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -152,11 +170,11 @@ def test_agent_beside_flows_is_twentyone_plus_the_agent_tools():
         "http://gateway.test",
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
         assembly_env={"ADMIN_API_URL": "http://identity", "FLOWS_API_URL": "http://flows",
-                     "AGENT_API_URL": "http://agent"},
+                     "AGENT_API_URL": "http://agent", "VEXA_FLOWS_API_KEY": "test-operator-key"},
         assembly_transport=httpx.MockTransport(handler),
     )
     names = {t.name for t in app.state.mcp.tools}
     n_agent = len(AGENT_MANIFEST["tools"])
-    assert len(names) == 21 + n_agent, (
-        f"expected 21 + {n_agent} = {21 + n_agent} tools with flows+agent both present, got "
+    assert len(names) == 23 + n_agent, (
+        f"expected 23 + {n_agent} = {23 + n_agent} tools with flows+agent both present, got "
         f"{len(names)}")

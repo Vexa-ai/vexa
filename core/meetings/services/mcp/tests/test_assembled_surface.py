@@ -48,7 +48,19 @@ FLOWS_OPENAPI = {"paths": {
         "get": {"summary": "Your own filed reports, newest first", "parameters": [
             {"name": "since", "in": "query", "schema": {"type": "string"}},
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    "/flows/{name}/{version}/{action}": {
+        "post": {"summary": "activate | retire one flow version", "parameters": []}},
 }}
+FLOWS_OPENAPI["paths"]["/flows"]["post"] = {
+    "summary": "Author a new flow version", "requestBody": {"content": {"application/json": {
+        "schema": {"$ref": "#/components/schemas/FlowSubmission"}}}}}
+FLOWS_OPENAPI["components"] = {"schemas": {"FlowSubmission": {
+    "type": "object", "title": "FlowSubmission",
+    "properties": {
+        "name": {"type": "string"}, "on_event": {"type": "string"},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "params": {"type": "object"}, "activate": {"type": "boolean", "default": True}},
+    "required": ["name", "on_event", "steps"]}}}
 
 BUILT_IN = 14
 
@@ -69,7 +81,12 @@ def _boot(**env):
     return create_app(
         "http://gateway.test",
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
-        assembly_env={"ADMIN_API_URL": "http://identity", **env},
+        # `flows_submit`/`flow_lifecycle` are `auth: admin` — assembly refuses to boot with flows
+        # deployed and no operator key held (manifest.py's own "refuse to serve a tool refused by
+        # its own door" rule). Harmless when flows is absent; a test that cares about the unset case
+        # overrides it back out via **env.
+        assembly_env={"ADMIN_API_URL": "http://identity", "VEXA_FLOWS_API_KEY": "test-operator-key",
+                     **env},
         assembly_transport=httpx.MockTransport(handler),
     )
 
@@ -110,3 +127,41 @@ def test_no_assembled_tool_takes_a_credential_argument():
         props = set(((t.inputSchema if hasattr(t, "inputSchema") else t.input_schema) or {})
                     .get("properties", {}))
         assert not (props & banned), f"{t.name} takes {sorted(props & banned)}"
+
+
+def test_a_json_body_tool_publishes_its_body_fields_in_the_tools_schema():
+    """flows_submit's arguments come from `POST /flows`'s `requestBody` (`FlowSubmission`), not
+    `parameters` — the whole point of this manifest's newly-added tools. The client-facing schema
+    does not care which OpenAPI half an argument came from; it is flat either way."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    tool = next(t for t in app.state.mcp.tools if t.name == "flows_submit")
+    props = set(tool.inputSchema["properties"])
+    assert props == {"name", "on_event", "steps", "params", "activate"}
+
+
+def test_a_body_only_tool_publishes_requestbody_not_parameters_on_this_edges_own_route():
+    """The mechanism that makes fastapi-mcp forward these fields as a JSON body rather than a query
+    string: THIS service's own OpenAPI has to show them under `requestBody`, not `parameters` —
+    that is `register.py`'s `Body(..., embed=True)` versus `Query(...)`, verified here at the level
+    an agent actually receives (the assembled app's own spec), not just at the unit level."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    spec = app.openapi()
+    op = spec["paths"]["/tools/flows_submit"]["post"]
+    assert "requestBody" in op
+    schema = op["requestBody"]["content"]["application/json"]["schema"]
+    ref = schema.get("$ref")
+    if ref:  # `embed=True` generates a named model (`Body_flows_submit`) rather than inlining it
+        schema = spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+    body_props = set(schema["properties"])
+    assert body_props == {"name", "on_event", "steps", "params", "activate"}
+    assert not any(p.get("name") in body_props for p in op.get("parameters") or [])
+
+
+def test_flow_lifecycle_s_path_parameters_still_publish_with_no_body_at_all():
+    """flow_lifecycle takes no body (`POST /flows/{name}/{version}/{action}` reads only its three
+    path segments) — the regression check that a body-less admin tool binds exactly as a body-less
+    subject tool always has."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    tool = next(t for t in app.state.mcp.tools if t.name == "flow_lifecycle")
+    assert set(tool.inputSchema["properties"]) == {"name", "version", "action"}
+    assert set(tool.inputSchema.get("required") or []) == {"name", "version", "action"}
