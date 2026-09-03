@@ -33,6 +33,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from . import bind as bind_mod
+from . import discover as discover_mod
+from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
@@ -575,12 +578,17 @@ def create_app(
     gateway_url: Optional[str] = None,
     *,
     transport: Optional[httpx.AsyncBaseTransport] = None,
+    assembly_env: Optional[dict] = None,
+    assembly_transport: Optional[httpx.BaseTransport] = None,
 ) -> FastAPI:
     """Build the MCP service app.
 
     ``gateway_url`` — the PUBLIC API base (env ``GATEWAY_URL``, compose ``http://gateway:8000``).
     ``transport``   — optional httpx transport override; the tests inject ``httpx.MockTransport``
                       so the shipped forwarding path runs with no network.
+    ``assembly_env`` / ``assembly_transport`` — the same seam for the DISCOVERY hop: which domains
+                      this deployment carries, and how their manifests are fetched. `VEXA_MCP_ASSEMBLY_OFF`
+                      skips assembly entirely, which is what the fourteen-tool surface tests want.
     """
     base_url = (gateway_url or os.getenv("GATEWAY_URL") or _DEFAULT_GATEWAY_URL).rstrip("/")
 
@@ -1203,6 +1211,31 @@ def create_app(
         if ticket_url:
             ack["url"] = ticket_url
         return ack
+
+    # ---------------------------
+    # ASSEMBLY (PRD decision 40) — the tools the DEPLOYED domains declare
+    # ---------------------------
+    # The fourteen tools above are this edge's own. Everything else it serves belongs to a domain:
+    # meetings owns the bots and transcripts, identity owns the person, flows owns the reaction
+    # engine, agent owns the desks. Each publishes a manifest at `/.well-known/mcp-tools.json`, this
+    # asks the ones the deployment names, and every tool becomes a route here with
+    # `operation_id=<name>` — the SAME mechanism the fourteen use, so an assembled tool and a
+    # built-in one are indistinguishable to a client.
+    #
+    # BEFORE `FastApiMCP(app, ...)`, necessarily: the MCP surface is derived from this app's
+    # OpenAPI, so a route added afterwards would be a tool nobody can see.
+    #
+    # AND IT FAILS THE BOOT. Every rule in `manifest.py` is a failure that is otherwise silent — a
+    # domain's tools quietly missing, one name claimed twice, a manifest naming a route its service
+    # does not serve. A server that started anyway would answer `tools/list` with a lie.
+    app.state.assembly = None
+    _assembly_env = assembly_env if assembly_env is not None else os.environ
+    if not _assembly_env.get("VEXA_MCP_ASSEMBLY_OFF"):
+        with httpx.Client(transport=assembly_transport) as _boot:
+            _assembly, _openapi, _bases = discover_mod.discover(_boot, env=_assembly_env)
+        _bound = bind_mod.verify(_assembly, _openapi)
+        register_mod.register(app, _bound, _bases, transport=transport)
+        app.state.assembly = _assembly
 
     # ---------------------------
     # MCP mount + prompts

@@ -107,6 +107,9 @@ clock = SystemClock()
 vocab = Registry()
 production.build(vocab, db)
 
+import json as _json
+import pathlib as _pathlib
+
 app = FastAPI(title="flows-api", version="0.1.0",
               description="Submit and manage Vexa workflows as data — no code over the wire.")
 
@@ -475,3 +478,28 @@ def main() -> int:  # pragma: no cover — process entrypoint
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# ── the MCP tool manifest (PRD decision 40) ───────────────────────────────────────────────────
+# The domain that owns the door owns the tool. This is flows' declaration of the tools it backs —
+# a NAME bound to a ROUTE, who may call it, and which deployments it exists in. The gateway's MCP
+# server fetches it at startup and assembles one surface from every deployed domain's.
+#
+# SERVED, not baked into the assembler: the version that answers is the version that is RUNNING, so
+# a deployment cannot advertise a tool this build does not actually serve. The file is committed at
+# `core/flows/mcp.tools.v1.json` and this route reads it — one copy, and the tests in
+# `core/gateway`'s MCP service put that same file through the assembler.
+#
+# OPEN, like /health: it names routes and argument names, never data and never a credential. An
+# assembler that had to authenticate to discover the surface could not boot before identity did.
+_MANIFEST_PATH = _pathlib.Path(__file__).resolve().parents[2] / "mcp.tools.v1.json"
+
+
+@app.get("/.well-known/mcp-tools.json")
+def mcp_tools_manifest():
+    """This domain's MCP tool manifest — what the gateway assembles into the one MCP surface."""
+    try:
+        return _json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503,
+                            detail=f"this build carries no tool manifest: {e}") from e
