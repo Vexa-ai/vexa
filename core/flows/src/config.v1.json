@@ -130,7 +130,7 @@
     {
       "key": "VEXA_MAIL_INBOX",
       "class": "defaulted",
-      "description": "`imap` (real) or `mailpit` (the dev double).",
+      "description": "`imap` (default, real), `mailpit` (the dev double) or `graph` (Microsoft 365 over Graph, for a tenant with IMAP switched off).",
       "default": "imap",
       "targets": [
         "compose"
@@ -199,6 +199,64 @@
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "VEXA_GRAPH_TENANT_ID",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The Microsoft Entra tenant the mailbox lives in.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_CLIENT_ID",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The app registration's application (client) id.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_CLIENT_SECRET",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The app registration's client secret. Application permissions Mail.ReadWrite + Mail.Send with admin consent, and an Exchange ApplicationAccessPolicy scoping the app to the ONE mailbox — without that policy this credential reads every mailbox in the tenant.",
+      "secret": true,
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_MAILBOX",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The mailbox address Graph polls and sends as.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_BASE",
+      "class": "defaulted",
+      "default": "https://graph.microsoft.com/v1.0",
+      "description": "The Graph endpoint. An in-code dial for a national cloud (Azure Government, China) — no deploy surface sets it.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_GRAPH_LOGIN",
+      "class": "defaulted",
+      "default": "https://login.microsoftonline.com",
+      "description": "The token endpoint — the same dial, the same reason.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_GRAPH_PAGE_SIZE",
+      "class": "defaulted",
+      "default": "25",
+      "description": "`$top` on the inbox listing.",
+      "targets": []
     },
     {
       "key": "VEXA_FLOWS_MAIL_DOMAINS",
@@ -385,6 +443,11 @@
     "meetings": {
       "description": "This deployment carries the meetings domain — scheduling a bot into a call and reading back what it recorded (PRD decision 40.7; decision 5 for meetings).",
       "when_unconfigured": "The meetings domain is not deployed. Flows still boots, still admits facts and still serves its queue; every flow step that would schedule or read a bot answers `meetings:not_present` — terminal, with the reason on the reaction, never a retry loop against a door that is not there."
+    },
+    "mailbox_graph": {
+      "description": "The mailbox is a Microsoft 365 tenant reached over Graph with client-credentials — inbound poll AND outbound send, for a deployment that exposes neither IMAP nor SMTP AUTH.",
+      "mode": "all",
+      "when_unconfigured": "This deployment is not on Microsoft. `VEXA_MAIL_INBOX=graph` and `VEXA_NOTIFY_CHANNEL=graph` refuse at the moment the mailbox is constructed, naming the missing keys; every other inbox is unaffected. It is a `capability` and not `required-explicit` because config.v1 cannot express a requirement conditional on another key, and refusing the boot of every non-Microsoft deployment to express one would be worse than the gap."
     }
   },
   "surface_only": [

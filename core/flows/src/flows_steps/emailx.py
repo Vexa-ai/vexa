@@ -120,22 +120,48 @@ def header_safe(value) -> str:
     return " ".join(str(value if value is not None else "").split())
 
 
+def build_rsvp_ics(self_addr: str, organizer_email: str, *, ics_uid: str,
+                   start_epoch: float, title: str) -> str:
+    """The iMIP REPLY body — ONE definition, whichever wire carries it.
+
+    Split out of `send_rsvp_accept` when a second wire arrived (Microsoft Graph). The escaping is
+    the reason it must not be written twice: every value here came off the invite we are
+    answering, and a `SUMMARY` containing a CRLF does not corrupt the file, it CLOSES the
+    property and opens whichever one the attacker names next — inside a REPLY we sign with our
+    own mailbox, into the organizer's calendar (R-B15)."""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    dtstart = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start_epoch))
+    return "\r\n".join([
+        "BEGIN:VCALENDAR", "PRODID:-//Vexa//flows//EN", "VERSION:2.0", "METHOD:REPLY",
+        "BEGIN:VEVENT", f"UID:{ics_escape(ics_uid)}", "SEQUENCE:0", f"DTSTAMP:{stamp}",
+        f"DTSTART:{dtstart}",
+        f"ORGANIZER:mailto:{ics_escape(organizer_email)}",
+        f"ATTENDEE;PARTSTAT=ACCEPTED;CN=Vexa:mailto:{ics_escape(self_addr)}",
+        f"SUMMARY:{ics_escape(title)}", "END:VEVENT", "END:VCALENDAR", ""])
+
+
 def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, title: str) -> str:
     """iMIP REPLY from minimal fields — Google flips this mailbox to 'Yes' in the guest list.
 
     Every value that came from the invite goes through `ics_escape` (and the Subject through
     `header_safe`): the title, the UID and the organizer address are all attacker-adjacent, and
-    this is a message we sign with our own mailbox (R-B15)."""
+    this is a message we sign with our own mailbox (R-B15).
+
+    A Microsoft 365 deployment with SMTP AUTH switched off sends the IDENTICAL calendar bytes as
+    a Graph attachment. Which wire that is, is the deployment's answer to `VEXA_NOTIFY_CHANNEL`
+    and nothing this function decides; the SMTP path below is untouched, down to the header order.
+    """
+    from .notify import channel
+    if getattr(channel(), "name", "smtp") == "graph":
+        from flows_integrations.graph_client import client
+        gc = client()
+        ics = build_rsvp_ics(gc.address(), organizer_email, ics_uid=ics_uid,
+                             start_epoch=start_epoch, title=title)
+        return gc.send_calendar_reply(organizer_email, header_safe(f"Accepted: {title}"),
+                                      "Vexa will attend and take the minutes.", ics)
     addr, pw = creds(login=_needs_login())
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    dtstart = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start_epoch))
-    ics = "\r\n".join([
-        "BEGIN:VCALENDAR", "PRODID:-//Vexa//flows//EN", "VERSION:2.0", "METHOD:REPLY",
-        "BEGIN:VEVENT", f"UID:{ics_escape(ics_uid)}", "SEQUENCE:0", f"DTSTAMP:{stamp}",
-        f"DTSTART:{dtstart}",
-        f"ORGANIZER:mailto:{ics_escape(organizer_email)}",
-        f"ATTENDEE;PARTSTAT=ACCEPTED;CN=Vexa:mailto:{ics_escape(addr)}",
-        f"SUMMARY:{ics_escape(title)}", "END:VEVENT", "END:VCALENDAR", ""])
+    ics = build_rsvp_ics(addr, organizer_email, ics_uid=ics_uid, start_epoch=start_epoch,
+                         title=title)
     msg = MIMEMultipart("mixed")
     msg["From"], msg["To"] = f"Vexa <{addr}>", organizer_email
     msg["Subject"] = header_safe(f"Accepted: {title}")

@@ -636,6 +636,14 @@ services:
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
+      # ── Microsoft 365 over Graph (VEXA_MAIL_INBOX=graph / VEXA_NOTIFY_CHANNEL=graph) ────────
+      # All four together or none — the `mailbox_graph` capability is mode=all, so three of four
+      # reads as `misconfigured` on /health rather than as a mailbox that half works. Empty is
+      # the ordinary state: this deployment is not on Microsoft.
+      - VEXA_GRAPH_TENANT_ID=${VEXA_GRAPH_TENANT_ID:-}
+      - VEXA_GRAPH_CLIENT_ID=${VEXA_GRAPH_CLIENT_ID:-}
+      - VEXA_GRAPH_CLIENT_SECRET=${VEXA_GRAPH_CLIENT_SECRET:-}
+      - VEXA_GRAPH_MAILBOX=${VEXA_GRAPH_MAILBOX:-}
       # ── who the mailbox will act for (R-B12) ────────────────────────────────────────────────
       # UNSET IS NOT `EVERYONE`: unset means the mailbox's own domain. Empty here is therefore the
       # safe value and not a hole.
@@ -741,6 +749,14 @@ services:
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
+      # ── Microsoft 365 over Graph (VEXA_MAIL_INBOX=graph / VEXA_NOTIFY_CHANNEL=graph) ────────
+      # All four together or none — the `mailbox_graph` capability is mode=all, so three of four
+      # reads as `misconfigured` on /health rather than as a mailbox that half works. Empty is
+      # the ordinary state: this deployment is not on Microsoft.
+      - VEXA_GRAPH_TENANT_ID=${VEXA_GRAPH_TENANT_ID:-}
+      - VEXA_GRAPH_CLIENT_ID=${VEXA_GRAPH_CLIENT_ID:-}
+      - VEXA_GRAPH_CLIENT_SECRET=${VEXA_GRAPH_CLIENT_SECRET:-}
+      - VEXA_GRAPH_MAILBOX=${VEXA_GRAPH_MAILBOX:-}
       # ── who the mailbox will act for (R-B12) ────────────────────────────────────────────────
       # UNSET IS NOT `EVERYONE`: unset means the mailbox's own domain. Empty here is therefore the
       # safe value and not a hole.
@@ -846,6 +862,14 @@ services:
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
+      # ── Microsoft 365 over Graph (VEXA_MAIL_INBOX=graph / VEXA_NOTIFY_CHANNEL=graph) ────────
+      # All four together or none — the `mailbox_graph` capability is mode=all, so three of four
+      # reads as `misconfigured` on /health rather than as a mailbox that half works. Empty is
+      # the ordinary state: this deployment is not on Microsoft.
+      - VEXA_GRAPH_TENANT_ID=${VEXA_GRAPH_TENANT_ID:-}
+      - VEXA_GRAPH_CLIENT_ID=${VEXA_GRAPH_CLIENT_ID:-}
+      - VEXA_GRAPH_CLIENT_SECRET=${VEXA_GRAPH_CLIENT_SECRET:-}
+      - VEXA_GRAPH_MAILBOX=${VEXA_GRAPH_MAILBOX:-}
       # ── who the mailbox will act for (R-B12) ────────────────────────────────────────────────
       # UNSET IS NOT `EVERYONE`: unset means the mailbox's own domain. Empty here is therefore the
       # safe value and not a hole.

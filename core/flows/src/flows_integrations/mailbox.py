@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import flows_config as cfg
 from flows import Registry, SystemClock, admit, postgres_db
 from flows_defs import production
-from flows_integrations import mail_policy
+from flows_integrations import mail_policy, outlook
 from flows_integrations.inbox import get_inbox
 from flows_steps.common import db_url
 
@@ -60,9 +60,14 @@ POLL_SECONDS = 12
 # matters most commercially — it is what a bank or a studio actually runs.
 MEET_URL = re.compile(r"https://meet\.google\.com/[a-z-]+")
 ZOOM_URL = re.compile(r"https://(?:[A-Za-z0-9-]+\.)*zoom\.us/j/\d+(?:\?pwd=[A-Za-z0-9._%~-]+)?")
+# `\\` and `;` EXCLUDED from the class, and that is a fix rather than tidiness: a newline inside
+# an ICS TEXT value arrives as the TWO characters backslash-n, so a class that permits `\\` runs
+# straight past the end of the link into the next line's prose — the captured URL reads
+# `…?p=HspUEOnQK2jxCFVGhg\\nMeeting`, which joins nothing. Measured on a live Microsoft 365
+# invitation (Vexa-ai/vexa#1320); a `;` ends an ICS parameter list and never belongs either.
 TEAMS_URL = re.compile(
-    r"https://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s<>\"']+"
-    r"|https://teams\.(?:microsoft|live)\.com/meet/[^\s<>\"']+")
+    r"https://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s<>\"';\\]+"
+    r"|https://teams\.(?:microsoft|live)\.com/meet/[^\s<>\"';\\]+")
 # Jitsi is host-scoped exactly as meeting_link.py scopes it: meet.jit.si always, plus whatever
 # VEXA_JITSI_HOSTS declares. A bare "any host with a path" rule would match half the web.
 _JITSI_HOSTS = [h.strip() for h in
@@ -130,6 +135,12 @@ def _zone(tzid: str):
     which is exactly what the floating-DTSTART branch beside it already does with the same
     uncertainty. A meeting an hour off still joins; an invite that raises never joins at all."""
     from zoneinfo import ZoneInfo
+    # THE QUOTES ARE MICROSOFT'S AND BELONG TO NEITHER NAME. Outlook writes
+    # `DTSTART;TZID="W. Europe Standard Time":…` as readily as the bare form, and with the quotes
+    # still attached this lookup misses the table, misses tzdata, and falls through to UTC — an
+    # hour wrong, silently, on the pilot's own zone, which is the one failure shape this table
+    # exists to prevent. Stripped here rather than at the regex so both spellings reach one rule.
+    tzid = (tzid or "").strip().strip('"').strip("'")
     for name in (tzid, _WINDOWS_ZONES.get(tzid.strip().lower(), "")):
         if not name:
             continue
@@ -151,8 +162,11 @@ def _meeting_url(text: str) -> str | None:
 def _unfold(ics: str) -> str:
     """RFC 5545 line folding: a CRLF followed by one space or tab continues the line. Real
     invites fold — a Zoom URL with a `?pwd=` is long enough to be split mid-token, and an
-    ATTENDEE line with a CN and a mailto is longer still."""
-    return re.sub(r"\r?\n[ \t]", "", ics)
+    ATTENDEE line with a CN and a mailto is longer still.
+
+    The implementation lives in `flows_integrations.outlook`, because every Microsoft reading
+    rule there depends on it and it must not exist twice."""
+    return outlook.unfold_ics(ics)
 
 
 def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
@@ -160,7 +174,17 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     if "BEGIN:VEVENT" not in ics:
         return None                       # no event block — never fall back to scanning VTIMEZONE
     ve = ics.split("BEGIN:VEVENT", 1)[-1].split("END:VEVENT", 1)[0]
-    url = _meeting_url(ve) or _meeting_url(ics)
+    # MICROSOFT'S OWN PROPERTIES FIRST, and the order is the whole point (see
+    # `flows_integrations/outlook.py`, rules 4-6). The generic scan reads the event
+    # top-to-bottom, and on a real Exchange invite that means LOCATION — the literal string
+    # "Microsoft Teams Meeting", carrying no URL at all — and then DESCRIPTION, whose FIRST link
+    # is the short form `teams.microsoft.com/meet/<digits>`. That is A DIFFERENT IDENTIFIER FOR
+    # THE SAME MEETING than `X-MICROSOFT-SKYPETEAMSMEETINGURL` carries, and nothing anywhere
+    # errors: the invite is admitted, a bot is dispatched, and it joins nothing.
+    #
+    # An invite with no Microsoft properties is untouched — `teams_join_url` returns None and the
+    # scan below is byte-for-byte what it was.
+    url = outlook.teams_join_url(ics) or _meeting_url(ve) or _meeting_url(ics)
     if not url:
         return None
     # ⚠ ANCHORED TO A LINE START, and it has to be. These patterns are case-insensitive and
@@ -177,7 +201,10 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     # flow reporting success. Property names live at the start of a content line (RFC 5545 §3.1),
     # so `re.M` + `^` is the whole fix, and `_unfold` above has already joined continuations.
     org = re.search(r"^ORGANIZER[^:]*:(?:mailto:)?([^\s]+)", ve, re.I | re.M)
-    dt = re.search(r"^DTSTART(?:;TZID=([^:;]+))?[^:]*:(\d{8}T\d{6})(Z?)", ve, re.M)
+    # `"…"` in the TZID alternation: Outlook writes `DTSTART;TZID="W. Europe Standard Time":…`
+    # and `[^:;]+` alone stops at neither quote — the captured name kept them, and `_zone` then
+    # missed a table row it has. Both spellings now reach `_zone`, which strips them.
+    dt = re.search(r'^DTSTART(?:;TZID=("[^"]*"|[^:;]+))?[^:]*:(\d{8}T\d{6})(Z?)', ve, re.M)
     uid = re.search(r"^UID:(.+)$", ve, re.M)
     # THE OCCURRENCE, not the series. RFC 5545 gives every occurrence of a recurring event the
     # SAME `UID`; only `RECURRENCE-ID` separates them. The dedup key was `ics-<UID>`, so a
@@ -185,7 +212,11 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     # duplicate, produced no reaction and no error, on precisely the "put the mailbox on the
     # recurring dailies" case `POST /events/batch` exists for (R-B02).
     rec = re.search(r"^RECURRENCE-ID(?:;[^:]*)?:(\S+)$", ve, re.M)
-    summ = re.search(r"^SUMMARY:(.+)$", ve, re.M)
+    # `;LANGUAGE=en-US` — Exchange puts a parameter on SUMMARY where Google does not, so
+    # `^SUMMARY:` matched nothing and every Exchange invite was titled "Meeting". Silent, and it
+    # reaches the person: the title is the subject line of the mail we send back. Same
+    # `(?:;[^:\n]*)?` shape RECURRENCE-ID above already uses.
+    summ = re.search(r"^SUMMARY(?:;[^:\n]*)?:(.+)$", ve, re.M)
     desc = re.search(r"^DESCRIPTION:(.*)$", ve, re.M)
     group = None
     gm = re.search(r"#group:([\w-]+)", ics)
@@ -219,7 +250,22 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     if dt:
         import calendar as cal
         from datetime import datetime
-        t = time.strptime(dt.group(2), "%Y%m%dT%H%M%S")
+        # `\d{8}T\d{6}` IS NOT ENOUGH TO MAKE strptime SAFE. Its `%H`/`%m`/`%d` patterns each
+        # accept a single digit, so a value the regex admits can still be unparseable —
+        # `20301231T240000` raises `ValueError: unconverted data remains: 0`. Out of `parse_ics`,
+        # out of `route`, out of the poll: the cursor advances only after a message is routed, so
+        # ONE such invite wedges every message behind it, forever. Exactly the failure `_zone`
+        # was written to end, one line further down, arriving by a different door. Found by the
+        # mutation storm over the Outlook corpus (`tests/test_exchange_ics.py`).
+        #
+        # An unreadable DTSTART is treated as an ABSENT one — the `if dt:` branch is simply not
+        # taken — because that is the answer this parser already gives to the same amount of
+        # information, and adding a second policy for it would be the drift, not the fix.
+        try:
+            t = time.strptime(dt.group(2), "%Y%m%dT%H%M%S")
+        except ValueError:
+            t = None
+    if dt and t is not None:
         if dt.group(3) == "Z":
             start = cal.timegm(t)
         elif dt.group(1) and (tz := _zone(dt.group(1))) is not None:

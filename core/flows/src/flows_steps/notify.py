@@ -6,11 +6,12 @@ mail. That is the wrong seam. A step's business is WHO to tell, WHAT to say, and
 that carries them onward; which channel delivers it is a deployment fact, exactly like the SMTP
 host ``emailx`` already reads from the environment.
 
-So: ``notify(person, subject, body, link=...)``. One adapter implements it today — ``SmtpNotifier``,
-which is ``emailx.send`` with the link appended as the message's single call to action. Teams,
-Slack and the rest are NOT here: a port with one implementation is honest, a port with three
-stubs is furniture. When a second channel arrives it implements ``NotifyPort`` and ``use()``
-selects it; no recipe changes.
+So: ``notify(person, subject, body, link=...)``. Two adapters implement it: ``SmtpNotifier``,
+which is ``emailx.send`` with the link appended as the message's single call to action, and
+``GraphNotifier``, which is the same message through Microsoft Graph for a Microsoft 365
+deployment that does not expose SMTP AUTH. Slack and the rest are still NOT here: a port with two
+real implementations is honest, a port with three stubs is furniture. No recipe changed when the
+second one arrived, which is what the port was for.
 
 Mirrors ``core/agent/llm/ports.py``'s ``HarnessPort``: a Protocol, a concrete adapter, and a
 module-level selector — the same shape the agent tier already uses for its swappable runner.
@@ -67,6 +68,26 @@ class SmtpNotifier:
         return mx.send(to, subject, compose(body, link), in_reply_to=in_reply_to)
 
 
+class GraphNotifier:
+    """Microsoft Graph, client-credentials — the same message, sent as the tenant's mailbox.
+
+    For an M365 deployment with SMTP AUTH switched off (the common bank posture, and the reason
+    this exists), Graph is the only way out as well as the only way in. Draft-then-send rather
+    than ``sendMail``, because the real ``internetMessageId`` is the threading contract the
+    caller registers in ``mail_thread`` — ``flows_integrations/graph_client.py`` carries the why.
+
+    ⚠ No live tenant has ever answered this: fixtures and a fake HTTP layer only."""
+
+    name = "graph"
+
+    def send(self, to: str, subject: str, body: str, *, link: Optional[str] = None,
+             in_reply_to: Optional[str] = None) -> str:
+        from flows_integrations.graph_client import client
+        return client().send(to, subject, compose(body, link), in_reply_to=in_reply_to)
+
+
+_CHANNELS = {"smtp": SmtpNotifier, "graph": GraphNotifier}
+
 _CHANNEL: Optional[NotifyPort] = None
 
 
@@ -78,9 +99,10 @@ def channel() -> NotifyPort:
     global _CHANNEL
     if _CHANNEL is None:
         want = os.environ.get("VEXA_NOTIFY_CHANNEL", "smtp").strip().lower()
-        if want != "smtp":
-            raise ValueError(f"unknown notify channel {want!r} — only 'smtp' is implemented")
-        _CHANNEL = SmtpNotifier()
+        if want not in _CHANNELS:
+            raise ValueError(f"unknown notify channel {want!r} — expected one of "
+                             + ", ".join(sorted(_CHANNELS)))
+        _CHANNEL = _CHANNELS[want]()
     return _CHANNEL
 
 
