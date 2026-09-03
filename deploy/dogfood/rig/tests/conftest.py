@@ -74,8 +74,15 @@ def _install_mcp_stub() -> None:
             return deco
 
         def streamable_http_app(self, *a, **kw):
-            async def _app(scope, receive, send):  # pragma: no cover — never served in tests
-                raise RuntimeError("stub app")
+            async def _app(scope, receive, send):
+                """The MCP app under our middleware. It knows the MCP endpoint and nothing else,
+                so any other path is a 404 — which is what makes "the /do route is gone" testable:
+                the request has to fall all the way through `_Auth` to get here."""
+                body = b'{"error":"not_found"}'
+                await send({"type": "http.response.start", "status": 404, "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
             return _app
 
     class TransportSecuritySettings:

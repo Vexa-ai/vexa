@@ -93,20 +93,29 @@ def test_rd12_whats_waiting_asks_only_for_this_subject(monkeypatch):
 
 def test_rd19_whats_waiting_is_anon_guarded(monkeypatch):
     """GATE 11 (R-D19). It was the one account tool with no `@_anon_guard`, so it set CALL_TOKEN by
-    hand: it accepted a credential in a call argument even with VEXA_RIG_MODE=0, and it CLEARED a
-    live token whenever the kwarg was absent — de-authenticating the first call every agent makes.
+    hand: it took a credential from a call argument, and it CLEARED a live token whenever the kwarg
+    was absent — de-authenticating the first call every agent makes.
+
+    The invariant changed under this test on 2026-09-03 and it changed in one direction only: the
+    argument used to be honoured unless `VEXA_RIG_MODE=0` said otherwise, and is now **always
+    ignored**, because the second authentication path is gone rather than switched off. What the
+    guard must still do is leave a live connection's credential alone.
     """
     as_user(monkeypatch, "7")
     rig.CURRENT.set(None)
     rig.CALL_TOKEN.set("vxa_mcp_LIVE")
 
-    tool("whats_waiting")()                    # no token= kwarg
+    tool("whats_waiting")()                    # the connection's credential, no argument
     assert rig.CALL_TOKEN.get() == "vxa_mcp_LIVE", "a live token was cleared by the call"
 
-    monkeypatch.setattr(rig, "RIG_MODE", False)
-    rig.CALL_TOKEN.set(None)
+    # …and a stray argument neither authenticates the call nor displaces what the connection holds.
     tool("whats_waiting")(token="vxa_mcp_FROM_AN_ARGUMENT")
-    assert rig.CALL_TOKEN.get() is None, "a token argument authenticated with RIG_MODE off"
+    assert rig.CALL_TOKEN.get() == "vxa_mcp_LIVE", "a call argument displaced the connection's token"
+
+    rig.CALL_TOKEN.set(None)
+    out = json.loads(tool("whats_waiting")(token="vxa_mcp_FROM_AN_ARGUMENT"))
+    assert out.get("authenticated") is False, "a call argument authenticated an anonymous connection"
+    assert rig.CALL_TOKEN.get() is None
 
 
 def test_rd21_friction_instance_wide_routes_are_gated(monkeypatch):
