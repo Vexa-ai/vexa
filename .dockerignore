@@ -1,7 +1,8 @@
-# Root .dockerignore — used by the meeting-api build (compose `context: ../..`). The other three
-# services build from their own narrow contexts. Keep the context light: exclude vendored/build
-# trees + venvs; the Dockerfile COPYs only the meeting-api src/, its pyproject+lock, and the five
-# sealed contract files it loads by path.
+# Root .dockerignore — used by every build whose context is the repository root: meeting-api,
+# agent-api, agent-worker and the gateway (compose `context: ../..`). Those Dockerfiles COPY only
+# their own src/ + pyproject/lock plus the specific files they load BY PATH — meeting-api's five
+# sealed contract schemas, the gateway's five routes.v1 manifests. Keep the context light: exclude
+# vendored/build trees + venvs. The remaining services build from their own narrow contexts.
 node_modules/
 **/node_modules/
 **/.venv/

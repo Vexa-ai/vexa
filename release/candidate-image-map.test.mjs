@@ -208,6 +208,9 @@ test("a root .dockerignore-only change invalidates every affected candidate", (t
     "vexaai/v012-agent-worker: .dockerignore",
     "vexaai/v012-agent-api: .dockerignore",
     "vexaai/v012-meeting-api: .dockerignore",
+    // the gateway joined the root-context builds when the edge stopped owning its route table:
+    // it now COPYs each domain's routes.v1.json, which a service-scoped context cannot reach.
+    "vexaai/v012-gateway: .dockerignore",
     "vexaai/vexa-bot: .dockerignore",
   ]);
 });
