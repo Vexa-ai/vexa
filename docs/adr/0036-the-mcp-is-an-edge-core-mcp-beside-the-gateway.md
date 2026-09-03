@@ -136,9 +136,11 @@ that does not pay it ships the docker socket as a product dependency.
   `gate:config-contract` checks reads → declaration but never declaration → reads, so a key declared
   and never read passes forever (`PROC_PENDING_GRACE_SEC` was one; `SCHEDULER_TICK_INTERVAL` still
   is); `core/flows` and `deploy/lite` were invisible to `gate:python` until this line added their
-  `pyproject.toml`s; and `deploy/dogfood/rig` has no tests to discover. A sixth config-contract check —
-  declared-and-never-read is an error unless the declaration carries a reason — is the closing move
-  and is not in this ADR's scope.
+  `pyproject.toml`s; and `deploy/dogfood/rig` carries five test files and a `conftest.py` that CI
+  cannot see, because the tree has no `pyproject.toml` and the discovery rule needs both — the
+  sharpest illustration of decision 7, since somebody has already written the tests. A sixth
+  config-contract check — declared-and-never-read is an error unless the declaration carries a
+  reason — is the closing move and is not in this ADR's scope.
 - **The known backlog is permitted non-conformance, and it is written down.** The seam inventory
   (`core/mcp` as a package; agent-api's 73 routes in one function; the worker turn's seven preambles;
   the two-spellings pairs between the worker and the MCP) is the release checklist, not a surprise. An
