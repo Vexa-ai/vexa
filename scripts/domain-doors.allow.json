@@ -56,7 +56,7 @@
       "line": 577,
       "from": "agent",
       "to": "mcp",
-      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+      "ruling": "PRD decision 40.5. HALF CLOSED: the URL now defaults to the gateway's assembled MCP surface (deploy/compose/docker-compose.yml, VEXA_MCP_URL) and `core/agent/worker` is classed `client` in this script's own UNITS (its VEXA_MCP_URL sites no longer appear above — client→edge is allowed outright). What remains open is THIS file: it is `agent` control-plane/shared code, not the worker, so it stays domain-kind and a domain may never name the mcp edge directly (the rule has no capability-class escape for domain→edge, unlike domain→domain). The entry closes when dispatch.py mints the worker's env from a value it does not itself hold as a literal MCP_URL/VEXA_MCP_URL-shaped key — e.g. the worker's own default (now in compose) covers the no-override case and this code only ever forwards an explicit operator override, or the mint moves into a helper this script does not scan as `agent`."
     },
     {
       "path": "core/agent/control_plane/dispatch.py",
@@ -64,7 +64,7 @@
       "line": 583,
       "from": "agent",
       "to": "mcp",
-      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+      "ruling": "PRD decision 40.5. HALF CLOSED: the URL now defaults to the gateway's assembled MCP surface (deploy/compose/docker-compose.yml, VEXA_MCP_URL) and `core/agent/worker` is classed `client` in this script's own UNITS (its VEXA_MCP_URL sites no longer appear above — client→edge is allowed outright). What remains open is THIS file: it is `agent` control-plane/shared code, not the worker, so it stays domain-kind and a domain may never name the mcp edge directly (the rule has no capability-class escape for domain→edge, unlike domain→domain). The entry closes when dispatch.py mints the worker's env from a value it does not itself hold as a literal MCP_URL/VEXA_MCP_URL-shaped key — e.g. the worker's own default (now in compose) covers the no-override case and this code only ever forwards an explicit operator override, or the mint moves into a helper this script does not scan as `agent`."
     },
     {
       "path": "core/agent/shared/config.py",
@@ -72,23 +72,15 @@
       "line": 115,
       "from": "agent",
       "to": "mcp",
-      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
-    },
-    {
-      "path": "core/agent/worker/engine.py",
-      "door": "VEXA_MCP_URL",
-      "line": 1112,
-      "from": "agent",
-      "to": "mcp",
-      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+      "ruling": "PRD decision 40.5. HALF CLOSED: the URL now defaults to the gateway's assembled MCP surface (deploy/compose/docker-compose.yml, VEXA_MCP_URL) and `core/agent/worker` is classed `client` in this script's own UNITS (its VEXA_MCP_URL sites no longer appear above — client→edge is allowed outright). What remains open is THIS file: it is `agent` control-plane/shared code, not the worker, so it stays domain-kind and a domain may never name the mcp edge directly (the rule has no capability-class escape for domain→edge, unlike domain→domain). The entry closes when dispatch.py mints the worker's env from a value it does not itself hold as a literal MCP_URL/VEXA_MCP_URL-shaped key — e.g. the worker's own default (now in compose) covers the no-override case and this code only ever forwards an explicit operator override, or the mint moves into a helper this script does not scan as `agent`."
     },
     {
       "path": "core/agent/worker/friction.py",
-      "door": "VEXA_MCP_URL",
-      "line": 272,
-      "from": "agent",
-      "to": "mcp",
-      "ruling": "PRD decision 40.5 — once the single MCP server is assembled at the gateway, a worker's VEXA_MCP_URL is an ordinary CLIENT edge to the edge. Today it points at deploy/dogfood's rig (architecture pass §1, 'agent → rig (MCP) 1'). The entry closes when it points at the gateway's assembled server and core/agent/worker is classed as the client process it is."
+      "door": "VEXA_AGENT_API_SELF_URL",
+      "line": 54,
+      "from": "agent-worker",
+      "to": "agent",
+      "ruling": "This is NOT the ADR-0037 seam (that one closed: `core/agent/worker` is now classed `client`, and its VEXA_MCP_URL sites are an ordinary client→edge reach, allowed outright). This is the worker reporting friction back to the SAME agent-api that spawned it — a callback to its own domain, not a client reaching an unrelated one — using an already-declared, already-defaulted config key (`VEXA_AGENT_API_SELF_URL`, config.v1.json class `defaulted`). The entry closes when the worker files friction through the assembled MCP edge (`report_friction`, already in `core/flows/mcp.tools.v1.json`) instead of calling agent-api's `/api/friction` directly, or when a worker-owned callback door is given its own declared class."
     },
     {
       "path": "core/agent/control_plane/routers/admin.py",
@@ -140,14 +132,6 @@
     },
     {
       "path": "core/gateway/services/gateway/src/gateway/adapters.py",
-      "door": "AGENT_API_URL",
-      "line": 209,
-      "from": "gateway",
-      "to": "agent",
-      "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. agent exports no manifest yet; the entry closes when core/agent ships one declaring base_url_env AGENT_API_URL."
-    },
-    {
-      "path": "core/gateway/services/gateway/src/gateway/adapters.py",
       "door": "ADMIN_API_URL",
       "line": 202,
       "from": "gateway",
@@ -161,14 +145,6 @@
       "from": "gateway",
       "to": "meetings",
       "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. meetings exports no manifest yet; the entry closes when core/meetings ships one declaring base_url_env MEETING_API_URL."
-    },
-    {
-      "path": "core/meetings/services/mcp/src/vexa_mcp/discover.py",
-      "door": "AGENT_API_URL",
-      "line": 34,
-      "from": "mcp",
-      "to": "agent",
-      "ruling": "PRD decision 40.5 — the MCP service already keys its discovery off DOMAIN_URL_ENV; flows is absent from this list because core/flows/mcp.tools.v1.json declares base_url_env FLOWS_API_URL. The entry closes when agent ships the same manifest."
     },
     {
       "path": "core/meetings/services/mcp/src/vexa_mcp/discover.py",
