@@ -167,13 +167,15 @@ def test_a_none_tool_sends_no_credential_at_all():
 
 # ── the manifest in this repository declares it ─────────────────────────────────────────────────
 
-def test_flows_four_tools_declare_the_subjects_credential():
+def test_every_flows_tool_declares_the_subjects_credential():
     """Which is the whole point: flows' door now takes the person's own credential (C1), so the
-    edge forwarding it is correct rather than a guess that happened to be wrong."""
+    edge forwarding it is correct rather than a guess that happened to be wrong. Asserted over
+    WHATEVER the manifest holds, not a list written here — a fifth tool added by another change is
+    exactly the case a hard-coded list would miss."""
     import json
     import pathlib
     doc = json.loads((pathlib.Path(__file__).resolve().parents[5]
                       / "core/flows/mcp.tools.v1.json").read_text())
+    assert doc["tools"], "the flows manifest declares no tools"
     assert {t["name"]: t.get("auth") for t in doc["tools"]} == {
-        "flows_list": "subject", "reactions_list": "subject",
-        "reaction_signal": "subject", "timeline": "subject"}
+        t["name"]: "subject" for t in doc["tools"]}
