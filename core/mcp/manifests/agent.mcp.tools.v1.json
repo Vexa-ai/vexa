@@ -1,0 +1,275 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "agent",
+  "owner": "core/agent/control_plane",
+  "base_url_env": "AGENT_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "tools": [
+    {
+      "name": "company_context",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/claims"
+      }
+    },
+    {
+      "name": "entity_upsert",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/entity"
+      }
+    },
+    {
+      "name": "friction_dump",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/friction/dump"
+      }
+    },
+    {
+      "name": "friction_fixed",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/friction/{friction_id}/fix"
+      }
+    },
+    {
+      "name": "friction_so_far",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/friction/dump"
+      }
+    },
+    {
+      "name": "mark_global_ready",
+      "identity": "admin",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/global/ready"
+      }
+    },
+    {
+      "name": "mark_scaffolded",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims/scaffold"
+      }
+    },
+    {
+      "name": "propose",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims"
+      }
+    },
+    {
+      "name": "report_friction",
+      "identity": "none",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/friction"
+      },
+      "note": "OPEN CALL: a no-agents deployment loses the improvement loop unless the friction store moves to identity or flows"
+    },
+    {
+      "name": "validate",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims/verdicts"
+      }
+    },
+    {
+      "name": "workspace_attach",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/swap"
+      }
+    },
+    {
+      "name": "workspace_init",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/init"
+      }
+    },
+    {
+      "name": "workspace_invite",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/invites"
+      }
+    },
+    {
+      "name": "workspace_members",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/members"
+      }
+    },
+    {
+      "name": "workspace_new",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/shared/new"
+      }
+    },
+    {
+      "name": "workspace_pull",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/pull"
+      }
+    },
+    {
+      "name": "workspace_purpose",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/purpose"
+      }
+    },
+    {
+      "name": "workspace_push",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/push"
+      }
+    },
+    {
+      "name": "workspace_read",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/file"
+      }
+    },
+    {
+      "name": "workspace_regime",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/regime"
+      },
+      "note": "NEW ROUTE. Today a per-person record in the edge's own state directory"
+    },
+    {
+      "name": "workspace_remove",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "DELETE",
+        "path": "/api/workspace/members/{member}"
+      }
+    },
+    {
+      "name": "workspace_tree",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/tree"
+      }
+    },
+    {
+      "name": "workspace_write",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/api/workspace/file"
+      }
+    },
+    {
+      "name": "workspaces",
+      "identity": "user",
+      "profiles": [
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/shared"
+      }
+    }
+  ]
+}

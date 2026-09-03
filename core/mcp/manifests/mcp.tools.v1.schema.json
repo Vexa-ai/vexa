@@ -1,0 +1,93 @@
+{
+  "$id": "https://vexa.ai/contracts/mcp.tools.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcp.tools.v1",
+  "description": "ONE DOMAIN'S TOOL MANIFEST. The domain that owns the door owns the tool: it declares the tool's name, the route behind it, the identity that route requires, and the deployment profiles the tool exists in. The gateway's MCP server assembles the union of every in-profile domain's manifest at startup and refuses a duplicate name. The manifest never carries a JSON schema or a description of its own — those are DERIVED from the bound route's OpenAPI operation, so a tool cannot drift from the route it forwards to (the mechanism core/meetings/services/mcp already uses: operation_id on a FastAPI route, read by FastApiMCP).",
+  "type": "object",
+  "required": ["contract", "domain", "owner", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": { "const": "mcp.tools.v1" },
+    "domain": {
+      "enum": ["meetings", "identity", "flows", "agent", "gateway", "rehearse"],
+      "description": "The owning domain. One domain, one manifest, one directory it lives in."
+    },
+    "owner": {
+      "type": "string",
+      "description": "The repo directory that owns this manifest. The manifest is committed HERE and served by the domain's own service; the gateway never holds a copy."
+    },
+    "base_url_env": {
+      "type": ["string", "null"],
+      "description": "The gateway config key naming this domain's base URL (MEETING_API_URL, ADMIN_API_URL, FLOWS_API_URL, AGENT_API_URL). NULL = an edge-owned tool with no domain door: the assembler itself serves it, which is the only case where the gateway holds behaviour."
+    },
+    "served_at": {
+      "type": ["string", "null"],
+      "description": "Where the domain serves this manifest at runtime, so the assembler fetches the manifest of the version that is actually deployed rather than the one in the image it was built from. NULL for edge-owned tools."
+    },
+    "tools": { "type": "array", "items": { "$ref": "#/$defs/Tool" }, "minItems": 1 }
+  },
+  "$defs": {
+    "Tool": {
+      "type": "object",
+      "required": ["name", "identity", "profiles", "route"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "The MCP tool name. GLOBALLY UNIQUE across every manifest: a duplicate is a BOOT FAILURE at the assembler, never a silent last-one-wins — two domains claiming one name is a design question and it must be answered by a person."
+        },
+        "route": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["method", "path"],
+              "additionalProperties": false,
+              "properties": {
+                "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+                "path": { "type": "string", "pattern": "^/" }
+              },
+              "description": "The route this tool forwards to, on the domain's own service. Its OpenAPI operation supplies the tool's input schema and description — there is no second place to write them, so they cannot disagree."
+            },
+            { "type": "null", "description": "Edge-owned: the assembler implements it (docs fetch, link minting). Allowed ONLY where base_url_env is null." }
+          ]
+        },
+        "identity": {
+          "enum": ["user", "admin", "operator", "none"],
+          "description": "user = the caller's own credential, resolved by the gateway and forwarded as X-User-Id (the caller can only reach what is theirs). admin = the instance admin role (users.data.is_admin). operator = the deployment's own service key, server-to-server. none = answers before anybody has an account. The ASSEMBLER enforces this before the forward, so a domain cannot be reached with an identity it did not ask for."
+        },
+        "profiles": {
+          "type": "array",
+          "items": { "enum": ["no-agents", "full", "dev"] },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Which deployment profiles the tool exists in. A tool the running profile does not carry is ABSENT from tools/list — not present-and-failing. An agent asked to use a tool that is not there recovers; an agent told a tool exists and handed a 502 tells the person the product is broken."
+        },
+        "enriched_by": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Enrichment" },
+          "description": "Optional additions another domain contributes to THIS tool's response. The OWNER merges them, not the gateway: one tool, one owner, one response shape. An enrichment whose domain is absent from the running profile simply does not appear, and the response says which enrichments were resolved."
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "Enrichment": {
+      "type": "object",
+      "required": ["domain", "route", "adds"],
+      "additionalProperties": false,
+      "properties": {
+        "domain": { "enum": ["meetings", "identity", "flows", "agent"] },
+        "route": {
+          "type": "object",
+          "required": ["method", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "POST"] },
+            "path": { "type": "string", "pattern": "^/" }
+          }
+        },
+        "adds": { "type": "string", "minLength": 1, "description": "What the reader gets that they would not get without this domain deployed." }
+      }
+    }
+  }
+}

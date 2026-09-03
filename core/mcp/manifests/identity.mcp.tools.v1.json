@@ -1,0 +1,96 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "identity",
+  "owner": "core/identity/services/admin-api",
+  "base_url_env": "ADMIN_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "tools": [
+    {
+      "name": "auth_claim",
+      "identity": "none",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/onboarding/claim"
+      },
+      "note": "NEW ROUTE"
+    },
+    {
+      "name": "auth_link",
+      "identity": "none",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/onboarding/link"
+      },
+      "note": "NEW ROUTE"
+    },
+    {
+      "name": "confirm_login",
+      "identity": "none",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/onboarding/confirm"
+      },
+      "note": "NEW ROUTE. Trades the code for a durable token. The token store moves here \u2014 it is identity state, not edge state"
+    },
+    {
+      "name": "settings",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/user/settings"
+      },
+      "note": "MOVES OUT OF THE WORKSPACE. mail_minutes/mail_rsvp/bot_name/timezone are read by flows at processing time and must exist with no agent domain"
+    },
+    {
+      "name": "start_onboarding",
+      "identity": "none",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/onboarding/start"
+      },
+      "note": "NEW ROUTE. The account create + the code mail. The workspace-init half is an agent enrichment, not a second service call from a tool",
+      "enriched_by": [
+        {
+          "domain": "agent",
+          "route": {
+            "method": "POST",
+            "path": "/api/workspace/init"
+          },
+          "adds": "seed the new person's desk"
+        }
+      ]
+    },
+    {
+      "name": "user_ensure",
+      "identity": "admin",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/admin/users"
+      }
+    }
+  ]
+}

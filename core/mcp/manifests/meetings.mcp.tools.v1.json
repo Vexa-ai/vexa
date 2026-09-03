@@ -1,0 +1,241 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "meetings",
+  "owner": "core/meetings/services/meeting-api",
+  "base_url_env": "MEETING_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "tools": [
+    {
+      "name": "bot_config",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/bots/{platform}/{native}/config"
+      }
+    },
+    {
+      "name": "bot_say",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/bots/{platform}/{native}/speak"
+      },
+      "note": "asked_by_a_human stays a required argument, enforced in the route"
+    },
+    {
+      "name": "bot_send",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/bots"
+      },
+      "note": "bot_name default is a per-person setting: identity enrichment, see enriches",
+      "enriched_by": [
+        {
+          "domain": "identity",
+          "route": {
+            "method": "GET",
+            "path": "/user/settings"
+          },
+          "adds": "the person's default bot_name"
+        }
+      ]
+    },
+    {
+      "name": "bot_stop",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "DELETE",
+        "path": "/bots/{platform}/{native}"
+      }
+    },
+    {
+      "name": "bots_running",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/bots/status"
+      }
+    },
+    {
+      "name": "captions_to_segments",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/transcripts/convert"
+      },
+      "note": "NEW ROUTE. Today a local parser in the tool; no service takes an unparsed track"
+    },
+    {
+      "name": "meeting_delete",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "DELETE",
+        "path": "/meetings/{meeting_id}"
+      }
+    },
+    {
+      "name": "meeting_info",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/meetings/{meeting_id}"
+      }
+    },
+    {
+      "name": "meeting_participants",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/meetings/{platform}/{native}/participants"
+      }
+    },
+    {
+      "name": "meeting_seed",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/meetings/{meeting_id}/transcript-import"
+      },
+      "note": "NEW: the create+import pair becomes one route, POST /meetings/seed"
+    },
+    {
+      "name": "meeting_transcript",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/transcripts/by-id/{meeting_id}"
+      },
+      "note": "the since-cursor and tail windowing move into the route's query"
+    },
+    {
+      "name": "meeting_update",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "PATCH",
+        "path": "/meetings/{meeting_id}"
+      },
+      "note": "falls through to POST /meetings/{platform}/{native}/annotate on 409"
+    },
+    {
+      "name": "meetings_list",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/meetings"
+      }
+    },
+    {
+      "name": "recordings_list",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/recordings"
+      }
+    },
+    {
+      "name": "transcript_search",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/transcripts/search"
+      }
+    },
+    {
+      "name": "transcript_terms",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/transcripts/{meeting_id}/terms"
+      },
+      "note": "CORE = the mechanical extractor (shared/terms). known/unknown needs the entity index, which is an agent enrichment",
+      "enriched_by": [
+        {
+          "domain": "agent",
+          "route": {
+            "method": "GET",
+            "path": "/api/entity-index"
+          },
+          "adds": "which named terms already have a page the caller can open (known/unknown)"
+        }
+      ]
+    },
+    {
+      "name": "zoom_transcript_to_segments",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/transcripts/convert"
+      },
+      "note": "NEW ROUTE. Same route, format=zoom"
+    }
+  ]
+}

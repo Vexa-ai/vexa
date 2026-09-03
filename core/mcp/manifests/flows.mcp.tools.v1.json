@@ -1,0 +1,152 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "flows",
+  "owner": "core/flows",
+  "base_url_env": "FLOWS_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "tools": [
+    {
+      "name": "bot_schedule",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/schedule/joins"
+      },
+      "note": "NEW ROUTE. A booking is a durable reaction, so flows owns it; the cancel half is GET+POST /schedule/joins?meeting=. Today it fans out to three doors"
+    },
+    {
+      "name": "fact_emit",
+      "identity": "admin",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/events"
+      }
+    },
+    {
+      "name": "flow_lifecycle",
+      "identity": "admin",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/flows/{name}/{version}/{verb}"
+      }
+    },
+    {
+      "name": "flows_list",
+      "identity": "operator",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/flows"
+      }
+    },
+    {
+      "name": "flows_submit",
+      "identity": "admin",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/flows"
+      }
+    },
+    {
+      "name": "mail_inbox",
+      "identity": "admin",
+      "profiles": [
+        "dev"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/mail/messages"
+      },
+      "note": "the mail DOUBLE \u2014 a dev-lane inbox, never a production door"
+    },
+    {
+      "name": "mail_read",
+      "identity": "admin",
+      "profiles": [
+        "dev"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/mail/messages/{message_id}"
+      }
+    },
+    {
+      "name": "reaction_signal",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/reactions/{reaction_id}/{verb}"
+      }
+    },
+    {
+      "name": "reactions_list",
+      "identity": "operator",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/reactions"
+      }
+    },
+    {
+      "name": "timeline",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/timeline"
+      }
+    },
+    {
+      "name": "whats_waiting",
+      "identity": "user",
+      "profiles": [
+        "no-agents",
+        "full"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/queue/waiting"
+      },
+      "note": "FLOWS-OWNED CORE. See the split table in core/mcp/README.md",
+      "enriched_by": [
+        {
+          "domain": "agent",
+          "route": {
+            "method": "GET",
+            "path": "/api/queue/enrichment"
+          },
+          "adds": "the setup gate (.scaffolded), the claim-book questions, and the first-run friction ask"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "rehearse",
+  "owner": "deploy/dogfood/rehearse",
+  "base_url_env": null,
+  "served_at": null,
+  "tools": [
+    {
+      "name": "rehearse",
+      "identity": "admin",
+      "profiles": [
+        "dev"
+      ],
+      "route": null,
+      "note": "the rehearse package, PRD decision 38"
+    },
+    {
+      "name": "rehearse_states",
+      "identity": "none",
+      "profiles": [
+        "dev"
+      ],
+      "route": null
+    },
+    {
+      "name": "subject_reset",
+      "identity": "admin",
+      "profiles": [
+        "dev"
+      ],
+      "route": null
+    }
+  ]
+}
