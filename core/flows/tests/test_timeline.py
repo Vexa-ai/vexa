@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from flows import SqliteDB
+from sqlite_double import SqliteDB
 from flows_timeline import (build_timeline, concerns, event_from_meeting, events_from_reaction,
                             iso, merge, read_flows, resolve_identity, split_around, to_epoch)
 from flows_timeline.model import Event, event_from_receipt

@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from flows import FakeClock, Registry, SqliteDB, admit, escalate, reclaim, tick
+from flows import FakeClock, Registry, admit, escalate, reclaim, tick
+from sqlite_double import SqliteDB
 from flows_steps.fakes import FakeWorld, INVITE_RECEIVED, MEETING_COMPLETED, build_registry
 
 

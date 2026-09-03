@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import flows as F
 from flows import EventType, admit, resume, status, tick
+from sqlite_double import SqliteDB
 from flows_defs.onboard_and_meet import register
 from flows_steps.fakes import FakeWorld, build_registry
 from fixtures import drain
@@ -15,7 +16,7 @@ from loopback import LoopbackWorld, drain_with_world
 def product_rig():
     world = LoopbackWorld(duration_s=1800.0, webhook_redeliveries=1)
     reg = build_registry(world)
-    db = F.SqliteDB()
+    db = SqliteDB()
     clock = F.FakeClock()
     world.admit_fn = lambda **kw: admit(db, reg, clock, **kw)   # fact-emitting steps loop back
     register(reg)

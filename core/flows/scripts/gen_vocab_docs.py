@@ -5,8 +5,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from flows import Registry, SqliteDB
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from flows import Registry
 from flows_defs import production
+from sqlite_double import SqliteDB
 
 reg = Registry()
 production.build(reg, SqliteDB())

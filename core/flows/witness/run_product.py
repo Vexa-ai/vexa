@@ -11,7 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from flows import Block, Done, EventType, Registry, SqliteDB, SystemClock, Wait, admit, resume, status, tick, reclaim, escalate  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from flows import Block, Done, EventType, Registry, SystemClock, Wait, admit, resume, status, tick, reclaim, escalate  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 import real_steps as rs  # noqa: E402
 
 INVITE = EventType("invite.received")

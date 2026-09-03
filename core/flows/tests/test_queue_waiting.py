@@ -31,7 +31,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import flows_queue  # noqa: E402
-from flows import FakeClock, Registry, SqliteDB, admit, status, tick  # noqa: E402
+from flows import FakeClock, Registry, admit, status, tick  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 
 import flows_defs.production as production  # noqa: E402
 
@@ -335,14 +336,20 @@ def test_an_old_absence_stops_being_news():
 
 # ── A4 · the subject is the authenticated caller's — through the real app ─────────────────────
 
+# UNREACHABLE Postgres DSN (port 1 is never a service) — `db_from_url` only accepts Postgres now
+# and `postgres_db` is lazy, so importing `flows_api` against this address succeeds with no
+# database anywhere; the fixture below then swaps in a real, working `SqliteDB` because `_seed`
+# genuinely executes against `flows_api.db`.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "sqlite://"}
+        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://queue-waiting:unreachable@127.0.0.1:1/flows"}
 
 
 @pytest.fixture(scope="module")
 def api():
-    """The real app on the offline dialect — the composition `tests/test_health.py` documents.
+    """The real app, composed against an unreachable Postgres (the composition
+    `tests/test_health.py` documents) and then handed a working `SqliteDB` — laziness proves the
+    app builds without a database; the swap gives these tests one that actually answers queries.
     SET, IMPORT, RESTORE: the module reads these at import and keeps them as constants."""
     from fastapi.testclient import TestClient
 
@@ -356,6 +363,7 @@ def api():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+    flows_api.db = SqliteDB()
     return flows_api, TestClient(flows_api.app)
 
 

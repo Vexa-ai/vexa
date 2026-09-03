@@ -31,7 +31,8 @@ import sys
 
 import flows_config
 import pytest
-from flows import FakeClock, SqliteDB, admit, status, tick
+from flows import FakeClock, admit, status, tick
+from sqlite_double import SqliteDB
 from flows_steps import common
 from flows_steps import meeting as mt
 

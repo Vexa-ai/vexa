@@ -45,8 +45,9 @@ import flows_steps.mailtext as mailtext
 import flows_steps.meeting as mt_mod
 import flows_steps.notify as notify_mod
 import pytest
-from flows import (Done, EventType, FakeClock, Reaction, Registry, SqliteDB, StepCtx, StepError,
+from flows import (Done, EventType, FakeClock, Reaction, Registry, StepCtx, StepError,
                    Wait, admit, escalate, reclaim, tick)
+from sqlite_double import SqliteDB
 from flows.loop import BACKOFF_S, LEASE_S, MAX_ATTEMPTS
 
 from test_link_loop import FakeChannel, FakeScaffolds, _StubDB

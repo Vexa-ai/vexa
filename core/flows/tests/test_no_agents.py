@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import flows_config
 import pytest
-from flows import Done, FakeClock, NotPresent, Registry, SqliteDB, StepCtx, admit, status, tick
+from flows import Done, FakeClock, NotPresent, Registry, StepCtx, admit, status, tick
+from sqlite_double import SqliteDB
 from flows_steps import common
 
 import flows_defs.production as production

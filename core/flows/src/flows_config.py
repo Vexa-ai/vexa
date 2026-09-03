@@ -113,11 +113,17 @@ DECLARED: dict[str, tuple[str, object, str]] = {
                                  "DEPLOYED — see flows_steps.common.domain_present."),
     "VEXA_FLOWS_DB_URL": (
         "required-explicit", None,
-        "the engine's Postgres DSN — the two tables the whole engine is. It USED to fall back to "
-        "reading a password out of a named container on one developer's host (decision 18d); a "
-        "guessed DSN on a machine that runs more than one stack does not fail, it addresses "
-        "somebody else's data, which is the `localhost:18057` bug in the DOORS block above with a "
-        "password on the end. `sqlite://` is the offline dialect the suite and gate:health run on."),
+        "the engine's Postgres DSN — the two tables the whole engine is, and the ONLY dialect "
+        "(2026-09-03): `db_from_url` refuses anything that does not name Postgres, naming the "
+        "scheme it saw. It USED to fall back to reading a password out of a named container on "
+        "one developer's host (decision 18d); a guessed DSN on a machine that runs more than one "
+        "stack does not fail, it addresses somebody else's data, which is the "
+        "`localhost:18057` bug in the DOORS block above with a password on the end. "
+        "gate:health needs no database at all now — `postgres_db` is lazy (connects and applies "
+        "schema on first real use), so the app composes and answers `/health` before any DB is "
+        "reachable; the offline/storm dialect (`SqliteDB`) is a TEST double in "
+        "core/flows/tests/sqlite_double.py, constructed directly there and never through this "
+        "key."),
     "VEXA_FLOWS_API_PORT": ("defaulted", "18200", "the port flows-api binds."),
     "VEXA_FLOWS_API_HOST": (
         "defaulted", "127.0.0.1",

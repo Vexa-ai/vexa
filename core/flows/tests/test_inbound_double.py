@@ -24,7 +24,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from flows import EventType, FakeClock, Registry, SqliteDB  # noqa: E402
+from flows import EventType, FakeClock, Registry  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 from flows_integrations.inbox import (  # noqa: E402
     ImapInbox,
     MailpitInbox,

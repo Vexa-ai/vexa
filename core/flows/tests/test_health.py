@@ -4,14 +4,19 @@ The gate discovers this file by name (`scripts/gates.mjs` gateHealth) for every 
 builds a FastAPI app, and a standing service without one is a RED rather than a green-on-empty: a
 process nobody can probe is a process nobody can restart on evidence.
 
-OFFLINE. `flows_api` builds its app at import and refuses to start without its credentials — by
-design, so an unconfigured deployment stops at the door rather than serving on a placeholder — so
-they are supplied here BEFORE the import, exactly as the rig's conftest does. `VEXA_FLOWS_DB_URL`
-matters most, and for two reasons: unset, `db_url()` REFUSES by name (decision 18d — it used to
-shell out to a named container to read a password off it); and `postgres_db` APPLIES THE SCHEMA at
-construction, so the module cannot be imported at all against a Postgres that is not there. `flows.db_from_url` reads the dialect off
-the URL, so `sqlite://` composes the same app on the in-memory dialect the whole offline suite
-already runs on.
+OFFLINE, and genuinely so (2026-09-03). `flows_api` builds its app at import and refuses to start
+without its credentials — by design, so an unconfigured deployment stops at the door rather than
+serving on a placeholder — so they are supplied here BEFORE the import, exactly as the rig's
+conftest does. `VEXA_FLOWS_DB_URL` matters most, and it is a syntactically-real but UNREACHABLE
+Postgres DSN (`127.0.0.1:1`, the same "never a service" convention the rig's conftest uses for its
+offline doors) rather than an offline dialect: `flows.db_from_url` now refuses anything that is not
+`postgres://`/`postgresql://` (SqliteDB — the old offline double — moved to a TEST fixture,
+`sqlite_double.py`, and is never reachable through a URL any more), and `postgres_db` is LAZY — the
+engine is created but does not connect, and the schema is applied on first real use, not at
+construction. So this module composes and this gate passes with no database running anywhere: the
+whole point of this file is that `flows-api can be built without a database` (gate:health / the
+issue this file backs) is now true of the PRODUCTION adapter, not true because the test routed
+around it onto a different one.
 """
 from __future__ import annotations
 
@@ -30,8 +35,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 # whichever module imports FIRST wins an env var. Alphabetical order is not a contract.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        # the offline dialect (flows.db_from_url) — unset, db_url() refuses and names the key
-        "VEXA_FLOWS_DB_URL": "sqlite://"}
+        # UNREACHABLE on purpose (port 1 is never a service) — proves the import touches no
+        # network. A real Postgres DSN shape is required: unset or `sqlite://` both refuse at
+        # `db_from_url` now (Postgres is the only production dialect).
+        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:
@@ -74,13 +81,21 @@ def test_health_touches_no_database():
     healthy process because a dependency blinked. `GET /reactions`, behind the key, is where the
     loop's own health is answered. Pinned by shape rather than by mocking: the handler's body is
     two `len()` calls over `vocab`, and this asserts the answer does not change when the DB is
-    unreachable — which is what the sqlite composition above already is.
+    unreachable — which, since the module composed against an unreachable Postgres above, is
+    already the state everything in this file is running in.
+
+    Restores whatever `flows_api.db` WAS, not a freshly built one from this file's own URL:
+    `flows_integrations.flows_api` is one module object, cached and shared across every test file
+    that imports it in the same session (gate:test-isolation's whole concern) — another file may
+    have swapped in a real, working double for its own tests, and rebuilding from THIS file's
+    (deliberately unreachable) URL would clobber that for everyone running after this one.
     """
     from flows_integrations import flows_api
 
     first = TestClient(app).get("/health").json()
+    saved_db = flows_api.db
     flows_api.db = None                      # the DB is gone; liveness must not notice
     try:
         assert TestClient(app).get("/health").json() == first
     finally:
-        flows_api.db = flows_api.db_from_url(_ENV["VEXA_FLOWS_DB_URL"])
+        flows_api.db = saved_db

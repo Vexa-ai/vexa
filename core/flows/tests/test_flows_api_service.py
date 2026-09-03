@@ -15,8 +15,12 @@ Three gaps, and each is small enough to look like nothing:
   * the manifest route exists but nothing pins WHICH tools it serves, so an assembly that silently
     lost a tool would still look assembled.
 
-Offline: the engine is stdlib-pure and `postgres_db` builds its engine lazily, so the app imports
-without a database.
+Offline, genuinely (2026-09-03): the engine is stdlib-pure and `postgres_db` builds its engine
+lazily — connects on first use, applies the schema on first real `execute`/`executescript` — so
+the app imports and answers `/health` against an UNREACHABLE Postgres DSN below, no database
+running anywhere. This file is the direct proof of that gap-closer: it used to compose against
+`sqlite://` (a different adapter standing in), which meant "builds without a database" was
+never actually exercised for the Postgres path this service ships on.
 """
 from __future__ import annotations
 
@@ -35,15 +39,17 @@ import pytest
 # THE DATABASE IS CHOSEN BY THE URL, not by a monkeypatch. An earlier version of this file swapped
 # `flows.postgres_db` for an in-memory sqlite adapter; `flows_api` then moved to `db_from_url`,
 # which resolves `postgres_db` inside `flows.db` and never saw the swap, so the module tried to
-# open a real connection at import. `db_from_url`'s own docstring is the fix: "a `sqlite://` URL
-# gets the sqlite dialect, anything else gets Postgres. No flag, no test-only branch — the
-# deployment's own URL decides." So this suite is a deployment whose URL says sqlite.
+# open a real connection at import. Postgres is now the ONLY dialect `db_from_url` accepts
+# (2026-09-03 — the old `sqlite://` branch moved a TEST double, `SqliteDB`, into
+# `tests/sqlite_double.py`, and `db_from_url` refuses anything that does not name Postgres), so
+# this suite is a deployment whose URL names Postgres and is simply UNREACHABLE — laziness, not a
+# different adapter, is what lets the import succeed.
 _PRIOR_ENV = {k: os.environ.get(k) for k in
               ("VEXA_FLOWS_API_KEY", "INTERNAL_API_SECRET", "VEXA_FLOWS_DB_URL")}
 
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
-os.environ["VEXA_FLOWS_DB_URL"] = "sqlite://"
+os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402
 finally:

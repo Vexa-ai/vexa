@@ -9,9 +9,11 @@ Three things are under test and they are deliberately separate concerns:
      same status, same step, same attempt, same next_run_at. A parked fact that retried itself
      into `failed` would be a dropped fact, just slower.
   3. `flows_integrations/flows_api.py` — intakes admit and SAY they parked; the two operator verbs
-     refuse; reads stay open. Asserted against the source, because importing that module opens a
-     Postgres connection and mints an API key at import time (the same reason no other test in
-     this suite imports it).
+     refuse; reads stay open. Asserted against the source rather than imported: importing that
+     module still mints an API key and needs its own credential + DB-URL env at import time
+     (`postgres_db` is lazy since 2026-09-03, so it no longer needs a reachable Postgres — but the
+     env dance is process-wide poison for every OTHER test file in the session, exactly the shape
+     `gate:test-isolation` exists for, which is why no other test in this suite imports it either).
 
 No network, no admin-api, no clock, no Postgres — the HTTP read is replaced at the seam and the
 engine half runs on the sqlite fixture.
@@ -261,8 +263,10 @@ def test_the_engine_core_still_imports_nothing_from_the_adapters():
 
 # ── 6. the API surface ───────────────────────────────────────────────────────────────────────
 def _api_blocks() -> dict:
-    """The flows-api source, split per endpoint. Read rather than imported: that module opens a
-    Postgres connection and refuses to start without VEXA_FLOWS_API_KEY, both at import time."""
+    """The flows-api source, split per endpoint. Read rather than imported: that module refuses to
+    start without VEXA_FLOWS_API_KEY (+ friends) at import time and pulls in FastAPI/SQLAlchemy —
+    heavier than a source-shape assertion needs, even though `postgres_db` itself is lazy now and
+    no longer requires a reachable Postgres to import."""
     src = (SRC / "flows_integrations" / "flows_api.py").read_text()
     blocks, name = {}, None
     for line in src.splitlines():
