@@ -119,6 +119,9 @@ export function checkFact(fact, root = DEFAULT_ROOT) {
     byValue.get(r.value).push(`${site.path}:${r.line}`);
   }
   const distinct = [...byValue.keys()].sort();
+  // value -> the FILES that give it (paths only: a line number moves with any edit above it, and a
+  // ledger that reds on whitespace is a ledger people stop reading)
+  const answers = distinct.map((v) => ({ value: v, sites: byValue.get(v).map((x) => x.split(":")[0]).sort() }));
 
   if (fact.enforced) {
     if (distinct.length > 1) {
@@ -126,14 +129,19 @@ export function checkFact(fact, root = DEFAULT_ROOT) {
       errs.push(`${fact.id} — "${fact.fact}" is written ${(fact.sites || []).length} times and they DISAGREE (${distinct.length} answers):\n${groups}\n        canonical: ${fact.canonical || "(none declared)"} — ${fact.how_to_agree || "make every site read the canonical definition"}`);
     }
   } else {
-    const pinned = (fact.distinct || []).slice().sort();
+    // WHAT IS PINNED IS THE MAPPING, not the set of answers. Pinning only the distinct VALUES let a
+    // site change sides in silence: flip core/agent's runtime hostname from runtime-api to runtime
+    // and both values are still present, so a set comparison sees no change while the tree just
+    // moved. A ledger entry has to say WHO gives WHICH answer, or it is not a baseline.
+    const pinned = JSON.stringify(fact.answers || []);
     if (distinct.length === 1 && (fact.sites || []).length > 1)
       errs.push(`${fact.id} — "${fact.fact}" is now IN PARITY across all ${(fact.sites || []).length} sites. The decision it was waiting on ("${fact.decision}") has been taken: set "enforced": true in ${MANIFEST_PATH} so it can never drift again. The ledger only shrinks.`);
-    else if (JSON.stringify(distinct) !== JSON.stringify(pinned)) {
-      errs.push(`${fact.id} — "${fact.fact}" has CHANGED since it was recorded, and it is a fact nobody has decided yet.\n        recorded: ${pinned.map(short).join("  |  ") || "(nothing)"}\n        found:    ${distinct.map(short).join("  |  ")}\n        Either make the sites agree and set "enforced": true, or update "distinct" in ${MANIFEST_PATH} so the ledger still tells the truth. Decision pending: ${fact.decision}`);
+    else if (JSON.stringify(answers) !== pinned) {
+      const render = (a) => a.map((x) => `          ${short(x.value)}\n            ${x.sites.join("\n            ")}`).join("\n");
+      errs.push(`${fact.id} — "${fact.fact}" has CHANGED since it was recorded, and it is a fact nobody has decided yet.\n        recorded:\n${render(fact.answers || []) || "          (nothing)"}\n        found:\n${render(answers)}\n        Either make the sites agree and set "enforced": true, or re-record with \`node scripts/check-parity.mjs --record\` so the ledger still tells the truth — the diff it writes IS the review. Decision pending: ${fact.decision}`);
     }
   }
-  return { id: fact.id, errs, byValue, distinct };
+  return { id: fact.id, errs, byValue, distinct, answers };
 }
 
 const short = (v) => {
@@ -211,8 +219,8 @@ export function recordLedger(root = DEFAULT_ROOT) {
     if (fact.enforced) continue;
     const r = results.find((x) => x.id === fact.id);
     if (!r) continue;
-    const next = r.distinct.slice().sort();
-    if (JSON.stringify(next) !== JSON.stringify((fact.distinct || []).slice().sort())) { fact.distinct = next; changed++; }
+    const next = r.answers;
+    if (JSON.stringify(next) !== JSON.stringify(fact.answers || [])) { fact.answers = next; delete fact.distinct; changed++; }
   }
   writeFileSync(join(root, MANIFEST_PATH), JSON.stringify(manifest, null, 2) + "\n");
   return changed;

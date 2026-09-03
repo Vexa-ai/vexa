@@ -200,11 +200,32 @@
         }
       ],
       "enforced": false,
-      "distinct": [
-        "[^a-z0-9]+",
-        "[^a-zA-Z0-9]+",
-        "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\")",
-        "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-|-$/g, \"\")"
+      "answers": [
+        {
+          "value": "[^a-z0-9]+",
+          "sites": [
+            "core/agent/shared/core.py"
+          ]
+        },
+        {
+          "value": "[^a-zA-Z0-9]+",
+          "sites": [
+            "core/agent/shared/entities.py"
+          ]
+        },
+        {
+          "value": "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\")",
+          "sites": [
+            "clients/terminal/src/ui-kit/docLinks.tsx"
+          ]
+        },
+        {
+          "value": "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-|-$/g, \"\")",
+          "sites": [
+            "clients/terminal/src/surfaces/meeting.tsx",
+            "clients/terminal/src/surfaces/meetingModel.ts"
+          ]
+        }
       ]
     },
     {
@@ -224,9 +245,19 @@
         }
       ],
       "enforced": false,
-      "distinct": [
-        "company · decision · meeting · person · project",
-        "company · person · task · topic"
+      "answers": [
+        {
+          "value": "company · decision · meeting · person · project",
+          "sites": [
+            "core/agent/shared/entities.py"
+          ]
+        },
+        {
+          "value": "company · person · task · topic",
+          "sites": [
+            "clients/terminal/src/surfaces/meetingModel.ts"
+          ]
+        }
       ]
     },
     {
@@ -254,9 +285,21 @@
         }
       ],
       "enforced": false,
-      "distinct": [
-        "Vexa runs on this organisation's own servers; the recording and transcript stay there.",
-        "Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces is visible to the company's agents; recordings and transcripts stay here."
+      "answers": [
+        {
+          "value": "Vexa runs on this organisation's own servers; the recording and transcript stay there.",
+          "sites": [
+            "core/flows/src/flows_defs/production.py"
+          ]
+        },
+        {
+          "value": "Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces is visible to the company's agents; recordings and transcripts stay here.",
+          "sites": [
+            "behavior/asks/setup-global.md",
+            "behavior/mail/attendee-head.md",
+            "core/flows/src/flows_steps/mailtext.py"
+          ]
+        }
       ]
     },
     {
@@ -276,9 +319,19 @@
         }
       ],
       "enforced": false,
-      "distinct": [
-        "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked",
-        "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own voice, without quoting or referring to these instructions. # READ SILENTLY. This rides on EVERY composed opening, not just the setup preset, because the # failure is the shape of the model rather than of one prompt: the founder's first setup turn # opened with I'll start by reading…, let me look at what actually exists in the mounts, # I've got what I need to begin — three lines of narration before one word addressed to him. # Reading is how the job is done, not part of the job; announcing it teaches the reader only # that they are waiting. Read whatever you need silently: the FIRST sentence you emit is addressed to the person, and you never narrate your own tool use. # TEMPLATES ARE SHAPES. An agent read kg/templates/person.md as if it described somebody and # created a real entity from the example inside it; a person was then shown a template rendered # as their own document. Both are the same mistake — a shape treated as a fact — and it is worth # one sentence on every turn rather than a rule in one preset. Anything marked template: true, and anything under kg/templates/, is a SHAPE and never a fact: copy it to make a new record, never cite it, never name it to a person, and never treat the example inside it as somebody real. # (unset) IS A GAP. A group workspace created before the template-free seed still carries the # seed's placeholders in its README, and an agent reported the project's objective is still # (unset) as though that were something it had found out. It is the templates-are-SHAPES # mistake one step smaller — a blank read as a value — so it gets the sentence next to it. (unset) and any other angle-bracket or placeholder value is a GAP, never a fact: say the thing is not recorded yet and offer to fill it in, never report the placeholder as the answer. # Decision 24. A composed opening is the turn most likely to meet a name for the first time # — an attendee clicking a post-meeting link brings a whole room with them — and it is the # turn least likely to stop and write pages, because it is answering an ask. A name without a page gets one now: whatever this turn learns about a person, company, meeting, project or decision goes in through entity_upsert with its source. Facts carry a source; gaps go to kg/MISSING.md, never invented. # F70. The founder asked for a bot and was told I don't have a bot-dispatch tool in this # session. The tool was there: the CLI logged hasTools: true, the rig served 57 tools # including bot_send, and the model never attempted a call. Asked afterwards to list its # tools it listed them all, then said it had been guessing at my own capabilities instead of # checking them. A refusal is the one answer that must never be produced from memory. Your tools are exactly the ones in your tool list. Never say you lack a capability without checking the list; if a call fails, report its error verbatim. # F71. The founder was handed curl -X POST https://api.vexa.ai/bots -H X-API-Key: … — the # agent's workaround for a thing it believed it could not do, which it could. Two failures in # one line: it made him the runtime, and it put a key in a chat. Never hand the person an API call, a curl command, a key or a token. If you cannot do something, say that you cannot do it right now and why, in one sentence. # F73. After a successful send the agent offered a link into the product the person was # already looking at. The panel is moved by the harness, not by you — there is no tool here to # call for it, and a URL is the one thing that cannot help someone already inside the app. The person is INSIDE the app: never give them an app URL or a link into it, and never tell them to open one. Say what is on screen now. # F69. A bare meeting link is not a topic to discuss. It is the whole instruction, and the # turn that answers it with a question has spent the moment the person needed. A message that is only a meeting URL means: send the bot now. # F72. Correcting yourself and then asking whether to proceed spends a second turn on a # decision already made — and on a standing instruction it re-asks something already answered. After correcting yourself on something the person has already told you, DO the thing in that same turn. Never re-ask what they have already answered."
+      "answers": [
+        {
+          "value": "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked",
+          "sites": [
+            "clients/terminal/src/canvas/actions.ts"
+          ]
+        },
+        {
+          "value": "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own voice, without quoting or referring to these instructions. # READ SILENTLY. This rides on EVERY composed opening, not just the setup preset, because the # failure is the shape of the model rather than of one prompt: the founder's first setup turn # opened with I'll start by reading…, let me look at what actually exists in the mounts, # I've got what I need to begin — three lines of narration before one word addressed to him. # Reading is how the job is done, not part of the job; announcing it teaches the reader only # that they are waiting. Read whatever you need silently: the FIRST sentence you emit is addressed to the person, and you never narrate your own tool use. # TEMPLATES ARE SHAPES. An agent read kg/templates/person.md as if it described somebody and # created a real entity from the example inside it; a person was then shown a template rendered # as their own document. Both are the same mistake — a shape treated as a fact — and it is worth # one sentence on every turn rather than a rule in one preset. Anything marked template: true, and anything under kg/templates/, is a SHAPE and never a fact: copy it to make a new record, never cite it, never name it to a person, and never treat the example inside it as somebody real. # (unset) IS A GAP. A group workspace created before the template-free seed still carries the # seed's placeholders in its README, and an agent reported the project's objective is still # (unset) as though that were something it had found out. It is the templates-are-SHAPES # mistake one step smaller — a blank read as a value — so it gets the sentence next to it. (unset) and any other angle-bracket or placeholder value is a GAP, never a fact: say the thing is not recorded yet and offer to fill it in, never report the placeholder as the answer. # Decision 24. A composed opening is the turn most likely to meet a name for the first time # — an attendee clicking a post-meeting link brings a whole room with them — and it is the # turn least likely to stop and write pages, because it is answering an ask. A name without a page gets one now: whatever this turn learns about a person, company, meeting, project or decision goes in through entity_upsert with its source. Facts carry a source; gaps go to kg/MISSING.md, never invented. # F70. The founder asked for a bot and was told I don't have a bot-dispatch tool in this # session. The tool was there: the CLI logged hasTools: true, the rig served 57 tools # including bot_send, and the model never attempted a call. Asked afterwards to list its # tools it listed them all, then said it had been guessing at my own capabilities instead of # checking them. A refusal is the one answer that must never be produced from memory. Your tools are exactly the ones in your tool list. Never say you lack a capability without checking the list; if a call fails, report its error verbatim. # F71. The founder was handed curl -X POST https://api.vexa.ai/bots -H X-API-Key: … — the # agent's workaround for a thing it believed it could not do, which it could. Two failures in # one line: it made him the runtime, and it put a key in a chat. Never hand the person an API call, a curl command, a key or a token. If you cannot do something, say that you cannot do it right now and why, in one sentence. # F73. After a successful send the agent offered a link into the product the person was # already looking at. The panel is moved by the harness, not by you — there is no tool here to # call for it, and a URL is the one thing that cannot help someone already inside the app. The person is INSIDE the app: never give them an app URL or a link into it, and never tell them to open one. Say what is on screen now. # F69. A bare meeting link is not a topic to discuss. It is the whole instruction, and the # turn that answers it with a question has spent the moment the person needed. A message that is only a meeting URL means: send the bot now. # F72. Correcting yourself and then asking whether to proceed spends a second turn on a # decision already made — and on a standing instruction it re-asks something already answered. After correcting yourself on something the person has already told you, DO the thing in that same turn. Never re-ask what they have already answered.",
+          "sites": [
+            "core/agent/control_plane/scaffolds.py"
+          ]
+        }
       ]
     },
     {
@@ -310,9 +363,22 @@
         }
       ],
       "enforced": false,
-      "distinct": [
-        "defaulted",
-        "required-explicit"
+      "answers": [
+        {
+          "value": "defaulted",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/config.v1.json"
+          ]
+        },
+        {
+          "value": "required-explicit",
+          "sites": [
+            "core/agent/control_plane/config.v1.json",
+            "core/flows/src/config.v1.json",
+            "core/gateway/services/gateway/src/gateway/config.v1.json",
+            "core/identity/services/admin-api/src/admin_api/config.v1.json"
+          ]
+        }
       ]
     },
     {
@@ -336,9 +402,20 @@
         }
       ],
       "enforced": false,
-      "distinct": [
-        "http://runtime-api:8090",
-        "http://runtime:8090"
+      "answers": [
+        {
+          "value": "http://runtime-api:8090",
+          "sites": [
+            "core/agent/control_plane/config.v1.json",
+            "core/agent/shared/config.py"
+          ]
+        },
+        {
+          "value": "http://runtime:8090",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/config.v1.json"
+          ]
+        }
       ]
     },
     {
@@ -406,12 +483,45 @@
           "pattern": "WHERE status IN \\(([^)]*)\\)"
         }
       ],
-      "distinct": [
-        "active · awaiting_admission · joining · needs_help · needs_human_help · requested · stopping",
-        "active · awaiting_admission · joining · needs_help · requested · stopping",
-        "active · awaiting_admission · joining · requested · scheduled · stopping",
-        "active · awaiting_admission · joining · requested · stopping",
-        "active · awaiting_admission · requested"
+      "answers": [
+        {
+          "value": "active · awaiting_admission · joining · needs_help · needs_human_help · requested · stopping",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · joining · needs_help · requested · stopping",
+          "sites": [
+            "clients/terminal/src/surfaces/liveMeetings.ts",
+            "clients/terminal/src/surfaces/meetingModel.ts",
+            "core/agent/control_plane/meeting_steering.py",
+            "core/agent/control_plane/scaffolds.py",
+            "core/agent/control_plane/schedule_digest.py",
+            "core/meetings/services/meeting-api/src/meeting_api/collector/transcript_import.py",
+            "deploy/dogfood/bin/blank-instance.sh",
+            "deploy/dogfood/rehearse/doors.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · joining · requested · scheduled · stopping",
+          "sites": [
+            "core/identity/services/admin-api/src/admin_api/schema/models.py",
+            "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · joining · requested · stopping",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · requested",
+          "sites": [
+            "deploy/dogfood/rig/vexa_control_mcp.py"
+          ]
+        }
       ]
     }
   ]

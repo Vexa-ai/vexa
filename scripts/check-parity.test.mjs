@@ -170,10 +170,10 @@ test("forbid_elsewhere makes the site list an INVENTORY — a stray writer fails
   } finally { rmSync(clean, { recursive: true, force: true }); rmSync(stray, { recursive: true, force: true }); }
 });
 
-const ledgerFact = (distinct) => [{
+const ledgerFact = (answers) => [{
   id: "slug", fact: "the entity slug", kind: "literal", enforced: false,
   decision: "which slug the server writes and the client must reproduce",
-  distinct,
+  answers,
   sites: [
     { path: "a/x.py", pattern: 'SLUG = "([^"]+)"' },
     { path: "b/y.ts", pattern: 'SLUG = "([^"]+)"' },
@@ -182,9 +182,9 @@ const ledgerFact = (distinct) => [{
 
 test("a LEDGER fact passes while it matches what was recorded, and fails the moment it moves", () => {
   const files = { "a/x.py": 'SLUG = "[^a-zA-Z0-9]+"\n', "b/y.ts": 'SLUG = "[^a-z0-9]+"\n' };
-  const pinned = fixture(ledgerFact(["[^a-z0-9]+", "[^a-zA-Z0-9]+"]), files);
-  const moved = fixture(ledgerFact(["[^a-z0-9]+", "[^a-zA-Z0-9]+"]),
-    { ...files, "b/y.ts": 'SLUG = "[^a-z0-9_]+"\n' });
+  const BASE = [{ value: "[^a-z0-9]+", sites: ["b/y.ts"] }, { value: "[^a-zA-Z0-9]+", sites: ["a/x.py"] }];
+  const pinned = fixture(ledgerFact(BASE), files);
+  const moved = fixture(ledgerFact(BASE), { ...files, "b/y.ts": 'SLUG = "[^a-z0-9_]+"\n' });
   try {
     assert.deepEqual(run(pinned).errs, [], "a drifted fact that has not moved is not news");
     const e = run(moved).errs;
@@ -195,7 +195,7 @@ test("a LEDGER fact passes while it matches what was recorded, and fails the mom
 });
 
 test("a LEDGER fact that comes into agreement FAILS — the decision was taken, so enforce it", () => {
-  const root = fixture(ledgerFact(["[^a-z0-9]+", "[^a-zA-Z0-9]+"]),
+  const root = fixture(ledgerFact([{ value: "[^a-z0-9]+", sites: ["b/y.ts"] }, { value: "[^a-zA-Z0-9]+", sites: ["a/x.py"] }]),
     { "a/x.py": 'SLUG = "[^a-z0-9]+"\n', "b/y.ts": 'SLUG = "[^a-z0-9]+"\n' });
   try {
     const e = run(root).errs;
@@ -205,8 +205,35 @@ test("a LEDGER fact that comes into agreement FAILS — the decision was taken, 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a LEDGER fact reds when a site SWITCHES SIDES, even though the answers are unchanged", () => {
+  // The failure this test exists for: pinning only the distinct VALUES let a site move from one
+  // camp to the other in silence, because both values were still present. What is pinned is the
+  // MAPPING. Measured on the real tree first: flipping core/agent's runtime hostname was invisible.
+  const three = [
+    { path: "a/x.py", pattern: 'H = "([^"]+)"' },
+    { path: "b/y.py", pattern: 'H = "([^"]+)"' },
+    { path: "c/z.py", pattern: 'H = "([^"]+)"' },
+  ];
+  const facts = (answers) => [{ id: "host", fact: "the runtime hostname", kind: "literal",
+    enforced: false, decision: "what the runtime is actually called on the network", answers, sites: three }];
+  const pinnedAnswers = [
+    { value: "http://runtime-api:8090", sites: ["a/x.py", "b/y.py"] },
+    { value: "http://runtime:8090", sites: ["c/z.py"] },
+  ];
+  const H = (v) => `H = "${v}"\n`;
+  const same = fixture(facts(pinnedAnswers), { "a/x.py": H("http://runtime-api:8090"), "b/y.py": H("http://runtime-api:8090"), "c/z.py": H("http://runtime:8090") });
+  const switched = fixture(facts(pinnedAnswers), { "a/x.py": H("http://runtime-api:8090"), "b/y.py": H("http://runtime:8090"), "c/z.py": H("http://runtime:8090") });
+  try {
+    assert.deepEqual(run(same).errs, []);
+    const e = run(switched).errs;
+    assert.equal(e.length, 1, "both values still exist — a set comparison would have seen nothing");
+    assert.match(e[0], /has CHANGED since it was recorded/);
+    assert.match(e[0], /b\/y\.py/, "the failure must name the site that moved");
+  } finally { rmSync(same, { recursive: true, force: true }); rmSync(switched, { recursive: true, force: true }); }
+});
+
 test("an unenforced fact that names no decision is itself an error", () => {
-  const root = fixture([{ id: "x", fact: "f", kind: "literal", enforced: false, distinct: [], sites: [] }], {});
+  const root = fixture([{ id: "x", fact: "f", kind: "literal", enforced: false, answers: [], sites: [] }], {});
   try {
     assert.ok(run(root).errs.some((e) => /must name the decision/.test(e)));
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -229,7 +256,11 @@ test("this repository's manifest still describes the tree, and the tip is green"
   assert.ok(res.enforced.length >= 1, "at least the control case is enforced");
   for (const f of res.manifest.facts || []) {
     assert.ok(f.fact && f.kind && Array.isArray(f.sites), `${f.id}: a fact names itself, its kind and its sites`);
-    if (!f.enforced) assert.ok(f.decision && f.decision.length > 20, `${f.id}: the ledger names the decision that settles it`);
+    if (!f.enforced) {
+      assert.ok(f.decision && f.decision.length > 20, `${f.id}: the ledger names the decision that settles it`);
+      assert.ok(Array.isArray(f.answers) && f.answers.length, `${f.id}: a ledger fact pins WHO gives WHICH answer`);
+      assert.ok(!("distinct" in f), `${f.id}: the old value-only baseline must not survive — a site could switch sides under it`);
+    }
     if (f.enforced) assert.ok(f.canonical || f.sites.length === 1, `${f.id}: an enforced fact names where the truth lives`);
   }
 });
