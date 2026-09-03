@@ -60,7 +60,7 @@ def test_a_person_who_has_set_nothing_gets_the_documented_defaults(client):
     _uid, h = _user(client)
     body = client.get("/user/settings", headers=h).json()
     assert body["settings"] == {"timezone": "", "mail_minutes": True, "mail_join": False,
-                                "mail_rsvp": True, "mail_prep": True}
+                                "mail_rsvp": True, "mail_prep": True, "bot_name": "Vexa"}
     assert set(body["what_each_means"]) == set(body["settings"])
 
 
@@ -82,14 +82,15 @@ def test_the_vocabulary_is_closed_and_the_refusal_carries_it(client):
     detail = r.json()["detail"]
     assert "make_it_funnier" in str(detail)
     assert set(detail["the_settings_that_exist"]) == {
-        "timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep"}
+        "timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep", "bot_name"}
 
 
-def test_bot_name_is_not_in_this_vocabulary(client):
-    """A bot default is a fact about the BOT. It has a home already (calendar_bot_name →
-    bot-context → meeting-api); accepting it here would make a fourth store for one fact."""
+def test_bot_name_is_settable_here_but_stored_where_meetings_reads_it(client):
+    """A bot default is a fact about the BOT, and its store already exists. This door writes THAT
+    key rather than a second one — see the bot-fact tests at the end of this file."""
     _uid, h = _user(client)
-    assert client.put("/user/settings", headers=h, json={"bot_name": "Scribe"}).status_code == 422
+    assert client.put("/user/settings", headers=h,
+                      json={"bot_name": "Scribe"}).status_code == 200
 
 
 def test_a_timezone_that_is_not_a_zone_is_refused(client):
@@ -147,18 +148,19 @@ def test_an_unknown_user_is_a_404_not_a_silent_default(client):
 
 
 # ── the one-shot migration off `.settings.json` ──────────────────────────────────────────────
-def test_a_legacy_settings_file_imports_and_drops_the_bot_fact(client):
-    """The migration takes a `.settings.json` verbatim. It keeps the five person facts, DROPS
-    `bot_name` (a bot fact, which this move deliberately did not touch), and ignores keys nobody
-    ever supported rather than refusing the whole file — a migration that stops on one odd key
-    leaves half the estate on the old store."""
+def test_a_legacy_settings_file_imports_every_key_that_has_a_home(client):
+    """The migration takes a `.settings.json` verbatim: the five person facts land in identity,
+    `bot_name` lands in the BOT's own store, and a key nobody ever supported is ignored rather than
+    refused — a migration that stops on one odd key leaves half the estate on the old store, and
+    there is no second run that fixes that."""
     uid, h = _user(client, "legacy@vexa.ai")
     legacy = {"bot_name": "Scribe", "timezone": "Europe/Lisbon", "mail_minutes": False,
               "who_knows": 7}
     r = client.post(f"/internal/users/{uid}/settings/import", headers=_internal(), json=legacy)
     assert r.status_code == 200, r.text
-    assert r.json()["imported"] == {"timezone": "Europe/Lisbon", "mail_minutes": False}
-    assert r.json()["dropped"] == ["bot_name", "who_knows"]
+    assert r.json()["imported"] == {"bot_name": "Scribe", "timezone": "Europe/Lisbon",
+                                    "mail_minutes": False}
+    assert r.json()["dropped"] == ["who_knows"]
     assert client.get("/user/settings", headers=h).json()["settings"]["timezone"] == "Europe/Lisbon"
 
 
@@ -181,3 +183,69 @@ def test_the_import_is_closed_without_the_internal_secret(client):
     uid, _h = _user(client, "closed@vexa.ai")
     assert client.post(f"/internal/users/{uid}/settings/import",
                        json={"timezone": "UTC"}).status_code in (401, 403)
+
+
+# ── the bot fact: settable here, stored in the ONE place meetings reads ──────────────────────
+def test_bot_name_is_settable_and_lands_in_the_store_meetings_already_reads(client):
+    """NO FOURTH STORE (founder ruling). `users.data.calendar_bot_name` is the single source —
+    served on /internal/users/{id}/bot-context, which meeting-api reads on both spawn paths. This
+    door writes THAT key, so a name set here and a name set on the calendar screen are one thing."""
+    uid, h = _user(client, "botname@vexa.ai")
+    assert client.get("/user/settings", headers=h).json()["settings"]["bot_name"] == "Vexa"
+    r = client.put("/user/settings", headers=h, json={"bot_name": "Scribe"})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["bot_name"] == "Scribe"
+    # the SAME value the meetings domain resolves a spawn from
+    ctx = client.get(f"/internal/users/{uid}/bot-context", headers=_internal()).json()
+    assert ctx["bot_name"] == "Scribe"
+
+
+def test_the_calendar_screen_and_this_door_set_one_value(client):
+    uid, h = _user(client, "onestore@vexa.ai")
+    client.put("/user/settings", headers=h, json={"bot_name": "FromChat"})
+    assert client.get(f"/internal/users/{uid}/bot-context",
+                      headers=_internal()).json()["bot_name"] == "FromChat"
+
+
+def test_bot_name_is_absent_from_the_internal_settings_edge(client):
+    """flows does not read a bot name any more — meetings resolves it. Serving it here would invite
+    exactly the second reader this move removed."""
+    uid, h = _user(client, "notflows@vexa.ai")
+    client.put("/user/settings", headers=h, json={"bot_name": "Scribe"})
+    assert "bot_name" not in client.get(f"/internal/users/{uid}/settings",
+                                        headers=_internal()).json()
+
+
+def test_an_empty_bot_name_is_refused(client):
+    _uid, h = _user(client, "emptyname@vexa.ai")
+    assert client.put("/user/settings", headers=h, json={"bot_name": "  "}).status_code == 422
+
+
+def test_the_migration_leaves_an_existing_persons_bot_name_unchanged(client):
+    """THE POINT OF MIGRATING RATHER THAN DELETING. Somebody who set a name in chat keeps it, and
+    somebody who set one on the calendar screen keeps THAT — the import never changes the name a
+    person's bot shows up as, in either direction."""
+    # (a) a person whose only name was in the workspace file: it arrives, and the bot keeps it
+    uid_a, _ha = _user(client, "only-chat@vexa.ai")
+    r = client.post(f"/internal/users/{uid_a}/settings/import", headers=_internal(),
+                    json={"bot_name": "Scribe", "timezone": "Europe/Lisbon"})
+    assert r.status_code == 200, r.text
+    assert r.json()["imported"]["bot_name"] == "Scribe"
+    assert client.get(f"/internal/users/{uid_a}/bot-context",
+                      headers=_internal()).json()["bot_name"] == "Scribe"
+
+    # (b) a person who already had one on the calendar side: the import does NOT overwrite it
+    uid_b, hb = _user(client, "already-named@vexa.ai")
+    client.put("/user/settings", headers=hb, json={"bot_name": "Calendarius"})
+    r = client.post(f"/internal/users/{uid_b}/settings/import", headers=_internal(),
+                    json={"bot_name": "Scribe"})
+    assert r.json()["kept"] == ["bot_name"]
+    assert client.get(f"/internal/users/{uid_b}/bot-context",
+                      headers=_internal()).json()["bot_name"] == "Calendarius"
+
+    # (c) re-running the migration changes nothing
+    before = client.get(f"/internal/users/{uid_a}/bot-context", headers=_internal()).json()
+    client.post(f"/internal/users/{uid_a}/settings/import", headers=_internal(),
+                json={"bot_name": "SomethingElse"})
+    assert client.get(f"/internal/users/{uid_a}/bot-context",
+                      headers=_internal()).json() == before

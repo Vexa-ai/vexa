@@ -425,53 +425,33 @@ SETTINGS_PATH = ".settings.json"        # legacy: the file this used to write. R
 # are already three stores for that one fact (identity's `calendar_bot_name` → bot-context →
 # meeting-api's auto-join, a per-calendar override, and this file). Moving it into identity's person
 # settings would make a fourth. Held for the founder; see the PR.
-_BOT_FACT = "bot_name"
-_BOT_FACT_DEFAULT = "Vexa"
-_BOT_FACT_MEANING = "the name the notetaker shows up as in the room"
-
-
 def _settings(uid: str) -> dict:
     """This person's preferences, defaults filled in. Never raises, never empty.
 
-    The five PERSON facts come from identity; `bot_name` still comes from the workspace file, which
-    is the one thing this slice deliberately did not move."""
+    All of them come from identity now, including `bot_name` — which identity stores in
+    `users.data.calendar_bot_name`, the ONE place meeting-api already reads a person's default from
+    on both spawn paths. This server holds no vocabulary and no copy of any value."""
     st, body = _http("GET", f"{ADMIN_API}/user/settings", {"X-API-Key": _user_key(uid)})
-    out = dict(body.get("settings") or {}) if st == 200 and isinstance(body, dict) else {}
-    raw = _read_json(uid, SETTINGS_PATH, {}) or {}
-    out[_BOT_FACT] = raw.get(_BOT_FACT, _BOT_FACT_DEFAULT)
-    return out
+    return dict(body.get("settings") or {}) if st == 200 and isinstance(body, dict) else {}
 
 
 def _settings_meanings() -> dict:
     """What each setting means, from the domain that owns it — never a second copy of the list."""
     st, body = _http("GET", f"{ADMIN_API}/user/settings",
                      {"X-API-Key": _user_key(_subject() or "")})
-    means = dict(body.get("what_each_means") or {}) if st == 200 and isinstance(body, dict) else {}
-    means[_BOT_FACT] = _BOT_FACT_MEANING
-    return means
+    return dict(body.get("what_each_means") or {}) if st == 200 and isinstance(body, dict) else {}
 
 
 def _settings_set(uid: str, key: str, value):
     """Set one setting. Returns (settings, refusal-or-None) — identity owns the vocabulary AND the
     coercion, so "off"/"no"/"yes" are parsed once, there, and not in every caller."""
-    if key == _BOT_FACT:
-        raw = _read_json(uid, SETTINGS_PATH, {}) or {}
-        raw[_BOT_FACT] = str(value).strip() or _BOT_FACT_DEFAULT
-        _write_json(uid, SETTINGS_PATH, raw)
-        return _settings(uid), None
     st, body = _http("PUT", f"{ADMIN_API}/user/settings", {"X-API-Key": _user_key(uid)},
                      {key: value})
     if st == 422 and isinstance(body, dict):
-        detail = body.get("detail")
-        if isinstance(detail, dict):
-            detail.setdefault("the_settings_that_exist", {})[_BOT_FACT] = _BOT_FACT_MEANING
-        return _settings(uid), detail
+        return _settings(uid), body.get("detail") if isinstance(body.get("detail"), dict) else body
     if st != 200:
         return _settings(uid), {"refused": "identity could not be reached", "status": st}
-    return _settings(uid), None
-
-
-_TZ_FILE = HOME / ".storm/user-timezones.json"
+    return dict((body or {}).get("settings") or {}), None
 
 
 def _person_tz(uid: str, set_to: str = "") -> str:
@@ -3778,13 +3758,20 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
     # resolved ONCE: the request and the sentence we say back must name the same bot. An
     # earlier cut resolved it inline and left the reply reading the raw empty parameter —
     # "the bot is at the door as ''".
-    bot_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
+    # NO DEFAULT RESOLVED HERE. An explicit name passes through; an absent one is meeting-api's to
+    # fill from the person's own default, which it reads from identity on every spawn path. This
+    # line used to read a workspace file, and that is how one fact came to have three stores.
+    bot_name = bot_name or ""
     # What the sentence CALLS the meeting. The url is the only name we reliably have here, and it
     # is the one the person just handed us — so it reads back as theirs rather than as an id.
     title_for_say = (meeting_url or "").strip() or f"{platform}/{mid}"
+    # What the room will actually see, resolved ONCE by the domain that decides it, so the sentence
+    # we say back and the name on the bot cannot differ.
+    said_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
     st, r = _gw_http(uid, "POST", "/bots",
                      {"platform": platform, "native_meeting_id": mid,
-                      "meeting_url": meeting_url.strip(), "bot_name": bot_name})
+                      "meeting_url": meeting_url.strip(),
+                      **({"bot_name": bot_name} if bot_name else {})})
     if st not in (200, 201):
         if st == 409:
             return json.dumps({"already_there": True,
@@ -3826,8 +3813,8 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
     # be fixed with an instruction — the tool was offering the link, labelled for exactly that use.
     # The panel is moved by the harness on this result; the sentence says what is about to happen.
     say = {
-        "in_call": f"The bot is in the call as '{bot_name}' — the transcript is beside this chat.",
-        "knocking": f"The bot is at the door of {title_for_say} as '{bot_name}'. Someone in the "
+        "in_call": f"The bot is in the call as '{said_name}' — the transcript is beside this chat.",
+        "knocking": f"The bot is at the door of {title_for_say} as '{said_name}'. Someone in the "
                     f"meeting has to let it in, same as any guest; the transcript opens beside "
                     f"this chat when it is admitted.",
         "failed": "The bot could not stay in the call. That is ours, not yours — I have "

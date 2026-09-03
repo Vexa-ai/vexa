@@ -35,7 +35,12 @@ VOCAB: Dict[str, Tuple[Any, str, str]] = {
                      "the day-before prepare email for upcoming meetings"),
 }
 
-MEANINGS = {k: v[2] for k, v in VOCAB.items()}
+#: The bot default: settable through this door, stored in the ONE place meetings already reads.
+BOT_NAME_KEY = "bot_name"
+BOT_NAME_STORE = "calendar_bot_name"
+BOT_NAME_MEANING = "the name the notetaker shows up as in the room"
+
+MEANINGS = {**{k: v[2] for k, v in VOCAB.items()}, BOT_NAME_KEY: BOT_NAME_MEANING}
 DEFAULTS = {k: v[0] for k, v in VOCAB.items()}
 
 _TRUE = ("on", "true", "yes", "1")
@@ -50,23 +55,42 @@ class Refused(ValueError):
         self.detail = detail
 
 
+def read_person_facts(data: dict | None) -> dict:
+    """The five PERSON facts, and only those — what flows reads over the internal edge.
+
+    `bot_name` is excluded deliberately: it is a fact about the bot, meetings resolves it on the
+    spawn path, and serving it here would invite exactly the second reader this move removed."""
+    out = read(data)
+    out.pop(BOT_NAME_KEY, None)
+    return out
+
+
 def read(data: dict | None) -> dict:
     """This person's settings, defaults filled in. Never raises, never empty, never a missing key.
 
     A caller that has to tell "unset" from "off" will get it wrong eventually, and the wrong way
     round is a person who quietly stops receiving their minutes."""
-    raw = (data or {}).get(DATA_KEY) or {}
+    data = data or {}
+    raw = data.get(DATA_KEY) or {}
     out = dict(DEFAULTS)
     if isinstance(raw, dict):
         out.update({k: v for k, v in raw.items() if k in VOCAB})
+    # From the ONE store, not from a copy of it here.
+    out[BOT_NAME_KEY] = data.get(BOT_NAME_STORE) or "Vexa"
     return out
 
 
-def coerce(key: str, value: Any) -> Any:
+def coerce(key: str, value: Any) -> Any:  # noqa: C901
     """One value, validated in the domain that owns it — so there is ONE parser, not one per caller.
 
     The MCP tool passes through whatever the person said ("off", "no", "yes"), because deciding what
     those words mean is this vocabulary's job and not the tool's."""
+    if key == BOT_NAME_KEY:
+        name = str(value).strip()
+        if not name:
+            raise Refused({"refused": "bot_name cannot be empty",
+                           "give_me": "the name the notetaker should show up as"})
+        return name[:64]
     if key not in VOCAB:
         raise Refused({
             "refused": f"there is no setting called {key!r}",
@@ -101,6 +125,10 @@ def apply(data: dict | None, update: dict) -> dict:
                        "the_settings_that_exist": MEANINGS})
     cleaned = {k: coerce(k, v) for k, v in update.items()}
     out = dict(data or {})
+    # THE BOT FACT GOES TO THE BOT'S STORE. Same key meetings already reads, so a person who sets a
+    # name here and a person who sets one on the calendar screen are setting one thing.
+    if BOT_NAME_KEY in cleaned:
+        out[BOT_NAME_STORE] = cleaned.pop(BOT_NAME_KEY)
     stored = dict(out.get(DATA_KEY) or {})
     stored.update(cleaned)
     out[DATA_KEY] = stored
@@ -116,8 +144,10 @@ def plan_import(existing: dict | None, legacy: dict | None) -> tuple:
       * a key the person has ALREADY set through the new door is KEPT, never overwritten. The
         migration is re-runnable across an estate where somebody has since changed a preference,
         and a second run that clobbered it would silently undo a person's choice.
-      * `bot_name` is DROPPED. It is a fact about the bot, not the person, and importing it here
-        would make a fourth store for it.
+      * `bot_name` is IMPORTED INTO THE BOT'S OWN STORE (`calendar_bot_name`), and only when that
+        store is empty — so nobody's bot changes the name it shows up as, in either direction: a
+        person who set one on the calendar screen keeps it, and a person who only ever set one in
+        chat keeps THAT. This is the whole reason the migration exists rather than a delete.
       * an unknown key is DROPPED, not refused. A migration that stops on one odd key leaves half
         the estate on the old store, and there is no second run that fixes that.
     """
@@ -126,6 +156,16 @@ def plan_import(existing: dict | None, legacy: dict | None) -> tuple:
     imported: Dict[str, Any] = {}
     kept, dropped = [], []
     for key, value in (legacy or {}).items():
+        if key == BOT_NAME_KEY:
+            if out.get(BOT_NAME_STORE):
+                kept.append(key)
+            else:
+                try:
+                    out[BOT_NAME_STORE] = coerce(key, value)
+                    imported[key] = out[BOT_NAME_STORE]
+                except Refused:
+                    dropped.append(key)
+            continue
         if key not in VOCAB:
             dropped.append(key)
             continue

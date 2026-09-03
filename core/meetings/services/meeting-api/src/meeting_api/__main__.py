@@ -226,6 +226,11 @@ def build_production_app():
 
     app = create_app(
         transcript_store=transcript_store,
+        # The person's default bot name reaches the DIRECT spawn path too, resolved by the domain
+        # that owns the bot — same edge, same value, same precedence as the auto-join sweep.
+        fetch_bot_context=_bot_context_fetcher(
+            (os.getenv("ADMIN_API_URL") or "").rstrip("/"),
+            os.getenv("INTERNAL_API_SECRET") or ""),
         redis=segment_bus,
         meeting_repo=meeting_repo,
         runtime=runtime_client,
@@ -562,29 +567,7 @@ def _attach_background_loops(
 
         from .bot_spawn.auto_join import auto_join_tick
 
-        fetch_bot_context = None
-        if admin_api_url and internal_secret:
-            async def fetch_bot_context(user_id: int):
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        r = await client.get(
-                            f"{admin_api_url}/internal/users/{user_id}/bot-context",
-                            headers={"X-Internal-Secret": internal_secret},
-                        )
-                    if r.status_code != 200:
-                        return None
-                    body = r.json()
-                    return body if isinstance(body, dict) else None
-                except Exception:
-                    return None  # identity unreachable → the sweep skips the row this tick
-
-        async def publish_status(*, user_id, meeting_id, native_id, status, when):
-            frame = {"type": "meeting.status", "meeting_id": meeting_id,
-                     "native": native_id, "status": status, "when": when}
-            try:
-                await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
-            except Exception:
-                pass  # best-effort, like the collector's publish
+        fetch_bot_context = _bot_context_fetcher(admin_api_url, internal_secret)
 
         async def _tick():
             await auto_join_tick(
@@ -740,6 +723,33 @@ def __getattr__(name: str):
     if name == "app":
         return build_production_app()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+
+def _bot_context_fetcher(admin_api_url: str, internal_secret: str):
+    """The per-user spawn context from identity, or None when no identity edge is configured.
+
+    ONE builder for BOTH spawn paths. The auto-join sweep has taken this edge since it existed; the
+    direct `POST /bots` path did not, which is why the same person's bot showed up under one name
+    when a calendar armed it and another when they asked for it in chat. Two fetchers would be two
+    answers to one question, so there is one, here.
+    """
+    if not admin_api_url or not internal_secret:
+        return None
+    import httpx as _httpx
+
+    async def fetch(user_id: int):
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{admin_api_url}/internal/users/{user_id}/bot-context",
+                    headers={"X-Internal-Secret": internal_secret},
+                )
+            return r.json() if r.status_code == 200 else None
+        except Exception:  # noqa: BLE001 — a preference read never stops a bot joining
+            return None
+
+    return fetch
 
 
 def main() -> None:

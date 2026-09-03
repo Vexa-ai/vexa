@@ -272,27 +272,11 @@ def person_settings(uid: str) -> dict:
     return out
 
 
-#: THE ONE KEY THIS SLICE DID NOT MOVE, and it is a question rather than an oversight.
-#: `bot_name` is a fact about the BOT, and there are already THREE stores for it on this line:
-#: `users.data.calendar_bot_name` (identity → /internal/users/{id}/bot-context → meeting-api's
-#: auto-join), a per-calendar `bot_name` that overrides it (`auto_join.py:152`), and this workspace
-#: file, which only chat-dispatched bots read. Moving it into identity's person settings would make
-#: a FOURTH; pointing this line at bot-context would change which name an existing person's bot
-#: shows up as. Both are the founder's call, so this slice moves the five PERSON facts and leaves
-#: the bot fact exactly where it was — one remaining flows→agent read, named, instead of five.
-_BOT_FACT = "bot_name"
-_BOT_FACT_DEFAULT = "Vexa"
-
-
 def setting(uid: str, key: str):
-    """One preference for one person. Never raises: an unreachable identity means defaults."""
-    if key == _BOT_FACT:
-        import json as _j
-        try:
-            raw = _j.loads(ws_file(uid, ".settings.json") or "{}")
-        except Exception:  # noqa: BLE001
-            raw = {}
-        return raw.get(_BOT_FACT, _BOT_FACT_DEFAULT)
+    """One preference for one person, from identity. Never raises: unreachable means defaults.
+
+    `bot_name` IS NOT HERE, and its absence is the point: a bot default is a fact about the bot, so
+    meetings resolves it on the spawn path and no caller reads it from anywhere."""
     return person_settings(uid).get(key, _SETTING_DEFAULTS.get(key))
 
 

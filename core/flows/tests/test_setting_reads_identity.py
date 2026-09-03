@@ -8,8 +8,9 @@ without the agent domain has nobody with a timezone or a mail preference. Every 
 sends is gated on one of these values, so "no agent domain" silently became "mail everybody
 everything, in UTC".
 
-`bot_name` is NOT part of this move — see `meeting.py:395` and the PR. It is a bot fact, and it
-already has a home on the meetings side.
+`bot_name` left too, but not to here: it is a fact about the BOT, so it lives in the store meetings
+already reads (`users.data.calendar_bot_name` → `/internal/users/{id}/bot-context`) and meeting-api
+resolves it on every spawn path. No flow reads one any more.
 
 No network: the identity edge is replaced at the seam, which is this suite's idiom.
 """
@@ -60,14 +61,16 @@ def test_no_person_fact_reaches_the_agent_domain(identity):
     assert all(common.AGENT_API not in url for _m, url, _h in identity)
 
 
-def test_bot_name_is_the_one_read_this_slice_did_not_move(identity, monkeypatch):
-    """Held on purpose, not missed. There are already THREE stores for this one fact and both ways
-    of resolving it are the founder's call — so the flows->agent edge shrinks from five keys to one,
-    named, rather than being closed by picking a winner."""
+def test_a_bot_name_is_not_something_this_module_reads_at_all(identity, monkeypatch):
+    """`bot_name` LEFT. A bot default is a fact about the bot, and meeting-api resolves it from
+    identity's bot-context on every spawn path — so no flow reads one, from anywhere. Reading it
+    here is what gave one fact three stores, and the same person's bot two different names."""
     seen = []
     monkeypatch.setattr(common, "ws_file", lambda uid, path, slug=None: seen.append(path) or None)
-    assert common.setting("57", "bot_name") == "Vexa"
-    assert seen == [".settings.json"]
+    assert common.setting("57", "bot_name") is None
+    assert seen == [], "no workspace file is touched for a bot name"
+    src = (Path(__file__).resolve().parents[1] / "src" / "flows_steps" / "meeting.py").read_text()
+    assert '"bot_name"' not in src, "a step still names a bot; meetings decides that now"
 
 
 def test_the_stored_value_wins_over_the_default(identity):

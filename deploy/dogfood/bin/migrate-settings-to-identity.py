@@ -6,12 +6,17 @@ the AGENT domain. They live in identity now (`admin_api.app.person_settings`), w
 domain flows and the MCP may depend on — so a deployment without the agent domain still has people
 with a clock and a way to stop the mail.
 
+`bot_name` moves too, into the store that ALREADY existed for it: `users.data.calendar_bot_name`,
+served on `/internal/users/{id}/bot-context`, which meeting-api reads on both spawn paths. NOBODY'S
+BOT CHANGES THE NAME IT SHOWS UP AS — that is the whole reason this is a migration and not a delete.
+A person who only ever set a name in chat keeps it; a person who set one on the calendar screen
+keeps THAT, and the import reports it under `kept` rather than overwriting it.
+
     python3 migrate-settings-to-identity.py --dry-run          # say what it would do
     python3 migrate-settings-to-identity.py                    # do it
 
 It is IDEMPOTENT: the import route keeps any key the person has already set through the new door,
-so re-running it cannot undo somebody's choice. `bot_name` is DROPPED — it is a fact about the bot,
-not the person, and this move deliberately did not touch it.
+so re-running it cannot undo somebody's choice.
 
 Reads the workspaces through agent-api (the domain that owns those files) and writes through
 admin-api's internal tier. Both are read from the environment; nothing is hardcoded and no container
@@ -101,8 +106,8 @@ def main() -> int:
         moved += 1
     verb = "would move" if args.dry_run else "moved"
     print(f"\n{verb} {moved}, nothing to do for {skipped}, failed {failed}")
-    # The legacy files are LEFT IN PLACE on purpose: this is reversible until somebody deletes them,
-    # and `bot_name` — the one key that did not move — is still read from them.
+    # The legacy files are LEFT IN PLACE on purpose: nothing reads them any more, so leaving them
+    # costs nothing and keeps this reversible until somebody deletes them deliberately.
     return 1 if failed else 0
 
 

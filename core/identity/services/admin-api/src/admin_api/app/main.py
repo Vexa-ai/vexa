@@ -1215,7 +1215,8 @@ def create_app() -> FastAPI:
         is about to mail a person who is not there."""
         _check_internal(request)
         user = await _load_user(user_id, db)
-        return person_settings_mod.read(user.data if isinstance(user.data, dict) else {})
+        return person_settings_mod.read_person_facts(
+            user.data if isinstance(user.data, dict) else {})
 
 
     @app.post("/internal/users/{user_id}/settings/import", include_in_schema=False)
