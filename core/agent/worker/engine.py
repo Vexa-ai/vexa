@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import pathlib
 import logging
 import os
 import shutil
@@ -991,37 +992,12 @@ VEXA_MCP_SERVER = "vexa"
 # (a finished turn with no note fails in seconds, with the agent's own words, instead of after
 # fifteen minutes).
 #
-# The list is the MEASURED 21-tool union from deploy/dogfood/rig/TOOL-USAGE.md — every tool real
-# delegated workers called (14) or reached for by name without calling (7) across 45 sessions. It
-# is deliberately not all 53: the other 32 are the person-agent's own surface (registration,
-# identity, deeplinks, operator bot control) and a worker has no business being offered them.
-#
-# `workspace_write` is here despite measuring zero calls, and the same document says why: workers
-# write the workspace 63 times a turn through the volume mount, so the write side looks unused only
-# because it is being reached another way. A worker without the mount needs it on day one.
-#
-# A tool the server does not serve is inert in an allow-set, so this list ageing behind the server
-# costs nothing; a tool the server gains and this list lacks is still permitted by the prefix on
-# the first line. It degrades in both directions.
-VEXA_MCP_TOOLS = (
-    # called by real workers, most-used first
-    "whats_waiting", "meeting_transcript", "meetings_list", "workspace_tree", "workspaces",
-    "bot_send", "bot_stop", "meeting_info", "company_context", "workspace_new", "workspace_read",
-    "report_friction", "flows_list", "propose",
-    # reached for by name but never successfully called — the same surface, one step later
-    "flow_lifecycle", "flows_submit", "start_onboarding", "validate", "vexa_overview",
-    "workspace_purpose", "mark_scaffolded",
-    # the write side, unused only because the volume mount hides it
-    "workspace_write",
-    # decision 24: the ONE call that turns something learned into a page. Named here
-    # rather than left to the prefix because the write-back phase is only as reliable
-    # as the tool being present without a search step (see the deferral note above).
-    "entity_upsert",
-    # decision 35: the transcript's chips. Named for the same reason `entity_upsert` is — the
-    # `highlight` preset's whole turn is two calls to this one tool, and a turn that has to search
-    # for its only verb is a turn that answers with an apology.
-    "transcript_terms",
-)
+# The list is DATA, in this domain: `core/agent/worker/mcp_tools.v1.json`. Everything that used to
+# be written in comments here — why `workspace_write` is in it on zero measured calls, why
+# `entity_upsert` and the transcript chips are named rather than left to the prefix, and why the
+# list degrades safely in both directions — is in that file, beside the values it explains.
+VEXA_MCP_TOOLS = tuple(json.loads(
+    pathlib.Path(__file__).with_name("mcp_tools.v1.json").read_text(encoding="utf-8"))["tools"])
 
 
 def room_run() -> str:

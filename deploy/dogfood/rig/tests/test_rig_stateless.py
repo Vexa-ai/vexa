@@ -21,7 +21,7 @@ from __future__ import annotations
 import pathlib
 import re
 
-RIG = pathlib.Path(__file__).resolve().parents[3] / "deploy/dogfood/rig/vexa_control_mcp.py"
+RIG = pathlib.Path(__file__).resolve().parents[1] / "vexa_control_mcp.py"
 
 
 def _src() -> str:

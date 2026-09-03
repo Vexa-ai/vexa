@@ -858,7 +858,7 @@ def build(reg: Registry, db) -> None:
         PLACEHOLDER WORDING — the founder has not chosen these words.
 
         CURRENTLY UNREFERENCED (2026-09-02). The attendee mail was its only caller, and its head
-        is now the founder's own file (`deploy/dogfood/mail/attendee-head.md`) — this sentence is
+        is now the founder's own file (`behavior/mail/attendee-head.md`) — this sentence is
         not in it. Kept, not deleted, because it is the only place the deployment's own mailbox
         address is turned into prose: putting the offer back is one `{{mailbox}}` token in that
         file plus one entry in the `values` dict handed to `mailtext.render`, and deleting this
@@ -1023,7 +1023,7 @@ def build(reg: Registry, db) -> None:
                 f"against (got {mid!r} from the row and refs). Every attendee link would resolve "
                 "to a meeting the reader cannot see.", retryable=False)
         # THE HEAD AND THE SUBJECT COME OUT OF ONE READER. `mailtext.render` is the contract
-        # `deploy/dogfood/mail/README.md` states for this whole directory: the live text is
+        # `behavior/mail/README.md` states for this whole directory: the live text is
         # `_global/mail/attendee-head.md` — git-backed, admin-writable, mounted into every worker
         # — falling back to the identical baked default in `flows_steps/mailtext.py`, and the
         # `subject:` / `---` header is PARSED rather than mailed.
