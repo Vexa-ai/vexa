@@ -58,8 +58,8 @@ This is the cheapest way to check that a key is live and which scopes it holds. 
 
 ## Model configuration
 
-The account's LLM settings, used by the [agent control plane](/api/agent) and meeting-time
-summarization.
+The account's LLM settings, used by the [agent control plane](/api/agent). There is one model —
+the agent's — so there is one model dial.
 
 ```bash GET /user/models
 curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
@@ -69,8 +69,9 @@ curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
 {
   "mode": "custom",
   "model": "gpt-4o",
-  "meeting_model": "gpt-4o-mini",
   "base_url": "https://api.example.com/v1",
+  "effort": "medium",
+  "runner": "claude-code",
   "api_key_set": true,
   "api_key": "********1f4c"
 }
@@ -93,10 +94,8 @@ Returns the same masked shape as the read, with **200 OK**.
   returns **422**. See [Model credentials & licensing](/model-credentials-licensing).
 </ParamField>
 <ParamField body="model" type="string">
-  Model name for general agent work.
-</ParamField>
-<ParamField body="meeting_model" type="string">
-  Model name for meeting-time work, when it should differ from `model`.
+  Model name for agent work. A name outside the deployment's allowlist is dropped back to the
+  deployment default at dispatch time rather than rejected here.
 </ParamField>
 <ParamField body="base_url" type="string">
   OpenAI-compatible endpoint. Must be an `http` or `https` URL with a hostname, or the request
@@ -105,10 +104,30 @@ Returns the same masked shape as the read, with **200 OK**.
 <ParamField body="api_key" type="string">
   Credential for that endpoint. Stored, never echoed in the clear.
 </ParamField>
+<ParamField body="extra_body" type="string">
+  Request fields the OpenAI dialect cannot express, as a JSON string — a self-hosted vLLM/Qwen
+  endpoint returns no valid JSON until thinking is disabled with
+  `{"chat_template_kwargs": {"enable_thinking": false}}`. Write-only: it is stored and applied, and
+  the read-back above does not echo it.
+</ParamField>
+<ParamField body="effort" type="string">
+  The reasoning-effort pin — `low`, `medium`, `high` or `xhigh`. Unset leaves the harness's own
+  default.
+</ParamField>
+<ParamField body="runner" type="string">
+  Which harness runs this account's workspace turns: `claude-code`, `codex` or `openai-agent`. Stored
+  as an opaque slug — an unknown one is dropped back to the deployment default at dispatch, not
+  refused here.
+</ParamField>
+
+Only three things return **422** on this write: a `mode` outside `subscription`/`custom`, a `base_url`
+that is not an `http(s)` URL with a hostname, and any field over 2,048 characters. `effort` and
+`runner` are not validated against a list at this tier, and an unrecognized field name is ignored
+rather than refused.
 
 The update is **partial**: only the fields present in the body change. Sending a field as an empty
 string clears it, and a cleared field falls back to the deployment default. Clearing every field
-removes the account override entirely. String fields longer than 2,048 characters return **422**.
+removes the account override entirely.
 
 ## Transcription backend
 
@@ -272,7 +291,7 @@ These have no settings endpoint today. They are listed so you can stop looking f
 | `401` | all | API key missing, unknown, or revoked. |
 | `403` | all | The key does not carry a scope this route accepts. |
 | `404` | admin patch | No account with that id. |
-| `422` | model, transcription, webhook writes, admin patch | Invalid `mode`, a non-`http(s)` URL, a string over 2,048 characters, an out-of-range `limit`, or an unrecognized field. |
+| `422` | model, transcription, webhook writes, admin patch | Invalid `mode`, a non-`http(s)` URL, a string over 2,048 characters, an out-of-range `limit`, or a field the admin patch does not recognize. |
 | `503` | all | Identity resolution is unavailable — the key was not rejected, it could not be checked. |
 
 See the full [error reference](/api/errors).

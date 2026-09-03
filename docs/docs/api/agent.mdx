@@ -31,21 +31,33 @@ canonical prefix **`/agent/*`**. The gateway resolves your
 that header (P20). A `subject` in a request body or query string is **ignored** — never trust the client
 for identity. The `$AGENT_API/api/...` paths below address the internal service directly (which requires
 `X-User-Id`); through the gateway the same routes are `$API_BASE/agent/...` with `X-API-Key`.
+
+The proxy maps `/agent/<path>` onto agent-api's `/api/<path>`, so **only the `/api/*` routes have a
+gateway path.** `POST /invocations`, `POST /events`, `GET /health` and `POST /internal/scaffolds` are
+reachable on the internal service only.
 </Note>
 
 ## Health
 
 ```bash GET /health
-curl "$AGENT_API/health"   # → {"status":"ok","service":"agent-api","checks":{"dispatcher":true}}
+curl "$AGENT_API/health"   # → {"status":"ok","service":"agent-api","checks":{"dispatcher":true},"capabilities":{...}}
 ```
+
+`503` with `"status":"degraded"` when the dispatcher is not wired. `capabilities` carries the agent
+plane's config tri-states and never affects `status` or the status code — an unconfigured capability
+degrades a feature, not the process.
 
 ## Models
 
-`GET /api/models` → the resolved model names for this subject:
+`GET /api/models` → the one model this subject runs, under both keys:
 
 ```json
-{ "chat_model": "...", "agent_model": "...", "streaming_model": "...", "meeting_model": "..." }
+{ "chat_model": "...", "agent_model": "..." }
 ```
+
+**Removed in 0.12** — `streaming_model` and `meeting_model`. They named the in-product inference
+pipeline, which no longer exists: Vexa makes no model calls of its own beside the agent, so there is
+one model left and both keys carry it.
 
 ## Dispatch a unit
 
@@ -138,7 +150,10 @@ ask about a meeting with `POST /api/chat`, passing
 
 `GET /api/workspace/tree?hidden=` → `{ "files": ["kg/entities/..."] }` ·
 `GET /api/workspace/file?path=` → `{ "path": "...", "content": "..." }` (`404` if absent) ·
+`PUT /api/workspace/file` `{ path, content, slug? }` → `{ "path": "...", "written": true }` (commits;
+`kg/templates/` is refused `403`, and `_global` needs the admin allowlist) ·
 `GET /api/workspace/git` → `{ branch, changes, commits }` ·
+`GET /api/workspace/git/show?sha=&path=&slug=` → the unified diff of one commit ·
 `POST /api/workspace/upload` (multipart `files`, ≤25 MB each) → `{ "files": [{ name, path }] }` ·
 `POST /api/workspace/init` → `201` `{ workspace, seeded, already_initialized }` (idempotent) ·
 `GET /api/workspace/attached` → `{ active, parked }` ·
@@ -146,3 +161,192 @@ ask about a meeting with `POST /api/chat`, passing
 workspace (parks the current one; omit `repo` to swap back to the seed).
 
 (All workspace routes derive `subject` from `X-User-Id` — no `subject` query parameter.)
+
+## Workspace identity and links
+
+A workspace's id lives **in the workspace** — `.vexa/workspace.json`, ten characters of lowercase
+base32 — and the server registry is the derived half, rebuildable by walking the root. Links are
+written `[[ws:<workspace-id>/<entity-id>]]` with one canonical URL `/w/<workspace-id>/<path>`, so
+renaming either the workspace or the page leaves them resolving.
+
+`GET /api/workspaces/by-slug/{slug}` · `GET /api/workspaces/{workspace_id}` →
+`{ id, name, kind, slug, access, writable }`, from this reader's point of view. `access` is
+`readable` · `not-yours` · `gone`, and neither route 404s or 403s: a workspace you cannot see is an
+**answer**, not an error, and a `gone` record still carries its last known name so a dead link renders
+as its own title.
+
+`POST /api/workspaces/{workspace_id}/rename` `{ name }` → the same view plus `renamed_from`. A group's
+owner and instance admins only — `403` otherwise, including for a desk's own owner; `404` unknown id,
+`400` empty name. The rename is audited on the record.
+
+`POST /api/links/resolve` `{ refs: [...], slug? }` →
+`{ "results": [{ ref, title, url, access, workspace, writable }] }` — a whole page of refs in one round
+trip, capped at 200. A readable ref with no file yet adds `missing: true` and still returns a `url`; a
+resolved one adds `path` and `slug`.
+
+`POST /api/desk/touch` `{ workspace, path }` → `202 { "recorded": true|false }`. The touch is filed
+under the **caller's own** desk, never a workspace named in the body; a workspace this caller cannot
+read answers `recorded: false` rather than confirming it exists. `400` without both fields.
+
+## Entities
+
+`POST /api/workspace/entity` — the one write that makes a knowledge-graph page. Body
+`{ kind, name, facts?, source?, summary?, fields?, section?, connections?, open_questions?, dates?, slug? }`;
+`kind` is `person` · `company` · `meeting` · `project` · `decision`, and `slug` names the **workspace**
+to write into (default: the caller's own). It renders `kg/entities/<kind>/<slug>.md` as a card, writes
+the reciprocal `## Connected` chips on the other page, refreshes `kg/INDEX.md`, and commits both by
+pathspec.
+
+Returns the upsert result — `path`, `created`, `changed`, `facts_written`, `links_resolved`,
+`links_missing`, `links_rewritten`, `back_links`, `filed`, `kind`, `name` — plus `index` (the index
+path) and `commit` (the sha, `null` when nothing changed). `403` for `_global`; `422` when the write is
+refused, and the refusal sentence is the product — fix the fact rather than retrying.
+
+## Rough edges
+
+`POST /api/friction` — body `{ kind?, severity?, tried?, happened?, would_help?, session?, context? }`;
+the context keys `workspace` · `path` · `meeting_id` · `scaffold_id` · `tool` · `error` · `surface` are
+also accepted flat. → `201 { id, status, recurrence, kind, known }`, where `known` is `recurrence > 1`.
+`kind` is `missing-tool` · `refusal` · `no-page` · `wrong-workspace` · `unfulfilled` · `error` · `ux` ·
+`other`; `severity` is `blocker` · `annoyance` · `papercut` · `idea`. Unknown keys are dropped, free
+text is clipped and secret-scrubbed, and identical reports fold into one row with a counter. This is
+the **one route here that files without an identified caller** — `X-User-Id` is recorded when present
+and never required.
+
+`GET /api/friction/dump?since=&status=open&format=md` → `text/markdown`; `format=json` returns
+`{ since, status, count, findings, records }` from the same renderer.
+
+`POST /api/friction/{friction_id}/fix` `{ fix_ref }` → `{ id, status, fix_ref }`. `fix_ref` is any
+reference a reader can follow — a sha, a PR, a sentence — and is required (`400` when empty); `404` for
+an unknown id. The same edge filed again after a fix comes back as `recurring`.
+
+## Sharing, membership and invites
+
+Membership is a file in the workspace's **own git repo** — `policy/members.json`, with invite token
+hashes beside it in `policy/invites.json` — and the user-row index (`users.data.memberships[]`) is the
+derived copy, so a grant survives a database loss and travels with the tree. Roles are `owner` >
+`contributor` > `viewer`. On the invite and member routes `workspace_id` is a **query parameter**.
+
+`POST /api/workspace/{slug}/share-enable` → `{ workspace_id, promoted }`, which is what lets any
+workspace be shared after creation · `POST /api/workspace/shared/new` `{ name }` →
+`201 { workspace_id, role, name }` · `POST /api/workspace/{workspace_id}/unshare` (owner) → `{ slug }`;
+the id does not change, so links into it keep resolving and answer `not-yours` to everyone else.
+
+`POST /api/workspace/invites` `{ workspace_id, role?, expires_in_sec?, max_uses?, mode?, allowed_emails? }`
+→ `201 { id, token, role, workspace_id, expires_at, max_uses, mode, accept_path }`. `mode` is `open` or
+`restricted` (redeemable only by the listed verified emails); the token is returned **once** and only
+its sha256 is stored ·
+`GET /api/workspace/invites/preview?token=` →
+`{ workspace_id, name, purpose, role, mode, expires_at, shared_by, valid, reason }`, granting nothing
+and consuming no use (`404` for a token matching nothing) ·
+`POST /api/workspace/invites/accept` `{ token }` → the membership, in both stores; idempotent per user,
+and the token carries no workspace id — it is resolved by hash ·
+`GET /api/workspace/invites?workspace_id=` → `{ invites: [...] }`, hashes never surfaced ·
+`DELETE /api/workspace/invites/{invite_id}?workspace_id=` → `{ ok, invite_id }`.
+
+`GET /api/workspace/members?workspace_id=` → `{ members: [...] }` ·
+`POST /api/workspace/members/{member_subject}/role?workspace_id=` `{ role }` → the member record
+(owner) · `DELETE /api/workspace/members/{member_subject}?workspace_id=` → `{ ok, subject }` (owner) ·
+`POST /api/workspace/{workspace_id}/leave` → `{ ok, left }` — any role, but the last owner is refused
+`409` and must hand off or unshare · `GET /api/workspace/shared` →
+`{ memberships: [...], index_degraded }`, the **union** of both stores, with `index_degraded: true`
+when the derived index could not be read.
+
+`POST /api/workspace/shared/{workspace_id}/attach` `{ repo?, ref?, slug?, token? }` →
+`{ workspace_id, active, repo, ref, attached, cloned, parked, nested, state }` — contributor or owner
+only; the current tree is parked, and `policy/` is carried into the new one so an attach cannot lock
+the group out · `GET /api/workspace/shared/{workspace_id}/attached` → the attachment view plus `home`
+(`remote`, `url`, `branch`, `ahead`, `behind`) and `credential`, which says what kind of credential
+exists and never its value · `POST /api/workspace/shared/{workspace_id}/active` `{ active }` →
+`{ workspace_id, active }`, a per-user mount preference; membership is unchanged.
+
+## Workspace slots and the active set
+
+`GET /api/workspace/active` →
+`{ subject, active: [{ slug, repo, ref, role, path, write, primary, name }], index_degraded }` — the
+ordered set the next dispatch mounts ·
+`POST /api/workspace/activate` `{ repo?, ref?, slug?, token? }` → `{ subject, slug, changed, cloned, nested }`,
+additive: nothing else is parked ·
+`POST /api/workspace/new` `{ name? }` → `201 { subject, slug, changed, added }` (blank, seeded) ·
+`POST /api/workspace/deactivate` `{ slug }` → `{ subject, slug, changed }` — parks it, never destroys ·
+`POST /api/workspace/rename` `{ slug, name }` → the slot's display label only; the slug and parked tree
+do not move ·
+`GET /api/workspace/purpose?slug=` and `POST /api/workspace/purpose` `{ slug?, purpose }` →
+`{ purpose }`, stored in the workspace and committed so it travels when shared ·
+`POST /api/workspace/{slug}/archive` `{ archived }` → `{ slug, archived }` ·
+`DELETE /api/workspace/{slug}` → `{ slug, deleted: true }`, irreversible; the baseline is refused ·
+`POST /api/workspace/reset` `{ target }` → `{ target, reset: true }` for `personal` or `_global` (admin
+only) — the slot survives and the content returns to the seed. `_system` is never resettable.
+
+## Git remotes, deploy keys and publish
+
+Credentials are resolved **server-side** — the workspace's own deploy key, or the caller's saved token
+— and errors are scrubbed by **shape** before they leave: known token families, credentials wearing a
+URL, and any long opaque run, whether or not the caller passed the secret in.
+
+`GET /api/workspace/git-token` → `{ set, masked }` · `POST /api/workspace/git-token` `{ token? }` → the
+same shape; an empty token clears it, and the clear value is never returned ·
+`GET /api/workspace/{slug}/deploy-key` → `{ slug, public_key, fingerprint, add_as }` (`public_key` is
+`null` until one is generated; the private half has no read path at all) ·
+`POST /api/workspace/{slug}/deploy-key` `{ repo? }` → the key plus where to add it, idempotent, so a key
+already added to a repository is never invalidated.
+
+`GET /api/workspace/git-remote-status?slug=` → `{ has_home, remote, url, branch, tracked, ahead, behind }`
+— no network, no token ·
+`POST /api/workspace/push` `{ slug?, token? }` → `{ remote, url, branch, head_sha }`, fast-forward only,
+never a force push; `400` when no credential resolves, naming the deploy-key route ·
+`POST /api/workspace/pull` `{ slug?, token? }` → `{ remote, url, branch, head_sha, updated, behind_before }`;
+a divergence is refused rather than merged, rebased or forced, and on a shared workspace a viewer is
+refused because a pull rewrites the tree ·
+`POST /api/workspace/publish` `{ repo_name?, private?, org?, remote_url?, slug?, token? }` →
+`{ repo_url, pushed_ref, head_sha, created }` — `409` if the repo already exists, `502` on a push
+failure, `400` with no token passed and none saved.
+
+## The company layer
+
+`GET /api/global/state` →
+`{ global_setup, company, present, missing_files, reasons, is_repo, commits, ready_to_accept, you_are_admin, gate_sentence }`.
+Readable by any authenticated subject: someone refused at the door is told the instance is mid-setup
+rather than that they are broken. `company` is `null` until the gate is down.
+
+`POST /api/global/ready` `{ author_email?, author_name? }` →
+`{ accepted, global_setup, company, service, commit, files }`. Admin only (`403`) and idempotent; it
+reads the files and commits them itself — nothing may mark itself ready. A layer that is not ready
+answers `409 { accepted: false, missing_files, reasons, next }`.
+
+## Scaffolds
+
+`POST /api/scaffolds/hand` `{ preset, meeting? }` → `201 { id, url }`. `preset` is a **name** in
+`_global/asks/`, never prompt text; the recipient is the signed-in caller, and there is no `who` field;
+`meeting` must be a row this caller can open. `400` unknown preset, `401` no subject, `404` a meeting
+that is not theirs, `409` a session carrying no address, `503` when `VEXA_UI_URL` is unset.
+
+`GET /api/scaffolds/{scaffold_id}` → the record as its recipient, with the opening already substituted
+server-side: `id`, `kind`, `who`, `meeting`, `native`, `phase`, `workspaces`, `refs`, `opening_preset`,
+`opening_label`, `opening_text`, `tabs`, `focus`, `header`, `provenance`, `provenance_line`,
+`minted_at`, `redeemed_at`, `redeemed_by`. Marks the record redeemed on first read. `404` for an
+unknown id **and** for one that is not yours — the id is a capability, so a `403` would confirm it
+exists; `409` when the preset it was minted against has been deleted.
+
+`GET /api/scaffolds?pending=` → `{ scaffolds: [...] }`, indexed by the caller's gateway-injected
+address. No address → an empty list, never every scaffold on the instance. (A `mine` parameter is
+accepted and has no effect — the listing is always the caller's own.)
+
+`POST /internal/scaffolds` is internal — it is not under `/api/`, so it has no gateway path.
+
+## Admin and config probes
+
+`GET /api/admin/overview` → `{ workloads, meetings }`, each replaced by `workloads_error` /
+`meetings_error` when that section fails · `POST /api/admin/probe` → the transcription-pipeline smoke
+probe (gateway → meeting-api → runtime → redis carriers → relay); POST because it writes and reads
+scratch keys. Both are **internal tier**: the caller sends `X-Internal-Secret` matching
+`VEXA_INTERNAL_API_SECRET`, and an unconfigured secret means nobody gets in (`403`), whichever ingress
+they arrive on.
+
+`GET /api/models/test` → `{ ok, summary, mode, config }`. Tests the caller's **effective** credentials
+now: `custom` makes a real one-token completion against the endpoint, `subscription` checks the mounted
+credentials for expiry. `config` echoes only `mode`, `model` and `base_url`.
+
+`GET /api/transcription/test` → `{ ok, summary, source }` (plus per-failure detail). Probes the
+effective STT backend with its token and then a real transcribe, so a zero-balance account fails here
+rather than on every segment; `source` says whether settings or the deployment env was tested.
