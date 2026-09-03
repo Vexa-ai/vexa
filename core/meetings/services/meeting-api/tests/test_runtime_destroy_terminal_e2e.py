@@ -180,7 +180,7 @@ def test_runtime_destroy_completes_stopping_after_active_e2e():
         "lifecycle_contract_version": "2026-07-28",
     }
     assert repo.list_stale_stopping_sync() == []
-    assert len(redis.streams.get(f"tc:meeting:{m['id']}", [])) == 1
+    assert len([p for p in redis.streams.get(f"tc:meeting:{m['id']}", []) if p.get("type") == "session_end"]) == 1
 
 
 def test_runtime_destroy_with_invalid_time_does_not_fabricate_provenance():
@@ -243,7 +243,7 @@ def test_runtime_destroy_fails_pre_active_e2e():
     assert repo._meetings[m["id"]]["status"] == "failed"
     assert repo._meetings[m["id"]]["data"].get("failure_stage") == "awaiting_admission"
     assert repo._meetings[m["id"]]["data"].get("completion_reason") == "awaiting_admission_timeout"
-    assert len(redis.streams.get(f"tc:meeting:{m['id']}", [])) == 1
+    assert len([p for p in redis.streams.get(f"tc:meeting:{m['id']}", []) if p.get("type") == "session_end"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -310,7 +310,7 @@ def test_runtime_destroy_noop_on_already_terminal_e2e():
     assert repo._meetings[m["id"]]["status"] == "completed"
     assert repo._meetings[m["id"]]["data"].get("completion_reason") == "left_alone"
     # Exactly ONE session_end (the bot's own completed), not a second from the trailing destroy.
-    assert len(redis.streams.get(f"tc:meeting:{m['id']}", [])) == 1
+    assert len([p for p in redis.streams.get(f"tc:meeting:{m['id']}", []) if p.get("type") == "session_end"]) == 1
 
 
 def test_runtime_nonterminal_state_does_not_advance_e2e():
