@@ -514,6 +514,43 @@ def test_watchdog_stays_quiet_when_the_worker_acks(monkeypatch):
     assert len(rt.spawned) == 1  # no respawn
 
 
+class _AliveFakeRuntime(_FakeRuntime):
+    """A worker that is genuinely ALIVE and simply never acks — the wedged case F161's fix must
+    keep honest. Unlike `_FakeRuntime` (`await_done` → "completed", i.e. gone), this one always
+    reports "running", so `_workload_gone()` is False for the whole watch window."""
+
+    def await_done(self, workload_id, timeout_sec=0.0):
+        return "running"
+
+
+def test_watchdog_still_warns_when_a_worker_is_alive_but_never_acks(monkeypatch, caplog):
+    """The turn-ack-before-writeback fix (engine.serve — the trailer now runs in the background so
+    a queued message's ack no longer waits on the PREVIOUS turn's write-back) must not have bought
+    its speed by weakening this detector. A unit that is truly wedged — alive, per the runtime, and
+    never emits `turn-accepted` at all — still has to trip the deadline warning: `_workload_gone()`
+    is checked every poll regardless of the overall deadline (dispatch.py's own comment on
+    `_watch_delivery`), so raising or removing this warning would be the actual regression, not
+    fixing it. No engine.py change is exercised here — this proves the (unchanged) dispatcher-side
+    detector is still honest."""
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_DEADLINE_SEC", 0.3)
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_POLL_SEC", 0.05)
+    import time as _time
+
+    rt = _AliveFakeRuntime()
+    warm = _WarmFake()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), warm_stream=warm)
+    with caplog.at_level("WARNING", logger="agent_api.dispatch"):
+        d.dispatch(VALID_INV)          # nothing ever acks this on the (fake) out topic
+        deadline = _time.monotonic() + 2.0
+        while _time.monotonic() < deadline:
+            if any("no turn-accepted within" in r.message for r in caplog.records):
+                break
+            _time.sleep(0.02)
+    assert any("no turn-accepted within" in r.message for r in caplog.records), \
+        "a genuinely wedged (alive, silent) unit must still trip the ack-deadline warning"
+    assert len(rt.spawned) == 1  # alive ⇒ never respawned, per _workload_gone()
+
+
 def test_message_dispatch_stamps_the_chat_idle_window():
     rt = _FakeRuntime()
     settings = load_settings()

@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -1515,7 +1516,36 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     is the evidence the dispatcher's warm-delivery watchdog waits on: no accepted event = the
     message was NOT taken (worker exited in the race window) → the dispatcher respawns. A warm
     in-topic message carries a ``nonce`` the ack echoes so the watchdog can match ITS delivery.
+
+    F161 — THE ACK IS FOR THE QUEUE, NOT FOR THE DESK. The write-back phase's actual model call is
+    bookkeeping that trails the answer the person already read — it is not part of what the next
+    queued message is waiting on. Fired synchronously it used to hold `run_message` open for up to
+    its own ~22-37s budget (`writeback_budget`'s own docstring), during which the outer loop below
+    could not `xread` the next message at all, let alone ack it — `_ACK_DEADLINE_SEC` (dispatch.py)
+    is 10s, so any turn that triggered write-back queued its successor behind a warning that reads
+    as "something is wrong" when the truth is "the worker is still finishing the LAST turn's
+    paperwork". Fix: `run_message` (below) runs its cheap, model-free write-back PRE-PASS inline —
+    it decides in a regex, not a round trip, whether there is anything expensive to do — and only
+    when that pre-pass says yes does the model call + desk-refresh + `turn-complete` trio move to a
+    background TRAILER, so `run_message` can return immediately and the outer loop is free to
+    `xread`, ack and start the NEXT turn's main work while the trailer finishes. Every turn whose
+    pre-pass says no (by far most of them) keeps running fully synchronously — unchanged from
+    before this fix, byte for byte. Two trailers CAN overlap (a fast turn following a slow
+    write-back) — they share `_desk_lock` so the desk mutations (write-back's tool calls,
+    `refresh_desk_readme`) never interleave; nothing else about a trailer needs to block the next
+    turn. `_join_trailers()` is called before every exit path so a daemon thread killed by
+    TTL-on-idle reaping never eats a commit mid-flight.
     """
+    _desk_lock = threading.Lock()
+    _trailers: list[threading.Thread] = []
+
+    def _join_trailers() -> None:
+        """Block until every in-flight trailer has finished — called on every way `serve()` can
+        return, so idle-reap or a `stop` message can never kill a write-back mid-commit to save a
+        few seconds nobody asked to save."""
+        while _trailers:
+            _trailers.pop().join()
+
     # Mid-turn injection (VEXA_MIDTURN_INJECT=1): between output events, drain the in-topic and hand
     # arriving user messages to the RUNNING harness through its runner-neutral steering seam. Claude
     # writes stream-json to its open stdin; Codex sends turn/steer to app-server. A message the active
@@ -1609,27 +1639,63 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     if ev.get("type") == "message-delta" and ev.get("text"):
                         said.append(ev["text"])
                     stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
+
+        # F161 fix — see the module docstring above `_join_trailers`. THE PRE-PASS DECIDES WHETHER
+        # THERE IS ANYTHING EXPENSIVE TO DEFER, and it is cheap by construction (`writeback_candidates`'s
+        # own docstring: "a regex... where it used to cost two minutes of worker time") — no model
+        # call happens here, so it runs INLINE, on the turn that is about to ack the next message
+        # either way. Only when it decides write-back's actual model call WILL run does the rest of
+        # the phase move to a background trailer; every other turn (by far the common case) keeps
+        # running fully synchronously, byte-for-byte the pre-fix behaviour, which is what keeps
+        # `test_entrypoint_then_interactive_then_idle`-style ordering assumptions intact for the
+        # turns that were never the problem.
+        run_writeback = False
+        candidates: list[str] = []
         if writeback is not None:
             try:
-                candidates = (writeback_candidates(said)
-                              if should_write_back(prompt, tool_calls, upserts=upserts) else [])
-                if should_write_back(prompt, tool_calls, upserts=upserts, candidates=candidates):
+                if should_write_back(prompt, tool_calls, upserts=upserts):
+                    candidates = writeback_candidates(said)
+                run_writeback = should_write_back(prompt, tool_calls, upserts=upserts, candidates=candidates)
+            except Exception as e:  # noqa: BLE001 — the pre-pass must never cost the turn either
+                log.warning("write-back pre-pass failed on %s: %s: %s", turn_id, type(e).__name__, e)
+                run_writeback = False
+
+        def _finish_desk_and_complete() -> None:
+            """Decision 26.4's refresh + `turn-complete` — the part every turn does regardless of
+            whether write-back itself ran."""
+            try:
+                refresh_desk_readme()
+            except Exception as e:  # noqa: BLE001
+                log.warning("desk README refresh failed on %s: %s: %s", turn_id, type(e).__name__, e)
+            stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
+
+        if not run_writeback:
+            # THE FAST PATH — no thread, no lock, no deferral: this is nearly every turn.
+            _finish_desk_and_complete()
+            return
+
+        # THE TRAILER — only a turn whose write-back is actually about to spend a model round trip
+        # (up to the ~37s `writeback_budget` docstring measured) takes this path. `run_message`
+        # returns as soon as the thread starts, so the outer loop is free to `xread`/ack/start the
+        # NEXT queued message right now rather than after this turn's paperwork. Two trailers CAN
+        # overlap (a fast turn following a slow write-back) — `_desk_lock` serializes the desk
+        # mutations (write-back's tool calls, `refresh_desk_readme`) between them; nothing else
+        # about a trailer needs to block the next turn.
+        def _trailer() -> None:
+            with _desk_lock:
+                try:
                     calls, secs = writeback_budget()
                     for ev in writeback_events(bounded(writeback(candidates),
                                                        max_tool_calls=calls, max_seconds=secs)):
                         stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
-            except Exception as e:  # noqa: BLE001
-                log.warning("write-back phase failed on %s: %s: %s", turn_id, type(e).__name__, e)
-        # THE DESK, REFRESHED. Decision 26.4 — the README is the desk, so what the turn just wrote
-        # into `kg/` has to be visible on it before the turn is called complete. It is a directory
-        # listing and a regex, no model call, so it runs on EVERY turn rather than only the ones
-        # the write-back phase fired on: a turn that called `entity_upsert` itself is precisely the
-        # turn whose desk moved, and that is the one the phase's gate 2 skips.
-        try:
-            refresh_desk_readme()
-        except Exception as e:  # noqa: BLE001
-            log.warning("desk README refresh failed on %s: %s: %s", turn_id, type(e).__name__, e)
-        stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
+                except Exception as e:  # noqa: BLE001
+                    log.warning("write-back phase failed on %s: %s: %s", turn_id, type(e).__name__, e)
+                _finish_desk_and_complete()
+
+        _trailers[:] = [t for t in _trailers if t.is_alive()]  # prune before the list grows forever
+        th = threading.Thread(target=_trailer, daemon=True, name=f"trailer-{turn_id}")
+        _trailers.append(th)
+        th.start()
 
     # SKIP THE ENTRYPOINT'S OWN COPY — AND NOTHING ELSE.
     #
@@ -1686,12 +1752,14 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     while True:
         resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
         if not resp:
+            _join_trailers()  # a trailer still writing back must finish before the container reaps
             return  # idle → exit 0 → container reaped
         for _name, entries in resp:
             for entry_id, fields in entries:
                 cursor[0] = entry_id
                 msg = json.loads(fields.get("turn", "{}"))
                 if msg.get("type") == "stop":
+                    _join_trailers()
                     return
                 n += 1
                 run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor)
