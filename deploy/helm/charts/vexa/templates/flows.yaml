@@ -64,6 +64,12 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            # THE TERMINAL'S PUBLIC ORIGIN — required now, because it goes into every link this
+            # deployment mails. It used to default to a localhost port, which is a dead button in
+            # every deployment that is not a laptop. `terminal.publicUrl` when an ingress fronts
+            # it; the in-cluster service otherwise, which is at least reachable from inside.
+            - name: VEXA_UI_URL
+              value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             - name: VEXA_FLOWS_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
@@ -100,10 +106,18 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            - name: VEXA_FLOWS_GATEWAY_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             - name: VEXA_FLOWS_AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            # THE TERMINAL'S PUBLIC ORIGIN — required now, because it goes into every link this
+            # deployment mails. It used to default to a localhost port, which is a dead button in
+            # every deployment that is not a laptop. `terminal.publicUrl` when an ingress fronts
+            # it; the in-cluster service otherwise, which is at least reachable from inside.
+            - name: VEXA_UI_URL
+              value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             - name: VEXA_FLOWS_ADMIN_KEY
               valueFrom:
                 secretKeyRef:

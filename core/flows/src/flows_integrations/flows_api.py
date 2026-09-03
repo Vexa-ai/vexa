@@ -45,6 +45,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, retry, wake  # noqa: E402
+import flows_config  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
 from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
@@ -100,6 +101,7 @@ def _timeline_key() -> str:
 TIMELINE_KEY = _timeline_key()
 # The internal-tier identity, refused the same way and for the same reason. Read at import so an
 # unconfigured deployment stops HERE rather than at the first post-meeting run.
+flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
 INTERNAL_SECRET = require_internal_secret()
 
 db = postgres_db(db_url())

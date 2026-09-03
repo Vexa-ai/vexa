@@ -62,11 +62,32 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "a read-only key that opens the timeline projection and nothing else. Unset = only the "
         "operator key opens it."),
 
-    # ── service endpoints ───────────────────────────────────────────────────
-    "VEXA_FLOWS_GATEWAY_URL": ("defaulted", "http://localhost:18056", "the meetings gateway."),
-    "VEXA_FLOWS_AGENT_API_URL": ("defaulted", "http://localhost:18100", "agent-api's internal tier."),
-    "VEXA_FLOWS_ADMIN_API_URL": ("defaulted", "http://localhost:18057", "admin-api's admin tier."),
-    "VEXA_UI_URL": ("defaulted", "http://localhost:18300", "where a person's own terminal lives."),
+    # ── service endpoints: THE DOORS ────────────────────────────────────────
+    #
+    # NO HOST-PORT DEFAULTS, and this is a correctness rule, not tidiness. `http://localhost:18057`
+    # is not "unconfigured" — on any host that runs more than one stack it is A DIFFERENT
+    # DEPLOYMENT'S admin-api, and a default that silently names one is worse than no default at
+    # all: found live on 2026-09-03, when a bare `pytest` run of `test_admin_user_lookup_shapes`
+    # talked to `vexa-v012`'s admin-api and read its 403 as this stack's answer. A door that is
+    # not configured must REFUSE, so the operator (or the test) is told which deployment it is
+    # missing rather than being handed somebody else's.
+    #
+    # A deployment default may name the SERVICE (`http://admin-api:8057`, which resolves only
+    # inside the deployment's own network) and lives in compose/helm, never here.
+    "VEXA_FLOWS_GATEWAY_URL": ("required-explicit", None, "the meetings gateway."),
+    "VEXA_FLOWS_ADMIN_API_URL": ("required-explicit", None, "admin-api's admin tier."),
+    "VEXA_UI_URL": ("required-explicit", None,
+                    "where a person's own terminal lives — it goes into every link we mail, so a "
+                    "localhost default is a dead button in every deployment that is not a laptop."),
+    # THE AGENT DOMAIN'S PRESENCE SIGNAL (PRD decision 40.7: *"meetings, agents and flows work
+    # independently and together in any configuration"*). `capability`, which is exactly what the
+    # class means here — unset is not a misconfiguration, it is the `no-agents` profile, and every
+    # flow step that would dispatch an agent turn reports `not_present` instead of knocking on a
+    # door that is not there. `defaulted` could not express that: a default URL asserts the domain
+    # exists, and the absence then arrives as a connection error that retries forever.
+    "VEXA_FLOWS_AGENT_API_URL": ("capability", None,
+                                 "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT "
+                                 "DEPLOYED — see flows_steps.common.domain_present."),
     "VEXA_FLOWS_DB_URL": (
         "capability", None,
         "the engine's Postgres DSN. Unset falls back to the dogfood container lookup in "
@@ -136,6 +157,51 @@ def _decl(name: str) -> tuple[str, object, str]:
         raise KeyError(
             f"{name} is not declared in flows_config.DECLARED — a key nobody declared is a key "
             "nobody can deploy. Add it to the table with its class and its why.") from None
+
+
+class ConfigError(RuntimeError):
+    """A door this deployment must name and did not (see the DOORS block above)."""
+
+
+#: The service endpoints flows reaches. `required-explicit` ones must be named by the deployment;
+#: the agent door is a capability, because its absence is a supported product configuration.
+DOOR_KEYS = ("VEXA_FLOWS_GATEWAY_URL", "VEXA_FLOWS_ADMIN_API_URL", "VEXA_UI_URL",
+             "VEXA_FLOWS_AGENT_API_URL")
+
+
+def require(name: str) -> str:
+    """The declared key, or `ConfigError` naming it. For a door: refuse rather than guess.
+
+    `get` answers "" for an unset required-explicit key, which is the right shape for a caller that
+    wants to test emptiness. A DOOR has no such caller: every use of one is about to become a URL
+    in an HTTP request, and an empty base silently produces a relative URL."""
+    _cls, _default, why = _decl(name)
+    value = get(name)
+    if not value:
+        raise ConfigError(f"{name} is unset — {why} There is no default: a host-port default names "
+                          f"whatever else happens to be listening on this machine. Set it.")
+    return value
+
+
+def missing_doors() -> list[str]:
+    """Which required doors this process cannot name. The boot preflight, and what the test asserts."""
+    out = []
+    for key in DOOR_KEYS:
+        cls, _default, _why = _decl(key)
+        if cls == "required-explicit" and not get(key):
+            out.append(key)
+    return out
+
+
+def preflight() -> None:
+    """Refuse to run with a door unnamed. Called at the entrypoints, and by anything that is about
+    to talk to a service."""
+    missing = missing_doors()
+    if missing:
+        raise ConfigError("this flows deployment cannot name " + ", ".join(missing)
+                          + " — set each to the service it should reach "
+                            "(e.g. http://admin-api:8057). There are no host-port defaults: one "
+                            "would silently address a different stack on the same host.")
 
 
 def get(name: str) -> str:

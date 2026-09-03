@@ -12,10 +12,82 @@ import urllib.request
 from typing import Optional
 from urllib.parse import quote as _q
 
-GATEWAY = os.environ.get("VEXA_FLOWS_GATEWAY_URL", "http://localhost:18056")
-AGENT_API = os.environ.get("VEXA_FLOWS_AGENT_API_URL", "http://localhost:18100")
-ADMIN_API = os.environ.get("VEXA_FLOWS_ADMIN_API_URL", "http://localhost:18057")
+import flows_config
+
 FIXTURE_TRANSCRIPT = os.environ.get("VEXA_FLOWS_FIXTURE_TRANSCRIPT", "") == "1"   # declared double
+
+#: The agent domain's door, or "" when the agent domain is not deployed (PRD decision 40.7). Read
+#: through the contract, which declares it a CAPABILITY rather than a defaulted URL — see
+#: `flows_config`'s DOORS block for why a host-port default is a correctness bug and not a
+#: convenience.
+AGENT_API = flows_config.get("VEXA_FLOWS_AGENT_API_URL")
+
+
+def domain_present(domain: str) -> bool:
+    """Is this domain deployed alongside flows? (PRD decision 40.7.)
+
+    *"We want agents service be optional, all domains must work independently and in any
+    configuration. Identity is probably the one that everyone depends on… meetings, agents and
+    flows — independently and together in any configuration."*
+
+    Presence is a CONFIGURATION FACT, never a probe: a health check would make "the agent-api is
+    restarting" and "there is no agent-api" the same answer, and the second is a supported product
+    (the `no-agents` profile — decision 40.6) while the first is an outage that must retry. The
+    signal is whether the deployment named the door.
+
+    `identity` is always present by construction — it is the one shared dependency 40.7 names, and
+    a flows deployment that cannot reach it has no subjects at all. Reads the MODULE attribute so a
+    test can set the world with one `monkeypatch.setattr`, the way this suite already does."""
+    if domain == "identity":
+        return True
+    if domain == "agent":
+        return bool((AGENT_API or "").strip())
+    return True
+
+
+class AgentDomainAbsent(RuntimeError):
+    """A helper that reaches agent-api was called in a deployment that does not run it.
+
+    THE SECOND LINE OF DEFENCE, and it should never fire: the engine answers `not_present` for a
+    step that declared `needs=("agent",)` without entering its body (PRD decision 40.7,
+    `flows/loop.tick`). This exists because the first line is a DECLARATION, and a step that
+    reaches the agent domain without declaring it would otherwise hand an empty base to urllib and
+    get `ValueError: unknown url type: '/api/workspace/file?...'` — an exception about a URL,
+    three frames from anything that names the real cause."""
+
+
+def agent_door() -> str:
+    """agent-api's base, or `AgentDomainAbsent`. Reads the MODULE attribute so a test can set the
+    world with one `monkeypatch.setattr`, the way this suite already does."""
+    base = (AGENT_API or "").strip()
+    if not base:
+        raise AgentDomainAbsent(
+            "this deployment does not run the agent domain (VEXA_FLOWS_AGENT_API_URL is unset). "
+            "A flow step that needs it must declare `needs=(\"agent\",)` so the engine answers "
+            "`not_present` instead of reaching for a door that is not there.")
+    return base.rstrip("/")
+
+
+def _door(name: str) -> str:
+    """A required door, resolved at ACCESS time and refused when unnamed (see flows_config.require).
+
+    Module ``__getattr__`` rather than a module constant: a constant binds whatever the environment
+    said at import, which is how a bare `pytest` run bound `http://localhost:18057` and talked to a
+    different stack's admin-api on the same host. Resolving at access makes an unnamed door a loud
+    refusal at the moment it would have been used, and lets a test set one without import order
+    mattering."""
+    return flows_config.require(name).rstrip("/")
+
+
+def __getattr__(name: str) -> str:                     # PEP 562
+    if name in _DOORS:
+        return _door(_DOORS[name])
+    raise AttributeError(name)
+
+
+_DOORS = {"GATEWAY": "VEXA_FLOWS_GATEWAY_URL",
+          "ADMIN_API": "VEXA_FLOWS_ADMIN_API_URL",
+          "UI_URL": "VEXA_UI_URL"}
 
 
 #: The ONE name for the internal-tier secret — the compose/helm secret key, the name admin-api,
@@ -108,10 +180,10 @@ def require_internal_secret() -> str:
             "published in this repository, so it authenticates nobody and everybody.")
     return key
 
-# Where a person's own terminal lives. Same env name the control MCP already reads, and the same
-# default — one deployment fact, one variable, never two spellings of one host. A mail that says
-# "open it here" and names a host the person cannot reach is worse than a mail with no link.
-UI_URL = os.environ.get("VEXA_UI_URL", "http://localhost:18300").rstrip("/")
+# Where a person's own terminal lives — resolved through `__getattr__` above, like the other two
+# doors. Same env name the control MCP already reads: one deployment fact, one variable, never two
+# spellings of one host. A mail that says "open it here" and names a host the person cannot reach
+# is worse than a mail with no link, which is exactly what a `localhost` default produced.
 
 
 def ui_link(**params) -> str:
@@ -129,7 +201,8 @@ def ui_link(**params) -> str:
     """
     from urllib.parse import urlencode
     q = urlencode({k: v for k, v in params.items() if v not in (None, "", [])})
-    return f"{UI_URL}/?{q}" if q else f"{UI_URL}/"
+    ui = _door("VEXA_UI_URL")
+    return f"{ui}/?{q}" if q else f"{ui}/"
 
 
 def mint_scaffold(kind: str, recipient: str, *, opening: str,
@@ -166,7 +239,7 @@ def mint_scaffold(kind: str, recipient: str, *, opening: str,
                        ("focus", focus), ("share_token", share_token), ("provenance", provenance)):
         if value not in (None, "", [], {}):
             payload[key] = value
-    code, body = http("POST", f"{AGENT_API}/internal/scaffolds",
+    code, body = http("POST", f"{agent_door()}/internal/scaffolds",
                       {"X-Internal-Secret": require_internal_secret()}, payload)
     url = body.get("url") if isinstance(body, dict) else None
     if 200 <= int(code or 0) < 300 and url:
@@ -226,7 +299,8 @@ def platform_user_id(email: str) -> str:
     # text — and was interpolated raw into an internal service path, where a `/`, a `?` or a `#`
     # re-points the request at a different route on a service that trusts this caller (R-B14).
     # agent-api's own resolver has always quoted; these two calls did not.
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/{_q(email, safe='')}", _admin_headers())
+    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/email/"
+                          f"{_q(email, safe='')}", _admin_headers())
     return str(u["id"]) if code == 200 and isinstance(u, dict) and u.get("id") is not None else ""
 
 
@@ -239,7 +313,7 @@ def ensure_platform_user(email: str) -> str:
     existing = platform_user_id(email)
     if existing:
         return existing
-    _code, u = http("POST", f"{ADMIN_API}/admin/users", _admin_headers(),
+    _code, u = http("POST", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users", _admin_headers(),
                     {"email": email, "name": email.split("@")[0].title()})
     return str(u["id"])
 
@@ -276,7 +350,8 @@ def user_api_key(uid: str) -> str:
     hit = _KEY_CACHE.get(str(uid))
     if hit and hit[1] > time.time() + 30:
         return hit[0]
-    st, tok = http("POST", f"{ADMIN_API}/admin/users/{_q(str(uid), safe='')}/tokens",
+    st, tok = http("POST", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/"
+                           f"{_q(str(uid), safe='')}/tokens",
                    _admin_headers(),
                    {"scopes": ["bot", "browser", "tx"], "expires_in": ttl})
     key = tok.get("token") or tok.get("key") if isinstance(tok, dict) else None
@@ -294,7 +369,7 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     # attacker-adjacent in exactly the way the address above is: unencoded, a `&` or a `#` in it
     # forges a second query parameter on an internal service (R-B14).
     q = f"&slug={_q(slug, safe='')}" if slug else ""
-    code, body = http("GET", f"{AGENT_API}/api/workspace/file?path={_q(path, safe='')}{q}",
+    code, body = http("GET", f"{agent_door()}/api/workspace/file?path={_q(path, safe='')}{q}",
                       {"X-User-Id": uid})
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 

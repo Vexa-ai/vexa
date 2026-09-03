@@ -7,11 +7,11 @@ from typing import Callable, Optional
 
 import logging
 
-from .model import Block, Done, StepCtx, Wait
+from .model import Block, Done, NotPresent, StepCtx, Wait
 
 _log = logging.getLogger(__name__)
 
-StepFn = Callable[[StepCtx], "Done | Wait | Block"]
+StepFn = Callable[[StepCtx], "Done | Wait | Block | NotPresent"]
 
 
 @dataclass(frozen=True)
@@ -48,18 +48,40 @@ class Registry:
     def __init__(self) -> None:
         self.flows: dict[tuple[str, int], Flow] = {}
         self.steps: dict[str, StepFn] = {}
+        # step name -> the DOMAINS its body reaches, declared at registration (PRD decision 40.7).
+        # Declarative rather than a check inside each body: a body that has to remember to ask
+        # cannot be enumerated, and the next step somebody adds will not remember.
+        self.step_needs: dict[str, frozenset[str]] = {}
         self.by_event: dict[str, list[Flow]] = {}
         # WHICH FLOWS CAME FROM THE DATABASE. Needed only to answer "is a runtime-authored version
         # shadowing the code's?" — see `shadowing_versions`. Without it the two are
         # indistinguishable here, which is precisely why the shadow was invisible.
         self.db_versions: set[tuple[str, int]] = set()
 
-    def step(self, fn: StepFn) -> StepFn:
-        name = fn.__name__
-        if name in self.steps and self.steps[name] is not fn:
-            raise ValueError(f"step name already registered: {name}")
-        self.steps[name] = fn
-        return fn
+    def step(self, fn: StepFn | None = None, *, needs: "tuple[str, ...] | list[str]" = ()):
+        """Register a step. `@reg.step` as before; `@reg.step(needs=("agent",))` also DECLARES the
+        domains the body reaches, so the engine can answer for it when one of them is not deployed
+        (PRD decision 40.7) without the body ever running."""
+        def register(f: StepFn) -> StepFn:
+            name = f.__name__
+            if name in self.steps and self.steps[name] is not f:
+                raise ValueError(f"step name already registered: {name}")
+            self.steps[name] = f
+            if needs:
+                self.step_needs[name] = frozenset(needs)
+            return f
+        return register(fn) if fn is not None else register
+
+    def rename_step(self, old: str, new: str) -> None:
+        """Re-register a step under its real name — the closure-factory idiom
+        (`reg.steps[f"open_{prefix}"] = reg.steps.pop("_open")`) moved the FUNCTION and silently
+        dropped everything else keyed by the name. There is metadata keyed by the name now."""
+        self.steps[new] = self.steps.pop(old)
+        if old in self.step_needs:
+            self.step_needs[new] = self.step_needs.pop(old)
+
+    def needs(self, step_name: str) -> frozenset:
+        return self.step_needs.get(step_name, frozenset())
 
     def flow(self, *, name: str, version: int, on: EventType, steps: list[StepFn],
              params: dict | None = None) -> Flow:

@@ -23,8 +23,31 @@ def _up(url: str) -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _up("http://localhost:18100/health"),
-                                reason="dev stack not running")
+# THE TARGET COMES FROM THE CONTRACT, and from nowhere else. This guard used to read
+# a hard-coded loopback health URL — a second, private copy of a door the config contract also
+# declared, and on 2026-09-03 the pair disagreed: a bare run reached `vexa-v012`'s admin-api on the
+# neighbouring port and read its 403 as this stack's answer. A smoke that carries its own idea of
+# where a service lives can test the wrong deployment and pass, which is worse than not running.
+#
+# Unnamed door → SKIP, never a fallback. `flows_config.require` raises for the two required doors;
+# the agent door is a capability, so an empty string there means the agent domain is not deployed
+# (PRD decision 40.7) and every agent smoke below is simply not applicable.
+import flows_config  # noqa: E402
+
+
+def _door(name: str) -> str:
+    try:
+        return flows_config.require(name).rstrip("/")
+    except flows_config.ConfigError:
+        return ""
+
+
+AGENT_API = flows_config.get("VEXA_FLOWS_AGENT_API_URL").rstrip("/")
+ADMIN_API = _door("VEXA_FLOWS_ADMIN_API_URL")
+GATEWAY = _door("VEXA_FLOWS_GATEWAY_URL")
+
+pytestmark = pytest.mark.skipif(not (AGENT_API and _up(f"{AGENT_API}/health")),
+                                reason="VEXA_FLOWS_AGENT_API_URL is unnamed, or that stack is down")
 
 # READ AT IMPORT, which is before any fixture runs — so this is the key the OPERATOR exported,
 # never the placeholder `conftest` injects for the offline suite. The admin smoke below used to
@@ -33,7 +56,7 @@ pytestmark = pytest.mark.skipif(not _up("http://localhost:18100/health"),
 # been configured correctly. A contract smoke that needs a credential runs when it is given one.
 REAL_ADMIN_KEY = (os.environ.get("VEXA_FLOWS_ADMIN_KEY") or "").strip()
 
-from flows_steps.common import ADMIN_API, AGENT_API, GATEWAY, http  # noqa: E402
+from flows_steps.common import http  # noqa: E402 — the doors above come from the contract
 
 
 def test_history_is_wrapped_in_turns_key():
@@ -61,8 +84,9 @@ def test_chat_post_is_a_stream_not_a_response():
         pass                                       # stream stayed open — the documented behavior
 
 
-@pytest.mark.skipif(not REAL_ADMIN_KEY,
-                    reason="VEXA_FLOWS_ADMIN_KEY not exported — the smoke needs this stack's key")
+@pytest.mark.skipif(not (REAL_ADMIN_KEY and ADMIN_API),
+                    reason="VEXA_FLOWS_ADMIN_KEY / VEXA_FLOWS_ADMIN_API_URL not exported — the "
+                           "smoke needs THIS stack's key and THIS stack's door")
 def test_admin_user_lookup_shapes():
     keyed = {"X-Admin-API-Key": REAL_ADMIN_KEY}
     code, u = http("GET", f"{ADMIN_API}/admin/users/email/definitely-absent@nowhere.test", keyed)
