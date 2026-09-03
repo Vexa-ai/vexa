@@ -2,7 +2,8 @@
 Every test and the storm build on this — zero domains, zero sleeps, zero network."""
 from __future__ import annotations
 
-from flows import FakeClock, SqliteDB, admit, escalate, reclaim, tick
+from flows import FakeClock, admit, escalate, reclaim, tick
+from sqlite_double import SqliteDB
 from flows_defs.defs import register_flows
 from flows_steps.fakes import FakeWorld, build_registry
 

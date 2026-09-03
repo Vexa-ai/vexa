@@ -148,7 +148,8 @@ def test_engine_restart_with_durable_db_never_repeats_effects():
     receipts honored, zero repeated effects. (The witness runner's per-process throwaway sqlite
     is the anti-pattern this test pins: state must outlive the process.)"""
     import os, tempfile
-    from flows import SqliteDB, admit, tick, reclaim
+    from sqlite_double import SqliteDB
+    from flows import admit, tick, reclaim
     from flows_defs.defs import register_flows
     from flows_steps.fakes import FakeWorld, build_registry
     from fixtures import INVITE_REFS, drain

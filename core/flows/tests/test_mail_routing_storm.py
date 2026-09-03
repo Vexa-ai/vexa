@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from flows import SqliteDB  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 from flows_integrations.mailbox import route  # noqa: E402
 from flows_steps.emailx import register_thread  # noqa: E402
 

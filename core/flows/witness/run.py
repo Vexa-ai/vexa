@@ -11,10 +11,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from flows import SqliteDB, SystemClock, admit, escalate, reclaim, status, tick  # noqa: E402
+from flows import SystemClock, admit, escalate, reclaim, status, tick  # noqa: E402
 from flows_steps.fakes import INVITE_RECEIVED, MEETING_COMPLETED  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from loopback import LoopbackWorld  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 from flows_steps.fakes import build_registry  # noqa: E402
 
 MAILPIT = ("localhost", 1025)

@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from flows import Done, EventType, Registry, SqliteDB, admit, tick  # noqa: E402
+from flows import Done, EventType, Registry, admit, tick  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 from fixtures import rig, drain  # noqa: E402
 
 

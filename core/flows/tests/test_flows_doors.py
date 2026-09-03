@@ -158,8 +158,10 @@ def test_an_unnamed_database_is_refused_rather_than_guessed(monkeypatch):
 
 
 def test_a_named_database_is_returned_unchanged(monkeypatch):
-    """The half a blanket refusal would break — including the offline dialect the whole suite and
-    `gate:health` run on."""
+    """`common.db_url()` is a thin config accessor — it returns whatever string the deployment
+    named, unchanged, and does not judge it. Dialect choice is `flows.db_from_url`'s job, one
+    layer up (Postgres only, 2026-09-03); this test would pass on any non-empty string, sqlite-
+    shaped or not — it is here to pin that `db_url()` itself never refuses or rewrites a value."""
     from flows_steps import common
-    monkeypatch.setenv("VEXA_FLOWS_DB_URL", "sqlite://")
-    assert common.db_url() == "sqlite://"
+    monkeypatch.setenv("VEXA_FLOWS_DB_URL", "postgresql+psycopg://x:y@127.0.0.1:1/flows")
+    assert common.db_url() == "postgresql+psycopg://x:y@127.0.0.1:1/flows"

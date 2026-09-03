@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from flows import SqliteDB
+from sqlite_double import SqliteDB
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING, REACTION_NOT_YOURS,
                             list_reactions, reaction_concerns)
 

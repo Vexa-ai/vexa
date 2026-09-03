@@ -30,10 +30,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlite_double import SqliteDB  # noqa: E402
 
+# UNREACHABLE Postgres DSN (port 1 is never a service) — `db_from_url` refuses anything that is
+# not Postgres-shaped, and `postgres_db` is lazy, so importing `flows_api` against this address
+# succeeds without a database running anywhere. The tests below DO touch the DB directly
+# (`fa.db.execute(...)`), so `fa.db` is swapped for a real, working `SqliteDB` right after import
+# — laziness proves the app composes with no database; the swap gives the tests one that works.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "sqlite://"}
+        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://subject-bearer:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:
@@ -45,6 +51,8 @@ finally:
             os.environ.pop(_k, None)
         else:
             os.environ[_k] = _v
+
+fa.db = SqliteDB()          # see the comment above _ENV: this file exercises the DB for real
 
 OPERATOR = fa.API_KEY
 
