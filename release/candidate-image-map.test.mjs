@@ -7,8 +7,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  FLOWS_IMAGE,
+  FLOWS_REQUIRED_FROM,
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
+  requiredImagesFor,
   BUILD_MATRIX_BY_IMAGE,
   RUNTIME_INPUTS_BY_IMAGE,
   assertNoRuntimeInputDrift,
@@ -20,17 +23,17 @@ import {
 
 const digest = (n) => `sha256:${n.repeat(64)}`;
 
-function validMap() {
+function validMap(release = "v0.12.18") {
   return {
     schema_version: 1,
-    release: "v0.12.18",
-    stable_tag: "v0.12.18",
-    candidate_tag: "v0.12.18-260723.stage2",
+    release,
+    stable_tag: release,
+    candidate_tag: `${release}-260723.stage2`,
     build_source: "1".repeat(40),
     validation_source: "2".repeat(40),
     build_run: "https://github.com/Vexa-ai/vexa/actions/runs/30033899550",
     validation_run: "https://github.com/Vexa-ai/vexa/actions/runs/30036135103",
-    images: Object.fromEntries(REQUIRED_IMAGES.map((image, index) => [
+    images: Object.fromEntries(requiredImagesFor(release).map((image, index) => [
       image,
       {
         class: PROD_DEPLOYED_IMAGES.has(image) ? "prod_deployed" : "oss_only",
@@ -174,6 +177,7 @@ test("every root-context image tracks the ignore file that shapes its inputs", (
     "vexaai/v012-agent-api",
     "vexaai/v012-meeting-api",
     "vexaai/vexa-bot",
+    FLOWS_IMAGE,
   ]) {
     assert.ok(RUNTIME_INPUTS_BY_IMAGE[image].includes(".dockerignore"), image);
   }
@@ -290,7 +294,7 @@ test("a partial build cannot silently widen beyond the validated Bot+Lite path",
   );
 });
 
-test("a release with no prior candidate map retains the full ten-image plan", () => {
+test("a release with no prior candidate map retains the full image plan", () => {
   const plan = candidateBuildPlan(null);
   assert.equal(plan.mode, "full");
   assert.equal(plan.changed_images.length, REQUIRED_IMAGES.length);
@@ -340,4 +344,119 @@ test("v0.12.26 canonical packet binds the rc.1 train candidate", () => {
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.26");
   assert.equal(map.candidate_tag, "v0.12.26-rc.1");
   assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:d0d0444e04932a911866b8e9c4e6629a7830339bafb0c76117186479f62cbffa");
+});
+
+// ── vexaai/v012-flows — the Minutes product joins the release image set (2026-09-03) ───────────
+
+test("the flows image is required from the floor release forward", () => {
+  assert.equal(FLOWS_REQUIRED_FROM, "v0.12.27");
+  assert.ok(REQUIRED_IMAGES.includes(FLOWS_IMAGE));
+  assert.ok(requiredImagesFor("v0.12.27").includes(FLOWS_IMAGE));
+  assert.ok(requiredImagesFor("v0.13.0").includes(FLOWS_IMAGE));
+  assert.ok(requiredImagesFor("v1.0.0").includes(FLOWS_IMAGE));
+  for (const older of ["v0.12.26", "v0.12.23", "v0.11.9"]) {
+    assert.equal(requiredImagesFor(older).includes(FLOWS_IMAGE), false, older);
+    assert.equal(requiredImagesFor(older).length, REQUIRED_IMAGES.length - 1, older);
+  }
+});
+
+test("a post-floor candidate map must carry the flows image", () => {
+  const doc = validMap("v0.12.27");
+  assert.ok(FLOWS_IMAGE in doc.images);
+  assert.equal(validateCandidateMap(doc, "v0.12.27").release, "v0.12.27");
+
+  const without = validMap("v0.12.27");
+  delete without.images[FLOWS_IMAGE];
+  assert.throws(() => validateCandidateMap(without), /image set mismatch/);
+});
+
+test("a pre-floor candidate map must NOT carry the flows image", () => {
+  // The frozen packets are sha256-pinned evidence; they carry ten images and must keep validating.
+  const doc = validMap("v0.12.26");
+  assert.equal(FLOWS_IMAGE in doc.images, false);
+  assert.doesNotThrow(() => validateCandidateMap(doc, "v0.12.26"));
+
+  const widened = validMap("v0.12.26");
+  widened.images[FLOWS_IMAGE] = validMap("v0.12.27").images[FLOWS_IMAGE];
+  assert.throws(() => validateCandidateMap(widened), /image set mismatch/);
+});
+
+test("flows is a multi-arch root-context build like its siblings", () => {
+  const row = BUILD_MATRIX_BY_IMAGE[FLOWS_IMAGE];
+  assert.deepEqual(row, {
+    name: "flows",
+    repository: "v012-flows",
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
+  });
+  // The build job hardcodes platforms: linux/amd64,linux/arm64 and fans out from this map, so
+  // membership IS the multi-arch shape; and the map validator demands both platforms for every
+  // image except the bot.
+  assert.equal(PROD_DEPLOYED_IMAGES.has(FLOWS_IMAGE), false);
+  const doc = validMap("v0.12.27");
+  assert.deepEqual(doc.images[FLOWS_IMAGE].platforms, ["linux/amd64", "linux/arm64"]);
+  assert.equal(doc.images[FLOWS_IMAGE].attestations, true);
+  assert.deepEqual(
+    RUNTIME_INPUTS_BY_IMAGE[FLOWS_IMAGE],
+    [".dockerignore", "core/flows", "behavior"],
+  );
+});
+
+test("a post-floor release with no prior map builds flows too", () => {
+  const plan = candidateBuildPlan(null);
+  assert.ok(plan.changed_images.includes(FLOWS_IMAGE));
+  assert.deepEqual(
+    plan.build_matrix.map(({ name }) => name).filter((n) => n === "flows"),
+    ["flows"],
+  );
+  const full = candidateBuildPlanFromChangedImages(
+    validMap("v0.12.27"),
+    requiredImagesFor("v0.12.27"),
+  );
+  assert.equal(full.mode, "full");
+  assert.ok(full.changed_images.includes(FLOWS_IMAGE));
+});
+
+test("a root .dockerignore change invalidates the flows candidate too", (t) => {
+  const repo = mkdtempSync(join(tmpdir(), "candidate-map-flows-drift-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+
+  git("init", "--quiet");
+  git("config", "user.name", "Candidate Map Test");
+  git("config", "user.email", "candidate-map-test@vexa.invalid");
+  writeFileSync(join(repo, ".dockerignore"), "node_modules\n");
+  git("add", ".dockerignore");
+  git("commit", "--quiet", "-m", "base");
+  const buildSource = git("rev-parse", "HEAD");
+  writeFileSync(join(repo, ".dockerignore"), "node_modules\n*.tmp\n");
+  git("add", ".dockerignore");
+  git("commit", "--quiet", "-m", "change build context");
+  const head = git("rev-parse", "HEAD");
+
+  const doc = validMap("v0.12.27");
+  doc.build_source = buildSource;
+  assert.deepEqual(candidateInputDrift(doc, head, repo), [
+    "vexaai/v012-agent-worker: .dockerignore",
+    "vexaai/v012-agent-api: .dockerignore",
+    "vexaai/v012-meeting-api: .dockerignore",
+    "vexaai/v012-gateway: .dockerignore",
+    "vexaai/v012-flows: .dockerignore",
+    "vexaai/vexa-bot: .dockerignore",
+  ]);
+});
+
+test("release-validate publishes and probes the flows image", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/release-validate.yml", import.meta.url),
+    "utf8",
+  );
+  // ALL_IMAGES is the promote/identity fan-out and its comment demands lockstep with the build
+  // set; every image there must also carry an identity assertion, or the `*)` arm fails the job.
+  assert.match(workflow, /ALL_IMAGES: >-[\s\S]*vexaai\/v012-flows/);
+  assert.equal(
+    (workflow.match(/vexaai\/v012-flows\)\s+probe/g) || []).length,
+    2,
+    "flows needs an identity probe on both the amd64 and arm64 legs",
+  );
 });
