@@ -4,7 +4,7 @@
  *  CENTER: dockview TABS — a "tab" host resolves each panel by params.kind via the tab registry.
  *  RIGHT (resizable/collapsible): the persistent workspace chat, grounded by the active center tab.
  *  Reuses the Phase-C ⌘K palette + keybindings; the kernel's services do the rest. */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
@@ -27,9 +27,10 @@ import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
 import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
-import { meetingsOnly } from "../app/mode";
+import { meetingsOnly, minutesOnly } from "../app/mode";
+import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 // ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {
@@ -288,7 +289,7 @@ export function Workbench() {
   // persisted "sessions" → the default), so `activeList` is never "sessions" and the chat-only branch
   // never renders. Kept (rather than ripping out its render sites) to avoid a risky pane refactor the
   // owner didn't ask for; the `=== "sessions"` guards below are dead but harmless.
-  const meetOnly = meetingsOnly();
+  const meetOnly = meetingsOnly() || process.env.NEXT_PUBLIC_NO_CHAT === "1";
   const chatOnly = !meetOnly && activeList === "sessions";
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
@@ -301,7 +302,7 @@ export function Workbench() {
     if (meetOnly || layout.store.getState().activeList !== "sessions") return;
     try {
       if (localStorage.getItem("vexa.openWorkspace")) layout.setActiveList("files");
-      else if (localStorage.getItem("vexa.openMeeting")) layout.setActiveList("meetings");
+      else if (localStorage.getItem("vexa.openMeeting") || localStorage.getItem("vexa.openMeetingRef")) layout.setActiveList("meetings");
     } catch { /* noop — a locked-down localStorage just means no early reveal */ }
     // once, on mount (a fresh page load after the redeem reload) — deps intentionally empty
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -323,6 +324,103 @@ export function Workbench() {
     window.addEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
     return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
   }, [layout]);
+
+  // A `?meeting=<platform>/<native>` deep-link (clicked in a meeting note, or the cold-load URL) →
+  // resolve the native id to its meeting row and open the canvas (transcript + recording).
+  const openMeetingByRef = useCallback((mid: string, beside = false) => {
+    // `?meeting=<id>` deep-link — the meeting ROW id. Open its canvas directly (the same tab a click
+    // in the meetings list opens); the canvas fetches its transcript/recording by that id.
+    const ref = mid.trim();
+    if (!ref) return;
+    // Two ref forms: a bare meeting ROW id, or `<platform>/<native>` (the email door links use the
+    // latter — the meeting's calendar-independent identity). Resolve either against the list.
+    const slash = ref.indexOf("/");
+    // The mapped row's `platform` is a display label ("Google Meet"), so a platform/native ref
+    // matches on the native id — unique enough for a door link; the row id remains the tab key.
+    // The list loads asynchronously and a door click resolves on a COLD dock, so an unresolved
+    // ref RETRIES for a few seconds before giving up — otherwise the race eats the landing.
+    const native = slash > 0 ? ref.slice(slash + 1) : null;
+    const find = () => {
+      const rows = liveMeetingsNow();
+      return native
+        ? rows.find((x) => (x as { native_id?: string }).native_id === native)
+        : rows.find((x) => String(x.id) === ref);
+    };
+    if (layout.store.getState().activeList === "sessions") layout.setActiveList("meetings");
+    const openRow = (m: ReturnType<typeof find>) => {
+      const id = m ? String(m.id) : (native ? "" : ref);
+      if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
+      const stashedTitle = (() => { try { const t = localStorage.getItem("vexa.openMeetingTitle"); localStorage.removeItem("vexa.openMeetingTitle"); return t; } catch { return null; } })();
+      // the emailed name wins — the row often only knows the platform·code fallback
+      const openIt = beside ? layout.openTabBeside.bind(layout) : layout.openTab.bind(layout);
+      openIt({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"), kind: "meeting", params: { meetingId: id } });
+    };
+    // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
+    // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
+    // one click away from the page's own transcript link. Fall through to the canvas otherwise.
+    const openArtifactFirst = async (m: ReturnType<typeof find>) => {
+      if (!minutesOnly() || !native) { openRow(m); return; }
+      const path = `kg/entities/meeting/${native}.md`;
+      try {
+        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+        if (r.ok) {
+          layout.openTab({ id: `doc:${path}`, title: m ? m.title.split(" — ")[0] : "Your minutes", kind: "doc", params: { path } });
+          // The click WAS the consent to set up (founder ruling 2026-08-22): start the agent on
+          // everything it can know — the artifact + transcript in the workspace, the reader's own
+          // login email — and have it ask the ONE thing it cannot infer: their position. Once per
+          // meeting door, ever; a revisit must not re-run onboarding.
+          // Once per PERSON, not per browser: the flag lives in `.system/<uid>` server-side —
+          // a fresh profile must not re-onboard a known person (witness-plan S3).
+          const kicked = `door-kickoff:${native}`;
+          const guard = await fetch(`/api/minutes/person-state?key=${encodeURIComponent(kicked)}`, { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : { set: true }))   // seam absent → fail CLOSED (no repeat)
+            .catch(() => ({ set: true }));
+          if (!guard.set) {
+            void fetch("/api/minutes/person-state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: kicked }) });
+            window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+              `[minutes-door-kickoff] A reader just arrived through the door of meeting ${native}. ` +
+              `Read kg/entities/meeting/${native}.md and kg/entities/meeting/${native}.transcript.md. ` +
+              `Their login email identifies them — infer their name from it and find them in the transcript. ` +
+              `Set up this workspace: record their identity in _system/identity.md, create person entities for the other participants, ` +
+              `and link the meeting page. From what they said in the meeting, form a HYPOTHESIS of their role. ` +
+              `Then reply briefly: greet them by name, one line on what you have set up, state your role hypothesis ` +
+              `as a guess to confirm or correct — and ask nothing else.` } }));
+          }
+          return;
+        }
+      } catch { /* no artifact page — the meeting canvas is the honest fallback */ }
+      openRow(m);
+    };
+    // An assign-link landing must show the GROUPS rail — the banner (and the decision) live
+    // there; the meeting opens in the center regardless.
+    const assigning = (() => { try { return !!localStorage.getItem("vexa.assignMeeting"); } catch { return false; } })();
+    if (assigning) layout.setActiveList("files");
+    const first = find();
+    if (first || !native) { void openArtifactFirst(first); return; }
+    // The door must NEVER land on a void: if this user has no row for the meeting the link names,
+    // mint one (dev seam; in prod the mailroom creates rows for every resolved participant at
+    // invite time) — then the retry loop below finds it.
+    if (minutesOnly()) {
+      const platform = ref.slice(0, slash);
+      const title = (() => { try { return localStorage.getItem("vexa.openMeetingTitle") || undefined; } catch { return undefined; } })();
+      void fetch("/api/minutes/ensure-meeting", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ platform, native, title }) }).catch(() => undefined);
+    }
+    let tries = 0;
+    const timer = setInterval(() => {
+      const m = find();
+      if (m || ++tries >= 10) { clearInterval(timer); void openArtifactFirst(m); }
+    }, 500);
+  }, [layout]);
+
+  useEffect(() => {
+    const onOpenMeeting = (e: Event) => {
+      const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
+      if (ref) openMeetingByRef(ref);
+    };
+    window.addEventListener(OPEN_MEETING_EVENT, onOpenMeeting);
+    return () => window.removeEventListener(OPEN_MEETING_EVENT, onOpenMeeting);
+  }, [openMeetingByRef]);
 
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
@@ -363,6 +461,50 @@ export function Workbench() {
   }, [activeTab]);
 
   const resolveFirstView = async (fresh: boolean) => {
+    // A `?meeting=<platform>/<native>` deep-link (App.tsx stashed the ref) — open that meeting's canvas
+    // directly. Explicit navigation wins over the plan below.
+    try {
+      // A `?view=` composed layout (App.tsx stashed it): open every listed pane, in order —
+      // the last one keeps focus. The composition is the sender's to decide.
+      const composed = localStorage.getItem("vexa.composedView");
+      if (composed) {
+        localStorage.removeItem("vexa.composedView");
+        // the saved-dock restore lands after this resolver — defer so the composition is
+        // applied ON TOP of (not under) whatever the dock brings back
+        await new Promise((r) => setTimeout(r, 450));
+        // the composition is authoritative: the sender decided what this view IS, so the
+        // restored dock yields to it entirely
+        try { apiRef.current?.clear(); } catch { /* noop */ }
+        // the optimal viewer frame (founder-arranged): list rail collapsed, the reading pane
+        // takes ~2/3, the beside pane the rest
+        if (!layout.store.getState().leftCollapsed) layout.toggleLeft();
+        let first = true;
+        for (const pane of composed.split(",")) {
+          const [kind, ...rest] = pane.split(":");
+          const ref = rest.join(":");
+          const openDoc = first ? layout.openTab.bind(layout) : layout.openTabBeside.bind(layout);
+          if (kind === "meeting" && ref) openMeetingByRef(ref, !first);
+          else if (kind === "file" && ref) {
+            const base = ref.split("/").pop() || ref;
+            try { openDoc({ id: `doc:${ref}`, title: base, kind: "doc", params: { path: ref } }); } catch { /* noop */ }
+          } else if (kind === "readme") {
+            openDoc({ id: "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md" } });
+          } else { continue; }
+          first = false;
+        }
+        try {
+          const api = apiRef.current;
+          if (api && api.groups.length >= 2) {
+            api.groups[api.groups.length - 1].api.setSize({ width: Math.round(api.width * 0.36) });
+          }
+        } catch { /* noop */ }
+        return;
+      }
+    } catch { /* noop */ }
+    try {
+      const mref = localStorage.getItem("vexa.openMeetingRef");
+      if (mref) { localStorage.removeItem("vexa.openMeetingRef"); openMeetingByRef(mref); return; }
+    } catch { /* noop */ }
     // an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload)
     let sharedMeetingId: string | null = null;
     try { sharedMeetingId = localStorage.getItem("vexa.openMeeting"); if (sharedMeetingId) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }

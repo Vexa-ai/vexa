@@ -38,6 +38,13 @@ ENV NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
 # deployment's DEFAULT_BOT_NAME and a rename costs a rebuild.
 ARG NEXT_PUBLIC_DEFAULT_BOT_NAME=""
 ENV NEXT_PUBLIC_DEFAULT_BOT_NAME=$NEXT_PUBLIC_DEFAULT_BOT_NAME
+# The BUILD STAMP the reload bar compares against (PRD decision 39). Inlined into the client bundle
+# like every other NEXT_PUBLIC_*, which is the property that makes it work: a tab running an old
+# bundle carries the old string, the server route serving the new one reports the new string, and
+# that difference IS "a new version is ready". Empty → "unknown", and a deployment of unstamped
+# images simply never offers a reload (no false positives, no silent wrong ones).
+ARG NEXT_PUBLIC_BUILD_ID=""
+ENV NEXT_PUBLIC_BUILD_ID=$NEXT_PUBLIC_BUILD_ID
 # Regular build (not standalone): produces .next served by the custom server in production.
 RUN npm run build
 
@@ -61,10 +68,36 @@ FROM node:22-slim AS runtime
 # The server-side proxy gate reads the mode at REQUEST time (process.env), so the runtime stage must
 # carry the same value the bundle was built with — client gating and edge gating stay in lockstep.
 ARG NEXT_PUBLIC_TERMINAL_MODE=""
+ARG NEXT_PUBLIC_BUILD_ID=""
 ENV NODE_ENV=production \
     PORT=3000 \
     HOST=0.0.0.0 \
-    NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
+    NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE \
+    NEXT_PUBLIC_BUILD_ID=$NEXT_PUBLIC_BUILD_ID
+# F67 — THE VARIANT, AS A FACT ON THE IMAGE. The minutes terminal and the default terminal come out
+# of this one Dockerfile and differ only by the build arg above. Both build, both pass the suite,
+# both start, and the tag is whatever the builder typed — so on 2026-09-02 a `docker compose build`
+# produced the DEFAULT variant under a `-minutes` name, twice, and it was caught only by grepping
+# three UI strings out of the client chunks. `Desk` and `wsLinks` were present in both, so a smaller
+# check would have passed.
+#
+# A LABEL rather than only the ENV: it survives `docker save`/`load` and a registry round-trip, it is
+# readable without starting the container, and it cannot be shadowed at `docker run -e` time the way
+# an env var can. "default" is spelled out because an empty string reads as "nobody set this", and
+# the swap guard has to tell the default variant from a broken read.
+LABEL ai.vexa.terminal.mode="${NEXT_PUBLIC_TERMINAL_MODE:-default}"
+# THE PAIRING NUMBER, AS A FACT ON THE IMAGE (F55/F77, PRD decision 39). The terminal and the
+# server have to move together: on 2026-09-02 a terminal built ahead of agent-api shipped a button
+# whose request every running server rejected, and a terminal swapped onto an old server pointed a
+# tab at a note path that server never writes. Both were caught by a human reading a diff.
+#
+# This label is what lets the swap catch them instead. It is the agent-api contract number the
+# BUNDLE was built against (`TERMINAL_AGENT_API` in src/version.ts — a test pins the two together),
+# and `deploy.sh` refuses a terminal whose label is not the `api` the agent-api that is actually
+# serving answers on GET /api/version. A literal rather than a build arg on purpose: a build arg
+# can be forgotten, and the mode label directly above is here because exactly that happened.
+LABEL ai.vexa.terminal.agent_api="1"
+LABEL ai.vexa.terminal.build="${NEXT_PUBLIC_BUILD_ID:-unknown}"
 WORKDIR /app
 COPY package.json package-lock.json ./
 # node_modules from the RUNTIME_DEPS-selected stage (prod = pruned + typescript; dev = full tree).

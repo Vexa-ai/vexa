@@ -11,8 +11,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/view": "^6.43.9",
+    "@lezer/highlight": "^1.2.3",
     "@next/env": "15.5.19",
     "@mdx-js/mdx": "^3.1.1",
+    "@uiw/react-codemirror": "^4.25.11",
     "acorn": "^8.17.0",
     "acorn-walk": "^8.3.5",
     "allotment": "^1.20.5",

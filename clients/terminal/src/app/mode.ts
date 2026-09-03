@@ -13,3 +13,20 @@
 export function meetingsOnly(): boolean {
   return process.env.NEXT_PUBLIC_TERMINAL_MODE === "meetings";
 }
+
+/** `NEXT_PUBLIC_TERMINAL_MODE=minutes` ships the MINUTES terminal — the product a participant
+ *  meets after clicking a link in an extract email. Three surfaces register and no more: the
+ *  rooms list (a room's README is its index), the meetings list, and the right-rail chat scoped
+ *  to the room in view. Routines, tasks, entity browsers, the token panels, the settings hub and
+ *  the admin panel never register.
+ *
+ *  This is a SHAPE, not a fork: every surface is the same module the full workbench registers.
+ *  A different product is a different registered set. */
+export function minutesOnly(): boolean {
+  return process.env.NEXT_PUBLIC_TERMINAL_MODE === "minutes";
+}
+
+/** True when the workbench is running a reduced product profile of any kind. */
+export function reducedMode(): boolean {
+  return meetingsOnly() || minutesOnly();
+}
