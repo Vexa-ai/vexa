@@ -95,6 +95,7 @@ def _database_url() -> str:
 def build_production_app():
     """Configure the DB engine + assemble the app; converge the schema on startup."""
     from .app import db as app_db
+    from .app.events import FLOWS_API_URL_ENV, deprecated_flows_url_env_in_use
     from .app.main import create_app
     from .config_preflight import preflight
     from .schema.models import Base
@@ -104,6 +105,18 @@ def build_production_app():
     # fail-closed /internal/validate guard 503 every gateway validation hop, but the process would
     # otherwise come up green (the 2026-04-23 shape: 23 meetings failed while monitors stayed green).
     preflight()
+
+    # F208: FLOWS_API_URL was the one flows publish-edge key spelled without the VEXA_ prefix
+    # meeting-api and agent-api already used — a dogfood stage worker had to open each service's
+    # config.v1.json in turn to learn what to set. Honoured for one release; named at boot, never
+    # per-request (events.py's _flows_base() reads it on every onboarding).
+    _legacy_flows_var = deprecated_flows_url_env_in_use()
+    if _legacy_flows_var:
+        logger.warning(
+            "%s is DEPRECATED — rename it to %s, the name every flows publisher now uses (F208). "
+            "Honoured this release, removed next.",
+            _legacy_flows_var, FLOWS_API_URL_ENV,
+        )
 
     # #635: per-pod pool ceiling from env so an operator can fit managed Postgres' max_connections
     # (the mitigation the 2026-04-21 outage required). Defaults 5/10 match deploy/db-budget.json:7.
