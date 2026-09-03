@@ -47,6 +47,24 @@ that cannot be wrong about any of them, and the button is where "what does this 
 gets answered by something that actually knows. It is also why the head has to earn the click on its
 own — it is the whole mail besides the report.
 
+## The one sentence that is not in a file
+
+`email_minutes` composes the organiser's body inline and renders no template, so the sentence that
+tells the creator sharing is on — *"Everyone else inside your organisation who was on the invite
+gets these notes too. To keep one meeting to yourself, put `#noshare` in the invite."* — lives in
+the step, not here. It is written down rather than left to be discovered: it moves into
+`minutes-head.md` the moment that step renders it.
+
+**`#noshare` is the per-meeting opt-out** (PRD §16.2 item 3). Sharing is creator-controlled and
+default ON — that one value is the loop — and the token in the invite is how a creator excludes a
+single meeting without an administrator. It is read by `mailbox.NOSHARE`, anywhere in the ICS, and
+it is a whole word: `#noshareholders` is a hashtag about shareholders. The deployment-wide switch
+beside it is the `attendee_followup` flow param, which is an admin's, not a creator's.
+
+The sentence is CONDITIONAL on the fan-out actually being on. A mail that announces sharing on a
+deployment that does not share is the same class of untruth as a mail titled "Minutes" with no
+minutes under it.
+
 ## Substitutions
 
 **Each template gets only the tokens its own step fills**, and they are not the same set. A token a

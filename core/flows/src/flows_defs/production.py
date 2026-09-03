@@ -1103,9 +1103,26 @@ def build(reg: Registry, db) -> None:
         if written is None:
             return _mail_the_recording(ctx)
         report = _readable(written)
+        # WHERE THE CREATOR LEARNS THEY CAN SAY NO. Default-ON sharing with an opt-out nobody can
+        # find is default-ON sharing, and under a works council the defensible part of the default
+        # is precisely that the creator decides (PRD §16.2 item 3). This is the only mail the
+        # creator reliably gets, so it is the only place the token can live and be seen.
+        #
+        # CONDITIONAL, because the sentence is a claim about what is about to happen. On a
+        # deployment with `attendee_followup: off`, or on a meeting already opted out, nobody else
+        # is getting these notes and saying so would be false — the same rule that stops the
+        # degraded mail from using the word "Minutes".
+        #
+        # This one sentence is hard-coded where the rest of the wording is a file. Written down
+        # rather than discovered later (`behavior/mail/README.md` says so too): `email_minutes`
+        # composes its body inline and renders no template, so there is no file for it to live in
+        # yet. It moves the moment this step renders `minutes-head.md`.
+        sharing = ("\nEveryone else inside your organisation who was on the invite gets these "
+                   "notes too. To keep one meeting to yourself, put #noshare in the invite.\n"
+                   if _followup_on(ctx) else "")
         body = (_provenance(ctx, ctx.refs["uid"], to_attendee=False)
-                + report + "\n\n—\nRecorded by Vexa\n"
-                "Reply to this email with corrections or questions — I'll update what we hold "
+                + report + "\n\n—\nRecorded by Vexa\n" + sharing
+                + "Reply to this email with corrections or questions — I'll update what we hold "
                 "and answer here. Or open it and talk it through:")
         # THE SCAFFOLD, not a raw deeplink (PRD §5.5). No share token: this is the organiser's own
         # meeting, and a capability nobody needs is a capability nobody should be handed.
@@ -1157,6 +1174,57 @@ def build(reg: Registry, db) -> None:
         return Done({"message_id": mid, "degraded": "agent:not_present",
                      "report": None}, provider_ref=mid)
 
+
+    def _mail_the_recording_to_attendees(ctx: StepCtx, who: list):
+        """The no-agents shape of the ATTENDEE mail — the room's half of `_mail_the_recording`.
+
+        SAME WORDS FOR EVERYONE, and here that is not a stylistic choice: there is no report to
+        select from, and the domain that would have done the selecting is the one that is absent.
+        One string, built once, sent N times.
+
+        NO LINK, for the reason the organiser's version states: `mint_scaffold` is the agent door
+        and this branch exists because that door is not there. It also means NO SHARE IS MINTED —
+        a transcript capability is the thing a button redeems, and nobody is being handed a button.
+
+        The subject does not say "Minutes". These readers are mostly strangers, this is the first
+        mail they ever get from us, and opening it to find no minutes under that word is the exact
+        failure `NotPresent` exists to prevent — told, this time, to somebody with no reason yet to
+        give us the benefit of the doubt.
+
+        A failed address is recorded, never retried: the whole step is one notify per person with
+        nothing minted in between, so the retry ceiling the agent-present path needs buys nothing
+        here, and re-running would re-mail everyone who succeeded."""
+        # `_mail_title`, not a fifth spelling of its fallback (F220) — an ad hoc meeting carries
+        # no `title` ref at all, and this step mails strangers, so a `KeyError` or a bare "your
+        # meeting" here is seen by the people least able to make sense of either.
+        title = _mail_title(ctx)
+        subject = f"Recorded: {title}"
+        organizer = ctx.refs.get("organizer") or "the organiser"
+        body = (f"{organizer} had Vexa in "
+                f"{title}, which you were in.\n\n"
+                "This meeting was recorded and its transcript is stored.\n\n"
+                "There is no written summary of it: this deployment does not run the agent that "
+                "writes them.\n\n—\nRecorded by Vexa\n"
+                "Reply to this email if something here is wrong.")
+        sent = list(ctx.scratch.setdefault("sent", []))
+        failures: dict[str, str] = {}
+        for a in who:
+            if a in sent:
+                continue
+            try:
+                notify(a, subject, body)
+                sent.append(a)
+                ctx.scratch["sent"] = sent
+            except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
+                failures[a] = f"{a}: {type(e).__name__}: {e}"[:240]
+            ctx.checkpoint()
+        return Done({"sent": len(sent), "followup": "on", "to": sent,
+                     "degraded": "agent:not_present",
+                     # `drops` stays EMPTY and stays present: `drop_to_attendees` is the next step
+                     # and reads this key. It is itself skipped with no agent, and a missing key
+                     # would be a second failure discovered only if that ever changed.
+                     "drops": [],
+                     "failed": [failures[a] for a in sorted(failures)]})
 
     def _readable(note: str) -> str:
         """The note as a PERSON meets it in a mail.
@@ -1277,7 +1345,16 @@ def build(reg: Registry, db) -> None:
         inert: an inert param a deployment can still set is a control that silently does nothing,
         which is worse than one that is not there.
         """
-        if ctx.refs.get("share") is False:
+        # THE OPT-OUT AS THE INVITE SPELLS IT (`#noshare`, `mailbox.NOSHARE`). Until that token
+        # existed this branch read only `share is False`, and no producer anywhere wrote `share`
+        # — the opt-out half of "default ON, per-meeting opt-out" was unreachable code that read
+        # as shipped. `share_opt_out` is TRUTHY on purpose: admission's `_merge_refs` keeps an
+        # existing key unless its value is falsy and the incoming one is not, so `share: False`
+        # could be flipped back to True by any later admission for the same meeting — a
+        # suppressed fan-out un-suppressing itself, silently. The old spelling is still honoured
+        # because a deployment that set it still means it, and losing a kill switch to a refactor
+        # re-enables a fan-out somebody turned off on purpose.
+        if ctx.refs.get("share_opt_out") or ctx.refs.get("share") is False:
             return False
         v = (ctx.flow.param("attendee_followup") if ctx.flow else None)
         if v is None:
@@ -1329,11 +1406,19 @@ def build(reg: Registry, db) -> None:
     # does not run agents, so the absent door is never knocked on.
     # ALSO REACHES MEETINGS — reads the meeting row and mints a transcript share per attendee (`mt.meeting_row`, `mt.mint_transcript_share`).
     #
-    # SKIPPED WITH NO AGENT (F-D20), which is the same OUTCOME `Vexa-ai/vexa#1523` gave this step
-    # for a room with nobody in it — a typed, recorded no-op that the flow continues past — reached
-    # by declaration rather than by an early return, because the body cannot be entered at all
-    # here: its input is `process_meeting`'s report, and it mints a scaffold per attendee.
-    @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
+    # `degrade`, NOT `skip` (F-D20), and this is a CHANGE: it used to skip. On the no-agents cut
+    # the organiser got `_mail_the_recording`'s "it was recorded, nobody wrote it up" and every
+    # other person in the room got SILENCE — from a bot they had watched sit in the meeting for an
+    # hour. That is the worse half of the same failure `email_minutes` already fixed one step over,
+    # and it is worse because it is the strangers who see it: the attendee mail is the first thing
+    # most of these people ever receive from us, and the first thing was nothing.
+    #
+    # The body's two agent reaches — the report it forwards and the scaffold behind its button —
+    # are exactly what is missing, so the degraded shape has neither: the same honest paragraph the
+    # organiser gets, no button, and no per-person selection, because selecting is what the absent
+    # domain did. Everything that is NOT the agent still holds: the opt-out, the domain allow-list,
+    # the one-body-for-everyone rule and the per-address retry ceiling.
+    @reg.step(needs=("agent", "meetings"), absent={"agent": "degrade"})
     def email_attendees(ctx: StepCtx):
         """Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click
         composes. Cannot run before the note: its input is process_meeting's receipt.
@@ -1369,7 +1454,14 @@ def build(reg: Registry, db) -> None:
         # string `email_minutes` puts in front of the organiser and the same one every attendee's
         # desk receives, which is what "the same report" means operationally rather than as an
         # intention.
-        report = _readable(ctx.prior["process_meeting"]["report"]).strip()
+        # THE REPORT, OR ITS HONEST ABSENCE — read exactly as `email_minutes` reads it. A skipped
+        # `process_meeting` leaves a CONFIRMED receipt carrying `{"outcome": "skipped", …}` rather
+        # than no receipt, so `.get` answers "there is no report" for the one case that produces
+        # none and still raises for a genuinely missing prior, which is a different bug.
+        written = (ctx.prior.get("process_meeting") or {}).get("report")
+        if written is None:
+            return _mail_the_recording_to_attendees(ctx, who)
+        report = _readable(written).strip()
         # The meeting belongs to the ORGANISER. Without a capability the attendee's link resolves
         # to "no such meeting" and the agent greets them as a new user instead of telling them
         # what the meeting held — every attendee click landed on the wrong chat. One restricted
