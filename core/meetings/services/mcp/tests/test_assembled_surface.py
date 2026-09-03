@@ -26,6 +26,9 @@ FLOWS_OPENAPI = {"paths": {
         {"name": "status", "in": "query", "schema": {"type": "string"}},
         {"name": "subject", "in": "query", "schema": {"type": "string"}}]}},
     "/reactions/{reaction_id}/{verb}": {"post": {"summary": "Steer one reaction", "parameters": []}},
+    "/queue/waiting": {"get": {"summary": "What is waiting for this person", "parameters": [
+        {"name": "subject", "in": "query", "schema": {"type": "string"}},
+        {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
     "/timeline": {"get": {"summary": "One person's day, in order", "parameters": [
         {"name": "subject", "in": "query", "schema": {"type": "string"}},
         {"name": "since", "in": "query", "schema": {"type": "string"}},

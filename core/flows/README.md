@@ -50,6 +50,24 @@ An inbound body that IS allowed through never reaches a prompt raw: it arrives q
 length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`) and labelled untrusted, with the machinery note AFTER
 the block. The frame is the control; the text itself is never altered.
 
+## What is waiting is flows
+
+`GET /queue/waiting` answers, for ONE person, what this engine is holding for them: the pending
+reactions scoped to their uid AND their address, each naming the flow that produced it and carrying
+a typed reason — `human` (blocked on an answer), `failed`, `not_present` (a domain this deployment
+does not run, PRD decision 40.7), `pending`. PRD decision 42.2: *what is waiting IS flows*, so
+nothing is unioned at the edge and no other domain contributes items — they publish events, and
+flow definitions decide what waits. The projection is `src/flows_queue.py`.
+
+Three flows exist for no other purpose than to put a row in that queue: `live_meeting` (a call is
+happening now — pending until `meeting.completed` for the same meeting is admitted), `desk_setup`
+and `desk_claim` (the two desk cards, both `needs=("agent",)`, so a deployment without the agent
+domain has neither the events nor the reactions — there is no desk there to have a card on).
+
+**The words are not in the code.** Every sentence a person hears is a file in `behavior/queue/`,
+resolved private-mount-first and read hot, and a pending reaction behavior says nothing about is
+counted rather than spoken. `behavior/queue/README.md` is the contract.
+
 ## Configuration
 
 Every environment key this brick reads is declared once in `src/flows_config.py`, with its class
