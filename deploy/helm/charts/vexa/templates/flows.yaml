@@ -18,8 +18,15 @@ stringData:
   VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
   VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
-  VEXA_FLOWS_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.componentName" (list . "postgres") }}:{{ .Values.postgres.service.port }}/flows"
-  ADMIN_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.componentName" (list . "postgres") }}:{{ .Values.postgres.service.port }}/postgres"
+  # HOST/PORT via the chart's shared resolvers (F-D4) — NOT the in-cluster "postgres" component
+  # name hardcoded here before. vexa.dbHostEffective/vexa.dbPortEffective are what every other DB
+  # consumer (admin-api, meeting-api, job-migrations) already uses: postgres.enabled=true resolves
+  # to the in-cluster Service (pgbouncer's, if pgbouncer.enabled), postgres.enabled=false resolves
+  # to the required database.host/database.port (external managed Postgres). Without this, the
+  # flows tier could not deploy against an external database — it always dialed the in-cluster
+  # component name regardless of what database.host said.
+  VEXA_FLOWS_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.dbHostEffective" . }}:{{ include "vexa.dbPortEffective" . }}/flows"
+  ADMIN_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.dbHostEffective" . }}:{{ include "vexa.dbPortEffective" . }}/postgres"
 ---
 apiVersion: apps/v1
 kind: Deployment

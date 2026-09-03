@@ -203,4 +203,34 @@ else
   echo "  FAIL: migrations Job ignored global.imageTag — schema/code skew risk (#900): $MIG_IMG"; fail=1
 fi
 
+# F-D4 — the flows tier (worker/mailbox/api Secret: VEXA_FLOWS_DB_URL + ADMIN_DB_URL) must resolve
+# its Postgres host/port through the chart's shared vexa.dbHostEffective/vexa.dbPortEffective
+# resolvers, same as admin-api/meeting-api/job-migrations — NOT a hardcoded in-cluster component
+# name. Before the fix this rendered "...@vexa-vexa-postgres:5432/..." even with postgres.enabled=
+# false and database.host set, so the flows tier could never deploy against an external managed
+# Postgres. Default (postgres.enabled=true) render must be unaffected.
+FLOWS_EXT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set postgres.enabled=false \
+  --set database.host=db.example.internal --set database.port=5432 \
+  --set postgres.credentialsSecretName=external-pg-creds \
+  --show-only templates/flows.yaml)"
+if grep -q 'VEXA_FLOWS_DB_URL: "postgresql+psycopg://postgres:postgres@db.example.internal:5432/flows"' <<< "$FLOWS_EXT" \
+  && grep -q 'ADMIN_DB_URL: "postgresql+psycopg://postgres:postgres@db.example.internal:5432/postgres"' <<< "$FLOWS_EXT"; then
+  echo "  OK: flows tier DB URLs honor database.host/port under postgres.enabled=false (#F-D4)"
+else
+  echo "  FAIL: flows tier DB URLs did not resolve to the external database.host/port (#F-D4)"; fail=1
+fi
+if grep -q -- '-postgres' <<< "$FLOWS_EXT"; then
+  echo "  FAIL: flows tier still references an in-cluster '...-postgres' component name under postgres.enabled=false (#F-D4)"; fail=1
+else
+  echo "  OK: flows tier renders no in-cluster postgres component name under postgres.enabled=false (#F-D4)"
+fi
+FLOWS_DEFAULT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --show-only templates/flows.yaml)"
+if grep -q 'VEXA_FLOWS_DB_URL: "postgresql+psycopg://postgres:postgres@vexa-vexa-postgres:5432/flows"' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: flows tier DB URL unchanged under the default in-cluster postgres.enabled=true"
+else
+  echo "  FAIL: flows tier DB URL changed meaning under default postgres.enabled=true"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
