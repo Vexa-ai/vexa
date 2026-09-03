@@ -324,35 +324,37 @@ ruling 4 proves it: the tool would vanish from seven of the eight configurations
 
 ## 10. The gate rule, and the migration backlog it produces
 
-**Proposed rule — `gate:domain-doors`: a domain's declared doors are IDENTITY plus ITSELF. Anything
-else fails.** Enforced two ways: `depends_on` in each manifest, and a scan of each domain's source
-for another domain's base-URL key.
+**The rule — `gate:domain-doors`: a domain's doors are IDENTITY, RUNTIME, and ITSELF. Anything else
+fails.** Enforced two ways: `depends_on` in each manifest, and a scan of each domain's source for
+another domain's base-URL key.
 
-Run today, **42 call sites fail it.** This is the migration backlog, and its shape is the finding:
-the agent domain reaches into three others, and nothing reaches into it.
+**Runtime is a primitive, not a domain** (founder ruling). It spawns bots for meetings and workers
+for agent; it has no tools, no manifest and no person-facing surface, so nothing about it is a
+product decision a person ever sees. `* → runtime` is allowed exactly as `* → identity` is, and the
+15 sites that reach it are not backlog.
+
+Run today, **27 call sites fail.** This is the migration backlog, and its shape is the finding: the
+agent domain reaches into three others, and nothing reaches into it.
 
 | edge | sites | representative |
 |---|---:|---|
 | **agent → meetings** | 16 | `core/agent/shared/config.py:99` (`meeting_api_url` in the settings model) · `core/agent/control_plane/api.py:1019,1052,2308,2338,2346,2423` · `schedule_digest.py:48,56,80,109` · `admin_panel.py:198` |
-| **agent → runtime** | 8 | `core/agent/shared/config.py:25` · `api.py:1411,1450,4000,4001` · `admin_panel.py:48,51,201` |
-| **meetings → runtime** | 7 | `meeting_api/__main__.py:112,138` · `bot_spawn/adapters.py:943,945,998,1009,1014` |
 | **agent → gateway** | 3 | `transcription_watcher.py:136,178` · `admin_panel.py:195` |
 | **agent → flows** | 3 | `shared/timeline.py:51` · `control_plane/api.py:1039` (the queue route this branch added) · `dispatch.py:546` |
 | **meetings → gateway** | 3 | `services/mcp/app.py:40,575,585` — dissolves when that service becomes the assembler |
 | **flows → agent** | 1 | `flows_steps/common.py:13` |
 | **flows → gateway** | 1 | `flows_steps/common.py:12` |
 
-Three of those groups are not the same kind of violation, and the rule needs to say which:
+**The seven `→ gateway` sites are the same violation wearing a hat.** A domain calling the edge that
+fronts it is not a shortcut to the edge — it is a call to whichever domain the edge forwards to, with
+an extra hop and the caller's own identity laundered through it. `transcription_watcher` reaching
+`/bots/status` is `agent → meetings`; `flows_steps/common.py:12` reaching the gateway is flows
+calling meetings. Counting them separately would let a domain satisfy the gate by adding a hop, which
+is the opposite of the rule.
 
-- **`* → runtime` (15 sites) is probably not a violation at all.** The runtime is a spawn primitive,
-  not a domain — it has no tools, no manifest and no person-facing surface. The rule should read
-  *identity, itself, and the platform primitives*, or the gate will demand a redesign of bot spawn
-  that nobody asked for. **This is the one open question in the rule.**
-- **`* → gateway` (6 sites) is a layering inversion** — a domain calling the edge that fronts it.
-  Three dissolve with the assembler move; `transcription_watcher` and `admin_panel` are real and
-  small.
-- **`agent → meetings`, `agent → flows`, `flows → agent` (20 sites) are the real backlog**, and they
-  are what ruling 4 exists to remove.
+So the backlog is really **agent → meetings (18 once the two watcher sites are read for what they
+are), agent → flows (3), flows → meetings (1 via the edge), flows → agent (1)** — and three sites
+that disappear with the assembler move. Every one of them is what ruling 4 exists to remove.
 
 ### What `gate:config-contract` needs alongside it
 
