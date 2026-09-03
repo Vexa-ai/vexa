@@ -9,6 +9,7 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane import claims as claims_mod
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
@@ -304,6 +305,35 @@ def build(**d) -> APIRouter:
         return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
                 "system_seeded": not system_existed}
 
+    @router.post("/api/claims")
+    def write_claims(request: Request, body: dict = Body(...)):
+        """Record what an agent believes about this person's company as PROPOSED — and tell flows,
+        once per claim.
+
+        THIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through
+        `PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what
+        they mean — so the one moment worth telling anybody about, a claim being proposed, was
+        indistinguishable from any other file write, and `claim.proposed` had no publisher. A
+        generic route cannot publish a specific fact without inspecting paths and guessing at
+        contents, which is how a file route quietly becomes a state machine nobody declared.
+
+        ONE EVENT PER CLAIM, and only for claims this call actually added: `await_claim` looks a
+        `claim_id` up in the book and blocks on that claim's own words, so one event for a batch
+        would be one card for three questions with no way to answer two of them.
+
+        It lives in the workspaces router because the book is a file on a desk and everything this
+        needs — the subject, the reader, the desk path — is already closed over here; the state
+        machine itself is `control_plane.claims`, which is the concern."""
+        subject = subject_of(request)
+        batch = (body or {}).get("claims") or []
+        if not isinstance(batch, list) or not batch:
+            raise HTTPException(status_code=400, detail="claims must be a non-empty list")
+        result = claims_mod.propose(wsr.workspace_dir(subject), batch)
+        for cid in result["ids"]:
+            publish_mod.publish(publish_mod.EVENT_CLAIM_PROPOSED,
+                                publish_mod.claim_source_id(subject, cid),
+                                publish_mod.claim_refs(subject, cid))
+        return result
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
