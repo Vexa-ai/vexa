@@ -16,6 +16,7 @@ from llm.errors import (
 from llm.ports import (
     HarnessExec,
     HarnessPort,
+    close_event_stream,
     run_harness_turn,
 )
 from llm.registry import (
@@ -34,6 +35,7 @@ __all__ = [
     "provider_host",
     "HarnessExec",
     "HarnessPort",
+    "close_event_stream",
     "run_harness_turn",
     "HARNESS_RUNNERS",
     "harness_from_env",

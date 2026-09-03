@@ -345,6 +345,34 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
 
 
 
+def close_event_stream(events: object) -> None:
+    """Close a harness event stream we have stopped reading — NOW, at the boundary.
+
+    ⚠ THE HOP THAT ONLY LOOKS LIKE IT CLOSES ITSELF. A generator that wraps another one with a
+    plain ``for ev in inner:`` releases ``inner`` when its OWN frame is torn down, and that teardown
+    is a CPython implementation detail rather than a language guarantee. Measured on
+    Vexa-ai/vexa#1434: on CPython 3.12.3, closing the outer generator left the inner one ALIVE
+    (``gi_frame`` not ``None``, one referrer — itself a generator), so
+    ``llm.claude_code._exec_subprocess``'s ``finally`` never ran and the CLI child was never killed.
+    The write-back budget stopped reading the process and bounded nothing; the worker stayed exactly
+    as busy as before. The identical tree passed in 0.67 s on 3.12.13. Both interpreters satisfy
+    ``requires-python = ">=3.11"``, so this is not a supported-versus-unsupported line — it is a
+    guarantee the chain never had, on any interpreter, and got right by luck on most.
+
+    So EVERY hop of the harness event chain closes what it wraps EXPLICITLY (P22 — guarantee
+    teardown at the boundary, never delegate it to something that may not run). ``yield from``
+    already does this; a ``for`` loop does not, and this call is the whole of the difference.
+
+    A plain iterable with no ``close`` (a list, a test's fake) is a no-op, and closing an exhausted
+    or already-closed generator is one too — so it belongs in a ``finally``, on the normal path as
+    much as the early-exit one.
+    """
+    close = getattr(events, "close", None)
+    if close is None:
+        return
+    close()
+
+
 def run_harness_turn(
     work: Path | str,
     prompt: str,
@@ -402,11 +430,18 @@ def run_harness_turn(
         for _mount in mounts:
             policy_baselines[str(_mount.resolve())] = _policy_head_sha(_mount)
     done: Optional[dict] = None
-    for ev in harness.run_turn(work, prompt, allowed_tools=allowed_tools, session=session,
-                               model=model, mcp_config=mcp_config):
-        if ev.get("type") == "done":
-            done = ev
-        yield ev
+    # Held in a NAME, not consumed inline, so the `finally` below has something to close. A caller
+    # may stop reading this turn mid-stream — the write-back phase's budget does exactly that — and
+    # the harness generator underneath owns the CLI subprocess. See `close_event_stream`.
+    stream = harness.run_turn(work, prompt, allowed_tools=allowed_tools, session=session,
+                              model=model, mcp_config=mcp_config)
+    try:
+        for ev in stream:
+            if ev.get("type") == "done":
+                done = ev
+            yield ev
+    finally:
+        close_event_stream(stream)
 
     if not commit:
         return

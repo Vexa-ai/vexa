@@ -33,6 +33,7 @@ from typing import Callable, Iterator, Protocol
 from llm import (
     HarnessPort,
     auth_error_event,
+    close_event_stream,
     harness_from_env,
     looks_like_auth_failure,
     preflight_provider_guard,
@@ -772,9 +773,7 @@ def bounded(events: Iterator[dict], *, max_tool_calls: int, max_seconds: float) 
                        "seconds": round(time.monotonic() - t0, 1), "tool_calls": calls}
                 return
     finally:
-        close = getattr(gen, "close", None)
-        if close is not None:
-            close()
+        close_event_stream(gen)
 
 
 def writeback_events(events: Iterator[dict]) -> Iterator[dict]:
@@ -784,11 +783,16 @@ def writeback_events(events: Iterator[dict]) -> Iterator[dict]:
 
     The `artifact` event is dropped for the same reason the text is: it steals the right panel onto
     an entity page the person did not ask to see, one turn after the document they did."""
-    for ev in events:
-        t = ev.get("type")
-        if t in ("message-delta", "artifact", "done"):
-            continue
-        yield {**ev, "phase": "writeback"}
+    try:
+        for ev in events:
+            t = ev.get("type")
+            if t in ("message-delta", "artifact", "done"):
+                continue
+            yield {**ev, "phase": "writeback"}
+    finally:
+        # `bounded` is underneath and the CLI subprocess is underneath that: whoever stops reading
+        # THIS generator must reach both. See `llm.ports.close_event_stream`.
+        close_event_stream(events)
 
 
 class _Stream(Protocol):
@@ -1182,6 +1186,9 @@ def run_turn_over_workspace(
             and not first.get("ok", True) and not first.get("reason")):
         if sess_file.exists():
             sess_file.unlink()
+        # The refused-resume turn is ABANDONED here — reap its CLI now rather than leaving a second
+        # harness subprocess to whatever the interpreter does with an unreferenced generator.
+        close_event_stream(gen)
         gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
                                commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
         first = next(gen, None)
@@ -1189,16 +1196,23 @@ def run_turn_over_workspace(
     # THE TURN'S OWN ROUGH EDGES (PRD decision 33 §1). Only the two event types the scan reads are
     # kept — a turn's full stream is unbounded and this is a footnote, not a recorder.
     tool_events: list[dict] = []
-    for ev in (gen if first is None else itertools.chain([first], gen)):
-        if ev.get("type") in ("tool-call", "tool-result"):
-            tool_events.append(ev)
-        if ev.get("type") == "done" and ev.get("sessionId"):
-            captured = ev["sessionId"]
-        if ev.get("type") == "done" and ev.get("reason"):
-            # WHAT THE TURN GAVE UP (F89). Before this the budget/trim events had no consumer at
-            # all, so a turn that stopped halfway looked in every log exactly like one that finished.
-            log.warning("turn incomplete for session=%s: %s", session or "-", ev["reason"])
-        yield ev
+    try:
+        for ev in (gen if first is None else itertools.chain([first], gen)):
+            if ev.get("type") in ("tool-call", "tool-result"):
+                tool_events.append(ev)
+            if ev.get("type") == "done" and ev.get("sessionId"):
+                captured = ev["sessionId"]
+            if ev.get("type") == "done" and ev.get("reason"):
+                # WHAT THE TURN GAVE UP (F89). Before this the budget/trim events had no consumer at
+                # all, so a turn that stopped halfway looked in every log exactly like one that
+                # finished.
+                log.warning("turn incomplete for session=%s: %s", session or "-", ev["reason"])
+            yield ev
+    finally:
+        # `itertools.chain` does not forward a close to what it chains, and neither does the `for`.
+        # The budget closes THIS generator when the write-back phase runs out; the CLI underneath it
+        # must go with it. See `llm.ports.close_event_stream`.
+        close_event_stream(gen)
     # AFTER the stream, never inside it: a report is a footnote to a turn, and a turn must not
     # stall on one. `report` never raises (see worker/friction.py) — this try is the belt.
     try:
