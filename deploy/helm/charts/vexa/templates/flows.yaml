@@ -195,12 +195,17 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-mailbox}
     spec:
-      # F192 — the SAME ensure-db initContainer flows-worker carries above. Only flows-worker had
-      # it; flows-mailbox and flows-api (further down) crash-loop until `flows-worker` happens to
-      # win the startup race and create the `flows` database first, which is an ordering accident,
-      # not a guarantee — k8s makes no promise about which Deployment's pods come up first. Every
-      # container in this file that opens VEXA_FLOWS_DB_URL must be able to create the database it
-      # opens, not borrow a sibling's luck.
+      {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
+      that opens VEXA_FLOWS_DB_URL must be able to create the database it opens, not rely on
+      flows-worker's pod happening to have won the startup race first (k8s makes no promise
+      about pod start order). Reconciled to the SAME shape as flows-worker's block (merge of
+      #1505/F192 with #1509/F-D5, which landed on top of it): the CREATEDB-tolerant bootstrap
+      against flows.databaseName, guarded by the same "nothing to do when it equals the app's
+      own database" skip. See flows-worker above for the full reasoning in one place. A Helm
+      TEMPLATE comment, not a YAML one — a plain "#" line here renders into every values-name
+      permutation regardless of the if-guard below, including the word "ensure-db" the guard
+      exists to keep OUT of the no-op case. */}}
+      {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
           image: {{ .Values.flows.image | quote }}
@@ -209,14 +214,55 @@ spec:
             - |
               import os
               from sqlalchemy import create_engine, text
-              e = create_engine(os.environ["ADMIN_DB_URL"], isolation_level="AUTOCOMMIT")
+              name = os.environ["FLOWS_DB_NAME"]
+              admin_url = (
+                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
+                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
+              )
+              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
               with e.connect() as c:
-                  if not c.execute(text("SELECT 1 FROM pg_database WHERE datname='flows'")).first():
-                      c.execute(text("CREATE DATABASE flows"))
-                      print("created database flows")
-          envFrom:
-            - secretRef:
-                name: {{ include "vexa.componentName" (list . "flows") }}
+                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
+                  if not exists:
+                      try:
+                          c.execute(text('CREATE DATABASE "' + name + '"'))
+                          print("created database " + name)
+                      except Exception as exc:
+                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
+                          if not exists:
+                              raise RuntimeError(
+                                  "database " + repr(name) + " does not exist and this role could "
+                                  "not create it (" + repr(exc) + ") — pre-create it "
+                                  "(CREATE DATABASE ...) or grant CREATEDB"
+                              ) from exc
+                          print("database " + name + " already exists (created by another process)")
+                  else:
+                      print("database " + name + " already exists")
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: FLOWS_DB_NAME
+              value: {{ .Values.flows.databaseName | quote }}
+      {{- end }}
       containers:
         - name: flows-mailbox
           image: {{ .Values.flows.image | quote }}
@@ -288,9 +334,12 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-api}
     spec:
-      # F192 — see the identical block on flows-mailbox above: every Deployment that opens
-      # VEXA_FLOWS_DB_URL must be able to create the `flows` database itself, not rely on
-      # flows-worker's pod happening to have won the startup race first.
+      {{- /* F192 — see the identical block on flows-worker above (reconciled the same way as
+      flows-mailbox's — merge of #1505/F192 with #1509/F-D5): every Deployment that opens
+      VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on
+      flows-worker's pod happening to have won the startup race first. Helm TEMPLATE comment,
+      not YAML — see the note on flows-mailbox's identical block for why. */}}
+      {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
           image: {{ .Values.flows.image | quote }}
@@ -299,14 +348,55 @@ spec:
             - |
               import os
               from sqlalchemy import create_engine, text
-              e = create_engine(os.environ["ADMIN_DB_URL"], isolation_level="AUTOCOMMIT")
+              name = os.environ["FLOWS_DB_NAME"]
+              admin_url = (
+                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
+                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
+              )
+              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
               with e.connect() as c:
-                  if not c.execute(text("SELECT 1 FROM pg_database WHERE datname='flows'")).first():
-                      c.execute(text("CREATE DATABASE flows"))
-                      print("created database flows")
-          envFrom:
-            - secretRef:
-                name: {{ include "vexa.componentName" (list . "flows") }}
+                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
+                  if not exists:
+                      try:
+                          c.execute(text('CREATE DATABASE "' + name + '"'))
+                          print("created database " + name)
+                      except Exception as exc:
+                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
+                          if not exists:
+                              raise RuntimeError(
+                                  "database " + repr(name) + " does not exist and this role could "
+                                  "not create it (" + repr(exc) + ") — pre-create it "
+                                  "(CREATE DATABASE ...) or grant CREATEDB"
+                              ) from exc
+                          print("database " + name + " already exists (created by another process)")
+                  else:
+                      print("database " + name + " already exists")
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: FLOWS_DB_NAME
+              value: {{ .Values.flows.databaseName | quote }}
+      {{- end }}
       containers:
         - name: flows-api
           image: {{ .Values.flows.image | quote }}
