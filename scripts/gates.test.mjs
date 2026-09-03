@@ -9,10 +9,11 @@
 // stay green through exactly the bug it was written to catch. The planted file IS the input
 // population: `git grep --untracked` reads the working tree, so a file on disk is a real input.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, mkdirSync, mkdtempSync, existsSync, copyFileSync, lstatSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -117,30 +118,86 @@ test("a test-only create_async_engine does not invent a service in the budget", 
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // #653 — gate:image-licenses and gate:runtime-parity. Same plant-and-run-the-real-gate discipline: a
-// gate that never reds on the input it was written to catch is theatre. These edit a tracked deploy
-// file in place, run the real gate as a subprocess, and restore — so each RED is the actual pipeline
-// firing, not a stubbed parse. Every fixture is paired with the vacuity control that the clean tree
-// is green (a red there would invalidate the fixture below it).
+// gate that never reds on the input it was written to catch is theatre. Each fixture edits a deploy
+// file, runs the real gate as a subprocess, and restores — so each RED is the actual pipeline firing,
+// not a stubbed parse. Every fixture is paired with the vacuity control that the clean tree is green
+// (a red there would invalidate the fixture below it).
+//
+// The edit lands in a PRIVATE SHADOW of the working tree, never in the checkout (#1106). `node --test`
+// runs every test file concurrently, and the checkout is read by the others: sbom.test.mjs reads
+// deploy/lite/Dockerfile.lite and asserts the very marker the runtime-parity fixture below replaces,
+// so an in-place edit here was a ~50 ms window in which a sibling file read a fixture as the tree —
+// one red run in three on a 4-core runner, on PRs that touched nothing near it. One writer per
+// surface: this file owns its shadow; the checkout has no writer. gates.mjs resolves every path it
+// reads from process.cwd(), so pointing the subprocess at the shadow is the whole redirection —
+// the script under test is still the working tree's scripts/gates.mjs, its inputs are the mirror.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
+// The shadow mirrors the working tree as git sees it — tracked + untracked-unignored, so an
+// uncommitted deploy edit is part of the fixture exactly as it would be for the gate itself — and
+// nothing git ignores (no node_modules, no build output). Built once per file, on first use, torn
+// down when the file's tests finish.
+let shadowRoot = null;
+function shadowTree() {
+  if (shadowRoot) return shadowRoot;
+  const dir = mkdtempSync(join(tmpdir(), "vexa-gates-test-"));
+  const listing = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT });
+  for (const relPath of listing.toString().split("\0")) {
+    if (!relPath) continue;
+    const src = join(ROOT, relPath);
+    let st; try { st = lstatSync(src); } catch { continue; }   // listed but gone: a sibling's planted fixture, already removed
+    if (!st.isFile()) continue;
+    const dst = join(dir, relPath);
+    mkdirSync(dirname(dst), { recursive: true });
+    copyFileSync(src, dst);
+  }
+  shadowRoot = dir;
+  return dir;
+}
+after(() => { if (shadowRoot) rmSync(shadowRoot, { recursive: true, force: true }); });
+
+// Runs the working tree's gates.mjs against the checkout by default, against the shadow under withEdited.
+let fixtureRoot = ROOT;
 function runGate(name) {
-  try { return { green: true, out: execFileSync("node", ["scripts/gates.mjs", name], { cwd: ROOT, encoding: "utf8" }) }; }
+  try { return { green: true, out: execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), name], { cwd: fixtureRoot, encoding: "utf8" }) }; }
   catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
 }
-// Temporarily replace `find`→`repl` in a tracked file, run fn, always restore the exact original bytes.
+// Temporarily replace `find`→`repl` in the SHADOW's copy of a tracked file, run fn with the gates
+// pointed at the shadow, always restore the exact original bytes. The checkout is never written.
 function withEdited(relPath, find, repl, fn) {
-  const abs = join(ROOT, relPath);
+  const abs = join(shadowTree(), relPath);
   const orig = readFileSync(abs, "utf8");
   const edited = orig.replace(find, repl);
   assert.notEqual(edited, orig, `fixture setup: pattern not found in ${relPath} — the test would prove nothing`);
   writeFileSync(abs, edited);
-  try { return fn(); } finally { writeFileSync(abs, orig); }
+  fixtureRoot = shadowTree();
+  try { return fn(); } finally { fixtureRoot = ROOT; writeFileSync(abs, orig); }
 }
 
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";
 const IMG_MANIFEST = "image-licenses.json";
+
+// ── the fixture harness itself ──────────────────────────────────────────────────────────────────
+
+test("withEdited (#1106): the checkout is untouched while a fixture runs — the edit lives in the shadow only", () => {
+  // The invariant the flake violated. A concurrent reader of the tracked file (sbom.test.mjs) must
+  // see the committed bytes at every instant of this file's run; only the shadow carries the edit.
+  const marker = "supervisor postgresql-client";
+  const tracked = join(ROOT, LITE);
+  const committed = readFileSync(tracked, "utf8");
+  let seenInside;
+  const r = withEdited(LITE, marker, `${marker} review-apt-probe`, () => {
+    seenInside = { checkout: readFileSync(tracked, "utf8"), shadow: readFileSync(join(shadowTree(), LITE), "utf8") };
+    return runGate("runtime-parity");
+  });
+  assert.equal(seenInside.checkout, committed, "the tracked Dockerfile.lite changed under a running fixture — a sibling test file can read the fixture as the tree");
+  assert.match(seenInside.shadow, /review-apt-probe/, "the shadow copy did not carry the edit — the gate under test never saw the fixture");
+  assert.equal(r.green, true, `runtime-parity ran against the shadow (an apt probe is not a cache engine) but redded:\n${r.out}`);
+  assert.equal(readFileSync(join(shadowTree(), LITE), "utf8"), committed, "the shadow was not restored after the fixture");
+  assert.equal(readFileSync(tracked, "utf8"), committed);
+});
 
 // ── gate:runtime-parity ─────────────────────────────────────────────────────────────────────────
 
