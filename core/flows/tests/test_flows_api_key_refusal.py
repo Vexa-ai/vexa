@@ -99,9 +99,12 @@ def test_the_refusal_names_the_key_and_never_echoes_the_value(a_configured_deplo
 def test_the_module_keeps_no_placeholder_list_of_its_own():
     """The structural guard under the rows above: a second list is how the first one drifted, and
     a list nobody can see drifting is the whole defect."""
-    src = inspect.getsource(flows_api._require_api_key)
+    # THE BODY, NOT THE DOCSTRING. The docstring records what the literals WERE and why they were
+    # wrong, which is the part of this fix most worth keeping; asserting over the whole source
+    # would make writing that history impossible.
+    body = inspect.getsource(flows_api._require_api_key).split('"""')[-1]
     for literal in ("changeme", "change-me", "default", "secret"):
-        assert f'"{literal}"' not in src, f"{literal!r} is hard-coded again — the declaration owns it"
+        assert f'"{literal}"' not in body, f"{literal!r} is hard-coded again — the declaration owns it"
 
 
 def test_the_boot_runs_the_shared_validator():

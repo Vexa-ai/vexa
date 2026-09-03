@@ -84,6 +84,7 @@ from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noq
 # the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
 # answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
 # in front of it hid that for as long as the route was operator-only. One name, one thing.
+import config_preflight                                            # noqa: E402
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
                             build_timeline, fetch_meetings, friction_for_subject,
                             reaction_concerns, render_preamble, render_text)
@@ -103,17 +104,30 @@ def _require_api_key() -> str:
     A weak default is worse than no default: it makes an unconfigured deployment look configured
     and it fails no test. So there is no default. A deployment that has not set the variable
     stops here, loudly, rather than serving on a known string.
+
+    THE REFUSAL IS THE SHARED VALIDATOR'S NOW (F-D20 b), not this function's. What stood here was
+    a hand-written pair of `RuntimeError`s carrying their own placeholder list —
+    `("changeme", "change-me", "default", "secret")` — while `config.v1.json`, five directories
+    away and enforced against every deploy surface by `gate:config-contract`, declared this same
+    key `required-explicit` with SEVEN `forbidden_values`. The three the local list was missing
+    (`vexa-internal-secret`, `lite-internal-secret`, `CHANGE-ME`) are precisely the literals a
+    stock deploy supplies, so flows-api booted, green, on a secret published in this repository —
+    F95's own lesson, in the one service that had not learned it: *"one secret with three names
+    has three refusal lists and they drift"*.
+
+    `flows_config.py` even said so out loud — *"nothing under core/flows/src imports the vendored
+    `config_preflight`"* — with the declaration held up by contract tests that drove the validator
+    while the running service never did. It does now, and the declaration is the only list.
+
+    It validates the WHOLE declaration, not this key alone, and that is deliberate: `preflight`
+    names every missing required-explicit key in ONE message rather than a peel-the-onion restart
+    loop, so it is called FIRST, before anything else this module reads. `VEXA_FLOWS_ADMIN_KEY` is
+    the only key whose absence newly stops the boot, and it was already refused at its first use
+    (`flows_steps.common.require_admin_key`), already exported by every start script, and already
+    asserted by `tests/test_config_contract.py`. flows-api declares no probes, so this does no I/O.
     """
-    key = (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError(
-            "VEXA_FLOWS_API_KEY is unset — flows-api refuses to start rather than serve on a "
-            "default. Mint one into a mode-600 file on the deployment host and export it "
-            "from the lane's start script; never put the value in the repo.")
-    if key in ("changeme", "change-me", "default", "secret"):
-        raise RuntimeError(
-            f"VEXA_FLOWS_API_KEY is the placeholder {key!r} — refusing to start.")
-    return key
+    config_preflight.preflight()
+    return (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
 
 
 API_KEY = _require_api_key()
