@@ -36,9 +36,16 @@ ZOOM = "https://us02web.zoom.us/j/84123456789?pwd=aBcD1234efGH"
 
 
 def _ics(**over) -> str:
+    # DTSTART sits in 2030, like every other ICS fixture in this suite — `parse_ics` returns None
+    # for a start more than 24h in the past (a bot would dispatch immediately on an ancient start),
+    # so a fixture dated the day it was written is a time bomb: this one carried the incident's
+    # own date, 2026-09-02T19:00Z, and every test here went red at 19:00 UTC on 2026-09-03 with
+    # `'NoneType' object is not subscriptable` on a tree nobody had touched. The DTSTAMP stays
+    # the incident's literal value — it is the string the unfixed regex captured, and it is what
+    # the reproduction below must see in the UID's shadow.
     rows = {
-        "DTSTART": "20260902T190000Z",
-        "DTEND": "20260902T200000Z",
+        "DTSTART": "20300302T190000Z",
+        "DTEND": "20300302T200000Z",
         "UID": "invite-1@example.test",
         "DTSTAMP": "20260902T183213Z",
         "ORGANIZER;CN=Real Person": "mailto:real@rehearse.test",
@@ -85,7 +92,7 @@ def test_dtstart_is_read_from_its_own_line_for_the_same_reason():
     import time
     ev = parse_ics(_ics(UID="dtstart-notes-2026@example.test",
                         DESCRIPTION=f"DTSTART is 7pm, do not be late\\n{ZOOM}"))
-    assert ev["start"] == calendar.timegm(time.strptime("20260902T190000", "%Y%m%dT%H%M%S"))
+    assert ev["start"] == calendar.timegm(time.strptime("20300302T190000", "%Y%m%dT%H%M%S"))
 
 
 def test_an_ordinary_invite_still_parses_exactly_as_before():
