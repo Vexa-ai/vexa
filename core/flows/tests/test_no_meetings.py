@@ -165,7 +165,7 @@ def test_every_production_reaction_reaches_a_terminal_state_with_meetings_absent
         rows = db.execute("SELECT reaction_id FROM reaction")
         assert rows, f"{name} admitted nothing for {flow.on.name}"
         rid = rows[0][0]
-        for _ in range(400):
+        for _ in range(1000):   # live_meeting parks to LIVE_CAP_S when no completion arrives
             if not tick(db, reg, clock, present=absent):
                 nxt = db.execute("SELECT MIN(next_run_at) FROM reaction "
                                  "WHERE status IN ('admitted','retrying')")[0][0]

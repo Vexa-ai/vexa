@@ -19,6 +19,21 @@ import flows_config
 #: convenience.
 AGENT_API = flows_config.get("VEXA_FLOWS_AGENT_API_URL")
 
+#: THE MEETINGS DOOR, and the name is a defect this change does not close. The key still says
+#: GATEWAY because flows reaches meetings THROUGH THE EDGE today — twelve call sites, all of them
+#: `{gateway}/meetings`, `{gateway}/bots`, `{gateway}/transcripts/…`. ADR-0037 forbids that hop
+#: ("fronting a sibling's door with the edge does not make it not-an-edge") and it is a separate
+#: change with its own consequences, measured and stated on this PR: the gateway resolves the
+#: caller's key and enriches every forward with X-User-Id, X-User-Scopes, X-User-Workspaces and
+#: X-User-Limits — and `POST /bots` enforces the per-user concurrent-bot cap out of that last one
+#: (`meeting_api/bot_spawn/router.py:208` `_resolve_max_concurrent`). Calling meeting-api directly
+#: without carrying those forward would silently drop the cap, so the de-hop is not a rename.
+#:
+#: What IS decided here (decision 5, founder-agreed) is the DEPENDENCY: meetings is optional, and
+#: its absence is a supported configuration rather than a refusal to boot.
+MEETINGS_DOOR = "VEXA_FLOWS_GATEWAY_URL"
+MEETINGS_API = flows_config.get(MEETINGS_DOOR)
+
 
 def domain_present(domain: str) -> bool:
     """Is this domain deployed alongside flows? (PRD decision 40.7.)
@@ -39,6 +54,8 @@ def domain_present(domain: str) -> bool:
         return True
     if domain == "agent":
         return bool((AGENT_API or "").strip())
+    if domain == "meetings":
+        return bool((MEETINGS_API or "").strip())
     return True
 
 
@@ -65,6 +82,38 @@ def agent_door() -> str:
     return base.rstrip("/")
 
 
+class MeetingsDomainAbsent(RuntimeError):
+    """A helper that reaches the meetings domain was called in a deployment that does not run it.
+
+    The sibling of `AgentDomainAbsent`, and the same second line of defence: the engine answers
+    `not_present` for a step that declared `needs=("meetings",)` without entering its body
+    (`flows/loop.tick`), so this should never fire. It exists because the first line is a
+    DECLARATION, and the next step somebody adds will not remember to make it.
+
+    Deliberately NOT `flows_config.ConfigError`. That one says *this deployment is misconfigured*,
+    and an absent optional domain is a supported configuration — the whole point of the class
+    change behind it. A refusal that names the wrong cause sends an operator to fix a door that
+    was never supposed to be there."""
+
+
+def meetings_door() -> str:
+    """The meetings base, or `MeetingsDomainAbsent`. Reads the MODULE attribute so a test can set
+    the world with one `monkeypatch.setattr`, exactly as `agent_door` does.
+
+    RESOLVED AT ACCESS, never at import. `from .common import GATEWAY` ran `flows_config.require`
+    while `flows_steps/meeting.py` was still loading, so an unset door was an ImportError for the
+    entire step vocabulary — every step, including the ones with no interest in meetings. An
+    optional domain has to be absent-able at boot, at import AND at the step; this is the middle
+    one."""
+    base = (MEETINGS_API or "").strip()
+    if not base:
+        raise MeetingsDomainAbsent(
+            f"this deployment does not run the meetings domain ({MEETINGS_DOOR} is unset). "
+            "A flow step that needs it must declare `needs=(\"meetings\",)` so the engine answers "
+            "`not_present` instead of reaching for a door that is not there.")
+    return base.rstrip("/")
+
+
 def _door(name: str) -> str:
     """A required door, resolved at ACCESS time and refused when unnamed (see flows_config.require).
 
@@ -82,8 +131,11 @@ def __getattr__(name: str) -> str:                     # PEP 562
     raise AttributeError(name)
 
 
-_DOORS = {"GATEWAY": "VEXA_FLOWS_GATEWAY_URL",
-          "ADMIN_API": "VEXA_FLOWS_ADMIN_API_URL",
+# `GATEWAY` is GONE from this map on purpose. `__getattr__` resolves a name here through
+# `flows_config.require`, which REFUSES an empty value — correct for a door the process cannot work
+# without, and exactly wrong for an optional domain. The meetings door is reached through
+# `meetings_door()` above, which answers with a typed absence instead.
+_DOORS = {"ADMIN_API": "VEXA_FLOWS_ADMIN_API_URL",
           "UI_URL": "VEXA_UI_URL"}
 
 

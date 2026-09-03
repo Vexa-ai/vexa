@@ -75,7 +75,18 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     #
     # A deployment default may name the SERVICE (`http://admin-api:8057`, which resolves only
     # inside the deployment's own network) and lives in compose/helm, never here.
-    "VEXA_FLOWS_GATEWAY_URL": ("required-explicit", None, "the meetings gateway."),
+    # THE MEETINGS DOOR (PRD decision 40.7 + decision 5, founder-agreed: flows → meetings is a
+    # declared OPTIONAL dependency that degrades). `capability`, which is what the class means
+    # here: unset is not a misconfiguration, it is a deployment that runs no meetings domain, and
+    # every step that would schedule or read a bot answers `not_present` instead of knocking.
+    # `required-explicit` was a refusal to BOOT — `preflight()` names the door and exits before
+    # anything about meetings is asked, so a flows+identity deployment could not start at all.
+    # The key still says GATEWAY because flows reaches meetings through the edge today; that hop
+    # is ADR-0037's to close and is not this class change (see flows_steps.common.MEETINGS_DOOR).
+    "VEXA_FLOWS_GATEWAY_URL": ("capability", None,
+                               "the meetings domain, reached through the gateway. UNSET MEANS THE "
+                               "MEETINGS DOMAIN IS NOT DEPLOYED — see "
+                               "flows_steps.common.domain_present."),
     "VEXA_FLOWS_ADMIN_API_URL": ("required-explicit", None, "admin-api's admin tier."),
     # THE LINK PORT, and `capability` is what makes it one (PRD decision 4, founder 2026-09-03
     # 09:56Z: *"fine as a port + adapter (P16): flows owns a link port, the terminal is one
@@ -229,6 +240,9 @@ class ConfigError(RuntimeError):
 #: in the table above and nowhere else.
 DOOR_KEYS = ("VEXA_FLOWS_GATEWAY_URL", "VEXA_FLOWS_ADMIN_API_URL", "VEXA_UI_URL",
              "VEXA_FLOWS_AGENT_API_URL")
+# `missing_doors` filters this tuple on the CLASS, so the two capability doors (meetings, agent)
+# drop out of the preflight by the same line that declares them optional — there is no second list
+# to keep in step, which is how the two would drift.
 
 
 def require(name: str) -> str:

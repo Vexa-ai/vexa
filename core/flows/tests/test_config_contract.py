@@ -98,9 +98,13 @@ def test_the_boot_refuses_a_deployment_that_named_no_credential_and_no_door():
         cp.preflight({})
     said = str(refused.value)
     for key in ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_ADMIN_KEY", "INTERNAL_API_SECRET",
-                "VEXA_FLOWS_ADMIN_API_URL", "VEXA_FLOWS_GATEWAY_URL"):
+                "VEXA_FLOWS_ADMIN_API_URL"):
         assert key in said, f"the refusal does not name {key}"
-    for capability_key in ("VEXA_FLOWS_AGENT_API_URL", "VEXA_UI_URL", "VEXA_MAIL_ADDR"):
+    # VEXA_FLOWS_GATEWAY_URL moved into this list (PRD 40.7 + decision 5): the meetings domain is
+    # optional, so naming it in a BOOT refusal was the defect — identity is the only door whose
+    # absence is a misconfiguration rather than a shape of deployment.
+    for capability_key in ("VEXA_FLOWS_AGENT_API_URL", "VEXA_FLOWS_GATEWAY_URL",
+                           "VEXA_UI_URL", "VEXA_MAIL_ADDR"):
         assert capability_key not in said, \
             f"{capability_key} is a capability — its absence is a product, not a misconfiguration"
 

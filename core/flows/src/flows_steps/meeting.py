@@ -10,7 +10,7 @@ from flows import Done, StepCtx, StepError, Wait
 # of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
 # than against this file. Found while adding the prep step, not by a test: nothing exercises
 # dispatch_bot outside a live meeting.
-from .common import GATEWAY, http, setting, user_api_key
+from .common import http, meetings_door, setting, user_api_key
 
 # THE FIXTURE-TRANSCRIPT INJECTION IS GONE (PRD decision 18d). When a rehearsed meeting completed
 # with no segments, this file used to write seven canned transcript rows into the MEETINGS database
@@ -32,7 +32,7 @@ def meeting_ref(uid: str, url: str) -> str:
     """
     native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
     try:
-        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(uid)})
+        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(uid)})
     except StepError:
         return native
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -75,7 +75,7 @@ def ensure_meeting_row(uid: str, url: str, title: str | None = None,
         body["scheduled_at"] = datetime.datetime.fromtimestamp(
             float(start_epoch), datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     try:
-        st, row = http("POST", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(uid)}, body)
+        st, row = http("POST", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(uid)}, body)
     except StepError:
         return native
     if st in (200, 201) and isinstance(row, dict) and row.get("id") is not None:
@@ -86,7 +86,7 @@ def ensure_meeting_row(uid: str, url: str, title: str | None = None,
 def meeting_row(uid: str, meeting_id, native: str | None = None):
     """This user's meeting row from the gateway, or None. One read, several callers."""
     try:
-        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(str(uid))})
+        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(str(uid))})
     except StepError:
         return None
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -160,7 +160,7 @@ def mint_transcript_share(uid: str, meeting_id, email: str,
     A 2xx that carries no token is a failure too, and takes the same branch: the caller asked for
     a capability and did not get one, and the reason it did not is worth the same noise.
     """
-    st, body = http("POST", f"{GATEWAY}/meetings/{meeting_id}/share",
+    st, body = http("POST", f"{meetings_door()}/meetings/{meeting_id}/share",
                     {"X-API-Key": user_api_key(str(uid))},
                     {"mode": "restricted", "allowed_emails": [email],
                      "expires_in_sec": int(expires_in_sec)})
@@ -193,7 +193,7 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     """
     import datetime
     try:
-        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(str(uid))})
+        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(str(uid))})
     except StepError:
         return None
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -238,7 +238,7 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     still means a meeting with no captured speech, which must still be writable.
     """
     try:
-        _st, body = http("GET", f"{GATEWAY}/transcripts/by-id/{meeting_id}",
+        _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
                          {"X-API-Key": user_api_key(str(uid))})
     except StepError:
         return None
@@ -293,7 +293,7 @@ def speaking_seconds(uid: str, meeting_id) -> dict:
     Never raises: an unreadable transcript is `{}`, which means nobody is prioritised and the
     invite's own order stands. It is not a reason to fail a meeting."""
     try:
-        _st, body = http("GET", f"{GATEWAY}/transcripts/by-id/{meeting_id}",
+        _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
                          {"X-API-Key": user_api_key(str(uid))})
     except StepError:
         return {}
@@ -410,10 +410,10 @@ def dispatch_bot(ctx: StepCtx):
     # step used to read a `bot_name` key out of `.settings.json` in the AGENT domain, which is how
     # one fact came to have three stores and why the same person's bot showed up under one name
     # when a calendar armed it and another when a flow did (founder ruling, 2026-09-02).
-    st, body = http("POST", f"{GATEWAY}/bots", {"X-API-Key": key},
+    st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
                     {"meeting_url": ctx.refs["url"]})
     if st == 409:
-        st2, existing = http("GET", f"{GATEWAY}/bots", {"X-API-Key": key})
+        st2, existing = http("GET", f"{meetings_door()}/bots", {"X-API-Key": key})
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])
         for m in rows:
             if m.get("native_meeting_id") == ctx.refs["url"].rsplit("/", 1)[1]:
@@ -432,7 +432,7 @@ def dispatch_bot(ctx: StepCtx):
 def _status(ctx: StepCtx) -> dict:
     d = ctx.prior["dispatch_bot"]
     key = user_api_key(ctx.prior["ensure_user"]["uid"])
-    st, body = http("GET", f"{GATEWAY}/transcripts/{d['platform']}/{d['native']}", {"X-API-Key": key})
+    st, body = http("GET", f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}", {"X-API-Key": key})
     return body if st == 200 else {"status": f"http-{st}"}
 
 
@@ -454,7 +454,7 @@ def run_meeting(ctx: StepCtx):
         if ctx.clock_now - ctx.refs["start"] < window:
             return Wait(seconds=8)
         key = user_api_key(ctx.prior["ensure_user"]["uid"])
-        http("DELETE", f"{GATEWAY}/bots/{d['platform']}/{d['native']}", {"X-API-Key": key})
+        http("DELETE", f"{meetings_door()}/bots/{d['platform']}/{d['native']}", {"X-API-Key": key})
         return Wait(seconds=5)
     if s == "stopping":
         return Wait(seconds=4)
