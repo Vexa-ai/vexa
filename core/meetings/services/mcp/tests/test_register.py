@@ -30,11 +30,11 @@ MANIFEST = {
     "base_url_env": "FLOWS_API_URL", "served_at": "/.well-known/mcp-tools.json",
     "depends_on": ["identity"],
     "tools": [
-        {"name": "flows_list", "identity": "operator", "requires": ["identity", "flows"],
+        {"name": "flows_list", "identity": "operator", "auth": "subject", "requires": ["identity", "flows"],
          "route": {"method": "GET", "path": "/flows"}},
-        {"name": "reactions_list", "identity": "operator", "requires": ["identity", "flows"],
+        {"name": "reactions_list", "identity": "operator", "auth": "subject", "requires": ["identity", "flows"],
          "route": {"method": "GET", "path": "/reactions"}, "arguments": ["status"]},
-        {"name": "reaction_signal", "identity": "user", "requires": ["identity", "flows"],
+        {"name": "reaction_signal", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
          "route": {"method": "POST", "path": "/reactions/{reaction_id}/{verb}"}},
     ],
 }

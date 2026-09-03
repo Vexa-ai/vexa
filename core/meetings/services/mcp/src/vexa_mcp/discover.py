@@ -98,4 +98,6 @@ def discover(client: httpx.Client, *, env: Optional[dict] = None
         openapi[domain] = spec
 
     deployed: Set[str] = set(bases)
-    return assemble(manifests, deployed=deployed), openapi, bases
+    # `env` reaches the assembler because "can this edge authenticate that tool" is a DEPLOYMENT
+    # question, and the assembler is where every other boot refusal already lives.
+    return assemble(manifests, deployed=deployed, env=env), openapi, bases

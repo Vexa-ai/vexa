@@ -5,27 +5,53 @@
   "owner": "core/flows",
   "base_url_env": "FLOWS_API_URL",
   "served_at": "/.well-known/mcp-tools.json",
-  "depends_on": ["identity"],
+  "depends_on": [
+    "identity"
+  ],
   "tools": [
     {
       "name": "flows_list",
       "identity": "operator",
-      "requires": ["identity", "flows"],
-      "route": { "method": "GET", "path": "/flows" }
+      "requires": [
+        "identity",
+        "flows"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/flows"
+      },
+      "auth": "subject"
     },
     {
       "name": "reactions_list",
-      "identity": "operator",
-      "requires": ["identity", "flows"],
-      "route": { "method": "GET", "path": "/reactions" },
-      "arguments": ["status", "subject"]
+      "identity": "user",
+      "requires": [
+        "identity",
+        "flows"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/reactions"
+      },
+      "arguments": [
+        "status",
+        "subject"
+      ],
+      "auth": "subject"
     },
     {
       "name": "reaction_signal",
       "identity": "user",
-      "requires": ["identity", "flows"],
-      "route": { "method": "POST", "path": "/reactions/{reaction_id}/{verb}" },
-      "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared — the route cannot be called without them."
+      "requires": [
+        "identity",
+        "flows"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/reactions/{reaction_id}/{verb}"
+      },
+      "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared \u2014 the route cannot be called without them.",
+      "auth": "subject"
     },
     {
       "name": "whats_waiting",
@@ -38,9 +64,21 @@
     {
       "name": "timeline",
       "identity": "user",
-      "requires": ["identity", "flows"],
-      "route": { "method": "GET", "path": "/timeline" },
-      "arguments": ["subject", "since", "until", "limit"]
+      "requires": [
+        "identity",
+        "flows"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/timeline"
+      },
+      "arguments": [
+        "subject",
+        "since",
+        "until",
+        "limit"
+      ],
+      "auth": "subject"
     }
   ],
   "publishes_events": [

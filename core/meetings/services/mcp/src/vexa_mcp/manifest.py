@@ -20,6 +20,7 @@ that is not there:
     one name claimed twice                   ->  last-one-wins, and nobody knows which won
     a route the domain does not serve        ->  the manifest lying about its own service
     two entitlement hooks                    ->  "may this person act" answered twice
+    a door this edge cannot authenticate     ->  a listed tool that 401s on first use
 
 The one thing that is NOT a failure is a domain that is simply not deployed. Its tools are ABSENT
 from `tools/list` — an agent that cannot see a tool recovers; an agent told a tool exists and then
@@ -28,6 +29,7 @@ handed a 502 tells the person the product is broken.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -50,6 +52,27 @@ DOMAINS = {"meetings", "identity", "flows", "agent", "gateway", "rehearse", "bil
 IDENTITIES = {"user", "admin", "operator", "none"}
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
+# WHICH CREDENTIAL THE DOOR BEHIND A TOOL READS — issue #1468. `identity` above says who the CALLER
+# must be; this says what THIS EDGE has to present on their behalf, and they are different
+# questions. Without it the edge had one move — forward the caller's own credential to everything —
+# and found out at call time whether the door read that. Flows' four tools sat behind a
+# deployment-wide operator key this edge does not hold and must never hold, so the answer reached
+# the agent as a JSON-RPC result with a 401 inside it: a tool in `tools/list` that cannot work.
+#
+#   subject   the caller's own credential travels. ALWAYS satisfiable — the caller brought it.
+#   admin     a key the DEPLOYMENT holds travels instead, and the caller's does not. Satisfiable
+#             only where that key is actually configured, which is why it fails the boot.
+#   none      nothing travels.
+#
+# REQUIRED, not defaulted. A default is what the edge already had — a guess, applied silently to
+# every tool, and wrong for four of them. A field that may be omitted reproduces this hole for the
+# next manifest, and the next manifest is the one nobody is watching.
+AUTHS = {"subject", "admin", "none"}
+#: Published literals a stock deploy surface once supplied — the same refusal list flows-api and the
+#: services' `config.v1` keep. A key that is in this repository authenticates nobody and everybody.
+PLACEHOLDER_KEYS = {"changeme", "change-me", "default", "secret", "vexa-internal-secret",
+                    "lite-internal-secret"}
+
 
 class ManifestError(Exception):
     """A manifest, or a combination of them, that this deployment must not boot with."""
@@ -66,6 +89,10 @@ class Tool:
     base_url_env: Optional[str]
     arguments: tuple = ()
     note: str = ""
+    #: which credential this edge presents to the door — see AUTHS.
+    auth: str = "subject"
+    #: for `auth: admin`, the domain's `{"header": …, "key_env": …}`. None for every other value.
+    admin_auth: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +137,17 @@ def validate(doc: dict) -> dict:
             raise ManifestError(f"{domain}: a tool with no name")
         if t.get("identity") not in IDENTITIES:
             raise ManifestError(f"{domain}/{name}: identity must be one of {sorted(IDENTITIES)}")
+        auth = t.get("auth")
+        if auth not in AUTHS:
+            raise ManifestError(
+                f"{domain}/{name}: auth must be one of {sorted(AUTHS)} (got {auth!r}) — every tool "
+                "states which credential its door reads. There is no default: the default is what "
+                "this edge used to guess, and it guessed wrong for every operator-keyed route.")
+        if auth == "admin" and not _admin_auth(doc):
+            raise ManifestError(
+                f"{domain}/{name}: auth is admin, so {domain} must declare admin_auth "
+                '{"header": …, "key_env": …} — a deployment cannot hold a key it cannot spell, '
+                "and this edge will not invent the header the door reads.")
         requires = t.get("requires")
         if not isinstance(requires, list) or not requires:
             raise ManifestError(f"{domain}/{name}: requires must name at least one domain")
@@ -144,6 +182,15 @@ def validate(doc: dict) -> dict:
     return doc
 
 
+def _admin_auth(doc: dict) -> Optional[dict]:
+    """A domain's `{"header", "key_env"}`, or None when it did not declare a usable one."""
+    aa = doc.get("admin_auth")
+    if not isinstance(aa, dict):
+        return None
+    header, key_env = str(aa.get("header") or "").strip(), str(aa.get("key_env") or "").strip()
+    return {"header": header, "key_env": key_env} if header and key_env else None
+
+
 def load_mounted(directory: Optional[str]) -> List[dict]:
     """Every manifest a private deployment supplied. EMPTY IS THE OSS PRODUCT, exactly.
 
@@ -170,8 +217,16 @@ def load_mounted(directory: Optional[str]) -> List[dict]:
 
 
 def assemble(manifests: List[dict], *, deployed: Set[str],
-             required_domains: Optional[Set[str]] = None) -> Assembly:
-    """The union, with every combination rule applied. Raises :class:`ManifestError`."""
+             required_domains: Optional[Set[str]] = None,
+             env: Optional[dict] = None) -> Assembly:
+    """The union, with every combination rule applied. Raises :class:`ManifestError`.
+
+    `env` is the DEPLOYMENT, and it is here for one question: can this edge actually authenticate
+    each tool it is about to publish? A tool it cannot is refused now, by name, rather than served
+    and refused later by the door — the same fail-direction as every other rule in this module, and
+    the one the contract could not express until `auth` existed.
+    """
+    env = os.environ if env is None else env
     answered = {d.get("domain") for d in manifests}
     for missing in sorted((required_domains or set()) - answered):
         raise ManifestError(
@@ -202,11 +257,22 @@ def assemble(manifests: List[dict], *, deployed: Set[str],
             claimed[name] = (domain, source)
             if not set(t["requires"]) <= deployed:
                 continue
+            admin_auth = _admin_auth(doc) if t["auth"] == "admin" else None
+            if admin_auth:
+                held = str(env.get(admin_auth["key_env"]) or "").strip()
+                if not held or held in PLACEHOLDER_KEYS:
+                    raise ManifestError(
+                        f"{domain}/{name} needs the operator credential this deployment does not "
+                        f"hold: {admin_auth['key_env']} is "
+                        f"{'a published placeholder' if held else 'unset'}. Refusing to serve a "
+                        "tool that would be listed and then refused by its own door — set it, or "
+                        "take the tool out of this deployment's manifest.")
             out.tools.append(Tool(
                 name=name, domain=domain, source=source, identity=t["identity"],
                 requires=frozenset(t["requires"]), route=t.get("route"),
                 base_url_env=doc.get("base_url_env"),
-                arguments=tuple(t.get("arguments") or ()), note=t.get("note", "")))
+                arguments=tuple(t.get("arguments") or ()), note=t.get("note", ""),
+                auth=t["auth"], admin_auth=admin_auth))
     for doc in manifests:
         if doc["domain"] not in deployed:
             out.absent_domains.add(doc["domain"])

@@ -21,7 +21,7 @@ FLOWS_MANIFEST = {
     "contract": "mcp.tools.v1", "domain": "flows", "source": "oss", "owner": "core/flows",
     "base_url_env": "FLOWS_API_URL", "served_at": "/.well-known/mcp-tools.json",
     "depends_on": ["identity"],
-    "tools": [{"name": "flows_list", "identity": "operator", "requires": ["identity", "flows"],
+    "tools": [{"name": "flows_list", "identity": "operator", "auth": "subject", "requires": ["identity", "flows"],
                "route": {"method": "GET", "path": "/flows"}}],
 }
 FLOWS_OPENAPI = {"paths": {"/flows": {"get": {"summary": "Every flow version", "parameters": []}}}}

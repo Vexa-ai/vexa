@@ -18,6 +18,33 @@ redis, never reaches into meeting-api or admin-api directly.
 | calls | ticket sink (`VEXA_TICKET_SINK_URL`) | `POST <sink>` | `report_issue` tickets: the agent's words + a server timestamp + a dedupe fingerprint + a **salted fingerprint of the caller's key** (never the key). Unset → `report_issue` returns 503 and nothing else is affected. |
 | calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
 
+## The manifest contract — `mcp.tools.v1`
+
+A domain that owns a door publishes its tools at `/.well-known/mcp-tools.json`; this service unions
+what the deployed domains declare and refuses the combinations that cannot be right
+(`src/vexa_mcp/manifest.py` is the contract — there is no separate schema file, so that validator
+and this section are the two places it is written).
+
+Each tool answers two different questions, and conflating them is what issue #1468 was:
+
+| field | question | values |
+|---|---|---|
+| `identity` | who the CALLER must be | `user` · `admin` · `operator` · `none` |
+| `auth` | which credential THIS EDGE presents to the door on their behalf | `subject` · `admin` · `none` |
+
+- **`subject`** — the caller's own credential travels, as `X-API-Key`. Always satisfiable: the
+  caller brought it. This is what the edge used to do for every tool, whether or not it was right.
+- **`admin`** — a key the *deployment* holds travels instead, and the caller's does not. The domain
+  must also declare `admin_auth: {"header": …, "key_env": …}`, and this deployment must actually
+  hold that key, or **the boot is refused, naming the tool**. A tool that is listed and then refused
+  by its own door is worse than one that is absent: an agent that cannot see a tool recovers.
+- **`none`** — nothing travels.
+
+**Migration note (operator-visible):** `auth` is **required**. A manifest written against the
+previous shape — including one supplied through `VEXA_MCP_MANIFEST_DIR` — refuses the boot, naming
+the tool and the field. That is deliberate: a default is a guess applied silently to every tool, and
+the guess was wrong for the four it was applied to.
+
 ## Tools (10)
 
 | Tool | Wraps |
