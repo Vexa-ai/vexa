@@ -526,6 +526,21 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:8000
       - PORT=8010
+      # ── assembly (PRD decision 40) ─────────────────────────────────────────────────────────
+      # The domains this deployment carries. A domain whose URL is set is ASKED for its tool
+      # manifest at /.well-known/mcp-tools.json and its tools join the one MCP surface; a domain
+      # whose URL is unset is never asked and its tools are simply absent. That is the whole of the
+      # eight-configuration story — identity plus any subset of meetings, flows and agent — and it
+      # needs no profile name, because a profile name would be a second place to say what these
+      # URLs already say.
+      - ADMIN_API_URL=http://admin-api:8001
+      - MEETING_API_URL=http://meeting-api:8080
+      - AGENT_API_URL=${AGENT_API_URL:-}
+      - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      # A private deployment mounts its own manifests here — billing, seats, entitlement — and they
+      # are assembled exactly like the OSS ones, competing for names in the same space so a mount
+      # can collide but never shadow. EMPTY IS THE OSS PRODUCT, exactly.
+      - VEXA_MCP_MANIFEST_DIR=${VEXA_MCP_MANIFEST_DIR:-}
       - VEXA_ENV=${VEXA_ENV:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
