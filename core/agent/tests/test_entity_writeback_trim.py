@@ -8,6 +8,7 @@ the budget is enforced rather than requested.
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 import pytest
@@ -268,7 +269,37 @@ def test_a_phase_over_budget_leaves_no_child_process(tmp_path, monkeypatch):
             '"name":"mcp__vexa__entity_upsert","id":"c","input":{}}]}}')
     argv = ["sh", "-c", f"echo '{line}'; echo '{line}'; echo '{line}'; sleep 300"]
 
-    events = cc.parse_stream_json(cc._exec_subprocess(argv, str(tmp_path)))
+    # ── DIAGNOSTIC INSTRUMENT (Vexa-ai/vexa#1434) — temporary, do not merge ──────────────────
+    # This test reds on CI and on no machine anybody can reach: 40 single-CPU-pinned runs, 25 more,
+    # and the full suite on 3.12, on 3.14 and pinned to two CPUs are all green on bbb. The bounded
+    # wait added by #1441 did not help — CI waited the full 5 s with the child still alive — which
+    # refutes "the reap is merely late" and says the reap does not happen at all. Rather than guess
+    # a third time, capture the state INTO the failure message and let the runner answer.
+    import gc
+    import weakref
+
+    reap_log = []
+    _real_reap = cc._reap
+
+    def _spy_reap(p, grace=None):
+        reap_log.append(f"enter(grace={grace!r}, poll={p.poll()!r})")
+        try:
+            _real_reap(p, grace)
+        except BaseException as exc:                       # noqa: BLE001 — reported, not handled
+            reap_log.append(f"raised {type(exc).__name__}: {exc}")
+            raise
+        finally:
+            reap_log.append(f"exit(poll={p.poll()!r})")
+
+    monkeypatch.setattr(cc, "_reap", _spy_reap)
+
+    # A weakref, and the strong reference is dropped IMMEDIATELY: holding the inner generator here
+    # would itself pin the thing whose finalization is under test.
+    inner = cc._exec_subprocess(argv, str(tmp_path))
+    inner_ref = weakref.ref(inner)
+    events = cc.parse_stream_json(inner)
+    del inner
+
     out = list(engine.bounded(events, max_tool_calls=2, max_seconds=10))
 
     assert sum(1 for e in out if e["type"] == "tool-call") == 2
@@ -276,31 +307,37 @@ def test_a_phase_over_budget_leaves_no_child_process(tmp_path, monkeypatch):
     assert len(seen) == 1
     proc = seen[0]
 
-    # WAIT FOR THE REAP — bounded, and not a sleep.
-    #
-    # The property is that the budget kills the CLI, and it is delivered by a cascade: `bounded`
-    # closes its iterator, GeneratorExit unwinds `parse_stream_json`, THAT frame's teardown drops
-    # the last reference to the `_exec_subprocess` generator, and only then does its `finally`
-    # reap. The last hop is finalization, not a call — so the guarantee the code offers is PROMPT,
-    # never INSTANTANEOUS, and an assertion taken on the next bytecode was reading a coin flip.
-    # It came up heads on every developer machine and tails on CI: red on three consecutive PRs
-    # into this line (#1426, #1428, #1431), and not reproducible in 40 single-CPU-pinned runs or a
-    # full-suite run on 3.12 and 3.14 (Vexa-ai/vexa#1434).
-    #
-    # This is a poll with a deadline, not `sleep(n)`: it returns the microsecond the reap lands, so
-    # a healthy run costs nothing, and 5s is far outside any scheduling delay while staying far
-    # inside the suite's patience. Every property the docstring above names survives it — with the
-    # kill path deleted, `_reap`'s bare `proc.wait()` still blocks inside the cascade and this test
-    # still hangs, which is the failure it was written to name.
-    #
-    # `events` is deliberately still referenced here. Dropping it would close the chain from the
-    # test instead of from `bounded`, and the test would then pass with `bounded`'s own
-    # `finally: gen.close()` deleted — proving the cascade, not the budget.
     deadline = time.monotonic() + 5.0
     while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(0.005)
 
-    assert proc.poll() is not None, "the CLI is still running after the budget stopped reading it"
+    if proc.poll() is None:
+        alive = inner_ref()
+        refs = []
+        if alive is not None:
+            for r in gc.get_referrers(alive):
+                kind = type(r).__name__
+                if kind == "frame":
+                    kind = f"frame({getattr(r, 'f_code', None) and r.f_code.co_name})"
+                refs.append(kind)
+        try:
+            import os as _os
+            waited = _os.waitpid(proc.pid, _os.WNOHANG)
+        except Exception as exc:                            # noqa: BLE001
+            waited = f"{type(exc).__name__}: {exc}"
+        raise AssertionError(
+            "the CLI is still running after the budget stopped reading it\n"
+            f"  _reap calls          : {reap_log or 'NEVER ENTERED'}\n"
+            f"  outer gen closed     : {events.gi_frame is None} (gi_running={events.gi_running})\n"
+            f"  inner gen collected  : {alive is None}\n"
+            f"  inner gen frame      : {None if alive is None else (alive.gi_frame is None)}\n"
+            f"  inner referrers      : {refs}\n"
+            f"  proc.poll/returncode : {proc.poll()!r} / {proc.returncode!r}\n"
+            f"  waitpid(WNOHANG)     : {waited!r}\n"
+            f"  gc enabled / counts  : {gc.isenabled()} / {gc.get_count()}\n"
+            f"  python               : {sys.version.split()[0]}\n"
+            f"  argv                 : {argv!r}\n")
+
     with pytest.raises(ProcessLookupError):
         os.kill(proc.pid, 0)
 
