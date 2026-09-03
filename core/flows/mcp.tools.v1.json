@@ -1,0 +1,77 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "flows",
+  "source": "oss",
+  "owner": "core/flows",
+  "base_url_env": "FLOWS_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": ["identity"],
+  "tools": [
+    {
+      "name": "flows_list",
+      "identity": "operator",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/flows" }
+    },
+    {
+      "name": "reactions_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/reactions" },
+      "arguments": ["status", "subject"],
+      "note": "A person's own queue: the subject is taken from their credential, so `subject` is optional and may only name themselves."
+    },
+    {
+      "name": "reaction_signal",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/reactions/{reaction_id}/{verb}" },
+      "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared — the route cannot be called without them."
+    },
+    {
+      "name": "whats_waiting",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/queue/waiting" },
+      "note": "PRD decision 42.2 — what is waiting IS flows: this subject's pending reactions, each naming the flow that produced it and its typed reason (human | failed | not_present | pending). Nothing is unioned at the edge. `auth: subject` means the person is the authenticated caller: flows resolves them from their own credential, and the tool takes no subject argument."
+    },
+    {
+      "name": "timeline",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/timeline" },
+      "arguments": ["subject", "since", "until", "limit"]
+    },
+    {
+      "name": "report_friction",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/friction" },
+      "arguments": ["session", "what_i_tried", "what_happened", "severity", "meeting_id", "tool", "deployment", "worker_image", "kind"],
+      "note": "PRD 40.9 open-decision 8 — friction is not a domain and this is its whole product surface: what did not work, dumped where the dev agent can read it and fix behaviour from it. Requires no agent domain: this is flows-api's own route, so it works in the no-agents profile too. `session` (the chat/meeting session this happened in), `what_i_tried`, `what_happened` and `severity` are required; the route refuses a report with no session rather than accept one nothing can be tied back to."
+    },
+    {
+      "name": "friction_so_far",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/friction" },
+      "arguments": ["since", "limit"],
+      "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+    }
+  ],
+  "publishes_events": [
+    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v3" },
+    { "event": "friction.reported", "status": "published today", "triggers": "no flow — recorded as a fact on the timeline only; friction is a sink, not a domain (PRD 40.9 open-decision 8)" }
+  ],
+  "handed_off_events": [
+    { "event": "meeting.started", "event_v2_owner": "meetings", "note": "F168/F181: meeting-api now publishes this too (config.v1 publish-edge, meeting_api/events.py), and the carrier census records meetings as owner. invite_intake v3's own emit_started keeps running unchanged — same source_event_id scheme (live-<meeting_id>), so admission dedups the two producers into one reaction (flows/admission.py) rather than firing live_meeting twice. Retiring emit_started is a follow-up, not part of this change." },
+    { "event": "meeting.completed", "event_v2_owner": "meetings", "note": "F168/F181: same handover as meeting.started (source_event_id done-<meeting_id>). invite_intake v3's emit_completed keeps running for calendar-intake meetings; the two producers dedupe at admission, not here." }
+  ]
+}
