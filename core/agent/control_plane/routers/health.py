@@ -7,9 +7,19 @@ single identifier changed.
 """
 from __future__ import annotations
 
+import json
+import pathlib
+
 from control_plane import version as version_mod
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+
+#: ADR-0037 / PRD decision 40.5 — the agent domain's MCP tool manifest, SERVED not baked into the
+#: assembler (mirrors core/flows/src/flows_integrations/flows_api.py's own `/.well-known/mcp-tools.json`
+#: route byte-for-byte): the version that answers is the version this build actually runs. Committed
+#: at `core/agent/mcp.tools.v1.json`; `parents[2]` from this file (routers/ -> control_plane/ ->
+#: core/agent/) lands on it, same distance flows-api's route sits from its own manifest.
+_MANIFEST_PATH = pathlib.Path(__file__).resolve().parents[2] / "mcp.tools.v1.json"
 
 
 def build(**d) -> APIRouter:
@@ -45,5 +55,15 @@ def build(**d) -> APIRouter:
         front of a person, because that is the failure where the client leads the server and every
         click 422s."""
         return version_mod.version_payload()
+    @router.get("/.well-known/mcp-tools.json")
+    def mcp_tools_manifest():
+        """This domain's MCP tool manifest — what the assembled edge (core/meetings/services/mcp)
+        discovers and binds against agent-api's own OpenAPI. OPEN, like `/health`: it names routes
+        and argument names, never data and never a credential."""
+        try:
+            return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=503,
+                                detail=f"this build carries no tool manifest: {e}") from e
 
     return router

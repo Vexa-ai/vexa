@@ -1,0 +1,46 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "agent",
+  "source": "oss",
+  "owner": "core/agent",
+  "base_url_env": "AGENT_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": ["identity"],
+  "note": "ADR-0037 / PRD decision 40.5 — the agent domain's first cut at the assembled edge. Four tools today, all GET, because that is what binds: `bind.py` derives a tool's argument schema from its route's OpenAPI `parameters`, and every workspace WRITE route here (`PUT /api/workspace/file`, `POST /api/workspace/entity`, `POST /api/claims`, `POST /api/workspace/shared/new`, `POST /api/workspace/purpose`) takes a single JSON-body parameter (`body: dict = Body(...)` or a Pydantic model), which FastAPI publishes under `requestBody`, not `parameters` — confirmed by dumping this app's own `openapi()`. Declaring them as tools today would either fail `bind.py`'s verification outright or, left undeclared, publish a schema with zero arguments and no way to pass `kind`/`name`/`facts`/etc — 'the worst reply available' by this codebase's own words in register.py, a tool an agent can call and be told it worked while nothing happened. Same class of gap flows' own manifest already lives with (`flows_submit`/`flow_lifecycle` are real FLOWS_API routes, absent from core/flows/mcp.tools.v1.json for the identical reason). Tracked, with the full tool-by-tool breakdown, at the issue this manifest shipped with.",
+  "tools": [
+    {
+      "name": "workspace_tree",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "agent"],
+      "route": { "method": "GET", "path": "/api/workspace/tree" },
+      "arguments": ["hidden", "slug"],
+      "note": "The file listing for the caller's own workspace, or one of their shared workspaces named by `slug`. `hidden` includes dotfiles."
+    },
+    {
+      "name": "workspace_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "agent"],
+      "route": { "method": "GET", "path": "/api/workspace/file" },
+      "arguments": ["path", "slug"],
+      "note": "Read one file's content by its relative path. `slug` selects a shared workspace; omitted, it is the caller's own."
+    },
+    {
+      "name": "workspaces",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "agent"],
+      "route": { "method": "GET", "path": "/api/workspace/shared" }
+    },
+    {
+      "name": "workspace_purpose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "agent"],
+      "route": { "method": "GET", "path": "/api/workspace/purpose" },
+      "arguments": ["slug"],
+      "note": "Reads the one-line PURPOSE a workspace carries. The SET side (`POST /api/workspace/purpose`) is a `WorkspacePurposeBody` JSON-body route and is not yet bindable — see the manifest-level note above."
+    }
+  ]
+}

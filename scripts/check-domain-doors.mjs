@@ -79,6 +79,13 @@ export const UNITS = [
   // assembled at the gateway from domain-owned manifests, ADR-0037). Listed BEFORE core/meetings so the
   // longest-prefix rule classes it correctly.
   { unit: "mcp", kind: "edge", root: "core/meetings/services/mcp" },
+  // ADR-0037 / PRD decision 40.5: once the one MCP server is assembled at the gateway, a worker's
+  // VEXA_MCP_URL is an ordinary CLIENT edge to that edge — the same relationship clients/terminal
+  // has, not the agent domain reaching a sibling's door. Listed BEFORE core/agent so the
+  // longest-prefix rule classes it correctly; core/agent/control_plane (the dispatcher that MINTS
+  // the worker's env, including this URL) stays domain-kind on purpose — it is agent's own
+  // config surface, not the client itself.
+  { unit: "agent-worker", kind: "client", root: "core/agent/worker" },
   { unit: "identity", kind: "domain", root: "core/identity" },
   { unit: "meetings", kind: "domain", root: "core/meetings" },
   { unit: "flows", kind: "domain", root: "core/flows" },
