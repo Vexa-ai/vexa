@@ -44,15 +44,28 @@ each slice carrying only what the rehearsal proved worth carrying.
 API and worker as processes so edits are live on restart. Both expect the dogfood stack from
 `deploy/dogfood/` to be running.
 
+**The server runs out of its own venv, `./.venv`, built by `rig.sh up` from
+[`pyproject.toml`](pyproject.toml).** It used to run out of `$VEXA_FLOWS_SRC`'s venv — a stale,
+shared checkout's — and on 2026-09-03 that cost 2.5 minutes of downtime when a module the import
+chain reached was not installed there, and a fix that meant installing a package into a venv three
+other things also use. The flows API and worker still use the flows venv; they are that checkout's
+processes. The control server is not.
+
+**`rig.sh down` stops the server by pidfile** (`$HOME/.storm/run/control-mcp.pid`, or
+`VEXA_RIG_RUN_DIR`), never by `pkill -f`. The pattern matched stage-1's own ssh session on the same
+day, so stopping the rig killed the session doing the stopping.
+
 ### What it has to be told
 
-Four values, all optional, each defaulted to what the bbb host has always used — so an
+These, all optional, each defaulted to what the bbb host has always used — so an
 unconfigured rig starts exactly as before, and a rig anywhere else is four exports rather than an
 edit to the source. `rig.sh config` prints what the current environment resolves to.
 
 | variable | what it names | default |
 |---|---|---|
-| `VEXA_FLOWS_SRC` | the flows checkout's `core/flows`: the venv, the flows API, the worker, and the engine `fact_emit` imports | `/home/dima/dev/vexa-flows1315/core/flows` |
+| `VEXA_FLOWS_SRC` | the flows checkout's `core/flows`: the flows API, the worker, their venv, and the engine `fact_emit` imports. **Not the control server's interpreter any more** | `/home/dima/dev/wt-line/core/flows` |
+| `VEXA_RIG_VENV` | the control server's own venv, built from `pyproject.toml` on `up` | `./.venv` beside this README |
+| `VEXA_RIG_RUN_DIR` | where the pidfile `down` stops by is written | `$HOME/.storm/run` |
 | `VEXA_PUBLIC_MCP_URL` | the name the server PUBLISHES — sign-in links, the `/connect` bootstrap, and the transport's host guard at once | `https://rig.dev.vexa.ai/mcp` |
 | `VEXA_UI_URL` | the terminal `deeplink()` sends people to | `https://app.dev.vexa.ai` |
 | `VEXA_MCP_DELEGATION_SECRET` | the HMAC key `vxd_` delegation tokens are verified against; read from `$HOME/.storm/delegation-secret` and never echoed | unset → every delegated token is refused, none admitted unverified |

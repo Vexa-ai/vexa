@@ -10,8 +10,12 @@ to a green suite (review row R-D20).
 ## Run them
 
 ```bash
-cd deploy/dogfood/rig && python3 -m pytest tests -q
+cd deploy/dogfood/rig && python3 -m pytest tests -q      # stdlib only, no venv needed
 ```
+
+The suite deliberately needs nothing installed. The server's own runtime dependencies are declared
+in `../pyproject.toml` and `rig.sh` builds `../.venv` from it — but a test run that required that
+venv would be a test run nobody does from a laptop.
 
 Offline and stdlib-only. `conftest.py` does two things so no test has to:
 
@@ -49,6 +53,18 @@ Gate 4c lives with the service that owns the scoping
 ([`core/flows/tests/test_reactions_scope.py`](../../../../core/flows/tests/test_reactions_scope.py))
 and gate 13 with the route it guards
 ([`clients/terminal/src/app/api/__tests__/minutesSeed.test.ts`](../../../../clients/terminal/src/app/api/__tests__/minutesSeed.test.ts)).
+
+## The runtime gates (added 2026-09-03, from three live findings on deploy)
+
+| gate | finding | holds |
+|---|---|---|
+| `test_migration.py` | the seal migration was LAZY | every known store is sealed at process start; the registry is total, so a new store cannot dodge it; plaintext this module does not own is reported rather than ignored |
+| `test_runtime_deps.py` | the rig had no venv and no dependency declaration | importing `rig_secrets` drags in no control-plane tree; the two borrowed `core/agent` files stay stdlib-pure; every third-party import is declared |
+| `test_rig_sh.py` | `rig.sh down` killed a bystander | `stop_by_pidfile` stops the rig and leaves a process whose command line merely *contains* the path alone; a recycled pid is not signalled |
+
+`test_rig_sh.py` drives `rig.sh`'s functions in bash (`RIG_SH_LIB=1 source rig.sh` defines them and
+returns before the dispatch). The `pkill` defect was behavioural — the string was in plain sight and
+looked fine — so reading the file would not have caught it.
 
 **Assert on the tool, not on the file.** The verbs are being split by owning domain; a test that
 greps this file dies the day it moves, and a test that calls the handler follows it.

@@ -34,8 +34,9 @@ set -u
 # attendee follow-up, the note-date fix and the provenance lines. Previous value:
 #   FL="${VEXA_FLOWS_SRC:-/home/dima/dev/vexa-flows1315/core/flows}"
 FL="${VEXA_FLOWS_SRC:-/home/dima/dev/wt-line/core/flows}"
-# The venv still lives in the old checkout: same dependencies, and a worktree has none of
-# its own. Source and interpreter are different questions.
+# THE FLOWS VENV, for the flows processes only. It still lives in the old checkout: same
+# dependencies, and a worktree has none of its own. Source and interpreter are different questions.
+# The CONTROL SERVER no longer runs out of it — see RIG_VENV below.
 VENV_DIR="${VEXA_FLOWS_VENV:-/home/dima/dev/vexa-flows1315/core/flows}"
 PUBLIC_MCP_URL="${VEXA_PUBLIC_MCP_URL:-https://rig.dev.vexa.ai/mcp}"
 UI_URL="${VEXA_UI_URL:-https://app.dev.vexa.ai}"
@@ -46,8 +47,74 @@ RIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CTL="$RIG_DIR/vexa_control_mcp.py"
 
 V=$VENV_DIR/.venv/bin
+
+# ── THE RIG'S OWN VENV, AND ITS OWN PIDFILES ─────────────────────────────────────────────────
+# 2026-09-03, live, 2.5 minutes down: the control server was started with $V — the venv of
+# `~/dev/vexa-flows1315`, a stale checkout that three other things also run out of. A module the
+# rig's import chain reached was not installed there, so the server would not start, and the fix
+# had to be an install into a venv nobody owns. The rig had no dependency declaration and no
+# interpreter of its own; it borrowed whichever was nearest.
+#
+# It has both now. `deploy/dogfood/rig/pyproject.toml` says what it needs and this builds a venv
+# from exactly that, next to the source, so the flows venv can be rebuilt, moved or deleted
+# without taking the rig with it.
+RIG_VENV="${VEXA_RIG_VENV:-$RIG_DIR/.venv}"
+RV="$RIG_VENV/bin"
+UV="${UV:-uv}"
+
+ensure_venv() {
+  [ -x "$RV/python" ] && return 0
+  command -v "$UV" >/dev/null 2>&1 || {
+    echo "rig: no venv at $RIG_VENV and no uv to build one — install uv, or set VEXA_RIG_VENV" >&2
+    return 1
+  }
+  echo "rig: building $RIG_VENV from $RIG_DIR/pyproject.toml…"
+  "$UV" venv "$RIG_VENV" >/dev/null 2>&1 || return 1
+  # Runtime only. The dev group is pytest, which the rig does not need to serve.
+  "$UV" pip install --python "$RV/python" -r "$RIG_DIR/pyproject.toml" >/dev/null || {
+    echo "rig: could not install the rig's dependencies into $RIG_VENV" >&2
+    return 1
+  }
+}
+
+# STOP BY PID, NEVER BY PATTERN. `pkill -f vexa_control_mcp` matches any command line containing
+# that string, and on 2026-09-03 that included stage-1's own ssh session: stopping the rig killed
+# the session doing the stopping. `-f` is a substring search over other people's arguments, not
+# process identity.
+RUN_DIR="${VEXA_RIG_RUN_DIR:-$HOME/.storm/run}"
+CTL_PIDFILE="$RUN_DIR/control-mcp.pid"
+
+# What a recorded pid's command line must look like before we signal it. The pidfile is the
+# identity; this is only the guard against a pid that has been recycled since it was written —
+# between a crash and a `down`, that number can belong to anybody.
+CTL_PAT="vexa_control_mcp"
+
+stop_by_pidfile() {  # stop_by_pidfile <file> [pattern]
+  local f="${1:-}" pat="${2:-$CTL_PAT}" pid cmd
+  [ -n "$f" ] && [ -r "$f" ] || return 0
+  pid="$(head -1 "$f" 2>/dev/null | tr -dc '0-9')"
+  rm -f "$f"
+  [ -n "$pid" ] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0          # already gone; the file was stale
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+  case "$cmd" in
+    *"$pat"*) : ;;
+    *) echo "rig: pid $pid is no longer the rig ($cmd) — not signalling it"; return 0 ;;
+  esac
+  kill "$pid" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.2
+  done
+  kill -9 "$pid" 2>/dev/null
+  return 0
+}
+
+# Sourced as a library (the tests drive these functions directly) — define and stop here.
+if [ -n "${RIG_SH_LIB:-}" ]; then return 0 2>/dev/null || exit 0; fi
+
 LOG=/tmp/storm-logs
-mkdir -p "$LOG"
+mkdir -p "$LOG" "$RUN_DIR"
 
 up_port() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 
@@ -71,12 +138,17 @@ lane_pids() {  # lane_pids <pattern>
 lane_up() { [ -n "$(lane_pids "$1")" ]; }
 
 start_ctl() {
+  ensure_venv || { echo "rig: refusing to start the control server without its own venv" >&2; return 1; }
+  stop_by_pidfile "$CTL_PIDFILE"
   tmux kill-session -t stormctl 2>/dev/null
+  # `echo $! > pidfile` INSIDE the session, so the pid recorded is the python process itself and
+  # not tmux's. The `wait` keeps the pane alive and the exit status honest.
   tmux new-session -d -s stormctl -c /tmp \
     "VEXA_FLOWS_SRC=\"$FL\" VEXA_PUBLIC_MCP_URL=\"$PUBLIC_MCP_URL\" VEXA_UI_URL=\"$UI_URL\" \
      VEXA_MCP_DELEGATION_SECRET=\"\$(cat \"\$HOME/.storm/delegation-secret\" 2>/dev/null)\" \
      INTERNAL_API_SECRET=\"\$(cat \"\$HOME/.storm/internal-secret\" 2>/dev/null)\" \
-     $V/python -u \"$CTL\" 2>&1 | tee $LOG/control-mcp.log"
+     $RV/python -u \"$CTL\" > >(tee $LOG/control-mcp.log) 2>&1 & \
+     echo \$! > \"$CTL_PIDFILE\"; wait"
 }
 start_api() {
   tmux kill-session -t stormapi 2>/dev/null
@@ -103,13 +175,15 @@ status() {
   printf "  %-18s %s\n" "control-mcp :18310" "$(up_port 18310 && echo UP || echo DOWN)"
   printf "  %-18s %s\n" "flows-worker"    "$(lane_up 'flows_worker' && echo "UP ($(lane_pids 'flows_worker' | tr '\n' ' '))" || echo DOWN)"
   printf "  %-18s %s\n" "lane checkout"   "$FL @ $(git -C "$FL" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  printf "  %-18s %s\n" "rig venv"        "$([ -x "$RV/python" ] && echo "$RIG_VENV" || echo "ABSENT (rig.sh up builds it)")"
   printf "  %-18s %s\n" "dogfood gateway" "$(curl -s -m 4 localhost:18456/health >/dev/null && echo UP || echo DOWN)"
   echo "  tmux: $(tmux ls 2>/dev/null | grep -c storm) storm sessions"
 }
 
 case "${1:-status}" in
   status) echo "storm rig:"; status ;;
-  config) echo "flows src:  $FL"; echo "server:     $CTL"; echo "publishes:  $PUBLIC_MCP_URL"; echo "terminal:   $UI_URL" ;;
+  config) echo "flows src:  $FL"; echo "server:     $CTL"; echo "rig venv:   $RIG_VENV"
+          echo "pidfile:    $CTL_PIDFILE"; echo "publishes:  $PUBLIC_MCP_URL"; echo "terminal:   $UI_URL" ;;
   up)
     start_mailpit
     lane_up 'flows_integrations.flows_api' || start_api
@@ -120,8 +194,14 @@ case "${1:-status}" in
     start_mailpit; start_api; start_worker; start_ctl
     sleep 10; echo "storm rig restarted:"; status ;;
   down)
+    # The control server by PIDFILE; the flows processes by LANE (their PYTHONPATH names the
+    # checkout, which is the identity `lane_pids` was already written for). Neither is a pattern
+    # match against every command line on the host.
+    stop_by_pidfile "$CTL_PIDFILE"
     for s in stormctl stormapi stormworker stormflows; do tmux kill-session -t $s 2>/dev/null; done
-    pkill -f vexa_control_mcp; pkill -f flows_worker; pkill -f "uvicorn flows"
+    for pid in $(lane_pids 'flows_worker') $(lane_pids 'flows_integrations.flows_api'); do
+      kill "$pid" 2>/dev/null
+    done
     docker rm -f storm-mailpit >/dev/null 2>&1
     echo "storm rig down (dogfood stack untouched)" ;;
   *) echo "usage: rig.sh status|config|up|restart|down"; exit 1 ;;
