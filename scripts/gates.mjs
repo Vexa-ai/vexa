@@ -5,13 +5,14 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|domain-doors|all]
+ *                                lite-makefile|domain-doors|fact-parity|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
+import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -1422,7 +1423,30 @@ function gateDomainDoors() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity };
+// gate:fact-parity (P23 — one writer per fact) — the generalisation of the ONE control case in this
+// repository. `config_preflight.py` is vendored byte-identically into seven packages and has never
+// drifted, because check 2 of gate:config-contract fails the build on byte-inequality. Every other
+// multiply-written fact in the tree either has drifted or is one edit away — the 2026-09-03 SSOT
+// survey found an entity slug with three implementations that already resolve a non-ASCII name to
+// two different filenames, a "live meeting" status set with ten declarations and four memberships,
+// and four comments asserting that copies are "kept identical on purpose" beside copies that are not.
+//
+// scripts/parity.json names each fact and where it is written. A fact is ENFORCED (every site must
+// agree — the teeth) or on the DRIFT LEDGER (it has already disagreed and agreeing needs a product
+// decision, so the gate records both answers, names the decision, and refuses to let either side
+// move silently). The gate does not pick winners: a gate that guesses a product decision makes the
+// wrong answer permanent and calls it enforcement.
+function gateFactParity() {
+  let res;
+  try { res = checkParity(ROOT); }
+  catch (e) { return fail([`fact-parity: the checker or ${PARITY_MANIFEST} itself failed — ${errText(e).slice(0, 800)}`]); }
+  if (!(res.manifest.facts || []).length) { console.log("  ✓ gate:fact-parity — no parity manifest yet (green-on-empty)"); return true; }
+  if (res.errs.length) return fail([`fact-parity (P23, one writer per fact) — facts written twice that disagree:`, ...res.errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:fact-parity — ${res.enforced.length} enforced fact(s) agree across ${res.enforced.reduce((n, f) => n + f.sites.length, 0)} site(s) · ${res.ledger.length} on the drift ledger, each pinned and naming its pending decision (\`node scripts/check-parity.mjs --ledger\`)`);
+  return true;
+}
+
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
