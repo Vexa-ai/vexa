@@ -414,61 +414,58 @@ CONFIG_VOCAB = {
 UI_BASE = os.environ.get("VEXA_UI_URL", "http://localhost:18300")
 
 
-SETTINGS_PATH = ".settings.json"
+SETTINGS_PATH = ".settings.json"        # legacy: the file this used to write. Read by nothing now.
 
-# CLOSED VOCABULARY. key -> (default, kind, what it means to the person). An unknown key is
-# refused with this list: a setting that silently does nothing is worse than an error, and an
-# agent with no vocabulary invents one.
-SETTINGS_VOCAB = {
-    "bot_name":     ("Vexa", "text",
-                     "the name the notetaker shows up as in the room"),
-    "mail_minutes": (True, "on/off",
-                     "the write-up after a meeting ends"),
-    "mail_join":    (False, "on/off",
-                     "a note each time the notetaker joins a call"),
-    "mail_rsvp":    (True, "on/off",
-                     "replying yes in the calendar when Vexa is invited to a meeting"),
-    "mail_prep":    (True, "on/off",
-                     "the day-before prepare email for upcoming meetings"),
-    "timezone":     ("", "text",
-                     "their IANA zone, e.g. Europe/Lisbon — every time is stated in it"),
-}
-
-
+# THE VOCABULARY MOVED TO IDENTITY. It was a Python dict here and a file in a workspace in the AGENT
+# domain, which made flows and this server depend on a third domain for a fact about a PERSON — so a
+# deployment without agents had nobody with a timezone and no way to stop the mail, and every mail
+# the engine sends is gated on one of these values. `admin_api.app.person_settings` owns it now; this
+# server asks identity, with the caller's own key, and holds no copy of the list.
+#
+# `bot_name` is the ONE key still written here, and it is a question rather than an oversight: there
+# are already three stores for that one fact (identity's `calendar_bot_name` → bot-context →
+# meeting-api's auto-join, a per-calendar override, and this file). Moving it into identity's person
+# settings would make a fourth. Held for the founder; see the PR.
 def _settings(uid: str) -> dict:
-    """This person's preferences, defaults filled in. Never raises, never empty."""
-    raw = _read_json(uid, SETTINGS_PATH, {}) or {}
-    out = {k: v[0] for k, v in SETTINGS_VOCAB.items()}
-    out.update({k: v for k, v in raw.items() if k in SETTINGS_VOCAB})
-    return out
+    """This person's preferences, defaults filled in. Never raises, never empty.
+
+    All of them come from identity now, including `bot_name` — which identity stores in
+    `users.data.calendar_bot_name`, the ONE place meeting-api already reads a person's default from
+    on both spawn paths. This server holds no vocabulary and no copy of any value."""
+    st, body = _http("GET", f"{ADMIN_API}/user/settings", {"X-API-Key": _user_key(uid)})
+    return dict(body.get("settings") or {}) if st == 200 and isinstance(body, dict) else {}
 
 
-def _settings_set(uid: str, key: str, value) -> dict:
-    raw = _read_json(uid, SETTINGS_PATH, {}) or {}
-    raw[key] = value
-    _write_json(uid, SETTINGS_PATH, raw)
-    return _settings(uid)
+def _settings_meanings() -> dict:
+    """What each setting means, from the domain that owns it — never a second copy of the list."""
+    st, body = _http("GET", f"{ADMIN_API}/user/settings",
+                     {"X-API-Key": _user_key(_subject() or "")})
+    return dict(body.get("what_each_means") or {}) if st == 200 and isinstance(body, dict) else {}
 
 
-_TZ_FILE = HOME / ".storm/user-timezones.json"
+def _settings_set(uid: str, key: str, value):
+    """Set one setting. Returns (settings, refusal-or-None) — identity owns the vocabulary AND the
+    coercion, so "off"/"no"/"yes" are parsed once, there, and not in every caller."""
+    st, body = _http("PUT", f"{ADMIN_API}/user/settings", {"X-API-Key": _user_key(uid)},
+                     {key: value})
+    if st == 422 and isinstance(body, dict):
+        return _settings(uid), body.get("detail") if isinstance(body.get("detail"), dict) else body
+    if st != 200:
+        return _settings(uid), {"refused": "identity could not be reached", "status": st}
+    return dict((body or {}).get("settings") or {}), None
 
 
 def _person_tz(uid: str, set_to: str = "") -> str:
-    """This person's IANA timezone, remembered across calls.
+    """This person's IANA timezone, remembered by IDENTITY across calls.
 
     Times were rendered on the server's clock, so a Lisbon person booking a standup was told it
-    would join at 19:15 when it was 17:15 where they stood. The agent knows their zone from its
-    own environment; we only have to be told once and then never state a bare time again.
-    """
+    would join at 19:15 when it was 17:15 where they stood. The agent knows their zone from its own
+    environment; we only have to be told once and then never state a bare time again. Whether a
+    string IS a zone is identity's judgement now, not a second `zoneinfo` check here."""
     uid = str(uid)
     if set_to:
-        try:
-            import zoneinfo
-            zoneinfo.ZoneInfo(set_to)
-        except Exception:  # noqa: BLE001
-            return _settings(uid).get("timezone", "")
-        _settings_set(uid, "timezone", set_to)
-        return set_to
+        after, refused = _settings_set(uid, "timezone", set_to)
+        return after.get("timezone", "") if not refused else _settings(uid).get("timezone", "")
     return _settings(uid).get("timezone", "")
 
 
@@ -3660,13 +3657,20 @@ def bot_send(meeting_url: str, bot_name: str = "") -> str:
     # resolved ONCE: the request and the sentence we say back must name the same bot. An
     # earlier cut resolved it inline and left the reply reading the raw empty parameter —
     # "the bot is at the door as ''".
-    bot_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
+    # NO DEFAULT RESOLVED HERE. An explicit name passes through; an absent one is meeting-api's to
+    # fill from the person's own default, which it reads from identity on every spawn path. This
+    # line used to read a workspace file, and that is how one fact came to have three stores.
+    bot_name = bot_name or ""
     # What the sentence CALLS the meeting. The url is the only name we reliably have here, and it
     # is the one the person just handed us — so it reads back as theirs rather than as an id.
     title_for_say = (meeting_url or "").strip() or f"{platform}/{mid}"
+    # What the room will actually see, resolved ONCE by the domain that decides it, so the sentence
+    # we say back and the name on the bot cannot differ.
+    said_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
     st, r = _gw_http(uid, "POST", "/bots",
                      {"platform": platform, "native_meeting_id": mid,
-                      "meeting_url": meeting_url.strip(), "bot_name": bot_name})
+                      "meeting_url": meeting_url.strip(),
+                      **({"bot_name": bot_name} if bot_name else {})})
     if st not in (200, 201):
         if st == 409:
             return json.dumps({"already_there": True,
@@ -3708,8 +3712,8 @@ def bot_send(meeting_url: str, bot_name: str = "") -> str:
     # be fixed with an instruction — the tool was offering the link, labelled for exactly that use.
     # The panel is moved by the harness on this result; the sentence says what is about to happen.
     say = {
-        "in_call": f"The bot is in the call as '{bot_name}' — the transcript is beside this chat.",
-        "knocking": f"The bot is at the door of {title_for_say} as '{bot_name}'. Someone in the "
+        "in_call": f"The bot is in the call as '{said_name}' — the transcript is beside this chat.",
+        "knocking": f"The bot is at the door of {title_for_say} as '{said_name}'. Someone in the "
                     f"meeting has to let it in, same as any guest; the transcript opens beside "
                     f"this chat when it is admitted.",
         "failed": "The bot could not stay in the call. That is ours, not yours — I have "
@@ -4604,39 +4608,22 @@ def settings(key: str = "", value: str = "") -> str:
 
     on/off settings accept on/off, true/false, yes/no."""
     uid = me()
-    cur = _settings(uid)
     if not key:
         return json.dumps({
-            "settings": cur,
-            "what_each_means": {k: v[2] for k, v in SETTINGS_VOCAB.items()},
+            "settings": _settings(uid),
+            "what_each_means": _settings_meanings(),
             "to_change": "settings(key=..., value=...) — one at a time",
         })
-    if key not in SETTINGS_VOCAB:
-        return json.dumps({
-            "refused": f"there is no setting called {key!r}",
-            "the_settings_that_exist": {k: v[2] for k, v in SETTINGS_VOCAB.items()},
-            "do": "pick one of these, or report_friction() if the thing they want is missing "
-                  "— do NOT edit a flow to work around it.",
-        })
-    default, kind, meaning = SETTINGS_VOCAB[key]
-    if kind == "on/off":
-        v = str(value).strip().lower()
-        if v not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
-            return json.dumps({"refused": f"{key} is on or off", "you_sent": value})
-        val = v in ("on", "true", "yes", "1")
-    else:
-        val = str(value).strip()
-        if key == "timezone" and val:
-            try:
-                import zoneinfo
-                zoneinfo.ZoneInfo(val)
-            except Exception:  # noqa: BLE001
-                return json.dumps({"refused": f"{val!r} is not a timezone",
-                                   "give_me": "an IANA name like Europe/Lisbon"})
-    after = _settings_set(uid, key, val)
+    after, refused = _settings_set(uid, key, value)
+    if refused:
+        return json.dumps({**refused,
+                           "do": "pick one of the settings above, or report_friction() if the "
+                                 "thing they want is missing — do NOT edit a flow to work around it."})
+    meaning = _settings_meanings().get(key, key)
     return json.dumps({
-        "changed": {key: val}, "settings": after,
-        "tell_your_person": f"Done — {meaning}: now {val!r}. It applies from the next meeting.",
+        "changed": {key: after.get(key)}, "settings": after,
+        "tell_your_person": f"Done — {meaning}: now {after.get(key)!r}. It applies from the next "
+                            f"meeting.",
         "scope": "this is theirs alone; nobody else's Vexa changed",
     })
 

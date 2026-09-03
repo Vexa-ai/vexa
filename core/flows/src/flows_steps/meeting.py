@@ -408,9 +408,13 @@ def dispatch_bot(ctx: StepCtx):
     # defaults it to True and resolves TRANSCRIBE_ENABLED per deployment — so naming it here
     # could only ever override a correct decision with a worse one. The name is the person's;
     # whether we transcribe at all is the deployment's.
+    # NO bot_name. The person's default is a fact about the BOT, so the domain that owns the bot
+    # resolves it — meeting-api reads it from identity's bot-context on every spawn path now. This
+    # step used to read a `bot_name` key out of `.settings.json` in the AGENT domain, which is how
+    # one fact came to have three stores and why the same person's bot showed up under one name
+    # when a calendar armed it and another when a flow did (founder ruling, 2026-09-02).
     st, body = http("POST", f"{GATEWAY}/bots", {"X-API-Key": key},
-                    {"meeting_url": ctx.refs["url"],
-                     "bot_name": setting(uid, "bot_name") or "Vexa"})
+                    {"meeting_url": ctx.refs["url"]})
     if st == 409:
         st2, existing = http("GET", f"{GATEWAY}/bots", {"X-API-Key": key})
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])

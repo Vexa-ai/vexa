@@ -995,7 +995,8 @@ class HttpRuntimeClient:
         return resp.json()
 
 
-def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None):
+def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None,
+                            fetch_bot_context=None):
     """Construct the bot-spawn router with real SQLAlchemy + httpx runtime adapters from env."""
     import httpx
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -1011,4 +1012,5 @@ def build_production_router(*, database_url: Optional[str] = None, runtime_api_u
     engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     http = httpx.AsyncClient(timeout=30.0)
-    return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url))
+    return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url),
+                        fetch_bot_context=fetch_bot_context)

@@ -33,6 +33,7 @@ from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
                              Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
+from . import person_settings as person_settings_mod
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -820,6 +821,41 @@ def create_app() -> FastAPI:
         await db.commit()
         return data.get(data_key) or {}
 
+
+    # ── person facts (settings-to-identity) ───────────────────────────────────────────────────
+    # `timezone` and the mail preferences moved here out of `.settings.json`, a file in a workspace
+    # in the AGENT domain. That made flows and the control MCP depend on a third domain for a fact
+    # about a PERSON — so a deployment without agents had people with no clock and no way to stop
+    # the mail. Identity is the only domain everyone may depend on; these are its kind of fact.
+    #
+    # `bot_name` is NOT here on purpose: a bot default is a fact about the bot, and meetings already
+    # resolves one through /internal/users/{id}/bot-context.
+
+    @app.get("/user/settings")
+    async def get_user_settings(user: User = Depends(get_current_user)):
+        """How Vexa behaves for THIS person. Defaults filled in — never empty, never a missing key."""
+        return {"settings": person_settings_mod.read(user.data if isinstance(user.data, dict) else {}),
+                "what_each_means": person_settings_mod.MEANINGS}
+
+    @app.put("/user/settings")
+    async def set_user_settings(update: dict = Body(...),
+                                user: User = Depends(get_current_user_for_update),
+                                db: AsyncSession = Depends(get_db)):
+        """Change one or more settings. An unknown key is refused WITH the list, and nothing is
+        written unless every key validates: a half-applied change is a person who thinks they turned
+        two things off and turned one."""
+        from sqlalchemy.orm import attributes
+        try:
+            data = person_settings_mod.apply(user.data if isinstance(user.data, dict) else {}, update)
+        except person_settings_mod.Refused as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.detail) from e
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return {"settings": person_settings_mod.read(data),
+                "what_each_means": person_settings_mod.MEANINGS}
+
     @app.put("/user/models")
     async def set_user_models(update: ModelPrefsUpdate,
                               user: User = Depends(get_current_user_for_update),
@@ -1183,6 +1219,44 @@ def create_app() -> FastAPI:
     async def _platform_setting(key: str, db: AsyncSession) -> dict:
         row = await db.get(PlatformSetting, key)
         return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
+
+    @app.get("/internal/users/{user_id}/settings", include_in_schema=False)
+    async def get_user_settings_internal(user_id: str, request: Request,
+                                         db: AsyncSession = Depends(get_db)):
+        """This person's settings, for flows. An allowed door: flows may call identity, and reading
+        `.settings.json` off agent-api — which is what this replaces — was not.
+
+        An unknown user is a 404 and never a defaulted answer: "defaults for somebody who exists"
+        and "defaults for somebody who does not" are opposite facts, and the second one means a flow
+        is about to mail a person who is not there."""
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        return person_settings_mod.read_person_facts(
+            user.data if isinstance(user.data, dict) else {})
+
+
+    @app.post("/internal/users/{user_id}/settings/import", include_in_schema=False)
+    async def import_user_settings(user_id: str, request: Request, legacy: dict = Body(...),
+                                   db: AsyncSession = Depends(get_db)):
+        """ONE-SHOT: take a legacy `.settings.json` and store the person facts in it.
+
+        Idempotent and lossless — a key the person has already set through `/user/settings` is
+        reported under `kept` and left alone. `bot_name` and anything the vocabulary never carried
+        come back under `dropped`, so the operator running the sweep can read what it did rather
+        than trust that it did nothing surprising."""
+        _check_internal(request)
+        from sqlalchemy.orm import attributes
+        user = await _load_user(user_id, db, for_update=True)
+        data, imported, kept, dropped = person_settings_mod.plan_import(
+            user.data if isinstance(user.data, dict) else {}, legacy)
+        if imported:
+            user.data = data
+            attributes.flag_modified(user, "data")
+            db.add(user)
+            await db.commit()
+        return {"imported": imported, "kept": kept, "dropped": dropped,
+                "settings": person_settings_mod.read(data)}
 
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
