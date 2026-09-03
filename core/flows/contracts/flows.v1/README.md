@@ -21,10 +21,19 @@ restore, and a second producer somebody adds later.
 | `onboarding.completed` | identity | exactly once per subject |
 | `meeting.completed` | flows | once per occurrence |
 | `invite.received` | flows | once per occurrence |
+| `desk.unscaffolded` | agent | exactly once per subject |
+| `claim.proposed` | agent | once per occurrence |
 
-The last two are recorded from `core/flows/mcp.tools.v1.json`'s own `publishes_events`, not asserted
-afresh: this file is a reading of what the repository already declares, which is what makes it a
-census rather than a wish.
+`meeting.completed` and `invite.received` are recorded from `core/flows/mcp.tools.v1.json`'s own
+`publishes_events`; the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None
+of them is asserted afresh: this file is a reading of what the repository already declares, which is
+what makes it a census rather than a wish.
+
+`desk.unscaffolded` claims exactly-once and its stamp is **the desk itself** rather than a column.
+That is a weaker guarantee than `onboarding.completed`'s and it is the right one here: the fact is
+re-derivable from the workspace at any time (a directory with no `.scaffolded` in it), the consumer
+takes no irreversible action — it puts a row on a queue — and a publish that never lands therefore
+loses a card and never loses the fact.
 
 ## What reads it
 

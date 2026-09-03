@@ -66,11 +66,13 @@ domain has neither the events nor the reactions — there is no desk there to ha
 
 `desk_setup` and `desk_claim` react to `desk.unscaffolded` and `claim.proposed`, which flows
 CONSUMES and does not publish — they are the agent domain's to publish, and they are deliberately
-absent from this domain's `publishes_events` for that reason. They have no producer yet: agent-api
-would publish the first at `control_plane/routers/workspaces.py` `ws_init` (a desk seeded with no
-`.scaffolded`) and the second needs a claim-aware route that does not exist, the claim book being
-written today through the generic file route. Until then the two flows never fire, which is the
-correct behaviour and not a gap in the queue.
+absent from this domain's `publishes_events` for that reason. Both have a producer now: agent-api
+publishes the first at `control_plane/routers/workspaces.py` `ws_init`, on the call that CREATED a
+desk carrying no `.scaffolded`, and the second at `POST /api/claims` — a claim-aware route that
+owns the claim book and publishes one event per claim it actually added, which is why that route
+exists at all. The edge is declared in agent-api's `config.v1.json` as two `publish-edge` keys
+(`VEXA_FLOWS_API_URL`, `VEXA_FLOWS_API_KEY`). Unset, the facts are dropped and the two flows never
+fire — which is the deployment that carries no agent domain, and not a gap in the queue.
 
 **The words are not in the code.** Every sentence a person hears is a file in `behavior/queue/`,
 resolved private-mount-first and read hot, and a pending reaction behavior says nothing about is

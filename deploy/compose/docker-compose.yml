@@ -344,6 +344,23 @@ services:
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # ── the publish edge (config.v1 class `publish-edge`) ─────────────────────────────────
+      # The agent domain hands `desk.unscaffolded` and `claim.proposed` to flows here — the two
+      # desk cards. A PUBLISH IS NOT A DEPENDENCY: the calls are bounded at 2s and swallowed, and
+      # this service provisions desks and records claims identically with the variable empty.
+      #
+      # DEFAULTS TO THE SERVICE, unlike admin-api's edge a few blocks up, and the difference is
+      # deliberate — it is the `mcp` block's rule, not a second opinion: flows-api is a service in
+      # THIS FILE, so an empty default would mean the full stack publishes nothing by default and
+      # the queue would be empty on a plain `up -d` with every part of the mechanism green. Set it
+      # empty to run a deployment that genuinely does not carry the flows domain.
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # The same operator key flows-api itself reads, passed through and never re-defaulted to a
+      # literal (F95). flows' POST /events is not open, so a target without its credential is a
+      # target that always 401s — which looks exactly like a deployment running no flows, and is
+      # not one. Empty here and empty on flows-api is a stack whose intake refuses everybody,
+      # which is the fail-closed shape #1453 chose on purpose.
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # The credential is MOUNTED below, but the capability oracle reads this env to know a
       # subscription path is CONFIGURED at all. Without the pair, a correctly-mounted credential
       # reports "No model credentials are configured" and the turn is refused before dispatch

@@ -9,9 +9,11 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane import claims as claims_mod
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
+from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import system_mounts
 from control_plane import workspace_credentials as wcreds
@@ -282,8 +284,56 @@ def build(**d) -> APIRouter:
         # address, and this is the one seam that has the address.
         _ws_sync(str(subject), kind="desk", owner=str(subject), ws_dir=ws,
                  name=(request.headers.get("x-user-email") or "").strip() or None)
+        # THE DESK EXISTS AND NOBODY HAS FINISHED SETTING IT UP — the agent domain's fact to tell
+        # (PRD ruling 9; the carrier flows' `desk_setup` reacts to). Told ONLY on the call that
+        # created the desk: this route is idempotent and called on every login, so a publish per
+        # call would put one card on the queue per sign-in, forever, for the very person who never
+        # finished — and a card a person sees daily is a card they learn to ignore.
+        #
+        # `.scaffolded` is the marker a finished setup leaves (`flows_steps.common.scaffolded`); a
+        # desk that already carries one is waiting for nothing. It cannot normally be there on a
+        # freshly seeded desk, and it is checked anyway because the alternative — asking somebody
+        # to finish what they already finished — is the one failure a queue card cannot survive.
+        #
+        # Fire-and-forget. A publish is not a dependency: the return value is dropped, the call is
+        # bounded at 2s and swallowed, and a deployment with no flows domain provisions this desk
+        # in exactly the same way.
+        if not existed and not (ws / ".scaffolded").exists():
+            publish_mod.publish(publish_mod.EVENT_DESK_UNSCAFFOLDED,
+                                publish_mod.desk_source_id(subject),
+                                publish_mod.desk_refs(subject))
         return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
                 "system_seeded": not system_existed}
+
+    @router.post("/api/claims")
+    def write_claims(request: Request, body: dict = Body(...)):
+        """Record what an agent believes about this person's company as PROPOSED — and tell flows,
+        once per claim.
+
+        THIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through
+        `PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what
+        they mean — so the one moment worth telling anybody about, a claim being proposed, was
+        indistinguishable from any other file write, and `claim.proposed` had no publisher. A
+        generic route cannot publish a specific fact without inspecting paths and guessing at
+        contents, which is how a file route quietly becomes a state machine nobody declared.
+
+        ONE EVENT PER CLAIM, and only for claims this call actually added: `await_claim` looks a
+        `claim_id` up in the book and blocks on that claim's own words, so one event for a batch
+        would be one card for three questions with no way to answer two of them.
+
+        It lives in the workspaces router because the book is a file on a desk and everything this
+        needs — the subject, the reader, the desk path — is already closed over here; the state
+        machine itself is `control_plane.claims`, which is the concern."""
+        subject = subject_of(request)
+        batch = (body or {}).get("claims") or []
+        if not isinstance(batch, list) or not batch:
+            raise HTTPException(status_code=400, detail="claims must be a non-empty list")
+        result = claims_mod.propose(wsr.workspace_dir(subject), batch)
+        for cid in result["ids"]:
+            publish_mod.publish(publish_mod.EVENT_CLAIM_PROPOSED,
+                                publish_mod.claim_source_id(subject, cid),
+                                publish_mod.claim_refs(subject, cid))
+        return result
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to

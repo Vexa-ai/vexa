@@ -16,6 +16,7 @@ Offline, stdlib only — this reads committed files and nothing else.
 """
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 
@@ -121,3 +122,69 @@ def test_identity_declares_the_publish_edge_that_carries_onboarding_completed():
         assert "default" not in k, (
             f"{k['key']} carries a default — a fallback address to publish to, invented by us, in a "
             f"deployment that deliberately runs no flows domain. Absent means absent.")
+
+
+# ── census ↔ the wire the producers actually put the fact on ──────────────────────────────────
+INTAKE = REPO / "core" / "flows" / "src" / "flows_integrations" / "flows_api.py"
+
+
+def _intake_fields() -> set:
+    """The field names `POST /events` reads, off the intake model's own source.
+
+    Read rather than imported: importing `flows_api` builds the FastAPI app and wants an
+    environment, and this file is stdlib-only by design."""
+    for node in ast.walk(ast.parse(INTAKE.read_text())):
+        if isinstance(node, ast.ClassDef) and node.name == "EventSubmission":
+            return {n.target.id for n in node.body if isinstance(n, ast.AnnAssign)}
+    raise AssertionError(f"no EventSubmission model in {INTAKE.relative_to(REPO)}")
+
+
+def _publisher_bodies():
+    """Every (file, body-keys) a publishing service builds for the intake.
+
+    DERIVED, not listed: a publisher is a service whose `config.v1.json` declares a `publish-edge`
+    key, and its body is the dict literal in that service's source carrying an `event_type` key.
+    A new publisher is therefore covered the moment it declares its edge, which is the same moment
+    the rest of this file starts checking its carriers."""
+    for decl in DECLARATIONS:
+        keys = json.loads(decl.read_text()).get("keys") or []
+        if not any(k.get("class") == "publish-edge" for k in keys):
+            continue
+        for f in sorted(decl.parent.rglob("*.py")):
+            if "/tests/" in str(f) or "/.venv/" in str(f):
+                continue
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+            except SyntaxError:                       # noqa: PERF203 - vendored oddities
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Dict):
+                    continue
+                names = {k.value for k in node.keys
+                         if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+                if "event_type" in names and "source_event_id" in names:
+                    yield f.relative_to(REPO), names, node.lineno
+
+
+def test_every_publisher_names_the_refs_field_the_intake_actually_reads():
+    """THE ONE FAILURE ON THIS EDGE THAT REPORTS ITSELF AS WORKING.
+
+    `EventSubmission` is a plain pydantic model, so an unknown key is IGNORED rather than refused.
+    A publisher that spells the refs field `subject_refs` — the name every one of them uses for the
+    same value INSIDE its own python — gets a `202` and admits a fact with `refs == {}`. The
+    consumer step then fails typed and non-retryable on a missing ref, on every single occurrence,
+    while the producer's logs, the intake's receipt and the reaction row all look ordinary.
+
+    Nothing else on this edge can catch it: the whole point of a publish edge is that the producer
+    does not import the consumer, so there is no shared type to disagree with. This test is the
+    substitute for that type, and it is worth exactly as much as its derivation — hence both
+    halves are read off source, and neither names a service by hand."""
+    fields = _intake_fields()
+    assert "refs" in fields, "the intake stopped calling it refs; every publisher below is now wrong"
+    bodies = list(_publisher_bodies())
+    assert bodies, "no publishing service builds an intake body — the derivation found nothing"
+    for path, names, line in bodies:
+        assert names <= fields, (
+            f"{path}:{line} sends {sorted(names - fields)}, which POST /events ignores rather than "
+            f"refuses — the fact is admitted with those values dropped. The intake reads "
+            f"{sorted(fields)}.")

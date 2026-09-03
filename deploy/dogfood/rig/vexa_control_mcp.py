@@ -3413,30 +3413,18 @@ def propose(claim: str = "", source: str = "", scope: str = "tenant",
     if not batch:
         return json.dumps({"error": "give claim= or claims=[{claim, source}] "
                                     "(plain strings work too)"})
-    book = _read_json(uid, _pending_path(uid), {"claims": []})
-    book.setdefault("claims", [])
-    out = []
-    for b in batch:
-        cid = "c" + str(len(book["claims"]) + 1).zfill(3)
-        book["claims"].append({
-            "id": cid, "claim": str(b.get("claim", ""))[:600],
-            "source": str(b.get("source", ""))[:300] or "proposed by an agent",
-            "scope": b.get("scope", "tenant"), "state": "proposed",
-            "proposed_at": time.time()})
-        out.append(cid)
-    ok = _write_json(uid, _pending_path(uid), book)
-    # Hand back the finished lines rather than a rule about how to write them. Formatting
-    # instructions carried in a tool response are a step, and a step is where a smaller model
-    # produces a numbered form or a paragraph — a wall nobody corrects.
-    shown = "\n".join("· " + c["claim"] for c in book["claims"][-len(batch):])
-    return json.dumps({
-        "ids": out, "state": "proposed", "written": ok,
-        "show_them_exactly_this": "Here is what I think I understand about your work — "
-                                  "correct anything that is wrong.\n" + shown,
-        "then": "Whatever they answer, however brief, goes back in ONE "
-                "validate(verdicts=[{id, verdict, note}]) call. That call finishes the setup.",
-        "note": "None of this counts as company context until a human has answered.",
-    })
+    # THROUGH THE CLAIM-AWARE ROUTE, not the generic file one. This used to read the book over
+    # `GET /api/workspace/file`, allocate the ids here, and write the whole thing back over
+    # `PUT /api/workspace/file` — so the state machine lived in this tool and the file lived in
+    # agent-api, and agent-api could not tell a claim being proposed from any other file write.
+    # That is exactly why `claim.proposed` had no producer: the fact was invisible at the only
+    # place that could have published it. `POST /api/claims` owns the book AND publishes one event
+    # per new claim; this tool forwards and renders.
+    st, body = _http("POST", f"{AGENT_API}/api/claims", {"X-User-Id": uid}, {"claims": batch})
+    if st != 200 or not isinstance(body, dict):
+        return json.dumps({"error": f"agent-api refused the claims: HTTP {st}",
+                           "detail": str(body)[:300]})
+    return json.dumps(body)
 
 
 @mcp.tool()

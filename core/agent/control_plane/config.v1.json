@@ -335,7 +335,7 @@
       "key": "INTERNAL_API_SECRET",
       "class": "required-explicit",
       "secret": true,
-      "description": "THE internal-tier shared secret — one name across every service (the compose/helm secret key). agent-api both PRESENTS it (Lane M: X-Internal-Secret on the admin-api membership-index edge) and BELIEVES it: `_internal_caller` compares this value, and gate 0 of the meeting room is by the code's own statement the trust boundary on who is in the room. Unset it used to mean `_internal_caller` simply returned False; the boot now refuses instead, because a half-configured internal tier is not a degrade an operator can see. Read through an alias so the deprecated VEXA_-prefixed spelling still works for one release (shared/config.py).",
+      "description": "THE internal-tier shared secret \u2014 one name across every service (the compose/helm secret key). agent-api both PRESENTS it (Lane M: X-Internal-Secret on the admin-api membership-index edge) and BELIEVES it: `_internal_caller` compares this value, and gate 0 of the meeting room is by the code's own statement the trust boundary on who is in the room. Unset it used to mean `_internal_caller` simply returned False; the boot now refuses instead, because a half-configured internal tier is not a degrade an operator can see. Read through an alias so the deprecated VEXA_-prefixed spelling still works for one release (shared/config.py).",
       "targets": [
         "compose",
         "helm",
@@ -354,7 +354,7 @@
     {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
-      "default": "(unset — DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
+      "default": "(unset \u2014 DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
       "secret": true,
       "description": "DEPRECATED spelling of INTERNAL_API_SECRET. One secret had three names (INTERNAL_API_SECRET in compose/helm and in admin-api/gateway/meeting-api, VEXA_INTERNAL_API_SECRET here and in the terminal, VEXA_INTERNAL_SECRET in flows) and the drift is what let a placeholder survive on one spelling's refusal list and not the others (F95). No deploy surface sets it on agent-api any more; it is still READ so an operator mid-upgrade is warned rather than 401ed. Delete once the terminal reads the canonical name too.",
       "targets": [],
@@ -482,10 +482,15 @@
     },
     {
       "key": "VEXA_FLOWS_API_URL",
-      "class": "defaulted",
-      "default": "(unset \u2014 no timeline block)",
-      "description": "flows-api's base url, for the WORKER's read-only timeline route (GET /timeline?format=preamble). Unset \u21d2 the dispatch carries no temporal block and the turn behaves exactly as it did before decision 31",
-      "targets": []
+      "class": "publish-edge",
+      "description": "flows' address \u2014 the domain this service HANDS DESK FACTS TO (desk.unscaffolded, claim.proposed) and reads the worker's read-only timeline preamble from. Declared as the publish edge because that is what it is: agent-api needs no answer from flows \u2014 the publishes are bounded at 2s and swallowed (control_plane/publish.py) and an absent timeline degrades a turn rather than failing it, so unset is the no-flows PROFILE and not a degraded state. NO DEFAULT, and the class forbids one for the right reason: a fallback address to publish to, invented by us, in a deployment that deliberately runs no such domain",
+      "targets": [
+        "compose"
+      ],
+      "publishes_events": [
+        "desk.unscaffolded",
+        "claim.proposed"
+      ]
     },
     {
       "key": "VEXA_FLOWS_TIMELINE_KEY",
@@ -497,11 +502,16 @@
     },
     {
       "key": "VEXA_FLOWS_API_KEY",
-      "class": "defaulted",
-      "default": "(unset)",
+      "class": "publish-edge",
       "secret": true,
-      "description": "flows-api's OPERATOR key. Read here only as a fallback credential for the timeline preamble; prefer VEXA_FLOWS_TIMELINE_KEY, which cannot configure the machine",
-      "targets": []
+      "description": "flows-api's OPERATOR key, sent as X-Flows-Operator-Key on the same edge (renamed by #1486; flows reads the old spelling for one more release and this edge does not send it) \u2014 flows' POST /events is authenticated, so a publish target without its credential is a publish that always 401s, and the pair is what makes the edge real. Declared as part of the edge rather than beside it: unset alongside an unset url is the no-flows profile, unset with a url set is a deployment whose facts are being refused, and one declaration shows both. The read-only VEXA_FLOWS_TIMELINE_KEY opens GET /timeline and nothing else, so it cannot stand in here",
+      "targets": [
+        "compose"
+      ],
+      "publishes_events": [
+        "desk.unscaffolded",
+        "claim.proposed"
+      ]
     },
     {
       "key": "VEXA_TIMELINE_CACHE_S",
