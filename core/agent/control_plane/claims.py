@@ -63,8 +63,10 @@ def propose(workspace: Path, batch: list) -> dict:
     claim's id is what a queue card is keyed on, so it must be stable for the life of the book and
     must never be reused. Appending only — nothing here ever removes a row.
 
-    Returns `written_ids` alongside `ids` for the route above, which publishes one fact per NEW
-    claim and must not re-announce the ones already in the book."""
+    `ids` is exactly the claims THIS call appended — the book is append-only and nothing here
+    ever rewrites a row, so the new ids and the published ids are the same list by construction.
+    That is what lets the route above publish one fact per NEW claim without re-announcing the
+    ones already in the book, and it is the reason there is no second list to keep in step."""
     book = _load(workspace)
     out = []
     for b in batch:
