@@ -127,6 +127,15 @@ def test_a_refusal_files_friction():
     assert "redis" in filed[0]["context"]["error"]
 
 
+def test_a_refusal_threads_the_session_through(monkeypatch):
+    """#1510: the friction carrier this record is published onto refuses a report with no
+    session, so overlay_model_config must hand refusal_friction whatever it was given."""
+    filed: list[dict] = []
+    _overlay({"mode": "custom", "base_url": "http://redis:6379", "api_key": "sk"},
+             friction=filed.append, subject="u_7", session="dispatch-u_7")
+    assert filed[0]["session"] == "dispatch-u_7"
+
+
 def test_a_broken_friction_sink_never_breaks_a_dispatch():
     def boom(_rec):
         raise RuntimeError("store down")

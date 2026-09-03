@@ -77,9 +77,7 @@ from control_plane import global_layer
 from control_plane import version as version_mod
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
-from control_plane import friction as friction_store_mod
 from control_plane import model_endpoint
-from shared import friction as friction_mod
 from control_plane import chat_intents
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
