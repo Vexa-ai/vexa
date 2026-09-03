@@ -330,13 +330,6 @@
       "description": "Forces the instance gate open or shut. A RIG DIAL: a deployment's gate state is a fact about the deployment, so no surface offers a way to lie about it.",
       "capability": "rig_dials",
       "targets": []
-    },
-    {
-      "key": "VEXA_FLOWS_FIXTURE_TRANSCRIPT",
-      "class": "capability",
-      "description": "`1` serves the declared fixture transcript instead of the gateway's. A HARNESS dial, on no surface for the same reason.",
-      "capability": "rig_dials",
-      "targets": []
     }
   ],
   "capabilities": {
