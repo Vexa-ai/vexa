@@ -13,6 +13,7 @@ written into a deployment, for a service the deployment does not run.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -132,3 +133,41 @@ def test_the_host_port_is_overridable_and_bound_to_loopback():
     box's public interfaces, and overridable so two stacks can share a host."""
     block = _service("flows-api")
     assert re.search(r'"127\.0\.0\.1:\$\{FLOWS_API_HOST_PORT:-\d+\}:8200"', block), block
+
+
+def test_the_agent_domain_carries_the_publish_edge_it_declares():
+    """THE DESK CARDS EXIST ON THE WIRE, or they exist only in the tests.
+
+    agent-api declares `desk.unscaffolded` and `claim.proposed` as a `publish-edge`, and a publish
+    edge that no deployment configures is a publisher that never publishes. `targets: []` is how
+    that passes every gate: gate:config-contract checks a key against the surfaces the key's own
+    `targets` names, so an empty list asks it to check nothing — the edge was declared, gated and
+    unit-tested, and set in no deployment we ship.
+
+    The KEYS ARE READ FROM THE DECLARATION rather than named here, so a third key added to the edge
+    is covered the moment it is declared."""
+    decl = json.loads((ROOT / "core/agent/control_plane/config.v1.json").read_text())
+    edge = [k["key"] for k in decl["keys"] if k.get("class") == "publish-edge"]
+    assert edge, "agent-api declares no publish edge — the desk cards have no producer"
+    block = _service("agent-api")
+    for key in edge:
+        assert f"- {key}=" in block, (
+            f"agent-api declares {key} as part of its publish edge and the compose service sets "
+            f"it nowhere; the two desk facts are dropped in the stack we actually ship")
+
+
+def test_the_agent_publish_edge_points_at_the_flows_service_by_default():
+    """Same rule as the assembler above, and the same reason: flows-api is a service in THIS FILE.
+
+    admin-api's edge defaults to EMPTY, which is right there — identity onboards people in
+    deployments that carry no flows at all. Here an empty default would mean a plain `up -d` of
+    the full stack publishes nothing, the queue shows no desk cards, and every part of the
+    mechanism reports itself healthy. Set it empty to run a deployment that genuinely has no
+    flows domain."""
+    block = _service("agent-api")
+    assert re.search(r"VEXA_FLOWS_API_URL=\$\{VEXA_FLOWS_API_URL:-http://flows-api:8200\}", block), \
+        "agent-api has no default route to the flows service, so the desk facts go nowhere"
+    # The credential travels as the SAME variable flows-api itself reads — one operator key, passed
+    # through, never re-defaulted to a literal (F95). A target without its credential 401s, which
+    # looks exactly like a deployment running no flows and is not one.
+    assert "VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}" in block

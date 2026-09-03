@@ -47,7 +47,7 @@ def _flows_base() -> str:
 
 
 def _flows_key() -> str:
-    """The OPERATOR key. flows' `POST /events` authenticates on `X-Flows-Admin-Key`, and the
+    """The OPERATOR key. flows' `POST /events` authenticates on `X-Flows-Operator-Key`, and the
     read-only `VEXA_FLOWS_TIMELINE_KEY` opens `GET /timeline` and nothing else — so the timeline
     key cannot stand in here, and this is deliberately not a fallback chain: a publish sent with a
     credential that cannot admit it is a publish that always 401s, which looks exactly like a
@@ -65,12 +65,22 @@ def publish(event_type: str, source_event_id: str, subject_refs: dict,
     base = _flows_base()
     if not base:
         return False          # no flows domain here — the desk still carries the fact
+    # `refs` IS THE FIELD NAME ON THE WIRE, and it is the one thing in this file that cannot be
+    # read off the python. flows' intake model is `EventSubmission(event_type, source_event_id,
+    # refs)` (`flows_integrations/flows_api.py`) — a plain pydantic BaseModel, so it IGNORES an
+    # unknown key instead of refusing it. A body spelled `subject_refs` is therefore ADMITTED, 202,
+    # with `refs == {}`, and `await_scaffold` then raises *"desk.unscaffolded carried no uid"*
+    # non-retryably on every card. Success at the intake, nothing on the queue, and no error
+    # anywhere between them: the one failure on this path that reports itself as working.
     body = json.dumps({"event_type": event_type, "source_event_id": source_event_id,
-                       "subject_refs": subject_refs}).encode()
+                       "refs": subject_refs}).encode()
     headers = {"content-type": "application/json"}
     key = _flows_key()
     if key:
-        headers["X-Flows-Admin-Key"] = key
+        # The OPERATOR key's canonical header since #1486. flows still reads the old
+        # `X-Flows-Admin-Key` for one release and it is deliberately not sent: a deprecated
+        # spelling that keeps working is how a rename never finishes.
+        headers["X-Flows-Operator-Key"] = key
     req = urllib.request.Request(f"{base}/events", data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:  # noqa: S310

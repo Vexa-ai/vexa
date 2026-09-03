@@ -94,8 +94,10 @@ def test_proposing_claims_writes_the_book_and_tells_flows_once_per_claim(tmp_pat
     assert all(c_["state"] == "proposed" for c_ in book["claims"])
 
     told = _of(flows, "claim.proposed")
-    assert [t["body"]["subject_refs"]["claim_id"] for t in told] == ["c001", "c002", "c003"]
-    assert {t["body"]["subject_refs"]["uid"] for t in told} == {"u_jane"}
+    # `refs`, the field flows' EventSubmission actually reads — see test_desk_events.py's
+    # test_the_body_carries_refs_under_the_name_the_intake_reads for what the other spelling costs.
+    assert [t["body"]["refs"]["claim_id"] for t in told] == ["c001", "c002", "c003"]
+    assert {t["body"]["refs"]["uid"] for t in told} == {"u_jane"}
     # keyed to (person, claim) so a redelivery dedupes at the flows intake
     assert [t["body"]["source_event_id"] for t in told] == \
         ["claim-u_jane-c001", "claim-u_jane-c002", "claim-u_jane-c003"]
@@ -109,7 +111,7 @@ def test_a_second_call_tells_flows_only_about_the_new_claims(tmp_path, monkeypat
     flows.clear()
     c.post("/api/claims", headers={"X-User-Id": "u_jane"}, json={"claims": ["two"]})
     told = _of(flows, "claim.proposed")
-    assert [t["body"]["subject_refs"]["claim_id"] for t in told] == ["c002"]
+    assert [t["body"]["refs"]["claim_id"] for t in told] == ["c002"]
 
 
 def test_claims_are_recorded_when_flows_is_not_deployed(tmp_path, monkeypatch):

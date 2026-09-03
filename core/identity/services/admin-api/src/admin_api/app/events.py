@@ -66,8 +66,17 @@ def publish(event_type: str, source_event_id: str, subject_refs: dict,
     base = _flows_base()
     if not base:
         return False          # no flows domain here — the fact is still recorded on the person
+    # `refs` IS THE FIELD NAME ON THE WIRE, and it is not the name this value has in python.
+    # flows' intake is `EventSubmission(event_type, source_event_id, refs)` — a plain pydantic
+    # BaseModel, so an unknown key is IGNORED rather than refused. This body said `subject_refs`
+    # until 2026-09-03, which means every `onboarding.completed` it ever sent was admitted `202`
+    # with `refs == {}`: no subject, no org, no seat, on the fact a paid deployment BILLS on. The
+    # producer saw success, the intake recorded an admitted fact, and the refs the census promises
+    # a consumer were dropped in between. Found by the census suite's
+    # `test_every_publisher_names_the_refs_field_the_intake_actually_reads`, which derives both
+    # halves from source precisely because a publish edge has no shared type to disagree with.
     body = json.dumps({"event_type": event_type, "source_event_id": source_event_id,
-                       "subject_refs": subject_refs}).encode()
+                       "refs": subject_refs}).encode()
     headers = {"content-type": "application/json"}
     key = _flows_key()
     if key:
