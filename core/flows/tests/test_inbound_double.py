@@ -37,24 +37,24 @@ from flows_integrations.mailbox import handle, parse_ics  # noqa: E402
 from flows_steps.emailx import register_thread  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "mailpit"
-SELF = "vexa@oenb.at"
+SELF = "vexa@example.com"
 
 
 @pytest.fixture(autouse=True)
-def _this_deployment_serves_dna(monkeypatch):
-    """The fixture world is a deployment that serves `dna.test` — so say so.
+def _this_deployment_serves_example(monkeypatch):
+    """The fixture world is a deployment that serves `example.test` — so say so.
 
     The intake now refuses to act for an address that is neither a known user nor inside the
-    deployment's domain allow-list (R-B12), and the recorded corpus is a `dna.test` organizer and
-    a `dna.test` attendee writing to a mailbox at `oenb.at`. That combination is a real deployment
+    deployment's domain allow-list (R-B12), and the recorded corpus is a `example.test` organizer and
+    a `example.test` attendee writing to a mailbox at `example.com`. That combination is a real deployment
     shape (we host the mailbox, the customer's people write to it) and it is expressed the way the
     PRD says it must be — as a deployment value, `VEXA_FLOWS_MAIL_DOMAINS`. Without it these mails
     are strangers, which is the correct new answer and not what this file is about."""
-    monkeypatch.setenv("VEXA_FLOWS_MAIL_DOMAINS", "dna.test")
+    monkeypatch.setenv("VEXA_FLOWS_MAIL_DOMAINS", "example.test")
 BEFORE_ALL = "2026-09-01T21:00:00.000000Z"
-EML = {"1InviteDnaTscZZZZZZZZZ": "invite-dna-tsc.eml",
+EML = {"1InvitePlatformSyncZZZ": "invite-platform-sync.eml",
        "2StrangerYYYYYYYYYYYYY": "not-for-us.eml",
-       "3ReplyAmeliaXXXXXXXXXX": "reply-minutes.eml"}
+       "3ReplyCaseyXXXXXXXXXXX": "reply-minutes.eml"}
 
 
 def recorded_mailpit(path: str) -> bytes:
@@ -98,10 +98,10 @@ def rig(lookback_s: float = 86_400.0):
 def drive(db, reg, clock, inbox, cursor: str, known: dict | None = None):
     """One poll: exactly what mailbox.main()'s loop body does, with the services injected.
 
-    `known` is the account directory. It defaults to Amelia — the person the registered thread
+    `known` is the account directory. It defaults to Casey — the person the registered thread
     belongs to — because a reply on a thread now runs a turn only for that thread's own
     participant: `In-Reply-To` says WHICH conversation, it never says who the sender is (R-B12)."""
-    known = {"amelia@dna.test": "7"} if known is None else known
+    known = {"casey@example.test": "7"} if known is None else known
     out = []
     for msg in inbox.fetch(cursor):
         out.append((msg, handle(db, reg, clock, SELF, msg,
@@ -131,35 +131,35 @@ def test_zoom_invite_becomes_the_exact_invite_received_refs():
 
     ev = refs_of(db, "invite.received")[0]
     assert ev == {
-        "organizer": "organizer@dna.test",
+        "organizer": "organizer@example.test",
         "url": "https://us02web.zoom.us/j/84123456789?pwd=aBcD1234efGH",
         "start": float(calendar.timegm(time.strptime("20300302T140000", "%Y%m%dT%H%M%S"))),
-        "ics_uid": "dna-tsc-20300302@zoom.us",
+        "ics_uid": "platform-sync-20300302@zoom.us",
         # THE OCCURRENCE — what makes this one instance of a series rather than the series
         # (R-B02). `RECURRENCE-ID` when the sender sends one, else the occurrence's own DTSTART.
         "occurrence": "20300302T140000Z",
-        "title": "DNA TSC weekly",
-        "group": "dna-tsc",
-        "participants": ["amelia@dna.test", "priya@dna.test"],
+        "title": "Platform Sync weekly",
+        "group": "platform-sync",
+        "participants": ["casey@example.test", "priya@example.test"],
         # the ATTENDEE lines' own CN= display names, address -> name. Without them, matching a
         # transcript speaker to somebody on the invite means guessing a name out of an email local
         # part, which is the guess the room ordering must not make.
-        "participant_names": {"amelia@dna.test": "Amelia Chen", "priya@dna.test": "Priya Raman"},
+        "participant_names": {"casey@example.test": "Casey Lund", "priya@example.test": "Priya Raman"},
     }
 
 
 def test_participants_exclude_us_case_insensitively_and_organizer_is_unchanged():
-    ics = (FIX / "invite-dna-tsc.eml").read_text().split("BEGIN:VCALENDAR", 1)[1]
-    ev = parse_ics("BEGIN:VCALENDAR" + ics, "VeXa@OeNB.at")
-    assert SELF not in ev["participants"] and ev["participants"] == ["amelia@dna.test",
-                                                                    "priya@dna.test"]
-    assert ev["organizer"] == "organizer@dna.test"        # exactly as before this change
+    ics = (FIX / "invite-platform-sync.eml").read_text().split("BEGIN:VCALENDAR", 1)[1]
+    ev = parse_ics("BEGIN:VCALENDAR" + ics, "VeXa@ExAmple.com")
+    assert SELF not in ev["participants"] and ev["participants"] == ["casey@example.test",
+                                                                    "priya@example.test"]
+    assert ev["organizer"] == "organizer@example.test"        # exactly as before this change
 
 
 def test_meet_invites_still_parse_and_now_carry_participants():
     meet = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:u-1\nDTSTART:20300302T140000Z\n"
             "ORGANIZER:mailto:anna@bank.com\nATTENDEE:mailto:ben@bank.com\n"
-            "ATTENDEE:mailto:vexa@oenb.at\nSUMMARY:Pilot sync\n"
+            "ATTENDEE:mailto:vexa@example.com\nSUMMARY:Pilot sync\n"
             "LOCATION:https://meet.google.com/jrn-qwko-mqp\nEND:VEVENT\nEND:VCALENDAR\n")
     ev = parse_ics(meet, SELF)
     assert ev["url"] == "https://meet.google.com/jrn-qwko-mqp"
@@ -172,12 +172,12 @@ def test_meet_invites_still_parse_and_now_carry_participants():
 # ---------------------------------------------------------------------------------------------
 def test_reply_routes_by_thread_not_by_sender():
     db, reg, clock, inbox = rig()
-    drive(db, reg, clock, inbox, BEFORE_ALL, known={"amelia@dna.test": "7"})
+    drive(db, reg, clock, inbox, BEFORE_ALL, known={"casey@example.test": "7"})
 
     r = refs_of(db, "mail.reply")[0]
     assert r["uid"] == "7" and r["session"] == "main", "the thread row decides, never the sender"
-    assert r["from_addr"] == "amelia@dna.test"
-    assert r["orig_msgid"] == "<reply-amelia-1@dna.test>"
+    assert r["from_addr"] == "casey@example.test"
+    assert r["orig_msgid"] == "<reply-casey-1@example.test>"
     assert r["text"].strip() == "Point 3 is wrong - the vote was deferred, not carried."
     assert ">" not in r["text"], "quoted history is stripped"
 
@@ -237,10 +237,10 @@ def test_go_trimmed_fractions_order_correctly():
 # 4 · the IMAP path
 # ---------------------------------------------------------------------------------------------
 def test_the_two_sources_yield_identical_facts_from_identical_bytes():
-    raw = (FIX / "invite-dna-tsc.eml").read_bytes()
+    raw = (FIX / "invite-platform-sync.eml").read_bytes()
     as_imap = from_rfc822(raw, cursor="4711", ext_id="4711")        # an IMAP UID
     as_mailpit = from_rfc822(raw, cursor=iso_norm("2026-09-01T21:14:02.503Z"),
-                             ext_id="1InviteDnaTscZZZZZZZZZ")
+                             ext_id="1InvitePlatformSyncZZZ")
     for f in ("message_id", "frm", "subject", "headers", "body", "ics"):
         assert getattr(as_imap, f) == getattr(as_mailpit, f), f
     assert parse_ics(as_imap.ics, SELF) == parse_ics(as_mailpit.ics, SELF)

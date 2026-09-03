@@ -7,15 +7,15 @@
   "tags": [],
   "messages": [
     {
-      "ID": "3ReplyAmeliaXXXXXXXXXX",
-      "MessageID": "reply-amelia-1@dna.test",
+      "ID": "3ReplyCaseyXXXXXXXXXXX",
+      "MessageID": "reply-casey-1@example.test",
       "Read": false,
-      "From": {"Name": "Amelia Chen", "Address": "amelia@dna.test"},
-      "To": [{"Name": "", "Address": "vexa@oenb.at"}],
+      "From": {"Name": "Casey Lund", "Address": "casey@example.test"},
+      "To": [{"Name": "", "Address": "vexa@example.com"}],
       "Cc": null,
       "Bcc": null,
       "ReplyTo": [],
-      "Subject": "Re: Minutes: DNA TSC weekly",
+      "Subject": "Re: Minutes: Platform Sync weekly",
       "Created": "2026-09-01T21:20:11.5Z",
       "Tags": [],
       "Size": 512,
@@ -39,20 +39,20 @@
       "Snippet": "This mailbox is a shared double"
     },
     {
-      "ID": "1InviteDnaTscZZZZZZZZZ",
-      "MessageID": "invite-dna-tsc-1@dna.test",
+      "ID": "1InvitePlatformSyncZZZ",
+      "MessageID": "invite-platform-sync-1@example.test",
       "Read": false,
-      "From": {"Name": "Marvin Nolan", "Address": "organizer@dna.test"},
-      "To": [{"Name": "", "Address": "vexa@oenb.at"}],
+      "From": {"Name": "Robin Vale", "Address": "organizer@example.test"},
+      "To": [{"Name": "", "Address": "vexa@example.com"}],
       "Cc": null,
       "Bcc": null,
       "ReplyTo": [],
-      "Subject": "Invitation: DNA TSC weekly @ Sat Mar 2, 2030 2pm (UTC)",
+      "Subject": "Invitation: Platform Sync weekly @ Sat Mar 2, 2030 2pm (UTC)",
       "Created": "2026-09-01T21:14:02.503Z",
       "Tags": [],
       "Size": 1204,
       "Attachments": 1,
-      "Snippet": "You have been invited to DNA TSC weekly."
+      "Snippet": "You have been invited to Platform Sync weekly."
     }
   ]
 }

@@ -949,8 +949,8 @@ def build(reg: Registry, db) -> None:
     def _followup_on(ctx) -> bool:
         """Does the attendee fan-out run for this meeting at all?
 
-        `shared` (default ON) is Marvin's own rule read across to SPI — creator-controlled
-        sharing, default on, with a per-meeting opt-out (`refs.share is False`). Default OFF and
+        `shared` (default ON) is creator-controlled sharing — default on, with a per-meeting
+        opt-out (`refs.share is False`). Default OFF and
         this loop is dead on day one; that one value IS the coefficient.
 
         THE PERSONAL/SHARED AXIS IS GONE (founder, 2026-09-02): one meeting produces one report

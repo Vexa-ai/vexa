@@ -10,7 +10,7 @@ The three `.eml` files are what `GET /api/v1/message/<ID>/raw` returns for those
 
 | file | what it proves |
 |---|---|
-| `invite-dna-tsc.eml` | an ICS invite the DNA corpus shape: a **Zoom** URL, two real ATTENDEEs plus our own address, a `#group:` tag, and folded lines (RFC 5545) through the ATTENDEE and DESCRIPTION properties |
+| `invite-platform-sync.eml` | an ICS invite in the recorded corpus's shape: a **Zoom** URL, two invented ATTENDEEs plus our own address, a `#group:` tag, and folded lines (RFC 5545) through the ATTENDEE and DESCRIPTION properties |
 | `reply-minutes.eml` | a reply carrying `In-Reply-To` — routed by the thread row, never by the sender |
 | `not-for-us.eml` | mailpit accepts every address, so a poller that does not filter on `VEXA_MAIL_ADDR` answers another tenant's mail |
 

@@ -42,7 +42,7 @@ def _ics(**over) -> str:
         "UID": "invite-1@example.test",
         "DTSTAMP": "20260902T183213Z",
         "ORGANIZER;CN=Real Person": "mailto:real@rehearse.test",
-        "SUMMARY": "DNA TSC 2026-03-02",
+        "SUMMARY": "Platform Sync 2026-03-02",
         "DESCRIPTION": f"Join Zoom Meeting\\n{ZOOM}",
         "LOCATION": ZOOM,
     }
@@ -91,7 +91,7 @@ def test_dtstart_is_read_from_its_own_line_for_the_same_reason():
 def test_an_ordinary_invite_still_parses_exactly_as_before():
     ev = parse_ics(_ics())
     assert ev["organizer"] == "real@rehearse.test"
-    assert ev["title"] == "DNA TSC 2026-03-02"
+    assert ev["title"] == "Platform Sync 2026-03-02"
     assert ev["url"] == ZOOM
     assert ev["ics_uid"] == "invite-1@example.test"
 

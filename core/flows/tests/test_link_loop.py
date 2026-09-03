@@ -285,7 +285,7 @@ def test_no_recipe_calls_the_mail_transport_by_name():
 
 
 # ── the attendee gate: a touch that cannot work is not sent ──────────────────────────────────
-# 2026-09-02, meeting 97 ("DNA TSC — 3 August"). The row was planned from an invite whose url
+# 2026-09-02, meeting 97 ("Platform Sync — 3 August"). The row was planned from an invite whose url
 # matched no platform, so it landed platform='unknown' with an empty native; the mint was
 # addressed by that pair, answered 404, and `mint_transcript_share` returned None rather than
 # raising — so the `except Exception` guarding it never fired. The mail went to every attendee
