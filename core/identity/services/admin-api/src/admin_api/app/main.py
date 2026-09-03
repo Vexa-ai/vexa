@@ -33,6 +33,7 @@ from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
                              Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
+from . import events as events_mod
 from . import person_settings as person_settings_mod
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
@@ -442,11 +443,37 @@ def create_app() -> FastAPI:
         if existing:
             response.status_code = status.HTTP_200_OK
             return UserResponse.model_validate(existing)
+        # ── the one point a person enters ────────────────────────────────────────────────────
+        # FIVE independent paths onboard somebody — the control MCP's sign-in verbs, its OAuth door,
+        # its shared account_for helper, the terminal's own auth, and the flows mail door when an
+        # invite arrives from a stranger. They look like five places to publish `onboarding.completed`
+        # and they are not: all five create the account HERE. The single point they already share is
+        # where the fact belongs, which is why nothing else had to be refactored to make it true.
+        #
+        # The STAMP is written in the same transaction as the account, so the record that this person
+        # was onboarded survives a publish that never lands — a later sweep can replay from it. That
+        # ordering is the whole exactly-once guarantee: it holds against a replay, a restore, and a
+        # second producer somebody adds later without reading this comment.
+        import time as _time
         u = User(email=user_in.email, name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
+        u.data = {"onboarding_completed_at": _time.time()}
         db.add(u)
         await db.commit()
         await db.refresh(u)
+        # FIRE-AND-FORGET. Identity tells flows; it does not ask it. A deployment with no flows
+        # domain still onboards people, and so does one where flows is down — the publisher swallows
+        # everything and the person is already committed above.
+        # Guarded HERE as well as inside the publisher, and neither one alone is load-bearing: the
+        # publisher swallows transport failures, this swallows a publisher that changes shape. The
+        # thing being protected is a person's sign-in, and it must not depend on anyone remembering.
+        try:
+            events_mod.publish(
+                events_mod.EVENT_ONBOARDING_COMPLETED,
+                events_mod.onboarding_source_id(u.id),
+                events_mod.onboarding_refs(u.id, (u.data or {}).get("org"), "member"))
+        except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+            pass
         response.status_code = status.HTTP_201_CREATED
         return UserResponse.model_validate(u)
 
