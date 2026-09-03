@@ -5,12 +5,13 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|all]
+ *                                lite-makefile|domain-doors|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -1075,9 +1076,31 @@ function liteProgramEnv(program) {
   const envLine = (section.match(/^environment=(.*)$/m) || [])[1] || "";
   return new Set([...envLine.matchAll(/([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]));
 }
-const liteEntrypointExports = () => new Set(
-  [...readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8")
-    .matchAll(/^export ([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]));
+// key -> the entrypoint.sh line that exports it. A Map, not a Set, so check 6 can name file:line;
+// `.has()` keeps it a drop-in for check 3's fallback use.
+const liteEntrypointExports = () => {
+  const lines = readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8").split("\n");
+  const out = new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^export ([A-Z][A-Z0-9_]*)=/);
+    if (m && !out.has(m[1])) out.set(m[1], i + 1);
+  }
+  return out;
+};
+// F130 — the keys deploy/lite/entrypoint.sh exports that NO config.v1-adopted service declares,
+// each naming the program it belongs to. entrypoint.sh is a SHARED surface: its exports land in the
+// environment every supervisord program inherits, so a key cannot be attributed to one service the
+// way a compose `environment:` block or a helm template can. The list is therefore the honest
+// alternative to attributing them wrongly — and, like `surface_only`, it is a backlog: an entry
+// leaves when its program adopts config.v1. Kept TIGHT: a key belonging to an ADOPTED service must
+// be declared, never listed here.
+const CONFIG_LITE_UNADOPTED = {
+  VEXA_PUBLIC_API_URL: "clients/terminal — the browser-visible API base; terminal has not adopted config.v1",
+  TERMINAL_PUBLIC_URL: "clients/terminal — its own public origin; same",
+  NEXTAUTH_SECRET: "clients/terminal — NextAuth's signing secret; same",
+  JWT_SECRET: "clients/terminal — the session secret; same",
+  VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
+};
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in
   const walk = (dir) => {
@@ -1166,11 +1189,31 @@ function gateConfigContract() {
       }
     }
   }
+  // 6. the shared lite entrypoint, surface → declaration (F130). Checks 3 and 4 walk compose, helm
+  //    and the supervisord program env in BOTH directions — but entrypoint.sh was read only in the
+  //    declaration→surface direction (as check 3's fallback), so it was the one surface, in the one
+  //    direction, that nothing walked: a key DELETED from a declaration while the entrypoint still
+  //    exported it left no refusal and no warning, and the operator kept setting a value that
+  //    reached nothing. Attribution is by construction impossible here (see CONFIG_LITE_UNADOPTED),
+  //    so the rule is: SOME adopted service declares it, or it is listed with the program it serves.
+  const declaredAnywhere = new Set();
+  for (const svc of CONFIG_ADOPTED) {
+    const declPath = join(ROOT, svc.decl);
+    if (!existsSync(declPath)) continue;
+    const decl = JSON.parse(readFileSync(declPath, "utf8"));
+    for (const k of decl.keys || []) declaredAnywhere.add(k.key);
+    for (const k of decl.surface_only || []) declaredAnywhere.add(k.key);
+  }
+  for (const [key, line] of entrypointExports) {
+    if (declaredAnywhere.has(key) || CONFIG_SURFACE_ALLOW.has(key) || key in CONFIG_LITE_UNADOPTED) continue;
+    errs.push(`lite: deploy/lite/entrypoint.sh:${line} exports ${key} but no adopted service's config.v1 declares it — declare it on the service that reads it, or list it in CONFIG_LITE_UNADOPTED (scripts/gates.mjs) naming the program it serves`);
+  }
+
   if (errs.length) return fail(["config-contract (ADR-0026) — config.v1 violations:", ...errs.map((e) => "   " + e)]);
   const edges = edgeCount
     ? ` · ${edgeCount} publish edge key(s) carrying ${edgeCarriers.size} carrier(s)${owners ? "" : " (no census — uncrossed)"}`
     : " · no publish edge declared";
-  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities${edges} · declarations ≡ deploy surfaces ≡ code reads`);
+  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities${edges} · ${entrypointExports.size} lite entrypoint export(s) · declarations ≡ deploy surfaces ≡ code reads (both directions, every surface)`);
   return true;
 }
 
@@ -1350,7 +1393,36 @@ function gateLiteMakefile() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+
+// gate:domain-doors (P9, ADR-0037) — the HTTP twin of gate:graph-py. `gate:graph` bans a
+// cross-domain IMPORT and there are none; every cross-domain edge on this tree is a DOOR — an
+// env-configured base URL plus an HTTP call — and until this gate none of the suite read one. So
+// "identity is the only shared dependency; meetings, agents and flows work independently and in
+// any configuration" (40.7) was a sentence in a PRD, not a property of the code.
+//
+// A domain may name its own door, identity's, and the runtime primitive's. Another domain's door
+// needs a DECLARATION — class `capability` with a degrade in that domain's config contract (the
+// #1453 `domain_present` pattern) — or a PUBLISH edge into flows. The edge and the clients reach a
+// domain only through a declared route binding (routes.v1 / mcp.tools.v1). The rule, the scanner
+// and the reasons live in scripts/check-domain-doors.mjs, measured against ADR-0037's figure; the
+// doors already open on the line live
+// in scripts/domain-doors.allow.json, each pinned to path:line and each naming the ruling that
+// closes it — checked in BOTH directions, so a stale entry is a failure and the list cannot rot.
+function gateDomainDoors() {
+  let res;
+  try { res = checkDomainDoors(ROOT); }
+  catch (e) { return fail([`domain-doors: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  const errs = [];
+  for (const v of res.violations)
+    errs.push(`${v.site} — ${v.from} → ${v.to} (${v.door}): ${v.why}`);
+  for (const e of res.stale)
+    errs.push(`STALE allowlist entry: ${e.door} in ${e.path} (${e.from} → ${e.to}) no longer matches any violation — DELETE it from ${DOORS_ALLOW}. The list is the migration backlog, not a permanent exemption.`);
+  if (errs.length) return fail([`domain-doors (P9, ADR-0037) — undeclared cross-domain doors:`, ...errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:domain-doors — ${res.sites.length} door site(s) · every cross-domain door declared or allowlisted (${res.allowlisted} on the dated backlog in ${DOORS_ALLOW})`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

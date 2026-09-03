@@ -7,6 +7,8 @@ governs [#729](https://github.com/Vexa-ai/vexa/issues/729) ·
 [#1286](https://github.com/Vexa-ai/vexa/issues/1286) · records the architecture half of the
 MCP-first product decision
 
+> Decision 2 (`core/mcp` as a tree beside the gateway) is superseded by [ADR-0037](0037-the-target-architecture-one-edge-domains-over-identity-and-runtime.md). The rest of this ADR stands.
+
 ## Context
 
 Vexa is about to be named after an interface it has never treated as a component. A person points
