@@ -141,3 +141,44 @@ Every environment key this brick reads is declared once in `src/flows_config.py`
 `tests/test_config_declaration.py` asserts BOTH directions — nothing read that is not declared,
 and nothing declared that nothing reads. `core/flows` is not yet one of the five `config.v1`
 adopted services (seam backlog B7/B9); this table is what makes that adoption a transcription.
+
+## Carrying flows this repo does not publish
+
+A deployment with flows of its own — a private onboarding ladder, a billing gate, anything — plugs
+into the same engine and the same queue through three seams. Nothing about them is a fork of this
+tree, and none of them lets a pack edit what is already here.
+
+**1 · Flow versions as data.** `POST /flows` writes a `flow_version` row and the worker hot-loads it
+within one refresh (`Registry.refresh_from_db`). Steps are referenced by NAME against the image's
+reviewed vocabulary, and an unknown name is refused — the API never accepts code. So a flow that is
+a re-ordering of steps that already exist needs nothing below.
+
+**2 · Steps of its own — `VEXA_FLOWS_DEFS_EXTRA`.** Comma-separated importable module names, each
+exposing `build(reg, db)`, called last by `flows_defs.production.build` — after every flow in this
+repo, so a pack composes on top and supersedes nothing. This is the seam that seam 1 deliberately
+does not provide: the vocabulary stays closed to the API and open to the operator, the same split
+`VEXA_BEHAVIOR_DIR` already draws for prose.
+
+```python
+# acme_pack.py, on the deployment's own PYTHONPATH
+from flows import Done, EventType
+
+def build(reg, db):
+    @reg.step
+    def acme_step(ctx):
+        return Done({"ok": True})
+    reg.flow(name="acme", version=1, on=EventType("acme.happened"),
+             steps=[reg.steps["acme_step"]])
+```
+
+A module named here and not importable is a **refusal to boot**, not a fallback: a deployment that
+declares a pack and starts without it reacts to none of that pack's events, silently, for as long
+as nobody looks.
+
+**3 · Its own words — `VEXA_BEHAVIOR_DIR`.** `flows_queue` reads `$VEXA_BEHAVIOR_DIR/queue/<flow>.
+<type>.md` before the showcase baked into the image, so a pack ships the sentences for its own flows
+in that tree. A flow with no file is **counted and not spoken** — the copy is also the filter.
+
+**Event types need no declaration.** There is no carrier allow-list on the intake: `POST /events`
+refuses a type only when no flow reacts to it, and answers with the list that would have worked.
+Register a flow on `acme.happened` and that type is admissible the same tick.
