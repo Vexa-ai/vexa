@@ -976,6 +976,19 @@ const CONFIG_ADOPTED = [
     compose: "admin-api", helm: ["deployment-admin-api.yaml"], lite: "admin-api",
   },
   {
+    // PRD decision 40 — the MCP surface a person's own agent connects to. Adopted late: it shipped
+    // with ELEVEN env keys and no declaration and no preflight, so the one service whose whole job
+    // is to be the product's front door was the one service nothing checked.
+    // helm/lite are EMPTY because it has no template and no supervisord program — every key it does
+    // plumb is declared for compose, and the ones it does not are `targets: []` rather than a
+    // pretence that a surface carries them.
+    service: "mcp",
+    decl: "core/meetings/services/mcp/src/vexa_mcp/config.v1.json",
+    preflight: "core/meetings/services/mcp/src/vexa_mcp/config_preflight.py",
+    scan: ["core/meetings/services/mcp/src"],
+    compose: "mcp", helm: [], lite: null,
+  },
+  {
     service: "gateway",
     decl: "core/gateway/services/gateway/src/gateway/config.v1.json",
     preflight: "core/gateway/services/gateway/src/gateway/config_preflight.py",
@@ -1068,7 +1081,9 @@ function gateConfigContract() {
     const compose = composeServiceEnv(svc.compose);
     if (!compose) { errs.push(`${svc.service}: compose service '${svc.compose}' not found`); continue; }
     const helm = helmEnvKeys(svc.helm);
-    const lite = liteProgramEnv(svc.lite);
+    // A service that is not on a surface yet declares no keys for it (`targets: []`); an
+    // absent program name means that surface simply contributes nothing to check 4.
+    const lite = svc.lite ? liteProgramEnv(svc.lite) : new Set();
     // 3. declaration → surfaces (per the key's declared targets; default = all three)
     for (const k of decl.keys || []) {
       const targets = k.targets ?? ["compose", "helm", "lite"];
