@@ -3625,6 +3625,37 @@ def _meeting_ref(meeting_url: str):
                   "(meet.google.com/xxx-xxxx-xxx, teams.live.com/meet/<id>, zoom.us/j/<id>)")
 
 
+# meeting-api's own non-terminal set (collector/app.py `_RUNNING_STATUSES`, canonical MeetingStatus
+# enum minus "stopping" and the two terminal values). A native id in this set has a bot dispatched
+# or in the call; "stopping" gets its own answer below, and anything else means the row is terminal
+# or unheard of.
+_BOT_LIVE_STATUSES = {"requested", "joining", "awaiting_admission", "active"}
+
+
+def _bot_conflict_state(uid: str, platform: str, mid: str):
+    """What a gateway 409 on POST /bots actually means for this platform/native id — READ, never
+    inferred (F193/F194). A 409 used to map to one answer, `already_there: true`, whichever of
+    three different things caused it: a bot genuinely in the call, the previous bot still tearing
+    down, or a stale conflict against a meeting that already ended.
+
+    `/bots/status` (the get_bot_status path) is meeting-api's own non-terminal list — checked
+    first because it is the cheap, common case. A native id absent there has either never existed
+    or already finished, so the fallback is `GET /meetings` (the meeting_info path), which carries
+    every status including the terminal ones. Returns the status string, or None when neither
+    surface has heard of this meeting at all."""
+    stc, rc = _gw_http(uid, "GET", "/bots/status")
+    if stc == 200:
+        for b in (rc or {}).get("running_bots", []) or (rc or {}).get("running", []):
+            if (str(b.get("platform")) == str(platform)
+                    and str(b.get("native_meeting_id")) == str(mid)):
+                return str(b.get("status", "")).lower()
+    stm, rm = _gw_http(uid, "GET", "/meetings")
+    for m in (rm or {}).get("meetings", []):
+        if m.get("platform") == platform and str(m.get("native_meeting_id")) == str(mid):
+            return str(m.get("status", "")).lower()
+    return None
+
+
 @mcp.tool()
 @_anon_guard
 def bot_send(meeting_url: str, bot_name: str = "") -> str:
@@ -3655,15 +3686,35 @@ def bot_send(meeting_url: str, bot_name: str = "") -> str:
     # What the room will actually see, resolved ONCE by the domain that decides it, so the sentence
     # we say back and the name on the bot cannot differ.
     said_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
-    st, r = _gw_http(uid, "POST", "/bots",
-                     {"platform": platform, "native_meeting_id": mid,
-                      "meeting_url": meeting_url.strip(),
-                      **({"bot_name": bot_name} if bot_name else {})})
-    if st not in (200, 201):
-        if st == 409:
-            return json.dumps({"already_there": True,
+    body = {"platform": platform, "native_meeting_id": mid,
+            "meeting_url": meeting_url.strip(),
+            **({"bot_name": bot_name} if bot_name else {})}
+    st, r = _gw_http(uid, "POST", "/bots", body)
+    if st == 409:
+        # F193/F194. A 409 used to mean ONE thing to the caller — `already_there: true` — for a
+        # live bot, a bot still leaving, AND a meeting that had already ended. Read the real
+        # state before answering any of those the same way.
+        conflict_status = _bot_conflict_state(uid, platform, mid)
+        if conflict_status in _BOT_LIVE_STATUSES:
+            return json.dumps({"already_there": True, "status": conflict_status,
                                "note": "a bot for this meeting is already up — go straight "
                                        "to meeting_transcript(meeting_url)"})
+        if conflict_status == "stopping":
+            return json.dumps({"already_there": False, "status": conflict_status,
+                               "error": "the previous bot for this meeting is still leaving",
+                               "do": "wait about 10 seconds and call bot_send again — this is "
+                                     "not a failure and not the same as a bot being in the "
+                                     "call; do not tell your person either of those yet"})
+        # Terminal ("completed"/"failed") or unheard-of: the 409 is stale, not a live conflict —
+        # meeting-api just has not reaped the old row yet. One retry, never a loop.
+        st, r = _gw_http(uid, "POST", "/bots", body)
+        if st == 409:
+            return json.dumps({"error": "the bot could not be dispatched", "status": 409,
+                               "detail": f"still conflicting after one retry; last known "
+                                         f"state {conflict_status or 'unknown'}",
+                               "do": "report_friction() with this, and tell your person in one "
+                                     "plain sentence that the bot could not join."})
+    if st not in (200, 201):
         return json.dumps({"error": "the bot could not be dispatched", "status": st,
                            "detail": str(r)[:300],
                            "do": "report_friction() with this, and tell your person in one "
@@ -4163,8 +4214,22 @@ def bot_config(meeting_url: str, language: str = "", bot_name: str = "") -> str:
     if not body:
         return json.dumps({"error": "give language= and/or bot_name="})
     st, r = _gw(uid, "PUT", f"/bots/{platform}/{mid}/config", body)
-    return json.dumps({"applied": st == 200, "status": st,
-                       "detail": None if st == 200 else str(r)[:200]})
+    if st == 200:
+        return json.dumps({"applied": True, "status": st})
+    # F201. A bare upstream 404 said nothing about WHY there was no bot to configure — no bot
+    # ever existed for this link, it already left, or the meeting ended. Read the real state
+    # (same lookup as bot_send's 409 handling) instead of forwarding the bare code.
+    if st == 404:
+        cause_status = _bot_conflict_state(uid, platform, mid)
+        if cause_status in _BOT_LIVE_STATUSES or cause_status == "stopping":
+            cause = (f"no bot answered, though meeting-api still shows this meeting "
+                     f"'{cause_status}' — try again in a few seconds")
+        elif cause_status in ("completed", "failed"):
+            cause = f"there is no bot to configure — this meeting already ended ({cause_status})"
+        else:
+            cause = "there is no bot to configure for this meeting"
+        return json.dumps({"applied": False, "status": st, "error": cause})
+    return json.dumps({"applied": False, "status": st, "detail": str(r)[:200]})
 
 
 @mcp.tool()

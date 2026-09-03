@@ -60,8 +60,22 @@ class EntityRefused(ValueError):
 
 
 def slugify(name: str) -> str:
-    """kebab-case ascii, the shape the templates promise (``id: <slug>`` matches the filename)."""
-    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode()
+    """kebab-case ascii, the shape the templates promise (``id: <slug>`` matches the filename).
+
+    ONE SLUGIFIER, and the whole point of it being one is that every caller lands on the SAME
+    filename for the same name (F200). An apostrophe is DROPPED, never turned into a hyphen: "Keith
+    O'Donnell" is "keith-odonnell", not "keith-o-donnell" — measured live, `entity_upsert` produced
+    the hyphenated form for a page that already existed under the dropped one (a human/agent typing
+    the filename by hand, via `workspace_write`, naturally wrote it without the hyphen), so the two
+    calls disagreed on this person's slug and a second page was created for the first one's subject.
+    Treating the apostrophe as an ordinary separator character is what did it: every OTHER
+    non-alnum run still becomes one hyphen, so a name is never assembled by both rules at once."""
+    # Apostrophe (straight/curly) stripped BEFORE the ascii-encode: NFKD has no compatibility
+    # decomposition for the curly form (U+2019) to an ascii base character, so `encode("ascii",
+    # "ignore")` would already have silently dropped it by the time a `.replace()` after that step
+    # could ever see it — leaving the straight apostrophe as the only one actually handled.
+    raw = str(name or "").replace("'", "").replace("’", "")
+    s = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
     return s[:80]
 
@@ -909,11 +923,23 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
 # `and` and `the` are NOT intra-name particles, and the first version had them: it read "Blue Light
 # Card and Kaar Tech" as ONE name, undercounting by exactly the amount a note listing several dead
 # names does.
-_BARE_NAME = re.compile(r"\b[A-Z][a-zA-Z'’\-]+(?:\s+(?:of|de|del|van|von|da|di)\s+[A-Z][a-zA-Z'’\-]+"
-                        r"|\s+[A-Z][a-zA-Z'’\-]+)+")
+#
+# THE CONNECTOR IS `[ \t]+`, NOT `\s+` (F202/F203/F204/F205). `\s` matches a newline, so the old
+# pattern joined the last capitalised word of one line to the first of the next into a single
+# "name" — two lines of an unrelated list, or a heading and the sentence under it, read as one
+# entity. A name is a phrase someone said in a row; it does not survive a line break.
+_BARE_NAME = re.compile(r"\b[A-Z][a-zA-Z'’\-]+(?:[ \t]+(?:of|de|del|van|von|da|di)[ \t]+[A-Z][a-zA-Z'’\-]+"
+                        r"|[ \t]+[A-Z][a-zA-Z'’\-]+)+")
 _FENCE = re.compile(r"```[\s\S]*?```")
 _HEADING = re.compile(r"^#{1,6}\s.*$", re.M)
 _MD_LINK = re.compile(r"\[[^\]]+\]\([^)]*\)")
+# A QUOTED SPAN IS SOMEBODY ELSE'S TITLE, NOT A NAME THE TURN IS INTRODUCING (F205). "This Week At
+# FINOS: Week Of August 17, 2026" is a web page's own headline, repeated verbatim inside the
+# model's prose because that is what search returned — the turn is reporting a title, not meeting
+# an entity called "Week Of August". Masked the same way a fenced block or a heading is: it is
+# text ABOUT the turn's content, not content the turn is asserting. Both quote styles the product's
+# own text mixes (curly from prose, straight from anything pasted or copied).
+_QUOTED = re.compile(r"[\"“][^\"”]{1,200}[\"”]")
 _POSSESSIVE = re.compile(r"[’']s$")
 _NOT_A_NAME = {"Open Items", "Action Items", "Next Steps", "Open Questions", "Decided Committed"}
 
@@ -922,6 +948,14 @@ _NOT_A_NAME = {"Open Items", "Action Items", "Next Steps", "Open Questions", "De
 # one a Committed-section bullet, which by convention opens with an imperative verb and is followed
 # by an acronym. Those are not names anybody failed to write; counting them inflated the deficit by
 # roughly a third and would have sent the phase off to create pages for them.
+#
+# "then" / "say" ADDED (F202/F203). `behavior/asks/create.md` and `extend.md` — the skill text a
+# `create`/`extend` turn runs as its own prompt, machinery no less than a Committed bullet — read
+# "Then WRITE IT, at that exact path." and "Say ONE line naming what you made", and neither leading
+# word was in this set: "WRITE IT" and "ONE" both capitalise every letter for emphasis in ordinary
+# instruction prose, which is exactly what `_BARE_NAME` cannot distinguish from a name. Measured on
+# a live `/extend` turn (ledger, 2026-09-03): the write-back phase asked to create pages for "Then
+# WRITE IT" and "Say ONE" — no person, company, meeting, project or decision by either name.
 _LEADING_VERB = {
     "add", "address", "agree", "answer", "ask", "assign", "attend", "await", "book", "bring",
     "build", "can", "check", "circulate", "clarify", "close", "co-author", "complete", "confirm",
@@ -931,10 +965,10 @@ _LEADING_VERB = {
     "investigate", "invite", "is", "keep", "land", "lead", "let", "look", "make", "merge", "move",
     "open", "organise", "organize", "pick", "plan", "post", "prepare", "present", "propose",
     "provide", "publish", "raise", "reach", "read", "record", "report", "request", "require",
-    "resolve", "review", "revisit", "run", "schedule", "send", "set", "share", "should", "start",
-    "submit", "support", "take", "test", "that", "the", "these", "this", "those", "track", "update",
-    "using", "verify", "wait", "was", "were", "what", "when", "where", "which", "who", "why",
-    "will", "work", "would", "write", "your",
+    "resolve", "review", "revisit", "run", "say", "schedule", "send", "set", "share", "should",
+    "start", "submit", "support", "take", "test", "that", "the", "then", "these", "this",
+    "those", "track", "update", "using", "verify", "wait", "was", "were", "what", "when", "where",
+    "which", "who", "why", "will", "work", "would", "write", "your",
 }
 
 
@@ -955,6 +989,10 @@ def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
     body = text[fm.end():] if fm else text
     body = _FENCE.sub(" ", body)
     body = _HEADING.sub(" ", body)
+    # QUOTED SPANS ARE MASKED UNCONDITIONALLY (F205), not gated on `mask_linked` — a quoted title is
+    # not a name either extraction mode should see: it is somebody else's headline sitting inside the
+    # turn's own prose, not a `[[wikilink]]` and not an entity this turn is introducing.
+    body = _QUOTED.sub(" ", body)
     if mask_linked:
         body = _WIKILINK.sub(" ", body)
         body = _MD_LINK.sub(" ", body)
@@ -1002,8 +1040,18 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
     for t in texts:
         for n in candidate_names(t, mask_linked=False):
             slug = slugify(n)
-            if slug and slug not in known and n not in seen:
-                seen.append(n)
+            if not slug or slug in known or n in seen:
+                continue
+            # F204: "Zenith SI" is not a name nobody wrote a page for — it is a fragment of
+            # "Zenith SIG", which already has one (kg/entities/project/zenith-sig.md, slug
+            # "zenith-sig"). An exact-slug miss above does not catch this: the fragment's slug
+            # differs from the real one by construction. A plain prefix test does — same trade as
+            # `_drop_prefixes` below (truncation cuts mid-word, so a word-boundary test would miss
+            # it too), extended from "against the rest of this batch" to "against every page this
+            # desk already has".
+            if any(k.startswith(slug) for k in known):
+                continue
+            seen.append(n)
     return _drop_prefixes(seen)[:limit]
 
 
