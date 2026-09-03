@@ -25,6 +25,7 @@ import json
 import pathlib
 import logging
 import os
+import re
 import shutil
 import time
 import urllib.error
@@ -186,6 +187,58 @@ def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
             return
         except OSError:
             continue
+
+
+# ── the imperative gate (F162, ledger 2026-09-02 14:17Z-14:30Z) ────────────────────────────────────────────
+# Ledger entries F161/F162/F166/F169: in a live-meeting copilot chat the founder wrote "send bot"
+# FOUR TIMES. The turn answered each with a workspace `propose` call (Objective/membership
+# questions), a WebSearch, a WebFetch — never `bot_send`. Two causes were found; this fixes the
+# worker-side one (the other is a `bots_running` state-truth fix in the rig, not this file): the
+# composed prompt put the person's own words LAST, after the mounts/entity/global-context
+# preambles below — and those preambles themselves nudge the model toward onboarding ("ASK the user
+# their name early") and proactive `propose` behaviour. An explicit operational imperative buried
+# under six preambles' worth of onboarding/propose framing lost to that framing, repeatedly.
+#
+# This preamble ships FIRST — before every other concern in `run_turn_over_workspace`'s composed
+# prompt, including the MCP-status note — so an imperative is the first thing the model reads, not
+# the last. It fires on the person's OWN words only (`prompt`, not the preamble text that follows),
+# to avoid ever matching itself or another preamble's prose.
+_IMPERATIVE_PATTERNS: tuple[tuple["re.Pattern[str]", str, str], ...] = (
+    (re.compile(r"\bsend\s+(the\s+)?bot\b", re.I), "bot_send", "send the bot"),
+    (re.compile(r"\bschedule\s+(the\s+)?bot\b", re.I), "bot_schedule", "schedule the bot"),
+    (re.compile(r"\bjoin\s+(the\s+)?(meeting|call)\b", re.I), "bot_send", "join the meeting"),
+    (re.compile(r"\bstop\s+record(ing)?\b", re.I), "bot_stop", "stop recording"),
+    (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "bot_stop", "stop the bot"),
+)
+
+
+def imperative_preamble(prompt: str) -> str:
+    """If the person's own message names an operational imperative — send/stop/schedule the bot,
+    join, stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
+    concern the rest of the composed prompt carries. Empty string when nothing matches: an ordinary
+    chat turn gets no extra framing at all."""
+    matched: list[tuple[str, str]] = []
+    seen_tools: set[str] = set()
+    for pat, tool, phrase in _IMPERATIVE_PATTERNS:
+        if pat.search(prompt or "") and tool not in seen_tools:
+            matched.append((tool, phrase))
+            seen_tools.add(tool)
+    if not matched:
+        return ""
+    lines = [
+        "## An operational imperative is in this message — act on it FIRST",
+        "",
+        "The person's own words below name at least one of: send/stop/schedule the bot, join the "
+        "meeting, stop recording. Call the matching tool NOW, before any onboarding question, any "
+        "`propose` call, any web search, and before the write-back phase. Answer with what the tool "
+        "actually returned — never a scaffold question, a search, or a description of what you would "
+        "do, in its place.",
+        "",
+    ]
+    for tool, phrase in matched:
+        lines.append(f"- \"{phrase}\" -> call `{tool}` first.")
+    lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 def voice_preamble() -> str:
@@ -1316,7 +1369,11 @@ def run_turn_over_workspace(
         "attached this turn. Do not claim to have created, read, or changed anything through them; "
         "tell the person plainly that the connection is down. It reattaches fresh next turn.\n\n"
     )
-    turn_prompt = (mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
+    # F162 — the imperative gate goes FIRST, ahead of even the MCP-status note: see its definition
+    # for the ledger incident this closes (four unanswered "send bot"s, lost under six preambles'
+    # worth of onboarding/propose framing).
+    turn_prompt = (imperative_preamble(prompt)
+                   + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
                    + mounts_preamble(mounts)
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
