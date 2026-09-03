@@ -3,6 +3,18 @@
 # (mailbox) and the management API. Behavior (prompts + flow definitions) is
 # data: baked showcase ships in the image; live iteration happens through the
 # flows API (flow versions are rows, hot-loaded by the worker within ~10s).
+#
+# F-D5 — DB CREDENTIALS/HOST/SSL FOLLOW THE SAME PATH admin-api/meeting-api/job-migrations DO:
+# DB_USER/DB_PASSWORD/DB_NAME via secretKeyRef against vexa.postgresCredentialsSecretName (never
+# a chart value inlined into a rendered Secret — the chart value is a decorative placeholder in
+# the postgres.enabled=false shape, where credentials live ONLY in the operator's pre-existing
+# Secret), DB_HOST/DB_PORT via vexa.dbHostEffective/vexa.dbPortEffective, sslmode from
+# database.sslMode. Kubernetes has no way to interpolate a secretKeyRef value into the middle of
+# another env var's string, and flows_config.py declares VEXA_FLOWS_DB_URL as ONE required DSN
+# string (unlike admin-api's discrete DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME vars) — so each
+# container composes its own DSN at startup from these parts via a thin shell wrapper, then execs
+# the real entrypoint. The flows Secret below no longer carries VEXA_FLOWS_DB_URL/ADMIN_DB_URL as
+# literal strings for exactly this reason.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -18,15 +30,6 @@ stringData:
   VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
   VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
-  # HOST/PORT via the chart's shared resolvers (F-D4) — NOT the in-cluster "postgres" component
-  # name hardcoded here before. vexa.dbHostEffective/vexa.dbPortEffective are what every other DB
-  # consumer (admin-api, meeting-api, job-migrations) already uses: postgres.enabled=true resolves
-  # to the in-cluster Service (pgbouncer's, if pgbouncer.enabled), postgres.enabled=false resolves
-  # to the required database.host/database.port (external managed Postgres). Without this, the
-  # flows tier could not deploy against an external database — it always dialed the in-cluster
-  # component name regardless of what database.host said.
-  VEXA_FLOWS_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.dbHostEffective" . }}:{{ include "vexa.dbPortEffective" . }}/flows"
-  ADMIN_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.dbHostEffective" . }}:{{ include "vexa.dbPortEffective" . }}/postgres"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -41,42 +44,135 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-worker}
     spec:
+      {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
+      OTHER than the application's own — when flows.databaseName == database.name they already
+      live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
+      shape, sharing the app's own "vexa" database — no separate CREATE DATABASE anywhere). */}}
+      {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
           image: {{ .Values.flows.image | quote }}
           command: ["python", "-c"]
           args:
             - |
+              # Bootstraps the SEPARATE flows.databaseName database (F-D5 item 3+6): connects to
+              # the APPLICATION database (database.name via DB_NAME/POSTGRES_DB — guaranteed to
+              # exist, unlike Postgres's own "postgres" maintenance database, which many managed
+              # Postgres offerings do not expose to the app's own role) purely as a bootstrap
+              # target, then checks/creates flows.databaseName. pg_database is a global catalog —
+              # visible from any database in the cluster, so the presence check works regardless
+              # of which database this connection lands on.
+              #
+              # Tolerates a role with no CREATEDB (F-D5 item 6, common on managed Postgres): the
+              # create is attempted only when the database is absent, and a privilege failure is
+              # not immediately fatal — it re-checks once more (another replica, or an operator,
+              # may have created it in the meantime / ahead of time) before refusing loudly.
               import os
               from sqlalchemy import create_engine, text
-              e = create_engine(os.environ["ADMIN_DB_URL"], isolation_level="AUTOCOMMIT")
+              name = os.environ["FLOWS_DB_NAME"]
+              admin_url = (
+                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
+                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
+              )
+              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
               with e.connect() as c:
-                  if not c.execute(text("SELECT 1 FROM pg_database WHERE datname='flows'")).first():
-                      c.execute(text("CREATE DATABASE flows"))
-                      print("created database flows")
-          envFrom:
-            - secretRef:
-                name: {{ include "vexa.componentName" (list . "flows") }}
+                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
+                  if not exists:
+                      try:
+                          c.execute(text('CREATE DATABASE "' + name + '"'))
+                          print("created database " + name)
+                      except Exception as exc:
+                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
+                          if not exists:
+                              raise RuntimeError(
+                                  "database " + repr(name) + " does not exist and this role could "
+                                  "not create it (" + repr(exc) + ") — pre-create it "
+                                  "(CREATE DATABASE ...) or grant CREATEDB"
+                              ) from exc
+                          print("database " + name + " already exists (created by another process)")
+                  else:
+                      print("database " + name + " already exists")
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: FLOWS_DB_NAME
+              value: {{ .Values.flows.databaseName | quote }}
+      {{- end }}
       containers:
         - name: flows-worker
           image: {{ .Values.flows.image | quote }}
-          command: ["python", "-m", "flows_worker"]
+          # Composes VEXA_FLOWS_DB_URL from secretKeyRef-sourced parts (F-D5 item 1) rather than
+          # a literal DSN in the Secret — see the file header. sslmode threads from database.sslMode
+          # (F-D5 item 2); the target database is flows.databaseName (default "flows", separate
+          # from the app database — set equal to database.name to share it, see values.yaml).
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              exec python -m flows_worker
           envFrom:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: FLOWS_DB_NAME
+              value: {{ .Values.flows.databaseName | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            {{- /* AGENT DOMAIN PRESENCE (F-D5 item 4): unset means "no agent domain deployed" to
+            flows_config.py (a `capability` key, degrades via flows_steps.common.domain_present) —
+            NOT a URL pointed at a Service that does not exist in a no-agents estate. */}}
+            {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
-            # THE TERMINAL'S PUBLIC ORIGIN — required now, because it goes into every link this
-            # deployment mails. It used to default to a localhost port, which is a dead button in
-            # every deployment that is not a laptop. `terminal.publicUrl` when an ingress fronts
-            # it; the in-cluster service otherwise, which is at least reachable from inside.
+            {{- /* THE TERMINAL'S PUBLIC ORIGIN (F-D5 item 5): unset means "no terminal adapter" to
+            flows_config.py (a `capability` key) — nothing is mailed with a link and any step that
+            would compose one refuses, naming the key. Previously this ALWAYS resolved to a URL
+            (terminal.publicUrl, or the in-cluster Service address as a fallback) even when
+            terminal.enabled=false, which is a dead link in every mail a no-terminal deployment
+            sends — there is no terminal there to answer it. */}}
+            {{- if .Values.terminal.enabled }}
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
+            {{- end }}
             - name: VEXA_FLOWS_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
@@ -102,7 +198,12 @@ spec:
       containers:
         - name: flows-mailbox
           image: {{ .Values.flows.image | quote }}
-          command: ["python", "-m", "flows_integrations.mailbox"]
+          # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              exec python -m flows_integrations.mailbox
           envFrom:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
@@ -113,18 +214,36 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: FLOWS_DB_NAME
+              value: {{ .Values.flows.databaseName | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
-            # THE TERMINAL'S PUBLIC ORIGIN — required now, because it goes into every link this
-            # deployment mails. It used to default to a localhost port, which is a dead button in
-            # every deployment that is not a laptop. `terminal.publicUrl` when an ingress fronts
-            # it; the in-cluster service otherwise, which is at least reachable from inside.
+            {{- if .Values.terminal.enabled }}
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
+            {{- end }}
             - name: VEXA_FLOWS_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
@@ -150,12 +269,36 @@ spec:
       containers:
         - name: flows-api
           image: {{ .Values.flows.image | quote }}
-          command: ["python", "-m", "flows_integrations.flows_api"]
+          # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              exec python -m flows_integrations.flows_api
           ports:
             - containerPort: 18200
           envFrom:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: FLOWS_DB_NAME
+              value: {{ .Values.flows.databaseName | quote }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
