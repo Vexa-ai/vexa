@@ -109,6 +109,7 @@ runs them). ("ADD" = gap still open; "retire" = scheduled for removal.)
 | `gate:graph-py` | Python cross-package edges are acyclic + allow-listed (the Python twin of the depcruise DAG) | P3 | `check-isolation-py.mjs --mode=graph` | **have** (green-on-empty) |
 | `gate:config-contract` | (ADR-0026) each adopted service's `config.v1.json` is the SSOT for its environment: the declaration conforms to the sealed schema, its vendored `config_preflight.py` is byte-identical to the canonical copy, and declaration ↔ deploy surface is checked in **both** directions on **every** surface — compose, helm, the lite supervisord program env, and the shared `deploy/lite/entrypoint.sh` — plus an undeclared-read scan of the service's source | P14, P9 | `scripts/gates.mjs` | **have** |
 | `gate:domain-doors` | (ADR-0037) every cross-domain HTTP **door** (an env-configured base URL, or a literal `http://<service>:`) is one a domain may open: its own, identity's, the runtime primitive's, one DECLARED optional in its config contract (`capability` class + degrade — the `domain_present` pattern), or a PUBLISH edge — class `publish-edge` on the key, or `publishes_events` on the domain manifest — since a fact handed over best-effort is not a dependency. The edge and the clients reach a domain only through a declared route binding (`routes.v1` / `mcp.tools.v1`). The doors already open on the line sit in a dated allowlist keyed on (file, env-key) — never on a line number, which any edit above it moves — checked in BOTH directions and by count, so a stale or surplus entry fails too and the backlog can only shrink | P2, P3, P9 | `check-domain-doors.mjs` (+ `domain-doors.allow.json`) | **have** (green-on-empty) |
+| `gate:fact-parity` | every fact written in more than one place agrees, or is on a pinned ledger that names the decision blocking it. `scripts/parity.json` declares each fact, its sites and how they are compared (byte-identical file · identical literal · identical membership · identical regex source across languages · the same sentence once its carrier is stripped), plus `forbid_elsewhere` so a declared site list is a real inventory. Generalises the one mechanism in this repo that has held: `config_preflight.py`, vendored into seven packages and never drifted, because a gate compares the bytes | P23 | `check-parity.mjs` (+ `parity.json`) | **have** (green-on-empty) |
 | `gate:test-isolation` | no Python test imports a sibling module's internals (the test lane obeys the same P2 boundary as prod) | P2 | `check-isolation-py.mjs --mode=test-isolation` | **have** (green-on-empty) |
 | `gate:exports` | no consumer deep-imports past a module's `index` | P6 | `package.json` `"exports"` + scan | **have** (locks land per-package) |
 | `gate:readme` | every non-ignored directory has a non-empty `README.md` | P12 | tree-walk | **have** |
@@ -148,6 +149,14 @@ file, the line, and the declaration that would have made it legitimate. The desi
 against is [ADR-0037](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0037-the-target-architecture-one-edge-domains-over-identity-and-runtime.md),
 which names this gate as the mechanism it expects; the allowlist is the distance between that
 figure and the tree.
+
+**A duplicated fact needs a gate, not a comment.** Four places in this tree carry a comment asserting that a
+copied literal is *"kept identical on purpose"*, and in each case the copies had already diverged when someone
+looked. The one multiply-written fact that has never drifted is the one with a gate on it. `gate:fact-parity`
+generalises that mechanism, and it deliberately does **not** pick winners: where making the copies agree needs a
+product decision — which slug the server writes, whether a `joining` meeting is live — it records every live
+answer, names the decision, and fails if any of them moves without someone writing down that it moved. A gate
+that guesses a product decision makes the wrong answer permanent and calls it enforcement.
 
 **Two-layer enforcement.** Locally, a `pre-push` hook (`.githooks/pre-push`, wired by `core.hooksPath` via the root `prepare` script — zero-dependency, per P17) runs `pnpm gates` and blocks any push that isn't green. In CI, `gates.yml` re-runs each gate as its own step so a failure is unambiguous. `git commit` itself runs nothing — the bar is at **push**, not every commit.
 

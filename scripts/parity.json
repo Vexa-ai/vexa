@@ -1,0 +1,528 @@
+{
+  "contract": "parity.v1",
+  "dated": "2026-09-03",
+  "measured_on": "Vexa-ai/vexa branch minutes-mcp-viewer",
+  "what_this_is": [
+    "Every fact in this repository that is written in more than one place, and what must be true of",
+    "the copies. P23 is 'one writer per data carrier'; these are not carriers, they are LITERALS — a",
+    "set of statuses, a mark, a sentence, a regex, a default URL — and nothing was checking them.",
+    "",
+    "The control case is the whole argument: config_preflight.py is vendored byte-identically into",
+    "seven packages and has NEVER drifted, because a gate fails the build on byte-inequality. It is",
+    "the only cross-image constant in this tree with a parity gate, and it is the only multiply-",
+    "written fact that has held. Four other facts carry a comment asserting the copies are 'kept",
+    "identical on purpose', beside copies that are not.",
+    "",
+    "A fact is either ENFORCED — every site must agree, and the gate is the reason they will — or on",
+    "the DRIFT LEDGER: it has already disagreed, and making the sites agree requires choosing which",
+    "live answer is right. The gate does not choose. It records every answer, names the decision, and",
+    "fails if any of them moves without a human writing down that it moved. It also fails when a",
+    "ledger fact comes into agreement, because that means the decision was taken and the fact should",
+    "now be enforced. The ledger can only shrink.",
+    "",
+    "Each site's `pattern` is a JS regex with exactly one capture group that must match EXACTLY ONCE",
+    "in the file. Zero matches or two is a failure: a manifest that has quietly stopped describing",
+    "the tree is worse than no manifest, because it reports green."
+  ],
+  "kinds": {
+    "file-bytes": "the whole file must be byte-identical to every other site's",
+    "literal": "the captured text must be identical",
+    "set": "the captured text is split on commas/whitespace, unquoted, de-duped and sorted — membership must be identical, order and spelling of the container need not be",
+    "regex-source": "the captured text is a regular expression SOURCE compared as a string. Used where the sites are in different languages and no shared module can exist (ADR-0036 item 10): two engines may still read one source differently, so this is the strongest check available without a mechanism that does not exist — and strictly stronger than the nothing there is today.",
+    "(any kind) forbid_elsewhere": "names the literal itself: any non-test source file under `scan` that contains it and is not a declared site fails. A site list is only an inventory if nothing else writes the fact — without this, single-sourcing a mark today just means someone retypes it next month and the manifest reports green over two writers.",
+    "prose": "the captured text is a SENTENCE compared after its carrier is removed — blockquote markers, string-concatenation seams and whitespace runs collapse. A Python implicit-concat splits a sentence at whichever word hit the margin and a markdown file hard-wraps it; those are not different sentences. Apostrophes are NOT normalised: U+2019 vs U+0027 is a real difference in text a stranger reads."
+  },
+  "facts": [
+    {
+      "id": "config-preflight",
+      "fact": "the config.v1 boot preflight",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/config.v1/preflight.py",
+      "how_to_agree": "vendor the canonical file VERBATIM into the service package",
+      "why": "THE CONTROL CASE. Seven vendored copies, md5 628e79b499… on every one, no drift since the gate landed. It is listed here so the manifest states the whole rule rather than only its exceptions — and so the mechanism that works is described in the same place as the facts that need it. gate:config-contract check 2 enforces this independently; the duplication is deliberate and cheap.",
+      "sites": [
+        {
+          "path": "deploy/contracts/config.v1/preflight.py"
+        },
+        {
+          "path": "core/agent/control_plane/config_preflight.py"
+        },
+        {
+          "path": "core/flows/src/config_preflight.py"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/config_preflight.py"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config_preflight.py"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/config_preflight.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config_preflight.py"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/config_preflight.py"
+        }
+      ]
+    },
+    {
+      "id": "machinery-mark",
+      "fact": "the machinery mark — the literal that hides a composed opening's prompt bubble",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/marks.py",
+      "how_to_agree": "import it from shared.marks in Python; the terminal's copy is the one genuine mirror and this gate is what keeps it honest",
+      "why": "Was written FOUR times across three images — control_plane/chat_intents.py, control_plane/scaffolds.py, worker/engine.py, clients/terminal/src/canvas/actions.ts — each with a comment saying the duplication was deliberate because 'the sides ship in different images'. True of the TypeScript copy; never true of the Python ones: core/agent/shared is COPY'd into agent-api, the worker AND lite, and two of the three modules already imported from it at module scope. Three images were agreeing on a literal by hand while the module that could hold it was already in all three. The Python side is now one definition; what is left is the one copy that cannot import Python, and it is gated here rather than hoped about in a comment.",
+      "sites": [
+        {
+          "path": "core/agent/shared/marks.py",
+          "pattern": "^MACHINERY_MARK = \"([^\"]+)\""
+        },
+        {
+          "path": "clients/terminal/src/canvas/actions.ts",
+          "pattern": "MACHINERY_MARK = \"([^\"]+)\""
+        }
+      ],
+      "forbid_elsewhere": "[vexa-machinery]",
+      "scan": [
+        "core",
+        "clients"
+      ]
+    },
+    {
+      "id": "phase-mark",
+      "fact": "the write-back phase mark — the literal that drops a phase exchange out of the history",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/marks.py",
+      "how_to_agree": "import PHASE_MARK (worker: WRITEBACK_MARK, an alias of the same constant) from shared.marks",
+      "why": "Was written THREE times under TWO names — control_plane/workspace_reader.py PHASE_MARK, control_plane/chat_intents.py PHASE_MARK, worker/engine.py WRITEBACK_MARK — all three inside core/agent, where not even an image boundary excused it. Now one literal with the worker's historical name kept as an alias. There is no TypeScript copy, so this fact has exactly ONE writer; `forbid_elsewhere` is what keeps it that way, because a fact with one writer stays that way only while something checks.",
+      "sites": [
+        {
+          "path": "core/agent/shared/marks.py",
+          "pattern": "^PHASE_MARK = \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/llm/openai_agent.py",
+          "pattern": "tests for `(\\[vexa-phase:writeback\\])`",
+          "note": "prose, not a definition — but a comment that names the mark must name it right, and declaring it here is what keeps forbid_elsewhere a true inventory"
+        }
+      ],
+      "forbid_elsewhere": "[vexa-phase:writeback]",
+      "scan": [
+        "core",
+        "clients"
+      ]
+    },
+    {
+      "id": "placeholder-secrets",
+      "fact": "the published placeholder values a deployment's internal secret must never still hold (F95)",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/flows/src/flows_steps/common.py — INTERNAL_SECRET_PLACEHOLDERS (the list with a name; the JSON contracts carry it as data)",
+      "how_to_agree": "one list; a contract that adds a placeholder adds it everywhere, or the boot preflight of one service accepts what another refuses",
+      "why": "Ten retypings of one seven-value list across five config.v1 contracts and two Python modules. Unlike every other fact on this page it has NOT drifted — every site is value- and order-identical today — which is exactly why it is enforced rather than laddered: this is the moment the gate costs nothing and buys everything. F95 was one secret with three names shipping the published placeholder as its default; the whole point of the list is that every service refuses the SAME values. There is nothing in deploy/contracts/config.v1 to import from — the schema types forbidden_values as an unconstrained string array — so extracting a shared artefact is a contract change and a design choice, and this PR does not make it. The gate holds the ten in agreement until someone does.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m",
+          "all": true,
+          "note": "every forbidden_values list in this contract must be the same list"
+        },
+        {
+          "path": "core/flows/src/config.v1.json",
+          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m",
+          "all": true,
+          "note": "every forbidden_values list in this contract must be the same list"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/config.v1.json",
+          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m",
+          "all": true,
+          "note": "every forbidden_values list in this contract must be the same list"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m",
+          "all": true,
+          "note": "every forbidden_values list in this contract must be the same list"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m",
+          "all": true,
+          "note": "every forbidden_values list in this contract must be the same list"
+        },
+        {
+          "path": "core/flows/src/flows_steps/common.py",
+          "pattern": "INTERNAL_SECRET_PLACEHOLDERS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
+          "pattern": "INTERNAL_SECRET_PLACEHOLDERS = \\(([^)]*)\\)"
+        }
+      ]
+    },
+    {
+      "id": "entity-slug",
+      "fact": "the slug that turns an entity's name into its filename",
+      "kind": "literal",
+      "decision": "WHICH SLUG THE SERVER WRITES AND EVERY CLIENT MUST REPRODUCE. Two live answers today, and they are not cosmetic: core/agent/shared/entities.py NFKD ascii-folds first, so \"Zoe Muller\" with a diaeresis and an umlaut becomes zoe-muller; every one of the other eight implementations produces zo-m-ller. The server writes the first filename and the terminal's wikilink chip looks for the second, so the chip never resolves for a non-ASCII name. Also open, and separate: the length cap is 80 (entities.py), 60 (production.py), 40 (workspace_attach.py) or absent (all TypeScript), and the empty-input fallback is \"\", \"shared\", \"untitled\", \"meeting\" or \"unknown\" depending on which one ran.",
+      "why": "Nine non-test implementations, not the four the survey first claimed. The manifest records each verbatim so no tenth appears quietly and no existing one moves without someone writing down that it moved. NOT a candidate for mechanical unification: the fix is that the server RETURNS the slug it wrote (entity_upsert), which is a product decision about an API, and picking one of the nine here would make one of the two current filenames permanent.",
+      "sites": [
+        {
+          "path": "core/agent/shared/entities.py",
+          "pattern": "re\\.sub\\(r\"(\\[\\^a-zA-Z0-9\\]\\+)\""
+        },
+        {
+          "path": "core/agent/shared/core.py",
+          "pattern": "re\\.sub\\(r\"(\\[\\^a-z0-9\\]\\+)\""
+        },
+        {
+          "path": "clients/terminal/src/ui-kit/docLinks.tsx",
+          "pattern": "entitySlug = \\(s: string\\) => (s\\.toLowerCase\\(\\)[^;]*);"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/meetingModel.ts",
+          "pattern": "const slug = \\(s: string\\) => (s\\.toLowerCase\\(\\)[^;]*);"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/meeting.tsx",
+          "pattern": "const docSlug = \\(s: string\\) => (s\\.toLowerCase\\(\\)[^;]*);"
+        }
+      ],
+      "enforced": false,
+      "answers": [
+        {
+          "value": "[^a-z0-9]+",
+          "sites": [
+            "core/agent/shared/core.py"
+          ]
+        },
+        {
+          "value": "[^a-zA-Z0-9]+",
+          "sites": [
+            "core/agent/shared/entities.py"
+          ]
+        },
+        {
+          "value": "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\")",
+          "sites": [
+            "clients/terminal/src/ui-kit/docLinks.tsx"
+          ]
+        },
+        {
+          "value": "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-|-$/g, \"\")",
+          "sites": [
+            "clients/terminal/src/surfaces/meeting.tsx",
+            "clients/terminal/src/surfaces/meetingModel.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "entity-kind-enum",
+      "fact": "the kinds an entity may be, and therefore the directories kg/entities may contain",
+      "kind": "set",
+      "decision": "WHETHER topic AND task ARE ENTITY KINDS. The server's writer refuses both and raises EntityRefused; the terminal types every participant and every mentioned title as \"topic\" and mints kg/entities/topic/<slug>.md for it (meetingModel.ts entityFor, reached from canvas/useMeeting.ts on every live meeting). Meanwhile meeting, project and decision cannot be expressed in the terminal at all. Either the server grows the two kinds or the terminal stops minting a path the writer will refuse — and until that is decided, the terminal is building links into a namespace that does not exist.",
+      "why": "Two declarations, five kinds against four, sharing only person and company. shared/governance.py's path gate accepts any kind segment, so a terminal-written topic path passes governance and fails later in entity_rel_path — the disagreement surfaces as far as possible from where it was made.",
+      "sites": [
+        {
+          "path": "core/agent/shared/entities.py",
+          "pattern": "^KINDS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/meetingModel.ts",
+          "pattern": "export type EntityType = ([^;]*);"
+        }
+      ],
+      "enforced": false,
+      "answers": [
+        {
+          "value": "company · decision · meeting · person · project",
+          "sites": [
+            "core/agent/shared/entities.py"
+          ]
+        },
+        {
+          "value": "company · person · task · topic",
+          "sites": [
+            "clients/terminal/src/surfaces/meetingModel.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "visibility-sentence",
+      "fact": "the visibility disclosure — the sentence telling a stranger who can see what they keep in a workspace",
+      "kind": "prose",
+      "decision": "WHETHER THE PRODUCTION DATA STATEMENT SAYS WHAT THE OTHERS SAY. Five sites carry the founder-decision-21 sentence identically. Two do not. flows_defs/production.py ships \"Vexa runs on this organisation's own servers; the recording and transcript stay there.\" — which drops the entire clause about a colleague's workspace being visible to the company's agents, on a live outbound path. That is a materially weaker disclosure, not a wording variant, and only a human can rule on what a stranger must be told. Separately, the rig's copy is written in the third person and uses U+2019 apostrophes where every other copy uses ASCII.",
+      "why": "Seven spellings of one sentence, three of them behind a fallback chain. The five that agree do so by luck: they are five independent retypings and nothing compares them. Recording them here makes the next edit to any one of them visible.",
+      "sites": [
+        {
+          "path": "core/flows/src/flows_steps/mailtext.py",
+          "pattern": "VISIBILITY_SENTENCE = \\(([\\s\\S]*?)\\)\\n"
+        },
+        {
+          "path": "behavior/mail/attendee-head.md",
+          "pattern": "^(Vexa runs on this organisation.s own servers;[^\\n]*)$"
+        },
+        {
+          "path": "behavior/asks/setup-global.md",
+          "pattern": "((?:^> .*\\n)*^> Vexa runs on this organisation.s own servers;[\\s\\S]*?stay here\\.)"
+        },
+        {
+          "path": "core/flows/src/flows_defs/production.py",
+          "pattern": "(\"Vexa runs on this organisation.s own servers; the recording and transcript stay there\\.\")"
+        }
+      ],
+      "enforced": false,
+      "answers": [
+        {
+          "value": "Vexa runs on this organisation's own servers; the recording and transcript stay there.",
+          "sites": [
+            "core/flows/src/flows_defs/production.py"
+          ]
+        },
+        {
+          "value": "Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces is visible to the company's agents; recordings and transcripts stay here.",
+          "sites": [
+            "behavior/asks/setup-global.md",
+            "behavior/mail/attendee-head.md",
+            "core/flows/src/flows_steps/mailtext.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "machinery-note",
+      "fact": "the machinery note — the prose a composed opening carries so the agent knows nobody typed it",
+      "kind": "prose",
+      "decision": "WHICH INSTRUCTION THE AGENT ACTUALLY GETS. The Python copy carries a clause the TypeScript copy does not. The two are handed to the same model in different code paths, so the model is given different instructions depending on which side composed the opening. Unlike the mark it rides on, this is prose with meaning and the two bodies cannot be reconciled mechanically — someone has to say which instruction is right.",
+      "why": "The mark this note carries is now single-sourced (fact machinery-mark). The note is not, and it had already drifted: scaffolds.py continues past where actions.ts stops. Kept on the ledger rather than fixed, because choosing the surviving text is choosing what the agent is told.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/scaffolds.py",
+          "pattern": "MACHINERY_NOTE = \\(([\\s\\S]*?)\\)\\n"
+        },
+        {
+          "path": "clients/terminal/src/canvas/actions.ts",
+          "pattern": "export const MACHINERY_NOTE = ([^;]*);"
+        }
+      ],
+      "enforced": false,
+      "answers": [
+        {
+          "value": "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked",
+          "sites": [
+            "clients/terminal/src/canvas/actions.ts"
+          ]
+        },
+        {
+          "value": "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own voice, without quoting or referring to these instructions. # READ SILENTLY. This rides on EVERY composed opening, not just the setup preset, because the # failure is the shape of the model rather than of one prompt: the founder's first setup turn # opened with I'll start by reading…, let me look at what actually exists in the mounts, # I've got what I need to begin — three lines of narration before one word addressed to him. # Reading is how the job is done, not part of the job; announcing it teaches the reader only # that they are waiting. Read whatever you need silently: the FIRST sentence you emit is addressed to the person, and you never narrate your own tool use. # TEMPLATES ARE SHAPES. An agent read kg/templates/person.md as if it described somebody and # created a real entity from the example inside it; a person was then shown a template rendered # as their own document. Both are the same mistake — a shape treated as a fact — and it is worth # one sentence on every turn rather than a rule in one preset. Anything marked template: true, and anything under kg/templates/, is a SHAPE and never a fact: copy it to make a new record, never cite it, never name it to a person, and never treat the example inside it as somebody real. # (unset) IS A GAP. A group workspace created before the template-free seed still carries the # seed's placeholders in its README, and an agent reported the project's objective is still # (unset) as though that were something it had found out. It is the templates-are-SHAPES # mistake one step smaller — a blank read as a value — so it gets the sentence next to it. (unset) and any other angle-bracket or placeholder value is a GAP, never a fact: say the thing is not recorded yet and offer to fill it in, never report the placeholder as the answer. # Decision 24. A composed opening is the turn most likely to meet a name for the first time # — an attendee clicking a post-meeting link brings a whole room with them — and it is the # turn least likely to stop and write pages, because it is answering an ask. A name without a page gets one now: whatever this turn learns about a person, company, meeting, project or decision goes in through entity_upsert with its source. Facts carry a source; gaps go to kg/MISSING.md, never invented. # F70. The founder asked for a bot and was told I don't have a bot-dispatch tool in this # session. The tool was there: the CLI logged hasTools: true, the rig served 57 tools # including bot_send, and the model never attempted a call. Asked afterwards to list its # tools it listed them all, then said it had been guessing at my own capabilities instead of # checking them. A refusal is the one answer that must never be produced from memory. Your tools are exactly the ones in your tool list. Never say you lack a capability without checking the list; if a call fails, report its error verbatim. # F71. The founder was handed curl -X POST https://api.vexa.ai/bots -H X-API-Key: … — the # agent's workaround for a thing it believed it could not do, which it could. Two failures in # one line: it made him the runtime, and it put a key in a chat. Never hand the person an API call, a curl command, a key or a token. If you cannot do something, say that you cannot do it right now and why, in one sentence. # F73. After a successful send the agent offered a link into the product the person was # already looking at. The panel is moved by the harness, not by you — there is no tool here to # call for it, and a URL is the one thing that cannot help someone already inside the app. The person is INSIDE the app: never give them an app URL or a link into it, and never tell them to open one. Say what is on screen now. # F69. A bare meeting link is not a topic to discuss. It is the whole instruction, and the # turn that answers it with a question has spent the moment the person needed. A message that is only a meeting URL means: send the bot now. # F72. Correcting yourself and then asking whether to proceed spends a second turn on a # decision already made — and on a standing instruction it re-asks something already answered. After correcting yourself on something the person has already told you, DO the thing in that same turn. Never re-ask what they have already answered.",
+          "sites": [
+            "core/agent/control_plane/scaffolds.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "internal-secret-class",
+      "fact": "how each service's config contract classes INTERNAL_API_SECRET, and therefore what it does when it is unset",
+      "kind": "literal",
+      "decision": "WHETHER ONE ENV VAR MAY HAVE THREE BOOT BEHAVIOURS. Four contracts declare it required-explicit (boot refuses); meeting-api declares it defaulted (boots, and silently stops attaching the internal header); runtime lists it surface_only (never read); the MCP service does not declare it at all, so gate:config-contract cannot see it there. Whether meeting-api's leniency is correct is a product decision about a security boundary — a service that quietly drops an auth header when a secret is missing is a different failure mode from one that refuses to start, and it is not for a gate to choose.",
+      "why": "F95 was one secret with three names. This is the same secret with three boot behaviours, and each contract argues its own case in its own description field where no reader compares them.",
+      "sites": [
+        {
+          "path": "core/gateway/services/gateway/src/gateway/config.v1.json",
+          "pattern": "\"key\": \"INTERNAL_API_SECRET\",\\s*\\n\\s*\"class\": \"([a-z-]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\": \"INTERNAL_API_SECRET\",\\s*\\n\\s*\"class\": \"([a-z-]+)\""
+        },
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\": \"INTERNAL_API_SECRET\",\\s*\\n\\s*\"class\": \"([a-z-]+)\""
+        },
+        {
+          "path": "core/flows/src/config.v1.json",
+          "pattern": "\"key\": \"INTERNAL_API_SECRET\",\\s*\\n\\s*\"class\": \"([a-z-]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"key\": \"INTERNAL_API_SECRET\",\\s*\\n\\s*\"class\": \"([a-z-]+)\""
+        }
+      ],
+      "enforced": false,
+      "answers": [
+        {
+          "value": "defaulted",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/config.v1.json"
+          ]
+        },
+        {
+          "value": "required-explicit",
+          "sites": [
+            "core/agent/control_plane/config.v1.json",
+            "core/flows/src/config.v1.json",
+            "core/gateway/services/gateway/src/gateway/config.v1.json",
+            "core/identity/services/admin-api/src/admin_api/config.v1.json"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runtime-door-default",
+      "fact": "the runtime's own hostname, as the two domains that call it each write it down",
+      "kind": "literal",
+      "decision": "WHAT THE RUNTIME IS CALLED. meeting-api defaults RUNTIME_API_URL to http://runtime:8090; core/agent defaults VEXA_RUNTIME_API_URL to http://runtime-api:8090. Same port, DIFFERENT DNS NAME, for one service. Compose sets both keys explicitly, which is why nothing has broken — the disagreement bites only where the env is unset, which is every deployment that has not copied compose's exact block. One of the two names is wrong and a human has to say which.",
+      "why": "The sharpest of the door-default divergences, and the only one where the two values could not both work. Kept separate from the other doors because it is the one that is not merely untidy.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"key\": \"RUNTIME_API_URL\",[\\s\\S]{0,200}?\"default\": \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/shared/config.py",
+          "pattern": "runtime_api_url: str = \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\": \"VEXA_RUNTIME_API_URL\",[\\s\\S]{0,200}?\"default\": \"([^\"]+)\""
+        }
+      ],
+      "enforced": false,
+      "answers": [
+        {
+          "value": "http://runtime-api:8090",
+          "sites": [
+            "core/agent/control_plane/config.v1.json",
+            "core/agent/shared/config.py"
+          ]
+        },
+        {
+          "value": "http://runtime:8090",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/config.v1.json"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-meeting-set",
+      "fact": "which meeting statuses mean the meeting is LIVE",
+      "kind": "set",
+      "enforced": false,
+      "decision": "WHAT COUNTS AS A LIVE MEETING, AND WHERE THAT IS DECIDED. Six answers across fourteen production sites. Three of them are load-bearing disagreements, not spellings: (1) the SQL index predicate that four model files share includes `scheduled` and omits `needs_help`, so the index the live queries were built for covers a different set of rows than the application calls live; (2) the rig calls a `joining` meeting not-live, so a meeting the terminal is showing as starting is invisible to the MCP; (3) `auto_join.py` carries the parent-side alias `needs_human_help` that nothing else does. Making them agree means deciding what live MEANS and then serving it from meeting-api as a phase field, which is a product decision about an API and a database index — not something a gate may pick.",
+      "why": "Fourteen production declarations of one concept, in five packages and two languages, plus a shell script. Nothing compares them and the survey found six distinct memberships. DELIBERATELY EXCLUDED as different questions, not copies of this one: `reconcile._PRE_ACTIVE_STATUSES` and `flows_steps/meeting.py`'s pre-active branch (before-active, not live), `reconcile._LIVENESS_GATED` (which rows the liveness sweep may touch), `collector/app._FSM_OWNED_STATUSES` (includes terminals) and `meeting.tsx` BADGE_STATUSES (rendering). Naming the exclusions here is the point: a manifest that quietly folded them in would be asserting a unification nobody decided.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/meeting_steering.py",
+          "pattern": "LIVE_STATUSES = \\{([^}]*)\\}"
+        },
+        {
+          "path": "core/agent/control_plane/schedule_digest.py",
+          "pattern": "_LIVE = \\{([^}]*)\\}"
+        },
+        {
+          "path": "core/agent/control_plane/scaffolds.py",
+          "pattern": "_LIVE_STATUSES = frozenset\\(\\{([^}]*)\\}"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/meetingModel.ts",
+          "pattern": "LIVE_PHASE_STATUSES = new Set\\(\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/liveMeetings.ts",
+          "pattern": "LIVE_STATUSES = new Set\\(\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/transcript_import.py",
+          "pattern": "IN_FLIGHT_STATUSES = frozenset\\(\\{([^}]*)\\}"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py",
+          "pattern": "LIVE_STATUSES = \\(([^)]*)\\)"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py",
+          "pattern": "_ACTIVE_STATUSES = \\(([^)]*)\\)"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/schema/models.py",
+          "pattern": "text\\(\\s*\"\\(status IN \\(([^)]*)\\)",
+          "all": true,
+          "note": "the SQL index predicate, written twice in this file (two indexes) — both must be the same predicate"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py",
+          "pattern": "text\\(\\s*\"\\(status IN \\(([^)]*)\\)",
+          "all": true,
+          "note": "the mirror of the admin-api predicate; sessions/models.py states it must stay verbatim-equal to the query's ORDER BY or the planner will not substitute the index"
+        },
+        {
+          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
+          "pattern": "\\.lower\\(\\) in \\(([^)]*)\\)"
+        },
+        {
+          "path": "deploy/dogfood/rehearse/doors.py",
+          "pattern": "LIVE_STATUSES = \\(([^)]*)\\)"
+        },
+        {
+          "path": "deploy/dogfood/bin/blank-instance.sh",
+          "pattern": "WHERE status IN \\(([^)]*)\\)"
+        }
+      ],
+      "answers": [
+        {
+          "value": "active · awaiting_admission · joining · needs_help · needs_human_help · requested · stopping",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · joining · needs_help · requested · stopping",
+          "sites": [
+            "clients/terminal/src/surfaces/liveMeetings.ts",
+            "clients/terminal/src/surfaces/meetingModel.ts",
+            "core/agent/control_plane/meeting_steering.py",
+            "core/agent/control_plane/scaffolds.py",
+            "core/agent/control_plane/schedule_digest.py",
+            "core/meetings/services/meeting-api/src/meeting_api/collector/transcript_import.py",
+            "deploy/dogfood/bin/blank-instance.sh",
+            "deploy/dogfood/rehearse/doors.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · joining · requested · scheduled · stopping",
+          "sites": [
+            "core/identity/services/admin-api/src/admin_api/schema/models.py",
+            "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · joining · requested · stopping",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py"
+          ]
+        },
+        {
+          "value": "active · awaiting_admission · requested",
+          "sites": [
+            "deploy/dogfood/rig/vexa_control_mcp.py"
+          ]
+        }
+      ]
+    }
+  ]
+}

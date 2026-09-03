@@ -102,11 +102,11 @@ _TEMPLATE_BANNER = (
 _TURNS_SIDECAR = "{session}.turns.jsonl"
 
 # The write-back phase runs in the SAME harness session as the turn it follows, so its prompt and
-# its reply are in this transcript. The phase declares itself with this mark (``engine.WRITEBACK_MARK``
-# — duplicated, not imported: the worker ships in its own image; ``tests/test_user_text_field.py``
-# pins the two literals together). Everything from a marked prompt until the next thing a person
-# actually said is bookkeeping the founder was never meant to read back as his own conversation.
-PHASE_MARK = "[vexa-phase:writeback]"
+# its reply are in this transcript. The phase declares itself with this mark — ONE literal now, in
+# ``shared/marks.py``; the worker reads the same constant under its historical name WRITEBACK_MARK.
+# Everything from a marked prompt until the next thing a person actually said is bookkeeping the
+# founder was never meant to read back as his own conversation.
+from shared.marks import PHASE_MARK  # noqa: E402 — re-export under this module's long-standing name
 
 # The harness's own auto-continue. It is a user line nobody typed — the runner nudging a turn that
 # stopped early — and it rendered as a grey USER bubble reading "Continue from where you left off."

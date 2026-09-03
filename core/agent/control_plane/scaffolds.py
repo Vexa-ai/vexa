@@ -89,12 +89,12 @@ TTL_SECONDS = 14 * 24 * 3600
 # did not type a paragraph of instructions, and on 2026-09-02 the founder saw exactly that paragraph
 # painted as his own chat message (ledger F7). The terminal already filters a user turn carrying
 # this mark out of what it renders (`clients/terminal/src/canvas/actions.ts` MACHINERY_MARK /
-# MACHINERY_NOTE); the string is duplicated here rather than shared because the two sides ship in
-# different images, and it is the SAME string on purpose — a rename on either side is a visible
-# regression in the other, which is the cheapest coupling available.
+# MACHINERY_NOTE). The literal now lives once, in `shared/marks.py`, which all three Python images
+# already carry; the terminal's TypeScript copy is the one that genuinely cannot import it, and
+# `gate:fact-parity` compares the two on every push instead of hoping a rename is noticed.
 #
 # "the human sees turns, the agent sees instructions" (founder, 2026-09-02).
-MACHINERY_MARK = "[vexa-machinery]"
+from shared.marks import MACHINERY_MARK  # noqa: E402 — re-export under this module's long-standing name
 MACHINERY_NOTE = (
     "\n\n" + MACHINERY_MARK + " This opening was composed by the product from the link this person "
     "clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own "

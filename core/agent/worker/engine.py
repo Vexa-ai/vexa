@@ -427,11 +427,11 @@ def mounts_preamble(mounts: list[dict]) -> str:
 # in flight — and the person's answer is never delayed by it, because their answer has already
 # streamed by the time this runs.
 #
-# THE SAME MARK the composed openings carry (control_plane.scaffolds.MACHINERY_MARK, and the
-# terminal's own copy in clients/terminal/src/canvas/actions.ts). Duplicated rather than shared for
-# the same stated reason: the three sides ship in different images, and a rename in one is meant to
-# be a visible regression in the others.
-MACHINERY_MARK = "[vexa-machinery]"
+# THE SAME MARK the composed openings carry. It is now READ from `shared/marks.py` rather than
+# retyped: this image COPYs `core/agent/shared` (worker/Dockerfile) and this module already imports
+# from it, so "the three sides ship in different images" was never a reason the PYTHON copies had to
+# diverge. The terminal's TypeScript copy still cannot import it and is compared by gate:fact-parity.
+from shared.marks import MACHINERY_MARK  # noqa: E402 — re-export; see shared/marks.py
 
 # THE PHASE'S OWN MARK (F51). The write-back phase runs in the SAME harness session as the turn,
 # so its prompt and its reply land in the transcript the history reader serves — and the founder read
@@ -444,7 +444,8 @@ MACHINERY_MARK = "[vexa-machinery]"
 # ever shown. Suppressing everything after a `MACHINERY_MARK` turn would delete the first real reply
 # of every scaffolded chat. One mark per meaning. `control_plane.workspace_reader.history` drops a
 # turn carrying this one and every agent turn up to the next thing a person actually said.
-WRITEBACK_MARK = "[vexa-phase:writeback]"
+# ONE literal, two names: `shared.marks.PHASE_MARK` is what control_plane calls it.
+from shared.marks import WRITEBACK_MARK  # noqa: E402 — re-export; see shared/marks.py
 
 # ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
 # dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,

@@ -173,6 +173,18 @@ that everything sometimes has are not.
   the running one; the stateful alternative breaks every in-flight client on each restart. Register
   → reconnect → continue is the copy; the product answer is the OAuth flow the gateway's MCP service
   speaks.
+- **A key is `required-explicit` only if NO valid deployment can lack it.** Recorded from the #1483
+  merge: `VEXA_FLOWS_DB_URL` is `required-explicit`, because a service without its database is not a
+  deployment in any profile — it is a broken one, and it should refuse to start rather than come up
+  and fail per request. The mail keys stay a `capability` (`mailbox`), because a deployment may
+  legitimately run without mail credentials: the dogfood stack's flows lanes run a mail DOUBLE — SMTP
+  to mailpit, no password by construction — and `required-explicit` would refuse their boot over a
+  credential the deployment is right not to have. The general rule, which is the one to apply to the
+  next key rather than to re-derive it: **anything a valid deployment may omit is a `capability` with
+  a declared degrade; anything no valid deployment can omit is `required-explicit`.** The test is not
+  "is this important" — the mail credential is important — it is "does a deployment that lacks this
+  still make sense". `defaulted` is for neither: a default asserts the thing exists.
+
 - **Nothing here is proven by running.** Every count above is a code read of the line at
   `a5ba8e952`. The claims that need a live leg before the first release are decision 4 (a
   `not_present` resolved in a real no-agents deployment) and decision 10 (both profiles booting from
