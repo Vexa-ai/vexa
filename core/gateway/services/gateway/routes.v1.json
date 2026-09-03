@@ -1,0 +1,19 @@
+{
+  "contract": "routes.v1",
+  "domain": "gateway",
+  "owner": "core/gateway/services/gateway",
+  "edge": "gateway",
+  "note": "The edge's OWN two routes, and the only ones it may declare: /health is the LB probe and /auth/me is 'who is this key'. Both are identity-only and forward nothing downstream, which is why they carry no scope \u2014 an empty `scopes` is a DECLARATION of that, never an omission.",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "scopes": []
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "scopes": []
+    }
+  ]
+}
