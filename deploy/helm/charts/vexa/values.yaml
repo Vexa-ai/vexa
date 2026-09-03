@@ -513,7 +513,15 @@ podDisruptionBudgets:
 # ── Vexa Minutes flows tier (off by default; the channel publisher pins the image digest) ──
 flows:
   enabled: false
-  image: vexaai/v012-flows:dev        # digest-pinned per release by the publisher
+  # Structured {repository, tag}, exactly like every other v0.12 component (gateway, terminal,
+  # runtime, ...). It was a FLAT STRING until 2026-09-03, and that made the flows tier the one
+  # component a customer channel entry could not pin: the publisher's pin injector merges
+  # {flows: {image: {tag: <version>@sha256:...}}} over these values, and merging a map over a
+  # string DROPS the repository silently — the render would have asked for an image named after
+  # its own tag. Nothing errored; the gate simply refused the chart as unpinned.
+  image:
+    repository: vexaai/v012-flows
+    tag: v012                         # follows global.imageTag when a release pins one
   workerReplicas: 2
   # The database the flows tables live in. Default "flows": a SEPARATE database from
   # database.name, bootstrapped by the ensure-db initContainer (needs CREATEDB or a pre-created
