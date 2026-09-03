@@ -24,7 +24,10 @@ the step — and this file is the contract for all three.
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
+import subprocess
+import sys
 
 import flows_config
 import pytest
@@ -60,10 +63,18 @@ def test_the_meetings_door_is_a_capability_not_a_required_one():
     assert cls == "capability" and default is None
 
 
-def test_an_unnamed_meetings_door_does_not_stop_the_process_booting():
+def test_an_unnamed_meetings_door_does_not_stop_the_process_booting(monkeypatch):
     """THE FIRST DEFECT. `missing_doors()` filters on the class, so the reclass is the whole fix —
-    but it is the half nothing else would notice, because every deployment in the tree names it."""
+    but it is the half nothing else would notice, because every deployment in the tree names it.
+
+    THE DOOR IS GENUINELY UNSET HERE, and that is the whole test. `conftest.OFFLINE_DOORS` declares
+    `VEXA_FLOWS_GATEWAY_URL` for the entire suite, so an assertion made without this `delenv` reads
+    `missing_doors()` on a process that names the door — and returns [] for it whatever its class.
+    It would have passed against the tree this change fixes: a test that cannot fail is the
+    success-shaped failure the reclass exists to remove."""
+    monkeypatch.delenv(common.MEETINGS_DOOR, raising=False)
     assert common.MEETINGS_DOOR not in flows_config.missing_doors()
+    flows_config.preflight()          # and the boot itself does not refuse
 
 
 @pytest.mark.parametrize("value,present", [("", False), ("   ", False), ("http://gw:8000", True)])
@@ -103,12 +114,33 @@ def test_the_step_module_binds_no_door_at_import():
     assert "meetings_door" in imported, "the door must be resolved at ACCESS, per call"
 
 
+def test_the_step_vocabulary_imports_in_a_process_that_names_no_meetings_door():
+    """THE SAME DEFECT, PROVED RATHER THAN READ. The assertion above is a source scan, because an
+    import that already succeeded inside this process cannot be asked whether it would have. So ask
+    a process that genuinely has no door: a fresh interpreter with `VEXA_FLOWS_GATEWAY_URL` removed
+    from the environment, importing the whole production step vocabulary.
+
+    Against the tree before this change it exits non-zero with a ConfigError raised THROUGH an
+    import statement — the shape that made an optional domain impossible."""
+    env = {k: v for k, v in os.environ.items() if k != common.MEETINGS_DOOR}
+    env["PYTHONPATH"] = str(SRC)
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import os, flows_defs.production as p, flows_steps.common as c;"
+         "assert not os.environ.get('VEXA_FLOWS_GATEWAY_URL'), 'the door leaked into the child';"
+         "assert c.domain_present('meetings') is False;"
+         "assert c.domain_present('identity') is True;"
+         "print('imported', len(dir(p)))"],
+        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"the step vocabulary would not import with no meetings door:\n{r.stderr}"
+
+
 def test_every_meetings_url_is_built_from_the_access_time_door():
     """The net under the assertion above: a site that went back to a module constant would import
     cleanly and fail at the first call in a deployment nobody tests."""
     text = (SRC / "flows_steps" / "meeting.py").read_text()
     assert "{GATEWAY}" not in text, "a call site still names the module-level door constant"
-    assert text.count("meetings_door()") >= 11, "the twelve sites resolve the door per call"
+    assert text.count("meetings_door()") == 11, "the eleven sites resolve the door per call"
 
 
 # ── the declarations on the steps ────────────────────────────────────────────────────────────
@@ -155,7 +187,11 @@ def test_every_production_reaction_reaches_a_terminal_state_with_meetings_absent
         monkeypatch.setattr(production.mt, attr, _forbidden)
     monkeypatch.setattr(common, "MEETINGS_API", "")
 
-    absent = lambda d: d != "meetings"                                       # noqa: E731
+    # THE REAL PREDICATE, over the door emptied above — not a lambda standing in for it. A
+    # hand-written `lambda d: d != "meetings"` proves the ENGINE degrades and says nothing about
+    # whether `domain_present` reads the configuration, which is the half that ships. Identity is
+    # still present here, and so is the agent domain: exactly one door is missing.
+    absent = common.domain_present
     terminal = {"done", "failed", "cancelled"}
     for (name, version), flow in reg.flows.items():
         db, clock = SqliteDB(), FakeClock()

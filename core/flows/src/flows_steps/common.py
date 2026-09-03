@@ -20,7 +20,7 @@ import flows_config
 AGENT_API = flows_config.get("VEXA_FLOWS_AGENT_API_URL")
 
 #: THE MEETINGS DOOR, and the name is a defect this change does not close. The key still says
-#: GATEWAY because flows reaches meetings THROUGH THE EDGE today — twelve call sites, all of them
+#: GATEWAY because flows reaches meetings THROUGH THE EDGE today — eleven call sites, all of them
 #: `{gateway}/meetings`, `{gateway}/bots`, `{gateway}/transcripts/…`. ADR-0037 forbids that hop
 #: ("fronting a sibling's door with the edge does not make it not-an-edge") and it is a separate
 #: change with its own consequences, measured and stated on this PR: the gateway resolves the

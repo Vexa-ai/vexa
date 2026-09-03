@@ -111,7 +111,7 @@ terminal, with the reason on the reaction, never a retry loop against a door tha
 
 | domain | key | steps that declare it |
 |---|---|---|
-| agent | `VEXA_FLOWS_AGENT_API_URL` | eleven, listed in `tests/test_no_agents.py` |
+| agent | `VEXA_FLOWS_AGENT_API_URL` | thirteen, listed in `tests/test_no_agents.py` |
 | meetings | `VEXA_FLOWS_GATEWAY_URL` | `await_start` · `dispatch_bot` · `run_meeting` · `process_meeting` · `email_minutes` · `email_attendees` · `drop_to_attendees` · `prepare_meeting` |
 
 **Presence is a configuration fact, never a probe.** A health check would make *"meeting-api is
@@ -126,6 +126,11 @@ last one — so calling meeting-api directly is not a rename. And the door resol
 never at import (`flows_steps.common.meetings_door`): `from .common import GATEWAY` used to run the
 refusal while `flows_steps/meeting.py` was still loading, so an unset door was an ImportError for
 the whole step vocabulary, including every step with no interest in meetings.
+
+**The class change does not close flows' `gate:domain-doors` entry, and the gate is right.** That
+gate refuses a domain naming an EDGE before it looks at any class, so the entry closes on the
+de-hop above and on nothing else; `scripts/domain-doors.allow.json` now says so, in place of a
+ruling that promised this change would close it.
 
 ## Configuration
 
