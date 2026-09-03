@@ -19,22 +19,6 @@
   ],
   "entries": [
     {
-      "path": "core/agent/control_plane/dispatch.py",
-      "door": "VEXA_FLOWS_API_URL",
-      "line": 593,
-      "from": "agent",
-      "to": "flows",
-      "ruling": "PRD decision 40.7 + Vexa-ai/vexa#1453 — the door is DECLARED but as class 'defaulted', which asserts flows exists. The entry closes when VEXA_FLOWS_API_URL is reclassed 'capability' with a declared degrade, so an agent-only deployment answers not_present instead of retrying a door that is not there."
-    },
-    {
-      "path": "core/agent/shared/timeline.py",
-      "door": "VEXA_FLOWS_API_URL",
-      "line": 51,
-      "from": "agent",
-      "to": "flows",
-      "ruling": "PRD decision 40.7 + Vexa-ai/vexa#1453 — the door is DECLARED but as class 'defaulted', which asserts flows exists. The entry closes when VEXA_FLOWS_API_URL is reclassed 'capability' with a declared degrade, so an agent-only deployment answers not_present instead of retrying a door that is not there."
-    },
-    {
       "path": "core/agent/control_plane/admin_panel.py",
       "door": "VEXA_GATEWAY_URL",
       "line": 195,
