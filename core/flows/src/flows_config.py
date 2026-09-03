@@ -68,7 +68,8 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # is not "unconfigured" — on any host that runs more than one stack it is A DIFFERENT
     # DEPLOYMENT'S admin-api, and a default that silently names one is worse than no default at
     # all: found live on 2026-09-03, when a bare `pytest` run of `test_admin_user_lookup_shapes`
-    # talked to `vexa-v012`'s admin-api and read its 403 as this stack's answer. A door that is
+    # talked to a NEIGHBOURING stack's admin-api and read its 403 as this stack's answer. A door
+    # that is
     # not configured must REFUSE, so the operator (or the test) is told which deployment it is
     # missing rather than being handed somebody else's.
     #
@@ -89,9 +90,12 @@ DECLARED: dict[str, tuple[str, object, str]] = {
                                  "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT "
                                  "DEPLOYED — see flows_steps.common.domain_present."),
     "VEXA_FLOWS_DB_URL": (
-        "capability", None,
-        "the engine's Postgres DSN. Unset falls back to the dogfood container lookup in "
-        "`common.db_url`, which exists for the rig and never for a deployment."),
+        "required-explicit", None,
+        "the engine's Postgres DSN — the two tables the whole engine is. It USED to fall back to "
+        "reading a password out of a named container on one developer's host (decision 18d); a "
+        "guessed DSN on a machine that runs more than one stack does not fail, it addresses "
+        "somebody else's data, which is the `localhost:18057` bug in the DOORS block above with a "
+        "password on the end. `sqlite://` is the offline dialect the suite and gate:health run on."),
     "VEXA_FLOWS_API_PORT": ("defaulted", "18200", "the port flows-api binds."),
 
     # ── the mailbox: which inbox, and what it will answer ───────────────────
@@ -149,7 +153,6 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_BEHAVIOR_DIR": ("capability", None, "the private behavior mount; unset uses the in-repo showcase prompts."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
     "VEXA_FLOWS_INSTANCE_GATE": ("capability", None, "forces the instance gate open or shut, for the rig."),
-    "VEXA_FLOWS_FIXTURE_TRANSCRIPT": ("capability", None, "`1` serves the declared fixture transcript instead of the gateway's."),
     "VEXA_FLOWS_USER_KEY_TTL_S": (
         "defaulted", "900",
         "how long a minted gateway token lives AND how long this process reuses it. One 20-person "

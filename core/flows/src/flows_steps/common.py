@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 import urllib.request
@@ -13,8 +12,6 @@ from typing import Optional
 from urllib.parse import quote as _q
 
 import flows_config
-
-FIXTURE_TRANSCRIPT = os.environ.get("VEXA_FLOWS_FIXTURE_TRANSCRIPT", "") == "1"   # declared double
 
 #: The agent domain's door, or "" when the agent domain is not deployed (PRD decision 40.7). Read
 #: through the contract, which declares it a CAPABILITY rather than a defaulted URL — see
@@ -150,7 +147,7 @@ def require_internal_secret() -> str:
 
     Deliberately the SAME REFUSAL as `flows_api._require_api_key`, down to the wording: a weak
     default makes an unconfigured deployment look configured and fails no test, so there is no
-    default and no fallback. The value lives in a mode-600 file under `~/.storm/`, exported by the
+    default and no fallback. The value lives in a mode-600 file on the deployment host, exported by the
     lane's start script; it never appears in this repository, in a log, or in an error message —
     including the ones below, which name the VARIABLE and never the value.
 
@@ -172,7 +169,7 @@ def require_internal_secret() -> str:
     if not key:
         raise RuntimeError(
             f"{INTERNAL_SECRET_ENV} is unset — flows refuses to start rather than run with no "
-            "internal-tier identity. Mint one into a mode-600 file (the ~/.storm/dburl pattern) "
+            "internal-tier identity. Mint one into a mode-600 file on the deployment host "
             "and export it from the lane's start script; never put the value in the repo.")
     if key in INTERNAL_SECRET_PLACEHOLDERS:
         raise RuntimeError(
@@ -258,12 +255,15 @@ def mint_scaffold(kind: str, recipient: str, *, opening: str,
 
 
 def db_url() -> str:
-    url = os.environ.get("VEXA_FLOWS_DB_URL")
-    if url:
-        return url
-    pw = subprocess.run(["docker", "exec", "vexa-v012-postgres-1", "sh", "-c", "echo -n $POSTGRES_PASSWORD"],
-                        capture_output=True, text=True).stdout.strip()
-    return f"postgresql+psycopg://postgres:{pw}@127.0.0.1:5458/flows"
+    """The engine's database, named by the deployment and by nothing else (decision 18d).
+
+    It used to fall back to `docker exec <a named container> sh -c 'echo -n $POSTGRES_PASSWORD'`
+    and compose a DSN against `127.0.0.1:5458` — the flows service reading a credential out of a
+    container belonging to one developer's other stack, on one host. No deployment can satisfy
+    that, no contract can declare it, and no operator can see it until it fails; worse, on a
+    machine that runs more than one stack the guessed DSN does not fail at all, it addresses
+    somebody else's data. `require` refuses and names the key instead."""
+    return flows_config.require("VEXA_FLOWS_DB_URL")
 
 
 def http(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 20):

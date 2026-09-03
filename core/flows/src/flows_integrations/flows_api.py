@@ -71,7 +71,7 @@ def _require_api_key() -> str:
     if not key:
         raise RuntimeError(
             "VEXA_FLOWS_API_KEY is unset — flows-api refuses to start rather than serve on a "
-            "default. Mint one into a mode-600 file (the ~/.storm/dburl pattern) and export it "
+            "default. Mint one into a mode-600 file on the deployment host and export it "
             "from the lane's start script; never put the value in the repo.")
     if key in ("changeme", "change-me", "default", "secret"):
         raise RuntimeError(
