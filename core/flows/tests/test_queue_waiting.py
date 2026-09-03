@@ -224,11 +224,14 @@ def test_a_live_call_is_a_pending_reaction_and_it_clears_on_completion():
     completion fact is admitted the reaction ends and the queue goes quiet."""
     db, clock = SqliteDB(), FakeClock()
     reg = _registry(db)
+    # The agent domain absent, so the post_meeting reaction the completion also admits degrades
+    # instead of dialling a door — this test is about the live one and must not depend on a socket.
+    absent = lambda d: d != "agent"                                          # noqa: E731
     admit(db, reg, clock, source_event_id="live-104", event_type=production.STARTED.name,
           subject_refs={"uid": "126", "meeting_id": "104"})
     rid = db.execute("SELECT reaction_id FROM reaction")[0][0]
 
-    tick(db, reg, clock)
+    tick(db, reg, clock, present=absent)
     assert status(db, rid)["status"] == "retrying", "the step must stay pending while the call runs"
 
     out = flows_queue.waiting(db, subject="126", now=clock.now(), identity=_identity)
@@ -242,7 +245,10 @@ def test_a_live_call_is_a_pending_reaction_and_it_clears_on_completion():
     admit(db, reg, clock, source_event_id="done-104", event_type=production.COMPLETED.name,
           subject_refs={"uid": "126", "meeting_id": "104"})
     clock._t += production.LIVE_POLL_S + 1
-    tick(db, reg, clock)
+    # More than one tick: the completion admitted a post_meeting reaction too, and  claims
+    # ONE due reaction per call — which one is the claim order's business, not this test's.
+    for _ in range(6):
+        tick(db, reg, clock, present=absent)
     assert status(db, rid)["status"] == "done"
 
 

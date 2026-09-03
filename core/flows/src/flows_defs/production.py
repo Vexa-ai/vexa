@@ -39,11 +39,12 @@ is about, and the sign-in hop preserves it. What travels the wire is a NOTIFICAT
 Laws (from the live witness): steps never sleep · all state in refs/receipts · replies by thread."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
 
-from flows import Done, Registry, StepCtx, StepError, Wait, EventType
+from flows import Block, Done, Registry, StepCtx, StepError, Wait, EventType
 
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
@@ -67,8 +68,30 @@ ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
 UPCOMING = EventType("meeting.upcoming")
 MAIL_REPLY = EventType("mail.reply")
+# THE THREE ADDED BY PRD DECISION 42.2 — what is waiting is the set of pending REACTIONS flows
+# holds for a subject, so anything a person should be told about has to BE one. A live call and the
+# two desk cards were read at the edge from `/bots/status` and from agent-api workspace files; here
+# they are facts with a flow each, which is what puts them in the queue and what lets the words
+# they are spoken in live in `behavior/` instead of in a tool body.
+STARTED = EventType("meeting.started")
+#: PUBLISHED BY THE AGENT DOMAIN. Absent — event and reaction both — where there is no agent-api,
+#: which is correct rather than degraded: there is no desk in that deployment to have a card on.
+DESK_UNSCAFFOLDED = EventType("desk.unscaffolded")
+CLAIM_PROPOSED = EventType("claim.proposed")
 
 NUDGE_EVERY_S = 15 * 60
+
+#: How often the live reaction looks again while a call is running, and how long it may do so.
+#: The cap is not a timeout on the meeting — it is the answer to a `meeting.completed` that never
+#: arrives (a producer that died, a flow retired out from under the fact): the reaction ends
+#: instead of parking forever, because a queue item that outlives its meeting is worse than none.
+LIVE_POLL_S = 60
+LIVE_CAP_S = 6 * 3600
+
+#: Where the claim book lives on a desk. The rig writes it through agent-api's generic file route
+#: (`deploy/dogfood/rig/vexa_control_mcp.py:3396` `propose`), which is also why `claim.proposed`
+#: has no publisher yet: there is no claim-aware route in agent-api to publish it from.
+CLAIM_BOOK = "_pending/claims.json"
 
 logger = logging.getLogger("flows.production")
 
@@ -1563,14 +1586,135 @@ def build(reg: Registry, db) -> None:
                     "h": ctx.scratch.get("out_hash", ""), "t": ctx.clock_now})
         return Done({"message_id": mid}, provider_ref=mid)
 
+    # ── the live call, and the two desk cards (PRD decision 42.2) ─────────────
+    def _completion_seen(meeting_id: str) -> bool:
+        """Has `meeting.completed` for this meeting been admitted? — flows' OWN table, only.
+
+        The obvious implementation asks the meetings domain whether the bot is still in the room.
+        This one must not: flows → meetings is an open seam ruling, and a step that polls another
+        domain to find out whether a fact arrived is asking the wrong service — the fact is already
+        here, as a reaction row, the moment it is admitted.
+
+        It reads across reactions rather than down one lineage because the completion may be
+        produced by anybody: `emit_completed` today, meeting-api's lifecycle tomorrow. The scan is
+        bounded for the reason `flows_timeline` gives — `subject_refs` is a JSON blob with no index
+        to push the predicate into.
+
+        THE ONE THING IT DEPENDS ON: a flow registered on `meeting.completed`, because admission
+        writes no row when nothing matches. `post_meeting` is that flow in every profile. If it
+        were ever retired, this would stop seeing completions and every live reaction would run to
+        `LIVE_CAP_S` — which is why the cap exists and why it is not optional.
+        """
+        rows = db.execute("SELECT subject_refs FROM reaction WHERE event_type = :et "
+                          "ORDER BY created_at DESC LIMIT 200", {"et": COMPLETED.name})
+        for row in rows:
+            try:
+                refs = json.loads(row[0]) or {}
+            except Exception:  # noqa: BLE001 — one unreadable row is not an answer about the rest
+                continue
+            if str(refs.get("meeting_id") or "") == str(meeting_id):
+                return True
+        return False
+
+    @reg.step
+    def emit_started(ctx: StepCtx):
+        """EMIT meeting.started — the fact the live flow reacts to. Prior: dispatch_bot.
+
+        THE PRODUCER, on this deployment, and deliberately a temporary one. meeting-api already
+        derives a typed `meeting.started` when the bot goes ACTIVE
+        (`core/meetings/services/meeting-api/src/meeting_api/lifecycle/webhook.py:40`) — that is
+        the true signal and the right home for it. Nothing carries it into flows' intake, so the
+        event exists and nothing reacts to it.
+
+        Emitting it from inside `invite_intake` is the shape `emit_prep` already uses one screen
+        up, for the same stated reason: a second producer can admit the same event type later
+        WITHOUT touching this step, because admission dedups on the source event id. When meetings
+        publishes it, this step goes and the flow does not change.
+        """
+        d = ctx.prior["dispatch_bot"]
+        refs = {k: v for k, v in ctx.refs.items() if k != "transcript"}
+        ctx.emit(STARTED.name, f"live-{d['meeting_id']}",
+                 {**refs, "meeting_id": d["meeting_id"], "native": d["native"],
+                  "uid": ctx.prior["ensure_user"]["uid"]})
+        return Done({})
+
+    @reg.step
+    def attend_live(ctx: StepCtx):
+        """PENDING WHILE THE CALL RUNS — the reaction that makes "a meeting is happening right
+        now" a queue item instead of a `/bots/status` read at the edge.
+
+        It does nothing and that is the point. `Wait` burns no attempt and costs nothing while
+        parked (`flows/loop.tick`), so the value here is entirely in the ROW: a person's queue can
+        say a call is live because flows is holding a pending reaction that says so, with the flow
+        that produced it attached — which is what `behavior/queue/live_meeting.pending.md` speaks.
+
+        Reaches no domain: `needs` is empty on purpose, so this works in every profile.
+        """
+        mid = str(ctx.refs.get("meeting_id") or "").strip()
+        if not mid:
+            raise StepError(
+                "meeting.started carried no meeting_id — there is no call to attend, and every "
+                "later reader of this reaction identifies the meeting by that field.",
+                retryable=False)
+        if _completion_seen(mid):
+            return Done({"meeting_id": mid, "outcome": "completed"})
+        since = ctx.scratch.setdefault("live_since", ctx.clock_now)
+        if ctx.clock_now - since > LIVE_CAP_S:
+            return Done({"meeting_id": mid, "outcome": "lapsed"})
+        return Wait(seconds=LIVE_POLL_S)
+
+    # THE TWO DESK CARDS REACH THE AGENT DOMAIN (PRD decision 40.7). The desk IS agent state, so in
+    # a deployment without it these answer `not_present` without being entered — and the events
+    # that trigger them are published by agent-api, so in that deployment they never arrive either.
+    # Absent by construction, twice over, which is what "there is no desk here" should look like.
+    @reg.step(needs=("agent",))
+    def await_scaffold(ctx: StepCtx):
+        """The SETUP card: a desk exists and has never been filled in. Reads: refs.uid.
+
+        It re-reads the desk rather than trusting the event, because the fact is old the moment it
+        is published: a person who finished setup between the publish and this step must not be
+        asked again. `Done` when the marker is there, `Block` when it is not.
+        """
+        uid = str(ctx.refs.get("uid") or "").strip()
+        if not uid:
+            raise StepError("desk.unscaffolded carried no uid — there is no desk to look at",
+                            retryable=False)
+        if scaffolded(uid, str(ctx.refs.get("slug") or "") or None):
+            return Done({"uid": uid, "outcome": "already_scaffolded"})
+        return Block("desk not scaffolded")
+
+    @reg.step(needs=("agent",))
+    def await_claim(ctx: StepCtx):
+        """The QUESTION card: one proposed claim, waiting for a person to confirm or correct it.
+
+        Same re-read, same reason. The block's reason carries the CLAIM ITSELF and nothing else:
+        it is this person's data, not our prose, and the sentence around it is
+        `behavior/queue/desk_claim.human.md`'s.
+        """
+        uid = str(ctx.refs.get("uid") or "").strip()
+        cid = str(ctx.refs.get("claim_id") or "").strip()
+        if not uid or not cid:
+            raise StepError("claim.proposed needs a uid and a claim_id — without both there is "
+                            "nothing to look up and nothing to resolve", retryable=False)
+        try:
+            book = json.loads(ws_file(uid, CLAIM_BOOK) or "{}")
+        except Exception:  # noqa: BLE001 — an unparseable book is not this reaction's failure
+            book = {}
+        claim = next((c for c in (book.get("claims") or []) if str(c.get("id")) == cid), None)
+        if not claim or claim.get("state") != "proposed":
+            return Done({"claim_id": cid, "outcome": "already_answered"})
+        return Block(str(claim.get("claim") or "")[:200] or "claim proposed")
+
     s = reg.steps
-    # VERSION 2 — `spawn_onboardings` removed (decision 29). The version bump is the whole
-    # mechanism: `match()` is newest-wins, so a step list is changed by ADDING a version, never by
-    # editing one in place, and a reaction already in flight keeps the version it was admitted on.
-    reg.flow(name="invite_intake", version=2, on=INVITE,
+    # VERSION 2 — `spawn_onboardings` removed (decision 29). VERSION 3 — `emit_started` added after
+    # `dispatch_bot` (PRD decision 42.2). The version bump is the whole mechanism: `match()` is
+    # newest-wins, so a step list is changed by ADDING a version, never by editing one in place,
+    # and a reaction already in flight keeps the version it was admitted on.
+    reg.flow(name="invite_intake", version=3, on=INVITE,
              steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"],
                     s["emit_prep"],
-                    s["await_start"], s["dispatch_bot"], s["run_meeting"], s["emit_completed"]])
+                    s["await_start"], s["dispatch_bot"], s["emit_started"],
+                    s["run_meeting"], s["emit_completed"]])
     # `onboard_person` and `onboard_group` are RETIRED (decision 29) — the email conversations that
     # chased a person until they finished setup. They are not declared, so nothing reacts to
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
@@ -1587,3 +1731,12 @@ def build(reg: Registry, db) -> None:
                     s["email_attendees"], s["drop_to_attendees"]])
     reg.flow(name="email_chat", version=1, on=MAIL_REPLY,
              steps=[s["feedback_turn"], s["email_reply"]])
+    # THE THREE QUEUE FLOWS (PRD decision 42.2). Each is one step, and none of them produces an
+    # effect: what they produce is a REACTION ROW in a state a person can be told about — pending
+    # while a call runs, blocked while a desk card is open. That row is the queue.
+    reg.flow(name="live_meeting", version=1, on=STARTED,
+             steps=[s["attend_live"]])
+    reg.flow(name="desk_setup", version=1, on=DESK_UNSCAFFOLDED,
+             steps=[s["await_scaffold"]])
+    reg.flow(name="desk_claim", version=1, on=CLAIM_PROPOSED,
+             steps=[s["await_claim"]])
