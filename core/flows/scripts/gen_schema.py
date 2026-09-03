@@ -24,7 +24,7 @@ def dump(sql, *a, **kw):
 engine = create_mock_engine("postgresql+psycopg://", dump)
 Base.metadata.create_all(engine, checkfirst=False)
 
-header = ("-- GENERATED from src/flows/schema_models.py (the SSOT) by scripts/gen_schema.py.\n"
+header = ("-- GENERATED from src/flows_schema/models.py (the SSOT) by core/flows/scripts/gen_schema.py.\n"
           "-- DO NOT EDIT BY HAND — edit the models and regenerate. The engine and the sqlite\n"
           "-- test rig consume this file so they stay stdlib-pure; the drift gate keeps it honest.\n\n")
 OUT.write_text(header + "\n\n".join(stmts) + "\n")
