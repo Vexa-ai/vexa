@@ -1,0 +1,53 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "billing",
+  "source": "mounted",
+  "owner": "PRIVATE \u2014 never in Vexa-ai/vexa. Mounted at VEXA_MCP_MANIFEST_DIR by the paid deployment.",
+  "base_url_env": "BILLING_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "entitlement": {
+    "route": {
+      "method": "GET",
+      "path": "/entitlement"
+    },
+    "answers": "entitled(subject) -> {entitled: bool, reason, upgrade_url}",
+    "note": "THE ONE HOOK, and the only one. The assembler asks it ONCE per call, before any forward. With no billing manifest mounted there is no hook and entitled() is always true \u2014 which IS the OSS product. The paid product is an addition; this repo never carries a gate switched off, because a gate that ships dark is a gate somebody eventually ships lit by accident."
+  },
+  "publishes_events": [
+    {
+      "event": "subscription.updated",
+      "status": "NEW (private)",
+      "triggers": "a flow definition in behavior/ decides what a person is told and when. FIRE-AND-FORGET: with no flows domain deployed the publish is dropped and billing still works \u2014 a private domain may not depend on flows either"
+    }
+  ],
+  "tools": [
+    {
+      "name": "billing_seats",
+      "identity": "admin",
+      "route": {
+        "method": "GET",
+        "path": "/seats"
+      },
+      "note": "ILLUSTRATIVE. The real names are the private domain's to choose; what this file pins is the SHAPE a mounted manifest must have to be assembled without touching OSS code.",
+      "requires": [
+        "identity",
+        "billing"
+      ]
+    },
+    {
+      "name": "billing_subscribe",
+      "identity": "user",
+      "route": {
+        "method": "POST",
+        "path": "/subscribe"
+      },
+      "requires": [
+        "identity",
+        "billing"
+      ]
+    }
+  ],
+  "depends_on": [
+    "identity"
+  ]
+}

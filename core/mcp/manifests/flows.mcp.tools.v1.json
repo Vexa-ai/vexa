@@ -1,151 +1,147 @@
 {
   "contract": "mcp.tools.v1",
   "domain": "flows",
+  "source": "oss",
   "owner": "core/flows",
   "base_url_env": "FLOWS_API_URL",
   "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
   "tools": [
     {
       "name": "bot_schedule",
       "identity": "user",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/schedule/joins"
       },
-      "note": "NEW ROUTE. A booking is a durable reaction, so flows owns it; the cancel half is GET+POST /schedule/joins?meeting=. Today it fans out to three doors"
+      "note": "ONE FLOWS FORWARD. A booking is a durable reaction, so flows owns it, and flows resolves the person's TIMEZONE from identity \u2014 the one door it is allowed. The version in core/mcp reads the timezone from agent-api, the pending rows from the flows DATABASE over psycopg, and mints the fact: three doors for one verb. The founder's question about exactly this is what produced the independence ruling.",
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "fact_emit",
       "identity": "admin",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/events"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "flow_lifecycle",
       "identity": "admin",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/flows/{name}/{version}/{verb}"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "flows_list",
       "identity": "operator",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "GET",
         "path": "/flows"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "flows_submit",
       "identity": "admin",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/flows"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "mail_inbox",
       "identity": "admin",
-      "profiles": [
-        "dev"
-      ],
       "route": {
         "method": "GET",
         "path": "/mail/messages"
       },
-      "note": "the mail DOUBLE \u2014 a dev-lane inbox, never a production door"
+      "note": "the mail DOUBLE \u2014 a dev-lane inbox, never a production door",
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "mail_read",
       "identity": "admin",
-      "profiles": [
-        "dev"
-      ],
       "route": {
         "method": "GET",
         "path": "/mail/messages/{message_id}"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "reaction_signal",
       "identity": "user",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/reactions/{reaction_id}/{verb}"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "reactions_list",
       "identity": "operator",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "GET",
         "path": "/reactions"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "timeline",
       "identity": "user",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "GET",
         "path": "/timeline"
-      }
+      },
+      "requires": [
+        "identity",
+        "flows"
+      ]
     },
     {
       "name": "whats_waiting",
       "identity": "user",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "GET",
         "path": "/queue/waiting"
       },
-      "note": "FLOWS-OWNED CORE. See the split table in core/mcp/README.md",
-      "enriched_by": [
-        {
-          "domain": "agent",
-          "route": {
-            "method": "GET",
-            "path": "/api/queue/enrichment"
-          },
-          "adds": "the setup gate (.scaffolded), the claim-book questions, and the first-run friction ask"
-        }
+      "note": "FLOWS OWNS IT (founder ruling). One forward to flows-api's pending-reactions projection with subject=<uid>. Nothing is unioned at the gateway: other domains compose by PUBLISHING EVENTS into flows, and a flow DEFINITION in behavior/ decides what waits. A \"subscribe\" prompt is a flow (onboarding.completed -> human step), not a branch in a tool.",
+      "requires": [
+        "identity",
+        "flows"
       ]
     }
   ]

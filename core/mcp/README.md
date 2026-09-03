@@ -61,18 +61,119 @@ to the in-network service names.
 
 # Destination
 
-**Founder ruling, 2026-09-02, after this package was built.** One MCP server, at the gateway,
-assembled from tool manifests each owned by the domain that owns the door — meetings, identity,
-flows, agent. No MCP-over-MCP, no separate `mcp-control` service. And a second constraint that
-decides several of the calls below: **a NO-AGENTS product must be deployable** — gateway + meetings
-+ flows + identity, with no `core/agent` at all — and it must carry the meetings tools *plus*
-`whats_waiting`.
+**Founder rulings, 2026-09-02, after this package was built.** In the order they were given, because
+each narrows the one before it:
 
-This package is the extraction, not the destination. What it proved (64 tools, no reach past HTTP,
-one identity resolution, a parity fixture) is what makes the move mechanical. What it got wrong is
-the HOME: a second MCP process, and `whats_waiting` on agent-api. Both are named below.
+1. **One MCP server, at the gateway**, assembled from tool manifests each owned by the domain that
+   owns the door. No MCP-over-MCP, no separate `mcp-control` service.
+2. **A separate paid per-seat product, fully MCP, must compose onto this line without touching OSS
+   code** — so the assembler reads manifests from the OSS packages *and* from a mounted directory,
+   and there is exactly **one** entitlement hook.
+3. **`whats_waiting` is flows.** One forward to flows-api's pending-reactions projection with
+   `subject=<uid>`. Nothing is unioned at the gateway.
+4. **Identity is the only domain everyone depends on.** Meetings, flows and agent must work
+   independently *and* together in **any** configuration — identity plus any subset of the three,
+   which is eight deployments, not two.
 
-## 1. What one domain exports — `mcp.tools.v1`
+This package is the extraction, not the destination. What it proved — 64 tools, no reach past HTTP,
+one identity resolution, a parity fixture — is what makes the move mechanical. What it got wrong is
+where things live, and ruling 4 is what makes each error visible rather than a matter of taste.
+
+## 1. The dependency graph
+
+```
+                    ┌──────────┐
+                    │ identity │   accounts · person facts · onboarding · entitlement subject
+                    └────▲─────┘   depends on NOTHING
+           ┌─────────────┼─────────────┐
+           │             │             │
+     ┌─────┴────┐  ┌─────┴────┐  ┌─────┴────┐
+     │ meetings │  │  flows   │  │  agent   │
+     └──────────┘  └──────────┘  └──────────┘
+        bots            the           desks
+        transcripts     reaction      knowledge
+        bot defaults    engine        friction
+
+  A domain's declared doors are ITSELF and IDENTITY. Nothing else. There is no meetings→agent
+  edge, no agent→meetings edge, no flows→agent edge — in either direction, at any layer.
+```
+
+**Eight configurations, and every one of them is a product:** identity alone, +meetings, +flows,
++agent, +meetings+flows, +meetings+agent, +flows+agent, all four. A tool declares `requires` — the
+domains it needs — and the assembler serves exactly the tools whose requirements are met. Enumerating
+deployment NAMES (`no-agents`, `full`) was the earlier shape and it was wrong for the same reason
+every enumeration of a product matrix is wrong: the eighth configuration nobody named is the one that
+breaks.
+
+| domain | `depends_on` | tools | present when |
+|---|---|---:|---|
+| identity | — | 6 | always |
+| meetings | identity | 17 | meetings deployed |
+| flows | identity | 11 | flows deployed |
+| agent | identity | 24 | agent deployed |
+| gateway (assembler, edge-owned) | identity | 3 | always |
+| rehearse (dev harness) | identity + all three | 3 | dev |
+
+## 2. How the three couple without depending on each other
+
+Two mechanisms, and only two.
+
+**Events published into flows — fire-and-forget.** A domain publishes a fact and does not wait, does
+not retry into an error, and does not care whether anybody admitted it. **A missing flows domain is
+tolerated**: the publish is dropped and the publisher's own verb still succeeds. That is what makes
+`meetings` deployable with no flows at all — a meeting still records, it simply produces no reaction.
+Declared per manifest in `publishes_events`.
+
+**Flow steps naming an agent — "not present", never an error.** A flow definition may name an agent
+step. With no agent domain deployed that step resolves to **not present** and the reaction continues
+or parks by the definition's own rule; it does not fail. A flow that cannot run its agent step in a
+deployment without agents is a flow that was written for a different deployment, and the engine says
+so in the step's own state rather than in a 502.
+
+Everything else is forbidden. In particular a domain may not read another's store, call another's
+route, or import another's module — the three shapes the seam inventory found in the rig, one layer
+up.
+
+## 3. Three things this branch has wrong by construction
+
+**`start_onboarding` calls two domains.** It creates the account on admin-api and then seeds a
+workspace on agent-api. Under ruling 4 that is identity→agent and it cannot exist. The shape:
+`POST /onboarding/start` is an **identity route and nothing else**; it publishes
+`onboarding.completed`; **seeding a desk is a reaction to that event**, and it exists only where the
+agent domain does. The tool then has one door in all eight configurations, and a deployment with no
+agents onboards people perfectly well — it just never seeds a desk, because there are none.
+
+**`bot_send` reads the person's default bot name from agent-api.** Under ruling 4, meetings→agent.
+The fix is not a second call, it is ownership: **a bot default is a fact about the bot, and the bot is
+meetings'.** `bot_name` moves next to `bot_config`, keyed by person id, and meeting-api resolves it
+internally. `bot_send` becomes one gateway forward.
+
+**`bot_schedule` uses three doors for one verb** — the person's timezone from agent-api, the pending
+rows straight out of the flows database over `psycopg`, and the fact through the flows intake. It
+becomes one flows forward: flows owns the booking (it is a durable reaction) and resolves the
+timezone from **identity**, the one door it is allowed. *The founder's question — why does this read
+a timezone from agent-api — is what produced ruling 4.*
+
+### The settings file, sorted
+
+`core/agent/control_plane/person_settings.py` holds six keys in one vocabulary. They are two
+different kinds of thing and that is why one file in the agent domain made two other domains depend
+on it:
+
+| key | what it is | owner | read by |
+|---|---|---|---|
+| `bot_name` | this person's default for THEIR bot | **meetings** — next to `bot_config` | meeting-api, resolving `bot_send` internally |
+| `timezone` | a fact about the person | **identity** | flows (`bot_schedule`, every stated time), agent |
+| `mail_minutes` | how this person wants to be contacted | **identity** | flows |
+| `mail_join` | " | **identity** | flows |
+| `mail_rsvp` | " | **identity** | flows |
+| `mail_prep` | " | **identity** | flows |
+
+The four `mail_*` keys are contact preferences — facts about the person, not about the mail — so they
+go with `timezone`. The `settings` tool stays one tool and becomes identity's; its vocabulary shrinks
+by exactly one key, and that is the only user-visible change in the move.
+
+## 4. What a manifest exports — `mcp.tools.v1`
 
 Schema: [`manifests/mcp.tools.v1.schema.json`](manifests/mcp.tools.v1.schema.json). Stubs with the
 real tool lists: [`manifests/`](manifests/).
@@ -81,198 +182,212 @@ real tool lists: [`manifests/`](manifests/).
 {
   "contract": "mcp.tools.v1",
   "domain": "flows",
+  "source": "oss",                             // oss | mounted
   "owner": "core/flows",                       // committed HERE, not in the gateway
-  "base_url_env": "FLOWS_API_URL",             // the gateway key naming this domain's door
+  "base_url_env": "FLOWS_API_URL",
   "served_at": "/.well-known/mcp-tools.json",  // the DEPLOYED version answers, not the built one
+  "depends_on": ["identity"],                  // itself and identity. Anything else fails the gate.
   "tools": [
-    {
-      "name": "whats_waiting",                 // globally unique; a duplicate is a boot failure
+    { "name": "whats_waiting",                 // globally unique; a duplicate is a boot failure
       "route": { "method": "GET", "path": "/queue/waiting" },
       "identity": "user",                      // user | admin | operator | none
-      "profiles": ["no-agents", "full"],       // absent from tools/list outside these
-      "enriched_by": [                         // optional additions from another domain
-        { "domain": "agent", "route": { "method": "GET", "path": "/api/queue/enrichment" },
-          "adds": "the setup gate, the claim-book questions, the first-run friction ask" }
-      ]
-    }
+      "requires": ["identity", "flows"] }      // absent from tools/list unless both are deployed
+  ],
+  "publishes_events": [                        // fire-and-forget; a missing flows is tolerated
+    { "event": "meeting.completed", "status": "published today", "triggers": "post_meeting v4" }
   ]
 }
 ```
 
-Four fields carry the whole design:
-
-- **`route`** — the tool's input schema and description are **derived from the bound route's
-  OpenAPI operation**, never written in the manifest. This is the mechanism
-  `core/meetings/services/mcp` already runs on: `operation_id` on a FastAPI route, read by
-  `FastApiMCP`. A manifest carrying its own schema would be a second place to write one thing.
-  `route: null` is legal only where `base_url_env` is null — the three edge-owned tools.
-- **`identity`** — what the route requires, enforced by the assembler *before* the forward, so a
-  domain cannot be reached with an identity it never asked for.
-- **`profiles`** — a tool the running profile does not carry is **absent from `tools/list`**, not
+- **`route`** — the tool's input schema and description are **derived from the bound route's OpenAPI
+  operation**, never written in the manifest. This is the mechanism `core/meetings/services/mcp`
+  already runs on (`operation_id` + `FastApiMCP`). `route: null` only where `base_url_env` is null.
+- **`identity`** — what the route requires, enforced by the assembler *before* the forward.
+- **`requires`** — the domains this tool needs. Unmet ⇒ **absent from `tools/list`**, not
   present-and-failing. An agent that cannot see a tool recovers; an agent told a tool exists and
   handed a 502 tells the person the product is broken.
-- **`enriched_by`** — the answer to "one tool, two domains". The **owner merges**, never the
-  gateway: one tool, one owner, one response shape. An enrichment whose domain is absent simply does
-  not appear, and the response names which enrichments resolved.
+- **`depends_on`** — itself and identity. This is the field the new gate rule checks.
+- **`publishes_events`** — the composition seam, and it is not the gateway's.
 
-## 2. How the gateway assembles the union
+## 5. `onboarding.completed` — the carrier the paid product hangs on
+
+**Founder ruling: `onboarding.completed` triggers billing on the new product.** That makes it a
+contract, not a convenience, and it pins five things:
+
+| | |
+|---|---|
+| **published by** | **IDENTITY ONLY.** Never agent-api, never the terminal, never a flow step. One producer for one fact — the rule the whole architecture is organised around, and the one this event is most likely to lose, because five different places currently think they decide it (§6). |
+| **payload** | `subject` (the person's id), `org` (the organisation id), `seat` (the seat this person occupies) — declared in `flows.v1` as an **identity-owned carrier** |
+| **cardinality** | **exactly once per completed onboarding.** Deduped on the subject at the producer, not by the consumer: a billing domain that charges twice because a retry re-published is a defect nobody sees until an invoice |
+| **profiles** | **fires in every configuration**, including one with no agent domain at all. No agent code on the path — that is the point of moving it to identity |
+| **consumers** | a desk seed (agent, when present) · a welcome flow (flows, when present) · a subscribe prompt (a mounted billing domain, when present). All three are reactions; none of them is a branch in a tool |
+
+Fire-and-forget still holds: with no flows domain the publish is dropped and onboarding still
+completes. What may NOT happen is the reverse — onboarding completing without the event, in any
+configuration, because that is a person who is signed in and has no seat.
+
+## 6. Where onboarding completion is decided TODAY — slice 2's starting inventory
+
+**Five independent paths, none of which publishes anything, and three of which seed a desk inline.**
+That is why `onboarding.completed` cannot simply be added: there is no single moment to add it to
+yet.
+
+| # | path | file:line | what it does |
+|---|---|---|---|
+| 1 | the MCP sign-in verbs | `core/mcp/src/vexa_mcp/tools/identity.py:119` `start_onboarding`, `:132` `:135` account create, **`:141` desk seed**, `:185` `confirm_login`, `:227` token mint | account → code → token, and seeds the desk itself |
+| 2 | the MCP's OAuth door — **a second copy of path 1** | `core/mcp/src/vexa_mcp/oauth.py:88` `:90` account create, **`:94` desk seed** | the same three steps again, in another module |
+| 3 | the MCP's shared helper — **a third copy** | `core/mcp/src/vexa_mcp/identity.py:301` `account_for`, `:306` create, **`:312` desk seed** | same again, called by `confirm_login` |
+| 4 | the terminal's own auth | `clients/terminal/src/app/api/auth/adminApi.ts:61` `:65` account, `:70` token, **`:471` `/agent/workspace/init`**, `:407` `:661` bootstrap admin claim | a whole parallel onboarding a person can complete without the MCP existing |
+| 5 | the flows mail door | `core/flows/src/flows_steps/common.py:158` `:171` account, `:183` token; `core/flows/src/flows_defs/production.py:365` and `:1185` `ag.workspace_init(uid)` via `flows_steps/agent.py:91` | an invite from a stranger onboards them silently |
+
+And the two services that hold the state the five paths race over:
+
+- `core/identity/services/admin-api/src/admin_api/app/main.py:428` (create), `:555` (token mint),
+  `:944` (`_BOOTSTRAP_ADMIN_LOCK` — the first sign-in claiming the instance)
+- `core/agent/control_plane/api.py:2801` `POST /api/workspace/init` — the de-facto completion signal
+  today, in the one domain that must not be on the path
+
+Slice 2 is therefore: **make identity the only path**, publish the event there, and turn the three
+inline desk seeds into a reaction. The three duplicate copies inside `core/mcp` collapse to nothing
+when the tool becomes a forward — they are an artefact of a file that could not call a route.
+
+## 7. How the gateway assembles the union — including the private domain
 
 The server already exists: `core/meetings/services/mcp` — a FastAPI app whose 14 routes carry
 `operation_id`, wrapped by `FastApiMCP(app, headers=["authorization", "x-api-key"])` and mounted at
-`/mcp` (`app.py:1210,1235`), fronted by the gateway's `MCP_URL` (`gateway/app.py:236`). It is
-already stateless, already forwards the caller's key as `X-API-Key`, and already never reaches past
-its door. **It stops being a meetings-owned service and becomes the assembler** — one directory
-move, `core/meetings/services/mcp` → `core/gateway/services/mcp`, because a server that serves four
-domains cannot be owned by one of them. Nothing about its transport, auth or tests changes.
-
-Startup, in order, and every step fails the boot rather than degrading:
+`/mcp` (`app.py:1210,1235`), fronted by the gateway's `MCP_URL` (`gateway/app.py:236`). Stateless,
+forwards the caller's key as `X-API-Key`, never reaches past its door. **It stops being a
+meetings-owned service and becomes the assembler** — `core/meetings/services/mcp` →
+`core/gateway/services/mcp`, because a server serving four domains cannot be owned by one of them.
 
 ```
-1. PROFILE      read VEXA_PROFILE (no-agents | full | dev). It names which domains exist.
-2. DISCOVER     for each domain in the profile: GET {base_url_env}/.well-known/mcp-tools.json
-                A domain in the profile that does not answer is a BOOT FAILURE — "the meetings
-                tools are missing" must never be something a person discovers by asking for one.
-                A domain NOT in the profile is never asked, so its absence costs nothing.
-3. FILTER       drop every tool whose `profiles` does not contain the running profile.
-4. UNION        merge. A name claimed by two manifests is a BOOT FAILURE naming both domains —
-                never last-one-wins. Two domains claiming one name is a design question and a
-                person has to answer it.
-5. BIND         for each tool, fetch the owning domain's OpenAPI, find the operation for
-                {method, path}, and derive the input schema + description. A route named by a
-                manifest that the domain's OpenAPI does not carry is a BOOT FAILURE — that is the
-                manifest lying about its own service, which is the one failure this design can
-                otherwise hide.
-6. SERVE        one MCP server, one /mcp, one instruction string (this package's
-                instructions.py moves here — it is the assembly's text, not a domain's).
+1. DEPLOYED   which domains answer. identity is required; meetings, flows, agent are each present
+              or not — eight configurations, and the set is discovered, not named.
+2. DISCOVER   OSS:     GET {base_url_env}/.well-known/mcp-tools.json per deployed domain
+              MOUNTED: every *.mcp.tools.v1.json in VEXA_MCP_MANIFEST_DIR (a volume; empty by
+                       default, and empty IS the OSS product), then each one's served_at.
+              A domain declared deployed that does not answer is a BOOT FAILURE.
+3. FILTER     drop every tool whose `requires` is not satisfied by the deployed set.
+4. UNION      OSS and mounted into ONE name space. A name claimed twice is a BOOT FAILURE naming
+              both manifests — a mounted manifest gets no precedence, so a private mount can
+              never shadow an OSS tool.
+5. ENTITLE    at most ONE manifest may declare `entitlement`; two is a boot failure; none is the
+              normal case (no hook, entitled() always true).
+6. BIND       per tool, fetch the owning domain's OpenAPI and derive the schema + description from
+              the operation at {method, path}. A route the OpenAPI does not carry is a BOOT
+              FAILURE — a manifest lying about its own service is the one failure this design
+              could otherwise hide.
+7. SERVE      one MCP server, one /mcp, one instruction string.
 ```
 
-Per call: resolve identity once (the gateway already does this — `_mcp_key`, `app.py:939`), check
-the tool's declared `identity`, forward to `{base_url}{path}` with `X-User-Id`, shape the response.
-**That is the whole assembler.** It holds no domain logic, which is the property that makes it
-gateway-shaped rather than a fifth service.
+Per call: resolve identity once (`_mcp_key`, `gateway/app.py:939`) → `entitled(subject)` if a
+manifest declared the hook → check the tool's declared identity → forward to `{base_url}{path}` with
+`X-User-Id` → shape. The assembler holds no domain logic, no composition and no product copy. That is
+what makes it gateway-shaped rather than a fifth service, and what lets a paid domain arrive as a
+mounted file plus a URL.
 
-Two things the assembler must NOT do, both learned here: it must not compose across domains (that is
-what `enriched_by` is for, and the owner does it), and it must not carry product copy (that belongs
-in the owning domain, read hot).
-
-## 3. This package's eight modules → domain directories
+## 8. This package's eight modules → domain directories
 
 | this package | destination | door | tools |
 |---|---|---|---:|
-| `tools/meetings.py` | `core/meetings/services/meeting-api` | meeting-api | 17 |
+| `tools/meetings.py` (+ `bot_name` defaults) | `core/meetings/services/meeting-api` | meeting-api | 17 |
 | `tools/workspaces.py` + `tools/friction.py` | `core/agent/control_plane` | agent-api | 24 |
-| `tools/flows.py` (+ `bot_schedule` from meetings) | `core/flows` | flows-api | 11 |
-| `tools/identity.py` (+ `settings` from workspaces) | `core/identity/services/admin-api` | admin-api | 6 |
+| `tools/flows.py` + `whats_waiting` + `bot_schedule` | `core/flows` | flows-api | 11 |
+| `tools/identity.py` + `settings` (person facts) | `core/identity/services/admin-api` | admin-api | 6 |
 | `tools/panel.py` + `tools/docs.py` | `core/gateway/services/mcp` (the assembler) | none | 3 |
 | `tools/rehearse.py` | `deploy/dogfood/rehearse` | the package | 3 |
 
-Three tools move domain on the way, and each is a correction rather than a preference:
+`report_friction` and its three siblings stay agent-owned, so **a deployment without the agent domain
+has no improvement loop.** Flagged in the manifest as an open call, not decided here.
 
-- **`bot_schedule` meetings → flows.** A booking is a durable reaction; it lives in the flows
-  database and is cancelled through the flows projection. Today it fans out to three doors.
-- **`settings` agent → identity.** `mail_minutes`, `mail_rsvp`, `bot_name`, `timezone` are read by
-  **flows** at processing time and must exist with no agent domain deployed. A per-person preference
-  in a workspace file is unreachable in `no-agents`.
-- **`transcript_terms` agent → meetings**, split: the extractor is mechanical and belongs beside the
-  transcript; the entity index is an agent enrichment.
+## 9. `whats_waiting`, and what has to become an event
 
-`report_friction` and its three siblings stay agent-owned, which means **a `no-agents` deployment
-has no improvement loop**. That is an open call, flagged in the manifest, not a decision made here.
+**It is flows.** `GET /queue/waiting?subject=<uid>` — the subject-scoped pending-reactions
+projection, nothing unioned at the edge. Today's tool fans out to four sources; three are not
+reactions and do not survive without an event and a flow definition. **This table is the decision.**
 
-## 4. `whats_waiting`, split
-
-Flows owns it: the queue is a queue of reactions, and reactions are flows state. `GET /queue/waiting`
-on flows-api.
-
-| item kind | owner | source | present in `no-agents` |
+| today's fan-out | reads now | already a reaction? | what it needs |
 |---|---|---|---|
-| `live_now` | flows core | meeting-api `/bots/status` for the caller | yes |
-| `blocked` | flows core | its own `reaction.status = blocked` | yes |
-| `stuck` / `ours_not_theirs` | flows core | its own failed reactions + the ours-or-theirs list | yes |
-| `welcome` (first turn, and anonymous) | flows core | copy, read hot | yes |
-| `next_options` / `close_with_options` / `offer_self_sustain` | flows core | copy, read hot | yes |
-| `setup` (the `.scaffolded` gate) | **agent enrichment** | agent-api `/api/queue/enrichment` | **no** |
-| `question` (the claim book) | **agent enrichment** | same | **no** |
-| `tell_us` (the first-run friction ask) | **agent enrichment** | same | **no** |
+| **flows reactions** — `blocked`, `stuck`, `ours_not_theirs` | `GET {flows}/reactions` | **Yes** — this IS the projection | nothing. The ours-or-theirs split becomes a field on the reaction, computed where the reason is written, not a keyword list in a tool |
+| **live meeting** — `live_now` | gateway `/bots/status` | **No.** `meeting.started` is emitted in meetings but is **not a registered trigger** (`production.py:56-61` registers `invite.received`, `meeting.completed`, `meeting.upcoming`, `mail.reply`) | register `meeting.started` + a flow whose step stays pending while the call runs and completes on `meeting.completed`. Cheapest of the three — the event exists |
+| **desk cards** — `setup` (`.scaffolded`) and `question` (the claim book) | agent-api workspace files | **No.** Nothing publishes either | two new events, `desk.unscaffolded` and `claim.proposed`, published by agent + a flow definition each. Absent without the agent domain by construction, which is correct: there is no desk |
+| **friction first-run ask** — `tell_us` | the friction record count | **No** | one new event `friction.first_run` + a flow. Or drop it: a flow that fires once per person is a heavy way to say hello |
 
-Flows calls the enrichment route when `AGENT_API_URL` is configured, merges into `items`, and states
-what it resolved:
+Two consequences. **The copy stops being the tool's** — every sentence a person hears becomes a flow
+definition's, in `behavior/`, editable without a deploy, which is what PRD §3.8 asks for and what a
+keyword list inside a tool body can never be. And **a short queue is no longer ambiguous**: pending
+reactions carry which flow produced them, so "nothing is waiting" and "that domain is not deployed"
+are answered by the flow list rather than by a field the tool invents.
 
-```jsonc
-{ "uid": "128", "waiting": 2, "items": [ ... ],
-  "enrichments": { "agent": "resolved" } }      // or "absent" — never a silent short list
-```
+**The commit in this branch puts `GET /api/queue/waiting` on agent-api. That is the wrong home**, and
+ruling 4 proves it: the tool would vanish from seven of the eight configurations.
 
-`enrichments` is not decoration. A queue that is short because a domain is off and a queue that is
-short because nothing is waiting are opposite facts, and the reader has to be able to tell them
-apart — the same rule as `read_ok` on a transcript.
+## 10. The gate rule, and the migration backlog it produces
 
-**The commit in this branch puts `GET /api/queue/waiting` on agent-api. That is the wrong home** and
-the `no-agents` constraint is what proves it: the tool would vanish from a deployment that is
-required to carry it. The queue module (`core/agent/control_plane/queue.py`) moves to `core/flows`
-with the three agent-sourced item kinds lifted out into the enrichment route; the copy mechanism
-(`_global/queue/*.md`, read hot) moves with it unchanged.
+**Proposed rule — `gate:domain-doors`: a domain's declared doors are IDENTITY plus ITSELF. Anything
+else fails.** Enforced two ways: `depends_on` in each manifest, and a scan of each domain's source
+for another domain's base-URL key.
 
-## 5. The two deployment profiles
+Run today, **42 call sites fail it.** This is the migration backlog, and its shape is the finding:
+the agent domain reaches into three others, and nothing reaches into it.
 
-Compose profiles, minimal diff: the agent tier carries `profiles: ["full"]`, everything else stays
-unprofiled and therefore starts in both.
+| edge | sites | representative |
+|---|---:|---|
+| **agent → meetings** | 16 | `core/agent/shared/config.py:99` (`meeting_api_url` in the settings model) · `core/agent/control_plane/api.py:1019,1052,2308,2338,2346,2423` · `schedule_digest.py:48,56,80,109` · `admin_panel.py:198` |
+| **agent → runtime** | 8 | `core/agent/shared/config.py:25` · `api.py:1411,1450,4000,4001` · `admin_panel.py:48,51,201` |
+| **meetings → runtime** | 7 | `meeting_api/__main__.py:112,138` · `bot_spawn/adapters.py:943,945,998,1009,1014` |
+| **agent → gateway** | 3 | `transcription_watcher.py:136,178` · `admin_panel.py:195` |
+| **agent → flows** | 3 | `shared/timeline.py:51` · `control_plane/api.py:1039` (the queue route this branch added) · `dispatch.py:546` |
+| **meetings → gateway** | 3 | `services/mcp/app.py:40,575,585` — dissolves when that service becomes the assembler |
+| **flows → agent** | 1 | `flows_steps/common.py:13` |
+| **flows → gateway** | 1 | `flows_steps/common.py:12` |
 
-```yaml
-agent-api:     { profiles: ["full"] }
-agent-worker:  { profiles: ["full"] }
-runtime:       { profiles: ["full"] }
-mcp:           { environment: [ VEXA_PROFILE=${VEXA_PROFILE:-no-agents}, AGENT_API_URL=... ] }
-```
+Three of those groups are not the same kind of violation, and the rule needs to say which:
 
-```
-docker compose up                      # no-agents: gateway · meetings · identity · flows
-docker compose --profile full up       # full: + agent-api · agent-worker · runtime
-```
+- **`* → runtime` (15 sites) is probably not a violation at all.** The runtime is a spawn primitive,
+  not a domain — it has no tools, no manifest and no person-facing surface. The rule should read
+  *identity, itself, and the platform primitives*, or the gate will demand a redesign of bot spawn
+  that nobody asked for. **This is the one open question in the rule.**
+- **`* → gateway` (6 sites) is a layering inversion** — a domain calling the edge that fronts it.
+  Three dissolve with the assembler move; `transcription_watcher` and `admin_panel` are real and
+  small.
+- **`agent → meetings`, `agent → flows`, `flows → agent` (20 sites) are the real backlog**, and they
+  are what ruling 4 exists to remove.
 
-`VEXA_PROFILE` is what the assembler reads at step 1, and it is the ONE value that decides the tool
-surface — derived from nothing, so a deployment cannot end up with a profile it did not choose.
+### What `gate:config-contract` needs alongside it
 
-### What `gate:config-contract` needs for a profile-scoped service
-
-Three changes, in order of how quietly each fails without them:
-
-1. **`targets` is not enough — a key needs `profiles` too.** Today check 3 requires every declared
-   key to appear in every surface its `targets` name. `AGENT_API_URL` on the MCP assembler exists in
-   `full` and not in `no-agents`; without a per-key profile the gate either demands it in the
-   no-agents surface (wrong) or the key goes undeclared (worse). Add `profiles` to
-   `KeyDeclaration` in `deploy/contracts/config.v1/config.schema.json`, defaulting to all.
-2. **A cross-profile key must be `class: capability`, never `required-explicit`.** A service that
-   boots in `no-agents` may not have a required key pointing at a `full`-only service — the boot
-   preflight would refuse to start the product the profile exists to ship. Add check 6: for every
-   adopted service, a key naming a service outside the service's own narrowest profile is
-   `capability`, with a `when_unconfigured` that says which tools disappear.
-3. **The adopted-service entry names its profiles**, and `composeServiceEnv` reads the profiled
-   block (it already does — the parse is line-wise and profile-blind). The entry this branch added
-   for `mcp-control` becomes the entry for `mcp`, with `profiles: ["no-agents", "full"]`.
-
-And one gate that does not exist yet and is the point of the whole design:
-
-4. **`gate:mcp-manifest`** — for each profile, union the in-profile manifests, assert every name is
-   claimed once, assert every bound route exists in its domain's OpenAPI, and assert the `no-agents`
-   union contains the meetings tools **and** `whats_waiting`. That last assertion is the founder's
-   constraint expressed as a test, and it is the only thing that stops the no-agents product
-   quietly losing a tool six merges from now.
+1. **`targets` is not enough — a key needs `requires`.** `AGENT_API_URL` on the assembler exists only
+   where the agent domain does. Add it to `KeyDeclaration` in
+   `deploy/contracts/config.v1/config.schema.json`, defaulting to always.
+2. **A cross-domain key must be `class: capability`, never `required-explicit`.** A service that
+   boots without a domain may not require a key pointing at it — the preflight would refuse to start
+   a product the configuration exists to ship. `BILLING_API_URL` and `VEXA_MCP_MANIFEST_DIR` are the
+   same class: absent is normal.
+3. **The adopted-service entry names the domain it belongs to**, so rule 1 and `gate:domain-doors`
+   read the same table. The `mcp-control` entry this branch added becomes the entry for `mcp`.
+4. **`gate:mcp-manifest`** — for each of the eight configurations: union the satisfiable manifests,
+   assert every name is claimed once across oss and mounted, assert every bound route exists in its
+   domain's OpenAPI, assert at most one `entitlement`, and assert that identity-only still serves a
+   usable surface. That last line is ruling 4 written as a test, and it is the only thing that stops
+   the eighth configuration quietly breaking six merges from now.
 
 ## What in this branch survives the move, and what does not
 
 | survives | why |
 |---|---|
 | `tests/rig_surface.json` + the parity test | the 64-tool surface is the contract regardless of who serves it; the assembler's union is diffed against the same fixture |
-| `tests/test_thin_forward.py` | the rule is the same in a domain's tool module as in this package's |
+| `tests/test_thin_forward.py` | the rule is the same in a domain's tool module as in this package's — and it must be extended to follow module-local helpers, which is where `bot_send` and `bot_schedule` hide their second and third doors |
 | `delegation.py` + its byte-identity test | one verifier, wherever the assembler runs |
-| the four B6 reaches being gone | they are gone from the tool bodies, and the bodies move intact |
-| `core/agent/control_plane/{claims,person_settings}.py` and the flows `source_event_prefix` filter | routes the tools forward to; the owner is the question, not the existence |
-| the `behavior/{asks,mail}` move | product behaviour, unrelated to who serves the tools |
+| the four B6 reaches being gone | gone from the tool bodies, and the bodies move intact |
+| `core/agent/control_plane/{claims,person_settings}.py`, the flows `source_event_prefix` filter | routes the tools forward to; the OWNER is the question, not the existence |
+| the `behavior/{asks,mail}` move | product behaviour — and `behavior/` is where the flow definitions §9 needs already live |
 
 | does not survive | replaced by |
 |---|---|
-| `mcp-control` as a compose service, and its `config.v1.json` | the assembler at `core/gateway/services/mcp`, profile-scoped |
+| `mcp-control` as a compose service, and its `config.v1.json` | the assembler at `core/gateway/services/mcp` |
 | `core/mcp/src/vexa_mcp/` as the final home of eight tool modules | four domain directories + the assembler |
-| `GET /api/queue/waiting` on agent-api | `GET /queue/waiting` on flows-api + `/api/queue/enrichment` on agent-api |
-| `web.py`'s sign-in pages living at the edge | admin-api's onboarding routes (§3, identity manifest) |
+| `GET /api/queue/waiting` on agent-api, and `queue.py`'s four fan-outs | one flows projection + three new events and their flow definitions (§9) |
+| `person_settings.py` as one vocabulary in one domain | bot defaults in meetings, person facts in identity (§3) |
+| `start_onboarding` calling two domains, and its three duplicate copies | one identity route publishing `onboarding.completed` (§5, §6) |
+| `_global/queue/*.md` as the copy mechanism | flow definitions in `behavior/` |
+| `web.py`'s sign-in pages living at the edge | admin-api's onboarding routes |

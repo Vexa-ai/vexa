@@ -1,96 +1,99 @@
 {
   "contract": "mcp.tools.v1",
   "domain": "identity",
+  "source": "oss",
   "owner": "core/identity/services/admin-api",
   "base_url_env": "ADMIN_API_URL",
   "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [],
   "tools": [
     {
       "name": "auth_claim",
       "identity": "none",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/onboarding/claim"
       },
-      "note": "NEW ROUTE"
+      "note": "NEW ROUTE",
+      "requires": [
+        "identity"
+      ]
     },
     {
       "name": "auth_link",
       "identity": "none",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/onboarding/link"
       },
-      "note": "NEW ROUTE"
+      "note": "NEW ROUTE",
+      "requires": [
+        "identity"
+      ]
     },
     {
       "name": "confirm_login",
       "identity": "none",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/onboarding/confirm"
       },
-      "note": "NEW ROUTE. Trades the code for a durable token. The token store moves here \u2014 it is identity state, not edge state"
+      "note": "NEW ROUTE. The durable token store moves here \u2014 it is identity state",
+      "requires": [
+        "identity"
+      ]
     },
     {
       "name": "settings",
       "identity": "user",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "GET",
         "path": "/user/settings"
       },
-      "note": "MOVES OUT OF THE WORKSPACE. mail_minutes/mail_rsvp/bot_name/timezone are read by flows at processing time and must exist with no agent domain"
+      "note": "PERSON FACTS ONLY. timezone, and the mail preferences that say how this person wants to be contacted \u2014 facts about the PERSON, so identity owns them and flows reads them through the one door every domain may use. The bot DEFAULTS that used to sit in the same file are not person facts: they are this person's defaults for THEIR bot, and the bot is meetings' (see meetings/bot_config). That split shrinks this tool's vocabulary by one key, which is the only user-visible change in the move.",
+      "requires": [
+        "identity"
+      ]
     },
     {
       "name": "start_onboarding",
       "identity": "none",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/onboarding/start"
       },
-      "note": "NEW ROUTE. The account create + the code mail. The workspace-init half is an agent enrichment, not a second service call from a tool",
-      "enriched_by": [
-        {
-          "domain": "agent",
-          "route": {
-            "method": "POST",
-            "path": "/api/workspace/init"
-          },
-          "adds": "seed the new person's desk"
-        }
+      "note": "An IDENTITY route, and nothing else. It creates the account, mails the code, and publishes `onboarding.completed`. Seeding a desk is a REACTION to that event and exists only where the agent domain is deployed \u2014 so the tool has one door in every one of the eight configurations. The version in core/mcp calls admin-api and then agent-api, which is the shape this ruling forbids.",
+      "requires": [
+        "identity"
       ]
     },
     {
       "name": "user_ensure",
       "identity": "admin",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": {
         "method": "POST",
         "path": "/admin/users"
-      }
+      },
+      "requires": [
+        "identity"
+      ]
+    }
+  ],
+  "publishes_events": [
+    {
+      "event": "invite.received",
+      "status": "published today (mail door)",
+      "triggers": "invite_intake v2"
+    },
+    {
+      "event": "onboarding.completed",
+      "status": "NEW",
+      "triggers": "the desk seed (agent), a welcome flow, and a paid deployment's subscribe prompt"
+    },
+    {
+      "event": "seat.changed",
+      "status": "NEW",
+      "triggers": "an entitlement flow"
     }
   ]
 }

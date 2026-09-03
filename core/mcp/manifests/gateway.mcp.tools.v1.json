@@ -1,38 +1,39 @@
 {
   "contract": "mcp.tools.v1",
   "domain": "gateway",
-  "owner": "core/gateway/services/gateway",
+  "source": "oss",
+  "owner": "core/gateway/services/mcp",
   "base_url_env": null,
   "served_at": null,
+  "depends_on": [
+    "identity"
+  ],
   "tools": [
     {
       "name": "deeplink",
       "identity": "user",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": null,
-      "note": "pure URL composition over VEXA_UI_URL, which only the edge knows. Targets naming a workspace degrade to a refusal in no-agents"
+      "note": "pure URL composition over VEXA_UI_URL, which only the edge knows. Targets naming a workspace degrade to a refusal without the agent domain",
+      "requires": [
+        "identity"
+      ]
     },
     {
       "name": "vexa_overview",
       "identity": "none",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
       "route": null,
-      "note": "fetches the published docs"
+      "note": "fetches the published docs",
+      "requires": [
+        "identity"
+      ]
     },
     {
       "name": "vexa_search_docs",
       "identity": "none",
-      "profiles": [
-        "no-agents",
-        "full"
-      ],
-      "route": null
+      "route": null,
+      "requires": [
+        "identity"
+      ]
     }
   ]
 }

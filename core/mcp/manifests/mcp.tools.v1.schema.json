@@ -2,14 +2,29 @@
   "$id": "https://vexa.ai/contracts/mcp.tools.v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mcp.tools.v1",
-  "description": "ONE DOMAIN'S TOOL MANIFEST. The domain that owns the door owns the tool: it declares the tool's name, the route behind it, the identity that route requires, and the deployment profiles the tool exists in. The gateway's MCP server assembles the union of every in-profile domain's manifest at startup and refuses a duplicate name. The manifest never carries a JSON schema or a description of its own — those are DERIVED from the bound route's OpenAPI operation, so a tool cannot drift from the route it forwards to (the mechanism core/meetings/services/mcp already uses: operation_id on a FastAPI route, read by FastApiMCP).",
+  "description": "ONE DOMAIN'S TOOL MANIFEST. The domain that owns the door owns the tool: it declares the tool's name, the route behind it, the identity that route requires, and the deployment profiles the tool exists in. The gateway's MCP server assembles the union of every in-profile manifest at startup and refuses a duplicate name. Manifests come from TWO places: the OSS packages in this repo (source=oss) and a MOUNTED directory (source=mounted) a private deployment supplies, so a paid domain \u2014 billing, seats, entitlement \u2014 contributes tools without a line of it living in Vexa-ai/vexa. The manifest never carries a JSON schema or a description of its own: both are DERIVED from the bound route's OpenAPI operation, the mechanism core/meetings/services/mcp already runs on (operation_id on a FastAPI route, read by FastApiMCP).",
   "type": "object",
-  "required": ["contract", "domain", "owner", "tools"],
+  "required": [
+    "contract",
+    "domain",
+    "owner",
+    "tools"
+  ],
   "additionalProperties": false,
   "properties": {
-    "contract": { "const": "mcp.tools.v1" },
+    "contract": {
+      "const": "mcp.tools.v1"
+    },
     "domain": {
-      "enum": ["meetings", "identity", "flows", "agent", "gateway", "rehearse"],
+      "enum": [
+        "meetings",
+        "identity",
+        "flows",
+        "agent",
+        "gateway",
+        "rehearse",
+        "billing"
+      ],
       "description": "The owning domain. One domain, one manifest, one directory it lives in."
     },
     "owner": {
@@ -17,76 +32,240 @@
       "description": "The repo directory that owns this manifest. The manifest is committed HERE and served by the domain's own service; the gateway never holds a copy."
     },
     "base_url_env": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The gateway config key naming this domain's base URL (MEETING_API_URL, ADMIN_API_URL, FLOWS_API_URL, AGENT_API_URL). NULL = an edge-owned tool with no domain door: the assembler itself serves it, which is the only case where the gateway holds behaviour."
     },
     "served_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Where the domain serves this manifest at runtime, so the assembler fetches the manifest of the version that is actually deployed rather than the one in the image it was built from. NULL for edge-owned tools."
     },
-    "tools": { "type": "array", "items": { "$ref": "#/$defs/Tool" }, "minItems": 1 }
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Tool"
+      },
+      "minItems": 1
+    },
+    "source": {
+      "enum": [
+        "oss",
+        "mounted"
+      ],
+      "description": "oss = a package in this repo, discovered from the profile. mounted = supplied at VEXA_MCP_MANIFEST_DIR by a deployment that carries a private domain. The two are assembled identically and compete for names in the same space \u2014 a mounted manifest cannot silently shadow an OSS tool, it collides and the boot fails."
+    },
+    "publishes_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "event",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]*\\.[a-z][a-z_]*$"
+          },
+          "status": {
+            "type": "string",
+            "description": "published today | emitted, NOT a registered trigger | NEW"
+          },
+          "triggers": {
+            "type": "string",
+            "description": "the flow definition that admits it, or what one would do"
+          }
+        }
+      },
+      "description": "HOW DOMAINS COMPOSE, and the only way they may. A domain publishes a fact into the flows intake FIRE-AND-FORGET: it does not wait, does not retry into an error, and a missing flows domain is tolerated \u2014 the publish is dropped and the publisher's own verb still succeeds. A flow DEFINITION in behavior/ then decides what waits; a step naming an agent resolves to 'not present' where there is no agent domain, never to an error. That is why whats_waiting is one forward and not a union, and why a 'subscribe' prompt is `onboarding.completed -> human step` rather than a branch inside a tool nobody can change without a deploy."
+    },
+    "entitlement": {
+      "type": "object",
+      "required": [
+        "route",
+        "answers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "route": {
+          "type": "object",
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "enum": [
+                "GET"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/"
+            }
+          }
+        },
+        "answers": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "description": "AT MOST ONE MANIFEST IN A DEPLOYMENT MAY DECLARE THIS, and two is a boot failure. It is the single per-call hook: the assembler asks entitled(subject) once, before any forward. No manifest declares it => there is no hook and entitled() is always true, which is exactly the OSS product. The paid product is an ADDITION; this repo never carries a gate shipped dark."
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "meetings",
+          "identity",
+          "flows",
+          "agent",
+          "gateway",
+          "rehearse",
+          "billing"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "The other domains this one may call. IT MAY NAME IDENTITY AND NOTHING ELSE (identity itself names none). Identity is the only domain everyone depends on; meetings, flows and agent must work independently and together in any of the eight configurations \u2014 identity plus any subset of the three. `gate:domain-doors` checks this field AND scans each domain's source for another domain's base-URL key, because a declaration is only worth what the code agrees with."
+    }
   },
   "$defs": {
     "Tool": {
       "type": "object",
-      "required": ["name", "identity", "profiles", "route"],
+      "required": [
+        "name",
+        "identity",
+        "requires",
+        "route"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
-          "description": "The MCP tool name. GLOBALLY UNIQUE across every manifest: a duplicate is a BOOT FAILURE at the assembler, never a silent last-one-wins — two domains claiming one name is a design question and it must be answered by a person."
+          "description": "The MCP tool name. GLOBALLY UNIQUE across every manifest: a duplicate is a BOOT FAILURE at the assembler, never a silent last-one-wins \u2014 two domains claiming one name is a design question and it must be answered by a person."
         },
         "route": {
           "oneOf": [
             {
               "type": "object",
-              "required": ["method", "path"],
+              "required": [
+                "method",
+                "path"
+              ],
               "additionalProperties": false,
               "properties": {
-                "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-                "path": { "type": "string", "pattern": "^/" }
+                "method": {
+                  "enum": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "pattern": "^/"
+                }
               },
-              "description": "The route this tool forwards to, on the domain's own service. Its OpenAPI operation supplies the tool's input schema and description — there is no second place to write them, so they cannot disagree."
+              "description": "The route this tool forwards to, on the domain's own service. Its OpenAPI operation supplies the tool's input schema and description \u2014 there is no second place to write them, so they cannot disagree."
             },
-            { "type": "null", "description": "Edge-owned: the assembler implements it (docs fetch, link minting). Allowed ONLY where base_url_env is null." }
+            {
+              "type": "null",
+              "description": "Edge-owned: the assembler implements it (docs fetch, link minting). Allowed ONLY where base_url_env is null."
+            }
           ]
         },
         "identity": {
-          "enum": ["user", "admin", "operator", "none"],
+          "enum": [
+            "user",
+            "admin",
+            "operator",
+            "none"
+          ],
           "description": "user = the caller's own credential, resolved by the gateway and forwarded as X-User-Id (the caller can only reach what is theirs). admin = the instance admin role (users.data.is_admin). operator = the deployment's own service key, server-to-server. none = answers before anybody has an account. The ASSEMBLER enforces this before the forward, so a domain cannot be reached with an identity it did not ask for."
-        },
-        "profiles": {
-          "type": "array",
-          "items": { "enum": ["no-agents", "full", "dev"] },
-          "minItems": 1,
-          "uniqueItems": true,
-          "description": "Which deployment profiles the tool exists in. A tool the running profile does not carry is ABSENT from tools/list — not present-and-failing. An agent asked to use a tool that is not there recovers; an agent told a tool exists and handed a 502 tells the person the product is broken."
         },
         "enriched_by": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Enrichment" },
+          "items": {
+            "$ref": "#/$defs/Enrichment"
+          },
           "description": "Optional additions another domain contributes to THIS tool's response. The OWNER merges them, not the gateway: one tool, one owner, one response shape. An enrichment whose domain is absent from the running profile simply does not appear, and the response says which enrichments were resolved."
         },
-        "note": { "type": "string" }
+        "note": {
+          "type": "string"
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "meetings",
+              "identity",
+              "flows",
+              "agent",
+              "gateway",
+              "rehearse",
+              "billing"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "The domains this tool needs deployed \u2014 its own, identity, and nothing else. Not satisfied => the tool is ABSENT from tools/list, not present-and-failing. An agent that cannot see a tool recovers; an agent told a tool exists and handed a 502 tells the person the product is broken. This replaced an enumeration of deployment NAMES: eight configurations are not two, and the one nobody named is the one that breaks."
+        }
       }
     },
     "Enrichment": {
       "type": "object",
-      "required": ["domain", "route", "adds"],
+      "required": [
+        "domain",
+        "route",
+        "adds"
+      ],
       "additionalProperties": false,
       "properties": {
-        "domain": { "enum": ["meetings", "identity", "flows", "agent"] },
+        "domain": {
+          "enum": [
+            "meetings",
+            "identity",
+            "flows",
+            "agent"
+          ]
+        },
         "route": {
           "type": "object",
-          "required": ["method", "path"],
+          "required": [
+            "method",
+            "path"
+          ],
           "additionalProperties": false,
           "properties": {
-            "method": { "enum": ["GET", "POST"] },
-            "path": { "type": "string", "pattern": "^/" }
+            "method": {
+              "enum": [
+                "GET",
+                "POST"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/"
+            }
           }
         },
-        "adds": { "type": "string", "minLength": 1, "description": "What the reader gets that they would not get without this domain deployed." }
+        "adds": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the reader gets that they would not get without this domain deployed."
+        }
       }
     }
   }
