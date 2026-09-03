@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from shared import entities as E
+from workspaces.shared import entities as E
 from worker import engine
 from worker.worker import serve
 

@@ -336,8 +336,8 @@ def entity_index_preamble(mounts: list[dict]) -> str:
     The list is read from the generated `kg/INDEX.md` when it is there (refreshed by every upsert)
     and rendered live from the directory when it is not, so a first dispatch into a workspace that
     has never been upserted still sees what it holds instead of being told nothing exists."""
-    from shared.entities import INDEX_PATH, render_index
-    from shared.workspace_id import workspace_id_of
+    from workspaces.shared.entities import INDEX_PATH, render_index
+    from workspaces.shared.workspace_id import workspace_id_of
 
     blocks: list[str] = []
     for m in mounts:
@@ -519,7 +519,7 @@ def entity_file_shape() -> str:
     tool path rendered cards. A fallback that produces a different shape is not a fallback, it is a
     second format nobody asked for, and the sections here are GENERATED from `CARD_SECTIONS` so this
     cannot go stale a second time."""
-    from shared.entities import CARD_SECTIONS
+    from workspaces.shared.entities import CARD_SECTIONS
 
     per_kind = "; ".join(f"{k} → " + " / ".join(v) for k, v in CARD_SECTIONS.items())
     return (
@@ -698,8 +698,8 @@ def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
     turn that answered the person and then died updating a bulleted list has lost far more than the
     list is worth."""
     from shared import desk_readme
-    from shared.entities import commit_entity
-    from shared.workspace_id import read_touches, workspace_id_of
+    from workspaces.shared.entities import commit_entity
+    from workspaces.shared.workspace_id import read_touches, workspace_id_of
 
     desk, groups = desk_mounts(mounts)
     if not desk or not desk.get("path"):
@@ -782,7 +782,7 @@ def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
     results), minus everything the mounted desks already have a page for. An empty list means the
     phase has nothing to do, and that is by far the commonest turn: it now costs a regex instead of
     a two-minute model call."""
-    from shared.entities import missing_names
+    from workspaces.shared.entities import missing_names
 
     # A ROOM RUN DOES NO BOOKKEEPING ON THE SUBJECT'S OWN DESK (decision 22, F103). The post-meeting
     # turn writes ONE shared artefact whose home is the meeting row; `drop_to_attendees` puts it on

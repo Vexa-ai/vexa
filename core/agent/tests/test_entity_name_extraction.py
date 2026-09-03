@@ -7,7 +7,7 @@ existing as code rather than a model call (see `entities.py`'s own module docstr
 """
 from __future__ import annotations
 
-from shared import entities as E
+from workspaces.shared import entities as E
 
 
 # ── F202/F203 — skill boilerplate is not a name ────────────────────────────────────────────────────

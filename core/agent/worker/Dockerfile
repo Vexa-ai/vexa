@@ -40,6 +40,12 @@ COPY core/agent/worker ./worker
 COPY core/agent/llm ./llm
 COPY core/agent/shared ./shared
 COPY core/agent/contracts ./contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). worker/engine.py imports them
+# as `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
 # The registry of per-person workspace templates the worker seeds new workspaces from (Phase 3) +
 # the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY behavior/workspaces ./workspace-seeds

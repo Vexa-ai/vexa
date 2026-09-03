@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from shared import entities as E
+from workspaces.shared import entities as E
 
 TEMPLATES = pathlib.Path(__file__).resolve().parents[3] / "behavior/workspaces/default/kg/templates"
 

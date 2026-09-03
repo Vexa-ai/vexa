@@ -40,6 +40,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git openssh-cli
 COPY core/agent/shared ./shared
 COPY core/agent/control_plane ./control_plane
 COPY core/agent/contracts ./contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). control_plane imports them as
+# `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
 # workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY behavior/workspaces ./workspace-seeds

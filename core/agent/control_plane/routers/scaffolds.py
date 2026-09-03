@@ -14,7 +14,7 @@ from control_plane import system_mounts
 from control_plane import workspace_ids as ids_mod
 from control_plane.api_shared import ScaffoldHandBody, ScaffoldMintBody, logger
 from fastapi import APIRouter, Body, HTTPException, Request
-from shared import workspace_paths as wpaths
+from workspaces.shared import workspace_paths as wpaths
 
 
 def build(**d) -> APIRouter:

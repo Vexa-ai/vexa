@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from shared.workspace_id import is_workspace_id
+from workspaces.shared.workspace_id import is_workspace_id
 
 # The wikilink itself — the same expression `shared/entities.py` uses, deliberately: two spellings
 # of "what a wikilink is" is how a rewrite pass and a link counter disagree about the same file.
@@ -137,7 +137,7 @@ def rewrite_cross_workspace(text: str, *, here: Iterable[str], elsewhere: dict,
 
     Already-``ws:`` links are untouched — the pass is idempotent, which matters because it runs on
     every entity write and a page accumulates its links over many turns."""
-    from shared.entities import slugify as _slugify  # deferred: entities imports nothing from here
+    from workspaces.shared.entities import slugify as _slugify  # deferred: entities imports nothing from here
 
     slugify = slugify or _slugify
     here_set = {s for s in here if s}
@@ -168,7 +168,7 @@ def entity_slug_index(root, *, workspace_id: str, kinds=None, slugify=None) -> d
     lookup rather than a directory walk per link."""
     from pathlib import Path
 
-    from shared.entities import ENTITIES_DIR, KINDS
+    from workspaces.shared.entities import ENTITIES_DIR, KINDS
 
     base = Path(root) / ENTITIES_DIR
     out: dict = {}

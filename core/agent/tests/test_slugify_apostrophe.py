@@ -11,7 +11,7 @@ lookup — it was that the SAME name produced two different paths depending on w
 """
 from __future__ import annotations
 
-from shared import entities as E
+from workspaces.shared import entities as E
 
 
 def test_a_straight_apostrophe_is_dropped_not_hyphenated():

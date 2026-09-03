@@ -9,8 +9,8 @@ import subprocess
 from pathlib import Path
 
 from shared import desk_readme
-from shared.entities import upsert_entity
-from shared.workspace_id import write_workspace_json
+from workspaces.shared.entities import upsert_entity
+from workspaces.shared.workspace_id import write_workspace_json
 from worker import engine
 
 

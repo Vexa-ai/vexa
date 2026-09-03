@@ -19,7 +19,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))          # core/agent
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))          # core — shared.terms now
+                                                                        # imports workspaces.shared
 
 from shared.terms import extract_terms, index_entries, match_known  # noqa: E402
 

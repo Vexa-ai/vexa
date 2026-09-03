@@ -30,7 +30,7 @@ agent, and a cursor for the next call — never a join key across two readers.
 """
 from __future__ import annotations
 
-from shared.entities import KINDS, candidate_names, slugify
+from workspaces.shared.entities import KINDS, candidate_names, slugify
 
 # `kg/entities/<kind>/<stem>.md` — the one shape `entity_upsert` writes and the one shape this
 # reads. Anything else in the tree is not an entity page, however much it looks like one.

@@ -44,11 +44,12 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))          # core/agent — the same path pytest uses
+sys.path.insert(0, str(HERE.parents[2]))          # core — for workspaces.shared (PRD decision 47)
 
 from control_plane import link_resolver, workspace_ids as ids  # noqa: E402
 from shared import desk_readme  # noqa: E402
-from shared.entities import upsert_entity  # noqa: E402
-from shared.links import cross_workspace_refs  # noqa: E402
+from workspaces.shared.entities import upsert_entity  # noqa: E402
+from workspaces.shared.links import cross_workspace_refs  # noqa: E402
 
 DESK = "126"                              # the shape the live instance actually has
 GROUP = "aswf-dna-project-b7b2ee"

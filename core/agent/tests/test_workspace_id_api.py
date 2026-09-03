@@ -17,8 +17,8 @@ from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
-from shared.entities import upsert_entity
-from shared.workspace_id import WORKSPACE_JSON, read_workspace_json
+from workspaces.shared.entities import upsert_entity
+from workspaces.shared.workspace_id import WORKSPACE_JSON, read_workspace_json
 
 
 class _FakeRuntime:
@@ -214,7 +214,7 @@ def test_the_read_widening_reaches_desks_only_never_a_group(tmp_path):
 def test_a_touch_is_filed_under_the_callers_own_desk_and_mirrored_for_the_worker(tmp_path):
     """The DESK a touch belongs to is never a parameter — "whose desk is this" is not a question a
     client gets to answer."""
-    from shared.workspace_id import TOUCHES_FILE, read_touches
+    from workspaces.shared.workspace_id import TOUCHES_FILE, read_touches
 
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
@@ -230,7 +230,7 @@ def test_a_touch_is_filed_under_the_callers_own_desk_and_mirrored_for_the_worker
 
 
 def test_a_touch_on_a_workspace_you_cannot_read_records_nothing_and_leaks_nothing(tmp_path):
-    from shared.workspace_id import read_touches
+    from workspaces.shared.workspace_id import read_touches
 
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
@@ -250,7 +250,7 @@ def test_a_touch_refuses_a_traversal_and_an_empty_body(tmp_path):
 def test_the_desk_readme_orders_by_what_was_touched(tmp_path):
     """End to end: the panel reports, the mirror lands, and the generator ranks by it."""
     from shared import desk_readme
-    from shared.workspace_id import read_touches
+    from workspaces.shared.workspace_id import read_touches
 
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
