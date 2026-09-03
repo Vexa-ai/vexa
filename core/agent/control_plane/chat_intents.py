@@ -45,8 +45,9 @@ SILENT_KINDS = frozenset({"highlight"})
 # real answer of every scaffolded chat. `worker/engine.py` says exactly this at its own definition —
 # "Distinct from MACHINERY_MARK and not a replacement for it" — and it is the whole reason there are
 # two literals rather than one flag.
-MACHINERY_MARK = "[vexa-machinery]"
-PHASE_MARK = "[vexa-phase:writeback]"
+# ONE SOURCE, three images (shared/marks.py). Re-exported under the names this module has always
+# published, so every reader of `chat_intents.MACHINERY_MARK` is unmoved.
+from shared.marks import MACHINERY_MARK, PHASE_MARK  # noqa: E402 — re-export, see the note above
 SILENT_PREFIX = MACHINERY_MARK + " " + PHASE_MARK + " "
 
 
