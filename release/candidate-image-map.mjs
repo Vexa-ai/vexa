@@ -13,6 +13,7 @@ export const REQUIRED_IMAGES = [
   "vexaai/v012-gateway",
   "vexaai/v012-mcp",
   "vexaai/v012-terminal",
+  "vexaai/v012-flows",
   "vexaai/vexa-bot",
   "vexaai/vexa-lite",
 ];
@@ -24,6 +25,33 @@ export const PROD_DEPLOYED_IMAGES = new Set([
   "vexaai/v012-gateway",
   "vexaai/vexa-bot",
 ]);
+
+// vexaai/v012-flows is the Minutes product's image, and it entered the release set on 2026-09-03.
+// The required set is therefore RELEASE-SCOPED rather than one global list. It has to be: the
+// packets for v0.12.23, v0.12.25 and v0.12.26 are frozen bytes whose sha256 is pinned as evidence
+// (release-validate's identity table, and this file's own tests), they carry exactly ten images,
+// and validateCandidateMap demands the set match EXACTLY. A single global list can satisfy the old
+// packets or the new chart, never both — which is why the flows tier could not be pinned into a
+// customer channel entry at all: adding flows failed "image set mismatch" and omitting it left the
+// six flows containers unpinned, so the station gate refused the chart (S8).
+export const FLOWS_IMAGE = "vexaai/v012-flows";
+export const FLOWS_REQUIRED_FROM = "v0.12.27";
+
+const versionParts = (version) => String(version).replace(/^v/, "").split(".").map(Number);
+
+export function requiredImagesFor(release) {
+  if (!release) return REQUIRED_IMAGES;
+  const actual = versionParts(release);
+  const floor = versionParts(FLOWS_REQUIRED_FROM);
+  for (let i = 0; i < 3; i += 1) {
+    if (actual[i] !== floor[i]) {
+      return actual[i] > floor[i]
+        ? REQUIRED_IMAGES
+        : REQUIRED_IMAGES.filter((image) => image !== FLOWS_IMAGE);
+    }
+  }
+  return REQUIRED_IMAGES;
+}
 
 // Every path that can enter each release image. Root-context builds include the
 // root .dockerignore because changing it changes which bytes Docker receives.
@@ -70,6 +98,13 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
   ],
   "vexaai/v012-terminal": [
     "clients/terminal",
+  ],
+  // Root context (the Dockerfile COPYs core/flows/* AND the top-level behavior/ tree), so the root
+  // .dockerignore shapes the bytes Docker receives and belongs in the input set like the others.
+  "vexaai/v012-flows": [
+    ".dockerignore",
+    "core/flows",
+    "behavior",
   ],
   "vexaai/vexa-bot": [
     ".dockerignore",
@@ -144,6 +179,12 @@ export const BUILD_MATRIX_BY_IMAGE = {
     context: "clients/terminal",
     dockerfile: "clients/terminal/Dockerfile",
   },
+  "vexaai/v012-flows": {
+    name: "flows",
+    repository: "v012-flows",
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
+  },
   "vexaai/vexa-lite": {
     name: "lite",
     repository: "vexa-lite",
@@ -187,13 +228,14 @@ export function validateCandidateMap(doc, expectedVersion) {
     fail("images must be an object keyed by repository");
   }
 
+  const releaseImages = requiredImagesFor(doc.release);
   const actual = Object.keys(doc.images).sort();
-  const required = [...REQUIRED_IMAGES].sort();
+  const required = [...releaseImages].sort();
   if (actual.join("\n") !== required.join("\n")) {
     fail(`image set mismatch\nactual=${actual.join(",")}\nrequired=${required.join(",")}`);
   }
 
-  for (const image of REQUIRED_IMAGES) {
+  for (const image of releaseImages) {
     const row = doc.images[image];
     if (!row || typeof row !== "object") fail(`${image}: row missing`);
     const expectedClass = PROD_DEPLOYED_IMAGES.has(image) ? "prod_deployed" : "oss_only";
@@ -299,7 +341,7 @@ export function runtimeInputDriftForPaths(
 }
 
 export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
-  return REQUIRED_IMAGES.flatMap((image) => {
+  return requiredImagesFor(doc?.release).flatMap((image) => {
     const row = doc.images[image];
     const buildSource = row.build_source || doc.build_source;
     return runtimeInputDriftForPaths(
@@ -312,7 +354,7 @@ export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
 }
 
 export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) {
-  return REQUIRED_IMAGES.filter((image) => {
+  return requiredImagesFor(doc?.release).filter((image) => {
     const row = doc.images[image];
     const buildSource = row.build_source || doc.build_source;
     return runtimeInputDriftForPaths(
@@ -325,8 +367,9 @@ export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) 
 }
 
 export function candidateBuildPlanFromChangedImages(doc, changedImages) {
+  const required = requiredImagesFor(doc?.release);
   const changed = [...new Set(changedImages)];
-  const unknown = changed.filter((image) => !REQUIRED_IMAGES.includes(image));
+  const unknown = changed.filter((image) => !required.includes(image));
   if (unknown.length > 0) fail(`build plan contains unknown image(s): ${unknown.join(", ")}`);
 
   const botLite = ["vexaai/vexa-bot", "vexaai/vexa-lite"];
@@ -334,8 +377,8 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     changed.length === botLite.length &&
     botLite.every((image) => changed.includes(image));
   const exactFull =
-    changed.length === REQUIRED_IMAGES.length &&
-    REQUIRED_IMAGES.every((image) => changed.includes(image));
+    changed.length === required.length &&
+    required.every((image) => changed.includes(image));
 
   if (!exactBotLite && !exactFull) {
     fail(
@@ -344,7 +387,7 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     );
   }
 
-  const selected = exactFull ? REQUIRED_IMAGES : botLite;
+  const selected = exactFull ? required : botLite;
   return {
     mode: exactFull ? "full" : "bot-lite-delta",
     changed_images: selected,
@@ -394,12 +437,15 @@ function main(argv) {
 
   if (command === "check") {
     if (!doc) usage();
-    console.log(`✓ ${doc.release}: exact ten-image candidate map is well formed`);
+    console.log(
+      `✓ ${doc.release}: exact ${requiredImagesFor(doc.release).length}-image candidate map ` +
+      "is well formed",
+    );
     return;
   }
   if (command === "emit-tsv") {
     if (!doc) usage();
-    for (const image of REQUIRED_IMAGES) {
+    for (const image of requiredImagesFor(doc.release)) {
       const row = doc.images[image];
       console.log(`${image}\t${row.digest}\t${row.candidate_tag || doc.candidate_tag}`);
     }
@@ -407,7 +453,7 @@ function main(argv) {
   }
   if (command === "emit-platform-tsv") {
     if (!doc) usage();
-    for (const image of REQUIRED_IMAGES) {
+    for (const image of requiredImagesFor(doc.release)) {
       const row = doc.images[image];
       for (const platform of row.platforms) {
         const identity = row.platform_manifests[platform];

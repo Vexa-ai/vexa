@@ -51,7 +51,7 @@ spec:
       {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
-          image: {{ .Values.flows.image | quote }}
+          image: "{{ .Values.flows.image.repository }}:{{ .Values.global.imageTag | default .Values.flows.image.tag }}"
           command: ["python", "-c"]
           args:
             - |
@@ -117,10 +117,20 @@ spec:
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
               value: {{ .Values.flows.databaseName | quote }}
+          {{- /* EVERY container declares cpu+memory requests AND limits — initContainers are
+          containers. This one had no resources block at all, which is the exact shape the
+          enterprise station gate's S6 check refuses (12 findings, 4 per flows Deployment) and the
+          exact shape of the 64Mi LimitRange squeeze in #1005: with no request, a namespace
+          LimitRange hands this pod its default, and a bootstrap that imports SQLAlchemy inside
+          64Mi is OOMKilled before it reaches the database. Sized like flows-api/flows-mailbox —
+          it opens one connection, runs one catalog query and exits. */}}
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: 250m, memory: 256Mi}
       {{- end }}
       containers:
         - name: flows-worker
-          image: {{ .Values.flows.image | quote }}
+          image: "{{ .Values.flows.image.repository }}:{{ .Values.global.imageTag | default .Values.flows.image.tag }}"
           # Composes VEXA_FLOWS_DB_URL from secretKeyRef-sourced parts (F-D5 item 1) rather than
           # a literal DSN in the Secret — see the file header. sslmode threads from database.sslMode
           # (F-D5 item 2); the target database is flows.databaseName (default "flows", separate
@@ -208,7 +218,7 @@ spec:
       {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
-          image: {{ .Values.flows.image | quote }}
+          image: "{{ .Values.flows.image.repository }}:{{ .Values.global.imageTag | default .Values.flows.image.tag }}"
           command: ["python", "-c"]
           args:
             - |
@@ -262,10 +272,20 @@ spec:
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
               value: {{ .Values.flows.databaseName | quote }}
+          {{- /* EVERY container declares cpu+memory requests AND limits — initContainers are
+          containers. This one had no resources block at all, which is the exact shape the
+          enterprise station gate's S6 check refuses (12 findings, 4 per flows Deployment) and the
+          exact shape of the 64Mi LimitRange squeeze in #1005: with no request, a namespace
+          LimitRange hands this pod its default, and a bootstrap that imports SQLAlchemy inside
+          64Mi is OOMKilled before it reaches the database. Sized like flows-api/flows-mailbox —
+          it opens one connection, runs one catalog query and exits. */}}
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: 250m, memory: 256Mi}
       {{- end }}
       containers:
         - name: flows-mailbox
-          image: {{ .Values.flows.image | quote }}
+          image: "{{ .Values.flows.image.repository }}:{{ .Values.global.imageTag | default .Values.flows.image.tag }}"
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
           args:
@@ -342,7 +362,7 @@ spec:
       {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
-          image: {{ .Values.flows.image | quote }}
+          image: "{{ .Values.flows.image.repository }}:{{ .Values.global.imageTag | default .Values.flows.image.tag }}"
           command: ["python", "-c"]
           args:
             - |
@@ -396,10 +416,20 @@ spec:
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
               value: {{ .Values.flows.databaseName | quote }}
+          {{- /* EVERY container declares cpu+memory requests AND limits — initContainers are
+          containers. This one had no resources block at all, which is the exact shape the
+          enterprise station gate's S6 check refuses (12 findings, 4 per flows Deployment) and the
+          exact shape of the 64Mi LimitRange squeeze in #1005: with no request, a namespace
+          LimitRange hands this pod its default, and a bootstrap that imports SQLAlchemy inside
+          64Mi is OOMKilled before it reaches the database. Sized like flows-api/flows-mailbox —
+          it opens one connection, runs one catalog query and exits. */}}
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: 250m, memory: 256Mi}
       {{- end }}
       containers:
         - name: flows-api
-          image: {{ .Values.flows.image | quote }}
+          image: "{{ .Values.flows.image.repository }}:{{ .Values.global.imageTag | default .Values.flows.image.tag }}"
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
           args:
