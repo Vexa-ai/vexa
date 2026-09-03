@@ -74,8 +74,8 @@ from flows_steps import common as _common
 # namespace, so one `monkeypatch.setattr(production, …)` sets the world for both (the idiom
 # `flows_steps.common.agent_door` states). Bind it in the other module and half the suite's fakes
 # would be bypassed silently.
-from flows_steps.common import (ensure_platform_user, mint_scaffold, platform_user_id,  # noqa: F401
-                                scaffolded, setting, ws_file)
+from flows_steps.common import (address_for_uid, ensure_platform_user, mint_scaffold,  # noqa: F401
+                                platform_user_id, scaffolded, setting, ws_file)
 from flows_steps.notify import notify
 
 INVITE = EventType("invite.received")
@@ -348,6 +348,26 @@ def _note_path(ctx, uid, title) -> str:
     # afternoon's record silently overwrote the morning's on every desk in the room. Nothing
     # failed; the morning simply stopped existing. (F58, 2026-09-02.)
     return f"kg/entities/meeting/{_meeting_stamp(ctx, uid)}-{_slug(str(title or 'meeting'))}.md"
+
+
+def _organizer_address(ctx) -> str:
+    """This meeting's organiser, as an address a mail can be sent to — or "" if there is none to
+    find.
+
+    `refs["organizer"]` is set for every CALENDAR-invited meeting (`ensure_user` mints the uid
+    FROM it), so reading it is safe there. It is ABSENT for an AD HOC meeting — one started via
+    `POST /bots` or the MCP tool, no calendar invite in sight — because meeting-api's
+    `meeting.completed` carries only `{admitted_by, completion_reason, meeting_id, native,
+    platform, uid}` (F212, 2026-09-03: `email_minutes` read the ref unconditionally and every
+    such meeting's mail step raised `KeyError('organizer')`, retried to the ceiling, and failed —
+    the no-agents product's own "meeting ended, transcript ready" promise never reached the one
+    person who could have read it). For that shape `uid` IS the person: they are already a
+    platform user (dispatching a bot needs their own gateway key), so their address is one lookup
+    away."""
+    who = str(ctx.refs.get("organizer") or "").strip()
+    if who:
+        return who
+    return address_for_uid(ctx.refs["uid"])
 
 
 # ── THE TWO SHARED SCAFFOLD RECIPES ───────────────────────────────────────────
@@ -926,6 +946,18 @@ def build(reg: Registry, db) -> None:
         Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
+        # THE RECIPIENT. `refs["organizer"]` only exists for a calendar-invited meeting — an AD
+        # HOC one (F212, 2026-09-03) carries no organizer at all, and `uid` IS the person: they
+        # dispatched the bot with their own gateway key, so their address is one lookup away
+        # (`_organizer_address`). Neither resolving is not retryable — the refs are frozen at
+        # admission, so a retry would ask the same unanswerable question again — and it names the
+        # uid so an operator reading the reason knows exactly which account has no address.
+        organizer = _organizer_address(ctx)
+        if not organizer:
+            raise StepError(
+                f"cannot mail meeting {ctx.refs.get('meeting_id')!r}: no organizer on the ref and "
+                f"no address for uid {ctx.refs.get('uid')!r} — refusing to mail nobody.",
+                retryable=False)
         # THE ONE ARTEFACT, off the receipt. It used to be re-read out of the organiser's desk
         # (`ws_file(uid, note_path)`), which no longer holds it — the run writes into no desk, so
         # `process_meeting`'s reply IS the report and the receipt is where it lives. The commit sha
@@ -945,13 +977,13 @@ def build(reg: Registry, db) -> None:
         row = mt.meeting_row(ctx.refs["uid"], ctx.refs.get("meeting_id"), ctx.refs.get("native"))
         row_id = (row or {}).get("id") if isinstance(row, dict) else None
         link = mint_scaffold(
-            "post-meeting", ctx.refs["organizer"], opening="minutes-review",
+            "post-meeting", organizer, opening="minutes-review",
             meeting_id=row_id or ctx.refs["meeting_id"],
             refs=_scaffold_refs(ctx, ctx.refs["uid"]),
             provenance={"flow": "post_meeting", "step": "email_minutes",
                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                         "minted_by": str(ctx.refs["uid"])})
-        mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
+        mid = notify(organizer, f"Minutes: {ctx.refs['title']}", body, link=link)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
 
@@ -1496,7 +1528,17 @@ def build(reg: Registry, db) -> None:
                          "skipped": "there is no report to drop"})
         uid = ctx.refs["uid"]
         title = ctx.refs.get("title") or "your meeting"
-        organizer = ctx.refs.get("organizer") or "the organiser"
+        # `refs["organizer"]` is absent on an AD HOC meeting (F212, 2026-09-03) — `uid` IS the
+        # person then, and `_organizer_address` resolves their own address. The room always
+        # includes at least this one desk (decision 22a: "the organiser is not special"), so an
+        # unresolvable address is not a meeting with nobody to drop to — it is a broken lookup,
+        # and it fails loudly rather than writing an entity whose `organizer:` field, and whose
+        # `ensure_platform_user` call below, is the literal placeholder string "the organiser".
+        organizer = _organizer_address(ctx)
+        if not organizer:
+            raise StepError(
+                f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any desk: no organizer on "
+                f"the ref and no address for uid {uid!r}.", retryable=False)
         day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
         date_prose = _meeting_date(ctx, uid)
         entity_path = _note_path(ctx, uid, title)      # the one recipe — see `_note_path`
