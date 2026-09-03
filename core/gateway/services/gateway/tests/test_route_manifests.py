@@ -27,7 +27,7 @@ from starlette.testclient import TestClient
 from gateway import ROUTE_SCOPES, UNSCOPED_ROUTES, create_app, routes_manifest, undeclared_routes
 from gateway.routes_manifest import ManifestError
 
-from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
+from conftest import AGENT_CARRIED, VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis, needs_agent
 
 #: The agent domain's whole share of the edge — the seven rows that vanish in `no-agents`.
 AGENT_ROWS = frozenset({
@@ -43,6 +43,10 @@ AGENT_ROWS = frozenset({
 #: keep in step, and `test_the_assembled_table_matches_the_app_exactly` is what proves the
 #: CONTENT — against the routes themselves, which is a stronger anchor than a literal.
 FULL_SCOPED, FULL_UNSCOPED = 69, 2
+#: What THIS BUILD publishes — the full profile, less the agent rows when the build omits them.
+#: DERIVED, so the count stays exact in either build rather than softening to a range or a
+#: subset check. 69 on the line; 62 in a build with no agent manifest.
+CARRIED_SCOPED = FULL_SCOPED - (0 if AGENT_CARRIED else len(AGENT_ROWS))
 
 
 def _app(**kw):
@@ -51,7 +55,17 @@ def _app(**kw):
 
 # ── 1 · the full profile is unchanged ────────────────────────────────────────────────────────────
 
-def test_the_full_profile_is_exactly_what_shipped():
+def test_the_published_table_is_exactly_what_this_build_serves():
+    """An exact count either way: five domains publish 69 scoped rows, four publish 62. The
+    expectation is derived from what the build carries, never relaxed to accommodate it."""
+    assert (len(ROUTE_SCOPES), len(UNSCOPED_ROUTES)) == (CARRIED_SCOPED, FULL_UNSCOPED)
+
+
+@needs_agent
+def test_the_full_profile_carries_the_agent_rows():
+    """The other half of the count, and it is a separate test on purpose: in a build with no agent
+    manifest this is not true, not vacuously true, and not quietly dropped — it is SKIPPED, and
+    pytest prints why."""
     assert (len(ROUTE_SCOPES), len(UNSCOPED_ROUTES)) == (FULL_SCOPED, FULL_UNSCOPED)
     assert AGENT_ROWS <= set(ROUTE_SCOPES)
 
@@ -69,6 +83,7 @@ def test_the_assembled_table_matches_the_app_exactly():
         "registered but not declared": sorted(registered - declared)}
 
 
+@needs_agent
 def test_every_domain_declares_its_own_and_only_its_own():
     a = routes_manifest.load({"gateway", "meetings", "identity", "mcp", "agent"})
     assert a.domains == {"agent": 7, "gateway": 2, "identity": 12, "mcp": 12, "meetings": 38}
@@ -79,6 +94,7 @@ def test_every_domain_declares_its_own_and_only_its_own():
 
 # ── 2 · the no-agents profile lacks exactly the agent's rows ─────────────────────────────────────
 
+@needs_agent
 def test_without_the_agent_domain_the_table_lacks_exactly_its_seven_rows():
     full = routes_manifest.load({"gateway", "meetings", "identity", "mcp", "agent"})
     lean = routes_manifest.load({"gateway", "meetings", "identity", "mcp"})
@@ -113,6 +129,7 @@ def test_a_request_to_an_absent_domain_is_404_not_401(method, path):
         assert r.status_code == 404, (path, headers, r.status_code)
 
 
+@needs_agent
 def test_the_same_request_is_served_when_the_agent_domain_is_there():
     """The half a blanket 404 would break."""
     client = TestClient(_app())
@@ -204,13 +221,17 @@ def _cut(tmp_path, domains):
 
 
 def test_a_domain_this_cut_does_not_ship_is_simply_absent(tmp_path):
-    """The bug at the assembly layer: this raised, so the package could not be imported at all."""
+    """The bug at the assembly layer: this raised, so the package could not be imported at all.
+
+    Independent of which build is running it — the cut is generated here from the real manifests
+    of the four domains, so it asserts 62 rows on the line and in the open-core build alike."""
     a = routes_manifest.load_carried(_OSS_CUT + ("agent",), repo_root=_cut(tmp_path, _OSS_CUT))
     assert (len(a.scopes), len(a.unscoped)) == (FULL_SCOPED - len(AGENT_ROWS), FULL_UNSCOPED)
     assert not [k for k in a.scopes if k[1].startswith("/agent")]
     assert set(a.domains) == set(_OSS_CUT)
 
 
+@needs_agent
 def test_the_full_checkout_still_assembles_every_row(tmp_path):
     """Tolerating absence must not lose a manifest that IS there — the control for the test above."""
     a = routes_manifest.load_carried(_OSS_CUT + ("agent",),
