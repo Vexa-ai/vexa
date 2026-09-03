@@ -569,6 +569,14 @@ def _attach_background_loops(
 
         fetch_bot_context = _bot_context_fetcher(admin_api_url, internal_secret)
 
+        async def publish_status(*, user_id, meeting_id, native_id, status, when):
+            frame = {"type": "meeting.status", "meeting_id": meeting_id,
+                     "native": native_id, "status": status, "when": when}
+            try:
+                await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
+            except Exception:
+                pass  # best-effort, like the collector's publish
+
         async def _tick():
             await auto_join_tick(
                 meeting_repo, runtime,
