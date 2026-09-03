@@ -70,7 +70,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
@@ -691,9 +691,29 @@ def _friction_id() -> str:
     return f"fr_{secrets.token_hex(8)}"
 
 
+#: `severity`, AS THE SERVED CONTRACT DESCRIBES IT (F-D20 d). The accepted set lived only in
+#: `FRICTION_SEVERITIES` and in the 400 this handler raises, so the OpenAPI document — the thing
+#: every generated client and every tool manifest is built from — said any string would do, and a
+#: caller learned the four words by sending a fifth and reading the refusal.
+#:
+#: `json_schema_extra`, NOT a `Literal` or an `Enum` type. Those would move the rejection into
+#: FastAPI's own validation, which answers 422 with a pydantic error body — a different status and
+#: a different shape from the 400 this route already returns, carrying `expected` for exactly this
+#: purpose. The contract is what was missing; the refusal was not, and changing it would break
+#: every caller that reads it. One source of truth, `FRICTION_SEVERITIES`, feeding both.
+#:
+#: `kind` has the SAME GAP against `FRICTION_KINDS` and is deliberately not changed here — it is
+#: optional (empty means "infer it from the words"), so its schema needs an enum AND a nullable
+#: empty, which is a contract decision rather than a transcription. Named, not fixed.
+_SEVERITY = Query(default="annoyance",
+                  description="How much this got in the way. One of: "
+                              + ", ".join(FRICTION_SEVERITIES) + ".",
+                  json_schema_extra={"enum": list(FRICTION_SEVERITIES)})
+
+
 @app.post("/friction", status_code=201)
 def report_friction(session: str = "", what_i_tried: str = "", what_happened: str = "",
-                    severity: str = "annoyance", meeting_id: str = "", tool: str = "",
+                    severity: str = _SEVERITY, meeting_id: str = "", tool: str = "",
                     deployment: str = "", worker_image: str = "", kind: str = "",
                     x_user_id: str = Header(default=""),
                     caller: Caller = Depends(subject_or_operator)):
