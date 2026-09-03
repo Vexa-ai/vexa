@@ -35,7 +35,7 @@ import {
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
-import { getJoinBrowserArgs } from '@vexa/join';
+import { getJoinBrowserArgs, resolveConferenceFrame } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
@@ -699,6 +699,13 @@ export async function startCaptureBridge(
   const jitsi = inv.platform === 'jitsi';
   const lane: 'gmeet' | 'mixed' = mixed ? 'mixed' : 'gmeet';
 
+  // JaaS/8x8.vc-backed Jitsi deployments (Brave Talk and other white-labeled embeds) render the
+  // whole conference — media elements included — inside a cross-origin <iframe>; page.evaluate()
+  // only ever reaches the top frame, so capture setup/control must target the resolved frame
+  // instead. Every other platform (and stock/self-hosted Jitsi, which renders at the top level)
+  // keeps targeting `page` exactly as before — resolveConferenceFrame only runs for jitsi.
+  const captureTarget: any = jitsi ? await resolveConferenceFrame(page) : page;
+
   // ── O-TEL-1 raw-signal tap (a DUAL-sink) ──────────────────────────────────────────────────
   // When a TelemetrySink is wired, tee each raw frame to it BEFORE the pipeline consumes it, so a
   // live bug's exact signal is stored as captured-signal.v1 and replays offline (O-TEL-2). The tap
@@ -788,7 +795,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
+  await captureTarget.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }: any) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -1116,7 +1123,7 @@ export async function startCaptureBridge(
       mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000),
       // How long a PICKED mix may stay wholly silent before the lane abandons it for every track.
       mainAudioSilenceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_SILENCE_MS || 20000),
-      mainAudioEnergyRms: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_ENERGY_RMS || 0.006) }).catch((e) => {
+      mainAudioEnergyRms: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_ENERGY_RMS || 0.006) }).catch((e: any) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
@@ -1132,7 +1139,7 @@ export async function startCaptureBridge(
   return async () => {
     if (countersTimer) clearInterval(countersTimer);
     activity?.unavailable();
-    await page.evaluate(() => {
+    await captureTarget.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
       try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
@@ -1192,6 +1199,10 @@ export async function restartMixedCapture(page: Page): Promise<boolean> {
  */
 export async function startRecording(page: Page, inv: Invocation, recording: BotRecordingSink): Promise<() => Promise<void>> {
   const key = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
+  // See startCaptureBridge: JaaS/8x8.vc-backed Jitsi (Brave Talk etc.) renders the participant
+  // <audio>/<video> elements inside a cross-origin <iframe> — the recording tap must scan that
+  // frame, not the top page. Every other platform keeps targeting `page` exactly as before.
+  const captureTarget: any = inv.platform === 'jitsi' ? await resolveConferenceFrame(page) : page;
   // Recording part interval (ms): the MediaRecorder timeslice = the durable-upload granularity.
   // Env-overridable (VEXA_RECORDING_TIMESLICE_MS) so a live multi-part run can shrink it to land
   // ≥2 parts in a short meeting (#509 A5); default 15000 (production parity). Each timeslice is a
@@ -1210,7 +1221,7 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
   // Page-side: start the generic recording tap (finds + combines the page audio elements).
-  await page.evaluate(async (timesliceMs) => {
+  await captureTarget.evaluate(async (timesliceMs: number) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
@@ -1222,11 +1233,11 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
       });
       await w.__vexaRecordingTap.start();
     }
-  }, timesliceMs).catch((e) => { console.error(`[bot] recording bridge: page-side start failed: ${String(e)}`); });
+  }, timesliceMs).catch((e: any) => { console.error(`[bot] recording bridge: page-side start failed: ${String(e)}`); });
 
   // Stop fn: stop the recorder so it flushes the final (isFinal) chunk → master assembly.
   return async () => {
-    await page.evaluate(async () => {
+    await captureTarget.evaluate(async () => {
       const w = (globalThis as any) as Record<string, any>;
       try { await w.__vexaRecordingTap?.stop?.(); } catch { /* best-effort */ }
     }).catch(() => { /* page already gone */ });
@@ -1263,8 +1274,11 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
   // unmutes before speech + auto-mutes after — index.ts:1039–1059). The PulseAudio source
   // (tts_sink → virtual_mic) is the actual audio path and is provided by the VM image.
   const setMic = async (on: boolean): Promise<void> => {
+    // JaaS/8x8.vc-backed Jitsi (Brave Talk etc.): the mic button lives in the embedding <iframe>,
+    // not the top page — resolve it fresh each call (cheap; the toggle isn't in a hot loop).
+    const target: any = platform === 'jitsi' ? await resolveConferenceFrame(page) : page;
     // Runs IN THE BROWSER; reach the DOM via globalThis (no DOM types in this Node-typed file).
-    await page.evaluate(({ on, platform }) => {
+    await target.evaluate(({ on, platform }: any) => {
       const doc = (globalThis as any).document;
       const click = (sel: string) => doc?.querySelector(sel)?.click();
       if (platform === 'teams') click('#microphone-button');

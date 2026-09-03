@@ -13,18 +13,28 @@ import {
   jitsiRejectionTexts,
   jitsiRemovalTexts,
 } from "./selectors";
+import { allJitsiFrames, isVisibleInAnyFrame, scanFrames } from "./frame-utils";
 
 /** The app's own runtime verdict — the SAME probe join/admission/removal all trust.
  *  jitsi-meet exposes the APP global on every stock deployment; "no-api" = a custom
- *  build stripped it, so the caller falls back to DOM signals. */
+ *  build stripped it, so the caller falls back to DOM signals.
+ *
+ *  Scans every frame, not just the top one: JaaS/8x8.vc-backed deployments (Brave Talk and
+ *  other white-labeled embeds) mount the whole jitsi app — APP global included — inside a
+ *  cross-origin <iframe>, so the top-level document never has it. The first frame to return an
+ *  authoritative verdict (not "no-api") wins. */
 export async function getAppJoinedState(page: Page): Promise<"joined" | "not-joined" | "no-api"> {
-  return await page.evaluate(() => {
-    try {
-      const app = (globalThis as any).APP;
-      if (app?.conference?.isJoined) return app.conference.isJoined() === true ? "joined" : "not-joined";
-      return "no-api";
-    } catch { return "no-api"; }
-  }).catch(() => "no-api") as "joined" | "not-joined" | "no-api";
+  for (const target of allJitsiFrames(page)) {
+    const result = await (target as Page).evaluate(() => {
+      try {
+        const app = (globalThis as any).APP;
+        if (app?.conference?.isJoined) return app.conference.isJoined() === true ? "joined" : "not-joined";
+        return "no-api";
+      } catch { return "no-api"; }
+    }).catch(() => "no-api") as "joined" | "not-joined" | "no-api";
+    if (result !== "no-api") return result;
+  }
+  return "no-api";
 }
 
 /** A fresh meet.jit.si room is members-only until a moderator arrives: the conference join fails
@@ -53,24 +63,28 @@ function membersOnlyLatched(page: Page): boolean {
  *  deployments where the store IS populated). On stock meet.jit.si the members-only latch above
  *  is the primary signal; this returns "no-api" pre-admission when the store isn't wired. */
 export async function getLobbyState(page: Page): Promise<"lobby" | "not-lobby" | "no-api"> {
-  return await page.evaluate(() => {
-    try {
-      const app = (globalThis as any).APP;
-      const state = app?.store?.getState?.();
-      if (!state) return "no-api";
-      const conf = state["features/base/conference"];
-      if (conf && conf.membersOnly) return "lobby"; // members-only lobby room JID when locked out
-      const lobby = state["features/lobby"];
-      if (lobby && lobby.knocking) return "lobby"; // explicit Lobby feature: knocking to be let in
-      return "not-lobby";
-    } catch { return "no-api"; }
-  }).catch(() => "no-api") as "lobby" | "not-lobby" | "no-api";
+  for (const target of allJitsiFrames(page)) {
+    const result = await (target as Page).evaluate(() => {
+      try {
+        const app = (globalThis as any).APP;
+        const state = app?.store?.getState?.();
+        if (!state) return "no-api";
+        const conf = state["features/base/conference"];
+        if (conf && conf.membersOnly) return "lobby"; // members-only lobby room JID when locked out
+        const lobby = state["features/lobby"];
+        if (lobby && lobby.knocking) return "lobby"; // explicit Lobby feature: knocking to be let in
+        return "not-lobby";
+      } catch { return "no-api"; }
+    }).catch(() => "no-api") as "lobby" | "not-lobby" | "no-api";
+    if (result !== "no-api") return result;
+  }
+  return "no-api";
 }
 
 /** The hangup control is footer-only — never rendered on the prejoin or lobby screens. */
 export async function isHangupVisible(page: Page): Promise<boolean> {
   for (const sel of jitsiHangupButtonSelectors) {
-    if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+    if (await isVisibleInAnyFrame(page, sel)) return true;
   }
   return false;
 }
@@ -99,13 +113,17 @@ export async function isAdmitted(page: Page): Promise<boolean> {
     const inLobby = await isInLobby(page);
     if (inLobby) return false;
 
-    const prejoinPresent = await page.evaluate((sels: string[]) => {
-      return sels.some((s) => !!document.querySelector(s));
-    }, jitsiPrejoinScreenSelectors).catch(() => true);
+    const prejoinPresent = await scanFrames(
+      page,
+      (sels: string[]) => sels.some((s) => !!document.querySelector(s)),
+      jitsiPrejoinScreenSelectors,
+      (v) => v === false,
+      true, // conservative default: assume still-prejoin (not admitted) if every frame errors
+    );
     if (prejoinPresent) return false;
 
     for (const sel of jitsiConferenceIndicators) {
-      if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+      if (await isVisibleInAnyFrame(page, sel)) return true;
     }
     return false;
   } catch {
@@ -126,13 +144,18 @@ async function isInLobby(page: Page): Promise<boolean> {
 
     // DOM fallback: explicit lobby/knock screens + APP-stripped custom builds.
     for (const sel of jitsiLobbyIndicators) {
-      const visible = await page.locator(sel).first().isVisible({ timeout: 200 }).catch(() => false);
-      if (visible) return true;
+      if (await isVisibleInAnyFrame(page, sel)) return true;
     }
-    return await page.evaluate((texts: string[]) => {
-      const bodyText = document.body?.innerText || "";
-      return texts.some((t) => bodyText.toLowerCase().includes(t.toLowerCase()));
-    }, jitsiLobbyTexts).catch(() => false);
+    return await scanFrames(
+      page,
+      (texts: string[]) => {
+        const bodyText = document.body?.innerText || "";
+        return texts.some((t) => bodyText.toLowerCase().includes(t.toLowerCase()));
+      },
+      jitsiLobbyTexts,
+      (v) => v === false,
+      false,
+    );
   } catch {
     return false;
   }
@@ -141,11 +164,17 @@ async function isInLobby(page: Page): Promise<boolean> {
 /** Detect a lobby decline, a kick, or a terminated conference (terminal states). */
 async function isRejectedOrEnded(page: Page): Promise<string | null> {
   try {
-    return await page.evaluate((texts: string[]) => {
-      const bodyText = (document.body?.innerText || "").toLowerCase();
-      for (const t of texts) if (bodyText.includes(t.toLowerCase())) return t;
-      return null;
-    }, [...jitsiRejectionTexts, ...jitsiRemovalTexts]).catch(() => null);
+    return await scanFrames(
+      page,
+      (texts: string[]) => {
+        const bodyText = (document.body?.innerText || "").toLowerCase();
+        for (const t of texts) if (bodyText.includes(t.toLowerCase())) return t;
+        return null;
+      },
+      [...jitsiRejectionTexts, ...jitsiRemovalTexts],
+      (v) => v === null,
+      null,
+    );
   } catch {
     return null;
   }

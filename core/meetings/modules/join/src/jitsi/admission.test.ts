@@ -26,9 +26,14 @@ function check(name: string, ok: boolean, detail?: string) {
 }
 
 // evaluate runs the probe fn in-node; getLobbyState/getAppJoinedState read globalThis.APP.
+// frames()/mainFrame() make this a single-frame page for allJitsiFrames() — the frame-aware
+// scan (added for iframe-embedded deployments like Brave Talk/JaaS) degenerates to exactly the
+// old single-page behavior these tests were written against.
 const page: any = {
   async evaluate(fn: any, arg?: any) { return fn(arg); },
   async waitForTimeout(_ms: number) {},
+  frames() { return [page]; },
+  mainFrame() { return page; },
 };
 
 function setApp(opts: { joined?: boolean; membersOnly?: string | null; knocking?: boolean }) {

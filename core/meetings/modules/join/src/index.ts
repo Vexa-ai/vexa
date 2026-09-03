@@ -157,3 +157,4 @@ export {
 export type { TeamsJoinRedirectReason } from "./msteams/auth-redirect";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
+export { resolveConferenceFrame } from "./jitsi/frame-utils";

@@ -8,6 +8,7 @@ import {
   jitsiJoinButtonSelector,
   jitsiGuestEntryTexts,
 } from "./selectors";
+import { findFrameWithVisibleSelector } from "./frame-utils";
 
 // NOTE vs the other platforms: Jitsi Meet is SELF-HOSTABLE — meet.jit.si is just
 // the canonical public deployment. The join layer therefore never rewrites the
@@ -161,14 +162,13 @@ export async function joinJitsiMeeting(
   // option) — clear it before waiting on any jitsi UI.
   await enterAsGuestIfGated(page);
 
-  // waitFor (NOT isVisible — which returns the instantaneous state and ignores its
-  // timeout): the prejoin screen mounts a beat after navigation / the auth landing.
-  const nameField = page.locator(jitsiNameInputSelector).first();
-  const havePrejoin = await nameField
-    .waitFor({ state: "visible", timeout: 15000 })
-    .then(() => true)
-    .catch(() => false);
-  if (havePrejoin) {
+  // Poll the top frame AND every child frame: JaaS/8x8.vc-backed deployments (Brave Talk and
+  // other white-labeled embeds) render the whole prejoin/conference app inside a cross-origin
+  // <iframe> — the top-level document has no jitsi DOM at all. Stock meet.jit.si and most
+  // self-hosted deployments render at the top level, so that path still resolves immediately.
+  const jitsiFrame = await findFrameWithVisibleSelector(page, jitsiNameInputSelector, 15000);
+  if (jitsiFrame) {
+    const nameField = jitsiFrame.locator(jitsiNameInputSelector).first();
     // Fill the display name with REAL keyboard events — jitsi's prejoin is a React
     // form; typing (not a synthetic value-set) reliably enables the join button.
     const current = await nameField.inputValue().catch(() => "");
@@ -179,16 +179,16 @@ export async function joinJitsiMeeting(
     }
     log(`[Jitsi] Name entered: "${botName}"`);
 
-    // Click "Join meeting" DOM-direct first (immune to overlay hit-test stalls),
-    // with a Playwright click as the fallback.
-    const clicked = await page.evaluate((sel: string) => {
+    // Click "Join meeting" DOM-direct first (immune to overlay hit-test stalls), scoped to the
+    // SAME frame the name field was found in — with a Playwright click as the fallback.
+    const clicked = await (jitsiFrame as any).evaluate((sel: string) => {
       const btn = document.querySelector(sel) as HTMLElement | null;
       if (!btn) return false;
       btn.click();
       return true;
     }, jitsiJoinButtonSelector.split(",")[0].trim()).catch(() => false);
     if (!clicked) {
-      const joinBtn = page.locator(jitsiJoinButtonSelector).first();
+      const joinBtn = jitsiFrame.locator(jitsiJoinButtonSelector).first();
       await joinBtn.waitFor({ state: "visible", timeout: 10000 });
       await joinBtn.click({ timeout: 10000 });
     }
