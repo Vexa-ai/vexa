@@ -13,6 +13,12 @@ _log = logging.getLogger(__name__)
 
 StepFn = Callable[[StepCtx], "Done | Wait | Block | NotPresent"]
 
+#: WHAT AN ABSENT DOMAIN DOES TO THE STEP THAT DECLARED IT (F-D20). Three values and no more: a
+#: fourth would be a policy no reader of a flow definition could hold in their head, and the whole
+#: value of declaring this rather than checking it in the body is that it is READ in review.
+ABORT, SKIP, DEGRADE = "abort", "skip", "degrade"
+ABSENT_POLICIES = (ABORT, SKIP, DEGRADE)
+
 
 @dataclass(frozen=True)
 class EventType:
@@ -52,16 +58,40 @@ class Registry:
         # Declarative rather than a check inside each body: a body that has to remember to ask
         # cannot be enumerated, and the next step somebody adds will not remember.
         self.step_needs: dict[str, frozenset[str]] = {}
+        # step name -> {domain: policy} — WHAT THE ABSENCE OF EACH DECLARED DOMAIN SHOULD DO
+        # (F-D20). Only the non-default entries are stored;  answers ABORT for
+        # everything else, so every declaration written before this existed keeps its behaviour.
+        self.step_absent: dict[str, dict[str, str]] = {}
         self.by_event: dict[str, list[Flow]] = {}
         # WHICH FLOWS CAME FROM THE DATABASE. Needed only to answer "is a runtime-authored version
         # shadowing the code's?" — see `shadowing_versions`. Without it the two are
         # indistinguishable here, which is precisely why the shadow was invisible.
         self.db_versions: set[tuple[str, int]] = set()
 
-    def step(self, fn: StepFn | None = None, *, needs: "tuple[str, ...] | list[str]" = ()):
+    def step(self, fn: StepFn | None = None, *, needs: "tuple[str, ...] | list[str]" = (),
+             absent: "str | dict[str, str] | None" = None):
         """Register a step. `@reg.step` as before; `@reg.step(needs=("agent",))` also DECLARES the
         domains the body reaches, so the engine can answer for it when one of them is not deployed
-        (PRD decision 40.7) without the body ever running."""
+        (PRD decision 40.7) without the body ever running.
+
+        `absent` says WHAT THAT ABSENCE SHOULD DO, per declared domain (F-D20). It is a policy and
+        not a check inside the body for the reason `needs` itself is: a body that has to remember
+        to ask cannot be enumerated, and the next step somebody adds will not remember.
+
+        * `ABORT` (the default, and what every declaration written before this meant) — terminal:
+          the reaction ends `done` carrying `<domain>:not_present`. Correct for a step that has
+          nothing to degrade TO — an agent turn, a bot dispatch.
+        * `SKIP` — the engine does not enter the body, records the skip on the step's receipt and
+          in the reaction's scratch, and ADVANCES. Correct where the rest of the flow is still
+          worth running: the no-agents cut still accepts the invite, still puts a bot in the call,
+          and still records the meeting.
+        * `DEGRADE` — the body RUNS and is told, through `ctx.absent`. Correct where the step can
+          still do most of its job: `email_minutes` still mails the person, it just has no chat to
+          link them into.
+
+        A string applies one policy to every declared domain; a dict names them one at a time. A
+        key that is not in `needs`, or a policy that is not one of the three, is a REGISTRATION
+        error — silently keeping the terminal default is the exact failure F-D20 was."""
         def register(f: StepFn) -> StepFn:
             name = f.__name__
             if name in self.steps and self.steps[name] is not f:
@@ -69,8 +99,29 @@ class Registry:
             self.steps[name] = f
             if needs:
                 self.step_needs[name] = frozenset(needs)
+            policies = self._policies(name, needs, absent)
+            if policies:
+                self.step_absent[name] = policies
             return f
         return register(fn) if fn is not None else register
+
+    @staticmethod
+    def _policies(name: str, needs, absent) -> dict[str, str]:
+        if absent is None:
+            return {}
+        declared = set(needs or ())
+        raw = {d: absent for d in declared} if isinstance(absent, str) else dict(absent)
+        for domain, policy in raw.items():
+            if domain not in declared:
+                raise ValueError(
+                    f"step {name}: absent policy names {domain!r}, which is not in needs="
+                    f"{tuple(sorted(declared))} — a policy for a domain the step never declared "
+                    f"is unreachable, and would leave the real one terminal by accident")
+            if policy not in ABSENT_POLICIES:
+                raise ValueError(
+                    f"step {name}: unknown absent policy {policy!r} for {domain!r} — "
+                    f"one of {ABSENT_POLICIES}")
+        return {d: p for d, p in raw.items() if p != ABORT}
 
     def rename_step(self, old: str, new: str) -> None:
         """Re-register a step under its real name — the closure-factory idiom
@@ -79,9 +130,17 @@ class Registry:
         self.steps[new] = self.steps.pop(old)
         if old in self.step_needs:
             self.step_needs[new] = self.step_needs.pop(old)
+        if old in self.step_absent:
+            self.step_absent[new] = self.step_absent.pop(old)
 
     def needs(self, step_name: str) -> frozenset:
         return self.step_needs.get(step_name, frozenset())
+
+    def absent_policy(self, step_name: str, domain: str) -> str:
+        """What this step wants done when `domain` is not deployed. ABORT unless it said otherwise
+        — the default is stated HERE, once, so an undeclared step and an unregistered one answer
+        the same thing and no caller has to remember which."""
+        return (self.step_absent.get(step_name) or {}).get(domain, ABORT)
 
     def flow(self, *, name: str, version: int, on: EventType, steps: list[StepFn],
              params: dict | None = None) -> Flow:

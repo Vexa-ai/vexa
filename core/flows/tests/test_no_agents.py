@@ -182,14 +182,26 @@ def test_no_production_step_reaches_the_agent_domain_undeclared():
 
 def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(monkeypatch):
     """THE CONTRACT (PRD decision 40.7). Every flow the production definitions register, admitted
-    with the agent domain absent, must END — and the agent-dispatching steps must end `done` with
-    a `not_present` reason rather than `failed` after N retries against a door that is not there.
+    with the agent domain absent, must END — never `failed` after N retries against a door that is
+    not there, and never parked.
 
     The proof that nothing was knocked on is `calls`: the agent-domain HTTP helpers are replaced
     with functions that record and raise, so a step that reached one both fails the test and says
-    which step it was."""
+    which step it was.
+
+    THIS TEST USED TO ALSO ASSERT `reason == "agent:not_present"` FOR A FLOW WHOSE FIRST STEP
+    NEEDS THE AGENT, and that assertion was the defect written down as a contract (F-D20): it
+    passed precisely because `post_meeting` ended at step one and the three steps behind it never
+    ran. Ending is the invariant; ending AT THE FIRST STEP is not. What each step does about an
+    absent domain is now its own declaration, and `tests/test_no_agents_degrade.py` holds the
+    per-step contract — including that `post_meeting` still mails the person.
+
+    `production.notify` is intercepted for the same reason: `email_minutes` now RUNS on this
+    profile, and a test that leaves it holding the real SMTP notifier opens a socket."""
     reg = _production_registry()
     calls: list[str] = []
+    monkeypatch.setattr(production, "notify",
+                        lambda *a, **k: "<no-mail-in-this-test@test>")
 
     def _forbidden(*a, **k):
         calls.append(str(a[:2]))
@@ -222,7 +234,6 @@ def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(m
         assert st["status"] in terminal, f"{name}@{version} parked in {st['status']}: {st['reason']}"
         if flow.steps[0] in AGENT_STEPS:
             assert st["status"] == "done", f"{name} FAILED instead of degrading: {st['reason']}"
-            assert (st["reason"] or "").startswith("agent:not_present"), st["reason"]
     assert calls == []
 
 

@@ -38,7 +38,22 @@ from sqlite_double import SqliteDB
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from test_link_loop import FakeChannel, FakeScaffolds, _StubDB  # noqa: E402
+from test_link_loop import FakeScaffolds, _StubDB  # noqa: E402
+
+
+class _Sent(list):
+    """Every notification a production step made, intercepted at `production.notify`.
+
+    NOT `flows_steps.notify.use()`, which is what the sibling suites install a channel with. A
+    module in this tree is reloaded by at least one other test module, and `production` binds the
+    FUNCTION (`from flows_steps.notify import notify`) — so a channel installed on the module
+    object this file imported is, after that reload, installed on a module `production` is no
+    longer looking at, and the send goes to real SMTP. It passed standalone and failed in the
+    suite, which is the worst shape of green there is."""
+
+    def __call__(self, to, subject, body, *, link=None, in_reply_to=None):
+        self.append({"to": to, "subject": subject, "body": body, "link": link})
+        return f"<fake-{len(self)}@test>"
 
 NO_AGENT = lambda d: d != "agent"          # noqa: E731 — the no-agents profile, as a predicate
 EVERYTHING = lambda _d: True               # noqa: E731
@@ -186,11 +201,13 @@ def _production(monkeypatch):
                         lambda *a, **k: "<rsvp@test>")
     monkeypatch.setattr(production.mx, "register_thread", lambda *a, **k: None)
     monkeypatch.setattr(mailtext, "ws_file", lambda *_a, **_k: None)
+    sent = _Sent()
+    monkeypatch.setattr(production, "notify", sent)
 
     reg.steps["await_start"] = lambda ctx: Done({"waited": True})
     reg.steps["dispatch_bot"] = lambda ctx: Done({"meeting_id": 41, "native": "abc123"})
     reg.steps["run_meeting"] = lambda ctx: Done({"completed": True})
-    return reg
+    return reg, sent
 
 
 def _forbid_the_agent_door(monkeypatch):
@@ -236,7 +253,7 @@ DONE_REFS = {"uid": "7", "meeting_id": 41, "native": "abc123", "title": "Weekly 
 def test_invite_intake_reaches_emit_completed_with_no_agent_domain(monkeypatch):
     """THE HEADLINE. Red before the fix: the reaction ends at `ack_by_email` and the receipts stop
     there — no bot, no meeting, no `meeting.completed`."""
-    reg = _production(monkeypatch)
+    reg, _sent = _production(monkeypatch)
     _forbid_the_agent_door(monkeypatch)
     st, emitted = _run_flow(reg, "invite.received", dict(INVITE_REFS), NO_AGENT)
 
@@ -252,19 +269,13 @@ def test_invite_intake_reaches_emit_completed_with_no_agent_domain(monkeypatch):
 def test_post_meeting_still_mails_the_person_with_no_agent_domain(monkeypatch):
     """Decision 3's promise on the no-agents cut: after a meeting, the person is told it was
     recorded. Red before the fix: `process_meeting` is step one and the reaction ends there."""
-    reg = _production(monkeypatch)
+    reg, sent = _production(monkeypatch)
     _forbid_the_agent_door(monkeypatch)
-    import flows_steps.notify as notify_mod
-    ch = FakeChannel()
-    notify_mod.use(ch)
-    try:
-        st, _ = _run_flow(reg, "meeting.completed", dict(DONE_REFS), NO_AGENT)
-    finally:
-        notify_mod.use(None)
+    st, _ = _run_flow(reg, "meeting.completed", dict(DONE_REFS), NO_AGENT)
 
     assert st["status"] == "done", f"{st['step']}: {st['reason']}"
-    assert len(ch.sent) == 1, f"the minutes mail did not go: {ch.sent}"
-    msg = ch.sent[0]
+    assert len(sent) == 1, f"the minutes mail did not go: {list(sent)}"
+    msg = sent[0]
     assert msg["to"] == "anna@bank.test"
     assert msg["link"] is None, "there is no chat to link to on a deployment with no agent domain"
     # HONEST, and this is the half that is easy to get wrong: the meeting WAS recorded (the
@@ -282,7 +293,7 @@ def test_post_meeting_still_mails_the_person_with_no_agent_domain(monkeypatch):
 def test_the_agent_present_path_is_unchanged(monkeypatch):
     """THE REGRESSION GUARD THAT DECIDES THE TRAIN. With agents deployed, `post_meeting` mails the
     report VERBATIM, with a minted scaffold link, exactly as it did before this branch."""
-    reg = _production(monkeypatch)
+    reg, sent = _production(monkeypatch)
     scaffolds = FakeScaffolds()
     monkeypatch.setattr(production, "mint_scaffold", scaffolds)
     monkeypatch.setattr(production, "ws_file", lambda *_a, **_k: None)
@@ -294,17 +305,11 @@ def test_the_agent_present_path_is_unchanged(monkeypatch):
     reg.steps["email_attendees"] = lambda ctx: Done({"sent": 0, "to": [], "drops": []})
     reg.steps["drop_to_attendees"] = lambda ctx: Done({"dropped": 0, "failed": []})
 
-    import flows_steps.notify as notify_mod
-    ch = FakeChannel()
-    notify_mod.use(ch)
-    try:
-        st, _ = _run_flow(reg, "meeting.completed", dict(DONE_REFS), EVERYTHING)
-    finally:
-        notify_mod.use(None)
+    st, _ = _run_flow(reg, "meeting.completed", dict(DONE_REFS), EVERYTHING)
 
     assert st["status"] == "done", f"{st['step']}: {st['reason']}"
-    assert len(ch.sent) == 1
-    msg = ch.sent[0]
+    assert len(sent) == 1
+    msg = sent[0]
     assert msg["subject"].startswith("Minutes:")
     assert "## Decided" in msg["body"]
     assert msg["link"] and scaffolds.minted, "the scaffold link is the agent-present shape"

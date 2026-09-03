@@ -519,9 +519,22 @@ def build(reg: Registry, db) -> None:
         return Done({"message_id": mid}, provider_ref=mid)
 
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
-    # the engine answers `not_present` for this step without entering it when a deployment
-    # does not run agents, so the absent door is never knocked on.
-    @reg.step(needs=("agent",))
+    # the engine answers for this step without entering it when a deployment does not run agents,
+    # so the absent door is never knocked on.
+    #
+    # SKIPPED, NOT TERMINAL (F-D20, found live 2026-09-03 on the no-agents cut). This step is
+    # THIRD OF NINE, and `not_present` used to end the reaction — so a deployment with no agent
+    # domain accepted the invite, sent the iMIP ACCEPT, and then never ran `emit_prep`,
+    # `await_start`, `dispatch_bot`, `emit_started`, `run_meeting` or `emit_completed`. No bot, no
+    # meeting row, nothing in the queue, and the reaction read `done`. The module header above
+    # promises "a bot still joins" of exactly this profile; it was false for three days.
+    #
+    # Skipping costs ONE of decision 29's three touches — the "Vexa will join" courtesy mail. The
+    # RSVP is not lost with it: `rsvp_accept`, the step before this one, is the iMIP METHOD:REPLY
+    # that flips Vexa to "Yes" in the organiser's calendar, and it needs no agent. The only agent
+    # reach in this body is `scaffolded(uid)`, which asks the person's desk whether their workspace
+    # is set up — a question with no meaning on a deployment that has no desks.
+    @reg.step(needs=("agent",), absent="skip")
     def ack_by_email(ctx: StepCtx):
         """Acknowledge by email: when Vexa joins, plus the finalize-your-workspace ask when
         onboarding is pending. Registers the mail as a THREAD ANCHOR (replies become conversation).
@@ -712,7 +725,15 @@ def build(reg: Registry, db) -> None:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
     # ALSO REACHES MEETINGS — reads the room order, the meeting row and the transcript (`mt.room_order`, `mt.meeting_row`, `mt.transcript_text`).
-    @reg.step(needs=("agent", "meetings"))
+    #
+    # THE AGENT'S ABSENCE IS SKIPPED; THE MEETINGS DOMAIN'S IS STILL TERMINAL (F-D20). This is the
+    # FIRST step of `post_meeting@4`, so `abort` on the agent meant the whole flow ended here and
+    # `email_minutes` — the one mail the no-agents product promises after a meeting (decision 3) —
+    # never ran at all. There is nothing to degrade the TURN to: with no agent there is no report,
+    # and `email_minutes` says so in its own words rather than being handed an empty one. Meetings
+    # keeps `abort` because a post-meeting flow with no meeting to read is not a degraded product,
+    # it is a reaction with no subject.
+    @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
     def process_meeting(ctx: StepCtx):
         """ONE REAL AGENT TURN on session meet-<id>, producing ONE SHARED ARTEFACT: the meeting's
         report, the same words for everybody who was in the room.
@@ -930,7 +951,13 @@ def build(reg: Registry, db) -> None:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
     # ALSO REACHES MEETINGS — stamps the meeting's date and mints the link's refs (`_meeting_stamp` → `mt.meeting_start`).
-    @reg.step(needs=("agent", "meetings"))
+    #
+    # `degrade`, NOT `skip` (F-D20). This is the mail the no-agents product exists to send — after
+    # a meeting, the person who had Vexa in the room is told it was recorded. Its ONLY agent reach
+    # is `mint_scaffold`, which composes the chat link; a deployment with no agent has no chat to
+    # link into, and losing a button is not a reason to lose the mail. So the body runs and is
+    # told, through `ctx.absent`, and what it sends changes shape — see below.
+    @reg.step(needs=("agent", "meetings"), absent={"agent": "degrade"})
     def email_minutes(ctx: StepCtx):
         """Send the committed note VERBATIM in the body + the feedback ask + ONE link into the
         minutes terminal, already primed on this meeting. Cannot run before the commit: its input
@@ -942,6 +969,14 @@ def build(reg: Registry, db) -> None:
         it, unchanged. The preset body is admin-owned (`_global/asks/minutes-review.md`) and
         substitutes {{meeting}}: the URL never carries prompt text, so nobody who can send mail can
         drive somebody else's agent.
+
+        WITH NO AGENT DOMAIN THIS STEP STILL SENDS, in a different shape (F-D20). `process_meeting`
+        is skipped there, so there is no report and no chat to link into — but the meeting WAS
+        recorded, by the meetings domain, which is deployed (this step still aborts when it is
+        not). The degraded mail says exactly that and no more: it never says "Minutes", because
+        there are none, and it never carries a link, because there is nothing behind one. Claiming
+        a report that was never written is the failure `NotPresent` itself exists to prevent, one
+        layer out.
 
         Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
         if not setting(ctx.refs["uid"], "mail_minutes"):
@@ -962,7 +997,14 @@ def build(reg: Registry, db) -> None:
         # (`ws_file(uid, note_path)`), which no longer holds it — the run writes into no desk, so
         # `process_meeting`'s reply IS the report and the receipt is where it lives. The commit sha
         # went with the desk write it referred to.
-        report = _readable(ctx.prior["process_meeting"]["report"])
+        # THE REPORT, OR ITS HONEST ABSENCE. A skipped `process_meeting` leaves a CONFIRMED
+        # receipt carrying `{"outcome": "skipped", …}` rather than no receipt at all, so `.get`
+        # here answers "there is no report" for the one case that produces none, and would still
+        # raise for a genuinely missing prior — which is a different bug and must stay loud.
+        written = (ctx.prior.get("process_meeting") or {}).get("report")
+        if written is None:
+            return _mail_the_recording(ctx)
+        report = _readable(written)
         body = (_provenance(ctx, ctx.refs["uid"], to_attendee=False)
                 + report + "\n\n—\nRecorded by Vexa\n"
                 "Reply to this email with corrections or questions — I'll update what we hold "
@@ -987,6 +1029,35 @@ def build(reg: Registry, db) -> None:
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
 
+
+
+    def _mail_the_recording(ctx: StepCtx):
+        """The no-agents shape of the post-meeting mail (F-D20): the meeting was recorded, and
+        nobody wrote it up.
+
+        NO LINK. `mint_scaffold` is the agent door, and this branch exists precisely because that
+        door is not there; a link composed from `VEXA_UI_URL` instead would be a second guess (the
+        terminal is its own capability, absent in this profile too) pointing at a page that may not
+        exist. One honest paragraph beats a dead button.
+
+        The subject deliberately does not say "Minutes". A person who opens a mail titled Minutes
+        and finds none has been told something untrue by the product, and that is the whole failure
+        class `NotPresent` was introduced for."""
+        organizer = _organizer_address(ctx)
+        body = (_provenance(ctx, ctx.refs["uid"], to_attendee=False)
+                + "This meeting was recorded and its transcript is stored.\n\n"
+                "There is no written summary of it: this deployment does not run the agent that "
+                "writes them.\n\n—\nRecorded by Vexa\n"
+                "Reply to this email if something here is wrong.")
+        # `.get`, where the branch above indexes. `meeting.completed`'s own refs are
+        # {admitted_by, completion_reason, meeting_id, native, platform, uid} — no `title` — so
+        # the title is only there when an invite put it there, and this is the branch that runs on
+        # the deployment least likely to have had one. `_provenance` already defaults the same way.
+        title = ctx.refs.get("title") or "your meeting"
+        mid = notify(organizer, f"Recorded: {title}", body)
+        mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs.get('meeting_id')}")
+        return Done({"message_id": mid, "degraded": "agent:not_present",
+                     "report": None}, provider_ref=mid)
 
 
     def _readable(note: str) -> str:
@@ -1173,7 +1244,12 @@ def build(reg: Registry, db) -> None:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
     # ALSO REACHES MEETINGS — reads the meeting row and mints a transcript share per attendee (`mt.meeting_row`, `mt.mint_transcript_share`).
-    @reg.step(needs=("agent", "meetings"))
+    #
+    # SKIPPED WITH NO AGENT (F-D20), which is the same OUTCOME `Vexa-ai/vexa#1523` gave this step
+    # for a room with nobody in it — a typed, recorded no-op that the flow continues past — reached
+    # by declaration rather than by an early return, because the body cannot be entered at all
+    # here: its input is `process_meeting`'s report, and it mints a scaffold per attendee.
+    @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
     def email_attendees(ctx: StepCtx):
         """Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click
         composes. Cannot run before the note: its input is process_meeting's receipt.
@@ -1465,7 +1541,13 @@ def build(reg: Registry, db) -> None:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
     # ALSO REACHES MEETINGS — stamps the meeting's day and its scaffold refs (`_meeting_stamp` → `mt.meeting_start`).
-    @reg.step(needs=("agent", "meetings"))
+    #
+    # SKIPPED WITH NO AGENT (F-D20). A drop is a WRITE ONTO A DESK (`ag.workspace_write`), and a
+    # deployment with no agent domain has no desks — there is no degraded version of this, only a
+    # recorded absence. It is the last step, so skipping it changes only what the reaction says
+    # about itself: `done` with a complete timeline, instead of `done / agent:not_present` at
+    # step one with seven steps' worth of silence behind it.
+    @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
     def drop_to_attendees(ctx: StepCtx):
         """The meeting's ARTEFACT into every desk in the room — the organiser's included. Plain
         code, no agent turn, no LLM (founder decisions 20 and 22).
