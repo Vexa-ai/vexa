@@ -127,6 +127,10 @@ def bearer(token):
 
 
 def admin():
+    return {"X-Flows-Operator-Key": OPERATOR}
+
+
+def admin_old_name():
     return {"X-Flows-Admin-Key": OPERATOR}
 
 
@@ -306,3 +310,40 @@ def test_the_timeline_refuses_a_subject_that_is_not_yours(client, identity):
 def test_the_flow_listing_takes_a_persons_bearer(client, identity):
     r = client.get("/flows", headers=bearer("anna-key"))
     assert r.status_code == 200 and "steps_vocabulary" in r.json()
+
+
+# ── the operator header says what it holds ──────────────────────────────────────────────────────
+
+def test_the_operator_key_travels_under_a_name_that_says_what_it_is(client, identity):
+    """`X-Flows-Admin-Key` reads as admin-api's token and is not: it is flows-api's own operator
+    key. The two have been confused on a live deployment, which is how a lane came to run on the
+    string `changeme`. Splitting this surface into two tiers is the moment the name has to stop
+    lying."""
+    assert client.get("/reactions", headers=admin()).status_code == 200
+
+
+def test_the_old_name_still_opens_the_door_for_one_release(client, identity):
+    assert client.get("/reactions", headers=admin_old_name()).status_code == 200
+    assert client.post("/events", headers=admin_old_name(), json={
+        "event_type": "meeting.completed", "source_event_id": "s-old", "refs": {}}
+    ).status_code != 401
+
+
+def test_the_old_name_says_once_that_it_is_deprecated(client, identity, capsys):
+    fa._DEPRECATED_HEADER_SAID.clear()
+    client.get("/reactions", headers=admin_old_name())
+    first = capsys.readouterr().out
+    assert "X-Flows-Admin-Key" in first and "X-Flows-Operator-Key" in first
+    client.get("/reactions", headers=admin_old_name())
+    assert capsys.readouterr().out == "", "once per process, not once per request"
+
+
+def test_the_new_name_wins_when_both_are_sent(client, identity):
+    r = client.get("/reactions", headers={"X-Flows-Operator-Key": OPERATOR,
+                                          "X-Flows-Admin-Key": "not-the-key"})
+    assert r.status_code == 200
+
+
+def test_a_wrong_operator_key_under_either_name_is_refused(client, identity):
+    assert client.get("/reactions", headers={"X-Flows-Operator-Key": "wrong"}).status_code == 401
+    assert client.get("/reactions", headers={"X-Flows-Admin-Key": "wrong"}).status_code == 401
