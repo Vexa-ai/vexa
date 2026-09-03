@@ -45,7 +45,27 @@ BG_ENV_FILE="${BG_ENV_FILE:-$BG_COMPOSE_DIR/.env}"
 BG_ENV_FILES="${BG_ENV_FILES:-}"          # extra --env-file args for `docker compose`, space-separated
 BG_NGINX_UPSTREAMS="${BG_NGINX_UPSTREAMS:-/etc/nginx/conf.d/vexa-dogfood-upstreams.conf}"
 BG_NGINX_TEST="${BG_NGINX_TEST:-sudo nginx -t}"
-BG_NGINX_RELOAD="${BG_NGINX_RELOAD:-sudo nginx -s reload}"
+# HOW THE HOST-SIDE SWITCH IS APPLIED. A graceful `nginx -s reload` is the right answer everywhere
+# this scheme was rehearsed, and it is why the switch is documented as costing zero requests: nginx
+# finishes in-flight requests on the old worker generation.
+#
+# ON THIS HOST IT IS NOT (2026-09-03). Two reloads took the whole edge down — every :443 vhost plus
+# the stable ports — for three minutes each. Both recovered instantly on `systemctl restart`. After
+# a reload the new generation comes up with ONE live worker instead of 128 (`worker_processes auto`
+# on a 128-core box); the old generation drains but the new one never fills, so nginx stops
+# accepting. NOTHING IS LOGGED: `nginx -t` passes, the reload reports success, and neither
+# error.log nor the journal records a word about the new workers. The only entry is systemd
+# SIGKILLing the old generation when the later restart's stop phase times out.
+#
+# `worker_shutdown_timeout 60s` was added and DOES work — the old generation collapses inside 35s —
+# and it changed nothing about the new one, which is what rules the SSE-draining theory out.
+# Unconfirmed leading suspect: nchan, the only third-party module here, holding a 128MB
+# shared-memory zone that both generations must map across a reload.
+#
+# So on this deployment the switch is a RESTART. The founder accepts a sub-second blip on a swap
+# (decision 39.5), and a deterministic blip beats a three-minute outage nobody can predict. Still
+# one knob, overridable: a deployment whose reload works sets BG_NGINX_RELOAD back to it.
+BG_NGINX_RELOAD="${BG_NGINX_RELOAD:-sudo systemctl restart nginx}"
 BG_NGINX_WRITE="${BG_NGINX_WRITE:-sudo tee}"   # how the upstreams file is written (tee reads stdin)
 BG_CURL_IMAGE="${BG_CURL_IMAGE:-curlimages/curl:8.12.1}"
 BG_HEALTH_TIMEOUT="${BG_HEALTH_TIMEOUT:-90}"
