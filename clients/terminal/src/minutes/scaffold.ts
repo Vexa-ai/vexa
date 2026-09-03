@@ -155,6 +155,43 @@ export function parseScaffold(raw: unknown): Scaffold | null {
   };
 }
 
+const SCAFFOLD_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+
+/** THE TRANSCRIPT SHARE, redeemed AGAINST THE SCAFFOLD ID (R-A08).
+ *
+ *  A scaffold about a meeting that is not the reader's own carries a restricted grant on that
+ *  meeting's transcript, minted by its owner. It used to ride the mailed link as `&tshare=<token>`
+ *  — a bearer credential in a query string, which enters every access log and proxy trace between
+ *  us and the recipient's inbox, and then whatever they forward. `core/agent/worker/engine.py`
+ *  states the rule for the MCP delegation token in as many words: *the token travels in a header,
+ *  never in the URL*. The link is now an id and nothing else, and this asks for the capability over
+ *  the authenticated session that already proved who the reader is.
+ *
+ *  NEVER THROWS, and null is the ordinary answer: most scaffolds are about the reader's own meeting
+ *  and carry no share at all. A caller that treated null as breakage would show an error on the
+ *  common path — and the one thing worse than a missing capability is a person told their link is
+ *  broken when it is not. */
+export async function redeemScaffoldShare(
+  id: string,
+  fetcher: typeof fetch = fetch,
+): Promise<string | null> {
+  if (!SCAFFOLD_ID.test(id)) return null;
+  try {
+    const res = await fetcher(`/api/scaffolds/${encodeURIComponent(id)}/share`, {
+      method: "POST", cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = await res.json() as { token?: unknown };
+    return typeof body?.token === "string" && body.token ? body.token : null;
+  } catch {
+    // A share we could not fetch is a meeting the reader may not see yet — worth a retry on the
+    // next open, never worth failing the arrival over. The chat still opens.
+    return null;
+  }
+}
+
+
 /** Fetch one scaffold AS THE SIGNED-IN IDENTITY. The server decides whether it is theirs; the
  *  client never asserts who it is for. A refusal is returned, never thrown — the caller renders a
  *  card that states the situation. */
@@ -162,7 +199,7 @@ export async function fetchScaffold(
   id: string,
   fetcher: typeof fetch = fetch,
 ): Promise<{ ok: true; scaffold: Scaffold } | { ok: false; refusal: ScaffoldRefusal }> {
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+  if (!SCAFFOLD_ID.test(id)) {
     return { ok: false, refusal: { reason: "malformed", status: 0, detail: "that is not a scaffold id" } };
   }
   let res: Response;

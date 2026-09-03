@@ -223,10 +223,11 @@ def test_the_mail_is_exactly_head_blankline_report_then_the_button(monkeypatch, 
     assert msg["body"] == "HEAD for Acme Bank.\n\n## Decided\n- ship it"
     # the gap line and the button are the PORT's, not the step's
     assert notify_mod.compose(msg["body"], msg["link"]) == msg["body"] + "\n\n" + msg["link"] + "\n"
-    # THE BUTTON IS AN ID AND A CAPABILITY — the preset moved into the record (PRD §5.5).
-    assert set(_params(msg["link"])) == {"s", "tshare"}
-    assert _params(msg["link"])["tshare"] == "97.tok-ben@bank.test"
+    # THE BUTTON IS AN ID — the preset moved into the record (PRD §5.5), and so did the capability
+    # (R-A08: a bearer token in a query string leaks into every log the link passes through).
+    assert set(_params(msg["link"])) == {"s"}
     rec = scaffolds.for_("ben@bank.test")
+    assert rec["share_token"] == "97.tok-ben@bank.test"
     assert (rec["kind"], rec["opening"], rec["meeting"]) == \
         ("invite-offer", "minutes-review-invite", "97")
     # the preamble the head replaced is gone — including the mailbox line's double splice
@@ -235,16 +236,22 @@ def test_the_mail_is_exactly_head_blankline_report_then_the_button(monkeypatch, 
     assert "Open it and ask anything about the meeting" not in msg["body"]
 
 
-def test_everybody_in_the_room_gets_byte_identical_words(monkeypatch):
+def test_everybody_in_the_room_gets_byte_identical_words(monkeypatch, scaffolds):
     """The founder's simplification, as a test: two attendees, one report, and the ONLY thing that
-    may differ between their mails is the share token inside their own button."""
+    may differ between them is the share token on their own record.
+
+    Since R-A08 the mails are byte-identical INCLUDING the button, because the capability left the
+    URL — which makes the claim stronger than it was, not weaker: there is now nothing per-person in
+    the mail at all."""
     reg, ch = _rig(monkeypatch)
     out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
 
     assert out.result["sent"] == 2 and out.result["followup"] == "on"
     assert len({m["body"] for m in ch.sent}) == 1
     assert len({m["subject"] for m in ch.sent}) == 1
-    assert {_params(m["link"])["tshare"] for m in ch.sent} == {
+    assert len({m["link"] for m in ch.sent}) == 2            # one id each, and only the id differs
+    assert all(set(_params(m["link"])) == {"s"} for m in ch.sent)
+    assert {scaffolds.for_(m["to"])["share_token"] for m in ch.sent} == {
         "97.tok-ben@bank.test", "97.tok-cara@bank.test"}
 
 

@@ -505,6 +505,35 @@ class ScaffoldStore:
                     ids.remove(scaffold_id)
         return rec
 
+    def hand_share(self, scaffold_id: str, subject: str) -> Optional[dict]:
+        """Give this record's transcript share to its recipient, and record that it was given.
+
+        THE SHARE STOPPED RIDING THE LINK (R-A08). It used to be a query parameter on the mail's one
+        button — `{ui}/?s=<id>&tshare=<token>` — which is a bearer credential in a URL that crosses a
+        public hostname, the recipient's mail provider, every proxy in between, and whoever they
+        forward it to. `worker/engine.py` states the opposite rule one file away for the MCP
+        delegation token, and the weaker spelling was on the more exposed artefact.
+
+        So the token lives on the RECORD and is handed over an authenticated request instead. The
+        caller must already have been judged the recipient — this method does not authorize; the
+        route does, with a stricter predicate than the read uses (an admin may read the record and
+        may never hold the capability).
+
+        IDEMPOTENT FOR THE SAME SUBJECT, deliberately, and this is a considered departure from
+        "one-time": a strictly single-use hand-out turns one dropped response into a person
+        permanently unable to open the meeting they were invited to, which is a worse failure than
+        the one this fixes. The property that carries the security is that the token is never in a
+        URL and is only ever handed to the identity the record names. The record expires anyway
+        (`TTL_SECONDS`), so the capability is bounded in time rather than by a counter."""
+        rec = self.get(scaffold_id)
+        if rec is None:
+            return None
+        if rec.get("share_token") and not rec.get("share_handed_at"):
+            rec["share_handed_at"] = time.time()
+            rec["share_handed_to"] = str(subject)
+            self._put(rec)
+        return rec
+
     def for_recipient(self, address: str, *, pending_only: bool = True) -> list[dict]:
         """This address's scaffolds, most recently minted first."""
         key = _recipient_key(address)

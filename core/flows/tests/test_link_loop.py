@@ -61,10 +61,10 @@ class FakeScaffolds:
                             "meeting": None if meeting_id is None else str(meeting_id),
                             "refs": refs or {}, "share_token": share_token,
                             "provenance": provenance or {}})
-        url = f"https://app.example.test/?s=sc{len(self.minted)}"
-        if share_token:
-            url += f"&tshare={share_token}"
-        return url
+        # THE LINK IS AN ID (R-A08). The share the step minted is stored ON the record and its
+        # recipient redeems it against this id; agent-api stopped composing `&tshare=` into the url,
+        # so a fake that still did would be this suite pinning a contract that no longer exists.
+        return f"https://app.example.test/?s=sc{len(self.minted)}"
 
     def for_(self, address: str) -> dict:
         return next(m for m in self.minted if m["who"] == address)
@@ -279,7 +279,7 @@ def _attendee_rig(monkeypatch, *, mint, row=None):
 
 def test_a_minted_share_travels_in_the_link(monkeypatch, scaffolds):
     """The happy path, asserted on the artifact the attendee actually receives: one token per
-    attendee, restricted to them, carried on the button as `tshare`."""
+    attendee, restricted to them, and carried ON THE RECORD the button's id names (R-A08)."""
     minted = []
 
     def mint(uid, meeting_id, email, expires_in_sec=30 * 86400):
@@ -294,11 +294,10 @@ def test_a_minted_share_travels_in_the_link(monkeypatch, scaffolds):
     assert [m[1] for m in minted] == [97, 97]
     assert [m[2] for m in minted] == ["ben@bank.test", "cara@bank.test"]
     for msg in ch.sent:
-        params = _params(msg["link"])
-        assert set(params) == {"s", "tshare"}                    # an id and a capability, nothing else
-        assert params["tshare"] == f"97.secret-for-{msg['to']}"   # this attendee's OWN capability
+        assert set(_params(msg["link"])) == {"s"}                 # an id, and nothing that is a credential
         rec = scaffolds.for_(msg["to"])
-        assert rec["meeting"] == "97" and rec["share_token"] == params["tshare"]
+        assert rec["meeting"] == "97"
+        assert rec["share_token"] == f"97.secret-for-{msg['to']}"  # this attendee's OWN capability
         # the attendee mail carries the SECOND ASK, so the record says which kind of touch it is
         assert (rec["kind"], rec["opening"]) == ("invite-offer", "minutes-review-invite")
 

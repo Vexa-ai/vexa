@@ -20,6 +20,7 @@ import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
 import { SetupGate } from "./SetupGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
+import { redeemScaffoldShare } from "../minutes/scaffold";
 import "../surfaces";
 
 const roleLabel = (role: string) => (role === "viewer" ? "read-only" : "read & write");
@@ -104,10 +105,29 @@ function InviteGate({ children }: { children: ReactNode }) {
   //
   // Same stash-and-clean discipline as `?ask=`: the URL is cleaned on landing so a reload does not
   // re-open a spent arrival, and the id travels to MinutesShell through storage.
+  //
+  //  THE SHARE COMES OFF THE RECORD, NOT OFF THE URL (R-A08). When the meeting is not the reader's
+  //  own, the scaffold carries a restricted transcript grant. It used to ride this same link as
+  //  `&tshare=`, where a bearer credential enters every access log and proxy trace between us and
+  //  the inbox. It is redeemed here instead — one authenticated POST against the id the link
+  //  already carries — and the URL is cleaned only AFTER, because `location.replace` aborts the
+  //  request in flight. `redeemScaffoldShare` never throws and answers null for the ordinary
+  //  no-share case, so the arrival is never held up by it.
   useEffect(() => {
     if (!scaffold) return;
     try { localStorage.setItem("vexa.pendingScaffold", scaffold); } catch { /* locked-down storage */ }
-    if (!invite && !tshare) window.location.replace(window.location.pathname);
+    let live = true;
+    void (async () => {
+      const token = await redeemScaffoldShare(scaffold);
+      if (token) {
+        try {
+          const r = await acceptTranscriptShare(token);
+          if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+        } catch (e) { console.error("scaffold transcript share redeem failed:", e); }
+      }
+      if (live && !invite && !tshare) window.location.replace(window.location.pathname);
+    })();
+    return () => { live = false; };
   }, [scaffold, invite, tshare]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL

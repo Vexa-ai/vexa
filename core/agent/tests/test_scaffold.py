@@ -131,9 +131,14 @@ def test_the_url_carries_the_id_and_nothing_else(client):
         assert word not in url
 
 
-def test_a_share_token_rides_the_url_when_the_meeting_is_not_theirs(client):
+def test_a_share_token_does_not_ride_the_url(client):
+    """It used to (`&tshare=<token>`), one test below the one that says the link carries an id and
+    nothing else — the exception that made the rule above false. A bearer credential in a query
+    string leaks into every access log and proxy trace between us and the recipient's inbox, and
+    into whatever they forward (R-A08). The share now lives on the record and its recipient redeems
+    it against the id; the whole contract is in `test_scaffold_share.py`."""
     url = _mint(client, share_token="tok-abc.def").json()["url"]
-    assert "&tshare=tok-abc.def" in url
+    assert "tshare" not in url and "tok-abc.def" not in url
 
 
 def test_an_unknown_preset_fails_the_mint_not_the_click(client):

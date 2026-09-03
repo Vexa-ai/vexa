@@ -1992,6 +1992,12 @@ def create_app(
             "minted_at": _iso(rec.get("minted_at")),
             "redeemed_at": _iso(rec.get("redeemed_at")),
             "redeemed_by": rec.get("redeemed_by"),
+            # WHETHER the transcript share was handed over, never WHAT it is (R-A08). This route is
+            # what a panel polls; a capability that rode every read would be a capability in every
+            # log that traffic touches — the shape the row exists to remove, one surface along.
+            # `has_share` is what the client branches on to decide whether to ask for it at all.
+            "has_share": bool(rec.get("share_token")),
+            "share_handed_at": _iso(rec.get("share_handed_at")),
         }
 
     def _scaffold_is_for(rec: dict, request: Request, subject: str) -> bool:
@@ -2011,8 +2017,27 @@ def create_app(
             return True
         return bool(global_layer.is_admin(settings, str(subject)))
 
+    def _scaffold_recipient_is(rec: dict, request: Request, subject: str) -> bool:
+        """Is this caller THE RECIPIENT — the three identity tests `_scaffold_is_for` runs, minus its
+        admin clause and with no service-key door.
+
+        Two predicates on purpose, because the two questions are different. Reading a scaffold is a
+        support surface and an instance admin has a reason to be on it. The transcript SHARE is a
+        bearer grant on somebody else's meeting: *may debug this record* is not *may watch this
+        meeting*, and collapsing them would hand every admin a capability the record was minted to
+        give one person (R-A08)."""
+        who = str(rec.get("who") or "").strip().lower()
+        email = (request.headers.get("x-user-email") or "").strip().lower()
+        if email and who and email == who:
+            return True
+        if rec.get("redeemed_by") and str(rec["redeemed_by"]) == str(subject):
+            return True
+        resolved = _email_subject_lookup(who) if who else None
+        return bool(resolved and str(resolved) == str(subject))
+
     def _compose_and_mint(*, who: str, subject: str, kind: str, opening: str, fm: dict,
-                          mid: str, mounts: list, group, refs_in, tabs, focus, provenance) -> dict:
+                          mid: str, mounts: list, group, refs_in, tabs, focus, provenance,
+                          share_token=None) -> dict:
         """Build the record and mint it. ONE composition, both mint routes.
 
         Factored when the hand-link route landed: two routes composing the same record from the same
@@ -2041,6 +2066,9 @@ def create_app(
             "tabs": tabs if tabs is not None else scaffolds_mod.frontmatter_list(fm, "tabs"),
             "focus": focus if focus is not None else (fm.get("focus") or ""),
             "provenance": dict(provenance or {}),
+            # THE SHARE LIVES ON THE RECORD, NOT IN THE LINK (R-A08). The recipient redeems it
+            # against the scaffold id over an authenticated request; nothing puts it in a URL.
+            "share_token": str(share_token) if share_token else None,
         })
 
     @app.post("/internal/scaffolds", status_code=201)
@@ -2133,15 +2161,15 @@ def create_app(
             who=who, subject=subject, kind=body.kind, opening=str(body.opening), fm=fm,
             mid=mid, mounts=mounts, group=group, refs_in=body.refs,
             tabs=body.tabs, focus=body.focus, provenance=body.provenance,
+            share_token=body.share_token,
         )
-        # The link carries the ID and, when the meeting is not the recipient's own, the capability
-        # that makes it visible. NOTHING ELSE: no preset name, no mount list, no prompt text. What a
-        # person forwards is an id bound to their address and a share bound to theirs.
+        # THE LINK IS AN ID. Nothing else: no preset name, no mount list, no prompt text — and since
+        # R-A08, no capability either. The share the caller minted is stored ON the record and the
+        # recipient redeems it against this id (`POST /api/scaffolds/<id>/share`), because a bearer
+        # token in a query string leaks into every access log and proxy trace it passes through —
+        # the rule `worker/engine.py` states for the delegation token, applied to the artefact that
+        # actually crosses a mail provider.
         url = f"{ui}/?s={rec['id']}"
-        if body.share_token:
-            from urllib.parse import quote as _quote
-
-            url += f"&tshare={_quote(str(body.share_token), safe='')}"
         logger.info("scaffold MINTED id=%s kind=%s who=%s meeting=%s mounts=%s opening=%s share=%s",
                     rec["id"], rec["kind"], who, rec.get("meeting"), mounts, rec["opening"],
                     bool(body.share_token))
@@ -2234,13 +2262,55 @@ def create_app(
         if not (_internal_caller(request) or _scaffold_is_for(rec, request, subject)):
             logger.warning("scaffold REFUSED id=%s subject=%s reason=not-the-recipient", scaffold_id, subject)
             raise HTTPException(status_code=404, detail="no such scaffold")
-        rec = scaffolds.redeem(scaffold_id, subject) or rec
+        # REDEEM ONLY FOR THE RECIPIENT (R-A13). An admin's debugging read used to stamp
+        # `redeemed_at`/`redeemed_by` with the ADMIN — and `scaffolds.redeem`'s own docstring calls
+        # that stamp "the only measurement the alpha ledger's 'seconds to act' column is made of".
+        #
+        # It is load-bearing twice over, which is why it is fixed here rather than left on the
+        # backlog: `redeemed_by == subject` is one of the three identity tests BOTH scaffold
+        # predicates run, so a stamp written by an admin's read promoted that admin to "the
+        # recipient" on every later call — including the share hand-out one route down, which is
+        # exactly the capability R-A08 exists to keep bound to one person.
+        if _scaffold_recipient_is(rec, request, subject):
+            rec = scaffolds.redeem(scaffold_id, subject) or rec
         try:
             return _scaffold_view(rec, subject)
         except scaffolds_mod.ScaffoldError as e:
             # The preset was there at mint and is not there now — an admin deleted or emptied it.
             # Say so; a silent empty opening is the failure that let the phase greeting win (F5).
             raise HTTPException(status_code=409, detail=str(e)) from e
+
+    @app.post("/api/scaffolds/{scaffold_id}/share")
+    def redeem_scaffold_share(scaffold_id: str, request: Request):
+        """The transcript share this record carries, handed to its RECIPIENT — the replacement for
+        `&tshare=` in the mailed link (R-A08).
+
+        A scaffold for a meeting that is not the reader's own carries a restricted grant, minted by
+        the meeting's owner in `core/flows` and passed to the mint. It used to ride the link's query
+        string, where a bearer credential enters every access log and proxy trace between us and the
+        recipient's inbox — and then whatever they forward. `worker/engine.py:1044-1046` states the
+        rule for the delegation token in as many words; this was the weaker spelling on the more
+        exposed artefact.
+
+        `{"token": null}` — not a 404 — when the record carries no share: most scaffolds are about
+        the reader's own meeting and carry no capability, and answering "not found" for the ordinary
+        case would teach the client to treat it as breakage.
+
+        A 404 for a stranger AND for an unknown id, exactly as the read route answers, so this route
+        cannot be used to discover that a scaffold id exists. An INSTANCE ADMIN gets the 404 too —
+        see `_scaffold_recipient_is` — and so does the internal tier: the mint hands the token IN,
+        and a route that handed it back out would be a second way to reach it."""
+        subject = subject_of(request)
+        rec = scaffolds.get(scaffold_id)
+        if rec is None or not _scaffold_recipient_is(rec, request, subject):
+            logger.warning("scaffold share REFUSED id=%s subject=%s reason=not-the-recipient",
+                           scaffold_id, subject)
+            raise HTTPException(status_code=404, detail="no such scaffold")
+        rec = scaffolds.hand_share(scaffold_id, subject) or rec
+        token = rec.get("share_token") or None
+        if token:
+            logger.info("scaffold share HANDED id=%s subject=%s", scaffold_id, subject)
+        return {"token": token}
 
     @app.get("/api/scaffolds")
     def list_scaffolds(request: Request, mine: bool = True, pending: bool = True):
