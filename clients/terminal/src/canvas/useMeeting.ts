@@ -53,10 +53,35 @@ function unresolvedMeeting(meetingId: string): MeetingMock {
   return { ...EMPTY_MEETING, id: meetingId, title: "Meeting" };
 }
 
+/** F169 — "the panel stays on the ended meeting". A bot can be RE-DROPPED into the SAME call (the
+ *  person says "send bot" again after the first session ended, or an auto-reconnect fires):
+ *  meeting-api mints a NEW row (a new `id`) for the new session, but the underlying call's
+ *  `native_id` (the Meet/Zoom code) is unchanged. A tab pinned to the OLD row's id used to keep
+ *  rendering that row's now-static transcript forever — `resolveMeeting` only ever looked up the
+ *  exact id it was given, so the pane never learned a fresher session for the same call existed.
+ *
+ *  Exported (pure, no I/O) so this is provable without mounting the hook: given the resolved row
+ *  and the full list, is there a LIVE row for the same call, newer than this one? Row ids are
+ *  sequential ints assigned in creation order (matchesMeeting/toMock's own comment), so the
+ *  highest numeric id among same-`native_id` live rows is unambiguously the newest session —
+ *  robust even when a fresh row's `start_time` hasn't landed yet (still `requested`/`joining`). */
+export function newerActiveSameCall(meetings: MeetingMock[], resolved: MeetingMock): MeetingMock | undefined {
+  if (resolved.status === "live" || !resolved.native_id) return undefined;
+  const candidates = meetings.filter(
+    (m) => m.status === "live" && m.native_id === resolved.native_id && m.id !== resolved.id,
+  );
+  if (!candidates.length) return undefined;
+  return candidates.reduce((newest, m) => (Number(m.id) > Number(newest.id) ? m : newest));
+}
+
 function resolveMeeting(meetings: MeetingMock[], meetingId: string): MeetingMock {
   // A real meeting id must NEVER resolve to a MOCK meeting. If it isn't in the live+past list yet,
   // show an empty placeholder for THAT id (it fills in when the list loads) — not a wrong meeting.
-  return meetings.find((m) => matchesMeeting(m, meetingId)) ?? unresolvedMeeting(meetingId);
+  const resolved = meetings.find((m) => matchesMeeting(m, meetingId)) ?? unresolvedMeeting(meetingId);
+  // FOLLOW the newer active session for the same call rather than freezing on a row that already
+  // ended (F169). A direct open of an id with no newer active session for its call is unaffected —
+  // it resolves to itself exactly as before, and terminal status renders "ended" normally.
+  return newerActiveSameCall(meetings, resolved) ?? resolved;
 }
 
 function latestCaption(segments: { text: string; completed?: boolean }[]): string | undefined {
