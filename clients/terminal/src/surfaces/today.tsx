@@ -90,7 +90,8 @@ export function agendaWindow(groups: MeetingGroup[], now: Date = new Date(), wee
 export interface PastEntry { run: MeetingMock; group: MeetingGroup }
 export interface PastDay { key: string; date: Date; entries: PastEntry[] }
 
-const PAST_CAP = 8;
+const PAST_CAP = 8;       // initial past-meetings shown
+const PAST_MORE = 20;     // how many more each "Show more" reveals
 
 /** The past feed: each meeting's newest finished run, newest first, day-grouped. */
 export function pastFeed(groups: MeetingGroup[], cap: number = PAST_CAP): PastDay[] {
@@ -228,8 +229,7 @@ function PastLine({ m }: { m: MeetingMock }) {
     fetchDurableTranscript(m.id)
       .then((t) => {
         if (!on) return;
-        if (t.notes.length) setLine(`${t.notes.length} notes`);
-        else if (t.lines?.length) setLine(`${t.lines.length} lines`);
+        if (t.lines?.length) setLine(`${t.lines.length} lines`);
       })
       .catch(() => {});
     return () => { on = false; };
@@ -280,10 +280,13 @@ function TodayView() {
   const reviewedIds = useReviewed();
   const ownTree = useOwnWorkspaceTree();
   const [weekOffset, setWeekOffset] = useState(0);
+  const [pastCap, setPastCap] = useState(PAST_CAP);
   const now = new Date();
   const groups = groupMeetings(meetings);
   const days = agendaWindow(groups, now, weekOffset);
-  const past = pastFeed(groups);
+  const past = pastFeed(groups, pastCap);
+  // Total past meetings eligible for the feed (same predicate pastFeed slices by) — drives "Show more".
+  const pastTotal = groups.filter((g) => g.pastRuns[0] && (g.pastRuns[0].has_recording || g.pastRuns[0].start_time)).length;
   const todayKey = dayKey(now);
   const empty = meetings.length === 0;
   const pager = { background: "none", border: "1px solid var(--line)", color: "var(--t2)", borderRadius: 6,
@@ -327,6 +330,14 @@ function TodayView() {
             {day.entries.map((e) => <PastRow key={e.run.id} e={e} reviewedIds={reviewedIds} />)}
           </div>
         ))}
+
+        {pastCap < pastTotal && (
+          <button onClick={() => setPastCap((c) => c + PAST_MORE)}
+            style={{ background: "none", border: "1px solid var(--line)", color: "var(--t2)", borderRadius: 8,
+              padding: "7px 14px", cursor: "pointer", fontSize: 12.5, marginTop: 14 }}>
+            Show more ({pastTotal - pastCap} older)
+          </button>
+        )}
 
         {!empty && (
           <div style={{ fontSize: 11.5, color: "var(--t3)", margin: "24px 2px 10px", lineHeight: 1.5 }}>

@@ -6,6 +6,7 @@
  *  the durable home (multi-calendar management lives in `calendarConnections.tsx`). Sections are a left nav (no sub-routing; one tab, local state). */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { registerTab } from "../contributions";
+import { minutesOnly } from "../app/mode";
 import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
 import { presentError } from "./apiClient";
@@ -147,7 +148,6 @@ function ModelsSection() {
     { key: "base_url", label: "Base URL", placeholder: "https://… (Anthropic/OpenAI-compatible gateway)", showIf: (v: Record<string, string>) => v.mode === "custom" },
     { key: "api_key", label: "API key", placeholder: "unchanged unless typed", secret: true, showIf: (v: Record<string, string>) => v.mode === "custom" },
     { key: "model", label: "Chat model", placeholder: "deployment default (e.g. sonnet)" },
-    { key: "meeting_model", label: "Meeting model", placeholder: "defaults to chat model" },
     { key: "effort", label: "Reasoning effort", placeholder: "CLI default (e.g. medium)", options: [
       { value: "", label: "CLI default" },
       { value: "low", label: "low" },
@@ -170,7 +170,8 @@ function ModelsSection() {
   return (
     <div>
       <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 12, maxWidth: 460 }}>
-        Which model the agent runs on, and which transcription service meeting bots use. Provider
+        Which model the agent runs on, and which transcription service meeting bots use. There is
+        one model: the agent&rsquo;s — meetings themselves run no inference. Provider
         &ldquo;subscription&rdquo; rides the deployment&rsquo;s Claude credentials; &ldquo;custom&rdquo; points at your own
         Anthropic/OpenAI-compatible endpoint (a LiteLLM/OpenRouter gateway serves open-source
         models). Empty fields inherit the deployment defaults.
@@ -246,4 +247,5 @@ function SettingsView() {
   );
 }
 
-registerTab("settings", SettingsView);
+// Minutes has no settings hub — a participant configures nothing.
+if (!minutesOnly()) registerTab("settings", SettingsView);

@@ -6,7 +6,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab } from "../contributions";
-import { meetingsOnly } from "../app/mode";
+import { reducedMode } from "../app/mode";
 import { Icon } from "../ui-kit";
 import { usePreviewPinTab } from "./previewPinTab";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
@@ -105,7 +105,7 @@ function RoutinesLeft() {
 }
 
 // Agent surface — absent in meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings).
-if (!meetingsOnly()) {
+if (!reducedMode()) {
   registerTab("routines", RoutinesBoard);
   registerList({ id: "routines", label: "Routines", icon: "zap", order: 40, component: RoutinesLeft });
 }

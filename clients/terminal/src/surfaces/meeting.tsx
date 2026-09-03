@@ -3,6 +3,7 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
+import { minutesOnly } from "../app/mode";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
@@ -750,8 +751,16 @@ function MeetingsList() {
     <div style={{ padding: "8px" }}>
       <div style={{ display: "flex", alignItems: "center", padding: "6px 4px 6px" }}>
         <span style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", flex: 1 }}>meetings</span>
-        <CalendarSyncButton />
+        {!minutesOnly() && <CalendarSyncButton />}
       </div>
+      {/* MINUTES: meetings arrive by INVITATION — no paste-a-link, no bot button, no calendar
+          sync, no plan-a-meeting. The rail states the mechanism instead of offering workarounds. */}
+      {minutesOnly() ? (
+        <div style={{ padding: "0 8px 10px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+          Invite the assistant&rsquo;s address to any calendar event — meetings appear here after
+          they happen.
+        </div>
+      ) : (
       <div style={{ padding: "0 4px 10px" }}>
         <div style={{ display: "flex", gap: 6 }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
@@ -770,54 +779,20 @@ function MeetingsList() {
           <CalendarSyncButton variant="row" />
         </div>
       </div>
+      )}
       {/* The day itself renders in the center (Today) — the sidebar only links there. */}
       <button onClick={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
         style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "10px 9px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, cursor: "pointer" }}
         onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t2)")} onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}>
-        {all.length === 0 ? "No meetings yet — paste a Meet link above, or open Today →" : "Your meetings are in Today →"}
+        {all.length === 0 ? (minutesOnly() ? "No meetings yet — they arrive by invitation" : "No meetings yet — paste a Meet link above, or open Today →") : "Your meetings are in Today →"}
       </button>
     </div>
   );
 }
 
-// ── Meeting COPILOT tab (center) — meeting shell + canvas ──────────────────────────
-type ModelInfo = { chat_model?: string; streaming_model?: string; agent_model?: string; meeting_model?: string };
-
-function useModelInfo(): ModelInfo | null {
-  const [models, setModels] = useState<ModelInfo | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const r = await fetch(`/api/models`, { cache: "no-store" });
-        if (!alive || !r.ok) return;
-        setModels(await r.json() as ModelInfo);
-      } catch {
-        /* model labels are informational */
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-  return models;
-}
-
-function ModelChips() {
-  const models = useModelInfo();
-  const streaming = models?.streaming_model || models?.meeting_model || "streaming";
-  const chat = models?.chat_model || models?.agent_model || "chat";
-  const chip = (label: string, value: string) => (
-    <span title={`${label} model: ${value}`} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t2)", background: "var(--panel)", fontSize: 11.5, whiteSpace: "nowrap", minWidth: 0 }}>
-      <span style={{ color: "var(--t3)", fontFamily: "var(--mono)", flex: "none" }}>{label}</span>
-      <span style={{ color: "var(--t1)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{value}</span>
-    </span>
-  );
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "flex-end", minWidth: 0 }}>
-      {chip("stream", streaming)}
-      {chip("chat", chat)}
-    </div>
-  );
-}
+// ── Meeting tab (center) — meeting shell + the live transcript canvas ─────────────────────────
+// PRD decision 34: no model chips here. The product runs no model calls of its own beside the
+// agent, so which model is configured is not a fact about this meeting and has no place on it.
 
 /** Bot lifecycle controls on the meeting page header (owner ask 2026-07-09): Stop while the bot
  *  is in the call, Re-send once it stopped/completed/failed. Reuses the row-action map verbatim
@@ -931,8 +906,13 @@ function MeetingTab({ params }: TabProps) {
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
       <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+        {/* WRAPS. This header was written for the full-width centre pane and its controls are all
+            `flex: none`; rendered in a narrower column (minutes mode puts this same canvas in the
+            resizable pages panel) a single non-wrapping row does not truncate, it OVERLAPS — the
+            bot controls paint across the meeting's own name. Wrapping costs nothing at the width it
+            was designed for and stays legible at every width below it. */}
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, rowGap: 8, fontSize: 13, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, rowGap: 6, minWidth: 0 }}>
             {header === "live"
               ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
               : header === "reconnecting"
@@ -945,10 +925,11 @@ function MeetingTab({ params }: TabProps) {
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
             {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
-          <div style={{ flex: 1 }} />
+          {/* the spacer keeps the controls right-aligned while they fit on the title's line, and
+              collapses to nothing once they have wrapped to their own */}
+          <div style={{ flex: "1 0 0", minWidth: 0 }} />
           {m && <BotControls m={m} connected={connected} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
-          <ModelChips />
         </div>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>

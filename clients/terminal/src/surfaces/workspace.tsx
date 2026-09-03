@@ -6,16 +6,17 @@ import { useContext, useEffect, useRef, useState, type CSSProperties, type Mouse
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
-import { meetingsOnly } from "../app/mode";
+import { minutesOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { RoomOnboarding } from "./roomOnboarding";
+import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocMetaContext, DocNavContext, resolveDocRef, type DocNavigate } from "../ui-kit/docLinks";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, listSharedMemberships, setSharedActive, setWorkspacePurpose, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 import { manageTabDescriptor } from "./workspaceManage";
 import { presentError } from "./apiClient";
 const base = (p: string) => p.split("/").pop() ?? p;
@@ -33,15 +34,28 @@ function parseEntity(text: string): { fm: [string, string][]; body: string } {
   return { fm, body: m[2] };
 }
 function wikilinks(text: string, navigate?: DocNavigate | null): ReactNode[] {
-  // Frontmatter [[wikilinks]] are clickable: navigate the doc pane in place when it provides
-  // a navigator (Obsidian-style), else fall back to the OPEN_ENTITY_EVENT tab path.
+  // Frontmatter [[wikilinks]] AND markdown [text](href) links are clickable (Obsidian-style): a
+  // wikilink / internal path navigates the doc pane (or opens a tab); a `?meeting=<id>` href opens the
+  // meeting canvas; http(s) opens externally. Lets a meeting note carry its recording links in metadata.
   const open = (wikilink: string) => navigate
     ? navigate({ wikilink })
     : window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { wikilink } }));
-  return text.split(/(\[\[[^\]]+\]\])/).map((part, i) => part.startsWith("[[")
-    ? <span key={i} onClick={() => open(part.slice(2, -2))}
-        style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>
-    : <span key={i}>{part}</span>);
+  return text.split(/(\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))/).map((part, i) => {
+    if (part.startsWith("[[")) return <span key={i} onClick={() => open(part.slice(2, -2))}
+      style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>;
+    const md = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (md) {
+      const [, label, href] = md;
+      const meeting = href.match(/[?&]meeting=([^&#]+)/);
+      if (meeting) return <span key={i} role="link" style={{ color: "var(--blue)", cursor: "pointer" }}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: decodeURIComponent(meeting[1]) } }))}>{label}</span>;
+      if (/^https?:/i.test(href)) return <a key={i} href={href} target="_blank" rel="noreferrer noopener"
+        style={{ color: "var(--blue)" }}>{label}</a>;
+      return <span key={i} role="link" style={{ color: "var(--blue)", cursor: "pointer" }}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: href } }))}>{label}</span>;
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 // [[Title]] / relative-path resolution lives in ui-kit/docLinks (resolveDocRef) — shared
@@ -395,19 +409,19 @@ export function FilesList() {  // exported for the surface test
         <span onClick={toggleFiles} title={filesOpen ? "Collapse the file tree" : "Browse the workspace files"}
           style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", minWidth: 0 }}>
           <Icon name="chevR" size={12} style={{ transform: filesOpen ? "rotate(90deg)" : "none", transition: "transform .12s", flex: "none" }} />
-          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>files{homeLabel ? ` · ${homeLabel}` : ""}</span>
+          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{minutesOnly() ? (homeLabel ? `in ${homeLabel}` : "documents") : `files${homeLabel ? ` · ${homeLabel}` : ""}`}</span>
         </span>
         <span onClick={() => setReloadKey((k) => k + 1)} title="Refresh the file list"
           style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: "var(--t3)" }}>
           <Icon name="refresh" size={13} />
         </span>
         <span onClick={toggleKgOnly} title={kgOnly ? "Show all workspace files" : "Show only the knowledge graph"}
-          style={{ display: "flex", cursor: "pointer", color: kgOnly ? "var(--accent)" : "var(--t3)" }}>
+          style={{ display: minutesOnly() ? "none" : "flex", cursor: "pointer", color: kgOnly ? "var(--accent)" : "var(--t3)" }}>
           <Icon name={kgOnly ? "eye" : "eyeOff"} size={13} />
         </span>
         <span onClick={() => setShowSystem((v) => { const n = !v; writeSS(SS_SYSTEM, n ? "1" : "0"); return n; })}
           title={showSystem ? "Hide the private system workspace" : "Show the private system workspace (_system)"}
-          style={{ display: "flex", cursor: "pointer", color: showSystem ? "var(--accent)" : "var(--t3)" }}>
+          style={{ display: minutesOnly() ? "none" : "flex", cursor: "pointer", color: showSystem ? "var(--accent)" : "var(--t3)" }}>
           <Icon name="key" size={13} />
         </span>
       </div>
@@ -420,7 +434,7 @@ export function FilesList() {  // exported for the surface test
             if (e.key === "Escape") { e.stopPropagation(); setQuery(""); e.currentTarget.blur(); }
             if (e.key === "Enter" && matches[0]) layout.openPreview(docTab(matches[0].p, matches[0].slug));
           }}
-          placeholder="Find file…"
+          placeholder={minutesOnly() ? "Search this group…" : "Find file…"}
           spellCheck={false}
           style={{ width: "100%", boxSizing: "border-box", fontSize: 12.5, padding: "5px 8px 5px 26px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t1)", outline: "none" }}
         />
@@ -472,6 +486,31 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // `view.active` (the single private-baseline primary) — a workspace can be MOUNTED (in the set) or just
   // AVAILABLE (parked). Drives the per-row toggle; the baseline is in the set by default but can be switched off.
   const [activeSet, setActiveSet] = useState<ActiveMount[]>([]);
+  // MINUTES: creating a shared room is an ONBOARDING, never a one-click side effect. The wizard holds
+  // the name, who belongs, and (after creation) the invite it minted — so nothing exists until the
+  // person has said what the room is for and who is in it.
+  const [roomWiz, setRoomWiz] = useState<null | true>(null);
+  // MINUTES `?assign=` — an organiser followed the artifact email's "assign to a group" link. The
+  // uid was stashed by the App gate; while set, clicking a group ASSIGNS the meeting to it (via the
+  // local-dev seam) instead of mounting. One meeting, one group; cancel clears the stash.
+  const [assignUid, setAssignUid] = useState<string | null>(() => {
+    try { return minutesOnly() ? localStorage.getItem("vexa.assignMeeting") : null; } catch { return null; }
+  });
+  const [assignDone, setAssignDone] = useState<string | null>(null);  // group display name after success
+  const assignTitle = (() => { try { return localStorage.getItem("vexa.assignMeetingTitle"); } catch { return null; } })();
+  const doAssign = async (wsId: string, display: string) => {
+    if (!assignUid) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/api/minutes/assign", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ uid: assignUid, workspaceId: wsId }) });
+      if (!r.ok) throw new Error(`assign failed (${r.status})`);
+      try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ }
+      setAssignUid(null); setAssignDone(display);
+    } catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+  const [confirmDelete, setConfirmDelete] = useState<null | { slug: string; display: string }>(null);
   const [sharedMemberships, setSharedMemberships] = useState<Membership[]>([]);  // ALL shared (incl switched-off)
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -507,6 +546,36 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
 
+  // MINUTES: a room is SELECTED, never composed. The multi-mount set is the terminal's model —
+  // in this product a meeting belongs to exactly one room, so picking one parks every other.
+  // Already-selected rooms are a no-op: there is no "no group at all" state to fall into.
+  const selectShared = async (wsId: string, mounted: boolean) => {
+    if (mounted) return;
+    setBusy(true); setErr(null);
+    try {
+      await setSharedActive(wsId, true);
+      for (const m of activeSet) if (m.slug !== wsId) { try { await deactivateWorkspace(m.slug); } catch { /* already parked */ } }
+      load(); onSwapped();
+    } catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+
+  const selectRoom = async (slug: string, mounted: boolean) => {
+    if (assignUid) {  // assign mode: the personal row is not a target — clicking it keeps the meeting personal
+      try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ }
+      setAssignUid(null);
+      return;
+    }
+    if (mounted) return;
+    setBusy(true); setErr(null);
+    try {
+      await activateWorkspace({ slug });
+      for (const m of activeSet) if (m.slug !== slug) { try { await deactivateWorkspace(m.slug); } catch { /* already parked */ } }
+      load(); onSwapped();
+    } catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+
   // ADD a repo to the mount set (additive — does NOT park the others), then re-load so its row shows mounted.
   const doAttach = async (repo: string, ref?: string, token?: string) => {
     setBusy(true); setErr(null);
@@ -518,6 +587,34 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // CREATE a brand-new BLANK workspace and ADD it to the mount set (additive — the "new workspace" list
   // action). NOT a swap: the private baseline and every other active workspace are left untouched (nothing
   // parked/rebuilt/backed up). The new row loads back CHECKED (it joined the active set).
+  // MINUTES: a room can be removed. Confirmed by name, never a bare icon click.
+  // A SHARED room is removed as its owner: unshare first (moves it into the private store and
+  // drops every member's index entry), then delete the returned private slug. A room that was
+  // never shared deletes directly.
+  const doDeleteRoom = async (slug: string) => {
+    setBusy(true); setErr(null);
+    try {
+      let target = slug;
+      try { const r = await unshareWorkspace(slug); target = (r as { slug?: string }).slug ?? slug; }
+      catch {
+        // Not shared (or already unshared by an earlier half-run). If no slot carries this slug,
+        // resolve by NAME against the attached slots — unshare renames the tree into the private
+        // store, and a retry after a mid-flight failure must find where it landed.
+        try {
+          const att = await readAttachedWorkspaces();
+          const slots = (att as { slots?: Record<string, { name?: string | null }> }).slots ?? {};
+          if (!(target in slots)) {
+            const byName = Object.entries(slots).find(([, v]) => (v?.name ?? "") === slug);
+            if (byName) target = byName[0];
+          }
+        } catch { /* resolution is best-effort; the delete below reports honestly */ }
+      }
+      await deleteWorkspace(target);
+      setConfirmDelete(null); load(); onSwapped();
+    } catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+
   const doNewWorkspace = async () => {
     setBusy(true); setErr(null);
     try { await createWorkspace(); load(); onSwapped(); }
@@ -561,6 +658,8 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   };
   // Delete one of your workspaces — irreversible (hard confirm).
   const doDelete = async (slug: string, display: string) => {
+    // MINUTES: removal is confirmed in the named modal (see confirmDelete), never a browser confirm.
+    if (minutesOnly()) { setConfirmDelete({ slug, display }); return; }
     if (typeof window !== "undefined" && !window.confirm(`Delete "${display}"? This permanently removes the workspace and all its data.`)) return;
     setBusy(true); setErr(null);
     try { await deleteWorkspace(slug); load(); onSwapped(); }
@@ -622,9 +721,22 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     <div style={{ paddingTop: 2 }}>
       <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <Icon name="folder" size={12} />workspaces
+        <Icon name="folder" size={12} />{minutesOnly() ? "groups" : "workspaces"}
       </div>
       {open && (<>
+        {assignUid && (
+          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--accent)", borderRadius: 6, color: "var(--t1)" }}>
+            <b>Assign {assignTitle ? `“${assignTitle}”` : "this meeting"} to a group</b> — click
+            the group below that should own it (and its series, if recurring).{" "}
+            <a onClick={(e) => { e.preventDefault(); try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ } setAssignUid(null); }}
+               style={{ cursor: "pointer", textDecoration: "underline" }}>Keep it personal</a>
+          </div>
+        )}
+        {assignDone && (
+          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--ok, #2e7d32)", borderRadius: 6, color: "var(--t1)" }}>
+            Assigned to <b>{assignDone}</b>. The group's minutes for this meeting are on their way.
+          </div>
+        )}
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
           // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
@@ -640,16 +752,27 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             <div key={slug}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
               onMouseEnter={(e) => { if (!isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              <Checkbox checked={mounted} disabled={busy}
-                onChange={() => void toggleActive(slug, mounted)}
-                title={toggleTitle} label={`${display} — ${mounted ? "mounted into the agent" : "available (parked)"}`} />
+              {minutesOnly() ? (
+                <span role="radio" aria-checked={mounted} tabIndex={0}
+                  onClick={() => void selectRoom(slug, mounted)}
+                  onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectRoom(slug, mounted); } }}
+                  title={mounted ? `${display} — the group you are in` : `Open ${display}`}
+                  aria-label={`${display} — ${mounted ? "the group you are in" : "open this group"}`}
+                  style={{ width: 14, height: 14, borderRadius: "50%", flex: "none", cursor: busy ? "default" : "pointer",
+                    border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`,
+                    background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
+              ) : (
+                <Checkbox checked={mounted} disabled={busy}
+                  onChange={() => void toggleActive(slug, mounted)}
+                  title={toggleTitle} label={`${display} — ${mounted ? "mounted into the agent" : "available (parked)"}`} />
+              )}
               {isRenaming ? (
                 <input autoFocus defaultValue={meta.name ?? ""} placeholder="display name" disabled={busy}
                   onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
                   onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
                   style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
               ) : (
-                <span onClick={() => !busy && openManage(slug, { name: display })}
+                <span onClick={() => assignUid ? void selectRoom(slug, false) : (!busy && openManage(slug, { name: display }))}
                   title="Open the manage panel (rename · on/off · GitHub · purpose · participants)"
                   style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: busy ? "default" : "pointer" }}>{display}</span>
               )}
@@ -669,13 +792,33 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             <div key={`shared:${wsId}`}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              <Checkbox checked={mounted} disabled={busy}
-                onChange={() => void toggleShared(wsId, !mounted)}
-                title={mounted ? "Mounted — uncheck to switch off (you stay a member)" : "Switched off — check to mount"}
-                label={`${wsId} — shared (${mem.role})`} />
-              <span onClick={() => openManage(wsId, { shared: true, name: wsId })}
+              {minutesOnly() ? (
+                <span role="radio" aria-checked={mounted} tabIndex={0}
+                  onClick={() => assignUid ? void doAssign(wsId, wsId) : void selectShared(wsId, mounted)}
+                  onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectShared(wsId, mounted); } }}
+                  title={mounted ? `${wsId} — the group you are in` : `Open ${wsId}`}
+                  aria-label={`${wsId} — shared group, ${mem.role}${mounted ? ", the group you are in" : ""}`}
+                  style={{ width: 14, height: 14, borderRadius: "50%", flex: "none", cursor: busy ? "default" : "pointer",
+                    border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`,
+                    background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
+              ) : (
+                <Checkbox checked={mounted} disabled={busy}
+                  onChange={() => void toggleShared(wsId, !mounted)}
+                  title={mounted ? "Mounted — uncheck to switch off (you stay a member)" : "Switched off — check to mount"}
+                  label={`${wsId} — shared (${mem.role})`} />
+              )}
+              <span onClick={() => assignUid ? void doAssign(wsId, wsId) : openManage(wsId, { shared: true, name: wsId })}
                 title="Open the manage panel (GitHub · purpose · participants)"
                 style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
+              {minutesOnly() && mem.role === "owner" && (
+                <span onClick={(e) => { e.stopPropagation(); setConfirmDelete({ slug: wsId, display: wsId }); }}
+                  title="Remove this group…" aria-label={`Remove ${wsId}`}
+                  style={{ display: "flex", cursor: "pointer", color: "var(--t3)", padding: "0 2px" }}
+                  onMouseEnter={(ev) => (ev.currentTarget.style.color = "var(--danger)")}
+                  onMouseLeave={(ev) => (ev.currentTarget.style.color = "var(--t3)")}>
+                  <Icon name="x" size={12} />
+                </span>
+              )}
               {/* Management (role · share · unshare · participants) lives in the manage panel opened by
                   the name — no per-row action icons. */}
             </div>
@@ -683,9 +826,33 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         })}
         {/* Attach repo is a LIST-LEVEL action; the FORM opens in a modal (portaled overlay) rather than
             expanding inline in the sidebar — see the Modal block below. */}
-        <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: minutesOnly() ? "none" : "flex", alignItems: "center", gap: 6 }}>
           <Icon name="plus" size={12} /> Attach repo…
         </div>
+        {/* MINUTES — room creation is a proactive conversation (roomOnboarding.tsx): the assistant
+            asks, classifies the use case from the person's own words, names the seed shape it picked,
+            and creates the room at the end. Nothing exists if the conversation is abandoned. */}
+        {roomWiz !== null && minutesOnly() && (
+          <RoomOnboarding onClose={() => setRoomWiz(null)} onCreated={() => { load(); onSwapped(); }} />
+        )}
+        {/* MINUTES — removing a room is confirmed by seeing its name, never a bare icon click. */}
+        {confirmDelete !== null && minutesOnly() && (
+          <Modal title="Remove this group?" onClose={() => setConfirmDelete(null)}>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <p style={{ fontSize: 13, color: "var(--t2)", margin: 0, lineHeight: 1.6 }}>
+                <b style={{ color: "var(--t1)" }}>{confirmDelete.display}</b> and everything it knows will be removed. Its members stop receiving extracts. Meetings already held keep their records.
+              </p>
+              <p style={{ fontSize: 12, color: "var(--t3)", margin: "9px 0 0", lineHeight: 1.55 }}>This cannot be undone.</p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+                <button disabled={busy} onClick={() => setConfirmDelete(null)}
+                  style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Keep it</button>
+                <button disabled={busy} onClick={() => void doDeleteRoom(confirmDelete.slug)}
+                  style={{ fontSize: 13, padding: "8px 16px", background: "var(--danger)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}>
+                  {busy ? "Removing…" : "Remove group"}</button>
+              </div>
+            </div>
+          </Modal>
+        )}
         {form !== null && (
           <Modal title="Attach a git repo" onClose={() => setForm(null)}>
             {(() => {
@@ -717,10 +884,12 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             leaves the baseline + every other workspace untouched. It lives alongside "+ Attach repo…" as
             the two ways to bring a new workspace into the set. No confirmation: creating a workspace is
             non-destructive. The new row appears CHECKED (it joined the active set). */}
-        <div onClick={() => { if (!busy) void doNewWorkspace(); }}
-          title="New workspace — create a blank workspace and add it to your set (nothing is replaced)"
+        <div onClick={() => { if (busy) return; if (minutesOnly()) setRoomWiz(true); else void doNewWorkspace(); }}
+          title={minutesOnly()
+            ? "New group — name it, say who belongs, then it is created"
+            : "New workspace — create a blank workspace and add it to your set (nothing is replaced)"}
           style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
-          <Icon name="plus" size={12} /> New workspace…
+          <Icon name="plus" size={12} /> {minutesOnly() ? "New group…" : "New workspace…"}
         </div>
         {/* SHARE dialog — mint an invite link (open/restricted · role · TTL) and copy it. */}
         {share !== null && (
@@ -873,7 +1042,7 @@ function GitSection() {
     <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
       <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <Icon name="zap" size={12} />source control
+        <Icon name="zap" size={12} />{minutesOnly() ? "recently in this group" : "source control"}
         {git.branch && <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{git.branch}</span>}
       </div>
       {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ git unavailable — {gitError}</div>}
@@ -1122,8 +1291,15 @@ function DocTab({ id, params }: TabProps) {
   );
 }
 
-// Agent surface — absent in meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings).
-if (!meetingsOnly()) {
-  registerList({ id: "files", label: "Knowledge", icon: "panel", order: 30, component: FilesList });
-  registerTab("doc", DocTab);
-}
+// The workspace is FIRST-CLASS in every shape — meetings mode included: the MCP-first viewer
+// shows meetings AND the knowledge the meetings produce. Only chat stays out. In MINUTES the
+// list is the product's primary navigation, named for what it holds: rooms — a room IS its
+// README. The doc TAB KIND is what composed deep-links (?view=file:...) open beside a meeting.
+registerList({
+  id: "files",
+  label: minutesOnly() ? "Groups" : "Knowledge",
+  icon: minutesOnly() ? "folder" : "panel",
+  order: minutesOnly() ? 10 : 30,
+  component: FilesList,
+});
+registerTab("doc", DocTab);

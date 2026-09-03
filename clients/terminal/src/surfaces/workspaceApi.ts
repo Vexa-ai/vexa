@@ -40,6 +40,16 @@ export async function archiveWorkspace(slug: string, archived: boolean): Promise
   });
 }
 
+/** WRITE one doc — the in-place page editor. Server enforces mount-rule authorization. */
+export async function writeWorkspaceFile(path: string, content: string, opts?: { slug?: string }): Promise<{ path: string; written: boolean }> {
+  return getJson(`/api/workspace/file`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content, slug: opts?.slug }) });
+}
+
+/** RESET a structural folder (personal baseline, or _global for admins) back to the seed. */
+export async function resetWorkspace(target: "personal" | "_global"): Promise<{ target: string; reset: boolean }> {
+  return getJson(`/api/workspace/reset`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }) });
+}
+
 /** DELETE one of your workspaces — removes the data irreversibly. */
 export async function deleteWorkspace(slug: string): Promise<{ slug: string; deleted: boolean }> {
   return getJson(`/api/workspace/${encodeURIComponent(slug)}`, { method: "DELETE" });
@@ -65,6 +75,52 @@ export interface ActiveSet { subject: string; active: ActiveMount[] }
  *  ones in `slots`, which are AVAILABLE to activate). The private baseline is first and always present. */
 export async function readActiveSet(): Promise<ActiveSet> {
   return getJson(`/api/workspace/active`);
+}
+
+// ── workspace identity + link resolution (PRD decision 26) ──────────────────────────────────────
+/** What a workspace IS, addressed by its immutable id. `access` is this reader's, not a property of
+ *  the workspace: `not-yours` and `gone` come back 200, because they are answers and not errors. */
+export interface WorkspaceIdentity {
+  id: string; name: string | null; kind: string | null; slug?: string | null;
+  access: "readable" | "not-yours" | "gone";
+}
+
+/** Resolve a workspace id → what it is now, for this reader. */
+export async function readWorkspaceById(id: string): Promise<WorkspaceIdentity> {
+  return getJson(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+/** Resolve a workspace SLUG → its identity, which is where its display NAME lives.
+ *  The whole of F49: the chat header printed `126`, a directory name showing through. */
+export async function readWorkspaceBySlug(slug: string): Promise<WorkspaceIdentity> {
+  return getJson(`/api/workspaces/by-slug/${encodeURIComponent(slug)}`);
+}
+
+export interface ResolvedLinkRow {
+  ref: string; title: string; url: string | null;
+  access: "readable" | "not-yours" | "gone";
+  workspace?: string | null; path?: string; slug?: string; missing?: boolean;
+}
+
+/** A page's worth of link refs → what each points at NOW. One round trip per document: the panel
+ *  renders a doc at once, and a request per link is a burst against the same three directories. */
+export async function resolveLinks(refs: string[], slug?: string): Promise<ResolvedLinkRow[]> {
+  const data = await getJson<{ results?: ResolvedLinkRow[] }>(`/api/links/resolve`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(slug ? { refs, slug } : { refs }),
+  });
+  return data.results ?? [];
+}
+
+/** Report that this reader OPENED one page — the ranking signal behind the desk README (founder,
+ *  2026-09-02: it is "mostly links to the other cards in different workspaces", and a list of links
+ *  is only useful if the ones they use are at the top). 202: the caller has nothing to do with the
+ *  answer, and a panel must never wait on bookkeeping to render a document. */
+export async function touchDeskPage(workspace: string, path: string): Promise<{ recorded: boolean }> {
+  return getJson(`/api/desk/touch`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace, path }),
+  });
 }
 
 // ── sharing (Lane M/Lane A): create a shared workspace, mint/redeem invites ──────────────────────
@@ -151,6 +207,13 @@ export async function mintTranscriptShare(opts: { platform: string; native_meeti
 
 /** Make one of YOUR workspaces shareable (promote a private one to shared if needed) → returns the
  *  shareable workspace_id. Lets ANY workspace be shared after creation — no share-vs-not at create time. */
+/** Set a workspace's PURPOSE line — the one-liner the mount preamble declares to the agent. */
+export async function setWorkspacePurpose(slug: string, purpose: string): Promise<{ purpose: string }> {
+  return getJson(`/api/workspace/purpose`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug, purpose }),
+  });
+}
+
 export async function shareEnableWorkspace(slug: string): Promise<{ workspace_id: string; promoted: boolean }> {
   return getJson(`/api/workspace/${encodeURIComponent(slug)}/share-enable`, { method: "POST" });
 }
@@ -353,4 +416,94 @@ export async function readWorkspaceGitDiff(opts: { sha: string; slug?: string; p
   if (opts.slug) qs.set("slug", opts.slug);
   if (opts.path) qs.set("path", opts.path);
   return getJson<GitDiff>(`/api/workspace/git/show?${qs.toString()}`);
+}
+
+// ── LOADING AN EXISTING REPO ("we already have our workspace on GitHub") ───────────────────────────
+//
+// Two lanes, one mechanic. A person's own desk swaps through `swapWorkspace` above; a GROUP workspace
+// goes through the routes below. They are separate routes only because the AUTHORIZATION differs — a
+// desk belongs to its subject, a group belongs to a member list, and replacing a group's tree is a
+// write, so the server refuses a viewer with 403.
+//
+// The credential model is deliberately NOT "paste a token". The primary path is a per-workspace
+// ed25519 DEPLOY KEY whose private half never leaves the server: we hand out our PUBLIC half, the
+// person adds it to THEIR repository, and nothing of theirs travels to us. The saved PAT
+// (`getGitToken`/`setGitToken`) stays as the fallback for `https://` remotes.
+
+/** What the server actually did — and `state` is the whole answer, in the server's own vocabulary:
+ *  `cloned` (fetched from the remote), `restored` (a copy was already here, swapped back to with no
+ *  re-clone) or `already attached` (nothing changed). `parked` names the tree set aside, which is what
+ *  makes the swap reversible. Callers must repeat these three back rather than collapsing them into
+ *  "done": a person deciding whether their data is where they think it is needs them told apart. */
+export interface SharedAttachResult {
+  workspace_id: string;
+  active: string;
+  repo: string | null;
+  ref: string | null;
+  attached: boolean;
+  cloned: boolean;
+  parked: string | null;
+  nested: boolean;
+  state: "cloned" | "restored" | "already attached";
+}
+
+/** A shared workspace's attachment view — what is mounted, what is parked and available to swap back
+ *  to, and where its GitHub home is. `credential` is a CAPABILITY line ("origin https://…, deploy key
+ *  set") — whether a credential exists and of what kind, NEVER its value; it is safe to render. */
+export interface SharedAttached {
+  workspace_id: string;
+  active: string | null;
+  slots: Record<string, WorkspaceSlot>;
+  home: { remote: string | null; url: string | null; branch: string | null; ahead: number; behind: number };
+  credential: string;
+}
+
+/** A workspace's deploy key, PUBLIC half only. `add_at` is GitHub's deploy-keys settings URL for the
+ *  repo and is null when no repo was named — surfaces must not invent one. `add_as` · `then` · `message`
+ *  are the server's own composed instruction; the GET (state-only) shape carries just `add_as`. */
+export interface DeployKey {
+  slug: string;
+  public_key: string | null;
+  fingerprint: string | null;
+  add_at?: string | null;
+  add_as: string;
+  then?: string;
+  message?: string;
+}
+
+/** Attach an existing git repo as a SHARED workspace's tree (contributor or owner — a viewer gets 403).
+ *  Park-and-clone like the desk swap: the current tree is kept and can be swapped back to by `slug` with
+ *  no re-clone. `token` is a one-off used server-side for this clone only and never stored (P15) — the
+ *  normal credential is the workspace's deploy key, which needs nothing passed here. */
+export async function attachSharedWorkspace(
+  workspaceId: string,
+  opts: { repo?: string; ref?: string; slug?: string; token?: string },
+): Promise<SharedAttachResult> {
+  return getJson(`/api/workspace/shared/${encodeURIComponent(workspaceId)}/attach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: opts.repo ?? null, ref: opts.ref ?? null, slug: opts.slug ?? null, token: opts.token ?? null }),
+  });
+}
+
+/** Read a shared workspace's attachment view. Any member may — it says WHAT is mounted, never a secret. */
+export async function readSharedAttached(workspaceId: string): Promise<SharedAttached> {
+  return getJson(`/api/workspace/shared/${encodeURIComponent(workspaceId)}/attached`);
+}
+
+/** Generate-or-return this workspace's deploy key and say where to add it. IDEMPOTENT by design: a
+ *  second call returns the SAME key, so a key the person already pasted into their repo is never
+ *  invalidated by clicking twice. Pass `repo` to get the exact GitHub settings URL back in `add_at`. */
+export async function ensureDeployKey(slug: string, repo?: string): Promise<DeployKey> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}/deploy-key`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: repo ?? null }),
+  });
+}
+
+/** This workspace's public deploy key, or `public_key: null` when none has been generated. A pure read:
+ *  it never creates one, so a surface can show the state before the person commits to anything. */
+export async function readDeployKey(slug: string): Promise<DeployKey> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}/deploy-key`);
 }
