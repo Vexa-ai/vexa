@@ -22,6 +22,16 @@ services:
     volumes:
       - ../../core/agent/control_plane:/app/control_plane
       - ../../core/agent/shared:/app/shared
+      # dev: live seeds (the baked copy predates flows/), and _global writable so /api/workspace/reset
+      # can reseed it (prod: k8s bakes _global differently; the endpoint stays allowlist-gated)
+      - ../../behavior/workspaces:/app/workspace-seeds
+      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:/workspaces/_global
+
+  admin-api:
+    # NOTE: no command override — admin_api.__main__ configures the DB before serving, which a bare
+    # uvicorn factory call skips. Bind-mounting the source is enough; restart to pick up an edit.
+    volumes:
+      - ../../core/identity/services/admin-api/src:/app/src
 
   runtime:
     command: ["uvicorn","runtime_kernel.api:app","--host","0.0.0.0","--port","8090","--reload","--reload-dir","/app/src","--timeout-graceful-shutdown","10"]

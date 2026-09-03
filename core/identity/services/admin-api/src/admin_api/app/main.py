@@ -25,10 +25,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_serializer, model_validator
+from sqlalchemy import delete, func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import APIToken, PlatformSetting, User
+from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
+                             Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 
@@ -222,7 +224,7 @@ class CalendarPatch(BaseModel):
 
 
 # ── model + transcription config (per-user prefs and the platform-wide defaults) ──
-# One vocabulary everywhere: a MODELS config is {mode, model, meeting_model, base_url, api_key}
+# One vocabulary everywhere: a MODELS config is {mode, model, base_url, api_key}
 # (mode "subscription" = the deployment's brokered credential — the mounted Claude Code
 # subscription or a deployment API key; mode "custom" = a user/operator-supplied
 # Anthropic-/OpenAI-compatible endpoint + key, e.g. a LiteLLM/OpenRouter gateway in front of an
@@ -232,12 +234,28 @@ class CalendarPatch(BaseModel):
 # resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
 # (dispatch/bot_spawn only override what is set here).
 MODEL_MODES = ("subscription", "custom")
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort")
+# extra_body: server-specific request fields the OpenAI dialect cannot express, as a JSON string.
+# Load-bearing for self-hosted vLLM/Qwen, which returns NO valid JSON unless thinking is disabled
+# via {"chat_template_kwargs": {"enable_thinking": false}} — without this field such an endpoint
+# could only be configured deployment-wide, never through BYOT.
+# effort: the claude-code reasoning-effort pin (low|medium|high|xhigh) — see ModelPrefsUpdate.
+# runner: WHICH HARNESS runs this subject's workspace turns (PRD decision 37). Stored here as an
+# opaque slug and never validated against a list — agent-api's `llm/registry.HARNESS_RUNNERS`
+# is the one authority on what a runner name means, and it drops an unknown one back to the
+# deployment default the way a non-allowlisted model is dropped. A second copy of that
+# vocabulary in this service would be a second thing to keep in step, and the copy that goes
+# stale is always the one furthest from the code that uses it.
+# The copilot's second model dial is deliberately absent — it went with the in-product
+# inference pipeline (PRD decision 34).
+_MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort", "runner")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
 # no secrets, admin-gated like the other keys.
-_SETUP_FIELDS = ("models", "transcription", "completed")
+# "global" is the HAND-OFF marker: the admin has left the wizard for the setup chat, and a reload
+# must resume there rather than throwing them back to step 1. It was missing from this tuple, and
+# the omission cost a live blocker on 2026-09-02 — see the write guard below for the whole story.
+_SETUP_FIELDS = ("models", "transcription", "completed", "global")
 # "diagnostics" carries the operator kill switches for capture-side telemetry. Today one field:
 # capture_signal — whether a spawned bot tees its raw captured-signal.v1 stream to durable storage
 # (the offline-replay fixture tape). It is the ONLY control-plane knob on fixture collection, and it
@@ -245,18 +263,56 @@ _SETUP_FIELDS = ("models", "transcription", "completed")
 # Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
 # default) because _validate_config_fields' one rulebook is string-only.
 _DIAGNOSTICS_FIELDS = ("capture_signal",)
+# "global_setup" is THE INSTANCE GATE (PRD S9 decision 17; founder 2026-09-02: "global needs to be
+# setup by admin, it just should not let him start the service before that"). `state` is "completed"
+# once an admin has written and committed the thin company layer into `_global`; ABSENT-OR-ANYTHING-
+# ELSE means missing, because this value is read FAIL-CLOSED by everything that can SEND. A fresh
+# instance, a cleared row and a half-written value therefore all mean the same thing: this Vexa
+# serves nobody yet. `company` is the company name the layer opens with -- evidence of WHAT was
+# accepted, never a second source of truth -- and `completed_at` is when. The only writer is
+# agent-api's verifier (POST /api/global/ready), which reads the files and the commit before it
+# flips anything: nothing may mark itself ready.
+_GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
 SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
-                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS}
+                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
+                "global_setup": _GLOBAL_SETUP_FIELDS}
+
+# One vocabulary for the gate, so no caller invents its own spelling of "not ready".
+GLOBAL_SETUP_COMPLETED = "completed"
+GLOBAL_SETUP_MISSING = "missing"
+
+# The one sentence a refused visitor sees, spelled once. Every service that refuses on this gate
+# quotes THIS wording; a paraphrase in one client is how a person learns to distrust the product.
+GATE_SENTENCE = "This Vexa is being set up by its administrator."
+
+
+def global_setup_state(value: dict) -> str:
+    """Read the gate out of the stored `global_setup` row -- FAIL-CLOSED.
+
+    Anything that is not exactly "completed" is "missing": an absent row, a cleared field, a typo,
+    a value half-written by a crashed run. The expensive direction of this decision is a flow
+    mailing strangers on behalf of a company nobody has described yet; the cheap direction is
+    showing an admin a wizard they have already finished."""
+    if isinstance(value, dict) and str(value.get("state", "")).strip() == GLOBAL_SETUP_COMPLETED:
+        return GLOBAL_SETUP_COMPLETED
+    return GLOBAL_SETUP_MISSING
 
 
 class ModelPrefsUpdate(BaseModel):
     """Partial update — only fields the caller SENDS change; an empty string clears a field."""
     mode: Optional[str] = None
     model: Optional[str] = None
-    meeting_model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    # extra_body was already in `_MODELS_FIELDS` — so the platform setting carried it and the
+    # effective-config resolution returned it — but it was NOT in this model, so no per-USER
+    # write could ever set it. A field that resolves and cannot be written is a field only the
+    # deployment has, silently. It is load-bearing for exactly the case per-user config exists
+    # for: a self-hosted vLLM/Qwen endpoint returns no valid JSON at all without
+    # {"chat_template_kwargs": {"enable_thinking": false}}.
+    extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
+    runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -373,7 +429,15 @@ def create_app() -> FastAPI:
               dependencies=[Depends(verify_admin_token)])
     async def create_user(user_in: UserCreate, response: Response,
                           db: AsyncSession = Depends(get_db)):
-        existing = (await db.execute(select(User).where(User.email == user_in.email))).scalars().first()
+        # CASE-FOLDED, like the sign-in lookup two hundred lines down (R-B08). An exact match
+        # here means `Anna.Smith@acme.com` does not find the account `anna.smith@acme.com`, so
+        # this route CREATES A SECOND ONE — a ghost with an empty desk that then receives the
+        # meeting report while the real account gets nothing. Email is case-insensitive in its
+        # domain and, in every provider we meet, in its local part too; one half of this service
+        # already knew that.
+        existing = (await db.execute(
+            select(User).where(func.lower(User.email) == user_in.email.lower())
+        )).scalars().first()
         if existing:
             response.status_code = status.HTTP_200_OK
             return UserResponse.model_validate(existing)
@@ -392,7 +456,12 @@ def create_app() -> FastAPI:
     @app.get("/admin/users/email/{email}", response_model=UserResponse,
              dependencies=[Depends(verify_admin_token)])
     async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
-        user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        # Case-folded (R-B08) — see `create_user`. This is the ASKING half of the same question,
+        # and the two disagreeing is what mints the ghost: flows asks here, is told "no such
+        # user", and creates one.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email.lower())
+        )).scalars().first()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return UserResponse.model_validate(user)
@@ -426,6 +495,75 @@ def create_app() -> FastAPI:
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
+
+    @app.put("/admin/users/{user_id}/models", dependencies=[Depends(verify_admin_token)])
+    async def set_user_models_as_admin(user_id: int, update: ModelPrefsUpdate,
+                                       db: AsyncSession = Depends(get_db)):
+        """Set ANOTHER user's model config — the admin-tier twin of ``PUT /user/models``.
+
+        The self-serve route takes the caller's own identity, which is exactly right for a person
+        editing their own Settings and exactly wrong for the one caller that has to bind a config
+        to somebody else: the rehearsal harness (PRD decision 38) pins a scratch subject under the
+        test domain to a runner and an endpoint, and it must be able to do that WITHOUT holding
+        that subject's credential and WITHOUT touching the deployment-wide platform setting, which
+        would change the model for every person on the instance.
+
+        Same validation, same partial semantics, same masking as the self-serve route — one
+        rulebook, two tiers. An empty string clears a field.
+        """
+        user = (await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        await _put_user_prefs(update.model_dump(exclude_unset=True), "model_prefs", user, db)
+        prefs = (user.data or {}).get("model_prefs") or {}
+        return {"mode": prefs.get("mode"), "model": prefs.get("model"),
+                "base_url": prefs.get("base_url"),
+                "effort": prefs.get("effort"), "runner": prefs.get("runner"),
+                "extra_body": prefs.get("extra_body"),
+                "api_key_set": bool(prefs.get("api_key")),
+                "api_key": _mask_secret(prefs.get("api_key"))}
+
+    @app.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(verify_admin_token)])
+    async def delete_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
+        """DELETE one person and everything keyed to them. Irreversible.
+
+        WHY IT HAS TO EXIST. There was no per-user delete anywhere in the product, so the only way
+        to remove somebody was `blank-instance.sh`, which deletes EVERY person on the stack — the
+        instrument for "reset one test subject" was a wipe of the whole instance. PRD decision 38.3
+        (`subject_reset`) is the caller that needs it: a state re-entered in seconds, the instance
+        never blanked.
+
+        IT DELETES EXPLICITLY, IN FK ORDER, because the cascade does not exist: `meetings.user_id`
+        is a plain Integer with no ForeignKey to `users`, so removing the row alone would leave
+        that person's meetings, sessions and transcripts behind, owned by an id that no longer
+        names anybody — the ghost-identity failure the rig hit on 2026-09-02, one layer down. The
+        order is the one `blank-instance.sh` documents: transcriptions → meeting_sessions →
+        meetings → api_tokens → the user.
+
+        It does NOT touch the workspace volume, redis, or the flows lanes: those stores belong to
+        other services, and a route that reached into them would be this service writing three
+        surfaces it does not own. `subject_reset` clears them through their own owners.
+        """
+        user = (await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        meeting_ids = [row[0] for row in (await db.execute(
+            select(Meeting.id).where(Meeting.user_id == user_id))).all()]
+        if meeting_ids:
+            await db.execute(delete(Transcription).where(
+                Transcription.meeting_id.in_(meeting_ids)))
+            await db.execute(delete(MeetingSession).where(
+                MeetingSession.meeting_id.in_(meeting_ids)))
+            await db.execute(delete(Meeting).where(Meeting.id.in_(meeting_ids)))
+        await db.execute(delete(APIToken).where(APIToken.user_id == user_id))
+        await db.delete(user)
+        await db.commit()
+        return None
 
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
               status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_admin_token)])
@@ -698,9 +836,9 @@ def create_app() -> FastAPI:
         return {
             "mode": prefs.get("mode"),
             "model": prefs.get("model"),
-            "meeting_model": prefs.get("meeting_model"),
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
+            "runner": prefs.get("runner"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }
@@ -824,10 +962,66 @@ def create_app() -> FastAPI:
         )).first()
         return row is not None
 
+    async def _instance_state(db: AsyncSession) -> dict:
+        """THE INSTANCE GATE, computed in exactly ONE place.
+
+        Every other service (the terminal, agent-api, the flows engine) reads the gate through one
+        of the two doors below -- never by reaching into platform_settings itself. One source of
+        truth, one reader function per service, is the whole design: a surface with two readers of
+        a lifecycle value does not error when they disagree, it just behaves differently in two
+        places and nobody can say which is right."""
+        row = await db.get(PlatformSetting, "global_setup")
+        value = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+        return {
+            "admin_exists": await _admin_exists(db),
+            "global_setup": global_setup_state(value),
+            "company": value.get("company") or None,
+        }
+
     @app.get("/internal/instance", include_in_schema=False)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
-        return {"admin_exists": await _admin_exists(db)}
+        return await _instance_state(db)
+
+    @app.get("/admin/instance", include_in_schema=False,
+             dependencies=[Depends(verify_admin_token)])
+    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
+        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
+        no internal secret (see flows_steps/common.py), so without this door it would have to infer
+        the gate from something else -- and a service that infers the gate IS a second source of
+        truth. Same body, same computation, different transport."""
+        return await _instance_state(db)
+
+    @app.post("/internal/signin-allowed", include_in_schema=False)
+    async def signin_allowed(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
+        """MAY THIS EMAIL SIGN IN RIGHT NOW? The company-layer gate's admission rule, decided HERE
+        because this service owns both halves of it -- `users.data.is_admin` and platform_settings.
+        The terminal asks one question instead of assembling the answer out of three reads it can
+        get wrong in three different ways.
+
+        While the gate is up the instance serves exactly one person:
+          * no admin yet -> allowed. The next sign-in IS the claim (first sign-in = admin), so
+            refusing here would make a fresh instance unclaimable -- a deadlock, not a gate.
+          * the admin    -> allowed. They are the one who has to finish the setup.
+          * anyone else  -> refused, in one sentence, and the caller must refuse BEFORE creating a
+            user row: an account minted for somebody who was never admitted is a ghost that later
+            reads as an adopted user.
+
+        Once the gate is down this answers True for everyone and is a formality."""
+        _check_internal(request)
+        email = str(payload.get("email") or "").strip().lower()
+        state = await _instance_state(db)
+        if state["global_setup"] == GLOBAL_SETUP_COMPLETED or not state["admin_exists"]:
+            return {"allowed": True, "reason": "", **state}
+        row = None
+        if email:
+            row = (await db.execute(
+                select(User).where(func.lower(User.email) == email).limit(1)
+            )).scalar_one_or_none()
+        data = row.data if row is not None and isinstance(row.data, dict) else {}
+        if data.get("is_admin") is True:
+            return {"allowed": True, "reason": "", **state}
+        return {"allowed": False, "reason": GATE_SENTENCE, **state}
 
     @app.post("/internal/bootstrap-admin", include_in_schema=False)
     async def bootstrap_admin(payload: dict, request: Request,
@@ -855,6 +1049,71 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         return {"claimed": True, "admin_exists": True}
+
+    # --- GET /internal/users/by-email/{email} → JUST the id, for the internal tier ---
+    # The post-meeting run mounts the desks of the people who were in the meeting, and it starts
+    # from the invite's ATTENDEE addresses. agent-api therefore has to turn an address into a
+    # subject, and until this route existed it had only two ways to do it, both wrong:
+    #
+    #   * `GET /admin/users/email/{email}`, which is gated by `verify_admin_token` — a credential
+    #     that can also CREATE and PATCH users. Handing agent-api an admin token so it can ask one
+    #     read-only question is a permanent over-grant for a temporary need.
+    #   * guessing the subject from a speaker's display name, which mounts the WRONG HUMAN'S desk.
+    #     Not a risk worth carrying at any price.
+    #
+    # So: the narrowest possible door. Same internal-secret tier the gateway's authz oracle already
+    # uses, and the response is ONLY the id. Never name, never email, never scopes, never `data` —
+    # the caller already knows the address it asked about, and everything else would be a new
+    # disclosure this question does not need. A route that answers exactly one question cannot be
+    # repurposed into a directory.
+    #
+    # 404 for an unknown address is deliberate and safe here: the caller is already inside the
+    # internal tier, so this leaks nothing to anyone who was not trusted with far more. The mount
+    # path treats it as "no subject yet — skip this desk", and the drop step creates it afterwards.
+    @app.get("/internal/users/by-email/{email}", include_in_schema=False)
+    async def internal_user_id_by_email(email: str, request: Request,
+                                        db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        # Case-folded (R-B08) — the mount path reads this one, so an exact match here silently
+        # drops a mixed-case signup out of every meeting room they are actually in.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email.lower())
+        )).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id}
+
+    @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
+    async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the
+        organisation tier read-write. It exists because the admin is CLAIMED at first sign-in — long
+        after any deployment env was written — so an env allow-list could never have been the
+        definition of who may rewrite how every agent in the company behaves."""
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        data = user.data if isinstance(user.data, dict) else {}
+        return {"user_id": user.id, "email": user.email, "is_admin": data.get("is_admin") is True}
+
+    @app.post("/internal/release-admin", include_in_schema=False)
+    async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
+        """RELEASE the admin role from a user so the next sign-in claims it again.
+
+        The counterpart of bootstrap-admin, and it exists for one honest reason: an instance whose
+        admin is a leftover TEST IDENTITY cannot rehearse first-run, and the alternative was hand
+        surgery on a jsonb column by whoever remembered the query. A named route is auditable; a
+        one-off UPDATE in somebody's shell is not. Internal-tier only, and it deliberately does NOT
+        delete the user or anything they own — role, and only role."""
+        from sqlalchemy.orm import attributes
+        _check_internal(request)
+        user = await _load_user(str(payload.get("user_id", "")), db, for_update=True)
+        data = dict(user.data or {})
+        had = data.pop("is_admin", None) is True
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return {"user_id": user.id, "email": user.email, "released": had,
+                "admin_exists": await _admin_exists(db)}
 
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
@@ -997,6 +1256,27 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
         update = {f: payload.get(f) for f in fields if f in payload}
+        # A WRITE THAT RECOGNISED NOTHING IS AN ERROR, not a no-op with a 200 on it.
+        #
+        # This filter silently drops any field not in `fields`. On 2026-09-02 the first-run wizard
+        # sent {"global": "handoff"} to record that the admin had left the wizard for the setup
+        # chat; "global" was not in _SETUP_FIELDS, so the write stored NOTHING and answered 200.
+        # The client had no way to know. On the next load the marker was absent, the wizard decided
+        # it was still at step 1, rendered its full-screen overlay INSTEAD of the workbench — so the
+        # chat it had just handed off to could never mount — and the admin was returned to the
+        # beginning. From the outside the button "did nothing"; underneath, every layer reported
+        # success. It cost the founder a live rehearsal.
+        #
+        # The lesson generalises past the missing tuple entry: an API that accepts a write, changes
+        # nothing, and says 200 is indistinguishable from one that worked, and no amount of care at
+        # the caller can detect it. So refuse. A partially-recognised write still succeeds (a client
+        # sending a known field plus noise is not the failure this catches); only a write where
+        # NOTHING was understood is refused, and the message names the keys and the vocabulary.
+        if payload and not update:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=(f"none of {sorted(payload)} is a field of '{key}'. "
+                        f"Known fields: {list(fields)}"))
         cleaned = _validate_config_fields(update, kind=key)
         row = await db.get(PlatformSetting, key)
         merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)

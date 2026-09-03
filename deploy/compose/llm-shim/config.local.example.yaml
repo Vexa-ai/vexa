@@ -1,0 +1,42 @@
+# LOCAL DEVELOPMENT ONLY — our own dev loop. Never a customer deployment.
+#
+# The key lives in the secret store, never here:
+#   make -C ~/dev/vexa-secrets openrouter          # set OPENROUTER_API_KEY
+#   export OPENROUTER_API_KEY=$(sops -d ~/dev/vexa-secrets/no-prod/openrouter.enc.env \
+#                               | grep '^OPENROUTER_API_KEY=' | cut -d= -f2-)
+#
+# Copy to config.local.yaml (gitignored) and run:
+#   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d llm-shim
+#
+# Primary is OUR inference box; the hosted gateway is a convenience so the dev stack keeps working
+# when that box is unreachable. A CUSTOMER deployment gets neither — it points at its own endpoint,
+# and a fallback that exports their meeting content to a third party is not a default we ship.
+model_list:
+  - model_name: local-model                     # primary: our own box, over an ssh tunnel
+    litellm_params:
+      model: os.environ/LLM_SHIM_MODEL
+      custom_llm_provider: hosted_vllm
+      api_base: http://host.docker.internal:8001/v1
+      api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false                # mandatory for this model; see README
+
+  - model_name: fallback                        # dev convenience only
+    litellm_params:
+      model: os.environ/LLM_SHIM_FALLBACK_MODEL
+      # The provider must be NAMED. Left to infer, LiteLLM reads the vendor off the model id
+      # ("anthropic/…" → the Anthropic provider), posts the wrong dialect to the wrong path, and
+      # OpenRouter replies with its marketing HTML — surfacing as an unreadable 500. And it has to
+      # be this field rather than an "openrouter/" prefix, because os.environ/ substitutes only as
+      # a WHOLE value: "openrouter/os.environ/NAME" is sent literally.
+      custom_llm_provider: openrouter
+      api_key: os.environ/OPENROUTER_API_KEY
+      # no extra_body: a hosted gateway neither needs nor accepts the thinking flag
+
+litellm_settings:
+  drop_params: true
+
+router_settings:
+  fallbacks:
+    - {"local-model": ["fallback"]}

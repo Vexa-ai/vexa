@@ -113,6 +113,13 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("PATCH", "/meetings/{platform}/{native_meeting_id}"): TX,
     ("DELETE", "/meetings/{platform}/{native_meeting_id}"): TX,
     ("PUT", "/meetings/{platform}/{native_meeting_id}/intent"): TX,
+    ("POST", "/meetings/{platform}/{native_meeting_id}/annotate"): TX,
+    # Minting a share is the same power on either address shape — the row id and the (platform,
+    # native) pair name the same meeting; only the pair cannot name all of them.
+    ("POST", "/meetings/{meeting_id}/share"): TX,
+    # Importing a transcript writes the caller's OWN meeting — the same plane as annotating or
+    # sharing it, addressed by the row id for the same reason (the pair is not an identity).
+    ("POST", "/meetings/{meeting_id}/transcript-import"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/workspace"): TX,
     # A participants read is meeting DATA, not bot control — same plane as the transcript it is
@@ -120,7 +127,9 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/meetings/{platform}/{native_meeting_id}/participants"): TX,
     # --- transcripts ---
     ("GET", "/transcripts/by-id/{meeting_id}"): TX,
+    ("GET", "/transcripts/search"): TX,
     ("GET", "/transcripts/{platform}/{native_meeting_id}"): TX,
+    ("POST", "/transcripts/by-id/{meeting_id}/share"): TX,
     ("POST", "/transcripts/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/transcripts/share/accept"): TX,
     # --- recordings (unchanged: the sealed table already accepted either domain) ---
@@ -274,6 +283,28 @@ def _required_scopes(request: Request) -> Optional[FrozenSet[str]]:
     return ROUTE_SCOPES.get((request.method.upper(), path))
 
 
+# ── the authority-header strip (F95) ─────────────────────────────────────────────
+# Downstream services trust a small vocabulary of headers as AUTHORITY: ``x-user-*`` is the identity
+# the gateway resolved from the api-key, ``x-internal-secret`` is the internal service tier (agent-api
+# ``_internal_caller``, admin-api ``_check_internal`` — the gate the meeting room calls its own trust
+# boundary), ``x-gateway-verified`` is the marker ``VEXA_REQUIRE_GATEWAY_IDENTITY`` looks for, and
+# ``x-admin-api-key`` is admin-api's privileged surface.
+#
+# NONE of them may arrive from a client. The strip used to be an eight-name list of ``x-user-*``
+# spellings, so ``x-internal-secret`` from the public edge reached agent-api and was believed — and
+# with the shipped compose default (a literal in a public repo) that was the internal tier, open to
+# any api-key holder. A LIST rots the moment a new authority header is added; a PREFIX rule does not,
+# which is why this matches by family and why every new internal header must be spelled into one.
+_AUTHORITY_HEADER_PREFIXES = ("x-user-", "x-internal-", "x-vexa-internal-")
+_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", "x-gateway-verified"})
+
+
+def _is_authority_header(name: str) -> bool:
+    """True for any header a downstream service reads as AUTHORITY — never forwarded from a client."""
+    name = name.lower()
+    return name in _AUTHORITY_HEADER_EXACT or name.startswith(_AUTHORITY_HEADER_PREFIXES)
+
+
 def _insufficient_scope_response() -> Response:
     return Response(
         content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
@@ -421,12 +452,12 @@ def create_app(
         )
 
         # Inject identity headers + forward the SAME trace_id downstream (main.py:322-326, 365).
-        # Strip any client-supplied identity headers first (anti-spoofing, main.py:294-296).
+        # Strip any client-supplied identity/authority headers first (anti-spoofing, main.py:294-296).
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-        for h in ("x-user-id", "x-user-email", "x-user-scopes", "x-user-limits", "x-user-workspaces",
-                  "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"):
-            headers.pop(h, None)
+        for h in list(headers):
+            if _is_authority_header(h):
+                headers.pop(h, None)
         headers["x-api-key"] = client_key
         headers["x-user-id"] = str(user_id)
         # The RESOLVED verified email (never client-declared; /internal/validate returns it). agent-api's
@@ -563,9 +594,22 @@ def create_app(
     # shape ({id, token, mode, expires_at}), NOT the sealed TranscriptShareResponse public-URL shape
     # ({share_id, url, expires_at, expires_in_seconds}) — the public-URL-share backend is gone; only
     # the capability-token share exists. See the PR's "signed gaps" section.
+    # by-ROW-id share alias, mirroring the `transcripts/by-id` read above so a client that knows a
+    # meeting only as a row id has one path shape for both. Declared BEFORE the {platform}/{native}
+    # form so `by-id` is not captured as a platform name.
+    @app.post("/transcripts/by-id/{meeting_id}/share")
+    async def mint_transcript_share_by_id_alias(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+
     @app.post("/transcripts/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+
+    # Declared BEFORE /transcripts/{platform}/... so `search` is matched as a literal, not
+    # captured as a platform name.
+    @app.get("/transcripts/search")
+    async def search_transcripts(request: Request):
+        return await _forward("GET", _meeting("/transcripts/search"), request)
 
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
@@ -631,6 +675,31 @@ def create_app(
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
     # Mint an INDEPENDENT transcript share link for a meeting (owner) — Lane A / M0.
+    # The caller's own description of a meeting — title + arbitrary metadata — writable in ANY
+    # status (meeting-api refuses nothing here; nothing in the dispatch pipeline reads it).
+    @app.post("/meetings/{platform}/{native_meeting_id}/annotate")
+    async def annotate_meeting(platform: str, native_meeting_id: str, request: Request):
+        return await _forward(
+            "POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/annotate"), request
+        )
+
+    # Mint by ROW id — the identity a meeting always has. The (platform, native) pair is not one: a
+    # row planned from an invite whose url matched no platform is platform='unknown' with an empty
+    # native, so the pair route below 404s on it and the caller (the attendee-mail fan-out) shipped
+    # links with no capability. Three segments against the pair route's four, so on segment count
+    # alone neither shadows the other — the same property the by-ROW-id notes above rely on. Same
+    # _forward, so the same auth/identity header prep (X-User-Id, X-User-Email, X-User-Workspaces).
+    @app.post("/meetings/{meeting_id}/share")
+    async def mint_transcript_share_by_id(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+
+    # Import a transcript into a meeting the caller owns — "this already happened, here are its
+    # words" — and complete it. Row-id addressed like the mint above; same _forward, so the same
+    # key→identity resolution (X-User-Id) the meeting-api route scopes on.
+    @app.post("/meetings/{meeting_id}/transcript-import")
+    async def import_meeting_transcript(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/transcript-import"), request)
+
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)

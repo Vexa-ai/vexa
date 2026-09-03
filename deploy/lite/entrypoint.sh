@@ -36,7 +36,13 @@ export DB_PASSWORD="${DB_PASSWORD:-postgres}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
 export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-changeme}}"
-export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-lite-internal-secret}"
+# The internal tier. lite is ONE container, so every service that shares this secret shares this
+# process's environment — which means the fallback can be MINTED per boot instead of shipped as
+# a literal. `lite-internal-secret` was published in this repository and was the exact value
+# agent-api's _internal_caller compared against, so anyone who could reach the port was the
+# internal tier (F95). A random per-boot value keeps the one-command quickstart working and is
+# nobody's to guess; set INTERNAL_API_SECRET explicitly when something outside talks in.
+export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
 
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
@@ -85,11 +91,15 @@ export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
-export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
-# INSIDE this lite container (mount it in, e.g. -v ~/.claude/.credentials.json:/claude-creds.json:ro
-# and set HOST_CLAUDE_CREDENTIALS=/claude-creds.json). Lite's runtime uses the process backend, so
-# the worker reads the file directly; the runtime's config.v1 file probe verifies it on /health.
+# INSIDE this lite container. Mount the DIRECTORY, not the file — `make up` does
+#   -v ~/.claude:/var/lib/vexa/host-claude:ro
+#   -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json
+# because a single-FILE bind is pinned to the inode it was created with, and the claude CLI
+# refreshes an expiring token by rename(2)-ing a NEW inode over .credentials.json: a long-lived
+# container then serves the pre-refresh token until it is restarted. Lite's runtime uses the
+# process backend, so the worker reads the file directly; the runtime's config.v1 file probe
+# verifies it on /health.
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
 export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"

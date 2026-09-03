@@ -1,0 +1,166 @@
+{{- if .Values.flows.enabled }}
+# Vexa Minutes — the flows tier: reaction engine (worker), mail integration
+# (mailbox) and the management API. Behavior (prompts + flow definitions) is
+# data: baked showcase ships in the image; live iteration happens through the
+# flows API (flow versions are rows, hot-loaded by the worker within ~10s).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows") }}
+type: Opaque
+stringData:
+  VEXA_MAIL_ADDR: {{ .Values.flows.mail.address | quote }}
+  VEXA_MAIL_APP_PASSWORD: {{ .Values.flows.mail.appPassword | quote }}
+  # the inbound intake's authorization + ceilings (R-B12) — see values.yaml for what empty means
+  VEXA_FLOWS_MAIL_DOMAINS: {{ .Values.flows.mail.domains | quote }}
+  VEXA_FLOWS_MAIL_QUARANTINE_REPLY: {{ .Values.flows.mail.quarantineReply | quote }}
+  VEXA_FLOWS_MAIL_RATE_PER_SENDER: {{ .Values.flows.mailRate.perSender | quote }}
+  VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
+  VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
+  VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
+  VEXA_FLOWS_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.componentName" (list . "postgres") }}:{{ .Values.postgres.service.port }}/flows"
+  ADMIN_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.componentName" (list . "postgres") }}:{{ .Values.postgres.service.port }}/postgres"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows-worker") }}
+  labels: {app.kubernetes.io/component: flows-worker}
+spec:
+  replicas: {{ .Values.flows.workerReplicas }}
+  selector:
+    matchLabels: {app.kubernetes.io/component: flows-worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: flows-worker}
+    spec:
+      initContainers:
+        - name: ensure-db
+          image: {{ .Values.flows.image | quote }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              from sqlalchemy import create_engine, text
+              e = create_engine(os.environ["ADMIN_DB_URL"], isolation_level="AUTOCOMMIT")
+              with e.connect() as c:
+                  if not c.execute(text("SELECT 1 FROM pg_database WHERE datname='flows'")).first():
+                      c.execute(text("CREATE DATABASE flows"))
+                      print("created database flows")
+          envFrom:
+            - secretRef:
+                name: {{ include "vexa.componentName" (list . "flows") }}
+      containers:
+        - name: flows-worker
+          image: {{ .Values.flows.image | quote }}
+          command: ["python", "-m", "flows_worker"]
+          envFrom:
+            - secretRef:
+                name: {{ include "vexa.componentName" (list . "flows") }}
+          env:
+            - name: VEXA_FLOWS_GATEWAY_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            - name: VEXA_FLOWS_AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            - name: VEXA_FLOWS_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            # THE TERMINAL'S PUBLIC ORIGIN — required now, because it goes into every link this
+            # deployment mails. It used to default to a localhost port, which is a dead button in
+            # every deployment that is not a laptop. `terminal.publicUrl` when an ingress fronts
+            # it; the in-cluster service otherwise, which is at least reachable from inside.
+            - name: VEXA_UI_URL
+              value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
+            - name: VEXA_FLOWS_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows-mailbox") }}
+  labels: {app.kubernetes.io/component: flows-mailbox}
+spec:
+  replicas: 1   # the IMAP cursor is single-writer by design
+  selector:
+    matchLabels: {app.kubernetes.io/component: flows-mailbox}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: flows-mailbox}
+    spec:
+      containers:
+        - name: flows-mailbox
+          image: {{ .Values.flows.image | quote }}
+          command: ["python", "-m", "flows_integrations.mailbox"]
+          envFrom:
+            - secretRef:
+                name: {{ include "vexa.componentName" (list . "flows") }}
+          # THE MAILBOX ASKS ADMIN-API WHO A SENDER IS, and it had no way to reach it: this pod
+          # took only the secret, so `ADMIN_API` fell back to its localhost default and every
+          # lookup failed. Harmless while an unknown sender was onboarded anyway; load-bearing
+          # now, because "is this address already a user?" is the first half of the intake's
+          # authorization decision (R-B12) — a known user outside the domain would otherwise be
+          # quarantined on a lookup that never reached anything.
+          env:
+            - name: VEXA_FLOWS_GATEWAY_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            - name: VEXA_FLOWS_AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            - name: VEXA_FLOWS_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            # THE TERMINAL'S PUBLIC ORIGIN — required now, because it goes into every link this
+            # deployment mails. It used to default to a localhost port, which is a dead button in
+            # every deployment that is not a laptop. `terminal.publicUrl` when an ingress fronts
+            # it; the in-cluster service otherwise, which is at least reachable from inside.
+            - name: VEXA_UI_URL
+              value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
+            - name: VEXA_FLOWS_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows-api") }}
+  labels: {app.kubernetes.io/component: flows-api}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: flows-api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: flows-api}
+    spec:
+      containers:
+        - name: flows-api
+          image: {{ .Values.flows.image | quote }}
+          command: ["python", "-m", "flows_integrations.flows_api"]
+          ports:
+            - containerPort: 18200
+          envFrom:
+            - secretRef:
+                name: {{ include "vexa.componentName" (list . "flows") }}
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows-api") }}
+spec:
+  selector: {app.kubernetes.io/component: flows-api}
+  ports:
+    - name: http
+      port: 18200
+      targetPort: 18200
+{{- end }}

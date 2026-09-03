@@ -193,7 +193,7 @@ _bot_check:
 _creds_check:
 	@_envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	 stt=1; [ -n "$$(_envv TRANSCRIPTION_SERVICE_URL)" ] && [ -n "$$(_envv TRANSCRIPTION_SERVICE_TOKEN)" ] && stt=0; \
-	 model=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN VEXA_LLM_API_KEY HOST_CLAUDE_CREDENTIALS; do \
+	 model=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN HOST_CLAUDE_CREDENTIALS; do \
 	   [ -n "$$(_envv $$k)" ] && model=0; done; \
 	 if [ $$stt -eq 1 ] || [ $$model -eq 1 ]; then \
 	   echo ""; \
@@ -209,7 +209,7 @@ _creds_check:
 	   if [ $$model -eq 1 ]; then \
 	     echo "  ⚠️  no model credential is configured — agent chat will refuse to run."; \
 	     echo "      Set ONE of CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY,"; \
-	     echo "      ANTHROPIC_AUTH_TOKEN, VEXA_LLM_API_KEY or HOST_CLAUDE_CREDENTIALS"; \
+	     echo "      ANTHROPIC_AUTH_TOKEN or HOST_CLAUDE_CREDENTIALS"; \
 	     echo "      in .env, then: make all — or configure Settings → Models in the UI."; \
 	   fi; \
 	   echo "═══════════════════════════════════════════════════════════"; \
@@ -238,7 +238,7 @@ _access:
 	 else echo "    API key     : admin-api not ready — mint later with:"; \
 	      echo "                  make -s provision-token ADMIN_TOKEN=<your ADMIN_TOKEN>"; fi; \
 	 STT=1; [ -n "$$(_envv TRANSCRIPTION_SERVICE_URL)" ] && [ -n "$$(_envv TRANSCRIPTION_SERVICE_TOKEN)" ] && STT=0; \
-	 MODEL=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN VEXA_LLM_API_KEY HOST_CLAUDE_CREDENTIALS; do \
+	 MODEL=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN HOST_CLAUDE_CREDENTIALS; do \
 	   [ -n "$$(_envv $$k)" ] && MODEL=0; done; \
 	 if [ $$STT -eq 1 ]; then echo "    ⚠ transcription: not configured — bots record, NO transcript"; fi; \
 	 if [ $$MODEL -eq 1 ]; then echo "    ⚠ agent chat  : no model credential — chat will refuse"; fi; \

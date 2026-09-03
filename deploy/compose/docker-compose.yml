@@ -100,7 +100,7 @@ services:
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
@@ -140,6 +140,11 @@ services:
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
       - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
+      # THE MODEL EVERY SPAWNED WORKER RUNS (decision 36, founder: "let's move to sonnet"). Unset =
+      # the CLI's own default, which on 2.1.197 is `claude-opus-4-8[1m]` — measured, not assumed.
+      # Set it here and the runtime forwards it into each spawned worker (docker_backend's forward
+      # list); ROLLBACK is to unset it and recreate the runtime.
+      - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       # Optional low-latency tuning for the Google Meet speaker-stream pipeline. Empty values keep
       # the bot defaults; runtime forwards configured values to spawned bot containers.
       - BOT_ALONE_SILENCE_WINDOW_MS=${BOT_ALONE_SILENCE_WINDOW_MS:-}
@@ -153,6 +158,17 @@ services:
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      # The DIRECTORY holding it (~/.claude). Same credential, inode-stable delivery — see the
+      # volumes: block below and .env.example. The docker backend derives the worker's credential
+      # bind from this when HOST_CLAUDE_CREDENTIALS is unset.
+      - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
+      - HOST_CODEX_CREDENTIALS=${HOST_CODEX_CREDENTIALS:-}
+      - VEXA_MIDTURN_INJECT=${VEXA_MIDTURN_INJECT:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
+      # Subscription OAuth as ENV (the twin of the credentials-file mount): `claude setup-token`
+      # output. Dispatch forwards it to workers via MODEL_AUTH_ENV_ALLOWLIST when set.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL now come from env_file (above), NOT environment: — an
       # `environment:` ${VAR} entry interpolates the AMBIENT SHELL first and silently shadowed .env (prod 401).
@@ -160,19 +176,38 @@ services:
       - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
       # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mirror of HOST_CLAUDE_CREDENTIALS (a DOCKER-HOST path — see .env.example) into THIS container,
-      # so the config.v1 `model_inference` file probe can verify the host file actually exists before
-      # any worker spawns: docker bind-mounts a MISSING host path as an empty DIRECTORY, which is how
-      # a bad path becomes 'Model inference failed: Not logged in' inside the worker. /dev/null when
-      # unset (the probe is skipped then — an ANTHROPIC_* key may be the credential path instead).
+      # THE CREDENTIAL MIRROR, TWO SHAPES. The probe reads the DIRECTORY one first (config.v1
+      # `model_inference` fallback_paths) and only falls back to the file.
+      #
+      #   ~/.claude          → /var/lib/vexa/host-claude:ro              ← use this one
+      #   ~/.claude/.credentials.json → /var/lib/vexa/host-claude-credentials:ro   ← legacy
+      #
+      # WHY THE DIRECTORY: a single-FILE bind is resolved once, at container create, and pinned to
+      # that INODE. The claude CLI refreshes an expiring OAuth token by writing a temp file and
+      # rename(2)-ing it over .credentials.json — a new inode — so a LONG-LIVED container keeps
+      # reading the pre-refresh token until it is recreated. That is 32h of dead agents on the
+      # dogfood stack (2026-08-31 → 09-01): `claude` worked fine on the host the whole time.
+      # A directory bind tracks the directory and resolves the filename live, so the refresh is
+      # visible immediately. Spawned workers were never affected (a fresh bind per container).
+      #
+      # The file mount is KEPT so deployments that only set HOST_CLAUDE_CREDENTIALS keep working;
+      # it is simply second in line. /dev/null when unset — the probe skips then (an ANTHROPIC_*
+      # key may be the credential path instead), and a MISSING host path would otherwise arrive as
+      # an empty DIRECTORY, which is the 'Model inference failed: Not logged in' signature the
+      # probe exists to catch.
+      - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
+      - ${HOST_CODEX_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-codex-credentials:ro
+      # The _global org tier: bound at the SAME path inside this container so the control plane's
+      # exists()-check and the worker's host-side bind agree on one path string.
+      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global}:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health').status==200 else 1)"]
       interval: 10s
@@ -223,18 +258,49 @@ services:
       # How the runtime's scheduler reaches this service's /invocations sink when a routine fires (MVP2).
       - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
+      # What GET /api/version reports, and what the terminal's reload bar compares against. It is a
+      # property of the CONTAINER, not of the source tree — an image knows nothing about the repo it
+      # was built from — so the deployment stamps it. Defaults to the image tag, which is right for a
+      # plain `up -d`; the blue/green deploy sets it explicitly to the tag it is rolling out.
+      # Unset reads as "unknown" and the bar simply never fires (PRD decision 39).
+      - VEXA_BUILD_SHA=${VEXA_BUILD_SHA:-${IMAGE_TAG:-dev}}
       - VEXA_WORKSPACES_DIR=/workspaces
+      # THE CREDENTIAL STORE'S KEY, and the profile that decides whether it may be absent (R-E08).
+      # `secret_store` seals saved PATs and per-workspace deploy-key private halves. With no key it
+      # GENERATES one under `<workspaces>/.secrets/`, beside the ciphertext it seals — which defends
+      # a stray read and not a stolen volume or a backup, and the module has always said so. It was
+      # settable nowhere, so no deployment ever set it and every deployment quietly took the weaker
+      # property. Mint one (`openssl rand -hex 32`) to hold the key outside the data volume.
+      #
+      # VEXA_ENV is the same profile word the mcp and transcription services already read: unset or
+      # anything but `production` keeps the generated key (with a warning on every boot that needs
+      # it); `production` makes an unset VEXA_SECRETS_KEY a refusal naming the fix.
+      - VEXA_SECRETS_KEY=${VEXA_SECRETS_KEY:-}
+      - VEXA_ENV=${VEXA_ENV:-development}
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001
-      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # The post-meeting room resolves a participant's email to a subject through admin-api. There
+      # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
+      # GET /admin/users/email/{email} sits behind this much broader credential, which can also
+      # create and patch users. So it is DELIBERATELY EMPTY BY DEFAULT: unset, the room resolves no
+      # participant and mounts zero desks, which is the safe degradation. It never falls back to
+      # matching a person by name. Delete this once admin-api serves
+      # GET /internal/users/by-email/{email} returning only {id} — agent-api already prefers it.
+      - VEXA_ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
+      # Read-only DSN for the meetings database, for ONE question: which meetings is this address
+      # invited to (data.attendees). Only the invite record knows somebody was invited before they
+      # ever signed in, which is the case a first visit is. Unset, the first-visit opening simply
+      # says nothing about meetings — it never asserts there are none. Goes away when meeting-api
+      # serves an invited-by-address route and agent-api stops holding a second DB credential.
+      - VEXA_MEETINGS_DB_URL=${MEETINGS_DB_URL:-}
       # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
       # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
       # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
       # agent-api and X-User-Id is always present — then a missing header fails closed (401).
       - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
-      - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
       # `environment:` entry interpolates the AMBIENT SHELL first, so a host `export ANTHROPIC_BASE_URL`
@@ -250,23 +316,48 @@ services:
       # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
-      # READ-ONLY into every worker (behaviour/skills/tools). Empty = no _global mount (mount-when-present);
-      # REF pins it to a branch/tag/sha for safe rollout, empty = HEAD.
+      # into every worker (behaviour/skills/tools). This path is required for agent dispatch; REF pins it
+      # to a branch/tag/sha for safe rollout, empty = HEAD.
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
+      - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
+      # The AUTHENTICATED vexa-control MCP a chat worker gets. agent-api mints a short-lived, scoped,
+      # revocable delegation token per dispatch and the MCP verifies it with the same secret — so a
+      # worker never holds a durable user credential. Both unset ⇒ no MCP is attached (default).
+      - VEXA_MCP_URL=${VEXA_MCP_URL:-}
+      - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
+      # THE SCAFFOLD's link origin (PRD §5.5). The SAME variable the flows lane reads, on purpose:
+      # one deployment fact, one name. Unset, POST /internal/scaffolds refuses to mint rather than
+      # handing a step a url with no origin — every deeplink the rig ever minted pointed at a port
+      # nothing serves because this variable was set NOWHERE (PRD §3.3), and that failure is only
+      # visible at the click unless the mint refuses.
+      - VEXA_UI_URL=${VEXA_UI_URL:-}
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # The credential is MOUNTED below, but the capability oracle reads this env to know a
+      # subscription path is CONFIGURED at all. Without the pair, a correctly-mounted credential
+      # reports "No model credentials are configured" and the turn is refused before dispatch
+      # (found by dogfooding 2026-08-30).
+      - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
     volumes:
       # The Workspace store backing (dev): the worker mounts the subject's subdir; agent-api reads the tree.
       - agent-workspaces:/workspaces
       # Settings → Models "Test" button: /api/models/test inspects the SAME subscription credential
-      # file the runtime brokers into workers (existence + expiry check — surfaces the stale-Keychain
-      # 401 with its remedy instead of failing the next chat turn). /dev/null when unset, same
-      # convention as the runtime's probe mount.
+      # the runtime brokers into workers (existence + expiry check — surfaces the stale-Keychain
+      # 401 with its remedy instead of failing the next chat turn). Both shapes, DIRECTORY first —
+      # see the runtime service above for why the single-file bind goes stale on a token refresh
+      # (inode pinning) and why this surface then reports a live token as expired. /dev/null when
+      # unset, same convention as the runtime's probe mount.
+      - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
+      # _global org tier at its HOST path — the control plane's exists() check runs here —
+      # AND at /workspaces/_global so the terminal's workspace-file API can read the org page.
+      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global2}:ro
+      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:/workspaces/_global:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s
@@ -298,7 +389,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -382,7 +473,7 @@ services:
       # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
       - MCP_URL=http://mcp:8010
       - REDIS_URL=redis://redis:6379/0
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -435,6 +526,21 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:8000
       - PORT=8010
+      # ── assembly (PRD decision 40) ─────────────────────────────────────────────────────────
+      # The domains this deployment carries. A domain whose URL is set is ASKED for its tool
+      # manifest at /.well-known/mcp-tools.json and its tools join the one MCP surface; a domain
+      # whose URL is unset is never asked and its tools are simply absent. That is the whole of the
+      # eight-configuration story — identity plus any subset of meetings, flows and agent — and it
+      # needs no profile name, because a profile name would be a second place to say what these
+      # URLs already say.
+      - ADMIN_API_URL=http://admin-api:8001
+      - MEETING_API_URL=http://meeting-api:8080
+      - AGENT_API_URL=${AGENT_API_URL:-}
+      - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      # A private deployment mounts its own manifests here — billing, seats, entitlement — and they
+      # are assembled exactly like the OSS ones, competing for names in the same space so a mount
+      # can collide but never shadow. EMPTY IS THE OSS PRODUCT, exactly.
+      - VEXA_MCP_MANIFEST_DIR=${VEXA_MCP_MANIFEST_DIR:-}
       - VEXA_ENV=${VEXA_ENV:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
@@ -481,10 +587,14 @@ services:
         # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
         NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
         # Terminal mode, baked at build time (NEXT_PUBLIC_* — see clients/terminal/src/app/mode.ts).
-        # "meetings" = meetings-only terminal: only the meetings list + meeting/canvas tabs + the
-        # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
-        # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
-        # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
+        # "meetings" = meetings-only terminal; "minutes" = the minutes terminal; empty = the full
+        # default. WIRED, not commented out (F67): while this line was a comment the ONLY way to
+        # build a non-default variant was a direct `docker build --build-arg`, so `docker compose
+        # build terminal` silently produced the default one — which is exactly what shipped under a
+        # `-minutes` tag on 2026-09-02. Set TERMINAL_MODE in .env (or in the environment) and
+        # rebuild; the resulting image carries `ai.vexa.terminal.mode`, and the swap guard reads
+        # that label rather than trusting the tag.
+        NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-}
         # Bot display name baked into the bundle. Leave commented: the terminal then omits bot_name and
         # meeting-api's DEFAULT_BOT_NAME (above) names the bot at runtime, renameable with a restart.
         # Uncomment + REBUILD only to pin a name into the image, which then wins over DEFAULT_BOT_NAME:
@@ -511,7 +621,7 @@ services:
       # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
       # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
       - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
-      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # Declared self-hosted Jitsi hostnames — served to the client link parser
       # (/api/meeting/jitsi-hosts) so pasted links on these hosts are recognized in the UI,
       # matching meeting-api's and mcp's parsers (same setting).
@@ -560,6 +670,46 @@ services:
   # floating outside all of them. Start it explicitly:
   #     docker compose --profile dashboard up -d
   # Deprecation exit: when the Terminal covers the flows above, this block is deleted, not ported.
+  # ─── The Anthropic front door (opt-in) ────────────────────────────────────────────────────────
+  # The workspace agent's harness speaks the ANTHROPIC dialect (/v1/messages); self-hosted model
+  # servers (vLLM, Ollama, llama.cpp) speak only the OPENAI dialect (/v1/chat/completions). Hosted
+  # gateways such as OpenRouter serve both, so they need nothing here. This service is the missing
+  # front door for a deployment running its OWN model — the whole product on your own hardware,
+  # with no traffic leaving the estate.
+  #
+  # OFF by default: most deployments point at an endpoint that already serves both dialects.
+  #     docker compose --profile llm-shim up -d llm-shim
+  # See ./llm-shim/README.md — especially the extra_body block, load-bearing for a Qwen upstream.
+  llm-shim:
+    profiles: ["llm-shim"]
+    # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
+    # dialects move. Bump it on purpose, never implicitly.
+    image: ${LLM_SHIM_IMAGE:-litellm/litellm:main-v1.97.0}
+    networks: [vexa]     # MUST match the stack: on the default network the agent cannot resolve it
+    ports:
+      - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
+    volumes:
+      - ${LLM_SHIM_CONFIG:-./llm-shim/config.yaml}:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      - LLM_SHIM_MODEL=${LLM_SHIM_MODEL:-local-model}
+      - LLM_SHIM_UPSTREAM=${LLM_SHIM_UPSTREAM:-http://host.docker.internal:8899/v1}
+      - LLM_SHIM_UPSTREAM_KEY=${LLM_SHIM_UPSTREAM_KEY:-none}
+      # A deployment may override the whole shim config with its own file:
+      #   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d
+      # Consumed only by that local file's fallback leg; empty (and unused) in a shipped deployment.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - LLM_SHIM_FALLBACK_MODEL=${LLM_SHIM_FALLBACK_MODEL:-google/gemini-2.5-flash-lite}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so an endpoint on the HOST is reachable from here
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
   dashboard:
     profiles: ["dashboard"]
     image: ${DASHBOARD_IMAGE:-vexaai/dashboard:0.10.6.3.14}

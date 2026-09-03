@@ -35,6 +35,11 @@ GPU_RESOURCE = "nvidia.com/gpu"
 # the runtime itself is allowed to run.
 TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
 NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
+# File-shaped credentials for spawned workloads (the twin of dispatch's MODEL_AUTH_ENV_ALLOWLIST,
+# which covers env-shaped ones): some harnesses read a credential FILE (codex: ~/.codex/auth.json),
+# and a bare `kubectl run` Pod inherits no mounts. JSON array of {"secret": <name>, "mountPath": <dir>}.
+# Mounted read-only — a token refresh cannot persist, so keep the Secret fresh operator-side.
+SECRET_MOUNTS_ENV = "RUNTIME_K8S_SECRET_MOUNTS"  # JSON array of {secret, mountPath}
 
 
 def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
@@ -62,7 +67,8 @@ def _runtime_scheduling_env() -> dict[str, str]:
     Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
     carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
     an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
-    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV) if os.environ.get(k)}
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV)
+            if os.environ.get(k)}
 
 
 def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -102,12 +108,37 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
+    # credential files go to AGENT WORKERS only (a dispatch env carries VEXA_UNIT_ID); a meeting
+    # bot never needs a model credential and must not carry one
+    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if env.get("VEXA_UNIT_ID") else None
+    for i, sm in enumerate(secret_mounts or ()):
+        if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
+            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
+        name = f"cred-{i}-{sm['secret']}"[:63].rstrip("-")
+        volumes.append({"name": name, "secret": {"secretName": sm["secret"]}})
+        mount = {"name": name, "mountPath": sm["mountPath"], "readOnly": True}
+        if sm.get("file"):
+            # single-FILE mount (subPath): the surrounding directory stays writable — required by
+            # harnesses that treat their config dir as state (codex: sqlite under ~/.codex);
+            # mountPath is then the file's full path and `file` is the Secret key
+            mount["subPath"] = sm["file"]
+        volume_mounts.append(mount)
     if not volumes and not tolerations and not node_selector:
         return None
     # ``containers`` is emitted ONLY when volumeMounts force it (the workspace-store seam);
     # pod-level fields (tolerations/nodeSelector) shape the Pod without touching the list. Keeping
     # the overlay minimal is what lets ``build_pod`` merge it BY CONTAINER NAME onto the generated
     # container instead of replacing it.
+    #
+    # Why the merge has to be OURS (the failure this minimal shape is only safe against because
+    # ``build_pod`` exists): ``kubectl run --overrides`` merges the containers LIST by replacement
+    # (json-merge, not strategic), so a partial containers entry under that path wipes the generated
+    # container — image, env, command — and the API server rejects the Pod
+    # (`spec.containers[0].image: Required value`), killing the spawn instantly. Proven live
+    # 2026-08-23: the volumeMounts-only entry here was rejected by the API server on the first real
+    # agent-worker spawn on k8s (bots never mount, so the M2 bot proof never exercised it). The
+    # answer was briefly to emit the COMPLETE container here; owning the whole Pod object in
+    # ``build_pod`` replaced that workaround and let the overlay go back to being minimal.
     spec: dict = {}
     if volume_mounts:
         spec["containers"] = [{"name": container_name, "volumeMounts": volume_mounts}]

@@ -27,6 +27,11 @@ when the cached result is older than the probe's ``ttl_s``. This is what turns t
 token and the absent claude-credentials mount into a visible ``misconfigured`` row BEFORE any
 meeting/agent runs.
 
+Any declaration class may also carry **forbidden_values** — the placeholder literals a stock deploy
+surface once supplied. A boot whose env holds one raises :class:`ConfigError` beside the missing-key
+refusal, because an unconfigured secret that LOOKS configured is the worse of the two failures: the
+service comes up green and the value is in the public repository (F95).
+
 Env-level state is computed AT CALL TIME (no boot-time snapshot), so tests monkeypatching the
 environment and long-lived processes both observe the truth.
 """
@@ -362,6 +367,20 @@ def preflight(env: Optional[Mapping[str, str]] = None) -> dict:
             f"{decl.get('service')} is misconfigured and refuses to boot — required environment "
             f"variable(s) not set: {detail}. Each is declared required-explicit in this service's "
             "config.v1 declaration (config.v1.json, gate:config-contract); set them and restart."
+        )
+    # A key sitting on a documented placeholder is UNCONFIGURED wearing a configured face — worse
+    # than unset, because nothing 503s and the value is published (F95). Never echo the value.
+    placeheld = [e["key"] for e in decl.get("keys") or []
+                 if e.get("forbidden_values")
+                 and (env.get(e["key"]) or "").strip() in set(e["forbidden_values"])]
+    if placeheld:
+        raise ConfigError(
+            f"{decl.get('service')} is misconfigured and refuses to boot — {', '.join(placeheld)} "
+            "still hold(s) a documented PLACEHOLDER value. That literal is published in this "
+            "repository, so it is not a secret: anyone can present it. Generate a real value "
+            "(`openssl rand -hex 32`), set it on every service that shares the tier, and restart. "
+            "The forbidden literals are declared per key in this service's config.v1 declaration "
+            "(config.v1.json, gate:config-contract)."
         )
     rows = capability_health(env, force_probe=True)
     for name, row in sorted(rows.items()):
