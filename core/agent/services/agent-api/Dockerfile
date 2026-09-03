@@ -40,6 +40,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git openssh-cli
 COPY core/agent/shared ./shared
 COPY core/agent/control_plane ./control_plane
 COPY core/agent/contracts ./contracts
+# ADR-0037 / PRD decision 40.5 -- this domain's MCP tool manifest, served BY PATH at import
+# from routers/health.py (parents[2] from routers/ lands on core/agent/). Not under shared/,
+# control_plane/, or contracts/ above, so it needs its own COPY line (F221: omitting this line
+# 503s GET /.well-known/mcp-tools.json -- "this build carries no tool manifest" -- and the
+# assembled MCP edge serves 0 agent tools). test_agent_api_image_manifest.py asserts every
+# by-path read control_plane/*.py makes is COPYd somewhere in this Dockerfile.
+COPY core/agent/mcp.tools.v1.json ./mcp.tools.v1.json
 # The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
 # core/agent/shared into their own domain (PRD decision 47, step 2). control_plane imports them as
 # `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
