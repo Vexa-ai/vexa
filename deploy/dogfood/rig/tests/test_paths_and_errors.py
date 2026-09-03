@@ -128,3 +128,13 @@ def test_rd14_the_credential_detector_is_the_one_the_api_uses():
     # The detector is lifted out of the file and run on its own by
     # core/agent/tests/test_workspace_credentials.py, so its prefixes are literals. Pin them here.
     assert rig._OUR_CREDENTIAL_PREFIXES == ("vxa_mcp_", rig.DELEGATION_PREFIX, rig.VIEW_PREFIX)
+
+    # …and an ORDINARY repository URL is not refused. This is the cost of delegating to the
+    # scrubber, and it is live: #1428 (R-E09) dropped the generic run's threshold from 36 to 24
+    # characters while this branch was open. Each time that threshold moves, the question "does
+    # workspace_attach still work on a normal repo?" is asked again — here.
+    for ordinary in ("https://github.com/Vexa-ai/vexa",
+                     "https://github.com/some-very-long-organisation-name/a-long-repository-name",
+                     "git@github.com:acme/kg.git",
+                     "https://gitlab.com/group/subgroup/project.git"):
+        assert not rig._refuse_credentials(ordinary), ordinary

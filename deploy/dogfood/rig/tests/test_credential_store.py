@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import tempfile
 import threading
 
 import rig_secrets
@@ -83,3 +84,28 @@ def test_rd09_concurrent_writers_do_not_lose_a_token():
 
     assert errors == []
     assert len(rig_secrets.read("race-store")) == 20
+
+
+def test_the_store_survives_secret_stores_own_hardening():
+    """The rig hard-imports two `core/agent` modules, and #1428 changed BOTH under this branch —
+    `secret_store` (R-E13) and `git_redaction` (R-E09). This pins the coupling that matters most.
+
+    R-E13 split key generation off the read path, so `get()` no longer creates `.master.key`. That
+    is correct and it is exactly the kind of change that turns a consumer's "no credential yet"
+    into a silent failure. What this holds: a pure READ of an empty store creates nothing and
+    answers `{}`, a WRITE mints the key, and the round trip works — so an unconfigured rig still
+    gets encryption on first use rather than falling back to plaintext or raising on boot.
+    """
+    fresh = pathlib.Path(tempfile.mkdtemp(prefix="rig-fresh-"))
+    original, rig_secrets.STATE_DIR = rig_secrets.STATE_DIR, fresh
+    try:
+        assert rig_secrets.read("mcp-tokens") == {}
+        assert not (fresh / ".secrets/.master.key").exists(), \
+            "a pure read generated a key — R-E13's split has regressed under us"
+
+        rig_secrets.write("mcp-tokens", {"vxa_mcp_FRESH": {"uid": "1"}})
+        assert (fresh / ".secrets/.master.key").exists(), "a write did not mint a key"
+        assert rig_secrets.read("mcp-tokens") == {"vxa_mcp_FRESH": {"uid": "1"}}
+        assert b"vxa_mcp_FRESH" not in (fresh / ".secrets/mcp-tokens.enc").read_bytes()
+    finally:
+        rig_secrets.STATE_DIR = original
