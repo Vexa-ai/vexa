@@ -152,3 +152,56 @@ def test_a_word_containing_noshare_is_not_the_token():
     somebody's agenda into a silently suppressed fan-out, which is the failure nobody reports."""
     ev = parse_ics(_exchange(description="agenda: #noshareholders meeting"), self_addr=ME)
     assert ev.get("share_opt_out") is not True
+
+
+# ── the whole inbound path, on a recorded Exchange message ──────────────────────────────────────
+#
+# `parse_ics` above is exercised on a string this file builds. THIS drives a real RFC822 message
+# through the shared parse (`from_rfc822`, the one both inbox sources go through) and then through
+# the routing DECISION — which is where an Exchange invite has to end up as "invite", not as a
+# quarantine and not as an exception. The recorded corpus held one Google/Zoom invite and nothing
+# else, which is exactly the hole the Windows-TZID bug lived in.
+
+from flows_integrations.inbox import from_rfc822  # noqa: E402
+from flows_integrations.mailbox import route  # noqa: E402
+
+FIX = Path(__file__).resolve().parent / "mailpit"
+DEPLOYMENT = "vexa@example.com"
+
+
+def _routed(*, known=None):
+    raw = (FIX / "invite-exchange-teams.eml").read_bytes()
+    msg = from_rfc822(raw, cursor="2026-09-03T09:02:11Z", ext_id="EXCHANGE1")
+    known = known or {}
+    return route(None, DEPLOYMENT, msg.frm, msg.headers, msg.ics,
+                 lambda e: known.get(e.lower()), lambda _u: True,
+                 allowed={"example.test"})
+
+
+def test_a_recorded_exchange_message_routes_as_an_invite():
+    """RED BEFORE THE FIX: this raised `ZoneInfoNotFoundError` out of `route`, so the poll that
+    called it died on the message rather than deciding anything about it."""
+    kind, ev = _routed()
+    assert kind == "invite", kind
+    assert ev["organizer"] == "tobias.huber@example.test"
+
+
+def test_the_exchange_invite_becomes_the_exact_invite_received_refs():
+    """The same assertion `test_inbound_double` makes of the Zoom invite, on the shape the pilot
+    actually sends. Folded ATTENDEE lines, folded DESCRIPTION with the Teams URL across the fold,
+    uppercase MAILTO, a comma inside a quoted CN, and a Windows zone on both DTSTART and VTIMEZONE."""
+    _, ev = _routed()
+    assert ev == {
+        "organizer": "tobias.huber@example.test",
+        "url": "https://teams.microsoft.com/l/meetup-join/"
+               "19%3ameeting_ZmE0MjJkNmEt%40thread.v2/0",
+        "start": datetime(2030, 9, 2, 14, 0, 0,
+                          tzinfo=ZoneInfo("Europe/Berlin")).timestamp(),
+        "ics_uid": "040000008200E00074C5B7101A82E00800000000A1B2C3D4E5F6",
+        "occurrence": "20300902T140000",
+        "title": "Planning",
+        "group": None,
+        "participants": ["anna.smith@example.test", "ben.meier@example.test"],
+        "participant_names": {"anna.smith@example.test": "Smith, Anna",
+                              "ben.meier@example.test": "Ben Meier"},
+    }
