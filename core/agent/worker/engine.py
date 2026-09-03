@@ -27,6 +27,8 @@ import logging
 import os
 import shutil
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
@@ -53,7 +55,7 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
 # Whoever composes that block appends what this returns.
 from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
-from worker.friction import (disbelieved_capability, friction_preamble,
+from worker.friction import (disbelieved_capability, friction_preamble, mcp_unreachable,
                              report as report_friction, scan_turn, spawn_gap)
 
 log = logging.getLogger("agent_api.worker")
@@ -1131,6 +1133,114 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
                        *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
 
 
+def _mcp_endpoint(mcp_config: str) -> "tuple[str, dict] | None":
+    """The ``(url, headers)`` an attached ``.mcp.json`` actually points at, or None.
+
+    Reads the FILE, not a separately-read env var: ``mcp_config`` is the exact attachment about to
+    be handed to the harness, so this checks what the turn will really get rather than a
+    ``VEXA_MCP_URL`` that could in principle disagree with it (or be unset, on a caller that built
+    the file some other way — the delegation seam is not the only writer of this shape, `shared.
+    tools.ToolGrant` is another)."""
+    try:
+        cfg = json.loads(Path(mcp_config).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
+    if not isinstance(servers, dict) or not servers:
+        return None
+    server = servers.get(VEXA_MCP_SERVER)
+    if not isinstance(server, dict):
+        server = next((v for v in servers.values() if isinstance(v, dict)), None)
+    if not isinstance(server, dict):
+        return None
+    url = str(server.get("url") or "").strip()
+    if not url:
+        return None  # a stdio/command server — nothing for an HTTP preflight to dial
+    headers = server.get("headers")
+    return url, ({str(k): str(v) for k, v in headers.items()} if isinstance(headers, dict) else {})
+
+
+def _first_sse_json(raw: str) -> "dict | None":
+    """The first parseable JSON payload out of an ``event-stream`` body's ``data:`` lines.
+
+    A streamable-HTTP MCP server may answer a POST with a plain JSON body or with SSE — the
+    transport lets the server choose per response — so the preflight below has to read a JSON-RPC
+    envelope out of either shape without caring which one it got."""
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[len("data:"):].strip()
+        if not chunk:
+            continue
+        try:
+            return json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+# 5 tries, delays 1+2+4+8 = 15s BETWEEN them — "bounded backoff over ~15s" (F153). The transport is
+# STATELESS BY DESIGN (PRD 40.10: a client reconnects), so a preflight `initialize` answered AT
+# ALL — a result or a JSON-RPC error, both prove the wire is alive — counts as success; only a
+# connection-level failure (refused, timed out, torn down mid-response, not JSON-RPC-shaped) counts
+# against the budget.
+MCP_PREFLIGHT_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
+
+
+def mcp_preflight(url: str, headers: dict, *, delays: tuple[float, ...] = MCP_PREFLIGHT_DELAYS,
+                  timeout: float = 3.0,
+                  sleep: Callable[[float], None] = time.sleep) -> "tuple[bool, str]":
+    """Confirm the delegated MCP server answers `initialize` BEFORE a turn runs on it — the guard
+    `spawn_gap`'s own docstring names and could not see from the spawn side: "the harness dropped
+    the server after init. That is invisible from here... a `tools unavailable` guard belongs in
+    the harness adapter."
+
+    WHY THIS EXISTS (F153, founder hit it live 2026-09-03 ~13:46Z). The control server is stateless
+    by design and restarts routinely; each turn is already a FRESH `claude`/`codex` subprocess that
+    re-reads `mcp_config` and re-attaches from scratch (`build_argv` / `_mcp_config` both take the
+    file path fresh, every call) — so a restart BETWEEN turns should be invisible. It was not: a
+    turn's subprocess attached to a server that was mid-restart, got nothing back, and the harness
+    silently ran the whole turn with no vexa tools. The model then told the founder its own guess
+    ("the workspace-creation tool isn't available in this session anymore") instead of the truth
+    ("the control server is not answering right now") — nothing upstream of the model could tell
+    the difference, because nothing checked.
+
+    This runs the SAME handshake the harness is about to run — a JSON-RPC `initialize` POST, with
+    retries, from the WORKER process, before the harness ever starts — so a still-down server is
+    known before a model call burns itself finding out the hard way, and a server that came back is
+    confirmed rather than assumed. Returns ``(True, "")`` the moment anything JSON-RPC-shaped
+    answers; ``(False, <detail>)`` once the retry budget (default ~15s) is spent. The caller decides
+    what a `False` means for the turn — this function only tells the truth about the wire."""
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": "preflight", "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "vexa-agent-worker-preflight", "version": "1"}},
+    }).encode("utf-8")
+    detail = "unreachable"
+    attempts = len(delays) + 1
+    for i in range(attempts):
+        try:
+            req = urllib.request.Request(url, data=body, method="POST", headers={
+                "content-type": "application/json",
+                "accept": "application/json, text/event-stream",
+                **headers,
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                ctype = r.headers.get("content-type", "") or ""
+                raw = r.read().decode("utf-8", "replace")
+            payload = (_first_sse_json(raw) if "text/event-stream" in ctype
+                      else (json.loads(raw) if raw.strip() else None))
+            if isinstance(payload, dict) and "jsonrpc" in payload:
+                return True, ""
+            detail = f"malformed response from {url}: {raw[:200]!r}"
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            detail = f"{type(e).__name__}: {e}"
+        if i < len(delays):
+            sleep(delays[i])
+    return False, detail
+
+
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
@@ -1158,13 +1268,55 @@ def run_turn_over_workspace(
     # pollute the user's chat conversation memory.
     resume = _resume_id(chat_root, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
+    # THE PER-TURN MCP GUARD (F153). This turn's `mcp_config` was intended by the caller (a URL was
+    # minted); confirm it is actually LIVE before handing it to the harness rather than hoping the
+    # fresh subprocess's own attach succeeds. See `mcp_preflight` for the incident this closes.
+    # `mcp_config` is intentionally reassigned to None on failure: a confirmed-dead attachment is
+    # never handed to the harness — offering it only costs the CLI its own connection timeout for
+    # nothing — and the turn runs plainly WITHOUT the toolbelt rather than silently discovering the
+    # gap mid-turn.
+    intended_mcp = mcp_config is not None
+    mcp_ok, mcp_detail, mcp_url = True, "", ""
+    if intended_mcp:
+        endpoint = _mcp_endpoint(mcp_config)
+        if endpoint is None:
+            mcp_ok, mcp_detail = False, f"no usable mcp endpoint in {mcp_config}"
+        else:
+            mcp_url, mcp_headers = endpoint
+            # `delays=MCP_PREFLIGHT_DELAYS` is explicit, not the default parameter, ON PURPOSE: a
+            # default is bound once at import time, so a test (or a future operator override)
+            # patching the module constant would silently fail to reach a call that relied on the
+            # default instead of a fresh lookup of the name at call time.
+            mcp_ok, mcp_detail = mcp_preflight(mcp_url, mcp_headers, delays=MCP_PREFLIGHT_DELAYS)
+        if not mcp_ok:
+            log.warning("agent-api worker: vexa MCP preflight failed after retries (%s) — running "
+                        "this turn WITHOUT the toolbelt rather than a silent stall", mcp_detail)
+            try:
+                report_friction(mcp_unreachable(
+                    url=mcp_url, detail=mcp_detail, attempts=len(MCP_PREFLIGHT_DELAYS) + 1,
+                    session=session or "", subject=os.environ.get("VEXA_OWNER", "")),
+                    subject=os.environ.get("VEXA_OWNER", ""))
+            except Exception as e:  # noqa: BLE001 — a friction report is never worth a turn
+                log.warning("friction: could not file the mcp-unreachable gap (%s)", e)
+            yield {"type": "mcp-unavailable", "server": VEXA_MCP_SERVER, "detail": mcp_detail}
+            mcp_config = None
     # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
     # agent never guesses where it may read/write. Single-mount turns get no mounts preamble; the
     # kg-links rule ([[wikilinks]] render as actionable entity chips) applies to EVERY turn.
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = (voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
+    # THE MODEL IS TOLD, NOT LEFT TO GUESS (F153's second half). A silent toolbelt gap is exactly
+    # how the model came to tell the founder a plausible-sounding excuse instead of the truth — so a
+    # turn that lost its MCP attachment says so in its own opening context, in words the model can
+    # repeat verbatim instead of inventing its own.
+    mcp_status_note = "" if mcp_ok else (
+        "## Vexa toolbelt unavailable this turn\n\n"
+        "The control server did not answer after retries — none of the `mcp__vexa__*` tools are "
+        "attached this turn. Do not claim to have created, read, or changed anything through them; "
+        "tell the person plainly that the connection is down. It reattaches fresh next turn.\n\n"
+    )
+    turn_prompt = (mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
                    + mounts_preamble(mounts)
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
@@ -1208,6 +1360,11 @@ def run_turn_over_workspace(
                 # all, so a turn that stopped halfway looked in every log exactly like one that
                 # finished.
                 log.warning("turn incomplete for session=%s: %s", session or "-", ev["reason"])
+            if ev.get("type") == "done" and intended_mcp:
+                # THE TYPED SIGNAL ON THE TURN'S OWN OUTCOME (F153) — never only a log line. A
+                # consumer reading only `done` events (the desk, an SSE relay, a test) can tell a
+                # degraded turn from a normal one without re-deriving it from a missing tool-call.
+                ev.setdefault("mcp_ok", mcp_ok)
             yield ev
     finally:
         # `itertools.chain` does not forward a close to what it chains, and neither does the `for`.

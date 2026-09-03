@@ -262,9 +262,10 @@ def spawn_gap(*, url: str, token: str, config_written: bool, session: str = "",
       * the attachment was not written.
 
     **What it cannot see, stated rather than implied:** the F70 session's config file *was* written
-    and the server *was* reachable — the harness dropped the server after init. That is invisible
-    from here and remains open; a `tools unavailable` guard belongs in the harness adapter, not in
-    this function pretending to have caught it."""
+    and the server *was* reachable AT SPAWN — a restart AFTER that, before some later turn ran, is
+    invisible from here by construction (this only runs once, at container boot). That guard is
+    `mcp_preflight` in `worker.engine`, run per-turn rather than once at spawn, and the record it
+    files on failure is `mcp_unreachable` below — see F153."""
     intended = bool((url or "").strip() or (token or "").strip())
     if not intended or config_written:
         return None
@@ -281,5 +282,31 @@ def spawn_gap(*, url: str, token: str, config_written: bool, session: str = "",
                       "attached, rather than a turn that runs as a text-only agent",
         "severity": "blocker",
         "context": {"tool": "mcp:vexa", "error": detail},
+        "auto": True,
+    }
+
+
+def mcp_unreachable(*, url: str, detail: str, attempts: int, session: str = "",
+                     subject: str = "") -> dict:
+    """The record for an MCP server that WAS attached at spawn and did NOT answer at TURN start —
+    ledger F153, the gap `spawn_gap` names above and cannot see from the spawn side.
+
+    The control server is stateless by design and restarts routinely; each turn is already a fresh
+    harness subprocess that re-reads the attachment and re-connects from scratch, so a restart
+    between turns should be invisible. It was not, on 2026-09-03: the harness attached to a server
+    mid-restart, got nothing back, and the turn ran silently with no vexa tools — the model then
+    told the founder its own guess about why, instead of the truth. `worker.engine.mcp_preflight`
+    runs the same handshake with retries BEFORE the turn, so this is filed the moment the retry
+    budget (~15s) is spent, not discovered mid-turn by a tool call that never had anywhere to go."""
+    return {
+        "reporter": "agent", "subject": subject, "session": session, "kind": "missing-tool",
+        "tried": f"reach the vexa MCP server at {url or '(no url)'} ({attempts} attempts, ~15s) "
+                 "before running this turn",
+        "happened": f"the server never answered — {detail}. This turn runs WITHOUT the vexa "
+                    "toolbelt; anything it says about meetings, workspaces or bots is unsourced.",
+        "would_help": "the control server should not go down mid-session, or should come back "
+                      "inside one turn's retry window",
+        "severity": "blocker",
+        "context": {"tool": f"mcp:{url or 'vexa'}", "error": detail},
         "auto": True,
     }

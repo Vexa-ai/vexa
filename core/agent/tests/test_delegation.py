@@ -283,7 +283,10 @@ def test_the_worker_attaches_nothing_when_the_dispatcher_minted_nothing(tmp_path
 
 def test_the_turn_runner_forwards_the_attachment_to_the_harness(monkeypatch, tmp_path):
     """The seam that did not exist: build_argv accepted mcp_config, run_turn_over_workspace did not
-    forward one, so no chat worker ever attached an MCP."""
+    forward one, so no chat worker ever attached an MCP.
+
+    `mcp_preflight` is stubbed to True here — this test is about the FORWARDING seam, not the F153
+    reachability guard (that guard, and the case where it says no, are `test_mcp_reconnect.py`'s)."""
     import worker.engine as engine
     seen = {}
 
@@ -294,6 +297,8 @@ def test_the_turn_runner_forwards_the_attachment_to_the_harness(monkeypatch, tmp
     monkeypatch.setattr(engine, "run_harness_turn", fake_run_harness_turn)
     monkeypatch.setattr(engine, "_ensure_repo", lambda w: None)
     monkeypatch.setattr(engine, "harness_from_env", lambda: _StubHarness())
+    monkeypatch.setattr(engine, "mcp_preflight", lambda url, headers, **kw: (True, ""))
+    monkeypatch.setattr(engine, "_mcp_endpoint", lambda path: ("https://rig.example/mcp", {}))
     list(engine.run_turn_over_workspace(tmp_path, "hi", mcp_config="/ws/.claude/mcp.json"))
     assert seen["mcp_config"] == "/ws/.claude/mcp.json"
 
