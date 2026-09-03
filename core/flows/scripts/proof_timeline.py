@@ -127,7 +127,7 @@ def main() -> int:
         pos.append(at)
     ats = [e["at_epoch"] for e in out["events"]]
     print(f"\n  events: {len(kinds)}   ascending: {ats == sorted(ats)}")
-    print(f"  the DNA sequence {want} in order: {'YES at ' + str(pos) if at >= 0 else 'NO'}")
+    print(f"  the expected sequence {want} in order: {'YES at ' + str(pos) if at >= 0 else 'NO'}")
     return 0 if at >= 0 and ats == sorted(ats) else 1
 
 

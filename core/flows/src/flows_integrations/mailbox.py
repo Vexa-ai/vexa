@@ -48,7 +48,8 @@ POLL_SECONDS = 12
 
 # A meeting link is Meet, Zoom, Teams or Jitsi — the SAME four platforms the rest of the product
 # accepts (`collector/meeting_link.py`). Meet stays byte-for-byte the pattern it always was (case
-# sensitive, lowercase code); Zoom is the DNA corpus's platform — those invites are zoom.us.
+# sensitive, lowercase code); Zoom is the recorded corpus's platform — those invites are
+# zoom.us.
 #
 # Teams and Jitsi were missing, and the way they failed is the point: an invite for a platform
 # this function does not know is not refused, it is IGNORED — `parse_ics` returns None, `route`

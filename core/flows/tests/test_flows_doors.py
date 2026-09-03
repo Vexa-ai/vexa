@@ -113,3 +113,48 @@ def test_the_link_port_still_refuses_at_the_moment_a_link_would_be_composed(monk
     with pytest.raises(flows_config.ConfigError) as refused:
         flows_config.require("VEXA_UI_URL")
     assert "VEXA_UI_URL" in str(refused.value)
+
+# ── PRD decision 18(d) · the database is a door too, and no source reaches into a container ─────
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def test_no_product_source_shells_out_to_a_named_container():
+    """`common.db_url` read the Postgres password with
+    `docker exec vexa-v012-postgres-1 sh -c 'echo -n $POSTGRES_PASSWORD'`, and
+    `meeting.run_meeting` injected fixture transcript rows through `docker exec … psql` into the
+    MEETINGS database. Both made the flows service depend on a named container of one developer's
+    other stack, on one host — a dependency no deployment can satisfy, no contract can declare,
+    and no operator can see until it fails. And the second one wrote into another domain's
+    database directly, past its API."""
+    offenders = {}
+    for f in sorted(SRC.rglob("*.py")):
+        bad = [f"{n}: {line.strip()}" for n, line in enumerate(f.read_text().splitlines(), 1)
+               if "vexa-v012" in line or "subprocess" in line]
+        if bad:
+            offenders[f.relative_to(SRC).as_posix()] = bad
+    assert offenders == {}, offenders
+
+
+def test_the_database_url_is_a_required_door_with_no_fallback():
+    cls, default, _why = flows_config.DECLARED["VEXA_FLOWS_DB_URL"]
+    assert cls == "required-explicit"
+    assert default is None
+
+
+def test_an_unnamed_database_is_refused_rather_than_guessed(monkeypatch):
+    """A guessed DSN on a host that runs more than one stack is the `localhost:18057` bug with a
+    password on the end: it does not fail, it addresses somebody else's data."""
+    from flows_steps import common
+    monkeypatch.delenv("VEXA_FLOWS_DB_URL", raising=False)
+    with pytest.raises(flows_config.ConfigError) as e:
+        common.db_url()
+    assert "VEXA_FLOWS_DB_URL" in str(e.value)
+
+
+def test_a_named_database_is_returned_unchanged(monkeypatch):
+    """The half a blanket refusal would break — including the offline dialect the whole suite and
+    `gate:health` run on."""
+    from flows_steps import common
+    monkeypatch.setenv("VEXA_FLOWS_DB_URL", "sqlite://")
+    assert common.db_url() == "sqlite://"

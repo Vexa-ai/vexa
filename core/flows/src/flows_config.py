@@ -68,7 +68,8 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # is not "unconfigured" — on any host that runs more than one stack it is A DIFFERENT
     # DEPLOYMENT'S admin-api, and a default that silently names one is worse than no default at
     # all: found live on 2026-09-03, when a bare `pytest` run of `test_admin_user_lookup_shapes`
-    # talked to `vexa-v012`'s admin-api and read its 403 as this stack's answer. A door that is
+    # talked to a NEIGHBOURING stack's admin-api and read its 403 as this stack's answer. A door
+    # that is
     # not configured must REFUSE, so the operator (or the test) is told which deployment it is
     # missing rather than being handed somebody else's.
     #
@@ -100,9 +101,12 @@ DECLARED: dict[str, tuple[str, object, str]] = {
                                  "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT "
                                  "DEPLOYED — see flows_steps.common.domain_present."),
     "VEXA_FLOWS_DB_URL": (
-        "capability", None,
-        "the engine's Postgres DSN. Unset falls back to the dogfood container lookup in "
-        "`common.db_url`, which exists for the rig and never for a deployment."),
+        "required-explicit", None,
+        "the engine's Postgres DSN — the two tables the whole engine is. It USED to fall back to "
+        "reading a password out of a named container on one developer's host (decision 18d); a "
+        "guessed DSN on a machine that runs more than one stack does not fail, it addresses "
+        "somebody else's data, which is the `localhost:18057` bug in the DOORS block above with a "
+        "password on the end. `sqlite://` is the offline dialect the suite and gate:health run on."),
     "VEXA_FLOWS_API_PORT": ("defaulted", "18200", "the port flows-api binds."),
     "VEXA_FLOWS_API_HOST": (
         "defaulted", "127.0.0.1",
@@ -114,19 +118,27 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 
     # ── the mailbox: which inbox, and what it will answer ───────────────────
     "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (real) or `mailpit` (the dev double)."),
-    # `capability`, not `required-explicit`, for the same reason as the agent door and the link
-    # port: a deployment may carry no mail intake at all (the no-agents MCP product does not), and
-    # the class that says so is the one that says a deployment is a product rather than a hole.
-    # Nothing changed operationally — flows' own `preflight` only ever enforced DOOR_KEYS, so this
-    # class was documentary — but the config.v1 declaration is read by the shared boot validator,
-    # where `required-explicit` means "refuse to boot" and would have refused the API lane over a
+    # `required-explicit` for the two keys below as of #1483 (decision 18c): every real transport
+    # logs in. The mail DOUBLE names VEXA_MAIL_SMTP_HOST instead and takes no login — the one shape
+    # where unset is a configuration rather than a gap. SMTP_HOST, the agent door and the link port
+    # stay `capability`. The mechanism the previous note warned about still holds and is still
+    # latent: flows’ own `preflight` enforces DOOR_KEYS only, and nothing under core/flows/src
+    # imports the vendored `config_preflight`, so the class here is documentary for flows’ OWN
+    # boot — it becomes "refuse to boot" the day flows boots through the shared validator, over a
     # key only the mailbox lane reads.
     "VEXA_MAIL_ADDR": (
-        "capability", None,
-        "the address this deployment's mailbox answers as, and the identity every allow-list is "
-        "anchored on. Unset = no mail intake; set without VEXA_MAIL_APP_PASSWORD is the "
-        "half-configured mailbox the capability's `all` mode calls misconfigured."),
-    "VEXA_MAIL_APP_PASSWORD": ("capability", None, "the IMAP/SMTP credential paired with VEXA_MAIL_ADDR."),
+        "required-explicit", None,
+        "the address this deployment's mailbox answers as. It is also the identity every "
+        "allow-list is anchored on, so an unset value is not a cosmetic gap. THERE IS NO VAULT "
+        "BEHIND IT: `emailx.creds` used to shell out to `sops -d` against a path in one "
+        "developer's home directory when this was unset (decision 18c)."),
+    "VEXA_MAIL_APP_PASSWORD": (
+        "required-explicit", None,
+        "the IMAP/SMTP credential paired with VEXA_MAIL_ADDR, and a P14 SECRET (see SECRETS "
+        "below): the deploy surface feeds it from a secret store, the service never reads one. "
+        "Required by every transport that logs in, which is every real one — the mail DOUBLE "
+        "names VEXA_MAIL_SMTP_HOST instead and takes no login, which is the only shape in which "
+        "an unset value is a configuration rather than a gap."),
     "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
@@ -167,13 +179,29 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_BEHAVIOR_DIR": ("capability", None, "the private behavior mount; unset uses the in-repo showcase prompts."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
     "VEXA_FLOWS_INSTANCE_GATE": ("capability", None, "forces the instance gate open or shut, for the rig."),
-    "VEXA_FLOWS_FIXTURE_TRANSCRIPT": ("capability", None, "`1` serves the declared fixture transcript instead of the gateway's."),
     "VEXA_FLOWS_USER_KEY_TTL_S": (
         "defaulted", "900",
         "how long a minted gateway token lives AND how long this process reuses it. One 20-person "
         "meeting used to leave ~30 permanent full-scope tokens on the organiser's account (R-B13)."),
     "VEXA_TIMELINE_SCAN_ROWS": ("defaulted", "2000", "how many reaction rows the timeline projection scans."),
 }
+
+
+#: THE CREDENTIALS (P14). A value named here is never logged, never written into a golden, and
+#: never appears in an error message: every refusal below names the KEY, exactly as
+#: `common.require_admin_key` does one file over. It is a SET rather than a fourth class because
+#: secrecy is orthogonal to necessity — `VEXA_FLOWS_TIMELINE_KEY` is a capability AND a secret,
+#: `VEXA_MAIL_ADDR` is required and public. The deploy surface feeds each of these from a secret
+#: store; a service that reads a secret store itself is the shape decision 18(c) removed.
+SECRETS = frozenset({
+    "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
+    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
+    "VEXA_MAIL_APP_PASSWORD",
+})
+
+#: The mail capability's keys, in one place so a half-declared control is visible as one.
+MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
+             "VEXA_MAIL_SMTP_PORT")
 
 
 def _decl(name: str) -> tuple[str, object, str]:

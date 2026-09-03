@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from flows_timeline.render import clock, line, render_preamble, render_text, when
 
-# 2026-09-02 11:23:05Z — the DNA invite. Lisbon is UTC+1 in September, so the two zones disagree,
+# 2026-09-02 11:23:05Z — the recorded invite. Lisbon is UTC+1 in September, so the two zones disagree,
 # which is the point: a stamp that reads the same in both proves nothing.
 INVITE = 1_788_348_185.0
 NOW = 1_788_362_400.0                  # same day, 15:20Z / 16:20 in Lisbon
@@ -48,26 +48,26 @@ def test_today_is_the_persons_today_not_the_servers():
 
 
 def test_a_line_hides_the_boring_status_and_shows_the_interesting_one():
-    ok = line(_ev(INVITE, "report.delivered", "ASWF DNA TSC"), LISBON, "2026-09-02")
-    skipped = line(_ev(INVITE, "report.delivered", "ASWF DNA TSC", status="skipped"),
+    ok = line(_ev(INVITE, "report.delivered", "Platform Sync"), LISBON, "2026-09-02")
+    skipped = line(_ev(INVITE, "report.delivered", "Platform Sync", status="skipped"),
                    LISBON, "2026-09-02")
     assert "[done]" not in ok and "[skipped]" in skipped
 
 
 def test_a_line_shows_what_the_event_produced():
-    got = line(_ev(INVITE, "report.delivered", "DNA", produced={"link": "https://app/x"}),
+    got = line(_ev(INVITE, "report.delivered", "Platform Sync", produced={"link": "https://app/x"}),
                LISBON, "2026-09-02")
     assert "https://app/x" in got
 
 
 def test_render_text_states_now_first_and_splits_at_it():
-    out = render_text(_payload([_ev(INVITE, "invite.received", "ASWF DNA TSC"),
+    out = render_text(_payload([_ev(INVITE, "invite.received", "Platform Sync"),
                                 _ev(NOW + 3600, "meeting.scheduled", "Standup", "scheduled")]),
                       LISBON)
     lines = out.splitlines()
     assert lines[0].startswith("now  Wed 02 Sep  16:20 WEST")
     assert out.index("already happened") < out.index("still ahead")
-    assert out.index("ASWF DNA TSC") < out.index("Standup")
+    assert out.index("Platform Sync") < out.index("Standup")
 
 
 def test_render_text_says_the_zone_is_unset_rather_than_pretending_utc_is_theirs():
@@ -86,7 +86,7 @@ def test_the_preamble_is_a_handful_of_lines_capped_both_ways():
 
 
 def test_the_preamble_states_now_and_the_zone_rule():
-    out = render_preamble(_payload([_ev(INVITE, "invite.received", "ASWF DNA TSC")]), LISBON)
+    out = render_preamble(_payload([_ev(INVITE, "invite.received", "Platform Sync")]), LISBON)
     assert "**Now: Wednesday 02 September 2026, 16:20 WEST.**" in out
     assert "timeline(since, until)" in out                  # the deeper read is named
     assert "12:23 WEST" in out                              # the event, in THEIR zone

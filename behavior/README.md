@@ -7,9 +7,25 @@ highest-level, diverse, and largely PROPRIETARY. This top-level tree holds only 
 showcase; the real voice is a private tree of the same shape, mounted at `VEXA_BEHAVIOR_DIR`
 (the `_global` deployment pattern) and resolved before these files. Flow params override both.
 
-- `prompts/`     flow kickoffs and instructions (showcase examples)
-- `workspaces/`  the workspace seeds — what a new personal/shared/org workspace is born as
-- `flows/`       flow compositions (canonical exports of the registry)
+**Not every subdirectory is present in every deployment, and the machinery must not assume one
+is.** `mail/` and `flows/` ship with the no-agents minutes product (PRD decision 40.6: gateway +
+meetings + flows + identity) because flows reads them on the paths that product runs. Everything
+else is OPTIONAL CONTENT — an agent-only or terminal-only deployment mounts it, and a deployment
+that does not run agents has no use for any of it and may carry none of it.
+
+| | | ships with the no-agents product |
+|---|---|---|
+| `mail/` | the words every notification is built from | **yes** — flows sends the mail |
+| `flows/` | flow compositions (canonical exports of the registry) | **yes** |
+| `prompts/` | agent-turn kickoffs and instructions (showcase examples) | no — nothing dispatches a turn |
+| `asks/` | the MCP edge's presets | no |
+| `workspaces/` | the workspace seeds — what a new personal/shared/org workspace is born as | no |
+
+This README used to list `prompts/` and `workspaces/` as though the tree were fixed, and the code
+believed it: `flows_defs/production.py` read three files out of `prompts/` at MODULE IMPORT, so a
+deployment carrying only what it needs could not import the flow definitions at all. **Absent
+content is a fact about the deployment, not a broken build** — a reader resolves its file when the
+step needs it, and a step that finds nothing reports `not_present` (decision 18a).
 
 Machinery (core/, clients/) knows HOW; this tree knows WHAT TO SAY. It changes at content speed —
 a git commit here or in the private tree, zero image rebuilds.

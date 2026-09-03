@@ -392,10 +392,10 @@ def test_a_group_meeting_asks_the_turn_to_MAINTAIN_the_group_desk(monkeypatch):
     monkeypatch.setattr(production.mt, "room_order",
                         lambda uid, mid, participants, names, cap=12: [])
     monkeypatch.setattr(production.mt, "meeting_row", lambda uid, m, native=None: {"id": 97})
-    reg.steps["process_meeting"](_ctx(dict(REFS, native="abc", group="dna-tsc")))
+    reg.steps["process_meeting"](_ctx(dict(REFS, native="abc", group="platform-sync")))
 
     k = kicks[0]
-    assert "THIS MEETING BELONGS TO THE GROUP #dna-tsc" in k
+    assert "THIS MEETING BELONGS TO THE GROUP #platform-sync" in k
     assert "MAINTAIN" in k and "READ/WRITE" in k
     for page in ("its PEOPLE", "its DECISIONS", "its OPEN ITEMS", "its README"):
         assert page in k

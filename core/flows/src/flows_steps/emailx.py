@@ -4,37 +4,56 @@ never by sender (the wrong-mail-answered-onboarding lesson)."""
 from __future__ import annotations
 
 import email.utils
-import os
 import smtplib
-import subprocess
 import time
 from email.message import EmailMessage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-VAULT = os.path.expanduser("~/dev/vexa-secrets/business/vexa-mail.enc.env")
+import flows_config
 
 
-def creds() -> tuple[str, str]:
-    """Address and password, always as a PAIR.
+def creds(*, login: bool = True) -> tuple[str, str]:
+    """Address and password, always as a PAIR, and always from THE CONFIG CONTRACT.
 
-    They used to come from different places: the guard fired when either was missing, the vault
-    was decrypted, and os.environ.setdefault then refused to replace an address that was already
-    set. A rig exporting VEXA_MAIL_ADDR and no password therefore logged into Gmail as
-    vexa@storm.test with the production account's password — Gmail answered 535 and the error
-    read as an expired credential for hours. A half-configured pair is not a configuration.
+    They used to come from different places: the guard fired when either was missing, a private
+    credential store was decrypted, and os.environ.setdefault then refused to replace an address
+    that was already set. A rig exporting VEXA_MAIL_ADDR and no password therefore logged into
+    Gmail as vexa@storm.test with the production account's password — Gmail answered 535 and the
+    error read as an expired credential for hours. A half-configured pair is not a configuration.
+
+    AND THE PRIVATE STORE IS GONE (PRD decision 18c). This function used to shell out to a
+    decrypt command against a path inside one developer's home directory whenever the pair was
+    incomplete: product source reading a private file on one machine. It made the mail path
+    unrunnable for anybody else, invisible to the config contract, and silently dependent on a
+    binary nothing installs. Configuration is delivered by the deployment's own environment
+    (P14) — a deployment that has not named these keys is REFUSED, by name, rather than guessed
+    at. The refusal names the KEY and never the value, exactly as `require_admin_key` does.
+
+    `login=False` is the mail DOUBLE: mailpit takes no credential at all, so the dogfood lane
+    names a host and a port and no password, and demanding one there would break the only lane
+    that can be rehearsed without reaching a real mailbox.
     """
-    addr = os.environ.get("VEXA_MAIL_ADDR")
-    pw = os.environ.get("VEXA_MAIL_APP_PASSWORD")
-    if addr and pw:
-        return addr, pw
-    out = subprocess.run(["sops", "-d", VAULT], check=True, capture_output=True, text=True).stdout
-    vault = {}
-    for line in out.splitlines():
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            vault[k.strip()] = v.strip().strip('"').strip("'")
-    return vault["VEXA_MAIL_ADDR"], vault["VEXA_MAIL_APP_PASSWORD"]
+    addr = flows_config.get("VEXA_MAIL_ADDR")
+    pw = flows_config.get("VEXA_MAIL_APP_PASSWORD")
+    missing = [k for k, value, needed in (("VEXA_MAIL_ADDR", addr, True),
+                                          ("VEXA_MAIL_APP_PASSWORD", pw, login))
+               if needed and not value]
+    if missing:
+        raise flows_config.ConfigError(
+            "this flows deployment cannot name " + ", ".join(missing)
+            + " — the mailbox credentials are delivered by the deployment's own environment (P14) "
+              "and there is nothing behind them to fall back on: set each, or name "
+              "VEXA_MAIL_SMTP_HOST to use a transport that takes no login.")
+    return addr, pw
+
+
+def _needs_login() -> bool:
+    """Does this transport authenticate? Gmail does; the double does not. Asked separately from
+    `_smtp` because the answer is needed BEFORE a socket is opened — the credentials are resolved
+    while the message is still being built, so a deployment that cannot name them is refused
+    without first connecting to a mail server."""
+    return not flows_config.get("VEXA_MAIL_SMTP_HOST")
 
 
 def _smtp():
@@ -44,15 +63,14 @@ def _smtp():
     path could not be rehearsed, only fired at real recipients. When VEXA_MAIL_SMTP_HOST is set we
     honour it; with nothing set, behaviour is exactly as before.
     """
-    host = os.environ.get("VEXA_MAIL_SMTP_HOST")
-    if not host:
+    if _needs_login():
         return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
-    port = int(os.environ.get("VEXA_MAIL_SMTP_PORT", "25"))
-    return smtplib.SMTP(host, port, timeout=20), False
+    return smtplib.SMTP(flows_config.get("VEXA_MAIL_SMTP_HOST"),
+                        flows_config.get_int("VEXA_MAIL_SMTP_PORT"), timeout=20), False
 
 
 def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) -> str:
-    addr, pw = creds()
+    addr, pw = creds(login=_needs_login())
     m = EmailMessage()
     m["From"], m["To"], m["Subject"] = f"Vexa <{addr}>", to, subject
     m["Message-ID"] = email.utils.make_msgid(domain=addr.split("@")[1])
@@ -108,7 +126,7 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     Every value that came from the invite goes through `ics_escape` (and the Subject through
     `header_safe`): the title, the UID and the organizer address are all attacker-adjacent, and
     this is a message we sign with our own mailbox (R-B15)."""
-    addr, pw = creds()
+    addr, pw = creds(login=_needs_login())
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     dtstart = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start_epoch))
     ics = "\r\n".join([

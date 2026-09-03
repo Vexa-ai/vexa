@@ -23,7 +23,7 @@ from meeting_api.collector import create_app
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 
 OWNER, STRANGER = 11, 12
-PLAT, NID = "jitsi", "dna-tsc-2026-08-03"
+PLAT, NID = "jitsi", "platform-sync-2026-08-03"
 WHEN = "2026-08-03T14:00:00Z"
 
 SEGS = [

@@ -17,8 +17,8 @@ from flows_timeline.model import Event, event_from_receipt
 T0 = 1_788_000_000.0          # a fixed "now"; every offset below is relative to it
 HOUR = 3600.0
 
-REFS_INVITE = {"ics_uid": "dna@zoom.us", "organizer": "admin@vexa.ai", "title": "ASWF DNA TSC",
-               "participants": ["sam.richards@dna.test", "tommy.snyder@dna.test"],
+REFS_INVITE = {"ics_uid": "platform-sync@zoom.us", "organizer": "admin@vexa.ai", "title": "Platform Sync",
+               "participants": ["sam.richards@example.test", "tommy.snyder@example.test"],
                "start": T0 + 3 * HOUR}
 REFS_DONE = {**REFS_INVITE, "uid": "126", "meeting_id": 104}
 
@@ -45,7 +45,7 @@ def _receipt(db, rid, step, *, state="confirmed", result=None, at=T0, confirmed=
 
 
 def _lane():
-    """The DNA day, exactly as the founder lane wrote it: invite → prepare mail → completed →
+    """The recorded day, exactly as the founder lane wrote it: invite → prepare mail → completed →
     minutes mail. Two reactions, four receipts that matter and three that are machinery."""
     db = SqliteDB()
     _reaction(db, "r-invite", "invite.received", REFS_INVITE, flow="invite_intake",
@@ -73,8 +73,8 @@ def _ident(subject):
 
 def test_scoping_matches_organizer_attendee_and_uid():
     assert concerns({"organizer": "Admin@Vexa.ai"}, email="admin@vexa.ai")
-    assert concerns({"participants": ["a@x.io", "sam.richards@dna.test"]},
-                    email="Sam.Richards@DNA.test")
+    assert concerns({"participants": ["a@x.io", "sam.richards@example.test"]},
+                    email="Sam.Richards@Example.test")
     assert concerns({"uid": "126"}, uid="126")
     assert concerns({"user_id": 126}, uid="126")   # an int column compares as its string
     assert not concerns({"organizer": "someone@else.io"}, uid="126", email="admin@vexa.ai")
@@ -111,7 +111,7 @@ def test_machinery_steps_produce_no_events():
 
 
 def test_a_failed_receipt_is_an_event_whatever_its_step():
-    refs = {"uid": "126", "title": "ASWF DNA TSC"}
+    refs = {"uid": "126", "title": "Platform Sync"}
     ev = event_from_receipt({"step": "ensure_user", "state": "failed", "attempted_at": T0,
                              "result": json.dumps({})}, refs)
     assert ev is not None and ev.kind == "reaction.failed" and ev.status == "failed"
@@ -136,17 +136,17 @@ def test_a_skipped_send_says_skipped_not_done():
 def test_produced_carries_the_link_the_note_and_the_message():
     ev = event_from_receipt({"step": "drop_to_attendees", "state": "confirmed", "attempted_at": T0,
                              "provider_ref": "<m@vexa.ai>",
-                             "result": json.dumps({"entity": "kg/entities/meeting/dna.md",
+                             "result": json.dumps({"entity": "kg/entities/meeting/platform-sync.md",
                                                    "link": "https://app/x", "dropped": 2})},
                             REFS_DONE)
-    assert ev.produced == {"link": "https://app/x", "note_path": "kg/entities/meeting/dna.md",
+    assert ev.produced == {"link": "https://app/x", "note_path": "kg/entities/meeting/platform-sync.md",
                            "message_id": "<m@vexa.ai>"}
 
 
 def test_a_meeting_row_is_scheduled_until_it_is_terminal():
     upcoming = event_from_meeting({"id": 200, "status": "scheduled", "data": {"title": "Standup",
                                    "scheduled_at": "2026-09-03T09:00:00Z"}})
-    held = event_from_meeting({"id": 104, "status": "completed", "data": {"title": "ASWF DNA TSC"},
+    held = event_from_meeting({"id": 104, "status": "completed", "data": {"title": "Platform Sync"},
                                "start_time": "2026-09-02T14:23:00", "end_time": "2026-09-02T15:36:10"})
     assert (upcoming.kind, upcoming.title) == ("meeting.scheduled", "Standup")
     assert held.kind == "meeting.held" and held.at == to_epoch("2026-09-02T15:36:10Z")
@@ -176,17 +176,17 @@ def test_the_window_excludes_what_is_outside_it():
 def test_one_meeting_seen_twice_is_one_row_and_the_earlier_sighting_wins():
     """The fact said the meeting finished at 13:52; the meetings table says its row ended at 15:36.
     Both are true and the person had one meeting — keep the moment the system LEARNED it."""
-    evs = [Event(at=T0 + 100, kind="meeting.held", title="DNA", status="done", meeting_id="104",
+    evs = [Event(at=T0 + 100, kind="meeting.held", title="Platform Sync", status="done", meeting_id="104",
                  source="reaction"),
-           Event(at=T0 + 6000, kind="meeting.held", title="DNA", status="completed",
+           Event(at=T0 + 6000, kind="meeting.held", title="Platform Sync", status="completed",
                  meeting_id="104", source="meeting")]
     got = merge(evs)
     assert len(got) == 1 and got[0].source == "reaction"
 
 
 def test_scheduled_and_held_for_one_meeting_both_survive():
-    evs = [Event(at=T0, kind="meeting.scheduled", title="DNA", status="scheduled", meeting_id="104"),
-           Event(at=T0 + 100, kind="meeting.held", title="DNA", status="done", meeting_id="104")]
+    evs = [Event(at=T0, kind="meeting.scheduled", title="Platform Sync", status="scheduled", meeting_id="104"),
+           Event(at=T0 + 100, kind="meeting.held", title="Platform Sync", status="done", meeting_id="104")]
     assert [e.kind for e in merge(evs)] == ["meeting.scheduled", "meeting.held"]
 
 
@@ -201,7 +201,7 @@ def test_split_around_gives_the_last_few_and_the_next_few():
 
 # ── the whole route answer ───────────────────────────────────────────────────────────────────────
 
-def test_the_dna_day_comes_back_in_order():
+def test_the_recorded_day_comes_back_in_order():
     db = _lane()
     out = build_timeline(db, "126", since=T0 - HOUR, until=T0 + 4 * HOUR, limit=50,
                          now=T0 + 3 * HOUR, meetings=None, identity=_ident)

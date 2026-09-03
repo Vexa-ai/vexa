@@ -524,7 +524,7 @@ flows:
     # EMPTY IS NOT "EVERYONE": it means the mailbox's own domain, exactly as an unset attendee
     # allow-list means the organizer's (PRD §16.2 — outside the domain, never). Set it when the
     # mailbox is hosted on a domain other than the organisation it serves.
-    domains: ""                       # comma-separated, e.g. "oenb.at,dna.test"
+    domains: ""                       # comma-separated, e.g. "example.com,example.test"
     # One fixed line back to a quarantined stranger, once per address, no model. Off by default:
     # an automatic reply to an unverified sender is a reflector.
     quarantineReply: ""               # "1" to enable

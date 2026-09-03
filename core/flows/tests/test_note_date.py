@@ -96,13 +96,13 @@ def test_seeded_row_with_no_start_falls_back_and_is_still_unique():
     """
     native = "96088138284"                       # the replay's real recurring id
     a = {"uid": "1", "meeting_id": 36, "native": native, "transcript": "t",
-         "organizer": "a@x.test", "title": "DNA TSC"}          # no `start`
+         "organizer": "a@x.test", "title": "Platform Sync"}          # no `start`
     b = dict(a)
     b["meeting_id"] = 37
     pa = _path_from(_stamp_for(a))
     pb = _path_from(_stamp_for(b))
     # both resolve, and neither carries a meeting date it cannot know
-    assert "dna-tsc" in pa and "dna-tsc" in pb, (pa, pb)
+    assert "platform-sync" in pa and "platform-sync" in pb, (pa, pb)
     assert pa.startswith("kg/entities/meeting/") and pb.startswith("kg/entities/meeting/")
     assert native not in pa, (pa, "the native is not part of the path any more")
 

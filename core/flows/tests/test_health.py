@@ -7,9 +7,9 @@ process nobody can probe is a process nobody can restart on evidence.
 OFFLINE. `flows_api` builds its app at import and refuses to start without its credentials — by
 design, so an unconfigured deployment stops at the door rather than serving on a placeholder — so
 they are supplied here BEFORE the import, exactly as the rig's conftest does. `VEXA_FLOWS_DB_URL`
-matters most, and for two reasons: unset, `db_url()` shells out to `docker exec` to read a password
-off a running container; and `postgres_db` APPLIES THE SCHEMA at construction, so the module cannot
-be imported at all against a Postgres that is not there. `flows.db_from_url` reads the dialect off
+matters most, and for two reasons: unset, `db_url()` REFUSES by name (decision 18d — it used to
+shell out to a named container to read a password off it); and `postgres_db` APPLIES THE SCHEMA at
+construction, so the module cannot be imported at all against a Postgres that is not there. `flows.db_from_url` reads the dialect off
 the URL, so `sqlite://` composes the same app on the in-memory dialect the whole offline suite
 already runs on.
 """
@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 # whichever module imports FIRST wins an env var. Alphabetical order is not a contract.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        # the offline dialect (flows.db_from_url) — unset, db_url() shells out to `docker exec`
+        # the offline dialect (flows.db_from_url) — unset, db_url() refuses and names the key
         "VEXA_FLOWS_DB_URL": "sqlite://"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)

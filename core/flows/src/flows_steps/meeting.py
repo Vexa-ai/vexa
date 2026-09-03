@@ -2,7 +2,6 @@
 travels in step results (receipts), never in process memory."""
 from __future__ import annotations
 
-import subprocess
 import time
 
 from flows import Done, StepCtx, StepError, Wait
@@ -11,17 +10,15 @@ from flows import Done, StepCtx, StepError, Wait
 # of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
 # than against this file. Found while adding the prep step, not by a test: nothing exercises
 # dispatch_bot outside a live meeting.
-from .common import FIXTURE_TRANSCRIPT, GATEWAY, http, setting, user_api_key
+from .common import GATEWAY, http, setting, user_api_key
 
-FIXTURE_LINES = [
-    (0.0, 6.0, "Anna", "Alright, quick sync on the pilot. Two decisions today."),
-    (6.5, 14.0, "Ben", "First: we go with the phased rollout — pilot group is treasury, four weeks."),
-    (14.5, 22.0, "Anna", "Agreed. Decision one: phased rollout, treasury first, four weeks starting Monday."),
-    (22.5, 30.0, "Ben", "Second: Anna owns the security review. I need it before the pilot starts."),
-    (30.5, 38.0, "Anna", "I commit to the security review by Friday. Send me the checklist today."),
-    (38.5, 44.0, "Ben", "Will do — checklist to you by end of day. That's a commitment."),
-    (44.5, 50.0, "Anna", "Open question for next time: do we invite risk and compliance to the pilot?"),
-]
+# THE FIXTURE-TRANSCRIPT INJECTION IS GONE (PRD decision 18d). When a rehearsed meeting completed
+# with no segments, this file used to write seven canned transcript rows into the MEETINGS database
+# with `docker exec <a named container> psql` — flows reaching past another domain's API, into
+# another domain's tables, through a container belonging to one developer's other stack on one
+# host. No deployment surface ever set the capability key that gated it, so the path existed
+# only for that machine. A transcript double belongs to the transcription domain that owns
+# the words, and reaches flows the same way a real one does: through the gateway.
 
 
 def meeting_ref(uid: str, url: str) -> str:
@@ -440,7 +437,7 @@ def _status(ctx: StepCtx) -> dict:
 
 
 def run_meeting(ctx: StepCtx):
-    """Poll-composite until completed. Transcribe window + (declared double) fixture injection."""
+    """Poll-composite until completed, over the transcribe window."""
     d = ctx.prior["dispatch_bot"]
     m = _status(ctx)
     s = m.get("status") or "?"
@@ -456,13 +453,6 @@ def run_meeting(ctx: StepCtx):
         # we approximate the window from meeting start_time instead of activation to stay stateless
         if ctx.clock_now - ctx.refs["start"] < window:
             return Wait(seconds=8)
-        if FIXTURE_TRANSCRIPT and not (m.get("segments") or []):
-            sql = "; ".join(
-                "INSERT INTO transcriptions (meeting_id,start_time,end_time,text,speaker,language,session_uid,segment_id,created_at) "
-                f"VALUES ({d['meeting_id']},{a},{b},'{t}','{sp}','en','flows-{d['meeting_id']}','fix-{i}',now()) ON CONFLICT DO NOTHING"
-                for i, (a, b, sp, t) in enumerate(FIXTURE_LINES))
-            subprocess.run(["docker", "exec", "vexa-v012-postgres-1", "psql", "-U", "postgres",
-                            "-d", "vexa", "-c", sql], check=True, capture_output=True)
         key = user_api_key(ctx.prior["ensure_user"]["uid"])
         http("DELETE", f"{GATEWAY}/bots/{d['platform']}/{d['native']}", {"X-API-Key": key})
         return Wait(seconds=5)

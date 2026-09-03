@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from test_link_loop import _StubDB  # noqa: E402
 
 
-def prompt_for_mail(monkeypatch, text, sender="amelia@dna.test", **env):
+def prompt_for_mail(monkeypatch, text, sender="casey@example.test", **env):
     """The prompt `feedback_turn` actually dispatches for one inbound mail."""
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -42,7 +42,7 @@ def prompt_for_mail(monkeypatch, text, sender="amelia@dna.test", **env):
                         lambda uid, s, p, room=None: seen.update(prompt=p) or 0)
     r = Reaction("rid", "sid", "mail.reply",
                  {"uid": "7", "session": "main", "text": text, "from_addr": sender,
-                  "subject": "Re: Minutes", "orig_msgid": "<m1@dna.test>"},
+                  "subject": "Re: Minutes", "orig_msgid": "<m1@example.test>"},
                  "email_chat", 1, "feedback_turn", "running", 1, 0.0, None, None, None)
     reg.steps["feedback_turn"](StepCtx(reaction=r, effect_key="k", prior={},
                                        clock_now=1_700_000_000.0, scratch={}, flow=None))
@@ -51,8 +51,8 @@ def prompt_for_mail(monkeypatch, text, sender="amelia@dna.test", **env):
 
 def test_the_body_is_fenced_labelled_and_attributed(monkeypatch):
     p = prompt_for_mail(monkeypatch, "Point 3 is wrong.")
-    assert "UNTRUSTED TEXT WRITTEN BY amelia@dna.test" in p
-    assert "BEGIN UNTRUSTED EMAIL FROM amelia@dna.test" in p
+    assert "UNTRUSTED TEXT WRITTEN BY casey@example.test" in p
+    assert "BEGIN UNTRUSTED EMAIL FROM casey@example.test" in p
     assert "END UNTRUSTED EMAIL" in p
     body_at = p.index("Point 3 is wrong.")
     assert p.index("BEGIN UNTRUSTED EMAIL") < body_at < p.index("END UNTRUSTED EMAIL")

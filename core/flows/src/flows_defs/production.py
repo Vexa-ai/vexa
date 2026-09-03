@@ -41,10 +41,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
-from flows import Block, Done, Registry, StepCtx, StepError, Wait, EventType
+from flows import Block, Done, NotPresent, Registry, StepCtx, StepError, Wait, EventType
 
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
@@ -102,27 +103,69 @@ def _repo_root() -> Path:
     return p.parents[4] if len(p.parents) > 4 else p.parents[len(p.parents) - 1]
 
 
-_SHOWCASE = next((c / "behavior" / "prompts" for c in
-                  (Path("/"), Path("/app"), _repo_root())   # image bakes /behavior; checkout has <root>/behavior
-                  if (c / "behavior" / "prompts").is_dir()),
-                 _repo_root() / "behavior" / "prompts")
+class PromptAbsent(LookupError):
+    """NO BEHAVIOR PROMPT OF THIS NAME IS MOUNTED — a fact about the deployment, not a defect.
+
+    `behavior/` is CONTENT (decision 43.12): a top-level tree whose real contents are proprietary
+    and mounted per deployment at `$VEXA_BEHAVIOR_DIR`, with the in-repo showcase as the published
+    example. A deployment may carry neither — the `no-agents` product (decision 40.6) never
+    dispatches an agent turn and so never reads a kickoff at all.
+
+    It used to be an ImportError in all but name. The three kickoffs were read at MODULE SCOPE
+    (`PROCESS_KICKOFF = _prompt("process-meeting.md")`), so a tree without `behavior/prompts/`
+    could not import this module: fourteen flows test modules failed to COLLECT, and a product
+    that needs none of these files still could not load the definitions describing its own
+    meetings. A missing content file crashing a build is a category error.
+
+    So the read is lazy, and this is what it raises. The steps that need a kickoff turn it into
+    `NotPresent("behavior")` — terminal, no retry, the missing filename on the reaction — which is
+    the same typed outcome #1453 gave a step whose agent domain is absent, for the same reason:
+    nothing is broken, nothing is coming, and a silent success would hide it."""
+
+    def __init__(self, fname: str) -> None:
+        super().__init__(fname)
+        self.fname = fname
+
+    def __str__(self) -> str:
+        return (f"no behavior prompt {self.fname!r} is mounted — neither $VEXA_BEHAVIOR_DIR/prompts/ "
+                f"nor an in-repo behavior/prompts/ showcase carries it")
+
+
+def _showcase() -> Path:
+    """Where the PUBLISHED showcase prompts live — resolved WHEN ASKED, never at import.
+
+    Three candidate roots because three shapes exist and all are legitimate: the image bakes
+    `/behavior`, the flows image bakes `/app/behavior`, and a checkout has `<root>/behavior`. The
+    final fallback is the checkout path, so the error a caller sees names a real location rather
+    than ""."""
+    return next((c / "behavior" / "prompts" for c in
+                 (Path("/"), Path("/app"), _repo_root())
+                 if (c / "behavior" / "prompts").is_dir()),
+                _repo_root() / "behavior" / "prompts")
 
 
 def _prompt(fname: str) -> str:
     """Behavior-domain prompt — machinery contains no prose, and the REAL voice is PROPRIETARY:
     resolution is (1) flow params override, (2) the PRIVATE behavior mount
     ($VEXA_BEHAVIOR_DIR/prompts/, deployed as a content tree like _global), (3) the in-repo
-    showcase default (published to demonstrate capability, never the product's actual voice)."""
-    import os
+    showcase default (published to demonstrate capability, never the product's actual voice).
+
+    (4) NOTHING, which is a supported deployment and raises `PromptAbsent` rather than
+    FileNotFoundError from whatever line happened to read the file. Both reads are guarded by
+    `is_file` now: the showcase read was unguarded, which is how the absence used to arrive as an
+    import crash."""
     private = os.environ.get("VEXA_BEHAVIOR_DIR")
     if private:
         f = Path(private) / "prompts" / fname
         if f.is_file():
             return f.read_text()
-    return (_SHOWCASE / fname).read_text()
+    baked = _showcase() / fname
+    if baked.is_file():
+        return baked.read_text()
+    raise PromptAbsent(fname)
 
 
-def prompt_for(ctx, fname: str, default: str) -> str:
+def prompt_for(ctx, fname: str, default: str | None = None) -> str:
     """The LIVE kick for one step, in the order the rest of this file already claims: the flow's
     own `prompts` param, then the admin's `_global/prompts/<fname>`, then the baked default.
 
@@ -134,10 +177,13 @@ def prompt_for(ctx, fname: str, default: str) -> str:
     when the detector fires pointed at a path the code never opened — which is worse than a
     missing feature, because it sends the person debugging a failure to the wrong file.
 
-    `default` is the BAKED prompt, and it is baked at IMPORT (`PROCESS_KICKOFF = _prompt(...)`),
-    which is where the "hot reload" half of the claim came from. The `_global` read below is the
-    hot half and it is per-call, exactly as `mailtext.render` reads `_global/mail/<name>.md` on
-    every send — the same contract, the same directory, one screen apart, and now the same shape.
+    `default` is the BAKED prompt. It USED TO BE BAKED AT IMPORT (`PROCESS_KICKOFF = _prompt(...)`
+    at module scope), which is where the "hot reload" half of the claim came from and which made
+    an unmounted `behavior/` an import crash; omitted, it is now read through `_prompt` HERE, on
+    the fall-through, so a call that an override answers touches no file at all. The `_global` read
+    below is the hot half and it is per-call, exactly as `mailtext.render` reads
+    `_global/mail/<name>.md` on every send — the same contract, the same directory, one screen
+    apart, and now the same shape.
 
     FAILS SOFT, twice over. An override that cannot be read (agent-api down, no uid in refs) and
     an override that is EMPTY or whitespace both fall through to the baked text. An admin who
@@ -154,14 +200,7 @@ def prompt_for(ctx, fname: str, default: str) -> str:
             live = None
         if (live or "").strip():
             return live
-    return default
-
-
-ONBOARD_KICKOFF = _prompt("onboard-person.md")
-
-GROUP_KICKOFF = _prompt("onboard-group.md")
-
-PROCESS_KICKOFF = _prompt("process-meeting.md")
+    return default if default is not None else _prompt(fname)
 
 # ── THE NOTE-PATH RECIPE ──────────────────────────────────────────────────────
 # These three are MODULE-LEVEL and not `build()` closures, for one reason: this is the only
@@ -477,10 +516,19 @@ def build(reg: Registry, db) -> None:
         def _open(ctx: StepCtx):
             """Open the onboarding conversation: seed the workspace, dispatch the agent kickoff
             (non-blocking — the freeze law). The agent's replies arrive via the FILE-OUTBOX
-            contract; the human's via threaded email. Reads: refs.uid (+person/group)."""
+            contract; the human's via threaded email. Reads: refs.uid (+person/group).
+
+            THE KICKOFF IS RESOLVED FIRST, before the workspace is seeded: a deployment with no
+            behavior tree mounted has no words to open the conversation with, and seeding a
+            workspace for a conversation that will never be opened leaves a side effect behind for
+            an outcome that is terminal."""
             uid = ctx.refs["uid"]
+            try:
+                kick = kickoff_of(ctx)
+            except PromptAbsent as absent:
+                return NotPresent("behavior", detail=str(absent))
             ag.workspace_init(uid)
-            base = ag.dispatch_turn(uid, session_of(ctx), kickoff_of(ctx))
+            base = ag.dispatch_turn(uid, session_of(ctx), kick)
             return Done({"baseline": base})
         _open.__name__ = f"open_{prefix}"
         reg.rename_step("_open", f"open_{prefix}")
@@ -523,12 +571,12 @@ def build(reg: Registry, db) -> None:
 
     _conversation("person",
                   session_of=lambda ctx: "onboarding",
-                  kickoff_of=lambda ctx: prompt_for(ctx, "onboard-person.md", ONBOARD_KICKOFF) + ctx.refs["person"],
+                  kickoff_of=lambda ctx: prompt_for(ctx, "onboard-person.md") + ctx.refs["person"],
                   gate_of=lambda ctx: scaffolded(ctx.refs["uid"]),
                   subject_line=lambda ctx: "Getting you set up")
     _conversation("group",
                   session_of=lambda ctx: f"group-{ctx.refs['group']}",
-                  kickoff_of=lambda ctx: GROUP_KICKOFF.format(group=ctx.refs["group"]) + ctx.refs["organizer"],
+                  kickoff_of=lambda ctx: _prompt("onboard-group.md").format(group=ctx.refs["group"]) + ctx.refs["organizer"],
                   gate_of=lambda ctx: ws_file(ctx.refs["uid"], f".scaffolded-group-{ctx.refs['group']}") is not None,
                   subject_line=lambda ctx: f"Setting up #{ctx.refs['group']}")
 
@@ -591,9 +639,16 @@ def build(reg: Registry, db) -> None:
         session = f"meet-{ctx.refs['meeting_id']}"
         group = str(ctx.refs.get("group") or "").strip()
         if "baseline" not in ctx.scratch:
-            kick = prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(
-                mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
-                date=_meeting_stamp(ctx, uid))
+            # NO KICK, NO TURN. An unmounted behavior tree is a deployment fact (decision 43.12),
+            # so it lands as the same terminal `not_present` an absent agent domain does — never as
+            # an exception, and never as a turn dispatched with an empty instruction, which would
+            # bill a model to produce a report nobody could ground.
+            try:
+                kick = prompt_for(ctx, "process-meeting.md").format(
+                    mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
+                    date=_meeting_stamp(ctx, uid))
+            except PromptAbsent as absent:
+                return NotPresent("behavior", detail=str(absent))
             # WHOSE DESKS THIS TURN MAY READ — the invite, ordered by who spoke, capped. Computed
             # here because flows is where the transcript is reachable, and sent as a PROPOSAL:
             # agent-api verifies membership itself and mounts only people who already have a desk.
@@ -925,8 +980,8 @@ def build(reg: Registry, db) -> None:
     def _followup_on(ctx) -> bool:
         """Does the attendee fan-out run for this meeting at all?
 
-        `shared` (default ON) is Marvin's own rule read across to SPI — creator-controlled
-        sharing, default on, with a per-meeting opt-out (`refs.share is False`). Default OFF and
+        `shared` (default ON) is creator-controlled sharing — default on, with a per-meeting
+        opt-out (`refs.share is False`). Default OFF and
         this loop is dead on day one; that one value IS the coefficient.
 
         THE PERSONAL/SHARED AXIS IS GONE (founder, 2026-09-02): one meeting produces one report

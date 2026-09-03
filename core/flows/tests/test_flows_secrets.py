@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import flows_config  # noqa: E402
 import flows_steps.common as common  # noqa: E402
 import flows_steps.emailx as emailx  # noqa: E402
 
@@ -152,7 +153,7 @@ def test_a_crafted_title_cannot_inject_calendar_properties(monkeypatch):
     opens whichever one the sender names next, inside a REPLY we send from our own mailbox into
     the organizer's calendar."""
     sent = {}
-    monkeypatch.setattr(emailx, "creds", lambda: ("vexa@acme.test", "pw"))
+    monkeypatch.setattr(emailx, "creds", lambda **k: ("vexa@acme.test", "pw"))
     monkeypatch.setattr(emailx, "_smtp",
                         lambda: (_FakeSMTP(sent), False))
     emailx.send_rsvp_accept("boss@acme.test", ics_uid="u-1", start_epoch=1_900_000_000.0,
@@ -168,7 +169,7 @@ def test_a_crafted_title_cannot_inject_calendar_properties(monkeypatch):
 
 def test_the_subject_header_has_no_line_structure(monkeypatch):
     sent = {}
-    monkeypatch.setattr(emailx, "creds", lambda: ("vexa@acme.test", "pw"))
+    monkeypatch.setattr(emailx, "creds", lambda **k: ("vexa@acme.test", "pw"))
     monkeypatch.setattr(emailx, "_smtp", lambda: (_FakeSMTP(sent), False))
     emailx.send_rsvp_accept("boss@acme.test", ics_uid="u-1", start_epoch=1_900_000_000.0,
                             title="Standup\r\nBcc: everyone@acme.test")
@@ -232,3 +233,61 @@ def test_an_empty_expected_key_opens_nothing():
     assert ns["_same_key"]("", "") is False
     assert ns["_same_key"]("k", "k") is True
     assert ns["_same_key"]("k", "j") is False
+
+
+# ── PRD decision 18(c) · the mailbox credentials come from the CONTRACT, never from a vault ───
+
+def test_no_product_source_shells_out_to_a_private_vault():
+    """`creds()` used to run `sops -d ~/dev/vexa-secrets/business/vexa-mail.enc.env` whenever the
+    pair was incomplete: product source decrypting a file inside one developer's home directory on
+    one machine. It made the mail path unrunnable for anybody else, invisible to the config
+    contract, and silently dependent on a binary nothing installs."""
+    text = Path(emailx.__file__).read_text()
+    for banned in ("sops", "vexa-secrets", "~/dev", "subprocess"):
+        assert banned not in text, f"{banned!r} is back in flows_steps/emailx.py"
+
+
+def test_an_unnamed_mailbox_is_refused_by_name(monkeypatch):
+    monkeypatch.delenv("VEXA_MAIL_ADDR", raising=False)
+    monkeypatch.delenv("VEXA_MAIL_APP_PASSWORD", raising=False)
+    with pytest.raises(flows_config.ConfigError) as e:
+        emailx.creds()
+    assert "VEXA_MAIL_ADDR" in str(e.value)
+
+
+def test_a_transport_that_logs_in_refuses_a_half_configured_pair(monkeypatch):
+    """The lesson the old docstring already carried: a rig exporting the address and no password
+    logged into Gmail as `vexa@storm.test` with the production account's password, and 535 read as
+    an expired credential for hours. A half-configured pair is not a configuration."""
+    monkeypatch.setenv("VEXA_MAIL_ADDR", "vexa@acme.test")
+    monkeypatch.delenv("VEXA_MAIL_APP_PASSWORD", raising=False)
+    with pytest.raises(flows_config.ConfigError) as e:
+        emailx.creds(login=True)
+    assert "VEXA_MAIL_APP_PASSWORD" in str(e.value)
+
+
+def test_the_mail_double_needs_no_password(monkeypatch):
+    """The half a blanket refusal would break: mailpit takes no login, so the dogfood lane names a
+    host and a port and no credential at all."""
+    monkeypatch.setenv("VEXA_MAIL_ADDR", "vexa@storm.test")
+    monkeypatch.delenv("VEXA_MAIL_APP_PASSWORD", raising=False)
+    assert emailx.creds(login=False) == ("vexa@storm.test", "")
+
+
+def test_the_refusal_names_the_key_and_never_the_value(monkeypatch):
+    monkeypatch.setenv("VEXA_MAIL_ADDR", "vexa@acme.test")
+    monkeypatch.setenv("VEXA_MAIL_APP_PASSWORD", "s3cr3t-app-password")
+    assert emailx.creds() == ("vexa@acme.test", "s3cr3t-app-password")
+    monkeypatch.delenv("VEXA_MAIL_APP_PASSWORD", raising=False)
+    try:
+        emailx.creds()
+    except flows_config.ConfigError as e:
+        assert "s3cr3t-app-password" not in str(e)
+
+
+def test_the_smtp_password_is_declared_a_credential(monkeypatch):
+    """P14: a value in `SECRETS` is never logged, never goldened, and is fed from a secret store by
+    the deploy surface — not read out of one by the service itself."""
+    assert "VEXA_MAIL_APP_PASSWORD" in flows_config.SECRETS
+    assert flows_config.DECLARED["VEXA_MAIL_APP_PASSWORD"][0] == "required-explicit"
+    assert flows_config.DECLARED["VEXA_MAIL_ADDR"][0] == "required-explicit"
