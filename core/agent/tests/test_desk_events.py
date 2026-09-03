@@ -287,6 +287,11 @@ def test_the_no_agents_profile_publishes_neither_because_it_carries_no_agent_cod
             if "desk.unscaffolded" in text or "claim.proposed" in text:
                 others.append(str(f.relative_to(REPO)))
     # flows CONSUMES both (it registers the event types and the flows behind them) — consuming is
-    # not publishing, so the definitions are named here as the known, correct exception.
-    others = [o for o in others if o != "core/flows/src/flows_defs/production.py"]
+    # not publishing, so the definitions are named here as the known, correct exception. The
+    # agent-only flows that consume them (desk_setup, desk_claim) live in production_agent.py,
+    # registered from production.py only when the agent domain is present (2026-09-03 split,
+    # Vexa-ai/vexa#1499) — so both source files are the same known exception, not two.
+    KNOWN_CONSUMERS = {"core/flows/src/flows_defs/production.py",
+                       "core/flows/src/flows_defs/production_agent.py"}
+    others = [o for o in others if o not in KNOWN_CONSUMERS]
     assert others == [], f"a non-agent domain names these carriers: {others}"
