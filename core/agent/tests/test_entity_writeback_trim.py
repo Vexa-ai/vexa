@@ -275,6 +275,31 @@ def test_a_phase_over_budget_leaves_no_child_process(tmp_path, monkeypatch):
     assert out[-1]["type"] == "writeback-truncated"
     assert len(seen) == 1
     proc = seen[0]
+
+    # WAIT FOR THE REAP — bounded, and not a sleep.
+    #
+    # The property is that the budget kills the CLI, and it is delivered by a cascade: `bounded`
+    # closes its iterator, GeneratorExit unwinds `parse_stream_json`, THAT frame's teardown drops
+    # the last reference to the `_exec_subprocess` generator, and only then does its `finally`
+    # reap. The last hop is finalization, not a call — so the guarantee the code offers is PROMPT,
+    # never INSTANTANEOUS, and an assertion taken on the next bytecode was reading a coin flip.
+    # It came up heads on every developer machine and tails on CI: red on three consecutive PRs
+    # into this line (#1426, #1428, #1431), and not reproducible in 40 single-CPU-pinned runs or a
+    # full-suite run on 3.12 and 3.14 (Vexa-ai/vexa#1434).
+    #
+    # This is a poll with a deadline, not `sleep(n)`: it returns the microsecond the reap lands, so
+    # a healthy run costs nothing, and 5s is far outside any scheduling delay while staying far
+    # inside the suite's patience. Every property the docstring above names survives it — with the
+    # kill path deleted, `_reap`'s bare `proc.wait()` still blocks inside the cascade and this test
+    # still hangs, which is the failure it was written to name.
+    #
+    # `events` is deliberately still referenced here. Dropping it would close the chain from the
+    # test instead of from `bounded`, and the test would then pass with `bounded`'s own
+    # `finally: gen.close()` deleted — proving the cascade, not the budget.
+    deadline = time.monotonic() + 5.0
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.005)
+
     assert proc.poll() is not None, "the CLI is still running after the budget stopped reading it"
     with pytest.raises(ProcessLookupError):
         os.kill(proc.pid, 0)
