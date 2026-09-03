@@ -36,6 +36,12 @@
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",
       "reason": "MinIO client, used only by the compose/helm bucket-init Job. Same disposition as minio/minio: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."
+    },
+    {
+      "name": "litellm/litellm",
+      "license": "MIT",
+      "disposition": "sidecar",
+      "note": "The llm-shim: the Anthropic /v1/messages front door for a deployment running its own OpenAI-dialect model server (deploy/compose/llm-shim/README.md). OFF by default, behind the `llm-shim` compose profile, and operator-pulled from LiteLLM's own registry — never redistributed inside a vexaai/* artifact. LiteLLM's LICENSE is MIT with one carve-out: content under `enterprise/` is governed by `enterprise/LICENSE`. We pin, run and vouch for the image as published; we bundle no part of it."
     }
   ],
   "bundled": [
