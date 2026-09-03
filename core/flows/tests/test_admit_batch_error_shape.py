@@ -11,6 +11,13 @@ to an admin caller over the network, not to a log.
 OFFLINE, same shape as `test_health.py` and `test_subject_bearer.py`: `flows_api` reads its
 credentials and builds its app at import, so they are set immediately before the import and
 restored immediately after — process-wide poison otherwise, whichever test module imports first.
+
+UNREACHABLE Postgres DSN, not `sqlite://` (merge-time fix, #1504 landing after this test was
+written): `db_from_url` now refuses any non-Postgres scheme outright (`flows.db.UnsupportedDialect`)
+and `SqliteDB` moved to `tests/sqlite_double.py` as a test double, so `sqlite://` fails at import.
+Postgres construction stays lazy (`postgres_db()` only connects/applies schema on first use — see
+`tests/test_queue_waiting.py`'s `api` fixture for the same pattern) and `admit` is monkeypatched to
+`_boom` below, so this module never touches a real database either way.
 """
 from __future__ import annotations
 
@@ -26,7 +33,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "sqlite://"}
+        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://admit-batch:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:
