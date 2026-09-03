@@ -1,0 +1,52 @@
+[project]
+name = "vexa-rig"
+version = "0.12.0"
+description = "The control MCP — the agent-facing seam a person's Claude Code or Codex reaches Vexa through, and its behavioural tests."
+requires-python = ">=3.11"
+# NONE OF THESE ARE THE RIG'S. Every module-scope import in vexa_control_mcp.py, rig_secrets.py
+# and vexa_oauth.py is stdlib except the MCP SDK, which tests/conftest.py stubs when it is absent.
+# This is `core/agent`'s BASE dependency set, mirrored, because `rig_secrets` reaches into that
+# tree for the redactor and the credential store (`_import_agent`, rig_secrets.py:59-75) and both
+# of the modules it wants are pure: `shared/git_redaction.py` imports `re`, and
+# `control_plane/secret_store.py` is stdlib throughout. What costs seven wheels is
+# `shared/__init__.py`, which eagerly re-exports `shared.config` and `shared.models` — so
+# importing a pure module by NAME pays for its package's convenience layer. Exactly the shape of
+# `test_meeting_room`'s `requests_unixsocket` red one tree over, and the reason the fix there was
+# to load the module by path.
+#
+# Mirroring a set is a second copy and it will drift. It is the honest cost of the reach itself,
+# which ADR-0036 decision 4 retires: when the verbs move to `core/mcp`, an edge imports
+# `shared/delegation.py` and `shared/git_redaction.py` as a library or not at all, and this block
+# goes to zero. Until then a declaration that under-states what the suite needs is a red in CI.
+dependencies = [
+    "pydantic>=2,<3",
+    "pydantic-settings>=2,<3",
+    "jsonschema>=4,<5",
+    "referencing>=0.30,<0.40",
+    "PyYAML>=6,<7",
+    "redis>=5,<6",
+    "httpx>=0.27,<1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# This file is what puts the rig in CI at all: gate:python discovers a tree by `pyproject.toml`
+# + `tests/`, and until now the rig had the tests and not the declaration — 24 gates over the
+# whole agent-facing surface, running nowhere.
+testpaths = ["tests"]
+# `rig_secrets` and `vexa_control_mcp` are imported by name, from this directory. conftest.py
+# also inserts it before the module loads (it must, to set the import-time env first); declaring
+# it here means the path does not depend on which conftest ran.
+pythonpath = ["."]
+
+# There is a SECOND reach into core/agent, and no dependency block can express it: several verbs
+# `sys.path.insert` at CALL time (vexa_control_mcp.py:3944-3952 for the agent tree, and the same
+# shape for the flows engine and the rehearsal package). `VEXA_AGENT_SRC` names the tree and
+# defaults to this repository's own `core/agent`, so it resolves in a checkout; the rig's own
+# harness sets it explicitly beside a stack. No test in this suite crosses it — the 24 gates call
+# tool functions over stubs — which is why nothing here needs the flows or rehearse trees on disk.
