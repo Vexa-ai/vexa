@@ -29,18 +29,46 @@ def test_rd06_the_autonomous_regime_may_not_speak_or_delete(monkeypatch):
     assert out.get("refused") != "regime"
 
 
-def test_rd07_reaction_signal_is_operator_only(monkeypatch):
+def test_rd07_reaction_signal_steers_only_the_callers_own_reaction(monkeypatch):
     """GATE 4a (R-D07). `reaction_signal` posts with the lane's admin key and never checked the
     reaction against the caller, while `reactions_list` handed out every id instance-wide — so
-    `cancel` on a stranger's scheduled join was one call away for any signed-in user. It is the
-    verb `_operator_or_refuse` was written for, and it was the one the gate was left off."""
-    as_user(monkeypatch, "7", admin=False)
-    out = json.loads(tool("reaction_signal")("r-1", "cancel"))
-    assert out.get("refused") == "operator only"
+    `cancel` on a stranger's scheduled join was one call away for any signed-in user.
 
-    http = as_user(monkeypatch, "7", admin=True)
-    tool("reaction_signal")("r-1", "cancel")
-    assert any("/reactions/r-1/cancel" in u for u in http.urls())
+    The check is OWNERSHIP, not operator authority, and the difference is the product: a person
+    stopping the join THEY scheduled with `bot_schedule` is the ordinary path, so an admin-only
+    gate here would close the common case to fix the rare one. The decision is made by the service
+    that owns the row — `subject` on the signal route — never here by matching strings.
+    """
+    # A COLLEAGUE'S reaction: the owning service answers 403 and the verb refuses by name.
+    http = as_user(monkeypatch, "7",
+                   routes={"/reactions/r-theirs/cancel": (403, "that reaction is not yours")})
+    out = json.loads(tool("reaction_signal")("r-theirs", "cancel"))
+    assert out.get("refused") == "not_yours", out
+    assert "subject=7" in http.urls("/reactions/r-theirs")[0]
+
+    # THEIR OWN: it goes through, and the subject rides along so the service can decide.
+    http = as_user(monkeypatch, "7", routes={"/reactions/r-mine/cancel": (200, {"cancel": True})})
+    out = json.loads(tool("reaction_signal")("r-mine", "cancel"))
+    assert out.get("refused") is None, out
+    assert out["result"] == {"cancel": True}
+    url = http.urls("/reactions/r-mine/cancel")[0]
+    assert "subject=7" in url, url
+
+    # An id that does not exist is its OWN answer — telling somebody "not yours" about a reaction
+    # nobody has sends them off to re-derive an id instead of asking for a real one.
+    http = as_user(monkeypatch, "7", routes={"/reactions/r-ghost/cancel": (404, "no such reaction")})
+    assert json.loads(tool("reaction_signal")("r-ghost", "cancel"))["refused"] == "no_such_reaction"
+
+
+def test_rd07_reaction_signal_is_not_operator_gated(monkeypatch):
+    """The other half of the same ruling, pinned so it cannot drift back: an ordinary,
+    non-admin account reaches this verb. It was briefly `_operator_gate`d, which would have made
+    `bot_schedule` mint a reaction its own author could not cancel."""
+    http = as_user(monkeypatch, "7", admin=False,
+                   routes={"/reactions/r-mine/cancel": (200, {"cancel": True})})
+    out = json.loads(tool("reaction_signal")("r-mine", "cancel"))
+    assert out.get("refused") is None, out
+    assert http.urls("/reactions/r-mine/cancel"), "a non-admin never reached the service"
 
 
 def test_rd07_reactions_list_is_scoped_to_the_caller(monkeypatch):

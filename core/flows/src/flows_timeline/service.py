@@ -85,6 +85,39 @@ def list_reactions(db, *, subject: str = "", status: str = "", limit: int = 100,
     return [{k: r[k] for k in LIST_COLS} for r in mine[:limit]]
 
 
+#: What `reaction_concerns` answers. Three outcomes, not two: "there is no such reaction" and
+#: "that one is not yours" have different fixes for the caller, and collapsing them into one
+#: refusal is how a person retries forever against an id that never existed.
+REACTION_FOUND, REACTION_MISSING, REACTION_NOT_YOURS = "ok", "not_found", "not_yours"
+
+
+def reaction_concerns(db, reaction_id: str, *, subject: str,
+                      identity: Optional[Callable] = None) -> str:
+    """Does this ONE reaction concern ``subject``? — the ownership check behind the signal verbs.
+
+    R-D07 was two holes, and only one of them is a read: `reactions_list` handed every id out
+    instance-wide, and `reaction_signal` then posted with the lane's admin key without ever asking
+    whether the reaction was the caller's. `cancel` on a stranger's scheduled join destroyed their
+    pending work.
+
+    The answer is OWNERSHIP, not authority. A person cancelling the join THEY scheduled is the
+    product — `bot_schedule` mints that reaction and the same person has to be able to stop it — so
+    an operator gate here would break the ordinary path to close an unusual one. This asks the
+    narrower question instead, on the same `concerns` predicate `list_reactions` uses, and it is a
+    DIRECT lookup rather than a scan: an old reaction outside the projection's window is still
+    yours, and a scoping check with a horizon would start refusing it.
+    """
+    rows = _rows(db, "SELECT reaction_id, subject_refs FROM reaction WHERE reaction_id = :rid",
+                 {"rid": str(reaction_id)}, ("reaction_id", "subject_refs"))
+    if not rows:
+        return REACTION_MISSING
+    uid, email = (identity or resolve_identity)(subject)
+    if not uid and not email:
+        return REACTION_NOT_YOURS          # FAIL CLOSED: a subject nobody answers to owns nothing
+    return (REACTION_FOUND if concerns(loads(rows[0]["subject_refs"]), uid, email)
+            else REACTION_NOT_YOURS)
+
+
 def read_flows(db, *, uid: str = "", email: str = "", since: float, until: float,
                scan: int = SCAN_ROWS) -> list[Event]:
     """Every reaction and receipt in the window that CONCERNS this person.

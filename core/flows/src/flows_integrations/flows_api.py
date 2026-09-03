@@ -47,7 +47,8 @@ from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, ret
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
 from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
-from flows_timeline import (build_timeline, fetch_meetings, list_reactions,  # noqa: E402
+from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
+                            build_timeline, fetch_meetings, list_reactions, reaction_concerns,
                             render_preamble, render_text)
 
 def _require_api_key() -> str:
@@ -359,11 +360,30 @@ def list_reactions(status: Optional[str] = None, subject: str = ""):
 
 
 @app.post("/reactions/{reaction_id}/{verb}", dependencies=[Depends(auth)])
-def signal_reaction(reaction_id: str, verb: str, x_actor: str = Header(default="api"),
-                    body: dict = Body(default={})):
+def signal_reaction(reaction_id: str, verb: str, subject: str = "",
+                    x_actor: str = Header(default="api"), body: dict = Body(default={})):
+    """Steer one reaction — and, with `subject`, only if it is THAT PERSON'S (R-D07).
+
+    The verbs post with the lane's admin key, so before `subject` existed the caller's identity
+    never reached this decision: the control MCP handed every signed-in user every reaction id and
+    then let them `cancel` any of it. Ownership is the right question here rather than operator
+    authority — a person stopping the join they scheduled with `bot_schedule` is the ordinary path,
+    and an admin-only gate would close it to fix an unusual one.
+
+    Omitting `subject` keeps the unscoped operator behaviour this route has always had: it is
+    already behind the operator key, and the admin console steers reactions it does not own.
+    """
     fns = {"retry": retry, "resume": resume, "cancel": cancel, "wake": wake}
     if verb not in fns:
         raise HTTPException(status_code=404, detail="retry | resume | cancel | wake")
+    if str(subject or "").strip():
+        owns = reaction_concerns(db, reaction_id, subject=subject.strip())
+        if owns == REACTION_MISSING:
+            raise HTTPException(status_code=404, detail="no such reaction")
+        if owns != REACTION_FOUND:
+            # Deliberately NOT 404: the caller named a real id and a real account, and telling them
+            # "no such reaction" for something that exists sends them off to re-derive it.
+            raise HTTPException(status_code=403, detail="that reaction is not yours")
     ok = fns[verb](db, reaction_id, actor=x_actor, clock=clock, reason=body.get("reason"))
     if not ok:
         raise HTTPException(status_code=409, detail=f"{verb} not applicable in current status")

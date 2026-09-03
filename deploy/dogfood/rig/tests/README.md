@@ -34,7 +34,7 @@ row and states the defect it replaces, so a future reader can tell what the asse
 | 1a·1b | R-D04 | a workspace link carries a short-lived, path-scoped view token, never a durable bearer |
 | 2a·2b | R-D05 | credential stores are sealed, `0600` in a `0700` dir; legacy plaintext migrates then goes |
 | 3 | R-D06 | the autonomous delegation regime may not `bot_say` or `meeting_delete` |
-| 4a·4b | R-D07 | `reaction_signal` is operator-only; `reactions_list` is scoped to the caller |
+| 4a·4b | R-D07 | `reaction_signal` steers only the caller's OWN reaction (ownership, not operator authority — cancelling the join you scheduled is the product); `reactions_list` is scoped to the caller |
 | 5 | R-D09 | concurrent sign-ins do not lose a token |
 | 6 | R-D10 | the transcript converters cannot read or write outside their directories |
 | 7a·7b | R-D11 | no account before the code is proven; identical answer either way; single-use codes |

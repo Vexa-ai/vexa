@@ -2263,14 +2263,30 @@ def reaction_signal(reaction_id: str, verb: str, token: str = "") -> str:
              retrying/admitted. Use this when you have just satisfied the condition a
              step was waiting on and do not want to wait out its poll interval.
 
-    OPERATOR ONLY, for the same reason `fact_emit` and `flow_lifecycle` are (R-D07): this posts
-    with the lane's admin key and never checked the reaction against the caller, while
-    `reactions_list` was handing every id out instance-wide — so `cancel` on somebody else's
-    scheduled join was one call away for any signed-in user."""
-    _actor, refused = _operator_gate("reaction_signal")
-    if refused:
-        return refused
-    st, body = _http("POST", f"{FLOWS_API}/reactions/{reaction_id}/{verb}", _fkey(), {})
+    YOURS ONLY (R-D07). This posts with the lane's admin key and never checked the reaction against
+    the caller, while `reactions_list` was handing every id out instance-wide — so `cancel` on
+    somebody else's scheduled join was one call away for any signed-in user. The check is
+    OWNERSHIP, not operator authority: stopping the join you scheduled with `bot_schedule` is the
+    ordinary path, and an admin-only gate would close it to fix an unusual one. The decision is
+    made by the service that owns the row — `subject` on the signal route — never here by matching
+    strings."""
+    uid = me()
+    q = urllib.parse.urlencode({"subject": str(uid)})
+    st, body = _http("POST", f"{FLOWS_API}/reactions/{reaction_id}/{verb}?{q}", _fkey(), {})
+    if st == 403:
+        return json.dumps({
+            "refused": "not_yours", "reaction": reaction_id, "verb": verb,
+            "why": "that reaction belongs to somebody else's meeting, so it is not yours to steer",
+            "tell_your_person": "plainly, that you cannot act on it — do not retry it, and do not "
+                                "describe it.",
+            "do": "reactions_list() shows the ones that are yours.",
+        })
+    if st == 404:
+        return json.dumps({
+            "refused": "no_such_reaction", "reaction": reaction_id,
+            "why": "nothing on this instance has that id",
+            "do": "call reactions_list() and use an id from it — do not guess or re-derive one.",
+        })
     return _capped({"status": st, "result": body}, 3000)
 
 
