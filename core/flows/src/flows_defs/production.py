@@ -92,8 +92,38 @@ def _prompt(fname: str) -> str:
 
 
 def prompt_for(ctx, fname: str, default: str) -> str:
+    """The LIVE kick for one step, in the order the rest of this file already claims: the flow's
+    own `prompts` param, then the admin's `_global/prompts/<fname>`, then the baked default.
+
+    THE MIDDLE ONE DID NOT EXIST (R-B18). This function read the flow param and nothing else,
+    while `_shared_report_rules` asserted three screens down that "`prompt_for` reads a live
+    `_global` override before the baked file" and the decision-22 detector told the operator to go
+    and check "the LIVE kick (`_global` override, else `behavior/prompts/process-meeting.md`)".
+    An admin who edited that file changed nothing, and the one instruction an operator is given
+    when the detector fires pointed at a path the code never opened — which is worse than a
+    missing feature, because it sends the person debugging a failure to the wrong file.
+
+    `default` is the BAKED prompt, and it is baked at IMPORT (`PROCESS_KICKOFF = _prompt(...)`),
+    which is where the "hot reload" half of the claim came from. The `_global` read below is the
+    hot half and it is per-call, exactly as `mailtext.render` reads `_global/mail/<name>.md` on
+    every send — the same contract, the same directory, one screen apart, and now the same shape.
+
+    FAILS SOFT, twice over. An override that cannot be read (agent-api down, no uid in refs) and
+    an override that is EMPTY or whitespace both fall through to the baked text. An admin who
+    cleared the file by accident did not mean "dispatch a turn with no instructions"; `mailtext`
+    learned the same lesson and its comment says so."""
     over = (ctx.flow.param("prompts") or {}) if ctx.flow else {}
-    return over.get(fname, default)
+    if fname in over:
+        return over[fname]
+    uid = str((getattr(ctx, "refs", None) or {}).get("uid") or "")
+    if uid:
+        try:
+            live = ws_file(uid, f"prompts/{fname}", "_global")
+        except Exception:  # noqa: BLE001 — a prompt we cannot fetch is not a reason to fail a turn
+            live = None
+        if (live or "").strip():
+            return live
+    return default
 
 
 ONBOARD_KICKOFF = _prompt("onboard-person.md")
@@ -597,8 +627,9 @@ def build(reg: Registry, db) -> None:
                     f"HEAD moved {before[:9]} -> {after[:9]}. Landed: "
                     f"{'; '.join(ag.head_subjects(uid)) or '(unreadable)'}. The report IS the "
                     "reply; desks are written by drop_to_attendees. Remove the stray commit, then "
-                    "check the LIVE kick (`_global` override, else `behavior/prompts/"
-                    "process-meeting.md`) for a file-writing instruction that came back.",
+                    "check the LIVE kick (`_global/prompts/process-meeting.md` if an admin wrote "
+                    "one, else the baked `behavior/prompts/process-meeting.md`) for a "
+                    "file-writing instruction that came back.",
                     retryable=False)
             return Done({"report": reply[:6000], "group": group,
                          "room_read": ctx.scratch.get("room_read", [])})
@@ -622,8 +653,10 @@ def build(reg: Registry, db) -> None:
         either text.
 
         The WRITE NO FILES clause below stays anyway, and deliberately: `prompt_for` reads a live
-        `_global` override before the baked file, so an admin can put the old instruction back
-        without touching this repo. Belt and braces, with the detector as the actual guarantee.
+        `_global/prompts/<name>` override before the baked file, so an admin can put the old
+        instruction back without touching this repo. Belt and braces, with the detector as the
+        actual guarantee. (Until R-B18 that override was asserted here and performed nowhere — the
+        sentence was true of the design and false of the code for as long as both existed.)
         """
         block = (
             "\n\nTHE REPORT IS SHARED, AND IT IS YOUR REPLY. One report for this meeting, the "

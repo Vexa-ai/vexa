@@ -24,6 +24,11 @@ different clause of it:
                    `email_minutes` renders as `in_flight` and the timeline module's own promise —
                    "the one thing an agent must not do is talk about a report it never delivered"
                    — is not kept.
+            R-B18  the prompt "hot reload" did not exist. `prompt_for` read the flow's `prompts`
+                   param and nothing else, while this file asserted three screens down that it
+                   "reads a live `_global` override before the baked file" and the decision-22
+                   detector told the operator to go and check that override when it fired — a path
+                   the code never opened.
             R-B21  the note path is stamped at three moments with a wall-clock fallback, so the
                    mail's path and the desk's path differ by minutes and the Minutes tab reads
                    "No page here yet". This is F58 re-opening on a second route.
@@ -415,3 +420,61 @@ def test_the_note_path_is_stamped_once_even_when_the_row_lookup_recovers(monkeyp
     first = production._note_path(ctx, "7", "Pilot sync")
     second = production._note_path(ctx, "7", "Pilot sync")
     assert first == second, "the mail's path and the desk's path must be one string"
+
+
+# ══ R-B18 · the live prompt override, asserted for as long as it did not exist ═══════════════
+def _prompt_ctx(refs: dict, flow=None) -> StepCtx:
+    return _ctx(refs, flow=flow)
+
+
+def test_an_admins_global_prompt_override_is_what_the_turn_is_dispatched(monkeypatch):
+    """`mailtext.render` reads `_global/mail/<name>.md` on every send; this is the same contract
+    one screen away, and it was asserted in two places and performed in none."""
+    monkeypatch.setattr(production, "ws_file",
+                        lambda uid, path, slug=None:
+                        "ADMIN KICK" if (slug == "_global" and path == "prompts/x.md") else None)
+
+    assert production.prompt_for(_prompt_ctx({"uid": "7"}), "x.md", "BAKED") == "ADMIN KICK"
+
+
+def test_the_override_is_re_read_every_turn_so_an_edit_needs_no_restart(monkeypatch):
+    """The "hot" half. The baked default is read at module IMPORT (`PROCESS_KICKOFF = _prompt(...)`)
+    — which is where the claim of a hot reload came from, and it was the only half that existed."""
+    live = {"prompts/x.md": "FIRST"}
+    monkeypatch.setattr(production, "ws_file",
+                        lambda uid, path, slug=None: live.get(path) if slug == "_global" else None)
+    ctx = _prompt_ctx({"uid": "7"})
+
+    assert production.prompt_for(ctx, "x.md", "BAKED") == "FIRST"
+    live["prompts/x.md"] = "SECOND"                       # the admin edits between turns
+    assert production.prompt_for(ctx, "x.md", "BAKED") == "SECOND"
+
+
+def test_the_flow_param_still_wins_over_the_live_override(monkeypatch):
+    """Order unchanged where it already worked: a flow submitted with its own `prompts` is the most
+    specific statement there is, and an admin's file does not override one flow's own definition."""
+    monkeypatch.setattr(production, "ws_file", lambda uid, path, slug=None: "ADMIN KICK")
+    ctx = _prompt_ctx({"uid": "7"}, flow=_Flow(prompts={"x.md": "FLOW KICK"}))
+
+    assert production.prompt_for(ctx, "x.md", "BAKED") == "FLOW KICK"
+
+
+def test_an_emptied_or_unreadable_override_falls_back_to_the_baked_prompt(monkeypatch):
+    """Both fail-soft paths. An admin who cleared the file did not mean "dispatch a turn with no
+    instructions", and agent-api being down is not a reason to dispatch one either."""
+    monkeypatch.setattr(production, "ws_file", lambda uid, path, slug=None: "   \n\n")
+    assert production.prompt_for(_prompt_ctx({"uid": "7"}), "x.md", "BAKED") == "BAKED"
+
+    def boom(uid, path, slug=None):
+        raise OSError("agent-api unreachable")
+
+    monkeypatch.setattr(production, "ws_file", boom)
+    assert production.prompt_for(_prompt_ctx({"uid": "7"}), "x.md", "BAKED") == "BAKED"
+
+
+def test_with_no_uid_there_is_nothing_to_read_and_the_baked_prompt_ships(monkeypatch):
+    """`_global` is read AS somebody — the refs carry the uid. A step with none (the pre-`ensure_user`
+    part of a flow) must not raise looking for an override."""
+    monkeypatch.setattr(production, "ws_file",
+                        lambda uid, path, slug=None: pytest.fail("read _global with no uid"))
+    assert production.prompt_for(_prompt_ctx({}), "x.md", "BAKED") == "BAKED"
