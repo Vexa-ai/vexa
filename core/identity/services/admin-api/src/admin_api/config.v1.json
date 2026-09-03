@@ -123,7 +123,7 @@
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],
    "secret": true,
-   "description": "operator key for the same edge, sent as X-Flows-Admin-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it: a publish target without its credential is a publish that always 401s, and the pair is what makes the edge real. Unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused, which is why both are visible on one declaration.",
+   "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). The header was spelled X-Flows-Admin-Key until #1486 and flows still accepts that name for one release; admin-api sends only the new one. Declared as part of the edge rather than beside it: a publish target without its credential is a publish that always 401s, and the pair is what makes the edge real. Unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused, which is why both are visible on one declaration.",
    "targets": ["compose"]
   },
   {
