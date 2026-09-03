@@ -22,7 +22,13 @@ import pytest
 DOORS = {
     "VEXA_FLOWS_GATEWAY_URL": "required-explicit",
     "VEXA_FLOWS_ADMIN_API_URL": "required-explicit",
-    "VEXA_UI_URL": "required-explicit",
+    # THE LINK PORT, not a service flows calls (PRD decision 4). `required-explicit` made a
+    # step-time link decide whether the process could BOOT — flows-api crash-looped on the compose
+    # network with `VEXA_UI_URL is unset` before serving /health or its manifest, and the
+    # no-agents product has no terminal to name. Unset is a deployment with no link adapter; the
+    # refusal moved to the moment a link would have been composed, which is where it says
+    # something.
+    "VEXA_UI_URL": "capability",
     "VEXA_FLOWS_AGENT_API_URL": "capability",       # 40.7: unset = the domain is not deployed
 }
 
@@ -58,16 +64,17 @@ def test_the_preflight_names_every_door_the_deployment_did_not(monkeypatch):
     for key, cls in DOORS.items():
         if cls == "required-explicit":
             assert key in said, f"the refusal does not name {key}"
-    assert "VEXA_FLOWS_AGENT_API_URL" not in said, \
-        "the agent door is a capability — its absence is a product, not a misconfiguration"
+    for capability in ("VEXA_FLOWS_AGENT_API_URL", "VEXA_UI_URL"):
+        assert capability not in said, \
+            f"{capability} is a capability — its absence is a product, not a misconfiguration"
 
 
 def test_the_preflight_passes_once_the_doors_are_named(monkeypatch):
     monkeypatch.setenv("VEXA_FLOWS_GATEWAY_URL", "http://gateway:8000")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
-    monkeypatch.setenv("VEXA_UI_URL", "http://terminal:3000")
+    monkeypatch.delenv("VEXA_UI_URL", raising=False)
     monkeypatch.delenv("VEXA_FLOWS_AGENT_API_URL", raising=False)
-    flows_config.preflight()                     # the no-agents profile boots
+    flows_config.preflight()      # no agent domain, no terminal adapter — and it boots
 
 
 def test_require_refuses_rather_than_returning_an_empty_base(monkeypatch):
@@ -96,3 +103,13 @@ def test_the_contract_smoke_takes_its_target_from_the_contract_only():
     src = (Path(__file__).resolve().parent / "test_contract_smokes.py").read_text()
     assert not _HOST_PORT.search(src), "the contract smoke hard-codes a local host-port"
     assert "flows_config" in src or "from flows_steps.common import" in src
+
+
+def test_the_link_port_still_refuses_at_the_moment_a_link_would_be_composed(monkeypatch):
+    """Reclassifying VEXA_UI_URL moved the refusal; it did not remove it. A deployment that has no
+    terminal boots and mails nothing with a link. One that HAS a terminal and forgot to name it
+    gets told so where the link would have gone, not three services away at boot."""
+    monkeypatch.delenv("VEXA_UI_URL", raising=False)
+    with pytest.raises(flows_config.ConfigError) as refused:
+        flows_config.require("VEXA_UI_URL")
+    assert "VEXA_UI_URL" in str(refused.value)

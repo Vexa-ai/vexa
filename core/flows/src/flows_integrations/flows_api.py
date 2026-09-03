@@ -487,16 +487,30 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     return out
 
 
+def bind_host() -> str:
+    """Which interface to listen on — loopback unless the deployment says otherwise.
+
+    THE DEFAULT STAYS `127.0.0.1` ON PURPOSE. This process runs two ways: as a host lane out of
+    `flows-up.sh` on the dogfood rig, and (new) as a container on the compose network. In a
+    container, loopback is the loopback of that container, so nothing else on the network can reach
+    it — which is why the interim wiring had to bind the lane to the docker bridge address by hand
+    and write a host-specific address into a deployment.
+
+    Flipping the default to `0.0.0.0` would fix the container and, the same day, publish the host
+    lane's port on every interface of the rig box: a deployment change smuggled in as a container
+    fix. So the container says `VEXA_FLOWS_API_HOST=0.0.0.0` in its own environment, out loud,
+    where an operator reading the compose file can see the exposure and its port binding together.
+    """
+    return (os.environ.get("VEXA_FLOWS_API_HOST") or "127.0.0.1").strip()
+
+
 def main() -> int:  # pragma: no cover — process entrypoint
     import uvicorn
     port = int(os.environ.get("VEXA_FLOWS_API_PORT", "18200"))
-    print(f"flows-api up on :{port} · vocabulary of {len(vocab.steps)} steps", flush=True)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    host = bind_host()
+    print(f"flows-api up on {host}:{port} · vocabulary of {len(vocab.steps)} steps", flush=True)
+    uvicorn.run(app, host=host, port=port, log_level="warning")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 # ── the MCP tool manifest (PRD decision 40) ───────────────────────────────────────────────────
@@ -522,3 +536,18 @@ def mcp_tools_manifest():
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=503,
                             detail=f"this build carries no tool manifest: {e}") from e
+
+
+# THE ENTRYPOINT GUARD IS THE LAST THING IN THIS MODULE, and that is load-bearing rather than
+# tidy. It used to sit above the manifest route, and `python -m flows_integrations.flows_api` —
+# the compose command, the helm command, the rig's command — runs this file AS `__main__`: the
+# guard fires, `main()` blocks inside `uvicorn.run`, and NOTHING BELOW IT IS EVER EXECUTED. So the
+# process that every deployment actually runs served /flows, /events and /health and answered 404
+# on `/.well-known/mcp-tools.json`, while the offline suite — which IMPORTS the module, where
+# `__name__` is not `__main__` and the whole file runs — proved the route existed and served the
+# right four tools. Green offline, absent live, and only the first live boot of the compose service
+# could tell them apart.
+#
+# Anything added after this line is invisible to the running service. Add routes ABOVE it.
+if __name__ == "__main__":
+    raise SystemExit(main())

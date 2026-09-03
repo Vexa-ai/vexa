@@ -76,9 +76,20 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # inside the deployment's own network) and lives in compose/helm, never here.
     "VEXA_FLOWS_GATEWAY_URL": ("required-explicit", None, "the meetings gateway."),
     "VEXA_FLOWS_ADMIN_API_URL": ("required-explicit", None, "admin-api's admin tier."),
-    "VEXA_UI_URL": ("required-explicit", None,
-                    "where a person's own terminal lives — it goes into every link we mail, so a "
-                    "localhost default is a dead button in every deployment that is not a laptop."),
+    # THE LINK PORT, and `capability` is what makes it one (PRD decision 4, founder 2026-09-03
+    # 09:56Z: *"fine as a port + adapter (P16): flows owns a link port, the terminal is one
+    # adapter, the no-agents product has none"*). It was `required-explicit`, which made a
+    # STEP-TIME link decide whether the process could BOOT: `preflight()` refused, so flows-api
+    # crash-looped on the compose network before it could serve /health or its tool manifest — and
+    # the no-agents product has no terminal to name. Unset is therefore a supported deployment,
+    # exactly as the agent door's absence is, and it is still not a silent one: `require` refuses
+    # at the moment a link would have been composed, naming this key (`ui_link`, `mint_scaffold`).
+    # There is still NO DEFAULT — a localhost default is a dead button in every deployment that is
+    # not a laptop, which is the reason the door rule exists at all.
+    "VEXA_UI_URL": ("capability", None,
+                    "where a person's own terminal lives — it goes into every link we mail. UNSET "
+                    "MEANS THIS DEPLOYMENT HAS NO TERMINAL ADAPTER: nothing is mailed with a link "
+                    "and any step that would compose one refuses, naming this key."),
     # THE AGENT DOMAIN'S PRESENCE SIGNAL (PRD decision 40.7: *"meetings, agents and flows work
     # independently and together in any configuration"*). `capability`, which is exactly what the
     # class means here — unset is not a misconfiguration, it is the `no-agents` profile, and every
@@ -93,13 +104,28 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "the engine's Postgres DSN. Unset falls back to the dogfood container lookup in "
         "`common.db_url`, which exists for the rig and never for a deployment."),
     "VEXA_FLOWS_API_PORT": ("defaulted", "18200", "the port flows-api binds."),
+    "VEXA_FLOWS_API_HOST": (
+        "defaulted", "127.0.0.1",
+        "the interface flows-api binds. Loopback by default because this process also runs as a "
+        "HOST LANE on the dogfood rig, where 0.0.0.0 would publish its port on every interface of "
+        "that box. The compose service sets 0.0.0.0 in its own environment — in a container "
+        "loopback is that container's own, so nothing else on the network can reach it, which is "
+        "why the interim wiring had to bind the lane to the docker bridge address by hand."),
 
     # ── the mailbox: which inbox, and what it will answer ───────────────────
     "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (real) or `mailpit` (the dev double)."),
+    # `capability`, not `required-explicit`, for the same reason as the agent door and the link
+    # port: a deployment may carry no mail intake at all (the no-agents MCP product does not), and
+    # the class that says so is the one that says a deployment is a product rather than a hole.
+    # Nothing changed operationally — flows' own `preflight` only ever enforced DOOR_KEYS, so this
+    # class was documentary — but the config.v1 declaration is read by the shared boot validator,
+    # where `required-explicit` means "refuse to boot" and would have refused the API lane over a
+    # key only the mailbox lane reads.
     "VEXA_MAIL_ADDR": (
-        "required-explicit", None,
-        "the address this deployment's mailbox answers as. It is also the identity every "
-        "allow-list is anchored on, so an unset value is not a cosmetic gap."),
+        "capability", None,
+        "the address this deployment's mailbox answers as, and the identity every allow-list is "
+        "anchored on. Unset = no mail intake; set without VEXA_MAIL_APP_PASSWORD is the "
+        "half-configured mailbox the capability's `all` mode calls misconfigured."),
     "VEXA_MAIL_APP_PASSWORD": ("capability", None, "the IMAP/SMTP credential paired with VEXA_MAIL_ADDR."),
     "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
@@ -164,7 +190,10 @@ class ConfigError(RuntimeError):
 
 
 #: The service endpoints flows reaches. `required-explicit` ones must be named by the deployment;
-#: the agent door is a capability, because its absence is a supported product configuration.
+#: the agent door and the link port are capabilities, because their absence is a supported product
+#: configuration — no agent domain (40.7) and no terminal adapter (decision 4) respectively.
+#: `missing_doors` filters on the CLASS, so a door moves between the two lists by reclassification
+#: in the table above and nowhere else.
 DOOR_KEYS = ("VEXA_FLOWS_GATEWAY_URL", "VEXA_FLOWS_ADMIN_API_URL", "VEXA_UI_URL",
              "VEXA_FLOWS_AGENT_API_URL")
 

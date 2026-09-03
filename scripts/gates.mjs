@@ -1013,6 +1013,24 @@ const CONFIG_ADOPTED = [
     compose: "mcp", helm: [], lite: null,
   },
   {
+    // #1453 + the compose-service branch: flows is a DEPLOYABLE DOMAIN now, not a pair of host
+    // lanes out of a rig script, and the seam backlog's B7 ("the config-contract gate is green
+    // over less than half the seam") named this brick by hand. `core/flows/src/flows_config.py`
+    // was written to make this adoption a transcription — one table, both directions asserted by
+    // its own test — and this entry is that transcription arriving.
+    // ONE DECLARATION, TWO COMPOSE LANES: `flows-api` and `flows-mailbox` are the same image under
+    // different commands and carry the same environment, so the declaration belongs to the domain
+    // and the entry binds it to the API lane.
+    // helm/lite are EMPTY: the flows helm chart plumbs its keys through a Secret's `stringData`,
+    // which the line-wise `- name:` scan cannot see, and there is no supervisord program at all.
+    // Naming a surface this check cannot actually read would be worse than saying it is not read.
+    service: "flows-api",
+    decl: "core/flows/src/config.v1.json",
+    preflight: "core/flows/src/config_preflight.py",
+    scan: ["core/flows/src"],
+    compose: "flows-api", helm: [], lite: null,
+  },
+  {
     service: "gateway",
     decl: "core/gateway/services/gateway/src/gateway/config.v1.json",
     preflight: "core/gateway/services/gateway/src/gateway/config_preflight.py",
