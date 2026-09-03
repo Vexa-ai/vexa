@@ -246,16 +246,23 @@ def d_compounding(rec: dict, earlier: list[dict]) -> tuple[float, dict]:
 # has anything to record at all. Two spellings of that rule is how a scorer ends up measuring
 # something the product never looked for — and the first version of this file WAS the second
 # spelling.
-# …and it is loaded BY PATH, not by package import. `from shared.entities import …` executes
-# `core/agent/shared/__init__.py`, whose convenience re-exports pull `shared.config` → pydantic and
-# pydantic_settings. `core/flows` advertises zero dependencies and its `make test` runs on a bare
-# python3, so that import killed the whole suite AT COLLECTION — 200 tests unrunnable to borrow one
-# stdlib-only regex. The module itself imports nothing outside the stdlib; only the package
-# __init__ does, so bypassing it is enough and keeps the one-extractor rule above intact.
+#
+# MERGE-TIME FIX (workspaces-domain-steps-0-2, F-D?): `entities.py` moved from
+# `core/agent/shared/` to `core/workspaces/shared/` — this file's hardcoded path was not repointed
+# by that move (a dynamic `importlib` load by file path is invisible to a static import-repoint
+# grep), so `gate:python` failed at collection with `FileNotFoundError` on the merged tree.
+#
+# …and it is STILL loaded BY PATH, not by package import, even though `core/workspaces/shared`'s
+# own `__init__.py` is now genuinely stdlib-only (no pydantic pull, unlike `core/agent/shared`'s —
+# see that package's own docstring). Keeping the by-path load anyway: it is already proven safe,
+# needs no `core/workspaces` on `sys.path`, and the original hazard this comment describes
+# (`core/agent/shared/__init__.py` pulling pydantic/pydantic_settings into a package that
+# advertises zero dependencies) is exactly the class of bug a static import would still risk in
+# THIS package if `core/workspaces/shared/__init__.py` ever grows one.
 def _load_candidate_names():
     import importlib.util
 
-    src = pathlib.Path(__file__).resolve().parents[3] / "agent" / "shared" / "entities.py"
+    src = pathlib.Path(__file__).resolve().parents[3] / "workspaces" / "shared" / "entities.py"
     spec = importlib.util.spec_from_file_location("_vexa_entities", src)
     if spec is None or spec.loader is None:  # pragma: no cover — a missing file is a broken checkout
         raise ImportError(f"cannot load the shared extractor from {src}")
