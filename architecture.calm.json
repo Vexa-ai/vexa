@@ -1271,6 +1271,18 @@
    ]
   },
   {
+   "unique-id": "flows.v1",
+   "node-type": "contract",
+   "name": "flows.v1",
+   "description": "flows.v1 — the carrier census (flows): every event type with exactly one producing domain, its owner, the refs a consumer may rely on, and its cardinality. IN DEVELOPMENT (unsealed). This is how two domains couple without either depending on the other — a publish edge is not a dependency — so the census is what makes 'who publishes this fact' answerable from a declaration instead of from grep.",
+   "metadata": [
+    {
+     "path": "core/flows/contracts/flows.v1",
+     "domain": "flows"
+    }
+   ]
+  },
+  {
    "unique-id": "flows-rows",
    "node-type": "data-asset",
    "name": "flows-rows",

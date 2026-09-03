@@ -84,6 +84,23 @@ def test_the_payload_is_subject_org_and_seat(client, published):
     assert str(refs["subject"]) == str(uid)
 
 
+def test_org_is_present_and_empty_because_identity_holds_no_org(client, published):
+    """A CHARACTERISATION TEST, deliberately — it pins behaviour that was already right by
+    accident and makes it right on purpose.
+
+    Identity has no organisation concept: no column, no create field, nothing. The publisher used
+    to read `u.data.get("org")` on the dict assigned two lines above it, so the value was never
+    anything but None while LOOKING like a lookup — which is the worst version of this, because it
+    reads as though somebody checked, and the next person to need an org would have gone looking
+    for where it was set. The ref is emitted EMPTY rather than omitted, because a consumer that
+    finds the key missing cannot tell "identity has no org" from "identity did not look", and the
+    one that cannot tell will infer one from the email domain."""
+    _create(client, "noorg@corp.example.com")
+    refs = published[0]["subject_refs"]
+    assert refs["org"] == "", "an org appeared from somewhere identity does not have one"
+    assert refs["seat"] == "member", "every person through this door gets the same seat"
+
+
 def test_the_source_event_id_is_the_subject_so_a_replay_dedupes(client, published):
     """flows admits on (source_event_id, flow). Keying the id to the person means a re-delivery of
     this fact is a no-op there as well as here — belt and braces, because a double charge is not a
@@ -108,16 +125,49 @@ def test_the_stamp_is_recorded_on_the_person(client, published):
     assert row["data"].get("onboarding_completed_at"), "nothing records that this fact was emitted"
 
 
-def test_a_person_who_already_carries_the_stamp_is_never_republished(client, published):
-    """The exactly-once guarantee is the STAMP, not the create path — so it holds against a replay,
-    a restore, or a second producer somebody adds later without reading this file."""
+def test_a_second_create_for_the_same_person_publishes_nothing(client, published):
+    """THE GUARD IS THE CREATE PATH, and it is worth being exact about which half does what,
+    because the two are easy to swap and only one of them is load-bearing at publish time.
+
+    The GUARD is this route's own case-folded email lookup: a second POST for the same address
+    returns the existing person and never reaches the publish. The STAMP is not a guard — nothing
+    consults it before publishing — it is the durable RECORD that the fact was emitted, written in
+    the same transaction as the account so a publish that never landed can be swept and replayed
+    from it, and so that a second producer added later has something to consult instead of
+    guessing. Saying the stamp is the guarantee would be a claim this file does not prove."""
     uid = _create(client, "again@vexa.ai").json()["id"]
     published.clear()
-    events_mod.publish_onboarding_completed_sync = None    # ensure no other path is involved
     r = client.post("/admin/users", headers=_admin(), json={"email": "again@vexa.ai"})
     assert r.status_code in (200, 201, 409)
     assert published == [], "the same person was onboarded twice"
     assert client.get(f"/admin/users/{uid}", headers=_admin()).status_code == 200
+
+
+def test_the_stamp_is_not_rewritten_when_the_same_person_comes_back(client, published):
+    """It records WHEN onboarding completed, so a second sign-in must not move it. A stamp that
+    slides forward on every visit is a timestamp of the last sign-in wearing the name of the
+    first, and any sweep or billing question asked of it gets a confidently wrong answer."""
+    uid = _create(client, "stable@vexa.ai").json()["id"]
+    first = client.get(f"/admin/users/{uid}", headers=_admin()).json()["data"]["onboarding_completed_at"]
+    client.post("/admin/users", headers=_admin(), json={"email": "stable@vexa.ai"})
+    again = client.get(f"/admin/users/{uid}", headers=_admin()).json()["data"]["onboarding_completed_at"]
+    assert again == first, "the onboarding stamp moved on a return visit"
+
+
+def test_the_carrier_the_route_publishes_is_the_one_identity_owns_in_the_census(client, published):
+    """The publisher and the carrier census are two halves of one fact. gate:config-contract checks
+    the declaration against the census; this checks the CODE against it, so the event name cannot
+    drift from the registry through a path no gate reads."""
+    import json as _json
+    import pathlib as _pathlib
+    census = _pathlib.Path(__file__).resolve().parents[5] / "core/flows/contracts/flows.v1/carriers.json"
+    owners = {c["event"]: c for c in _json.loads(census.read_text())["carriers"]}
+    _create(client, "census@vexa.ai")
+    event = published[0]["event_type"]
+    assert event in owners, f"{event} is published by identity and registered nowhere"
+    assert owners[event]["owner"] == "identity"
+    assert set(published[0]["subject_refs"]) >= set(owners[event]["refs"]), \
+        "the payload omits a ref the census promises a consumer"
 
 
 # ── it fires in every configuration ──────────────────────────────────────────────────────────

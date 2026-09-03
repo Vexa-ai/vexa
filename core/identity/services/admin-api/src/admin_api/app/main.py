@@ -19,6 +19,7 @@ exercises:
 """
 import hmac
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -454,10 +455,9 @@ def create_app() -> FastAPI:
         # was onboarded survives a publish that never lands — a later sweep can replay from it. That
         # ordering is the whole exactly-once guarantee: it holds against a replay, a restore, and a
         # second producer somebody adds later without reading this comment.
-        import time as _time
         u = User(email=user_in.email, name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
-        u.data = {"onboarding_completed_at": _time.time()}
+        u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
         db.add(u)
         await db.commit()
         await db.refresh(u)
@@ -467,11 +467,21 @@ def create_app() -> FastAPI:
         # Guarded HERE as well as inside the publisher, and neither one alone is load-bearing: the
         # publisher swallows transport failures, this swallows a publisher that changes shape. The
         # thing being protected is a person's sign-in, and it must not depend on anyone remembering.
+        #
+        # `org` IS EMPTY, AND IT IS PRESENT. Identity holds no organisation for a person — there is
+        # no org column, no org field on the create body, and no org anywhere in this service — so
+        # the honest value is the empty one. It is emitted rather than omitted because a consumer
+        # that finds the key missing cannot tell "identity has no org for them" from "identity did
+        # not look", and would go and infer one from the email domain: a second place the answer
+        # lives, which is what stating every ref exists to prevent. The earlier shape here read
+        # `u.data.get("org")` on the dict assigned two lines above, so it was never anything but
+        # None while LOOKING like a lookup — the worst version of this, because it reads as though
+        # somebody checked.
         try:
             events_mod.publish(
                 events_mod.EVENT_ONBOARDING_COMPLETED,
                 events_mod.onboarding_source_id(u.id),
-                events_mod.onboarding_refs(u.id, (u.data or {}).get("org"), "member"))
+                events_mod.onboarding_refs(u.id, events_mod.NO_ORG, events_mod.DEFAULT_SEAT))
         except Exception:  # noqa: BLE001 — a publish edge is not a dependency
             pass
         response.status_code = status.HTTP_201_CREATED

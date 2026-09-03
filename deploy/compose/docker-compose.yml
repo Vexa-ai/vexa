@@ -102,6 +102,13 @@ services:
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
+      # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
+      # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —
+      # a deployment with no flows domain still onboards people, and the fact stays stamped on
+      # the person either way. The key authenticates the same edge; flows' POST /events is not open.
+      - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
       interval: 10s

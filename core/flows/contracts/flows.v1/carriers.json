@@ -1,0 +1,28 @@
+{
+  "contract": "flows.v1",
+  "carriers": [
+    {
+      "event": "onboarding.completed",
+      "owner": "identity",
+      "cardinality": "exactly_once_per_subject",
+      "refs": ["subject", "org", "seat"],
+      "source_event_id": "onboarding-<subject> — keyed to the person, so a redelivery dedupes at the flows intake as well as at the stamp",
+      "stamp": "users.data.onboarding_completed_at, written in the same transaction as the account (admin-api POST /admin/users)",
+      "description": "A person finished onboarding. Published by identity at POST /admin/users — the single account-creation point all five onboarding paths already share (the control MCP's sign-in verbs, its OAuth door, its account_for helper, the terminal's auth, and the flows mail door), so one publish covers all five and none of them had to be refactored. Fires in every profile including the no-agents one. `seat` is what a billing domain charges for and `org` is what it charges; `org` is empty today because identity holds no organisation for a person, and it is present-and-empty rather than absent so a consumer never has to ask a second place whether it looked."
+    },
+    {
+      "event": "meeting.completed",
+      "owner": "flows",
+      "cardinality": "once_per_occurrence",
+      "refs": ["subject", "meeting_id"],
+      "description": "A meeting finished and its transcript is ready to work with; triggers post_meeting. Recorded here from the producing domain's own manifest (core/flows/mcp.tools.v1.json `publishes_events`) rather than asserted afresh — this census is a reading of what the repository already declares, and gate:config-contract plus the flows suite hold the two in agreement."
+    },
+    {
+      "event": "invite.received",
+      "owner": "flows",
+      "cardinality": "once_per_occurrence",
+      "refs": ["subject"],
+      "description": "An invitation arrived at the shared mailbox; triggers invite_intake. Recorded here from core/flows/mcp.tools.v1.json `publishes_events`, on the same terms as meeting.completed."
+    }
+  ]
+}

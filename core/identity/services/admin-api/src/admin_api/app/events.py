@@ -32,6 +32,17 @@ from typing import Optional
 
 EVENT_ONBOARDING_COMPLETED = "onboarding.completed"
 
+#: The org this deployment's identity knows for a person: none. Identity has no organisation
+#: concept — no column, no create field, nothing — so the ref is emitted EMPTY rather than omitted.
+#: A missing key cannot be told apart from a key nobody looked up, and the consumer that cannot
+#: tell will infer one from the email domain, which is a second place the answer lives. Named, so
+#: that the day identity does hold an org there is one place to change and a test that fails.
+NO_ORG = ""
+
+#: Every person onboarded through this door gets the same seat. There is no seat model in identity
+#: either; a billing domain that needs tiers reads them from wherever it prices, not from here.
+DEFAULT_SEAT = "member"
+
 #: Bounded on purpose. This runs inside the request that creates a person, so the ceiling on how
 #: slow flows can make sign-in is this number, not flows' own timeout.
 TIMEOUT_S = 2.0
