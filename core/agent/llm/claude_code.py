@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from llm.errors import looks_like_auth_failure, preflight_provider_guard
-from llm.ports import HarnessExec, harness_subprocess_env
+from llm.ports import HarnessExec, close_event_stream, harness_subprocess_env
 
 
 # Tools whose SUCCESS means a document now exists that the person should be looking at. The
@@ -165,112 +165,120 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     pending_terms: set[str] = set()
     # callIds of in-flight `bot_send` calls — same per-stream, popped-on-result discipline.
     pending_bots: set[str] = set()
-    for raw in lines:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        t = obj.get("type")
-        if t == "stream_event":
-            event = obj.get("event", {}) or {}
-            if event.get("type") == "content_block_delta":
-                delta = event.get("delta", {}) or {}
-                if delta.get("type") == "text_delta" and delta.get("text"):
-                    streamed_partial = True
-                    yield {"type": "message-delta", "text": delta["text"]}
-        elif t == "assistant":
-            for block in obj.get("message", {}).get("content", []) or []:
-                bt = block.get("type")
-                if bt == "text" and block.get("text"):
-                    if not streamed_partial:  # no partials → emit the whole block (back-compat)
-                        yield {"type": "message-delta", "text": block["text"]}
-                elif bt == "tool_use":
-                    tool_name = block.get("name", "")
-                    call_id = block.get("id", "")
-                    # THE PANEL FOLLOWS THE WRITE, and the record is what makes it follow (decision
-                    # 18: layout is a function of the chat's state, never of the client's guess).
-                    # The founder watched the agent create a shared workspace and write its README
-                    # while the panel sat on `_global/README.md` — the document it had just made was
-                    # the one thing not on screen. The argument names the file; remember it now,
-                    # because the tool RESULT carries only a summary string and by then the path is
-                    # gone.
-                    if tool_name in _WRITER_TOOLS:
-                        target = _written_artifact(tool_name, block.get("input", {}) or {})
-                        if target:
-                            pending_writes[call_id] = target
-                    elif tool_name in _TERMS_TOOLS:
-                        pending_terms.add(call_id)
-                    elif tool_name in _BOT_TOOLS:
-                        pending_bots.add(call_id)
-                    yield {
-                        "type": "tool-call",
-                        "tool": tool_name,
-                        "args": block.get("input", {}),
-                        "callId": call_id,
-                    }
-        elif t == "user":
-            for block in obj.get("message", {}).get("content", []) or []:
-                if block.get("type") == "tool_result":
-                    call_id = block.get("tool_use_id", "")
-                    ok = not block.get("is_error", False)
-                    yield {
-                        "type": "tool-result",
-                        "callId": call_id,
-                        "ok": ok,
-                        "summary": _short(block.get("content")),
-                    }
-                    # ONLY ON SUCCESS. A failed write must not open a tab: the file is not there,
-                    # and a tab on a path that does not exist is exactly the "page that can never
-                    # load" this stream is careful about elsewhere. `pop` either way, so a failed
-                    # call cannot leave an entry that a later, unrelated result matches.
-                    # THE CHIPS (decision 35). Same success-only rule as the artifact below:
-                    # a failed read must not paint a transcript.
-                    was_terms = call_id in pending_terms
-                    pending_terms.discard(call_id)
-                    if was_terms and ok:
-                        ev = _published_terms(block.get("content"))
-                        if ev:
-                            yield ev
-                    # THE BOT IS IN THE ROOM — open its transcript. Success-only, like the two
-                    # above: a send that failed must not front a transcript that will stay empty.
-                    was_bot = call_id in pending_bots
-                    pending_bots.discard(call_id)
-                    if was_bot and ok:
-                        ev = _bot_artifact(block.get("content"))
-                        if ev:
-                            yield ev
-                    target = pending_writes.pop(call_id, None)
-                    if target and ok:
-                        workspace, path = target
+    try:
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            t = obj.get("type")
+            if t == "stream_event":
+                event = obj.get("event", {}) or {}
+                if event.get("type") == "content_block_delta":
+                    delta = event.get("delta", {}) or {}
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        streamed_partial = True
+                        yield {"type": "message-delta", "text": delta["text"]}
+            elif t == "assistant":
+                for block in obj.get("message", {}).get("content", []) or []:
+                    bt = block.get("type")
+                    if bt == "text" and block.get("text"):
+                        if not streamed_partial:  # no partials → emit the whole block (back-compat)
+                            yield {"type": "message-delta", "text": block["text"]}
+                    elif bt == "tool_use":
+                        tool_name = block.get("name", "")
+                        call_id = block.get("id", "")
+                        # THE PANEL FOLLOWS THE WRITE, and the record is what makes it follow (decision
+                        # 18: layout is a function of the chat's state, never of the client's guess).
+                        # The founder watched the agent create a shared workspace and write its README
+                        # while the panel sat on `_global/README.md` — the document it had just made was
+                        # the one thing not on screen. The argument names the file; remember it now,
+                        # because the tool RESULT carries only a summary string and by then the path is
+                        # gone.
+                        if tool_name in _WRITER_TOOLS:
+                            target = _written_artifact(tool_name, block.get("input", {}) or {})
+                            if target:
+                                pending_writes[call_id] = target
+                        elif tool_name in _TERMS_TOOLS:
+                            pending_terms.add(call_id)
+                        elif tool_name in _BOT_TOOLS:
+                            pending_bots.add(call_id)
                         yield {
-                            "type": "artifact",
-                            "workspace": workspace,
-                            "path": path,
-                            "focus": True,
+                            "type": "tool-call",
+                            "tool": tool_name,
+                            "args": block.get("input", {}),
+                            "callId": call_id,
                         }
-        elif t == "result":
-            reply = obj.get("result", "")
-            done = {
-                "type": "done",
-                "reply": reply,
-                "sessionId": obj.get("session_id"),
-                "ok": obj.get("is_error") is not True and obj.get("subtype") != "error",
-            }
-            if not done["ok"] and looks_like_auth_failure(reply):
-                # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
-                # THIS adapter — /login doesn't exist for an API consumer. Rewrite to the
-                # platform-actionable message; the raw text rides along in `detail` (additive).
-                done["detail"] = _short(reply, 200)
-                done["reply"] = (
-                    "Model credentials are missing or expired for this deployment. "
-                    "Set or refresh one of HOST_CLAUDE_CREDENTIALS, ANTHROPIC_API_KEY, "
-                    "ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, "
-                    "or configure a model under Settings → Models."
-                )
-            yield done
+            elif t == "user":
+                for block in obj.get("message", {}).get("content", []) or []:
+                    if block.get("type") == "tool_result":
+                        call_id = block.get("tool_use_id", "")
+                        ok = not block.get("is_error", False)
+                        yield {
+                            "type": "tool-result",
+                            "callId": call_id,
+                            "ok": ok,
+                            "summary": _short(block.get("content")),
+                        }
+                        # ONLY ON SUCCESS. A failed write must not open a tab: the file is not there,
+                        # and a tab on a path that does not exist is exactly the "page that can never
+                        # load" this stream is careful about elsewhere. `pop` either way, so a failed
+                        # call cannot leave an entry that a later, unrelated result matches.
+                        # THE CHIPS (decision 35). Same success-only rule as the artifact below:
+                        # a failed read must not paint a transcript.
+                        was_terms = call_id in pending_terms
+                        pending_terms.discard(call_id)
+                        if was_terms and ok:
+                            ev = _published_terms(block.get("content"))
+                            if ev:
+                                yield ev
+                        # THE BOT IS IN THE ROOM — open its transcript. Success-only, like the two
+                        # above: a send that failed must not front a transcript that will stay empty.
+                        was_bot = call_id in pending_bots
+                        pending_bots.discard(call_id)
+                        if was_bot and ok:
+                            ev = _bot_artifact(block.get("content"))
+                            if ev:
+                                yield ev
+                        target = pending_writes.pop(call_id, None)
+                        if target and ok:
+                            workspace, path = target
+                            yield {
+                                "type": "artifact",
+                                "workspace": workspace,
+                                "path": path,
+                                "focus": True,
+                            }
+            elif t == "result":
+                reply = obj.get("result", "")
+                done = {
+                    "type": "done",
+                    "reply": reply,
+                    "sessionId": obj.get("session_id"),
+                    "ok": obj.get("is_error") is not True and obj.get("subtype") != "error",
+                }
+                if not done["ok"] and looks_like_auth_failure(reply):
+                    # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
+                    # THIS adapter — /login doesn't exist for an API consumer. Rewrite to the
+                    # platform-actionable message; the raw text rides along in `detail` (additive).
+                    done["detail"] = _short(reply, 200)
+                    done["reply"] = (
+                        "Model credentials are missing or expired for this deployment. "
+                        "Set or refresh one of HOST_CLAUDE_CREDENTIALS, ANTHROPIC_API_KEY, "
+                        "ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, "
+                        "or configure a model under Settings → Models."
+                    )
+                yield done
+    finally:
+        # THE KILL HAPPENS HERE, on every interpreter. `lines` is `_exec_subprocess`'s generator and
+        # its `finally` is what reaps the CLI child; a `for` loop hands that last hop to refcount
+        # finalization, which on CPython 3.12.3 did not run it at all (Vexa-ai/vexa#1434) — the
+        # phase's budget then stopped READING the process without stopping it. Closing explicitly is
+        # what makes the budget's stop a kill rather than a hope.
+        close_event_stream(lines)
 
 
 def build_argv(

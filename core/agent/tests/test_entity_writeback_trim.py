@@ -276,33 +276,80 @@ def test_a_phase_over_budget_leaves_no_child_process(tmp_path, monkeypatch):
     assert len(seen) == 1
     proc = seen[0]
 
-    # WAIT FOR THE REAP — bounded, and not a sleep.
+    # THE KILL IS SYNCHRONOUS, and this assertion is taken on the next bytecode on purpose.
     #
-    # The property is that the budget kills the CLI, and it is delivered by a cascade: `bounded`
-    # closes its iterator, GeneratorExit unwinds `parse_stream_json`, THAT frame's teardown drops
-    # the last reference to the `_exec_subprocess` generator, and only then does its `finally`
-    # reap. The last hop is finalization, not a call — so the guarantee the code offers is PROMPT,
-    # never INSTANTANEOUS, and an assertion taken on the next bytecode was reading a coin flip.
-    # It came up heads on every developer machine and tails on CI: red on three consecutive PRs
-    # into this line (#1426, #1428, #1431), and not reproducible in 40 single-CPU-pinned runs or a
-    # full-suite run on 3.12 and 3.14 (Vexa-ai/vexa#1434).
+    # Every hop of the cascade now closes what it wraps EXPLICITLY: `bounded` closes its iterator,
+    # `parse_stream_json` closes `_exec_subprocess`'s generator in its own `finally`, and that
+    # generator's `finally` reaps. Nothing is left to finalization, so by the time `bounded` has
+    # returned the child is already gone — on every interpreter, not just the ones whose refcount
+    # teardown happened to run it.
     #
-    # This is a poll with a deadline, not `sleep(n)`: it returns the microsecond the reap lands, so
-    # a healthy run costs nothing, and 5s is far outside any scheduling delay while staying far
-    # inside the suite's patience. Every property the docstring above names survives it — with the
-    # kill path deleted, `_reap`'s bare `proc.wait()` still blocks inside the cascade and this test
-    # still hangs, which is the failure it was written to name.
+    # ⚠ THE 5-SECOND WAIT THAT USED TO BE HERE IS DELETED, AND ITS DELETION IS PART OF THE FIX.
+    # #1441 replaced this assertion with a bounded poll on the theory that the reap was merely late.
+    # CI then waited the full five seconds with the child still alive (#1434): the last hop was
+    # finalization and on CPython 3.12.3 it never ran at all. A wait cannot turn a kill that does
+    # not happen into one, and it would hide the day this one stops happening again.
     #
     # `events` is deliberately still referenced here. Dropping it would close the chain from the
     # test instead of from `bounded`, and the test would then pass with `bounded`'s own
     # `finally: gen.close()` deleted — proving the cascade, not the budget.
-    deadline = time.monotonic() + 5.0
-    while proc.poll() is None and time.monotonic() < deadline:
-        time.sleep(0.005)
 
     assert proc.poll() is not None, "the CLI is still running after the budget stopped reading it"
     with pytest.raises(ProcessLookupError):
         os.kill(proc.pid, 0)
+
+
+def test_the_kill_survives_somebody_else_holding_the_stream(tmp_path, monkeypatch):
+    """The reap is delivered by a CLOSE, never by whoever happens to drop the last reference.
+
+    The test above proves the child dies. This one proves WHY, and it is the property #1434 was
+    actually missing: there, `parse_stream_json` released `_exec_subprocess`'s generator only when
+    its own frame was torn down, so the kill was really being delivered by CPython's refcounting.
+    On 3.12.3 that teardown did not run and the child outlived the budget; on 3.12.13 it did. Same
+    code, same tree, same machine — a coin the interpreter tossed.
+
+    So this holds a SECOND strong reference to that generator for the whole run — a spy, a
+    debugger, a future caller that keeps the stream around to read `gi_frame` — under which
+    refcount finalization simply cannot fire, on any interpreter. Measured with
+    `parse_stream_json`'s explicit close deleted: the child is STILL RUNNING when `bounded`
+    returns, on 3.12.3 and on 3.12.13 alike. With it: reaped, both. That is the difference between
+    a budget that bounds something and one that only stops reading.
+    """
+    import os
+    import subprocess as sp
+
+    from llm import claude_code as cc
+
+    seen = []
+
+    class _Recorder:
+        TimeoutExpired = sp.TimeoutExpired
+        PIPE, STDOUT = sp.PIPE, sp.STDOUT
+
+        @staticmethod
+        def Popen(*a, **kw):
+            proc = sp.Popen(*a, **kw)
+            seen.append(proc)
+            return proc
+
+    monkeypatch.setattr(cc, "subprocess", _Recorder)
+    monkeypatch.setenv("VEXA_HARNESS_REAP_GRACE_SEC", "0.3")
+
+    line = ('{"type":"assistant","message":{"content":[{"type":"tool_use",'
+            '"name":"mcp__vexa__entity_upsert","id":"c","input":{}}]}}')
+    argv = ["sh", "-c", f"echo '{line}'; echo '{line}'; echo '{line}'; sleep 300"]
+
+    # THE SECOND REFERENCE, and it is the whole test. `inner` stays live in this frame past the
+    # assertions, so nothing about the child's death can be attributed to a refcount reaching zero.
+    inner = cc._exec_subprocess(argv, str(tmp_path))
+    out = list(engine.bounded(cc.parse_stream_json(inner), max_tool_calls=2, max_seconds=10))
+
+    assert out[-1]["type"] == "writeback-truncated"
+    proc = seen[0]
+    assert proc.poll() is not None, "the CLI outlived the budget because somebody still held the stream"
+    with pytest.raises(ProcessLookupError):
+        os.kill(proc.pid, 0)
+    assert inner.gi_frame is None, "the subprocess generator was never closed, only abandoned"
 
 
 def test_a_phase_inside_its_budget_is_waited_for_not_killed(tmp_path, monkeypatch):
