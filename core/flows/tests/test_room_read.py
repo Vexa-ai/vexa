@@ -354,10 +354,20 @@ def test_every_room_field_flows_sends_is_declared_in_agent_apis_ChatBody():
 
     here = pathlib.Path(__file__).resolve()
     root = next(p for p in here.parents if (p / "core" / "agent").is_dir())
-    api = root / "core" / "agent" / "control_plane" / "api.py"
-    assert api.is_file(), f"agent-api source not found at {api}"
-
-    src = api.read_text()
+    # SEARCH THE CONTROL PLANE, not one file. `ChatBody` lived in `api.py` until agent-api split
+    # that module into `control_plane/routers/` plus `api_shared.py` (PR #1459); the request models
+    # moved with it. Pinning the filename made this guard fail closed on a pure refactor — correct,
+    # but it also means the guard is dark until someone repoints it, and a dark cross-domain guard
+    # is exactly what let the 2026-09-02 mismatch through. Finding the class wherever it lives keeps
+    # the check crude (still a regex over source, still no import) and keeps it ALIVE across moves.
+    plane = root / "core" / "agent" / "control_plane"
+    src = ""
+    for cand in sorted(plane.rglob("*.py")):
+        text = cand.read_text()
+        if "class ChatBody(BaseModel):" in text:
+            src = text
+            break
+    assert src, f"agent-api's ChatBody not found anywhere under {plane}"
     m = re.search(r"class ChatBody\(BaseModel\):(.*?)(?=\nclass )", src, re.S)
     assert m, "could not find ChatBody in agent-api's api.py"
     declared = set(re.findall(r"^\s{4}([a-z_][a-z0-9_]*)\s*:", m.group(1), re.M))

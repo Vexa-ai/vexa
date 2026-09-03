@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, retry, wake  # noqa: E402
+from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
 import flows_config  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
@@ -104,7 +104,7 @@ TIMELINE_KEY = _timeline_key()
 flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
 INTERNAL_SECRET = require_internal_secret()
 
-db = postgres_db(db_url())
+db = db_from_url(db_url())
 clock = SystemClock()
 vocab = Registry()
 production.build(vocab, db)
@@ -139,6 +139,23 @@ def timeline_auth(x_flows_admin_key: str = Header(default="")) -> None:
     if _same_key(x_flows_admin_key, API_KEY) or _same_key(x_flows_admin_key, TIMELINE_KEY):
         return
     raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
+
+
+@app.get("/health")
+def health():
+    """Liveness, and the ONE route on this surface that takes no credential.
+
+    A probe that needs a key is not a liveness probe: the orchestrator holding it would be a second
+    place the operator key has to reach, and a 401 and a dead process look identical to a restart
+    policy. Nothing here is a secret — the two counts are the in-memory registry's depth, the same
+    shape meeting-api's receiver reports beside its own status.
+
+    LIVENESS, NOT READINESS: it touches no database. `postgres_db` is lazy, so a flows-api that
+    cannot reach Postgres still answers here, which is correct — this says the process is up, and
+    the reaction loop's own health is `GET /reactions`, behind the key, where it belongs.
+    """
+    return {"status": "ok", "service": "flows-api",
+            "flows": len(vocab.flows), "steps": len(vocab.steps)}
 
 
 def _refuse_if_gated(verb: str) -> None:

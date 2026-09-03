@@ -384,7 +384,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "provider-agnostic llm-module credential path, brokered into spawned workers (CompletionPort adapters)",
+      "description": "provider-agnostic llm-module credential path, brokered into spawned workers (the HarnessPort adapters in core/agent/llm)",
       "targets": [
         "compose"
       ]

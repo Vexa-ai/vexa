@@ -3,7 +3,6 @@
 // (a) intra-package — a relative path OR the `@/*` tsconfig alias (→ ./src/*), (b) a Node/
 // browser builtin, or (c) a DECLARED dep in package.json. An undeclared bare/npm import →
 // violation (the app must declare what it pulls in, so it installs + builds standalone).
-// Dynamic `import(`${expr}`)` (template literals) are not static specifiers and are skipped.
 // ESM ("type":"module" not set on this app, but node runs .js as ESM here via the import syntax
 // — the gate invokes `node scripts/check-isolation.js`).
 import { readFileSync, readdirSync } from "node:fs";
@@ -54,6 +53,41 @@ function stripComments(src) {
   return out;
 }
 
+/** The import forms this gate must see, and only those.
+ *
+ *  ⚠ 2026-09-02, second occurrence: the specifier regex was `from\s+['"]…['"]` with no anchor, so
+ *  it read the words `from "…"` as an import ANYWHERE they appeared — including inside a string
+ *  literal and inside a regular-expression literal. Stripping comments (below) fixed the prose
+ *  half; a regex literal is code, survives that strip, and failed a push the same day. Both are
+ *  the same defect: a gate reporting a real-looking violation, with a file name and a specifier,
+ *  and being wrong.
+ *
+ *  A static import or re-export is a STATEMENT: it begins a line. Anchoring at line start is what
+ *  separates the keyword from the same six letters quoted inside an expression — and the clause
+ *  may span lines but never crosses a quote or a semicolon, so it cannot run out of its own
+ *  statement into the next one.
+ *
+ *  1. `import … from "x"` / `export … from "x"` — the multi-line `{ a, b }` clause included.
+ *  2. `import "x"` — the side-effect form, which the previous regex did not see at all.
+ *  3. `require("x")`, wherever it sits — a call, not a statement, so it cannot be anchored; the
+ *     preceding-character guard keeps `myrequire(` out.
+ *
+ *  Deliberately NOT a form: a bare `import("x")`. In TypeScript those same characters are also the
+ *  TYPE-QUERY form — `Content: import("mdx/types").MDXContent` (ui-kit/MdxDoc.tsx:268) names a type
+ *  package that is never installed as a runtime dependency and must not be reported as one. Telling
+ *  a type query from a dynamic import needs a parser, which this is deliberately not, and no file in
+ *  src/ loads a runtime module that way.
+ *
+ *  Known and accepted: a multi-line template literal containing a line that itself begins with
+ *  `import … from "…"` (a code sample in a string) still matches form 1. Nothing in this tree does
+ *  that, and separating it needs a real parser, which this is deliberately not.
+ */
+const IMPORT_SPECIFIER = new RegExp([
+  String.raw`^[ \t]*(?:import|export)\b(?:[^;'"\n]|\n)*?\bfrom\s*['"]([^'"\n]+)['"]`,
+  String.raw`^[ \t]*import\s+['"]([^'"\n]+)['"]`,
+  String.raw`(?<![\w$.])require\(\s*['"]([^'"\n]+)['"]\s*\)`,
+].join("|"), "gm");
+
 let files = 0;
 const violations = [];
 (function walk(d) {
@@ -63,8 +97,8 @@ const violations = [];
     else if (e.name.endsWith(".ts") || e.name.endsWith(".tsx")) {
       files++;
       const src = stripComments(readFileSync(p, "utf8"));
-      for (const m of src.matchAll(/from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
-        const spec = m[1] || m[2];
+      for (const m of src.matchAll(IMPORT_SPECIFIER)) {
+        const spec = m[1] || m[2] || m[3];
         if (spec.includes("${")) continue;                             // a `from "${x}"` substring inside a template/string literal, not a real import
         if (spec.startsWith(".") || spec.startsWith("@/")) continue;    // intra-package (relative or @/* alias)
         const bare = spec.startsWith("node:") ? spec.slice(5) : spec;

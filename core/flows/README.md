@@ -14,6 +14,9 @@ time, and every touch of the outside world leaves an `effect_receipt` a retry co
   clock consumer. Waits cost nothing; escalation is `blocked_deadline`, one column not a service.
 - **Testing:** the whole failure matrix runs offline on stdlib sqlite with `FakeClock` and fake
   steps — zero domains attached. Postgres is the production dialect (see `schema.sql`).
+  `pyproject.toml` is what puts that suite in CI: `gate:python` discovers a tree by `pyproject.toml`
+  + `tests/`, so `make test` and the gate now run the same thing. `tests/test_contract_smokes.py`
+  is the one exception — it asserts the LIVE stack shapes and skips itself when the stack is down.
 
 Layering (dependency, not data): flows → domain HTTP APIs → runtime. Domains never know flows
 exists — they only write outbox facts. Tactical retries (bot reconnects, webhook delivery) stay in

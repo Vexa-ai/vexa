@@ -38,7 +38,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset recording-blob [writers: bot, meeting-api]
   data-asset userdata-blob [writers: remote-browser, bot]
 
-system agent  # copilot; owns the processed (cleaned) transcript + signals
+system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api
   contract event.v1
   contract invoke.v1
@@ -84,6 +84,12 @@ system platform  # shared infra backing the services
   service redis
   database postgres
   service minio
+
+system flows  # the reaction engine; owns the reaction row and its effect receipts
+  module flows-engine
+  service flows-api
+  service flows-worker
+  data-asset flows-rows
 
 edges:
   bot -write-> segments-stream
@@ -134,8 +140,14 @@ edges:
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
+  flows-worker -write-> flows-rows
+  flows-api -read-> flows-rows
+  flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
+  flows-worker -req-> gateway
+  flows-worker -req-> admin-api
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
+  flows-api, flows-worker deployed-in deploy
 
 flows:
   live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative

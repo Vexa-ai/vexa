@@ -79,6 +79,26 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     return db
 
 
+def db_from_url(url: str):
+    """The DB the URL names. Postgres is the production dialect; sqlite is the offline one.
+
+    Composition sites used to call `postgres_db` directly, which made the dialect a property of the
+    CALLER rather than of the configuration — so `flows_api` could not be imported at all without a
+    reachable Postgres, because `postgres_db` applies the schema at construction (below). That is
+    correct for a service booting against its own database and wrong for anything that only wants
+    the app object: a liveness probe, an import-time check, the offline suite that already runs the
+    whole failure matrix on `SqliteDB`.
+
+    One function, and the same rule everywhere: a `sqlite://` URL gets the sqlite dialect, anything
+    else gets Postgres. No flag, no test-only branch — the deployment's own URL decides.
+    """
+    if url.startswith("sqlite"):
+        # sqlite:///path → the path; sqlite:// and sqlite:///:memory: → in-memory
+        tail = url.split("://", 1)[1].lstrip("/")
+        return SqliteDB(tail or ":memory:")
+    return postgres_db(url)
+
+
 def dumps(v: Any) -> str:
     return json.dumps(v, separators=(",", ":"), sort_keys=True)
 
