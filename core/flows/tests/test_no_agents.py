@@ -218,3 +218,90 @@ def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(m
             assert st["status"] == "done", f"{name} FAILED instead of degrading: {st['reason']}"
             assert (st["reason"] or "").startswith("agent:not_present"), st["reason"]
     assert calls == []
+
+
+# ── the behavior prompt tree is CONTENT, not a build dependency ──────────────────────────────────
+#
+# PRD decision 18(a). `behavior/` is a top-level content tree, mounted per deployment (decision
+# 43.12) — and the three agent kickoffs in it were read at MODULE IMPORT:
+# `PROCESS_KICKOFF = _prompt("process-meeting.md")`. A tree without `behavior/prompts/` therefore
+# could not IMPORT `flows_defs.production` at all: fourteen test modules failed to collect, and the
+# `no-agents` product — which never dispatches a turn and never reads a kickoff — still could not
+# load the flow definitions that describe its own meetings. Absent content is a fact about the
+# deployment, not a broken build.
+
+
+def _blind_to_the_prompt_tree(monkeypatch):
+    """Every `behavior/prompts` path answers "not there", wherever it is resolved from — the
+    image bakes `/behavior`, the checkout has `<root>/behavior`, and a deployment may mount
+    neither."""
+    from pathlib import Path
+    real_is_dir, real_is_file, real_read = Path.is_dir, Path.is_file, Path.read_text
+
+    def _gone(self) -> bool:
+        return "behavior/prompts" in self.as_posix()
+
+    def _read(self, *a, **k):
+        # READ_TEXT TOO, and this is what makes the test red against the old code: `_prompt` did
+        # not ask whether the file was there, it just read it — so blinding only the predicates
+        # left the real repo checkout answering, and the absence was never simulated at all.
+        if _gone(self):
+            raise FileNotFoundError(self.as_posix())
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "is_dir", lambda self: False if _gone(self) else real_is_dir(self))
+    monkeypatch.setattr(Path, "is_file", lambda self: False if _gone(self) else real_is_file(self))
+    monkeypatch.setattr(Path, "read_text", _read)
+
+
+def test_production_imports_with_no_behavior_prompts_on_disk(monkeypatch):
+    """THE IMPORT. Red before decision 18(a): the reload raised FileNotFoundError at module scope,
+    from `ONBOARD_KICKOFF = _prompt("onboard-person.md")`."""
+    import importlib
+    _blind_to_the_prompt_tree(monkeypatch)
+    try:
+        importlib.reload(production)                      # must not raise
+        assert callable(production.build)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(production)                      # leave the module as the suite found it
+
+
+def test_a_missing_prompt_is_a_typed_absence_at_read_time(monkeypatch):
+    monkeypatch.delenv("VEXA_BEHAVIOR_DIR", raising=False)
+    _blind_to_the_prompt_tree(monkeypatch)
+    with pytest.raises(production.PromptAbsent) as e:
+        production._prompt("process-meeting.md")
+    assert "process-meeting.md" in str(e.value)
+
+
+def test_the_private_behavior_mount_still_wins_when_it_is_there(monkeypatch, tmp_path):
+    """The half a blanket refusal would break: absence-TOLERANT, never absence-assuming."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "process-meeting.md").write_text("PRIVATE VOICE")
+    monkeypatch.setenv("VEXA_BEHAVIOR_DIR", str(tmp_path))
+    _blind_to_the_prompt_tree(monkeypatch)                 # the showcase is gone; the mount is not
+    assert production._prompt("process-meeting.md") == "PRIVATE VOICE"
+
+
+def test_post_meeting_answers_not_present_when_the_kickoff_is_absent(monkeypatch):
+    """THE STEP. Agents deployed, no prompt tree mounted: `process_meeting` must reach the SAME
+    typed terminal outcome #1453 gave an absent domain — never an exception, and never a turn
+    dispatched with an empty kick."""
+    from flows import Reaction
+    monkeypatch.delenv("VEXA_BEHAVIOR_DIR", raising=False)
+    _blind_to_the_prompt_tree(monkeypatch)
+
+    def _forbidden(*a, **k):
+        raise AssertionError("a turn was dispatched with no kickoff")
+
+    monkeypatch.setattr(production.ag, "dispatch_turn", _forbidden)
+    reg = _production_registry()
+    r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": 97, "native": "abc",
+                                     "organizer": "a@x.test", "title": "T"},
+                 "post_meeting", 1, "process_meeting", "running", 1, 0.0, None, None, None)
+    out = reg.steps["process_meeting"](
+        StepCtx(reaction=r, effect_key="k", prior={}, clock_now=1.0, scratch={}, flow=None))
+    assert isinstance(out, NotPresent), out
+    assert out.domain == "behavior"
+    assert "process-meeting.md" in out.reason
