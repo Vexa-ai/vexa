@@ -105,6 +105,11 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
 # real fault, and that is where the refusal belongs.
 _FULL_PROFILE: FrozenSet[str] = frozenset({"gateway", "meetings", "identity", "mcp", "agent"})
 _ASSEMBLED = routes_manifest.load_carried(_FULL_PROFILE)
+#: The domains THIS BUILD carries a manifest for. `_FULL_PROFILE` is the candidate list; this is
+#: what is on disk. An unspecified door defaults to it (see `create_app`), and the package's own
+#: tests read it to know which profile they are asserting against.
+CARRIED_DOMAINS: FrozenSet[str] = frozenset(_ASSEMBLED.domains)
+
 ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = dict(_ASSEMBLED.scopes)
 
 # The routes that carry NO scope requirement, declared explicitly so "no entry" can mean "denied"
@@ -237,7 +242,7 @@ def create_app(
     redis: RedisBus,
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
-    agent_api_url: Optional[str] = _DEFAULT_AGENT_API_URL,
+    agent_api_url: Optional[str] = None,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
     rate_limiter=None,
@@ -259,7 +264,16 @@ def create_app(
     # whole point. Declared-but-unregistered would be a dead row; registered-but-undeclared would
     # 403 — "you may not", which is false. Absent on both sides answers **404**: this deployment
     # does not serve it, which is the truth and the only answer a client can act on.
+    #
+    # UNSPECIFIED IS NOT THE SAME AS "ALL FIVE". `agent_api_url=None` means the caller said
+    # nothing, and what a build fronts when nobody says otherwise is what it CARRIES: a build
+    # generated without the agent surface must not name a door it cannot describe. Production
+    # never reaches this default — `adapters.build_production_app` reads AGENT_API_URL and passes
+    # "" when it is unset, which has always meant no agent. An EXPLICIT url still names the
+    # domain, and a named domain with no manifest behind it still refuses to boot, below.
     _present = {"gateway", "meetings", "identity", "mcp"}
+    if agent_api_url is None:
+        agent_api_url = _DEFAULT_AGENT_API_URL if "agent" in CARRIED_DOMAINS else ""
     _agent_present = bool((agent_api_url or "").strip())
     if _agent_present:
         _present.add("agent")
