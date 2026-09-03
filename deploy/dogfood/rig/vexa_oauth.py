@@ -25,35 +25,30 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import pathlib
 import secrets
 import time
 import urllib.parse
 
-HOME = pathlib.Path.home()
-STORE = HOME / ".storm/oauth"
-STORE.mkdir(parents=True, exist_ok=True)
+import rig_secrets
 
-CLIENTS = STORE / "clients.json"
-CODES = STORE / "codes.json"
-TOKENS = STORE / "tokens.json"
+# THESE ARE STORE NAMES, NOT PATHS (R-D05). `tokens.json` held live bearer tokens and `codes.json`
+# live authorization codes, both written as plaintext JSON — the chmod below happened AFTER the
+# write, and the directory itself was left at the default mode. They now go through the same sealed
+# store the rest of the rig uses: encrypt-then-MAC, 0600 in a 0700 directory, locked
+# read-modify-write, with any plaintext file an older rig left behind migrated on first read.
+CLIENTS = "oauth/clients"
+CODES = "oauth/codes"
+TOKENS = "oauth/tokens"
 CODE_TTL = 60          # seconds; an authorization code is single-use and short-lived
 TOKEN_TTL = 8 * 3600
 
 
-def _load(p: pathlib.Path) -> dict:
-    try:
-        return json.loads(p.read_text())
-    except Exception:
-        return {}
+def _load(name: str) -> dict:
+    return rig_secrets.read(name)
 
 
-def _save(p: pathlib.Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=1))
-    try:
-        p.chmod(0o600)
-    except Exception:
-        pass
+def _save(name: str, d: dict) -> None:
+    rig_secrets.write(name, d)
 
 
 def _j(status: int, obj, extra_headers=None):

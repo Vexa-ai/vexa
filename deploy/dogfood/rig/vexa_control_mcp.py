@@ -24,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import rig_secrets                     # the sealed credential store + the ONE redactor (R-D05/D14)
 from mcp.server.mcpserver import MCPServer
 
 # The flows ENGINE is imported in-process by exactly one tool (fact_emit); every other flows
@@ -129,7 +130,7 @@ def _http(method: str, url: str, headers: dict | None = None, body=None, timeout
         except Exception:
             return e.code, raw
     except Exception as e:  # noqa: BLE001
-        return 0, f"{type(e).__name__}: {e}"
+        return 0, _safe_error(e)
 
 
 # ── the internal tier: ONE name, and no start without it (F95) ───────────────────────────────────
@@ -234,15 +235,29 @@ def _fkey():
     return {"X-Flows-Admin-Key": FLOWS_KEY}
 
 
+def _safe_error(e: BaseException) -> str:
+    """An exception rendered for a CALLER — type and message, with every credential shape masked.
+
+    R-D13: the `/do` bridge returned `f"{type(e).__name__}: {e}"` verbatim over HTTP, and the tool
+    internals under it raise with the URLs and headers they were using — `_gw_http`'s key,
+    `_admin_key()`, and `psycopg.connect(url)` with the database password inside the DSN. That was
+    the one path in this file that handed a raw internal message to a caller.
+
+    Shape-based masking does the work (`shared/git_redaction`); the values this process holds are
+    passed as `known` too, because a short secret no pattern would catch is still a secret.
+    """
+    known = [FLOWS_KEY, os.environ.get("VEXA_INTERNAL_API_SECRET", ""),
+             os.environ.get("INTERNAL_API_SECRET", ""), DELEGATION_SECRET]
+    known += list(_ADMIN_KEY_CACHE) + list(_USER_KEYS.values())
+    return rig_secrets.redact(f"{type(e).__name__}: {e}", *known)
+
+
 _USER_KEYS: dict = {}
-_USER_KEYS_FILE = None          # set once HOME is known, below
+USER_KEYS_STORE = "user-api-keys"    # a rig_secrets name, never a path — see rig_secrets.__doc__
 
 
 def _user_keys_disk() -> dict:
-    try:
-        return json.loads(_USER_KEYS_FILE.read_text())
-    except Exception:  # noqa: BLE001
-        return {}
+    return rig_secrets.read(USER_KEYS_STORE)
 
 
 def _user_key(uid: str, fresh: bool = False) -> str:
@@ -270,10 +285,7 @@ def _user_key(uid: str, fresh: bool = False) -> str:
     if key:
         _USER_KEYS[uid] = key
         try:
-            d = _user_keys_disk()
-            d[uid] = key
-            _USER_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _USER_KEYS_FILE.write_text(json.dumps(d, indent=1))
+            rig_secrets.update(USER_KEYS_STORE, lambda d: d.update({uid: key}) or d)
         except Exception:  # noqa: BLE001
             pass
     return key
@@ -306,30 +318,26 @@ SESSION_BIND: dict = {}
 RIG_MODE = os.environ.get("VEXA_RIG_MODE", "1") != "0"
 CALL_TOKEN = contextvars.ContextVar("vexa_call_token", default=None)
 SESSION_DIAG = True          # Mcp-Session-Id -> uid, for accounts created mid-conversation
-TOKENS_FILE = HOME / ".storm/mcp-tokens.json"
-_USER_KEYS_FILE = HOME / ".storm/user-api-keys.json"
 
-
-EMAIL_CODES = HOME / ".storm/oauth/email-codes.json"
-LOGINS = HOME / ".storm/oauth/logins.json"
-REGIMES = HOME / ".storm/oauth/regimes.json"
+# EVERY ONE OF THESE IS A CREDENTIAL MAP, AND NONE OF THEM IS A PATH ANY MORE (R-D05, R-D09).
+# They were plaintext JSON written at the default umask — on the live host, mode 0664: every user's
+# gateway API key, every minted vxa_mcp_ token and every live sign-in code readable by any local
+# account. They now go through `rig_secrets`, which seals each map with control_plane/secret_store
+# (encrypt-then-MAC), writes 0600 into a 0700 directory, and holds a lock across read-modify-write.
+# A name here is a STORE NAME, not a filename; the plaintext file an older rig left behind is
+# migrated on first read and then removed.
+TOKENS_STORE = "mcp-tokens"
+EMAIL_CODES_STORE = "oauth/email-codes"
+LOGINS_STORE = "oauth/logins"
+REGIMES_STORE = "oauth/regimes"
 
 
 def _regime(uid: str) -> dict:
-    try:
-        return json.loads(REGIMES.read_text()).get(str(uid), {"mode": "cloud"})
-    except Exception:
-        return {"mode": "cloud"}
+    return rig_secrets.read(REGIMES_STORE).get(str(uid), {"mode": "cloud"})
 
 
 def _regime_set(uid: str, rec: dict) -> None:
-    try:
-        d = json.loads(REGIMES.read_text())
-    except Exception:
-        d = {}
-    d[str(uid)] = rec
-    REGIMES.parent.mkdir(parents=True, exist_ok=True)
-    REGIMES.write_text(json.dumps(d, indent=1))
+    rig_secrets.update(REGIMES_STORE, lambda d: d.update({str(uid): rec}) or d)
 LOGIN_TTL = 900
 
 # The welcome every sign-in response hands the agent, whichever door the person came through.
@@ -347,17 +355,12 @@ WELCOME_BEATS = [
 
 
 def _logins() -> dict:
-    try:
-        d = json.loads(LOGINS.read_text())
-    except Exception:
-        d = {}
     now = time.time()
-    return {k: v for k, v in d.items() if v.get("exp", 0) > now}
+    return {k: v for k, v in rig_secrets.read(LOGINS_STORE).items() if v.get("exp", 0) > now}
 
 
 def _logins_save(d: dict) -> None:
-    LOGINS.parent.mkdir(parents=True, exist_ok=True)
-    LOGINS.write_text(json.dumps(d, indent=1))
+    rig_secrets.write(LOGINS_STORE, d)
 
 
 def _account_for(email: str):
@@ -376,16 +379,17 @@ def _account_for(email: str):
     return uid, existed
 
 
+def _token_put(tok: str, rec: dict) -> None:
+    """THE only writer of the token map (R-D09). There used to be three, each an unlocked
+    read-modify-write with a truncating save: two sign-ins in the same second lost one token, and a
+    crash between read and write emptied the store and signed everybody out permanently."""
+    rig_secrets.update(TOKENS_STORE, lambda d: d.update({tok: rec}) or d)
+
+
 def _mint_token(uid: str, email: str) -> str:
     import secrets
     tok = "vxa_mcp_" + secrets.token_urlsafe(24)
-    f = HOME / ".storm/mcp-tokens.json"
-    try:
-        d = json.loads(f.read_text())
-    except Exception:
-        d = {}
-    d[tok] = {"uid": uid, "email": email}
-    f.write_text(json.dumps(d, indent=1))
+    _token_put(tok, {"uid": uid, "email": email})
     return tok
 
 
@@ -520,13 +524,63 @@ def _ui_meeting_url(platform: str, native: str, title: str = "", row_id=None) ->
     return f"{UI_BASE}/?{_up.urlencode(q)}"
 
 
-def _ws_url(path: str, token: str) -> str:
-    """The cloud URL a human can open for a workspace file, viewable with the caller's own
-    credential. Handed out alongside every path so the agent never names an unopenable file."""
+VIEW_PREFIX = "vxv_"
+VIEW_TTL_S = int(os.environ.get("VEXA_MCP_VIEW_TTL_S", "900"))
+
+
+def _view_key() -> bytes:
+    return rig_secrets.signing_key("view", env="VEXA_MCP_VIEW_SECRET")
+
+
+def _view_token(uid: str, path: str, ttl: int = 0) -> str:
+    """A SHORT-LIVED, PATH-SCOPED view token — ``vxv_<uid>.<exp>.<path-hash>.<mac>`` (R-D04).
+
+    What this replaces: the durable ``vxa_mcp_`` bearer was being minted straight into the URL the
+    agent is told to `paste_this_link` to the person — four call sites, none gated by RIG_MODE — so
+    a credential that never expires and opens every tool ended up in chat scrollback, browser
+    history and any Referer header. This one opens ONE file, for fifteen minutes, and is useless
+    for anything else: the path is bound into the MAC, so it cannot be re-pointed, and the token
+    carries no authority the ``/w/`` viewer does not grant it.
+    """
+    exp = int(time.time()) + (ttl or VIEW_TTL_S)
+    ph = hashlib.sha256(path.strip("/").encode()).hexdigest()[:16]
+    msg = f"{uid}.{exp}.{ph}".encode()
+    mac = hmac.new(_view_key(), msg, hashlib.sha256).hexdigest()[:32]
+    return f"{VIEW_PREFIX}{uid}.{exp}.{ph}.{mac}"
+
+
+def _view_verify(tok: str, path: str) -> str:
+    """The uid this view token grants for THIS path, or "" — expired, forged, or for another file."""
+    if not isinstance(tok, str) or not tok.startswith(VIEW_PREFIX):
+        return ""
+    parts = tok[len(VIEW_PREFIX):].split(".")
+    if len(parts) != 4:
+        return ""
+    uid, exp_s, ph, mac = parts
+    try:
+        exp = int(exp_s)
+    except ValueError:
+        return ""
+    if time.time() >= exp:
+        return ""
+    if ph != hashlib.sha256(path.strip("/").encode()).hexdigest()[:16]:
+        return ""
+    want = hmac.new(_view_key(), f"{uid}.{exp}.{ph}".encode(), hashlib.sha256).hexdigest()[:32]
+    return uid if hmac.compare_digest(want, mac) else ""
+
+
+def _ws_url(path: str, uid: str) -> str:
+    """The cloud URL a human can open for one workspace file.
+
+    Takes a UID, never a token: the second argument used to be the caller's durable bearer and it
+    went into the query string verbatim. Handing a link to a person is not a reason to hand them a
+    credential — see `_view_token`.
+    """
     base = CANONICAL.rsplit("/mcp", 1)[0]
     import urllib.parse as _up
-    return f"{base}/w/{_up.quote(path.strip(chr(47)))}?token={token}" if token else \
-           f"{base}/w/{_up.quote(path.strip(chr(47)))}"
+    quoted = _up.quote(path.strip(chr(47)))
+    uid = str(uid or "").strip()
+    return f"{base}/w/{quoted}?token={_view_token(uid, path)}" if uid else f"{base}/w/{quoted}"
 
 
 def _frontmatter_keys(content: str):
@@ -654,6 +708,24 @@ _F_BTN = ""
 
 
 
+#: Sign-in codes this process will MAIL per window, across all addresses (R-D11). `start_onboarding`
+#: takes no account, so per-address throttling alone left one anonymous caller able to mail an
+#: arbitrary list; this is the only "source" a stateless MCP tool can see.
+CODE_BUDGET = int(os.environ.get("VEXA_RIG_CODE_BUDGET", "20"))
+CODE_BUDGET_WINDOW_S = int(os.environ.get("VEXA_RIG_CODE_WINDOW_S", "600"))
+_CODE_SENDS: list = []
+
+
+def _code_budget() -> bool:
+    """True when there is budget to mail one more code, and spends it. False when there is not."""
+    now = time.time()
+    _CODE_SENDS[:] = [t for t in _CODE_SENDS if t > now - CODE_BUDGET_WINDOW_S]
+    if len(_CODE_SENDS) >= CODE_BUDGET:
+        return False
+    _CODE_SENDS.append(now)
+    return True
+
+
 def _send_code(email: str, code: str) -> str | None:
     """Deliver the sign-in code over the same channel the product lives on. Returns an error
     string, or None on success."""
@@ -673,14 +745,11 @@ def _send_code(email: str, code: str) -> str | None:
             srv.send_message(m)
         return None
     except Exception as e:
-        return f"{type(e).__name__}: {e}"
+        return _safe_error(e)
 
 
 def _tokens() -> dict:
-    try:
-        return json.loads(TOKENS_FILE.read_text())
-    except Exception:
-        return {}
+    return rig_secrets.read(TOKENS_STORE)
 
 
 # ── DELEGATED TOKENS ────────────────────────────────────────────────────────────────────────────
@@ -780,6 +849,35 @@ def _scope_allows(scope, slug: str) -> bool:
     if ws == "*":
         return True
     return isinstance(ws, list) and str(slug) in {str(w) for w in ws}
+
+
+# ── DECISION 7, ENFORCED (R-D06) ────────────────────────────────────────────────────────────────
+# The delegation scope's `regime` was LOGGED at two places and read for authorization at none, so
+# the autonomous client — a model dispatched with no person in the loop — kept both verbs that
+# reach outside the machine. `bot_say`'s only guard was `asked_by_a_human`, an argument the calling
+# model sets about itself; `meeting_delete` had none at all. The reduction existed as prose in
+# TOOL-USAGE.md, which is not a control.
+#
+# HUMAN is the only regime these two are in. Anything else — autonomous, or a regime this build has
+# never heard of — is refused, because a scope naming an unknown regime is a scope we cannot
+# reason about and the fail direction on an irreversible verb is closed.
+HUMAN_REGIME = "human"
+HUMAN_ONLY_VERBS = {
+    "bot_say": "speaks out loud to everyone in a live meeting",
+    "meeting_delete": "erases a meeting and its transcript permanently, and cannot be undone",
+}
+
+
+def _regime_of(scope) -> str:
+    """The regime this call was delegated under, or "" when it is not a delegated call at all."""
+    return str((scope or {}).get("regime") or "").strip().lower() if isinstance(scope, dict) else ""
+
+
+def _regime_forbids(verb: str, scope) -> str:
+    """Why ``verb`` is refused under this delegation's regime, or "" when it may proceed."""
+    if verb not in HUMAN_ONLY_VERBS or scope is None:
+        return ""
+    return "" if _regime_of(scope) == HUMAN_REGIME else HUMAN_ONLY_VERBS[verb]
 
 
 GHOST_UID = contextvars.ContextVar("vexa_ghost_uid", default=None)
@@ -901,6 +999,27 @@ def _operator_or_refuse(verb: str) -> str:
     raise _NotOperator(verb, f"uid {uid}", "not an instance admin")
 
 
+#: What an operator verb tells a caller it refused. One string, because five call sites each
+#: writing their own is how `reaction_signal`, `friction_dump` and `friction_fixed` came to have
+#: none at all — a gate you have to remember to copy is a gate that is missing somewhere.
+_OPERATOR_WHAT_TO_DO = ("An instance admin can run this. A harness or other non-person producer "
+                        "should use flows-api POST /events or /events/batch with the lane's "
+                        "admin key.")
+
+
+def _operator_gate(verb: str, what_to_do: str = "") -> tuple[str, str]:
+    """``(actor, "")`` when the caller holds operator authority, else ``("", <refusal json>)``.
+
+    The uniform shape for every operator verb — `_operator_or_refuse` raises, and an exception that
+    each call site has to remember to catch is exactly the kind of gate that gets left off."""
+    try:
+        return _operator_or_refuse(verb), ""
+    except _NotOperator as e:
+        return "", json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                               "why": e.why,
+                               "what_to_do": what_to_do or _OPERATOR_WHAT_TO_DO})
+
+
 # A uid this process resolved that no longer names a real account. Cached so the check costs one
 # admin-api call per identity per minute, not one per tool call.
 _UID_ALIVE: dict[str, tuple[float, bool]] = {}
@@ -1002,6 +1121,20 @@ def _anon_guard(fn):
         # the caller. A NAMED slug on a scoped (autonomous) delegation must be in the isolation set.
         slug = (kw.get("slug") or "").strip()
         scope = CALL_SCOPE.get()
+        # REGIME, enforced in the same one place, for the same reason (R-D06). Decision 7 said the
+        # autonomous client does not speak in a room and does not delete meetings; until now that
+        # sentence lived in a markdown file and the token's own `regime` claim was only printed.
+        why = _regime_forbids(fn.__name__, scope)
+        if why:
+            return json.dumps({
+                "refused": "regime",
+                "verb": fn.__name__,
+                "why": f"this session was dispatched WITHOUT a person in the loop, and this verb "
+                       f"{why}",
+                "tell_your_person": "nothing — there is no person in this session. Record what you "
+                                    "wanted to do and stop; do not retry it and do not look for "
+                                    "another route to it.",
+            })
         if slug and scope is not None and not _scope_allows(scope, slug):
             return json.dumps({
                 "refused": "out_of_scope",
@@ -1406,11 +1539,15 @@ working.</p>""", "Connected")
             fpath = _up.unquote(scope["path"][3:])
             q = dict(_up.parse_qsl((scope.get("query_string") or b"").decode()))
             t = q.get("token", "")
-            rec = vexa_oauth.resolve_token(t, CANONICAL) if t else None
-            rec = rec or (_tokens().get(t) if t else None)
+            # VIEW TOKENS ONLY (R-D04). A durable bearer in a query string is the thing this
+            # route existed to leak, so it is not accepted here even though it would resolve: a
+            # viewer that still honours the old shape leaves every pasted link a live credential
+            # and keeps the habit alive on the minting side.
+            view_uid = _view_verify(t, fpath) if t else ""
+            rec = {"uid": view_uid} if view_uid else None
             if not rec:
-                b = _login_page("<p>This file needs a signed-in link — ask your agent for "
-                                "one.</p>", "Not signed in")
+                b = _login_page("<p>This link has expired, or it is not a view link for this "
+                                "file. Ask your agent for a fresh one.</p>", "Not signed in")
                 await send({"type": "http.response.start", "status": 401, "headers": [
                     (b"content-type", b"text/html; charset=utf-8"),
                     (b"content-length", str(len(b)).encode())]})
@@ -1569,10 +1706,10 @@ working.</p>""", "Connected")
                     body = out.encode() if isinstance(out, str) else json.dumps(out).encode()
                     status = 200
                 except TypeError as e:
-                    body = json.dumps({"error": f"bad arguments: {e}"}).encode()
+                    body = json.dumps({"error": "bad arguments: " + rig_secrets.redact(e)}).encode()
                     status = 400
                 except Exception as e:
-                    body = json.dumps({"error": f"{type(e).__name__}: {e}"}).encode()
+                    body = json.dumps({"error": _safe_error(e)}).encode()
                     status = 500
             await send({"type": "http.response.start", "status": status, "headers": [
                 (b"content-type", b"application/json; charset=utf-8"),
@@ -1636,10 +1773,8 @@ working.</p>""", "Connected")
                 else:
                     _rec = _logins().get(_c)
                     if _rec and _rec.get("token"):
-                        _d = _tokens()
-                        _d[_c] = {"uid": _rec["uid"], "email": _rec["email"],
-                                  "via": "setup-url"}
-                        (HOME / ".storm/mcp-tokens.json").write_text(json.dumps(_d, indent=1))
+                        _token_put(_c, {"uid": _rec["uid"], "email": _rec["email"],
+                                        "via": "setup-url"})
                         tok = _c
                     else:
                         # NEVER FALL THROUGH TO ANONYMOUS. A registration carrying a code we no
@@ -2030,14 +2165,9 @@ def flows_submit(name: str, on_event: str, steps: list[str],
 
     REFUSED while the company layer is missing: a flow submitted into an instance that cannot yet
     say who it works for is a machine configured for nobody."""
-    try:
-        _actor = _operator_or_refuse("flows_submit")
-    except _NotOperator as e:
-        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
-                           "why": e.why,
-                           "what_to_do": "An instance admin can run this. A harness or other "
-                                         "non-person producer should use flows-api POST /events "
-                                         "or /events/batch with the lane's admin key."})
+    _actor, _refused = _operator_gate("flows_submit")
+    if _refused:
+        return _refused
     gated = _refuse_if_gated("flows_submit", me())
     if gated:
         return gated
@@ -2056,14 +2186,9 @@ def flow_lifecycle(name: str, version: int, verb: str, token: str = "") -> str:
     rewrites work already running.
 
     REFUSED while the company layer is missing, for the same reason flows_submit is."""
-    try:
-        _actor = _operator_or_refuse("flow_lifecycle")
-    except _NotOperator as e:
-        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
-                           "why": e.why,
-                           "what_to_do": "An instance admin can run this. A harness or other "
-                                         "non-person producer should use flows-api POST /events "
-                                         "or /events/batch with the lane's admin key."})
+    _actor, _refused = _operator_gate("flow_lifecycle")
+    if _refused:
+        return _refused
     gated = _refuse_if_gated("flow_lifecycle", me())
     if gated:
         return gated
@@ -2078,9 +2203,15 @@ def flow_lifecycle(name: str, version: int, verb: str, token: str = "") -> str:
 def reactions_list(status: str = "", token: str = "") -> str:
     """The operator projection: what happened, why, and what is waiting.
 
-    status filters to one of admitted/running/blocked/retrying/failed/cancelled/done.\n\n    If you have not called whats_waiting() yet this session, call it first."""
-    me()   # account-scoped: this touches shared state
-    q = f"?status={status}" if status else ""
+    status filters to one of admitted/running/blocked/retrying/failed/cancelled/done.
+
+    YOURS ONLY. It used to answer with the whole instance's reactions, which is how an ordinary
+    user came to hold every other tenant's reaction ids (R-D07/R-D12); the flows route now scopes
+    on the subject, the way `timeline` always did.\n\n    If you have not called whats_waiting() yet this session, call it first."""
+    uid = me()   # account-scoped: this touches shared state
+    q = "?subject=" + urllib.parse.quote(str(uid))
+    if status:
+        q += "&status=" + urllib.parse.quote(status)
     st, body = _http("GET", f"{FLOWS_API}/reactions{q}", _fkey())
     return _capped({"status": st, "result": body}, 12000)
 
@@ -2130,8 +2261,15 @@ def reaction_signal(reaction_id: str, verb: str, token: str = "") -> str:
     cancel — stop it; on admitted/retrying/blocked/running
     wake   — re-check NOW something that is deliberately sleeping between polls; on
              retrying/admitted. Use this when you have just satisfied the condition a
-             step was waiting on and do not want to wait out its poll interval."""
-    me()   # account-scoped: this touches shared state
+             step was waiting on and do not want to wait out its poll interval.
+
+    OPERATOR ONLY, for the same reason `fact_emit` and `flow_lifecycle` are (R-D07): this posts
+    with the lane's admin key and never checked the reaction against the caller, while
+    `reactions_list` was handing every id out instance-wide — so `cancel` on somebody else's
+    scheduled join was one call away for any signed-in user."""
+    _actor, refused = _operator_gate("reaction_signal")
+    if refused:
+        return refused
     st, body = _http("POST", f"{FLOWS_API}/reactions/{reaction_id}/{verb}", _fkey(), {})
     return _capped({"status": st, "result": body}, 3000)
 
@@ -2147,14 +2285,9 @@ def fact_emit(event_type: str, source_event_id: str, subject_refs: dict,
     no-op rather than a duplicate.
 
     invite.received wants: organizer, url, start (epoch), ics_uid, title, group|null."""
-    try:
-        _actor = _operator_or_refuse("fact_emit")
-    except _NotOperator as e:
-        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
-                           "why": e.why,
-                           "what_to_do": "An instance admin can run this. A harness or other "
-                                         "non-person producer should use flows-api POST /events "
-                                         "or /events/batch with the lane's admin key."})
+    _actor, _refused = _operator_gate("fact_emit")
+    if _refused:
+        return _refused
     import sys
     src = _flows_src()
     if src is None:
@@ -2207,7 +2340,7 @@ def workspace_tree(slug: str = "", token: str = "") -> str:
     sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
     if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
         home = f"{sbody.get('remote')} {sbody.get('url')} on {sbody.get('branch')}"
-    return _capped({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body, "git_home": home or "no git home — this workspace was not loaded from a repository"}, 8000)
+    return _capped({"for_display": "a file is opened with a SHORT-LIVED view link this server mints per file (workspace_read returns one) — never show a person a path: paths are arguments for workspace_read/write; show names and links", "status": st, "result": body, "git_home": home or "no git home — this workspace was not loaded from a repository"}, 8000)
 
 
 @mcp.tool()
@@ -2218,8 +2351,8 @@ def workspace_read(path: str, slug: str = "", token: str = "") -> str:
     q = f"?path={urllib.parse.quote(path)}" + (f"&slug={slug}" if slug else "")
     st, body = _http("GET", f"{AGENT_API}/api/workspace/file{q}", {"X-User-Id": uid})
     name = path.rsplit("/", 1)[-1]
-    return json.dumps({"status": st, "url": _ws_url(path, token or ""),
-                       "paste_this_link": f"[{name}]({_ws_url(path, token or '')})",
+    return json.dumps({"status": st, "url": _ws_url(path, uid),
+                       "paste_this_link": f"[{name}]({_ws_url(path, uid)})",
                        "never_show_the_path": "the path is an argument for tools; your "
                        "person sees the name and the link above, nothing slashed",
                        "result": body})[:12000]
@@ -2276,8 +2409,8 @@ def workspace_write(path: str, content: str, slug: str = "", token: str = "") ->
         return json.dumps({"refused": "not_written", "status": st, "path": rel,
                            "workspace": slug or "your own",
                            "why": resp if isinstance(resp, (str, dict)) else "write refused"})
-    return json.dumps({"url": _ws_url(rel, token or ""),
-                       "paste_this_link": "[" + rel.rsplit("/", 1)[-1] + "](" + _ws_url(rel, token or "") + ")",
+    return json.dumps({"url": _ws_url(rel, uid),
+                       "paste_this_link": "[" + rel.rsplit("/", 1)[-1] + "](" + _ws_url(rel, uid) + ")",
                        "written": rel, "bytes": len(content)})
 
 
@@ -2428,18 +2561,33 @@ _CREDENTIAL_REFUSAL = (
 )
 
 
+#: This server's OWN credential prefixes — `vxa_mcp_` (durable bearer), `vxd_` (delegation),
+#: `vxv_` (view link). Spelled as literals so the detector below can be lifted out of this file and
+#: executed on its own, which is how `core/agent/tests/test_workspace_credentials.py` checks the
+#: shipped code; a test in this directory pins them equal to the constants they mirror.
+_OUR_CREDENTIAL_PREFIXES = ("vxa_mcp_", "vxd_", "vxv_")
+
+
 def _refuse_credentials(*values) -> str:
-    """The refusal, or "" when nothing credential-shaped was passed. Same detector the API uses."""
-    tokenish = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
+    """The refusal, or "" when nothing credential-shaped was passed.
+
+    IT NOW IS the detector the API uses (R-D14). The claim was made in this docstring and was
+    false: the copy below listed six GitHub prefixes and no ``glpat-``, no generic long run, and a
+    URL rule that required BOTH ``:`` and ``@`` in the userinfo — so ``https://<gitlab-pat>@gitlab.com/a/b``,
+    the exact shape git itself writes a PAT into, walked straight through. The scrubber's own
+    patterns decide instead: if `redact` would mask any part of the value, it is credential-shaped.
+    """
     for v in values:
-        text = str(v or "")
-        if any(t in text for t in tokenish):
+        text = str(v or "").strip()
+        if not text:
+            continue
+        # OUR OWN auth argument is not a git credential. `token=` is how this server is
+        # authenticated; it is 40 urlsafe characters, so the generic rule would refuse every
+        # authenticated call to workspace_attach if it were not named here.
+        if text.startswith(_OUR_CREDENTIAL_PREFIXES):
+            continue
+        if rig_secrets.looks_like_token(text) or rig_secrets.redact(text) != text:
             return _CREDENTIAL_REFUSAL
-        # https://user:password@host — a credential wearing a URL
-        if "://" in text:
-            userinfo = text.split("://", 1)[1].split("/", 1)[0]
-            if ":" in userinfo and "@" in userinfo:
-                return _CREDENTIAL_REFUSAL
     return ""
 
 
@@ -2693,6 +2841,40 @@ def meetings_list(token: str = "") -> str:
     return _capped({"status": st, "result": body}, 10000)
 
 
+# ── WHERE THE TRANSCRIPT CONVERTERS MAY READ AND WRITE (R-D10) ──────────────────────────────────
+# `zoom_transcript_to_segments(name, path)` took an unconstrained host path — matching lines came
+# back in `speakers`, so it was an arbitrary file read with the output as the oracle — and wrote to
+# `~/.storm/caps/{name}.segments.json` with `name` unsanitized, so `name="../../../../tmp/x"` wrote
+# outside. `captions_to_segments` had the same traversal in `video_id`.
+CAPS_DIR = rig_secrets.STATE_DIR / "caps"
+IMPORT_DIR = pathlib.Path(os.environ.get("VEXA_RIG_IMPORT_DIR") or (rig_secrets.STATE_DIR / "imports"))
+_SAFE_STEM = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _safe_stem(name: str) -> str:
+    """The file stem, or "" — one path segment of a closed alphabet, never a traversal."""
+    n = str(name or "").strip()
+    return n if _SAFE_STEM.match(n) else ""
+
+
+def _import_path(path: str):
+    """A caller-named source file, CONFINED to the import directories, or None.
+
+    Resolved before it is compared, so a symlink out of the directory is caught with the rest —
+    `startswith` on an unresolved string is the version of this check that does not work."""
+    try:
+        p = pathlib.Path(path).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+    for root in (IMPORT_DIR, CAPS_DIR):
+        try:
+            if p.is_relative_to(root.resolve()):
+                return p
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 @mcp.tool()
 @_anon_guard
 def captions_to_segments(video_id: str, max_minutes: int = 45, token: str = "") -> str:
@@ -2702,9 +2884,13 @@ def captions_to_segments(video_id: str, max_minutes: int = 45, token: str = "") 
     Speaker 1..N rather than inventing identities — which is also what our own pipeline
     produces before attribution runs. Source stays in ~/.storm/caps/<id>.en.json3."""
     me()   # account-scoped: this touches shared state
-    src = HOME / ".storm/caps" / f"{video_id}.en.json3"
+    stem = _safe_stem(video_id)
+    if not stem:
+        return json.dumps({"error": "video_id must match ^[A-Za-z0-9_-]{1,64}$",
+                           "why": "it names a file in the caption directory and nothing else"})
+    src = CAPS_DIR / f"{stem}.en.json3"
     if not src.exists():
-        return json.dumps({"error": f"no captions at {src}"})
+        return json.dumps({"error": f"no captions for {stem}"})
     data = json.loads(src.read_text())
     events = [e for e in data.get("events", []) if e.get("segs")]
     turns, cur, speaker, last_end, start_t = [], [], 1, 0.0, 0.0
@@ -2734,13 +2920,13 @@ def captions_to_segments(video_id: str, max_minutes: int = 45, token: str = "") 
         last_end = t0 + e.get("dDurationMs", 2000) / 1000.0
     flush()
 
-    out = HOME / ".storm/caps" / f"{video_id}.segments.json"
+    out = CAPS_DIR / f"{stem}.segments.json"
     out.write_text(json.dumps([{"start": a, "end": b, "speaker": sp, "text": t}
                                for a, b, sp, t in turns]))
     words = sum(len(t.split()) for _, _, _, t in turns)
     # truncate the SAMPLE, never the payload -- slicing the rendered JSON produces invalid
     # JSON and the caller silently gets a string instead of a result.
-    return json.dumps({"video_id": video_id, "turns": len(turns), "words": words,
+    return json.dumps({"video_id": stem, "turns": len(turns), "words": words,
                        "speakers": len({sp for _, _, sp, _ in turns}),
                        "minutes": round(turns[-1][1] / 60, 1) if turns else 0,
                        "written": str(out),
@@ -2757,10 +2943,20 @@ def zoom_transcript_to_segments(name: str, path: str, token: str = "") -> str:
     affiliations, so it exercises attribution the way a real capture does. Consecutive lines
     from one speaker are merged into a turn."""
     me()   # account-scoped: this touches shared state
-    import re
-    src = pathlib.Path(path)
+    stem = _safe_stem(name)
+    if not stem:
+        return json.dumps({"error": "name must match ^[A-Za-z0-9_-]{1,64}$",
+                           "why": "it names the output file and nothing else"})
+    src = _import_path(path)
+    if src is None:
+        return json.dumps({"error": "that path is outside the import directory",
+                           "read_from": [str(IMPORT_DIR), str(CAPS_DIR)],
+                           "why": "this tool used to take any host path, and the lines it matched "
+                                  "came back as `speakers` — an arbitrary file read with its own "
+                                  "oracle. Put the transcript in the import directory first.",
+                           "set": "VEXA_RIG_IMPORT_DIR names it"})
     if not src.exists():
-        return json.dumps({"error": f"no transcript at {path}"})
+        return json.dumps({"error": f"no transcript at {src}"})
     pat = re.compile(r"^\[(\d+):(\d+):([\d.]+)\s*-->\s*(\d+):(\d+):([\d.]+)\]\s*([^:]{1,60}?):\s*(.*)$")
     turns = []
     for raw in src.read_text().splitlines():
@@ -2777,12 +2973,13 @@ def zoom_transcript_to_segments(name: str, path: str, token: str = "") -> str:
             turns[-1] = (turns[-1][0], b, sp, turns[-1][3] + " " + text)
         else:
             turns.append((a, b, sp, text))
-    out = HOME / ".storm/caps" / f"{name}.segments.json"
+    out = CAPS_DIR / f"{stem}.segments.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps([{"start": a, "end": b, "speaker": sp, "text": t}
                                for a, b, sp, t in turns]))
     from collections import Counter
     who = Counter(sp for _, _, sp, _ in turns)
-    return json.dumps({"name": name, "turns": len(turns),
+    return json.dumps({"name": stem, "turns": len(turns),
                        "words": sum(len(t.split()) for _, _, _, t in turns),
                        "speakers": [{"name": k, "turns": v} for k, v in who.most_common(10)],
                        "minutes": round(turns[-1][1] / 60, 1) if turns else 0,
@@ -3018,6 +3215,7 @@ def _write_json(uid: str, path: str, obj) -> bool:
 
 
 @mcp.tool()
+@_anon_guard
 def whats_waiting(token: str = "") -> str:
     """START HERE on every connection — EXCEPT the one case named below, which is common.
     Everything Vexa needs from this person, in one read.
@@ -3040,7 +3238,10 @@ def whats_waiting(token: str = "") -> str:
       blocked    — a reaction stopped on a human gate; answer it with reaction_signal(resume)
       stuck      — a reaction failing with a reason worth a human eye
     """
-    CALL_TOKEN.set(token or None)
+    # The token is set by @_anon_guard, which this tool used to be the ONE account tool without
+    # (R-D19). The manual set was two bugs at once: it accepted a credential in a call argument
+    # even when VEXA_RIG_MODE=0 turns that off, and it CLEARED a live token whenever the kwarg was
+    # absent — de-authenticating the first call every agent makes.
     uid = _subject()
     if not uid:
         # A GHOST IS NOT A NEWCOMER. This is the first call every agent makes, so the greeting it
@@ -3172,7 +3373,12 @@ def whats_waiting(token: str = "") -> str:
                   "be asked — a rough edge you route around silently is one nobody fixes.",
         })
 
-    st, body = _http("GET", f"{FLOWS_API}/reactions", _fkey())
+    # SCOPED TO THIS PERSON (R-D12). Unscoped, this — the tool nobody can avoid calling — read the
+    # whole instance's reactions and reported other tenants' flow names, step names and failure
+    # reasons as this person's queue. `timeline` two hundred lines up already proved the route
+    # takes a subject.
+    st, body = _http("GET", f"{FLOWS_API}/reactions?subject={urllib.parse.quote(str(uid))}",
+                     _fkey())
     for r in (body or {}).get("reactions", []) if isinstance(body, dict) else []:
         if r.get("status") == "blocked":
             items.append({"kind": "blocked", "id": r["id"],
@@ -4191,7 +4397,7 @@ def deeplink(target: str, ref: str = "", name: str = "", meeting: str = "", ws: 
 
     NEVER put prompt text in a link. name= is a preset NAME; the words behind it are a file
     only an admin can write, and that is the whole security of the ask link."""
-    me()
+    uid = me()
     import urllib.parse as _up
     em = _caller_email()
     as_q = f"as={_up.quote(em)}" if em else ""
@@ -4239,7 +4445,7 @@ def deeplink(target: str, ref: str = "", name: str = "", meeting: str = "", ws: 
         return json.dumps({"url": f"{UI_BASE}/?{as_q}" if as_q else UI_BASE,
                            "opens": "the terminal on their meetings list"})
     if target == "workspace_file":
-        return json.dumps({"url": _ws_url(ref, token or CALL_TOKEN.get() or ""),
+        return json.dumps({"url": _ws_url(ref, uid),
                            "opens": "the file, rendered"})
     if target in ("view", "pre_meeting", "during_meeting", "post_meeting"):
         # Composed layouts: the existing shell, filled deliberately. 'view' takes a raw pane
@@ -4291,7 +4497,7 @@ def _scheduled_joins(mid: str):
                 (f"sched-{mid}-%",)).fetchall()
         return [{"id": r[0], "flow": r[1], "step": r[2], "status": r[3]} for r in rows], None
     except Exception as e:  # noqa: BLE001
-        return None, f"{type(e).__name__}: {e}"[:200]
+        return None, _safe_error(e)[:200]
 
 
 @mcp.tool()
@@ -4551,7 +4757,7 @@ def workspace_pull(workspace: str = "", token: str = "") -> str:
     files = (body or {}).get("files", []) if isinstance(body, dict) else []
     return json.dumps({
         "regime": reg,
-        "files": [{"path": f, "url": _ws_url(f, token or "")} for f in files][:200],
+        "files": [{"path": f, "url": _ws_url(f, uid)} for f in files][:200],
         "do": "fetch each file you do not already have locally (workspace_read) and write "
               "it under local_path with the same relative path. Then work locally.",
     })[:14000]
@@ -4631,13 +4837,11 @@ def rehearse(state: str, subject: str, meeting: str = "2026-03-02", when: str = 
     `fresh` resets the subject and its derived organizer first, which DELETES them.
     `plan_only` resolves and guards every step and executes none.
     """
-    try:
-        _operator_or_refuse("rehearse")
-    except _NotOperator as e:
-        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who, "why": e.why,
-                           "what_to_do": "An instance admin can run this. It injects facts and "
+    _actor, _refused = _operator_gate("rehearse", "An instance admin can run this. It injects facts and "
                                          "sends mail as other people, which is authority, not "
-                                         "authentication."})
+                                         "authentication.")
+    if _refused:
+        return _refused
     pkg = _rehearse_pkg()
     try:
         res = pkg.rehearse(state, subject, meeting=meeting, when=when, runner=runner, fresh=fresh,
@@ -4665,11 +4869,9 @@ def subject_reset(address: str = "", uid: str = "", token: str = "") -> str:
     It reads the emptiness back and reports whatever it could NOT remove under `remaining` — a
     reset that half worked and said "done" is worse than one that refused.
     """
-    try:
-        _operator_or_refuse("subject_reset")
-    except _NotOperator as e:
-        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who, "why": e.why,
-                           "what_to_do": "An instance admin can run this — it deletes a person."})
+    _actor, _refused = _operator_gate("subject_reset", "An instance admin can run this — it deletes a person.")
+    if _refused:
+        return _refused
     pkg = _rehearse_pkg()
     if not (address or uid):
         return json.dumps({"refused": "name an address, or a uid with `uid=` for an account whose "
@@ -4782,7 +4984,11 @@ def report_friction(what_i_was_doing: str, what_went_wrong: str,
 @mcp.tool()
 @_anon_guard
 def friction_so_far(token: str = "") -> str:
-    """Everything reported through report_friction, newest first. NO ACCOUNT NEEDED.
+    """Everything reported through report_friction, newest first. NEEDS AN ACCOUNT.
+
+    It said "NO ACCOUNT NEEDED" and then called `me()` on the next line (R-D21), so an anonymous
+    agent that believed the docstring got a refusal it read as an empty ledger and filed the same
+    rough edge again.
 
     Useful before reporting: if the thing you hit is already here, add what is different about
     your case rather than filing it again."""
@@ -4827,7 +5033,16 @@ def friction_dump(since: str = "", status: str = "open", token: str = "") -> str
     status: "open" (the default — includes `recurring`, which is the most urgent work there is) ·
             "fixed" · "recurring" · "" for all.
 
-    When you fix something from it, close it: `friction_fixed([ids], "<commit or PR>")`."""
+    When you fix something from it, close it: `friction_fixed([ids], "<commit or PR>")`.
+
+    OPERATOR ONLY (R-D21). This is the WHOLE INSTANCE's ledger — other people's workspace names,
+    file paths, meeting ids and free text — and it was open to any signed-in caller. A person's own
+    reports come back from `friction_so_far`, which is scoped to them."""
+    _actor, _refused = _operator_gate(
+        "friction_dump", "An instance admin can run this — it reads every user's reports. Your own "
+                         "are in friction_so_far().")
+    if _refused:
+        return _refused
     uid = me()
     q = f"?since={urllib.parse.quote(since)}&status={urllib.parse.quote(status)}&format=md"
     st, body = _http("GET", f"{AGENT_API}/api/friction/dump{q}", {"X-User-Id": uid})
@@ -4845,7 +5060,15 @@ def friction_fixed(ids: list[str], fix_ref: str, token: str = "") -> str:
     `fix_ref` is whatever lets the next reader find the change — a commit sha, a PR url, a branch,
     or one sentence. Closing is CHEAP and meant to be: a record filed again after a fix flips itself
     to `recurring`, so a fix that did not hold announces itself instead of hiding. Close what you
-    addressed; do not close what you merely looked at."""
+    addressed; do not close what you merely looked at.
+
+    OPERATOR ONLY (R-D21), the mutating half of `friction_dump`: it marks records fixed across the
+    whole instance, and any signed-in caller could close anybody's."""
+    _actor, _refused = _operator_gate(
+        "friction_fixed", "An instance admin can run this — it closes records across every user's "
+                          "ledger.")
+    if _refused:
+        return _refused
     uid = me()
     if not str(fix_ref or "").strip():
         return json.dumps({"error": "fix_ref is required",
@@ -4984,22 +5207,16 @@ def start_onboarding(email: str) -> str:
     if "@" not in email or email.startswith("@") or email.endswith("@"):
         return json.dumps({"error": "that is not an email address"})
     import secrets
-    ak = {"X-Admin-API-Key": _admin_key()}
-    st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{email}", ak)
-    returning = st == 200
-    if not returning:
-        st, u = _http("POST", f"{ADMIN_API}/admin/users", ak,
-                      {"email": email, "name": email.split("@")[0].title()})
-    uid = str((u or {}).get("id", ""))
-    if not uid:
-        return json.dumps({"error": "could not create the account", "status": st})
-    if not returning:
-        _http("POST", f"{AGENT_API}/api/workspace/init", {"X-User-Id": uid}, {})
-
-    try:
-        codes = json.loads(EMAIL_CODES.read_text())
-    except Exception:
-        codes = {}
+    if not _code_budget():
+        # RATE-LIMITED BY SOURCE (R-D11). This tool needs no account, so the only source this
+        # server can see is itself: a process-wide budget on codes MAILED. Without it, one
+        # anonymous caller in a loop makes us the mailer for an address list.
+        return json.dumps({
+            "error": "too many sign-in codes have been sent from this server just now",
+            "what_to_do": "Wait a minute and call start_onboarding(email) again. If your person "
+                          "already has a code from the last few minutes, use that one.",
+        })
+    codes = rig_secrets.read(EMAIL_CODES_STORE)
     live = codes.get(email)
     if live and time.time() < live.get("exp", 0) and live.get("tries", 0) < 5:
         # a code is already sitting in that inbox — reminting would invalidate it
@@ -5010,18 +5227,24 @@ def start_onboarding(email: str) -> str:
                           "confirm_login(email, code) — do not request another.",
         })
     code = f"{secrets.randbelow(1000000):06d}"
-    codes[email] = {"code": code, "uid": uid, "exp": time.time() + 900, "tries": 0}
-    EMAIL_CODES.parent.mkdir(parents=True, exist_ok=True)
-    EMAIL_CODES.write_text(json.dumps(codes, indent=1))
+    # NO ACCOUNT IS CREATED HERE (R-D11). It used to POST /admin/users before any code was
+    # verified, so an unauthenticated caller minted platform accounts for addresses it did not
+    # own — and the response then said "existing" or "created", which made this an existence
+    # oracle for the whole user table. The account is created in confirm_login, once the code
+    # coming back proves the caller can read that mailbox.
+    rig_secrets.update(EMAIL_CODES_STORE, lambda d: d.update(
+        {email: {"code": code, "exp": time.time() + LOGIN_TTL, "tries": 0}}) or d)
 
     err = _send_code(email, code)
     if err:
         return json.dumps({"error": "could not send the code", "detail": err,
-                           "try": "report_friction() and tell your person — the account "
-                                  "exists but the mail channel is down."})
+                           "try": "report_friction() and tell your person — the mail channel "
+                                  "is down."})
     return json.dumps({
         "code_sent_to": email,
-        "account": "existing — same person signing in again" if returning else "created",
+        # IDENTICAL EITHER WAY. Saying which of the two this was is the oracle.
+        "account": "a code is on its way — whether this address is new here or returning, the "
+                   "next step is the same",
         "what_to_do": "Ask your person for the 6-digit code that just arrived in that inbox. "
                       "Then call confirm_login(email, code). Do NOT guess codes and do not "
                       "try to read their mail — the code coming from the person IS the proof "
@@ -5045,49 +5268,44 @@ def confirm_login(email: str, code: str) -> str:
     of this conversation — you are authenticated immediately, nothing needs restarting."""
     email = (email or "").strip().lower()
     code = "".join(ch for ch in str(code) if ch.isdigit())
-    try:
-        codes = json.loads(EMAIL_CODES.read_text())
-    except Exception:
-        codes = {}
-    rec = codes.get(email)
+    rec = rig_secrets.read(EMAIL_CODES_STORE).get(email)
     if not rec:
         return json.dumps({"error": "no code is pending for that email",
                            "fix": "call start_onboarding(email) first"})
+
+    def _drop(d):
+        d.pop(email, None)
+        return d
+
     if time.time() > rec["exp"]:
-        codes.pop(email, None)
-        EMAIL_CODES.write_text(json.dumps(codes, indent=1))
+        rig_secrets.update(EMAIL_CODES_STORE, _drop)
         return json.dumps({"error": "that code expired",
                            "fix": "call start_onboarding(email) again for a fresh one"})
     if rec["tries"] >= 5:
-        codes.pop(email, None)
-        EMAIL_CODES.write_text(json.dumps(codes, indent=1))
+        rig_secrets.update(EMAIL_CODES_STORE, _drop)
         return json.dumps({"error": "too many wrong attempts — code invalidated",
                            "fix": "call start_onboarding(email) again"})
-    if code != rec["code"]:
-        rec["tries"] += 1
-        EMAIL_CODES.write_text(json.dumps(codes, indent=1))
+    if not hmac.compare_digest(str(code), str(rec["code"])):
+        def _bump(d):
+            r = d.get(email)
+            if r:
+                r["tries"] = int(r.get("tries", 0)) + 1
+            return d
+        tries = int(rig_secrets.update(EMAIL_CODES_STORE, _bump).get(email, {}).get("tries", 5))
         return json.dumps({"error": "wrong code",
-                           "attempts_left": 5 - rec["tries"],
+                           "attempts_left": max(0, 5 - tries),
                            "note": "ask your person to re-read it — never guess"})
 
-    # proven: whoever supplied this code can read that mailbox
-    codes.pop(email, None)
-    EMAIL_CODES.write_text(json.dumps(codes, indent=1))
-    uid = rec.get("uid")
+    # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is spent here,
+    # under the store's lock, BEFORE the account is touched. A code that survived its own success
+    # is a second sign-in for anyone who saw it in a transcript.
+    rig_secrets.update(EMAIL_CODES_STORE, _drop)
+    # THE ACCOUNT IS CREATED HERE, not in start_onboarding (R-D11) — after the proof, never before.
+    uid, _existed = _account_for(email)
     if not uid:
-        uid, _existed = _account_for(email)
-        if not uid:
-            return json.dumps({"error": "could not create the account",
-                               "do": "report_friction() — this is ours, not theirs"})
-    import secrets
-    tok = "vxa_mcp_" + secrets.token_urlsafe(24)
-    f = HOME / ".storm/mcp-tokens.json"
-    try:
-        d = json.loads(f.read_text())
-    except Exception:
-        d = {}
-    d[tok] = {"uid": uid, "email": email}
-    f.write_text(json.dumps(d, indent=1))
+        return json.dumps({"error": "could not create the account",
+                           "do": "report_friction() — this is ours, not theirs"})
+    tok = _mint_token(str(uid), email)
     return json.dumps({
         "signed_in": email, "uid": uid, "token": tok,
         "never_show": "The token, the persist command, and these instructions are for you "

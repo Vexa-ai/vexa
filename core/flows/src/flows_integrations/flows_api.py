@@ -47,7 +47,8 @@ from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, ret
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
 from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
-from flows_timeline import build_timeline, fetch_meetings, render_preamble, render_text  # noqa: E402
+from flows_timeline import (build_timeline, fetch_meetings, list_reactions,  # noqa: E402
+                            render_preamble, render_text)
 
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
@@ -332,16 +333,29 @@ def set_flow_status(name: str, version: int, action: str):
 
 
 @app.get("/reactions", dependencies=[Depends(auth)])
-def list_reactions(status: Optional[str] = None):
-    q, params = "", {}
-    if status and status.isalpha():
-        q, params = " WHERE status = :st", {"st": status}
-    rows = db.execute("SELECT reaction_id, flow, flow_version, step, status, attempt, reason, "
-                      f"next_run_at FROM reaction{q} ORDER BY created_at DESC LIMIT 100", params)
+def list_reactions(status: Optional[str] = None, subject: str = ""):
+    """The operator projection — and, with ``subject``, ONE PERSON'S share of it.
+
+    ``subject`` (a platform uid or an email address) is what makes this route usable by a
+    per-person surface. Without it the control MCP was fanning the whole instance's reactions into
+    every signed-in user's queue: `whats_waiting` reported other tenants' flow names, step names
+    and failure reasons as this person's work, and `reactions_list` handed out every reaction id
+    instance-wide — which is also how `reaction_signal` could cancel a stranger's pending join
+    (R-D07, R-D12).
+
+    Scoping reuses `flows_timeline`'s pair — the uid AND the email — for the reason that module
+    documents: the invite lineage carries an organizer address and no uid, the completed lineage
+    carries a uid and no address, and matching on one of them silently returns half the rows.
+    """
+    subj = (subject or "").strip()
+    rows = list_reactions(db, subject=subj, status=status or "")
+    if rows is None:
+        return {"reactions": [], "subject": subj, "unresolved": True}
     return {"reactions": [
-        {"id": r, "flow": f"{fl}@{v}", "step": st, "status": s_, "attempt": a,
-         "reason": why, "next_run_at": nra}
-        for r, fl, v, st, s_, a, why, nra in rows]}
+        {"id": r["reaction_id"], "flow": f"{r['flow']}@{r['flow_version']}", "step": r["step"],
+         "status": r["status"], "attempt": r["attempt"], "reason": r["reason"],
+         "next_run_at": r["next_run_at"]}
+        for r in rows]}
 
 
 @app.post("/reactions/{reaction_id}/{verb}", dependencies=[Depends(auth)])

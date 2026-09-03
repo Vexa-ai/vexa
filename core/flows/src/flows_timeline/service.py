@@ -48,6 +48,43 @@ def window(since=None, until=None, now: Optional[float] = None) -> tuple[float, 
             now + DEFAULT_AHEAD_S if u is None else u)
 
 
+#: The operator projection's columns — what `GET /reactions` has always returned.
+LIST_COLS = ("reaction_id", "flow", "flow_version", "step", "status", "attempt", "reason",
+             "next_run_at")
+
+
+def list_reactions(db, *, subject: str = "", status: str = "", limit: int = 100,
+                   scan: int = SCAN_ROWS, identity: Optional[Callable] = None):
+    """The operator projection, optionally SCOPED TO ONE PERSON. ``None`` when nobody answers to
+    ``subject``.
+
+    Scoping lives here rather than in the route because it is the part that can be wrong: the
+    control MCP's `whats_waiting` and `reactions_list` were reading this table unscoped and
+    reporting the whole instance's reactions — flow names, step names and failure reasons — as one
+    person's queue, and handing out every reaction id along with them (R-D07, R-D12).
+
+    It scopes on the uid AND the email, for the reason `model.concerns` documents: the invite
+    lineage carries an organizer address and no uid, the completed lineage carries a uid and no
+    address, and matching on one of them silently returns half the rows. `subject_refs` is a JSON
+    blob with no index to push the predicate into, so the SCAN is bounded and the result is
+    filtered — the same shape `read_flows` uses, and for the same reason.
+    """
+    where, params = "", {}
+    if status and status.isalpha():
+        where, params = " WHERE status = :st", {"st": status}
+    if not str(subject or "").strip():
+        return _rows(db, f"SELECT {', '.join(LIST_COLS)} FROM reaction{where} "
+                         f"ORDER BY created_at DESC LIMIT {int(limit)}", params, LIST_COLS)
+    uid, email = (identity or resolve_identity)(subject)
+    if not uid and not email:
+        return None
+    cols = LIST_COLS + ("subject_refs",)
+    rows = _rows(db, f"SELECT {', '.join(cols)} FROM reaction{where} "
+                     f"ORDER BY created_at DESC LIMIT {int(scan)}", params, cols)
+    mine = [r for r in rows if concerns(loads(r["subject_refs"]), uid, email)]
+    return [{k: r[k] for k in LIST_COLS} for r in mine[:limit]]
+
+
 def read_flows(db, *, uid: str = "", email: str = "", since: float, until: float,
                scan: int = SCAN_ROWS) -> list[Event]:
     """Every reaction and receipt in the window that CONCERNS this person.

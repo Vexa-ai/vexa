@@ -159,20 +159,35 @@ def test_the_rig_refuses_a_credential_smuggled_into_an_argument():
     from the deployed code) — a PAT typed into the repo URL is refused with a sentence that points at
     the key instead of asking again."""
     tree = ast.parse(RIG.read_text(encoding="utf-8"))
-    wanted = ("_CREDENTIAL_REFUSAL", "_refuse_credentials")
+    wanted = ("_CREDENTIAL_REFUSAL", "_refuse_credentials", "_OUR_CREDENTIAL_PREFIXES")
     picked = [n for n in tree.body
               if (isinstance(n, ast.FunctionDef) and n.name in wanted)
               or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") in wanted for t in n.targets))]
-    assert len(picked) == 2, "the rig's refusal helper moved — this test must follow it"
-    ns: dict = {}
+    assert len(picked) == 3, "the rig's refusal helper moved — this test must follow it"
+    # The detector now IMPORTS the scrubber instead of re-implementing it (R-D14: the copy had
+    # drifted past `glpat-`, the generic run, and bare-userinfo URLs). `rig_secrets` re-exports
+    # `shared.git_redaction`, so the lifted-out copy needs it in its namespace.
+    ns: dict = {"rig_secrets": _rig_secrets()}
     exec(compile(ast.Module(body=picked, type_ignores=[]), str(RIG), "exec"), ns)  # noqa: S102
 
     refuse = ns["_refuse_credentials"]
     assert refuse("https://ghp_AAAAAAAAAAAAAAAAAAAA@github.com/acme/kg.git")
     assert refuse("git@github.com:acme/kg.git", "main", "", "ghp_BBBBBBBBBBBBBBBBBBBB")
     assert refuse("https://user:secret@github.com/acme/kg.git")
+    assert refuse("https://glpat-AAAAAAAAAAAAAAAAAAAA@gitlab.com/acme/kg.git"), \
+        "the drifted six-prefix copy is back — a GitLab PAT in a remote URL walked through it"
     assert refuse("git@github.com:acme/kg.git", "main", "grp-a1b2c3", "") == ""
     assert "will not take a token in chat" in ns["_CREDENTIAL_REFUSAL"]
+
+
+def _rig_secrets():
+    """The rig's own module, imported the way the rig imports it."""
+    import importlib
+    import sys
+    rig_dir = str(RIG.parent)
+    if rig_dir not in sys.path:
+        sys.path.insert(0, rig_dir)
+    return importlib.import_module("rig_secrets")
 
 
 def test_the_rig_calls_that_refusal_before_it_does_anything():
