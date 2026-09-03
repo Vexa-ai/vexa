@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from shared import workspace_paths as wpaths
+
 
 def _tool_op(name: str, args: Optional[dict] = None) -> dict:
     """Classify a claude tool name into one of the terminal's op labels (read/search/edit/git/web/tool).
@@ -248,9 +250,10 @@ class WorkspaceReader:
         applies) comes back with ``_TEMPLATE_BANNER`` prepended, so a shape can never be read as a
         record. Deliberately not a refusal: the shape is what you consult to write a real entity."""
         ws = self._guard_under_root(base)
-        f = (ws / path).resolve()
-        if ws not in f.parents:  # the resolved path must stay inside the workspace
-            raise ValueError("invalid path")
+        try:
+            f = wpaths.resolve_inside(ws, path)   # absolute · `..` · symlink-out · `.git`/`.vexa`
+        except wpaths.PathRefused as exc:
+            raise ValueError(str(exc)) from None
         if not (f.exists() and f.is_file()):
             return None
         text = f.read_text()
@@ -549,6 +552,13 @@ class WorkspaceReader:
         from shared.gitenv import scrubbed_git_env
 
         base = self._guard_under_root(base)
+        if path is not None:
+            # The path is a PATHSPEC handed to `git show` — the same caller-supplied string every
+            # other route guards, and `git show <sha> -- ../x` reads out of the workspace.
+            try:
+                wpaths.resolve_inside(base, path)
+            except wpaths.PathRefused as exc:
+                raise ValueError(str(exc)) from None
         if not (base / ".git").exists() or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
             return {"sha": sha, "path": path, "diff": "", "truncated": False}  # bad sha never hits git
         args = ["git", "-C", str(base), "show", "--no-color", "--format=", sha]

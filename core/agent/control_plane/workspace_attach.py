@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared.git_redaction import redact
-from control_plane.repo_ref import RepoRefError, assert_not_credential
+from control_plane.repo_ref import RepoRefError, assert_not_credential, assert_public_host, valid_ref
 from shared.gitenv import scrubbed_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 
@@ -168,11 +168,13 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
     # scrubbed env: a hook-exported GIT_DIR would re-point every op below at the hook's repo
     # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud.
     assert_not_credential(repo_url)   # never hand a secret to a subprocess (see repo_ref)
+    assert_public_host(repo_url)      # …nor make this server fetch its own neighbours (R-D15)
+    ref = valid_ref(ref)              # …and never hand it a git OPTION either (R-E14)
     env = scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {}))
     url = _authenticated_url(repo_url, token)
 
     try:
-        subprocess.run(["git", "clone", "--quiet", url, str(dest)],
+        subprocess.run(["git", "clone", "--quiet", "--", url, str(dest)],
                        check=True, capture_output=True, text=True, env=env)
         if token:  # never persist the credential in the cloned repo's origin (P15)
             subprocess.run(["git", "-C", str(dest), "remote", "set-url", "origin", repo_url],

@@ -123,7 +123,7 @@ def test_clone_over_ssh_with_the_deploy_key(tmp_path, monkeypatch):
         # git composes: <GIT_SSH_COMMAND> <host> git-upload-pack '<path>' — the stub runs the tail.
         env = {**env, "GIT_SSH_COMMAND": env["GIT_SSH_COMMAND"].replace("ssh ", f"{fake} ", 1)}
         clone = partial(_git_clone, ssh_env=env)
-        clone(f"ssh://git@fake-host{bare}", "main", dest, None)
+        clone(f"ssh://git@fake-host.test{bare}", "main", dest, None)
 
     assert (dest / "README.md").read_text().startswith("hello from the existing repo")
     args = (tmp_path / "ssh-args.log").read_text()
@@ -132,7 +132,7 @@ def test_clone_over_ssh_with_the_deploy_key(tmp_path, monkeypatch):
     # the token-free origin the attach relies on (nothing embedded, because nothing was)
     origin = subprocess.run(["git", "-C", str(dest), "remote", "get-url", "origin"],
                             capture_output=True, text=True).stdout.strip()
-    assert origin.startswith("ssh://") and "@fake-host" in origin
+    assert origin.startswith("ssh://") and "@fake-host.test" in origin
 
 
 def test_deploy_keys_url_is_derived_not_guessed():

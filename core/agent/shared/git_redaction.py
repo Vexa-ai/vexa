@@ -44,10 +44,35 @@ _TOKEN_FAMILIES = re.compile(
 _URL_USERINFO = re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)")
 #: ``scheme://token@host`` — a PAT used as the whole userinfo (how git's own clone URL carries one).
 _URL_BARE_USERINFO = re.compile(r"(?<=://)[^/\s:@]{16,}(?=@)")
-#: Anything long and opaque enough to be a secret we have no name for yet.
-_GENERIC = re.compile(r"[A-Za-z0-9_-]{36,}")
-#: …except a git object id, which is exactly what an operator reading a git error needs to keep.
+#: Anything long and opaque enough to be a secret we have no name for yet. The threshold this was
+#: written with — 36 — was read off a GitHub PAT, and the secrets this deployment actually holds are
+#: shorter: an admin token is 32 hex characters and `sk_live_…` is about 32 (R-A09 / R-E09). So the
+#: rule now has two bands, and the second is why the first can stay:
+#:
+#: * **36+**, masked on LENGTH alone — exactly the old rule, unchanged, so nothing that was masked
+#:   before is unmasked now;
+#: * **24–35**, masked only when the run is OPAQUE — at least two of lower/upper/digit. That is what
+#:   separates `a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4` from `some-long-repository-name`, and a clone
+#:   error that cannot name the repository is a scrubber that has eaten its own diagnostics.
+_GENERIC = re.compile(r"[A-Za-z0-9_-]{24,}")
+_OPAQUE_MIN = 36
+#: A BASE64-shaped secret — the one shape `_GENERIC` cannot see, because `+` and `/` are outside its
+#: class and SPLIT the run: an AWS secret key (`…/K7MDENG/…`) becomes three sub-24 fragments and
+#: survives whole. Applied with `_is_opaque_b64` rather than alone, because `/` is also the commonest
+#: character in a URL path and masking `github.com/owner/repository-name` out of a clone error would
+#: destroy the message this scrubber exists to keep readable.
+_B64_RUN = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
+#: …except a git object id, which is exactly what an operator reading a git error needs to keep —
+#: and ONLY where the line is talking about git. A bare 64-char lowercase hex run is precisely what
+#: `INTERNAL_API_SECRET` and `ADMIN_TOKEN` look like, so the unconditional exemption was a hole
+#: shaped exactly like this deployment's own secrets.
 _GIT_OID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+#: The words that make a 40/64-hex run an object id rather than a secret. Read off the LINE the run
+#: sits on: git's own messages always name what the id is.
+_GIT_CUE = re.compile(
+    r"\b(?:commit|commits|sha|sha1|oid|object|objects|blob|tree|revision|rev|ref|refs|HEAD|"
+    r"branch|tag|detached|fast-forward|merge|rebase|cherry-pick|checkout|clone|fetch|pull|push|"
+    r"reset|pathspec|ancestor|upstream)\b", re.I)
 #: …and except an SSH PUBLIC KEY, which is a long base64 run the generic rule would happily eat — and
 #: which is the OPPOSITE of a secret: it is the answer we hand a person when a credential is missing
 #: ("add this key to your repository"). Masking it would leave a message that says "add this:
@@ -70,6 +95,53 @@ def looks_like_token(value: str) -> bool:
     person typed, before anything is done with it."""
     v = (value or "").strip()
     return v.startswith(TOKEN_PREFIXES) or bool(_TOKEN_FAMILIES.fullmatch(v))
+
+
+def _line_of(text: str, start: int, end: int) -> str:
+    """The line ``text[start:end]`` sits on — the context both allow-lists below are read from."""
+    ls = text.rfind("\n", 0, start) + 1
+    le = text.find("\n", end)
+    return text[ls:le if le != -1 else len(text)]
+
+
+def _spare_as_git_oid(text: str, m) -> bool:
+    """Is this 40/64-hex run an object id in a git sentence, rather than a hex secret?"""
+    return bool(_GIT_OID.match(m.group(0))) and bool(_GIT_CUE.search(_line_of(text, m.start(), m.end())))
+
+
+def _is_opaque_run(run: str) -> bool:
+    """Two of lower/upper/digit — the density that tells a token from a hyphenated English name."""
+    return sum(bool(re.search(p, run)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]")) >= 2
+
+
+def _mask_generic(text: str, m) -> bool:
+    """The two-band rule at `_GENERIC`: 36+ on length alone, 24–35 only when the run is opaque —
+    and never a git object id that the line itself says is one."""
+    if _spare_as_git_oid(text, m):
+        return False
+    return len(m.group(0)) >= _OPAQUE_MIN or _is_opaque_run(m.group(0))
+
+
+def _is_opaque_b64(text: str, m) -> bool:
+    """Is this run a base64 SECRET rather than a URL path or a branch name?
+
+    The class itself does most of the work: `_B64_RUN` is the STANDARD base64 alphabet and nothing
+    else, so `-` and `_` are not in it — which excludes every hyphenated repository, branch and
+    package name in one stroke (`some-team/some-long-repository-name`, `feature/PR-12-thing`) while
+    keeping the shape an AWS secret key actually has. Three tests then narrow what is left:
+
+    * it must contain a `+` or a `/` — otherwise `_GENERIC` already owns the run;
+    * it must not START mid-path: a path continues a hostname or another segment, so the character
+      before it is `.` or `/`, where a pasted secret follows whitespace, a quote or an `=`;
+    * and it must be dense — two of lower/upper/digit, which a path segment rarely is."""
+    run = m.group(0)
+    if not any(c in "+/" for c in run):
+        return False                                   # `_GENERIC` below already owns this run
+    if run.startswith(("/", "+", "=")) or run.endswith("+"):
+        return False
+    if m.start() and text[m.start() - 1] in "./":
+        return False                                   # a hostname tail, or a path continuing
+    return _is_opaque_run(run)
 
 
 def redact(text, *known: "str | None") -> str:
@@ -97,7 +169,8 @@ def redact(text, *known: "str | None") -> str:
 
     out = _SSH_PUBKEY.sub(_park, out)
     out = _KEY_FINGERPRINT.sub(_park, out)
-    out = _GENERIC.sub(lambda m: m.group(0) if _GIT_OID.match(m.group(0)) else MASK, out)
+    out = _B64_RUN.sub(lambda m: MASK if _is_opaque_b64(out, m) else m.group(0), out)
+    out = _GENERIC.sub(lambda m: MASK if _mask_generic(out, m) else m.group(0), out)
     for i, original in enumerate(kept):
         out = out.replace(f"\x00pub{i}\x00", original)
     return out

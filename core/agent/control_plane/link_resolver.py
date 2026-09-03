@@ -21,6 +21,7 @@ from typing import Optional
 from control_plane import workspace_ids as ids_mod
 from shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
 from shared.links import Ref, canonical_url, parse_ref
+from shared.workspace_paths import PathRefused, is_inside, relative_parts
 
 # Titles a resolver may show for a page it is not allowed to open. Deriving one from the ref is the
 # ONLY honest option: the id `olga-avramenko` becomes "Olga Avramenko", which is what the writer
@@ -54,15 +55,19 @@ def escapes(target: str) -> bool:
     """Does this path ref walk OUT of the workspace it names?
 
     A link is text somebody (or some model) wrote into a document, so it is untrusted input on the
-    read path exactly like a request parameter. ``..`` is refused at BOTH ends: the lookup below
-    will not find a file through it, and ``resolve`` will not echo it back inside a URL — a URL the
-    client would then hand to the file endpoint, where the same string gets a second chance."""
-    parts = [p for p in str(target or "").split("/") if p and p != "."]
-    depth = 0
-    for p in parts:
-        depth += -1 if p == ".." else 1
-        if depth < 0:
-            return True
+    read path exactly like a request parameter. It is refused at BOTH ends: the lookup below will
+    not find a file through it, and ``resolve`` will not echo it back inside a URL — a URL the
+    client would then hand to the file endpoint, where the same string gets a second chance.
+
+    THE TEXTUAL half only, because this answers about a ref before any workspace root is known;
+    ``_find`` re-asks ``shared.workspace_paths`` with the root so a SYMLINK out is caught too. The
+    version this replaces counted ``..`` segments and nothing else — and ``Path("/ws") / "/etc/passwd"``
+    is ``/etc/passwd``, an absolute path DISCARDING the root, which is how ``[[ws:<id>//etc/passwd]]``
+    read a host file and echoed its path back to the caller (R-A06)."""
+    try:
+        relative_parts(target)
+    except PathRefused:
+        return True
     return False
 
 
@@ -73,8 +78,10 @@ def _find(root: Path, ref: Ref) -> Optional[str]:
     (survives a rename), a path (survives nothing but a rename of the workspace), a title (the
     in-workspace form, matched by the same slug rule ``entity_upsert`` writes filenames with)."""
     if ref.form == "path":
-        if escapes(ref.target):
-            return None                            # traversal guard: a link can never escape
+        # ONE guard, with the root, so absolute · `..` · symlink-out · `.git`/`.vexa` are all one
+        # answer (shared/workspace_paths). A link can never escape the workspace it names.
+        if not is_inside(root, ref.target):
+            return None
         return ref.target if (root / ref.target).is_file() else None
     from shared.entities import slugify
 

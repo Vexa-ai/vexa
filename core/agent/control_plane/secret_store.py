@@ -76,23 +76,38 @@ def _harden(p: Path) -> None:
         log.debug("could not chmod secret store entry", exc_info=True)
 
 
+def read_key(root: str | Path, configured: str = "") -> Optional[bytes]:
+    """The key to open secrets under ``root``, WITHOUT creating one — or ``None`` when there is none.
+
+    Split out of ``master_key`` because ``get()`` used to call it, so a pure READ generated and wrote
+    ``.master.key`` (R-E13). Two consequences, and the second is the expensive one: a read created
+    server-side state, and when ``VEXA_SECRETS_KEY`` had been set at seal time and was later rotated
+    or unset, the read MINTED A FRESH KEY, ``unseal`` returned ``None``, and ``has()`` answered
+    ``False`` — telling the operator the credential did not exist when in fact it could not be
+    decrypted. Re-pasting the PAT then overwrote a perfectly good envelope."""
+    supplied = configured_key(configured)
+    if supplied:
+        return hashlib.sha256(supplied.encode("utf-8")).digest()
+    try:
+        raw = (secrets_dir(root) / MASTER_KEY_FILENAME).read_bytes().strip()
+    except OSError:
+        return None
+    return hashlib.sha256(raw).digest() if raw else None
+
+
 def master_key(root: str | Path, configured: str = "") -> bytes:
-    """The server-side key every secret under ``root`` is encrypted with.
+    """The server-side key every secret under ``root`` is encrypted with, CREATING it if absent.
 
     ``configured`` (``VEXA_SECRETS_KEY``) wins when set — that is the operator holding the key outside
     the data volume. Otherwise the key is READ from ``<root>/.secrets/.master.key``, and GENERATED
     there (32 random bytes, ``0600``) the first time anything is stored. Generation is racy-safe: a
-    concurrent writer's file wins on re-read, so two boots cannot end up with two keys."""
-    supplied = configured_key(configured)
-    if supplied:
-        return hashlib.sha256(supplied.encode("utf-8")).digest()
+    concurrent writer's file wins on re-read, so two boots cannot end up with two keys.
+
+    **Only the WRITE path may call this.** Reads go through ``read_key`` — see its docstring."""
+    existing = read_key(root, configured)
+    if existing is not None:
+        return existing
     kf = secrets_dir(root) / MASTER_KEY_FILENAME
-    try:
-        raw = kf.read_bytes().strip()
-        if raw:
-            return hashlib.sha256(raw).digest()
-    except OSError:
-        pass
     kf.parent.mkdir(parents=True, exist_ok=True)
     fresh = base64.b64encode(_secrets.token_bytes(32))
     tmp = kf.with_name(f"{kf.name}.{os.getpid()}.tmp")
@@ -192,9 +207,13 @@ def put(root: str | Path, name: str, value: Optional[str], *, key_env: str = "")
     return True
 
 
-def get(root: str | Path, name: str, *, key_env: str = "") -> Optional[str]:
-    """The stored secret, or ``None`` (absent · unreadable · wrong key · tampered). Never raises —
-    this sits on the git hot path, where "no credential" is an ordinary answer."""
+#: What ``state`` can answer. ``UNREADABLE`` is the one this store could not say before: an envelope
+#: is there and this key does not open it, which is an OPERATOR problem (a rotated or unset
+#: ``VEXA_SECRETS_KEY``) and not the "you never saved a credential" that ``ABSENT`` means.
+ABSENT, HELD, UNREADABLE = "absent", "held", "unreadable"
+
+
+def _envelope(root: str | Path, name: str) -> Optional[str]:
     p = _secret_path(root, name)
     if p is None:
         return None
@@ -202,14 +221,46 @@ def get(root: str | Path, name: str, *, key_env: str = "") -> Optional[str]:
         envelope = p.read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    if not envelope:
+    return envelope or None
+
+
+def get(root: str | Path, name: str, *, key_env: str = "") -> Optional[str]:
+    """The stored secret, or ``None`` (absent · unreadable · wrong key · tampered). Never raises —
+    this sits on the git hot path, where "no credential" is an ordinary answer.
+
+    A READ, all the way down: no key is generated here (R-E13). Ask ``state`` when the difference
+    between "there is none" and "this key does not open it" is what the caller needs."""
+    envelope = _envelope(root, name)
+    if envelope is None:
         return None
-    return unseal(envelope, master_key(root, key_env))
+    key = read_key(root, key_env)
+    if key is None:
+        log.warning("a sealed secret is held under %r and no key is configured to open it", name)
+        return None
+    out = unseal(envelope, key)
+    if out is None:
+        log.warning("a sealed secret under %r cannot be decrypted with the current key "
+                    "(rotated or unset VEXA_SECRETS_KEY?) — it is NOT absent", name)
+    return out
+
+
+def state(root: str | Path, name: str, *, key_env: str = "") -> str:
+    """``absent`` · ``held`` · ``unreadable`` — the three answers ``has()`` collapses into a bool.
+
+    The collapse is what made a rotated key look like a missing credential, so the surfaces that
+    ask a person to re-paste a PAT should ask this instead of ``has``."""
+    envelope = _envelope(root, name)
+    if envelope is None:
+        return ABSENT
+    key = read_key(root, key_env)
+    if key is None or unseal(envelope, key) is None:
+        return UNREADABLE
+    return HELD
 
 
 def has(root: str | Path, name: str, *, key_env: str = "") -> bool:
     """Whether a READABLE secret is held under ``name`` (a file we cannot decrypt is not one)."""
-    return get(root, name, key_env=key_env) is not None
+    return state(root, name, key_env=key_env) == HELD
 
 
 def delete(root: str | Path, name: str) -> bool:

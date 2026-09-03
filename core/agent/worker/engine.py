@@ -669,7 +669,11 @@ def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
     from shared.entities import missing_names
 
     roots = [Path(str(m.get("path") or "")) for m in (mounts if mounts is not None else active_mounts())
-             if m.get("write", True) and m.get("path")]
+             if m.get("write") and m.get("path")]
+    # DEFAULT FALSE (R-A15). Every other mount consumer reads the bit explicitly; this one
+    # defaulted a missing key to writable, so a mount that LOST it — a fake, a future producer,
+    # the read-only room mounts of a run with no primary — was silently promoted to a write
+    # target for the phase. A write bit that has to be present to be true cannot be lost.
     if not roots:
         return []
     return missing_names(roots, [t for t in texts if t])
