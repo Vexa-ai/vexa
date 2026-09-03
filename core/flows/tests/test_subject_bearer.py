@@ -347,3 +347,56 @@ def test_the_new_name_wins_when_both_are_sent(client, identity):
 def test_a_wrong_operator_key_under_either_name_is_refused(client, identity):
     assert client.get("/reactions", headers={"X-Flows-Operator-Key": "wrong"}).status_code == 401
     assert client.get("/reactions", headers={"X-Flows-Admin-Key": "wrong"}).status_code == 401
+
+
+# ── `GET /queue/waiting` — the fifth subject-scoped route (#1482 landed it operator-keyed) ──────
+
+@pytest.fixture
+def queue_subject(monkeypatch):
+    """Records WHICH subject the queue projection was asked about. The door is what is under test
+    here; `tests/test_queue_waiting.py` owns what the projection answers."""
+    asked = []
+
+    def waiting(_db, *, subject, flows, limit):
+        asked.append(subject)
+        return {"items": [], "flows": []}
+
+    monkeypatch.setattr(fa._flows_queue, "waiting", waiting)
+    return asked
+
+
+def test_the_queue_takes_a_persons_bearer_and_answers_about_them(client, identity, queue_subject):
+    r = client.get("/queue/waiting", headers=bearer("anna-key"))
+    assert r.status_code == 200, r.text
+    assert queue_subject == ["126"]
+
+
+def test_the_queue_refuses_a_subject_that_is_not_yours(client, identity, queue_subject):
+    r = client.get("/queue/waiting", params={"subject": "512"}, headers=bearer("anna-key"))
+    assert r.status_code == 403, r.text
+    assert queue_subject == [], "nothing was read"
+
+
+def test_a_stamped_user_id_does_not_beat_an_authenticated_person(client, identity, queue_subject):
+    """`X-User-Id` is a header a caller can type. It is trustworthy on this route only because the
+    OPERATOR key gates it — a service identity vouching for a person it resolved. A person's own
+    credential is stronger evidence than any header, so when one is present it wins.
+
+    This route is not always behind the gateway: reached through the MCP edge it is addressed
+    directly, and the edge stamps no `X-User-Id` at all."""
+    r = client.get("/queue/waiting", headers={**bearer("anna-key"), "X-User-Id": "512"})
+    assert r.status_code == 200
+    assert queue_subject == ["126"], "a header overrode a verified credential"
+
+
+def test_the_operator_read_still_honours_the_stamped_identity(client, identity, queue_subject):
+    """Unchanged: with the operator key, `X-User-Id` is the gateway's answer and still wins over
+    `?subject=` — `tests/test_queue_waiting.py` owns that row and it must keep passing."""
+    r = client.get("/queue/waiting", params={"subject": "999"},
+                   headers={**admin(), "X-User-Id": "126"})
+    assert r.status_code == 200 and queue_subject == ["126"]
+
+
+def test_the_queue_needs_a_credential(client, identity, queue_subject):
+    assert client.get("/queue/waiting", params={"subject": "126"}).status_code == 401
+    assert queue_subject == []
