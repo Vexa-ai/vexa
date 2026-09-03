@@ -137,6 +137,29 @@ function withEdited(relPath, find, repl, fn) {
   try { return fn(); } finally { writeFileSync(abs, orig); }
 }
 
+
+// ── gate:config-contract check 6 — the shared lite entrypoint (F130) ────────────────────────────
+// Checks 3 and 4 walk compose, helm and the supervisord program env in BOTH directions.
+// deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
+// one direction, that nothing walked: an export whose declaration AND reader were both deleted left
+// no refusal and no warning. Measured on the tip before the fix — the same plant was green.
+// entrypoint.sh is touched by no other test file, so the in-place edit below stays inside this
+// file's sequential run.
+const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
+
+test("config-contract vacuity: the committed lite entrypoint is green", () => {
+  const r = runGate("config-contract");
+  assert.equal(r.green, true, `the clean tree must be green or the fixture below proves nothing:\n${r.out}`);
+});
+
+test("an entrypoint.sh export that no adopted declaration carries is RED, named by file:line", () => {
+  const r = withEdited(LITE_ENTRYPOINT, "\nexport ", "\nexport VEXA_PHANTOM_ENTRY=1\nexport ",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `a phantom lite export passed the contract gate:\n${r.out}`);
+  assert.match(r.out, /entrypoint\.sh:\d+ exports VEXA_PHANTOM_ENTRY/,
+    `the failure must name the FILE AND LINE the operator has to open:\n${r.out}`);
+});
+
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";
@@ -202,7 +225,12 @@ const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
 test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
   // The gate must read helm templates, not only compose + values — a literal `image:` in a template
   // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
-  const r = withEdited(MINIO_JOB, "image: minio/mc:latest", "image: somevendor/unaudited:1.2",
+  // #1321 moved the mc image from a template literal to values (minio.mcImage) — the template
+  // line is now templated. The test's subject is unchanged: inject a LITERAL pin into the
+  // template and require the gate to read it.
+  const r = withEdited(MINIO_JOB,
+    "image: {{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}",
+    "image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
   assert.match(r.out, /undeclared pinned image/);
@@ -241,4 +269,84 @@ test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caug
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);
   assert.match(r.out, /XAUTOCLAIM/);
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// #209 (F209) — gate:python used to `return fail(...)` INSIDE its per-package loop, so the first
+// red package stopped the run and every later package was never even invoked. This is the
+// mechanism behind #1434's "CI never executed core/flows, lite or the rig": #1473 fixed the
+// package that happened to be red, not the loop that stopped after it. Real uv-backed Python
+// packages are planted under scripts/ — walkDirs() reads the whole tree from ROOT, so a package
+// planted here is a real input, not a stub — and the real gate runs as a subprocess, same
+// plant-and-run discipline as the fixtures above.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+const PY_PYPROJECT = (name) => `[project]
+name = "${name}"
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=9.0.3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+`;
+const PY_TEST_PASS = "def test_zz_planted():\n    assert True\n";
+const PY_TEST_FAIL = "def test_zz_planted():\n    assert False, \"planted failure\"\n";
+
+// Plants N fixture Python packages (each { dir, pass }), runs fn, then removes every planted
+// directory whole — each dir is fully owned by this helper (created here, nothing pre-existing
+// under it), so a plain recursive rm cannot eat a sibling's files the way a partial-path prune
+// could.
+function withPlantedPyPkgs(specs, fn) {
+  for (const { dir, pass } of specs) {
+    const abs = join(ROOT, dir);
+    mkdirSync(join(abs, "tests"), { recursive: true });
+    writeFileSync(join(abs, "pyproject.toml"), PY_PYPROJECT(dir.replace(/[^a-z0-9]+/gi, "-")));
+    writeFileSync(join(abs, "tests", "test_zz_planted.py"), pass ? PY_TEST_PASS : PY_TEST_FAIL);
+  }
+  try {
+    return fn();
+  } finally {
+    for (const { dir } of specs) rmSync(join(ROOT, dir), { recursive: true, force: true });
+  }
+}
+
+const PKG_A = "scripts/zz-gatepy-fixture-a";
+const PKG_B = "scripts/zz-gatepy-fixture-b";
+
+test("gate:python vacuity: the committed tree is green (a red here invalidates every row below)", () => {
+  const r = runGate("python");
+  assert.equal(r.green, true, `the clean tree already reds — these fixtures prove nothing:\n${r.out}`);
+});
+
+test("gate:python RED (#209): a single failing package still fails the gate", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }], () => runGate("python"));
+  assert.equal(r.green, false, `a planted failing package did not red the gate:\n${r.out}`);
+  assert.match(r.out, new RegExp(PKG_A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("gate:python RED (#209): two failing packages are BOTH named in the one failure — the loop must not stop at the first", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }, { dir: PKG_B, pass: false }], () => runGate("python"));
+  assert.equal(r.green, false, `two planted failing packages did not red the gate:\n${r.out}`);
+  // both packages must appear — a `return` inside the loop would report only PKG_A (the first
+  // walked) and PKG_B would never even be run, let alone named.
+  assert.match(r.out, new RegExp(PKG_A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `PKG_A missing from output:\n${r.out}`);
+  assert.match(r.out, new RegExp(PKG_B.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `PKG_B missing — the gate stopped after the first red package:\n${r.out}`);
+  // the failure names how many of the population went red, not just that "a" package did
+  assert.match(r.out, /2\/\d+ package\(s\) failed pytest/, `no failing-package count in the output:\n${r.out}`);
+});
+
+test("gate:python: one red package alongside a green one still runs (and names) both — green does not mask red, red does not skip green", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: false }], () => runGate("python"));
+  assert.equal(r.green, false, `a genuinely red package among green ones did not red the gate:\n${r.out}`);
+  assert.match(r.out, new RegExp(PKG_B.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `the red package (PKG_B) is not named:\n${r.out}`);
+  assert.doesNotMatch(r.out, new RegExp(PKG_A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `the green package (PKG_A) was wrongly named as a failure:\n${r.out}`);
+});
+
+test("gate:python GREEN: multiple passing planted packages do not red the gate", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: true }], () => runGate("python"));
+  assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
 });

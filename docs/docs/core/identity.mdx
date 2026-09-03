@@ -139,7 +139,7 @@ CI red can be crossed.
 | Gateway: key → user, `X-User-Id`, route scopes, `/ws` | ✅ **built** |
 | Agent-api derives `subject` from `X-User-Id`, ignores the client body | ✅ **built** (P20) |
 | Client identity is real (terminal sends the logged-in user's key via OAuth) | ✅ **fixed** — the old hardcoded `u_live` is gone from the client |
-| `can_access` / `OwnerOnlyPolicy` **adopted on every meeting path** | ⚠️ **partial** — meeting-api owner-checks its own way; the agent domain's `chat` / `meeting/stream` / `meeting/start` / `meeting/process` do **not** call it yet |
+| `can_access` / `OwnerOnlyPolicy` **adopted on every meeting path** | ⚠️ **partial** — meeting-api owner-checks its own way; the agent domain's `chat` / `meeting/stream` do **not** call it yet |
 | Server-side live-meeting **owner attribution** | ⚠️ **pre-M2** — the live-meeting watcher is started with the default `subject = "u_live"` (`control_plane/api.py:880` → `transcription_watcher.py:203`); live-meeting dispatch (M2) is not yet delivered, so this default must be replaced with the real owner before it ships |
 | **Auth spine** end-to-end (opaque token → user → scoped access, everywhere) | ⬜ **planned** (Stage 2) |
 | Workload identity in production (SPIRE), Keycloak, RFC 8693, MCP Gateway | ⬜ **planned** (Stage 2) |
@@ -172,12 +172,12 @@ that makes it real (P9: an ungated rule is aspirational). Foundations:
 
 | Principle | Today (in code) | Next step | Lands as |
 |---|---|---|---|
-| **P20 — complete mediation**: authorize every access, default-deny `canAccess` on API · WS · agent | deny test on the library only (`core/identity/tests/test_access.py`, `gate:access`); meeting-api owner-checks **implicitly per query**; agent meeting paths unchecked (`can_access` count = 0 in `control_plane/api.py`) | wire `can_access(subject, resource, action)` onto every meeting path (`chat` · `meeting/stream` · `meeting/start` · `meeting/process`); extend `gate:access` to the wired paths | ADR-0012 · `gate:access` |
+| **P20 — complete mediation**: authorize every access, default-deny `canAccess` on API · WS · agent | deny test on the library only (`core/identity/tests/test_access.py`, `gate:access`); meeting-api owner-checks **implicitly per query**; agent meeting paths unchecked (`can_access` count = 0 in `control_plane/api.py`) | wire `can_access(subject, resource, action)` onto every meeting path (`chat` · `meeting/stream`); extend `gate:access` to the wired paths | ADR-0012 · `gate:access` |
 | **Identity is a chain of custody** | `x-user-id` is plaintext, trusted by network position (`gateway/app.py:192`); the per-dispatch token is minted (`control_plane/dispatch.py:36`) but not yet verified at a boundary | a **signed** user-assertion verified at each hop; verify the dispatch token at the workspace/tool boundaries | Stage 2 — SPIRE · Keycloak · RFC 8693 · MCP Gateway |
 | **Scoped agent domain** | `/api/*` carries **no** scope — any valid key reaches any agent route (`gateway/app.py:153-156`) | per-route scopes for the agent domain | Stage 3 |
 | **P15 — secrets behind a port** | broker pattern **wired** for the per-user git token (`agent/shared/adapters.py:135-162`); the store is the stand-in `PassthroughSecretsBroker` | real vault — lease · rotation · BYOK — behind `SecretsPort` | P16 · ADR-0003 |
 | **P15 — data encrypted at rest** | buckets bind-mounted; transcripts and tokens in cleartext | the three at-rest stores → see [Data at rest](#data-at-rest-encryption) | Stage 0 contract · planned |
-| **Multi-tenant attribution** | the live-meeting watcher is started with the default `subject = "u_live"` (`control_plane/api.py:880` → `transcription_watcher.py:203,339`); live-meeting dispatch (M2) is not yet delivered | arm the copilot as the real meeting owner before M2 ships | Auth spine · M2 |
+| **Multi-tenant attribution** | the copilot **does** dispatch on live meetings; what is pre-M2 is *who it is attributed to* — the watcher starts with the default `subject = "u_live"` (`control_plane/api.py:2342` passes no `subject=` → `transcription_watcher.py:216`, whose docstring calls it a "PRE-M2 placeholder"), so every armed copilot lands on one subject instead of the meeting's owner | pass the real meeting owner at `transcription_watcher.start` before M2 ships | Auth spine · M2 |
 | **P9 / P6 — one front door** | `_resolve_user_id` is duplicated across four meeting-api routers (`collector` · `bot_spawn` · `lifecycle` · `recordings`) | fold identity resolution into the shared `identity` front door | cleanup |
 
 <Note>`subject_of` (`control_plane/api.py`) has a `VEXA_AGENT_DEFAULT_SUBJECT` fallback for a gateway-less

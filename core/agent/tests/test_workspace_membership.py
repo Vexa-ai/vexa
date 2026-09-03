@@ -631,3 +631,76 @@ def test_require_gateway_identity_flag_rejects_direct_edge(tmp_path, monkeypatch
     r2 = c.get("/api/workspace/members?workspace_id=wsA",
                headers={"X-User-Id": "attacker", "X-Gateway-Verified": "1"})
     assert r2.status_code == 403
+
+
+# ── the listing must not lose a grant when the derived index is unreachable ──────────────────────
+class _DeadIndex:
+    """A ``MembershipIndex`` whose remote edge is down — the live failure on the dogfood deploy, where
+    agent-api held the compose-default internal secret and every call to admin-api answered 403."""
+
+    def add(self, subject, workspace_id, role, added_at):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    def remove(self, subject, workspace_id):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    def list(self, subject):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+
+def test_api_shared_list_survives_a_dead_index(tmp_path):
+    """create → list must show the row even when the index mirror is unreachable.
+
+    The regression: ``POST /api/workspace/shared/new`` returned 201 (the authoritative
+    policy/members.json write succeeded and the index write is best-effort by contract), but the
+    listing read ONLY the index and swallowed its error into ``{"memberships": []}`` — so the creator
+    could not see the workspace they had just been made owner of, and the failure was reported as
+    "you have no shared workspaces" instead of as an error."""
+    c = _client(tmp_path, _DeadIndex())
+
+    created = c.post("/api/workspace/shared/new", headers=_h("owner1"), json={"name": "Deal Room"})
+    assert created.status_code == 201, created.text
+    wid = created.json()["workspace_id"]
+    assert created.json()["role"] == "owner"
+
+    listed = c.get("/api/workspace/shared", headers=_h("owner1"))
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    rows = {r["workspace_id"]: r for r in body["memberships"]}
+    assert wid in rows, f"the grant just made is invisible: {body}"
+    assert rows[wid]["role"] == "owner"
+    # the degradation is SAID, not swallowed — an empty-looking listing must be distinguishable
+    # from a healthy one that genuinely has nothing in it.
+    assert body["index_degraded"] is True
+
+    # and it stays scoped to the caller: another subject sees nothing.
+    other = c.get("/api/workspace/shared", headers=_h("stranger")).json()
+    assert other["memberships"] == []
+
+
+def test_api_shared_list_unions_index_and_git_store(tmp_path):
+    """An index row for a workspace that is NOT on this host (another host's dir) is still listed —
+    the reconciliation ADDS from the git store, it never subtracts using it."""
+    _init_ws(tmp_path, "wsLocal")
+    idx = m.InMemoryMembershipIndex()
+    m.ensure_owner(tmp_path, "wsLocal", "owner1", index=idx)
+    idx.add("owner1", "wsElsewhere", "contributor", "2026-01-01T00:00:00Z")
+
+    body = _client(tmp_path, idx).get("/api/workspace/shared", headers=_h("owner1")).json()
+    assert {r["workspace_id"] for r in body["memberships"]} == {"wsLocal", "wsElsewhere"}
+    assert body["index_degraded"] is False
+    # no duplicate row for the workspace both stores know about
+    assert len([r for r in body["memberships"] if r["workspace_id"] == "wsLocal"]) == 1
+
+
+def test_list_memberships_skips_reserved_slugs(tmp_path):
+    """The authoritative scan honours the same reserved/dot namespace ``assert_shareable`` refuses,
+    so the SYSTEM + seed workspaces never surface as memberships."""
+    for slug in ("_global", "seed", ".attach", "wsReal"):
+        ws = tmp_path / slug / "policy"
+        ws.mkdir(parents=True)
+        (ws / "members.json").write_text(json.dumps([{"subject": "u1", "role": "owner"}]) + "\n")
+
+    got = m.list_memberships(tmp_path, "u1")
+    assert [r["workspace_id"] for r in got] == ["wsReal"]
+    assert m.list_memberships(tmp_path, "nobody") == []

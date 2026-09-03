@@ -64,6 +64,43 @@ def validate_seed(seed: Path) -> list[str]:
             for rel in REQUIRED_SEED_PATHS if not (seed / rel).is_file()]
 
 
+# ── what a NEW DESK does NOT start with ──────────────────────────────────────────────────────────
+# ⚠ 2026-09-02. A new user signed in and the right panel rendered his desk's README as a page:
+#     "# (unset) — this workspace has not been set up yet … Purpose (unset) … Objective (unset)"
+# That file is a TEMPLATE. It shipped in the seed, was copied into every desk as ordinary content,
+# and the panel — correctly, by its own rules — rendered the first document it found. The founder
+# saw a form he had never filled in, presented as his workspace. "not happy about that."
+#
+# A desk starts EMPTY of pages. The agent writes the README when it has something to put in it (the
+# company-setup chat did exactly that for the admin's desk, and it read well because it was written,
+# not filled in). Index pages are the same shape of defect one level down: `kg/index.md` and
+# `kg/entities/*/index.md` are scaffolding for a graph with no entities in it yet.
+#
+# MACHINERY IS NOT CONTENT and stays: CLAUDE.md (the agent's conventions for this repo), flows/,
+# skills/, routines/, views/, and kg/templates/ — the agent READS those; a person never opens them
+# as a page. Dropping them would change how every desk behaves, which is a bigger change than the
+# defect asks for.
+_SEED_PAGES_NOT_COPIED = frozenset({
+    "README.md",                     # the "(unset)" page the founder was shown
+    "kg/index.md",
+    "kg/entities/index.md",
+    "kg/entities/person/index.md",
+    "kg/entities/company/index.md",
+    "kg/entities/meeting/index.md",
+})
+
+
+def _seed_pairs(seed_dir: Path):
+    """(source, workspace-relative path) for every seed file that should actually be copied."""
+    for src in sorted(seed_dir.rglob("*")):
+        if src.is_dir():
+            continue
+        rel = src.relative_to(seed_dir).as_posix()
+        if rel in _SEED_PAGES_NOT_COPIED:
+            continue
+        yield src, rel
+
+
 def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
     """Initialize `ws` as a git repo seeded from `seed_dir` (the validated template). Idempotent: a
     workspace that already has `.git` is returned untouched. Copies the template tree, then `git init`
@@ -72,12 +109,15 @@ def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
         return ws
     ws.mkdir(parents=True, exist_ok=True)
     if seed_dir and seed_dir.exists():
-        for item in seed_dir.iterdir():
-            dst = ws / item.name
-            if item.is_dir():
-                shutil.copytree(item, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dst)
+        # File-by-file rather than copytree, so the page exclusions above are actually applied —
+        # a directory copy cannot skip one document inside a tree it is copying wholesale.
+        for src, rel in _seed_pairs(seed_dir):
+            dst = ws / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        # `kg/entities/` must EXIST and be empty: the agent writes entities into it, and a missing
+        # directory is a different failure from an empty one.
+        (ws / "kg" / "entities").mkdir(parents=True, exist_ok=True)
     # scrubbed_git_env: a hook-exported GIT_DIR would otherwise re-point init/add/commit at the
     # HOOK's repo (with `ws` as its work tree) and rewrite that repo's branch — see shared/gitenv.py.
     env = scrubbed_git_env()

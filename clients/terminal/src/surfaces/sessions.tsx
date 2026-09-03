@@ -4,7 +4,7 @@
  *  was redundant. This module now just exports `sessionTitle` (the chat rail's session picker reuses it)
  *  and re-exports `SessionSummary`. */
 import { type SessionSummary } from "./sessionsApi";
-import { ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
+import { MACHINERY_MARK, ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
 export type { SessionSummary } from "./sessionsApi";  // re-exported for the chat surface
 
 const truncateSessionId = (session: string) => session.length > 18 ? `${session.slice(0, 18)}...` : session;
@@ -27,9 +27,10 @@ function compactTitle(title: string): string {
 
 export const sessionTitle = (s: SessionSummary) => {
   const title = s.title?.trim();
-  // A session titled by the onboarding kickoff (the first message) must not show the raw prompt — fall
-  // back to the session id (e.g. "main").
-  if (title && !title.includes(ONBOARDING_KICKOFF_MARK)) return compactTitle(title);
+  // A session titled by MACHINERY — the onboarding kickoff, or a `?ask=` preset an emailed link
+  // composed — must not show the raw prompt. The session's title is its first message, and the
+  // first message of a clicked-through chat is the product talking to itself.
+  if (title && !title.includes(ONBOARDING_KICKOFF_MARK) && !title.includes(MACHINERY_MARK)) return compactTitle(title);
   return truncateSessionId(s.session);
 };
 

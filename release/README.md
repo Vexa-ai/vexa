@@ -24,3 +24,10 @@ never moved by a replacement-candidate run.
 The map records the top-level descriptor plus each selected platform manifest
 and image-config digest, so production imageID evidence is compared at the
 correct OCI identity layer.
+
+A map cannot exist before the build that publishes the digests it records, so
+the freeze build defers its identity check with a notice and a human binds the
+packet afterwards. That step is the review, and it is written down in
+[`releases/README.md` § Bind, validate, freeze](../releases/README.md).
+`release-validate-gating.test.mjs` holds both halves in place: the freeze path
+may defer, and every promote / stable / already-mapped path still fails closed.

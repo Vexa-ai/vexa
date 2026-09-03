@@ -7,6 +7,7 @@ import {
   recomputeTranscripts,
   addSegment,
   bootstrapSegments,
+  retractSegments,
 } from './state';
 
 function seg(
@@ -412,5 +413,64 @@ describe('confirmed/pending lifecycle (integration)', () => {
     // "The project" starts with prefix of "The project is on track" → stale
     expect(result).toHaveLength(1);
     expect(result[0].text).toBe('The project is on track');
+  });
+});
+
+describe('retractSegments', () => {
+  it('drops a confirmed row by id and recomputes', () => {
+    const state = createTranscriptState();
+    bootstrapConfirmed(state, [
+      seg('Alice', 0, 5, 'kept', { segment_id: 'a:0' }),
+      seg('Alice', 5, 10, 'withdrawn', { segment_id: 'a:1' }),
+    ]);
+
+    const result = retractSegments(state, ['a:1']);
+    expect(result).not.toBeNull();
+    expect(state.confirmed.has('a:1')).toBe(false);
+    expect(result!.map(s => s.text)).toEqual(['kept']);
+  });
+
+  it('drops a pending draft and clears the speaker when nothing survives', () => {
+    const state = createTranscriptState();
+    bootstrapConfirmed(state, []);
+    applyTranscriptTick(state, [], [seg('Alice', 0, 3, 'draft', { segment_id: 'a:draft', completed: false })], 'Alice');
+    expect(state.pendingBySpeaker.get('Alice')).toHaveLength(1);
+
+    const result = retractSegments(state, ['a:draft']);
+    expect(result).toEqual([]);
+    expect(state.pendingBySpeaker.has('Alice')).toBe(false);
+  });
+
+  it('keeps the surviving drafts of a partially retracted speaker', () => {
+    const state = createTranscriptState();
+    bootstrapConfirmed(state, []);
+    applyTranscriptTick(state, [], [
+      seg('Alice', 0, 3, 'first draft', { segment_id: 'a:1', completed: false }),
+      seg('Alice', 4, 7, 'second draft', { segment_id: 'a:2', completed: false }),
+    ], 'Alice');
+
+    const result = retractSegments(state, ['a:1']);
+    expect(state.pendingBySpeaker.get('Alice')).toHaveLength(1);
+    expect(result!.map(s => s.text)).toEqual(['second draft']);
+  });
+
+  it('retracts across both lanes in one call', () => {
+    const state = createTranscriptState();
+    bootstrapConfirmed(state, [seg('Alice', 0, 5, 'confirmed', { segment_id: 'a:0' })]);
+    applyTranscriptTick(state, [], [seg('Bob', 5, 8, 'draft', { segment_id: 'b:0', completed: false })], 'Bob');
+
+    const result = retractSegments(state, ['a:0', 'b:0']);
+    expect(result).toEqual([]);
+    expect(state.confirmed.size).toBe(0);
+    expect(state.pendingBySpeaker.size).toBe(0);
+  });
+
+  it('returns null when no id matches, and on an empty list', () => {
+    const state = createTranscriptState();
+    bootstrapConfirmed(state, [seg('Alice', 0, 5, 'kept', { segment_id: 'a:0' })]);
+
+    expect(retractSegments(state, ['nope'])).toBeNull();
+    expect(retractSegments(state, [])).toBeNull();
+    expect(state.confirmed.size).toBe(1);
   });
 });

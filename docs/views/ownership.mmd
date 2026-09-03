@@ -4,7 +4,6 @@ flowchart LR
   tc_mutable[("tc:meeting:{id}:mutable (pubsub)")]
   style tc_mutable stroke-dasharray: 5 5,stroke-width:3px
   tc_stream[("tc:meeting:{id} (stream)")]
-  proc_stream[("proc:meeting:{id} (stream)")]
   out_stream[("unit:{id}:out (stream)")]
   segments_table[("transcription_segments (table)")]
   recording_blob[("recordings bucket (blob)")]
@@ -17,6 +16,7 @@ flowchart LR
   unit_in[("unit:{id}:in (stream)")]
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
+  flows_rows[("flows-rows")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -26,7 +26,6 @@ flowchart LR
   agent_api -.->|read| tc_stream
   gateway -.->|read| tc_mutable
   terminal -.->|read| tc_stream
-  terminal -.->|read| proc_stream
   terminal -.->|read| out_stream
   bot -->|write| recording_blob
   bot -.->|read-write| userdata_blob
@@ -41,9 +40,10 @@ flowchart LR
   agent_api -.->|read| out_stream
   agent_worker -.->|read| tc_stream
   agent_worker -->|write| out_stream
-  agent_worker -->|write| proc_stream
   agent_worker -.->|read| unit_in
   gateway -.->|read| bm_status
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat
   admin_api -->|write| identity_db
+  flows_worker -->|write| flows_rows
+  flows_api -.->|read| flows_rows

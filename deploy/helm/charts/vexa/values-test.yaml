@@ -12,7 +12,10 @@ global:
 
 secrets:
   adminApiToken: "test-admin-token"
-  internalApiSecret: "vexa-internal-secret"
+  # A RENDER fixture, never a running value — and deliberately not the old published literal:
+  # `vexa-internal-secret` is on every service's forbidden-values list now (F95) and a boot
+  # holding it refuses to start.
+  internalApiSecret: "helm-render-test-only"
   transcriptionServiceToken: ""
   dispatchSigningKey: "dev-dispatch-signing-key"
 

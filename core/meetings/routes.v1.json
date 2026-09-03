@@ -1,0 +1,282 @@
+{
+  "contract": "routes.v1",
+  "domain": "meetings",
+  "owner": "core/meetings",
+  "edge": "gateway",
+  "note": "Bots, meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's.",
+  "presence_env": "MEETING_API_URL",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/bots",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/bots",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/bots/status",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/bots/{platform}/{native_meeting_id}",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/bots/{platform}/{native_meeting_id}/chat",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/bots/{platform}/{native_meeting_id}/config",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/bots/{platform}/{native_meeting_id}/speak",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/meetings",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/meetings/{meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/meetings/{meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/share",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/transcript-import",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/meetings/{platform}/{native_meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/meetings/{platform}/{native_meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{platform}/{native_meeting_id}/annotate",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/meetings/{platform}/{native_meeting_id}/intent",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/meetings/{platform}/{native_meeting_id}/participants",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{platform}/{native_meeting_id}/share",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{platform}/{native_meeting_id}/workspace",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/recordings",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/recordings/{recording_id}",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/recordings/{recording_id}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/recordings/{recording_id}/master",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/recordings/{recording_id}/media/{media_file_id}/download",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/recordings/{recording_id}/media/{media_file_id}/raw",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/transcripts/by-id/{meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/transcripts/by-id/{meeting_id}/share",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/transcripts/search",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/transcripts/share/accept",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/transcripts/{platform}/{native_meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/transcripts/{platform}/{native_meeting_id}/share",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/calendar/sync",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/user/calendar/sync",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/calendars/{calendar_id}/sync",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/user/calendars/{calendar_id}/sync",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/webhook/deliveries",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    }
+  ]
+}

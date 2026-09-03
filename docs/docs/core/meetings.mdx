@@ -18,6 +18,10 @@ It also **composes** with the [agent domain](/core/agents) — the transcript be
 on — but that is a composition, not a dependency: meetings stands alone. How the two connect (the
 `transcript.v1` → agent bridge) lives in one place: [Modules & seams](/architecture/modules).
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ## The lifecycle — one meeting, one row
 
 A meeting is **one record from plan to transcript**. It is born in a user-owned *intent* status,
@@ -53,16 +57,19 @@ later; a plan without a time sits in `idle` until you schedule it.
 Connect your calendar with its **secret ICS address** (Google Calendar and Outlook both provide
 one — see [Calendar sync](/how-to/calendar-sync)); no OAuth needed. Connecting syncs immediately
 and answers with the result — every sync failure is stamped as a human-readable status
-(`GET /user/calendar/sync`, shown in the Terminal's calendar panel), never swallowed — failures
+(`GET /user/calendars/{calendar_id}/sync`, surfaced on the Calendar page of the hosted dashboard at
+[dashboard.vexa.ai](https://dashboard.vexa.ai)), never swallowed — failures
 are loud here, like everywhere in the lifecycle. A background sweep re-fetches
-the feed (default every 5 minutes) and upserts planned meetings:
+the feed (`CALENDAR_SYNC_INTERVAL_S`; self-hosted default 5 minutes, hosted rollout 60 seconds)
+and upserts planned meetings:
 
-- **Only events with a recognizable meeting link** import — a dentist appointment is not a
-  joinable meeting.
+- **Every upcoming event imports.** Recognizable Meet/Zoom/Teams links arm auto-join; link-less
+  events remain visible as unarmed planned meetings until a link appears.
 - **One meeting per calendar event, next occurrence only** — a weekly meeting reuses one link, so
   the importer tracks the next upcoming occurrence; the following one imports after the current
   completes.
-- Moves and cancellations follow the feed; a meeting the bot already joined is never touched.
+- Moves, cancellations, title/link changes, attendees, and complete provider metadata follow the
+  feed; a meeting the bot already joined is never touched.
 - A meeting you planned manually on the same link is **adopted** (linked to the calendar event),
   not duplicated.
 
@@ -70,7 +77,7 @@ the feed (default every 5 minutes) and upserts planned meetings:
 
 A `scheduled` meeting with a link is joined **automatically**: a sweep sends the bot shortly
 before the start time (default 60 s lead). Control it per meeting with the **auto-join toggle**
-(default on) and globally for imported meetings with the calendar's **auto-join switch**. Two
+(default on) and per source with each calendar connection's **auto-join switch**. Two
 guarantees:
 
 - **Never hours late** — a meeting whose start passed the grace window (default 10 min) is
@@ -82,7 +89,9 @@ guarantees:
 ### Capture
 
 The bot joins natively, in real time, with no plugins or host configuration — it attends like any
-participant, on [**Google Meet**, **Zoom**, **Microsoft Teams**, and **Jitsi Meet**](/api/meetings#platforms).
+participant, on [**Google Meet**, **Zoom**, and **Microsoft Teams**](/api/meetings#platforms) in
+production, plus [**Jitsi Meet**](/api/meetings#platforms) — join + capture offline-proven, live
+validation pending ([#883](https://github.com/Vexa-ai/vexa/issues/883)).
 Mechanically it is a **browser [container](/concepts#container) spawned by the
 [runtime](/core/runtime)** — the same runtime an agent runs in. The speaker-attributed (diarized)
 transcript streams live over the [API](/api/meetings) and WebSocket.
@@ -103,4 +112,4 @@ the meeting itself rides along. See [Plan and share a meeting](/how-to/plan-a-me
    - **Before the meeting** — prepare a briefing in the bound workspace; attendees see it live.
    - **After the meeting** — a dispatch writes notes, decisions, and action items as workspace files.
    - **During the meeting** — a live dispatch surfaces proactive cards (new person, action item,
-     decision); see [Meeting copilot](/how-to/live-copilot).
+     decision); see [Follow a live meeting](/how-to/live-copilot).

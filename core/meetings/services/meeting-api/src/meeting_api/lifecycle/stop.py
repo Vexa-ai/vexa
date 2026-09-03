@@ -22,11 +22,22 @@ import json
 from typing import Any, Optional, Protocol, runtime_checkable
 
 from .machine import (
+    USER_STOP_REASON,
     BotStatus,
     CompletionReason,
     MeetingRecord,
     TransitionSource,
+    dominant_completion_reason,
 )
+
+# Re-exported here because this is the module a reader looks in for the stop path's rules; the rule
+# itself lives in ``machine`` (which owns ``CompletionReason``, and which must not import this
+# module — ``stop`` already imports it).
+__all__ = [
+    "USER_STOP_REASON", "dominant_completion_reason",
+    "leave_command_channel", "leave_command_payload", "LeaveCommandPublisher",
+    "request_stop", "classify_user_stop", "stop_event_for", "USER_STOP",
+]
 
 
 def leave_command_channel(meeting_id: Any) -> str:

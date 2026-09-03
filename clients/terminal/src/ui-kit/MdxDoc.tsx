@@ -18,8 +18,9 @@ import remarkGfm from "remark-gfm";
 import { Markdown } from "./Markdown";
 import { Icon } from "./index";
 import {
-  Card, CardGroup, DocMetaContext, DocNavContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
-  Wikilink, isInternalHref, type DocNavigate,
+  Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
+  Wikilink, WorkspaceRef, isDistinctiveWorkspaceToken, isInternalHref, knownWorkspaces, lookupWorkspace,
+  primeKnownWorkspaces, type DocNavigate,
 } from "./docLinks";
 import { OPEN_MEETING_EVENT } from "../canvas/actions";
 
@@ -142,7 +143,7 @@ const htmlComponents = {
   ),
 };
 
-export const MDX_COMPONENTS = { ...htmlComponents, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink };
+export const MDX_COMPONENTS = { ...htmlComponents, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef };
 
 // ── security: forbid executable MDX ──────────────────────────────────────────
 // kg/ markdown is agent-written from meeting transcripts and external content, so it
@@ -170,13 +171,14 @@ function remarkForbidExecutable() {
   return (tree: { type?: string; children?: unknown[] }) => assertNoExecutableMdx(tree);
 }
 
-// ── prose preprocessing (code spans/fences untouched) ────────────────────────────
+// ── prose preprocessing (fences untouched) ───────────────────────────────────────
 // 1. escape `<` that doesn't start a known tag — agent-written docs routinely carry raw
 //    angle-bracket text (`<meeting_id>`, `a<b`, `<url>`) that would otherwise abort the
 //    whole MDX compile and downgrade the doc to the plain renderer;
 // 2. rewrite [[Title]] → <Wikilink title="Title" /> (after escaping, so the injected tag
-//    survives).
-const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|Tab|Wikilink" +
+//    survives);
+// 3. rewrite a doc PATH → <DocPath path="…" /> so the file the agent names is clickable.
+const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|Tab|Wikilink|DocPath|WorkspaceRef" +
   // no single-letter html tags (b, i): `a<b then` in prose is far likelier than a raw
   // <b> tag, and an unclosed <b would abort the compile this pass exists to save
   "|a\\b|br|blockquote|code|details|div|em|h[1-6]|hr|img|kbd|li|ol|p\\b|pre|span|strong|sub|summary|sup|table|tbody|td|th|thead|tr|ul";
@@ -184,11 +186,81 @@ const UNKNOWN_TAG_OPEN = new RegExp(`<(?!/?(?:${KNOWN_TAGS})(?:[\\s/>]|$))`, "g"
 export function escapeUnknownTags(seg: string): string {
   return seg.replace(UNKNOWN_TAG_OPEN, "\\<");
 }
-function transformWikilinks(src: string): string {
-  // split out fenced code blocks and inline code; only rewrite prose segments
-  return src.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) =>
-    i % 2 === 1 ? seg : escapeUnknownTags(seg).replace(/\[\[([^\]]+)\]\]/g, (_m, t: string) => `<Wikilink title=${JSON.stringify(t)} />`),
-  ).join("");
+// ── what a reply names, and what it must therefore link to ──────────────────────
+// The founder asked the agent to "reference workspace with its readme". The reply named the
+// workspace in bold and its README as inline code, and neither was clickable: "no reference, and
+// when reference it's not interactive." Three spellings carry a reference, so three are recognized:
+//
+//   1. an ABSOLUTE mount path   `/workspaces/<slug>/README.md`   — inline code AND prose
+//   2. a RELATIVE doc path      `kg/entities/company/x.md`       — inline code only, and only
+//                                                                  once it resolves in a tree
+//   3. a WORKSPACE name         **vexa-team-3183d1**             — bold, inline code, or (when
+//                                                                  distinctive) bare prose
+//
+// FENCED blocks are never touched. A fence is a transcript of literal text — a shell command, a
+// file listing, a snippet someone is meant to copy — and turning a word inside one into a chip
+// falsifies what it says. Inline code is the opposite: it is the agent's own idiom for NAMING a
+// file, which is exactly what has to become clickable.
+
+/** Inline code that names a workspace doc: an absolute mount path (always chipped — unambiguous),
+ *  or a bare workspace-relative path ending `.md` (chipped only once DocPath finds it in a tree,
+ *  so `package.json` and prose fragments stay plain monospace). */
+export const DOC_PATH_IN_CODE =
+  /^(?:\/(?:[\w.-]+\/)*?workspaces\/[\w.-]+\/[\w./ -]+|[\w.-]+(?:\/[\w.\- ]+)*\.(?:md|markdown|mdx))$/;
+/** The same absolute path, scanned inside PROSE. Ends on a word character so trailing sentence
+ *  punctuation stays in the sentence — and NO space is allowed inside it: prose has no delimiter,
+ *  so a space-tolerant class swallows the rest of the sentence into the chip. (Inline code IS
+ *  delimited, which is why DOC_PATH_IN_CODE can afford to allow one.) */
+const WORKER_PATH_IN_PROSE = /\/(?:[\w.-]+\/)*?workspaces\/[\w.-]+\/[\w./-]*[\w]/g;
+/** A bold run — the spelling the founder's reply used for the workspace it was about. */
+const BOLD_RUN = /\*\*([^*\n]+)\*\*/g;
+/** A bare slug-shaped token in prose (filtered against the KNOWN set before it becomes a chip). */
+const BARE_TOKEN = /[A-Za-z0-9][\w-]*/g;
+
+function docPathsInProse(seg: string): string {
+  return seg.replace(WORKER_PATH_IN_PROSE, (m: string, offset: number) => {
+    const prev = offset > 0 ? seg[offset - 1] : "";
+    // `](…)` is already a markdown link and `="…"` is an attribute we just injected; a word char or
+    // a slash before it means we're mid-token, not at the start of a path.
+    if (seg.slice(Math.max(0, offset - 2), offset) === "](" || /[\w`"'=/]/.test(prev)) return m;
+    return `<DocPath path=${JSON.stringify(m)} />`;
+  });
+}
+
+/** Workspace names → chips, matched ONLY against the closed known set (lookupWorkspace). Bold and
+ *  inline-code mentions are deliberate and match any known token; a BARE prose word must also be
+ *  distinctive (carry a `-` or `_`) so "personal notes" never sprouts a chip. */
+function workspaceRefsInProse(seg: string): string {
+  if (!knownWorkspaces().length) return seg;      // snapshot cold — emit nothing rather than guess
+  const chip = (t: string) => `<WorkspaceRef token=${JSON.stringify(t)} />`;
+  const bold = seg.replace(BOLD_RUN, (m, inner: string) => (lookupWorkspace(inner) ? chip(inner.trim()) : m));
+  return bold.replace(BARE_TOKEN, (m: string, offset: number) => {
+    if (!isDistinctiveWorkspaceToken(m) || !lookupWorkspace(m)) return m;
+    // Never rewrite inside a tag we just injected (`token="…"`, `path="…"`), inside a markdown
+    // link's text or target, or mid-path — those are structure, not a mention.
+    const before = bold.slice(0, offset);
+    if (before.lastIndexOf("<") > before.lastIndexOf(">")) return m;
+    const prev = offset > 0 ? bold[offset - 1] : "";
+    if ("/\"'`[(=".includes(prev) || bold[offset + m.length] === "/") return m;
+    return chip(m);
+  });
+}
+
+/** Rewrite every reference spelling into its interactive component, fences excepted. */
+export function transformDocRefs(src: string): string {
+  // split out fenced code blocks and inline code; odd indices are one or the other
+  return src.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
+    if (i % 2 === 0) {
+      const prose = escapeUnknownTags(seg)
+        .replace(/\[\[([^\]]+)\]\]/g, (_m, t: string) => `<Wikilink title=${JSON.stringify(t)} />`);
+      return workspaceRefsInProse(docPathsInProse(prose));
+    }
+    if (seg.startsWith("```")) return seg;                         // fenced: literal, always
+    const code = seg.slice(1, -1);
+    if (DOC_PATH_IN_CODE.test(code)) return `<DocPath path=${JSON.stringify(code)} />`;
+    if (lookupWorkspace(code)) return `<WorkspaceRef token=${JSON.stringify(code.trim())} />`;
+    return seg;
+  }).join("");
 }
 
 type CompileState =
@@ -210,15 +282,24 @@ function stripFrontmatter(md: string): string {
 export function MdxDoc({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
   const src = stripFrontmatter(children ?? "");
   const [state, setState] = useState<CompileState>({ status: "loading" });
+  // Recognizing a workspace NAME needs the known set, and the transform cannot await. Prime the
+  // snapshot once and recompile when it lands; a warm snapshot costs no second compile.
+  const [wsGen, setWsGen] = useState(0);
+  useEffect(() => {
+    if (knownWorkspaces().length) return;
+    let cancelled = false;
+    void primeKnownWorkspaces().then(() => { if (!cancelled) setWsGen((n) => n + 1); });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    evaluate(transformWikilinks(src), { ...runtime, remarkPlugins: [remarkGfm, remarkForbidExecutable] })
+    evaluate(transformDocRefs(src), { ...runtime, remarkPlugins: [remarkGfm, remarkForbidExecutable] })
       .then((mod) => { if (!cancelled) setState({ status: "ok", Content: mod.default }); })
       .catch((err: unknown) => { if (!cancelled) setState({ status: "fallback", error: String((err as Error)?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, [src]);
+  }, [src, wsGen]);
 
   if (state.status === "loading") return <div style={{ color: "var(--t3)", fontSize: 12, ...style }}>rendering…</div>;
   if (state.status === "fallback") {

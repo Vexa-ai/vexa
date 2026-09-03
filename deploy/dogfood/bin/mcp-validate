@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+"""mcp-validate — drive a RUNNING Vexa MCP endpoint as a real MCP client and report what it is.
+
+This is not a unit test. ``core/meetings/services/mcp/tests/`` already proves the app in-process
+against a faked gateway. This proves the DEPLOYED surface: the transport as an MCP client actually
+speaks it, through whatever proxy chain fronts it, with a real API key against a real gateway.
+
+Two families of check, and the second is the point:
+
+  CONFORMANCE  — does the endpoint behave as an MCP server?
+                 initialize · tools/list · prompts/list · a real tools/call round trip ·
+                 auth passthrough (good key works, bad key 401s).
+
+  NATIVE-READY — is it a *connector*, or does a human still have to paste a key?
+                 RFC 9728 protected-resource metadata · the 401 WWW-Authenticate challenge ·
+                 authorization-server metadata. These are what make Claude offer a browser
+                 login instead of asking for a header, i.e. what "native like Gmail" means
+                 mechanically. They are EXPECTED TO FAIL until the OAuth work lands; the run
+                 prints them as a measured distance, not as noise.
+
+Stdlib only — no install step, runs from the laptop or from bbb.
+
+    ./mcp-validate --url https://mcp.dev.vexa.ai/mcp --key "$VEXA_API_KEY"
+    ./mcp-validate --url http://127.0.0.1:18456/mcp --key "$VEXA_API_KEY" --json
+
+Exit code is 0 when every CONFORMANCE check passes; NATIVE-READY failures never fail the run
+(use --require-native to make them binding once the OAuth work is expected to hold).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from typing import Any
+
+PROTOCOL_VERSION = "2025-06-18"
+
+# The surface core/meetings/services/mcp/README.md declares. Drift here is a finding either way:
+# a missing tool is a regression, an extra one is a doc that stopped being true.
+EXPECTED_TOOLS = {
+    "parse_meeting_link",
+    "request_meeting_bot",
+    "get_bot_status",
+    "update_bot_config",
+    "stop_bot",
+    "list_meetings",
+    "get_meeting_transcript",
+    "list_recordings",
+    "get_recording",
+}
+EXPECTED_PROMPTS = {
+    "vexa.meeting_prep",
+    "vexa.during_meeting",
+    "vexa.post_meeting",
+    "vexa.teams_link_help",
+}
+
+
+@dataclass
+class Check:
+    name: str
+    family: str  # "conformance" | "native-ready"
+    ok: bool
+    detail: str = ""
+
+
+@dataclass
+class Session:
+    url: str
+    key: str | None
+    timeout: float
+    session_id: str | None = None
+    checks: list[Check] = field(default_factory=list)
+
+    def record(self, name: str, family: str, ok: bool, detail: str = "") -> bool:
+        self.checks.append(Check(name, family, ok, detail))
+        return ok
+
+
+def _sse_to_payload(body: str) -> Any:
+    """Pull the first JSON-RPC message out of a text/event-stream response body."""
+    for raw in body.splitlines():
+        if raw.startswith("data:"):
+            chunk = raw[5:].strip()
+            if chunk:
+                try:
+                    return json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+    raise ValueError("no JSON payload in event-stream body")
+
+
+def rpc(
+    sess: Session,
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    key: str | None = "__default__",
+    notify: bool = False,
+    request_id: int = 1,
+) -> tuple[int, dict[str, str], Any]:
+    """One JSON-RPC call over streamable HTTP. Returns (status, headers, decoded-or-raw-body)."""
+    payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+    if params is not None:
+        payload["params"] = params
+    if not notify:
+        payload["id"] = request_id
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    token = sess.key if key == "__default__" else key
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if sess.session_id:
+        headers["mcp-session-id"] = sess.session_id
+        headers["MCP-Protocol-Version"] = PROTOCOL_VERSION
+
+    req = urllib.request.Request(
+        sess.url, data=json.dumps(payload).encode(), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=sess.timeout) as resp:
+            status, hdrs, body = resp.status, dict(resp.headers), resp.read().decode(errors="replace")
+    except urllib.error.HTTPError as e:  # 4xx/5xx still carry a body worth reading
+        status, hdrs, body = e.code, dict(e.headers or {}), e.read().decode(errors="replace")
+    except urllib.error.URLError as e:
+        return 0, {}, f"transport error: {e.reason}"
+
+    hdrs = {k.lower(): v for k, v in hdrs.items()}
+    if not sess.session_id and hdrs.get("mcp-session-id"):
+        sess.session_id = hdrs["mcp-session-id"]
+
+    ctype = hdrs.get("content-type", "")
+    decoded: Any = body
+    try:
+        decoded = _sse_to_payload(body) if "text/event-stream" in ctype else json.loads(body)
+    except (ValueError, json.JSONDecodeError):
+        pass
+    return status, hdrs, decoded
+
+
+def get(url: str, timeout: float, key: str | None = None) -> tuple[int, dict[str, str], str]:
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read().decode(errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, e.read().decode(errors="replace")
+    except urllib.error.URLError as e:
+        return 0, {}, f"transport error: {e.reason}"
+
+
+# ── conformance ──────────────────────────────────────────────────────────────────────────────
+
+def check_initialize(sess: Session) -> bool:
+    status, _, body = rpc(
+        sess,
+        "initialize",
+        {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "vexa-mcp-validate", "version": "1"},
+        },
+    )
+    result = body.get("result") if isinstance(body, dict) else None
+    if status != 200 or not result:
+        return sess.record("initialize", "conformance", False, f"HTTP {status}: {str(body)[:200]}")
+    server = result.get("serverInfo", {}) or {}
+    negotiated = result.get("protocolVersion", "?")
+    rpc(sess, "notifications/initialized", {}, notify=True)
+    return sess.record(
+        "initialize",
+        "conformance",
+        True,
+        f"server={server.get('name', '?')} v{server.get('version', '?')} protocol={negotiated}"
+        + (f" session={sess.session_id[:8]}…" if sess.session_id else " session=stateless"),
+    )
+
+
+def check_tools(sess: Session) -> bool:
+    status, _, body = rpc(sess, "tools/list", {}, request_id=2)
+    result = body.get("result") if isinstance(body, dict) else None
+    if status != 200 or not result:
+        return sess.record("tools/list", "conformance", False, f"HTTP {status}: {str(body)[:200]}")
+    got = {t.get("name") for t in result.get("tools", [])}
+    missing, extra = EXPECTED_TOOLS - got, got - EXPECTED_TOOLS
+    if missing or extra:
+        bits = []
+        if missing:
+            bits.append(f"missing {sorted(missing)}")
+        if extra:
+            bits.append(f"undeclared {sorted(extra)}")
+        return sess.record("tools/list", "conformance", False, f"{len(got)} tools; " + "; ".join(bits))
+    return sess.record("tools/list", "conformance", True, f"all {len(EXPECTED_TOOLS)} declared tools present")
+
+
+def check_prompts(sess: Session) -> bool:
+    status, _, body = rpc(sess, "prompts/list", {}, request_id=3)
+    result = body.get("result") if isinstance(body, dict) else None
+    if status != 200 or not result:
+        return sess.record("prompts/list", "conformance", False, f"HTTP {status}: {str(body)[:200]}")
+    got = {p.get("name") for p in result.get("prompts", [])}
+    missing = EXPECTED_PROMPTS - got
+    if missing:
+        return sess.record("prompts/list", "conformance", False, f"missing {sorted(missing)}")
+    return sess.record("prompts/list", "conformance", True, f"all {len(EXPECTED_PROMPTS)} prompts present")
+
+
+def _tool_payload(body: Any) -> Any:
+    """Unwrap a tools/call result into the tool's own JSON, whatever content shape carried it."""
+    result = body.get("result") if isinstance(body, dict) else None
+    if not isinstance(result, dict):
+        return None
+    if isinstance(result.get("structuredContent"), dict):
+        return result["structuredContent"]
+    for item in result.get("content", []) or []:
+        if item.get("type") == "text":
+            try:
+                return json.loads(item.get("text", ""))
+            except (ValueError, json.JSONDecodeError):
+                return item.get("text")
+    return result
+
+
+def check_pure_tool_call(sess: Session) -> bool:
+    """parse_meeting_link — the one tool with no gateway hop. Proves the transport round trip alone."""
+    status, _, body = rpc(
+        sess,
+        "tools/call",
+        {"name": "parse_meeting_link", "arguments": {"meeting_url": "https://meet.google.com/abc-defg-hij"}},
+        request_id=4,
+    )
+    payload = _tool_payload(body)
+    if status != 200 or not isinstance(payload, dict):
+        return sess.record("tools/call parse_meeting_link", "conformance", False, f"HTTP {status}: {str(body)[:200]}")
+    if payload.get("platform") != "google_meet" or payload.get("native_meeting_id") != "abc-defg-hij":
+        return sess.record("tools/call parse_meeting_link", "conformance", False, f"unexpected parse: {payload}")
+    return sess.record("tools/call parse_meeting_link", "conformance", True, "google_meet / abc-defg-hij")
+
+
+def check_gateway_tool_call(sess: Session) -> bool:
+    """list_meetings — the full path: MCP → gateway → meeting-api, with the caller's real key."""
+    if not sess.key:
+        return sess.record("tools/call list_meetings", "conformance", False, "no --key supplied")
+    status, _, body = rpc(sess, "tools/call", {"name": "list_meetings", "arguments": {"limit": 1}}, request_id=5)
+    payload = _tool_payload(body)
+    if status != 200:
+        return sess.record("tools/call list_meetings", "conformance", False, f"HTTP {status}: {str(body)[:200]}")
+    if isinstance(body, dict) and body.get("result", {}).get("isError"):
+        return sess.record("tools/call list_meetings", "conformance", False, f"tool error: {str(payload)[:200]}")
+    shape = type(payload).__name__
+    n = len(payload.get("meetings", [])) if isinstance(payload, dict) else "?"
+    return sess.record("tools/call list_meetings", "conformance", True, f"gateway reached; {shape}, {n} meeting(s)")
+
+
+def check_auth_rejected(sess: Session) -> bool:
+    """A bogus key must NOT reach the gateway as an anonymous call. Fail-closed is the whole seam."""
+    status, _, body = rpc(
+        sess,
+        "tools/call",
+        {"name": "list_meetings", "arguments": {"limit": 1}},
+        key="obviously-not-a-real-vexa-key",
+        request_id=6,
+    )
+    payload = _tool_payload(body)
+    is_error = bool(isinstance(body, dict) and body.get("result", {}).get("isError"))
+    blob = json.dumps(payload) if not isinstance(payload, str) else payload
+    rejected = status in (401, 403) or is_error or "401" in (blob or "") or "403" in (blob or "")
+    return sess.record(
+        "auth fail-closed",
+        "conformance",
+        rejected,
+        "bad key rejected" if rejected else f"BAD KEY WAS ACCEPTED — HTTP {status}: {str(payload)[:200]}",
+    )
+
+
+# ── native-readiness (the OAuth connector surface) ────────────────────────────────────────────
+
+def check_www_authenticate(sess: Session) -> bool:
+    """MCP spec: an unauthorized request MUST be answered with a WWW-Authenticate carrying
+    resource_metadata. That header is the thread Claude pulls to offer a browser login."""
+    status, hdrs, _ = rpc(sess, "tools/call", {"name": "list_meetings", "arguments": {}}, key=None, request_id=7)
+    challenge = hdrs.get("www-authenticate", "")
+    if "resource_metadata" in challenge:
+        return sess.record("401 WWW-Authenticate", "native-ready", True, challenge[:160])
+    return sess.record(
+        "401 WWW-Authenticate",
+        "native-ready",
+        False,
+        f"HTTP {status}, no resource_metadata challenge"
+        + (f" (got: {challenge[:80]})" if challenge else " (no WWW-Authenticate header)"),
+    )
+
+
+def check_protected_resource_metadata(sess: Session) -> bool:
+    """RFC 9728. MCP servers MUST serve this; clients MUST use it for AS discovery."""
+    parts = urllib.parse.urlsplit(sess.url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    # Path-aware form first (RFC 9728 §3.1), then the origin-level fallback.
+    candidates = [
+        f"{origin}/.well-known/oauth-protected-resource{parts.path}",
+        f"{origin}/.well-known/oauth-protected-resource",
+    ]
+    for url in candidates:
+        status, _, body = get(url, sess.timeout)
+        if status == 200:
+            try:
+                doc = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            servers = doc.get("authorization_servers") or []
+            return sess.record(
+                "RFC 9728 protected-resource metadata",
+                "native-ready",
+                bool(servers),
+                f"{url} → resource={doc.get('resource', '?')} as={servers}",
+            )
+    return sess.record(
+        "RFC 9728 protected-resource metadata",
+        "native-ready",
+        False,
+        "not served at either well-known path",
+    )
+
+
+def check_as_metadata(sess: Session) -> bool:
+    """RFC 8414 / OIDC discovery on the same origin — the fallback a client tries when it has a
+    resource but no explicit AS. Presence here is what turns `claude mcp add` into a login."""
+    parts = urllib.parse.urlsplit(sess.url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    for path in ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"):
+        status, _, body = get(f"{origin}{path}", sess.timeout)
+        if status == 200:
+            try:
+                doc = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            return sess.record(
+                "authorization-server metadata",
+                "native-ready",
+                bool(doc.get("authorization_endpoint") and doc.get("token_endpoint")),
+                f"{path} → issuer={doc.get('issuer', '?')}",
+            )
+    return sess.record("authorization-server metadata", "native-ready", False, "no AS metadata on this origin")
+
+
+# ── driver ───────────────────────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--url", required=True, help="MCP endpoint, e.g. https://mcp.dev.vexa.ai/mcp")
+    ap.add_argument("--key", default=None, help="Vexa API key (falls back to $VEXA_API_KEY)")
+    ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--json", action="store_true", help="emit machine-readable results")
+    ap.add_argument(
+        "--require-native",
+        action="store_true",
+        help="make the OAuth connector checks binding on the exit code (they are informational by default)",
+    )
+    args = ap.parse_args()
+
+    import os
+
+    key = args.key or os.environ.get("VEXA_API_KEY") or None
+    sess = Session(url=args.url, key=key, timeout=args.timeout)
+
+    if check_initialize(sess):
+        check_tools(sess)
+        check_prompts(sess)
+        check_pure_tool_call(sess)
+        check_gateway_tool_call(sess)
+        check_auth_rejected(sess)
+    check_www_authenticate(sess)
+    check_protected_resource_metadata(sess)
+    check_as_metadata(sess)
+
+    conformance = [c for c in sess.checks if c.family == "conformance"]
+    native = [c for c in sess.checks if c.family == "native-ready"]
+    conf_ok = all(c.ok for c in conformance) and len(conformance) == 6
+    native_ok = all(c.ok for c in native)
+
+    if args.json:
+        print(json.dumps(
+            {
+                "url": args.url,
+                "conformance_ok": conf_ok,
+                "native_ready": native_ok,
+                "checks": [vars(c) for c in sess.checks],
+            },
+            indent=2,
+        ))
+    else:
+        print(f"\n  MCP endpoint: {args.url}\n")
+        print("  CONFORMANCE — is this an MCP server?")
+        for c in conformance:
+            print(f"    {'PASS' if c.ok else 'FAIL'}  {c.name:<34} {c.detail}")
+        if not conformance:
+            print("    FAIL  initialize never completed; nothing else could run")
+        print("\n  NATIVE-READY — is this a connector, or does a human paste a key?")
+        for c in native:
+            print(f"    {'PASS' if c.ok else 'GAP '}  {c.name:<34} {c.detail}")
+        verdict = "MCP-conformant" if conf_ok else "NOT CONFORMANT"
+        native_verdict = (
+            "OAuth connector surface present"
+            if native_ok
+            else "key-paste only — no OAuth connector surface yet"
+        )
+        print(f"\n  → {verdict}; {native_verdict}\n")
+
+    if not conf_ok:
+        return 1
+    return 1 if (args.require_native and not native_ok) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

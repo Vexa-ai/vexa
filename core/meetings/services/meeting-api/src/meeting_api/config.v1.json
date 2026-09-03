@@ -87,7 +87,16 @@
    "class": "defaulted",
    "default": "(unset — the internal lifecycle-callback header is then not attached)",
    "secret": true,
-   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
+   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "DEFAULT_BOT_NAME",
@@ -292,7 +301,7 @@
    "key": "DB_WRITER_INTERVAL_S",
    "class": "defaulted",
    "default": "10",
-   "description": "db-writer cadence (seconds) — each tick flushes immutable live segments from the redis hash meeting:{id}:segments into the transcriptions table and drains proc:meeting:{id} notes into meeting.data (the restored 0.10 flush loop)",
+   "description": "db-writer cadence (seconds) — each tick flushes immutable live segments from the redis hash meeting:{id}:segments into the transcriptions table (the restored 0.10 flush loop)",
    "targets": []
   },
   {
@@ -317,17 +326,17 @@
    "targets": []
   },
   {
+   "key": "IMMUTABILITY_THRESHOLD_TEAMS_CSRC_CONFIRMED",
+   "class": "defaulted",
+   "default": "0",
+   "description": "the hold (seconds) for a CONFIRMED Teams CSRC segment (source=merged plus speaker_key=csrc:<id>), whose drafts are explicitly retractable. Never raises the hold above IMMUTABILITY_THRESHOLD; pending Teams rows and every other lane keep the full hold",
+   "targets": []
+  },
+  {
    "key": "REDIS_SEGMENT_TTL",
    "class": "defaulted",
    "default": "3600",
    "description": "TTL (seconds) re-armed on the live segment hash meeting:{id}:segments at every append — an abandoned hash cannot linger forever once flushed (0.10 parity)",
-   "targets": []
-  },
-  {
-   "key": "PROC_PENDING_GRACE_SEC",
-   "class": "defaulted",
-   "default": "120",
-   "description": "bounded grace (s) for draining a finalized meeting's processed_pending entries after its view_end marker — the copilot's final post-session beat must land within this window or the drain is abandoned with a warning (ADR-0027 Train 2)",
    "targets": []
   },
   {
@@ -368,8 +377,15 @@
   {
    "key": "RECONCILE_PREACTIVE_GRACE_S",
    "class": "defaulted",
-   "default": "660",
-   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — derived from the lobby budget the spawn issues (waitingRoomTimeout 600s) plus headroom, so the control plane is never less patient than the deadline it handed the bot (#862)",
+   "default": "960 (VEXA_LOBBY_BUDGET_S + 60)",
+   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — DERIVED from the lobby budget the spawn issues (VEXA_LOBBY_BUDGET_S, default 900s) plus 60s of headroom, so the control plane is never less patient than the deadline it handed the bot (#862, #1208)",
+   "targets": []
+  },
+  {
+   "key": "VEXA_LOBBY_BUDGET_S",
+   "class": "defaulted",
+   "default": "900",
+   "description": "lobby budget (s) issued to every spawned bot as automatic_leave.waitingRoomTimeout — how long it may wait for admission before reporting awaiting_admission_timeout. 15 min so an auto-joined bot outwaits a late host (#1208); the reconcile pre-active grace derives from it, so raising it never leaves a waiter reaped by a shorter watchdog. An explicit automatic_leave.max_wait_for_admission on POST /bots still wins.",
    "targets": []
   },
   {
@@ -499,8 +515,8 @@
   {
    "key": "AUTO_JOIN_LEAD_S",
    "class": "defaulted",
-   "default": "60",
-   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at",
+   "default": "120",
+   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
    "targets": []
   },
   {
@@ -607,6 +623,21 @@
    "default": "600",
    "description": "O-TEL-1: minimum tape age (s) before the budget janitor may evict it — the in-flight-upload guard, so a sweep firing mid-teardown can never half-delete a tape whose parts are still arriving",
    "targets": []
+  },
+  {
+   "key": "VEXA_FLOWS_API_URL",
+   "class": "publish-edge",
+   "publishes_events": ["meeting.started", "meeting.completed"],
+   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — best-effort, bounded at 2s, swallowed (events.py), so a deployment with no flows domain runs meetings exactly as one with a flows domain does, and so does one where flows is down. Unset is a profile, not a degraded state. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
+   "targets": ["compose"]
+  },
+  {
+   "key": "VEXA_FLOWS_API_KEY",
+   "class": "publish-edge",
+   "publishes_events": ["meeting.started", "meeting.completed"],
+   "secret": true,
+   "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it, on the same terms as identity's admin-api and agent-api's control_plane declare theirs: unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused.",
+   "targets": ["compose"]
   }
  ],
  "capabilities": {

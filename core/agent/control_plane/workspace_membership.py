@@ -179,8 +179,14 @@ def policy_commit(ws: Path, message: str) -> None:
     if not (ws / ".git").exists():
         subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True,
                        capture_output=True, text=True, env=env)
-    subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR], check=True,
-                   capture_output=True, text=True, env=env)
+    added = subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR],
+                           capture_output=True, text=True, env=env)
+    if added.returncode != 0:
+        # policy/ is EXCLUDED in this clone — the workspace has an ATTACHED external repo as its tree
+        # (workspace_attach.carry_policy), where the member list is deliberately untracked so it is
+        # never pushed to somebody else's repository. The write to disk already happened and
+        # ``read_members`` reads the working tree, so this is a legitimate state, not a failure.
+        return
     # commit only if policy/ actually changed (staged diff non-empty)
     staged = subprocess.run(["git", "-C", str(ws), "diff", "--cached", "--quiet", "--", POLICY_DIR],
                             capture_output=True, text=True, env=env)
@@ -294,6 +300,60 @@ def require_role(root: Path, workspace_id: str, subject: str, min_role: str) -> 
     if role is None or _RANK.get(role, -1) < _RANK[min_role]:
         raise MembershipError("insufficient role for this workspace", status=403)
     return role
+
+
+def list_memberships(root: Path, subject: str) -> list[dict]:
+    """Every shareable workspace on this host whose AUTHORITATIVE ``policy/members.json`` names
+    ``subject``, in the row shape the index returns (``workspace_id``/``role``/``added_at``).
+
+    The RECOVERY read for the derived index (Q6). Grants are written to BOTH stores, but only the git
+    file is authoritative — so a listing that consults ONLY the mirror reports "no shared workspaces"
+    whenever the internal edge to the identity service is unreachable, losing a grant the system
+    demonstrably holds. Reserved slugs and the dot-namespace are skipped exactly as ``assert_shareable``
+    refuses them, so the SYSTEM/seed workspaces never surface as memberships."""
+    root = Path(root)
+    if not root.exists():
+        return []
+    out: list[dict] = []
+    for child in sorted(c for c in root.iterdir() if c.is_dir()):
+        slug = child.name
+        if slug.startswith(".") or slug in RESERVED_SLUGS:
+            continue
+        for member in _read_json_list(child, MEMBERS_FILE):
+            if member.get("subject") == subject:
+                out.append({"workspace_id": slug, "role": member.get("role"),
+                            "added_at": member.get("added_at")})
+                break
+    return out
+
+
+def reconciled_memberships(root: Path, subject: str,
+                           index_list: Callable[[str], list]) -> tuple[list[dict], bool]:
+    """The membership ENUMERATION for consumers that turn grants into MOUNTS (the active-set route, the
+    dispatch mount builder): the derived index UNIONed with the authoritative ``list_memberships`` scan.
+    Returns ``(rows, index_degraded)``.
+
+    Same reconciliation contract as the shared-workspace listing (Q6): a UNION, never a subtraction — an
+    index row with no local dir is a workspace on another host and must still be enumerated, so the git
+    store only ever ADDS rows the index is missing. NEVER raises: a dead index leg flips
+    ``index_degraded`` (the git rows still answer), a dead git leg still serves the index rows — so an
+    unreachable or incomplete index cannot silently drop a locally-held grant from the enumeration.
+    Consumers keep re-checking the role authoritatively per workspace (``is_member``); this feeds
+    CANDIDATES, never access."""
+    degraded = False
+    try:
+        rows = list(index_list(subject) or [])
+    except Exception as exc:  # noqa: BLE001 — the authoritative store still answers
+        log.warning("membership index list failed for subject=%s: %s — enumerating from policy/members.json only",
+                    subject, exc)
+        rows, degraded = [], True
+    seen = {r.get("workspace_id") for r in rows if isinstance(r, dict)}
+    try:
+        rows += [row for row in list_memberships(root, subject) if row["workspace_id"] not in seen]
+    except Exception as exc:  # noqa: BLE001 — enumeration must never break a mount path; the index rows still serve
+        log.warning("authoritative membership scan failed for subject=%s: %s — serving the index rows only",
+                    subject, exc)
+    return rows, degraded
 
 
 # ── membership writes (both stores) ─────────────────────────────────────────────────────────────

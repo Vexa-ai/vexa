@@ -15,7 +15,9 @@
  *
  * Run: npx tsx src/roster-panel.test.ts
  */
-import { readTeamsRosterPanel, isTeamsDisplayNameCandidate } from './msteams-speakers.js';
+import {
+  readTeamsRosterPanel, readTeamsRosterPanelState, isTeamsDisplayNameCandidate,
+} from './msteams-speakers.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail?: string): void => {
@@ -64,6 +66,15 @@ Object.setPrototypeOf(makeDom, Object.prototype);
     names.includes('Dmitry Grankin'), JSON.stringify(names));
   check('and yields each participant once, however many selectors matched',
     names.length === new Set(names).size, JSON.stringify(names));
+}
+{
+  const dom = makeDom({ panel: ['Dmitry Grankin', 'mic_off'] });
+  (globalThis as any).HTMLElement = Object;
+  const state = readTeamsRosterPanelState(dom);
+  check('the panel accounts for an unresolved row instead of dropping it from completeness',
+    state.names.length === 1 && state.names[0] === 'Dmitry Grankin'
+      && state.entries.length === 2 && state.entries[1] === null,
+    JSON.stringify(state));
 }
 {
   // A CLOSED panel is the m37 state. It must return nothing — and must not throw, because the scan

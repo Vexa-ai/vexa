@@ -6,8 +6,12 @@ SAME app runs with real adapters in prod and in-process fakes in the conformance
 
 Public surface (the front door):
   - ``create_app(authorizer, downstream, redis, ...)`` — the FastAPI gateway (REST proxy,
-    fail-closed auth + scope 403, verbatim body passthrough; the ``/ws`` multiplex;
-    ``/health``).
+    fail-closed auth + deny-by-default scope 403, verbatim body passthrough; the ``/ws``
+    multiplex; ``/health``). Raises if any route it registers declares no scope.
+  - ``ROUTE_SCOPES`` / ``UNSCOPED_ROUTES`` / ``undeclared_routes(app)`` — the scope model and
+    the executable form of the deny-by-default invariant.
+  - ``CARRIED_DOMAINS`` — the domains this BUILD ships a route manifest for. The open-core build
+    carries four of the five; an unspecified door in ``create_app`` defaults to these.
   - ``run_multiplex(ws, authorizer, redis)`` — the ``/ws`` control loop + fan-in, exposed so the
     conformance ws-harness drives the SHIPPED multiplex without reaching for a private.
   - ``ports`` — the Protocols: ``Authorizer``, ``DownstreamClient``, ``RedisBus`` (+ helpers).
@@ -19,13 +23,17 @@ shipped app; this package imports nothing from conformance.
 """
 from __future__ import annotations
 
-from .app import ROUTE_SCOPES, create_app, run_multiplex
+from .app import (CARRIED_DOMAINS, ROUTE_SCOPES, UNSCOPED_ROUTES, create_app, run_multiplex,
+                  undeclared_routes)
 from .ports import Authorizer, DownstreamClient, PubSub, RedisBus
 
 __all__ = [
     "create_app",
     "run_multiplex",
+    "CARRIED_DOMAINS",
     "ROUTE_SCOPES",
+    "UNSCOPED_ROUTES",
+    "undeclared_routes",
     "Authorizer",
     "DownstreamClient",
     "RedisBus",

@@ -19,6 +19,7 @@ from urllib.parse import quote
 import requests_unixsocket
 
 from .backend import WorkloadHandle
+from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
 
@@ -27,6 +28,28 @@ WORKLOAD_ID_LABEL = "runtime.workload_id"
 _COMPOSE_LABEL = "com.docker.compose.project"
 
 logger = logging.getLogger("runtime_kernel.docker_backend")
+
+
+#: The claude CLI's own filename inside ``~/.claude``.
+CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
+
+
+def host_claude_credentials(env: Optional[Any] = None) -> Optional[str]:
+    """The DOCKER-HOST path of the claude subscription credential to broker into a spawned worker.
+
+    ``HOST_CLAUDE_CREDENTIALS`` (the file) wins when set; otherwise it is derived from
+    ``HOST_CLAUDE_DIR`` (the host's ``~/.claude``), which is the mount shape that survives a token
+    refresh — the CLI replaces ``.credentials.json`` by ``rename(2)``, i.e. with a NEW INODE, and a
+    single-FILE bind is pinned to the inode it was created with. A worker bind is created fresh at
+    every spawn so it was never the half that went stale, but a deployment that configures only the
+    directory must still produce an authenticated worker. ``None`` = no subscription file
+    configured (an API-style key may still be brokered as env)."""
+    env = os.environ if env is None else env
+    explicit = (env.get("HOST_CLAUDE_CREDENTIALS") or "").strip()
+    if explicit:
+        return explicit
+    host_dir = (env.get("HOST_CLAUDE_DIR") or "").strip()
+    return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
 
 
 def _stop_grace_sec() -> int:
@@ -174,7 +197,19 @@ class DockerBackend:
             )
         return target
 
-    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
+    def start(
+        self,
+        workload_id: str,
+        runnable: Runnable,
+        env: dict[str, str],
+        resources: Optional[Resources] = None,
+    ) -> WorkloadHandle:
+        """``resources`` is accepted and NOT enforced here — the enforcement boundary is k8s-only,
+        and this backend claims no parity with it. Compose/Lite have no admission controller
+        demanding a declared request+limit, and translating the intent into ``HostConfig.Memory``
+        would introduce an OOM-kill ceiling on live meeting bots that run unbounded today: a
+        behaviour change on the most-used substrate, bought for no admission benefit. A deployment
+        that wants Docker enforcement adds it as its own change, with its own live evidence."""
         if not runnable.image:
             raise ValueError("docker backend requires an image")
         name = self._cname(workload_id)
@@ -208,11 +243,14 @@ class DockerBackend:
             host_config["Mounts"] = api_mounts
 
         # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
-        # API-style provider env (the VEXA_LLM_* completion dials + the claude-code runner's
-        # ANTHROPIC_*) is copied from the trusted runtime service into spawned workers.
-        creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
+        # API-style provider env (the claude-code runner's ANTHROPIC_*) is copied from the trusted
+        # runtime service into spawned workers.
+        creds = host_claude_credentials(os.environ)
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
+        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS")
+        if codex_creds:
+            binds.append(f"{codex_creds}:/root/.codex/auth.json:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
         # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
         # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
@@ -223,16 +261,42 @@ class DockerBackend:
             host_config["Binds"] = binds
 
         spawn_env = dict(env)
+        if dev_src:
+            # The worker image normally imports its baked packages from /app. Put the whole hot
+            # agent source tree first or the bind above is decorative: `python -m worker` otherwise
+            # resolves /app/worker and silently runs stale code.
+            spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
         for key in (
-            # llm-module dials (provider-agnostic): completion endpoint/credential/model + the
-            # harness runner selection. Dispatch-stamped values win (`key not in spawn_env`).
-            "VEXA_LLM_PROVIDER",
+            # llm-module dials: the harness runner selection and its gate. Dispatch-stamped values
+            # win (`key not in spawn_env`). The completion dials that stood here went with the
+            # in-product inference pipeline (PRD decision 34); what remains is read by the
+            # openai-agent HARNESS inside the worker (decision 37), so it must still be forwarded.
+            # THE WORKER'S MODEL (decision 36). `engine.py` reads VEXA_AGENT_MODEL and passes it to
+            # every turn — the chat turn AND the write-back phase — so a deployment that wants
+            # Sonnet sets one value. It has to be FORWARDED or it reaches the runtime and stops
+            # there: the runtime spawns workers with this list, and a setting the worker never sees
+            # is a setting that silently does nothing while reading as configured.
+            "VEXA_AGENT_MODEL",
             "VEXA_LLM_BASE_URL",
             "VEXA_LLM_API_KEY",
             "VEXA_LLM_MODEL",
-            "VEXA_LLM_MAX_TOKENS",
+            # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
+            # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the
+            # model reasons its whole budget away and returns nothing parseable — a failure that
+            # looks like a bad model, not like a missing variable.
+            "VEXA_LLM_EXTRA_BODY",
             "VEXA_MODEL_ALLOWLIST",
             "VEXA_RUNNER",
+            "VEXA_MIDTURN_INJECT",
+            "VEXA_CODEX_MODEL",
+            # openai-agent harness budget dials (per-turn ceiling + context trim + streaming)
+            "VEXA_AGENT_MAX_TOOL_CALLS",
+            "VEXA_AGENT_MAX_TURN_SEC",
+            "VEXA_AGENT_CONTEXT_TOKENS",
+            "VEXA_AGENT_STREAM",
+            # codex harness API-key auth (subscription auth is the read-only bind above)
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
             # claude-code harness credentials (that adapter's concern only)
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
@@ -252,6 +316,10 @@ class DockerBackend:
             "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels},
             "HostConfig": host_config,
         }
+        if dev_src:
+            # `python -m worker` prepends its cwd to sys.path ahead of PYTHONPATH. Start inside the
+            # mounted tree as well, or /app/worker still wins despite the PYTHONPATH above.
+            payload["WorkingDir"] = "/app/src/agent_api"
         if runnable.command:
             payload["Cmd"] = list(runnable.command)
 

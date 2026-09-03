@@ -187,10 +187,17 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # flows is opt-in (values.yaml: flows.enabled=false) but it is a RELEASE image, so the
+          # pinned-render assertion has to see it: rendered with the tier on, its six containers
+          # must follow global.imageTag like every other component. Until 2026-09-03 flows.image
+          # was a flat string that ignored global.imageTag entirely and defaulted to :dev.
           RENDER="$(helm template vexa deploy/helm/charts/vexa -n vexa \
-            -f deploy/helm/charts/vexa/values-test.yaml --set global.imageTag="$VERSION")"
+            -f deploy/helm/charts/vexa/values-test.yaml --set flows.enabled=true \
+            --set global.imageTag="$VERSION")"
           N="$(grep -cE "image: \"vexaai/v012-[a-z-]+:$VERSION\"" <<<"$RENDER" || true)"
-          [ "$N" -ge 6 ] || { echo "::error ::expected >=6 v012 component images pinned to $VERSION, got $N"; exit 1; }
+          [ "$N" -ge 12 ] || { echo "::error ::expected >=12 v012 component images pinned to $VERSION, got $N"; exit 1; }
+          F="$(grep -cE "image: \"vexaai/v012-flows:$VERSION\"" <<<"$RENDER" || true)"
+          [ "$F" -eq 6 ] || { echo "::error ::expected the 6 flows containers pinned to $VERSION, got $F"; exit 1; }
           grep -q "vexaai/vexa-bot:$VERSION" <<<"$RENDER" \
             || { echo "::error ::bot image (runtime BROWSER_IMAGE) does not follow global.imageTag"; exit 1; }
           grep -q "vexaai/v012-agent-worker:$VERSION" <<<"$RENDER" \
@@ -692,9 +699,11 @@ jobs:
           BOT="$(inspect_image vexaai/vexa-bot false linux/amd64)"
           LITE="$(inspect_image vexaai/vexa-lite true linux/amd64 linux/arm64)"
           RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          RELEASE="v${VERSION#v}"
+          RELEASE="${RELEASE%%-*}"
           jq -n \
             --arg schema_version "1" \
-            --arg release "v0.12.18" \
+            --arg release "$RELEASE" \
             --arg candidate_tag "$VERSION" \
             --arg base_candidate_tag "$BASE_VERSION" \
             --arg source "$GITHUB_SHA" \
@@ -734,6 +743,15 @@ jobs:
   # witness.json) and every batch change is accepted (release-value-gate), a maintainer dispatches
   # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
   # on the `release-promote` Environment for the owner's approval before :v012 moves.
+  #
+  # #1237 — what this nested call can and cannot prove at FREEZE time. release-validate's
+  # packet-bound candidate-map identity check reads a map that records the digests THIS build
+  # has only just published, so on a new rc the map cannot exist yet. release-validate defers
+  # that one check (with a notice in its run summary and a line in the guarantee block) and
+  # runs every other leg against the published bytes; a human then binds the packet and
+  # dispatches release-validate standalone, where the identity IS enforced. The consequence
+  # for this workflow's conclusion is the point: release-images is red when the build or the
+  # published artifacts are wrong, and green when they are not.
   validate:
     needs: [preflight, build, build-bot, alias-candidate, sbom]
     if: >-

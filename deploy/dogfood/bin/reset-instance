@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# reset-instance — hand a dogfood stack back to FIRST RUN, without deleting anybody's work.
+#
+# A first-run rehearsal needs an instance that has never been claimed. This one has: the admin is
+# whatever identity happened to sign in first, which on a dogfood stack is usually a test account
+# (`minutes-test@vexa.ai`), and the setup wizard is marked complete. Neither fact can be undone from
+# any product surface, and the alternative to this script was hand surgery on a jsonb column by
+# whoever remembered the query.
+#
+# WHAT IT TOUCHES — three values, and nothing else:
+#   1. `users.data.is_admin` on the named user   → released, so the next sign-in claims the role
+#   2. `platform_settings.setup`                 → cleared, so the wizard runs again
+#   3. `platform_settings.global_setup`          → set to missing, so the company-layer gate goes up
+#
+# WHAT IT NEVER TOUCHES: workspaces, chats, meetings, transcripts, users, tokens, `_global/asks/`.
+# It is a role-and-flags reset, not a wipe. The founder's own account and everything in it survives
+# verbatim — that is the whole reason it is a script with a named blast radius rather than a
+# `docker volume rm`.
+#
+#   deploy/dogfood/bin/reset-instance [--admin-email minutes-test@vexa.ai] [--keep-global]
+#
+# --keep-global leaves the company layer accepted (only the wizard and the admin role reset), for
+# the case where you want to rehearse the claim but not re-type the company.
+set -euo pipefail
+
+ADMIN_EMAIL="minutes-test@vexa.ai"
+KEEP_GLOBAL=0
+STACK="${VEXA_DOGFOOD_STACK:-vexa-dogfood}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --admin-email) ADMIN_EMAIL="$2"; shift 2 ;;
+    --keep-global) KEEP_GLOBAL=1; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+API="${STACK}-admin-api-1"
+env_of() { docker inspect "$API" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep "^$1=" | cut -d= -f2- ; }
+
+SECRET="$(env_of INTERNAL_API_SECRET)"
+KEY="$(env_of ADMIN_API_TOKEN)"
+BASE="${VEXA_ADMIN_API_URL:-http://127.0.0.1:18457}"
+
+if [ -z "$SECRET" ] || [ -z "$KEY" ]; then
+  echo "could not read admin-api credentials from container $API — is the stack up?" >&2
+  exit 1
+fi
+
+say() { printf '  %s\n' "$*"; }
+
+echo "reset-instance — stack ${STACK}, admin-api ${BASE}"
+
+# 1 · the admin role. Resolve the user first so a typo in the address fails loudly instead of
+#     silently resetting nothing and leaving the rehearsal to discover it at the login screen.
+UID_JSON="$(curl -fsS -H "X-Admin-API-Key: ${KEY}" "${BASE}/admin/users/email/${ADMIN_EMAIL}" || true)"
+USER_ID="$(printf '%s' "$UID_JSON" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: print("")' )"
+if [ -z "$USER_ID" ]; then
+  echo "no user with email ${ADMIN_EMAIL} — nothing to release" >&2
+  exit 1
+fi
+say "releasing the admin role from ${ADMIN_EMAIL} (user ${USER_ID})"
+curl -fsS -X POST -H "X-Internal-Secret: ${SECRET}" -H 'Content-Type: application/json' \
+  -d "{\"user_id\": \"${USER_ID}\"}" "${BASE}/internal/release-admin"
+echo
+
+# 2 · the first-run wizard. Empty strings CLEAR a field (the settings writers' documented rule),
+#     so the wizard's own probe reads "not completed" and it runs from step 1.
+say "clearing the first-run wizard state"
+curl -fsS -X PUT -H "X-Internal-Secret: ${SECRET}" -H 'Content-Type: application/json' \
+  -d '{"models": "", "transcription": "", "completed": "", "global": ""}' \
+  "${BASE}/internal/settings/setup"
+echo
+
+# 3 · the company-layer gate.
+if [ "$KEEP_GLOBAL" = "0" ]; then
+  say "putting the company-layer gate back up"
+  curl -fsS -X PUT -H "X-Internal-Secret: ${SECRET}" -H 'Content-Type: application/json' \
+    -d '{"state": "missing", "company": "", "completed_at": ""}' \
+    "${BASE}/internal/settings/global_setup"
+  echo
+else
+  say "--keep-global: leaving the company layer accepted"
+fi
+
+echo
+say "state now:"
+curl -fsS -H "X-Internal-Secret: ${SECRET}" "${BASE}/internal/instance"
+echo
+echo
+cat <<'NEXT'
+  The next sign-in at the terminal claims the admin role, meets the setup wizard
+  (model -> transcription -> company layer), and lands in the company-setup chat.
+  Until that chat calls mark_global_ready:
+    - a non-admin sign-in is refused with one sentence,
+    - the flows engine parks every fact instead of sending,
+    - flows_submit / flow_lifecycle refuse by name.
+  Nothing was deleted: workspaces, chats, meetings and _global/asks/ are untouched.
+NEXT

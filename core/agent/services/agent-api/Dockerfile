@@ -26,10 +26,13 @@ COPY core/agent/pyproject.toml core/agent/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-default-groups --group control-plane
 
-# git only (the control plane reads workspace git state via workspace_reader). NO claude-code / node here:
+# git + openssh-client. The control plane reads workspace git state via workspace_reader, and LOADS an
+# existing repo into a workspace over git's SSH transport: `ssh` is the binary git shells out to for an
+# ssh:// remote, and `ssh-keygen` mints the per-workspace deploy key (control_plane/deploy_keys.py) that
+# makes loading a private repo possible without anybody pasting a token. NO claude-code / node here:
 # agents never run in the control plane — the claude turn runs in the separate `vexa-agent` WORKER image
 # (core/agent/worker/Dockerfile). This is the payoff of the control-plane ⊥ worker split (a lean image).
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The control-plane packages (NO worker): control_plane + shared + contracts, copied to /app so
@@ -37,15 +40,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY core/agent/shared ./shared
 COPY core/agent/control_plane ./control_plane
 COPY core/agent/contracts ./contracts
+# ADR-0037 / PRD decision 40.5 -- this domain's MCP tool manifest, served BY PATH at import
+# from routers/health.py (parents[2] from routers/ lands on core/agent/). Not under shared/,
+# control_plane/, or contracts/ above, so it needs its own COPY line (F221: omitting this line
+# 503s GET /.well-known/mcp-tools.json -- "this build carries no tool manifest" -- and the
+# assembled MCP edge serves 0 agent tools). test_agent_api_image_manifest.py asserts every
+# by-path read control_plane/*.py makes is COPYd somewhere in this Dockerfile.
+COPY core/agent/mcp.tools.v1.json ./mcp.tools.v1.json
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). control_plane imports them as
+# `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
 # workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
-COPY core/agent/workspace-seeds ./workspace-seeds
+COPY behavior/workspaces ./workspace-seeds
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves
 # `meetings/contracts/...` and `agent/contracts/...` (repo_root == /app).
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json  ./meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json  ./workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json

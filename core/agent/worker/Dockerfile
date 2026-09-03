@@ -25,29 +25,35 @@ COPY core/agent/pyproject.toml core/agent/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-default-groups
 
-# Claude Code (the unit's model+tooling runtime) + git (the governance git ops). node 20 via nodesource
-# so claude-code resolves; the subscription credentials are bind-mounted read-only at runtime (P15).
+# Claude Code + Codex (selectable model/tooling runtimes) and git (governance git ops). Subscription
+# credentials are bind-mounted read-only at runtime; pin Codex because app-server is a versioned protocol.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    npm install -g @anthropic-ai/claude-code && \
+    npm install -g @anthropic-ai/claude-code @openai/codex@0.146.0 && \
     apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The worker's own packages (NO control_plane): worker + llm + shared + contracts, copied to /app so
 # `PYTHONPATH=/app` resolves them as top-level imports. llm/ is the provider-agnostic ports module
-# (completion adapters + the claude-code harness adapter the npm install above serves).
+# (completion adapters + the claude-code/codex harness adapters the npm install above serves).
 COPY core/agent/worker ./worker
 COPY core/agent/llm ./llm
 COPY core/agent/shared ./shared
 COPY core/agent/contracts ./contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). worker/engine.py imports them
+# as `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
 # The registry of per-person workspace templates the worker seeds new workspaces from (Phase 3) +
 # the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
-COPY core/agent/workspace-seeds ./workspace-seeds
+COPY behavior/workspaces ./workspace-seeds
 COPY core/agent/tools-seed ./tools-seed
 
 # The sealed contracts loaded BY PATH at import (walk-up resolves repo_root == /app).
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json  ./meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json  ./workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json

@@ -13,8 +13,19 @@ instead.
 Do not commit executed agreements or personal information here. The public repository records
 only an opaque `VCR-YYYY-NNNN` receipt bound to the exact PR and head SHA.
 
-Vexa publishes no contributor agreement, and asks no one to sign one. If your legal team requires
-a signed agreement on file, email [dmitry@vexa.ai](mailto:dmitry@vexa.ai) and we will work out an
-instrument that fits.
+## If your legal team requires a signed agreement
+
+Vexa requires no contributor agreement from anyone. Some organizations nonetheless need one on
+file, and for them a novel one-page letter is the expensive artifact — an unfamiliar text starts a
+custom legal review, while a familiar one is a signature.
+
+So Vexa also accepts the **[ASWF 2020 v2 CCLA](ccla-aswf2020.md)** — the Academy Software
+Foundation's Apache-derived corporate CLA, reproduced with its three header fields completed for
+Vexa and no term altered. Studios and vendors across the ASWF ecosystem have had this exact text
+through legal for years.
+
+It is an accepted alternative, never a requirement, and it is per-project: an existing ASWF CLA
+signed for another project does not cover Vexa. If neither instrument fits, email
+[dmitry@vexa.ai](mailto:dmitry@vexa.ai) and we will work out one that does.
 
 See [`CONTRIBUTOR_RIGHTS.md`](../CONTRIBUTOR_RIGHTS.md) for the complete policy and verifier format.

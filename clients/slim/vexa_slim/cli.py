@@ -26,17 +26,12 @@ def parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
                                 description="slim gateway-only client for the meeting/agent control plane")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("run", help="full meeting-processor agent validation scenario")
+    sp = sub.add_parser("run", help="end-to-end live-transcript validation scenario")
     sp.add_argument("native")
     sp.add_argument("--platform", default="google_meet")
     sp.add_argument("--seconds", type=float, default=45.0)
     sp.add_argument("--send-bot", metavar="MEET_URL", default=None,
                     help="POST /bots with this meeting url first (meetings prerequisite)")
-
-    sp = sub.add_parser("process", help="toggle the copilot processor on/off")
-    sp.add_argument("native")
-    sp.add_argument("--platform", default="google_meet")
-    sp.add_argument("--off", action="store_true", help="turn processing OFF (default is ON)")
 
     sp = sub.add_parser("watch", help="tail the merged live feed and tally event types")
     sp.add_argument("native")
@@ -66,12 +61,6 @@ async def _dispatch(args: argparse.Namespace, slim: Slim) -> int:
     if args.cmd == "run":
         return await run_processor(slim, args.native, platform=args.platform,
                                    seconds=args.seconds, send_bot_url=args.send_bot)
-    if args.cmd == "process":
-        agent = slim.agent
-        result = (await agent.stop_processing(args.native, platform=args.platform) if args.off
-                  else await agent.start_processing(args.native, platform=args.platform))
-        print(json.dumps(result))
-        return 0
     if args.cmd == "watch":
         tally = await slim.agent.watch(args.native, seconds=args.seconds,
                                        on_event=lambda e: print(json.dumps(e)[:200]))

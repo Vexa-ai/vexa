@@ -11,6 +11,10 @@
  *
  *  Extracted from Chat.send so the robustness logic is unit-testable against a faked fetch/SSE. */
 
+import type { ChatIntent } from "./chatIntent";
+import { noteAuthFailure, isAuthStatus } from "@/app/session";
+import { SESSION_ENDED_HEADLINE } from "./apiClient";
+
 /** A parsed SSE event off the chat stream. `type` is the discriminator; other fields are per-type. */
 export type ChatStreamEvent = {
   type: string;
@@ -19,8 +23,56 @@ export type ChatStreamEvent = {
   sha?: string;
   ok?: boolean;
   reply?: string;
+  /** `done` events only — WHAT THE TURN GAVE UP (F89): its tool-call or wall-clock budget ran out,
+   *  or its context was trimmed to fit. Absent on a turn that finished under its own budgets. */
+  reason?: string;
   message?: string;
+  /** `error` events only — the upstream HTTP status the proxy folded into the stream. /api/chat
+   *  answers 200 with an `error` event even when the gateway refused with a 401, so this field is
+   *  the ONLY place the auth status survives into the client. */
+  status?: number;
+  /** `artifact` events only — a file a tool WROTE, and whether it should come to the front.
+   *  `workspace` is "" when the write landed on the caller's own desk: the server's record resolves
+   *  that, and the stream deliberately does not guess, so an empty string means "no slug" rather
+   *  than "unknown". */
+  workspace?: string;
+  path?: string;
+  focus?: boolean;
+  /** `artifact` events only — KEEP this page in the chat's strip, as a pinned entry, exactly as a
+   *  scaffold-declared pinned tab does. Orthogonal to `focus`: pinning is about what stays,
+   *  focusing is about what is in front, and a turn may ask for either, both, or neither. */
+  pin?: boolean;
+  /** `terms` events only (PRD decision 35) — the meeting ROW the chips belong to, the cursor the
+   *  next Highlight should send back, and the published terms themselves. */
+  meeting?: string;
+  cursor?: string;
+  terms?: unknown[];
 };
+
+/** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
+ *
+ *  `message-delta` carries two different things depending on how the worker's model backend is
+ *  running: with partial streaming it is a TOKEN, and without it, a whole assistant text block.
+ *  Plain concatenation is right for the first and wrong for the second, and the founder read the
+ *  result on screen: `"created here.I'll set up a shared workspace…"` — two separate narrations run
+ *  together into a sentence that reads as one and parses as neither.
+ *
+ *  The boundary that is actually observable from the stream is a TOOL CALL: an assistant message
+ *  ends when the model reaches for a tool, and text arriving after the tool result is a NEW message.
+ *  So `afterTool` is armed by a tool-call and spent by the next delta. Tokens inside one block never
+ *  have a tool call between them, so nothing is ever broken mid-sentence.
+ *
+ *  Paragraphs rather than folding the narration under the step line: those interim texts ARE the
+ *  agent saying what it is about to do, and a person watching a turn in flight is reading exactly
+ *  them. Collapsing them by default would hide the only running commentary there is — to fix a
+ *  problem that is a missing blank line.
+ *
+ *  Pure, and exported, because the rule is one line of string handling that is impossible to see
+ *  wrong by reading it and trivial to see wrong in a test. */
+export function joinInterim(prev: string, next: string, afterTool: boolean): string {
+  if (!afterTool || !prev.trim() || prev.endsWith("\n")) return prev + next;
+  return prev + "\n\n" + next;
+}
 
 /** The live phase of a turn, surfaced so the pane is VERBOSE about what's happening instead of going
  *  silently stale: `connecting` (cold-starting the worker, no output yet) · `working` (output seen, but
@@ -40,6 +92,13 @@ export type ChatStreamCallbacks = {
   onRejected: () => void;
   /** a done event with ok=false — model inference failed (terminal, surfaced) */
   onModelFailure: (reply: string | undefined) => void;
+  /** THE TURN GAVE SOMETHING UP (F89): `done.reason` — it hit its tool-call or wall-clock budget,
+   *  or answered from a context it had trimmed. The harness emitted `turn-truncated` /
+   *  `context-trimmed` for this and NOTHING consumed them, so a half-finished turn was rendered as
+   *  a finished one. `partial` is whatever reply the turn did produce; it is still worth showing.
+   *  Optional so existing callers/tests need not implement it — when it is absent an `ok=false`
+   *  done still falls through to `onModelFailure`. */
+  onTruncated?: (reason: string, partial: string | undefined) => void;
   /** a hard upstream error the proxy folded into the stream (terminal, surfaced) */
   onError: (message: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
@@ -49,6 +108,14 @@ export type ChatStreamCallbacks = {
   onStatus?: (phase: ChatPhase | null) => void;
   /** a chunk was consumed — a hook for autoscroll */
   onProgress?: () => void;
+  /** A FILE THE TURN JUST WROTE (F41). Emitted after the matching `tool-result` and only on
+   *  success — a failed write says nothing. Optional so existing callers/tests need not implement
+   *  it. */
+  onArtifact?: (a: { workspace: string; path: string; focus: boolean; pin: boolean }) => void;
+  /** TERMS THE TURN PUBLISHED for a meeting's transcript (decision 35.2). Forwarded, never stored:
+   *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
+   *  `onArtifact`. Optional so existing callers/tests need not implement it. */
+  onTerms?: (t: { meeting: string; cursor: string; terms: unknown[] }) => void;
 };
 
 export type ChatStreamRequest = {
@@ -60,6 +127,16 @@ export type ChatStreamRequest = {
   active: unknown;
   /** the terminal-state context bundle {tz, surface, focus, include}, or undefined */
   context?: unknown;
+  /** THE SCAFFOLD this turn opened from (PRD §5.5), on the FIRST turn only.
+   *
+   *  One record, two renderers: the panel rendered its tabs from this id and dispatch reads its
+   *  mounts and opening from the same one. Absent on every later turn — the session carries the
+   *  thread from then on, and re-sending it would invite the server to re-apply an arrival that
+   *  already happened. */
+  scaffold_id?: string;
+  /** PRD decision 32 — what a button pressed on a page asks for. Typed, never prose: the server
+   *  half turns it into the matching preset. Omitted when absent, like `scaffold_id`. */
+  intent?: ChatIntent;
 };
 
 /** One nonce per user turn, constant across that turn's reconnect attempts. It lets agent-api tell a
@@ -171,7 +248,12 @@ export async function streamChatTurn(
       r = await fetchImpl("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
-        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId }),
+        // `scaffold_id` is OMITTED when absent rather than sent as null: agent-api's ChatBody is
+        // `extra="forbid"`-adjacent about shapes, and an explicit null is a different statement
+        // from "this turn did not come from an arrival".
+        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId,
+          ...(req.scaffold_id ? { scaffold_id: req.scaffold_id } : {}),
+          ...(req.intent ? { intent: req.intent } : {}) }),
         signal,
       });
     } catch (e) {
@@ -181,7 +263,14 @@ export async function streamChatTurn(
     if (!r.ok) {
       // 4xx is a real client/terminal error — surface it, don't retry for the whole hard cap. A 5xx
       // (transient gateway/upstream) is resumable → reconnect from the cursor.
-      if (r.status < 500) { terminal = true; cb.onError(`Chat request failed (${r.status})`); return "terminal"; }
+      if (r.status < 500) {
+        terminal = true;
+        // An auth-shaped refusal is the SESSION, not this turn: tell the watcher and say so plainly
+        // instead of leaving a status code in the transcript.
+        noteAuthFailure(r.status, "/api/chat");
+        cb.onError(isAuthStatus(r.status) ? SESSION_ENDED_HEADLINE : `Chat request failed (${r.status})`);
+        return "terminal";
+      }
       return "closed";
     }
     const reader = r.body?.getReader();
@@ -231,6 +320,27 @@ export async function streamChatTurn(
           case "tool-call":
             sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args);
             break;
+          // A SUCCESSFUL WRITE TO A MOUNTED WORKSPACE (F41). The founder created a shared workspace,
+          // the agent wrote its README, and the right panel stayed on `_global/README.md` — the one
+          // document the turn had just made was the one thing not on screen. The event is
+          // advisory-only here: this reader forwards it and the shell decides, because the tab set
+          // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
+          case "artifact":
+            if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+            break;
+          // THE TRANSCRIPT'S CHIPS (decision 35). Emitted by the harness off a successful
+          // `transcript_terms` PUBLISH — the agent's second call, the one carrying `keep`. A bare
+          // look-up emits nothing, so a turn that read the room without choosing anything paints
+          // nothing on the person's screen.
+          //
+          // NOT counted as visible output: a Highlight turn is machinery and produces no prose, and
+          // treating this as "the agent said something" would keep the "starting agent…" affordance
+          // honest for the wrong turn.
+          case "terms":
+            if (ev.meeting && Array.isArray(ev.terms) && ev.terms.length) {
+              cb.onTerms?.({ meeting: ev.meeting, cursor: ev.cursor ?? "", terms: ev.terms });
+            }
+            break;
           case "commit":
             terminal = true; cb.onCommit(ev.sha);
             break;
@@ -240,16 +350,35 @@ export async function streamChatTurn(
           case "turn-complete":
             terminal = true;
             break;
-          case "done":
+          case "done": {
             terminal = true;
-            if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
+            // `reason` distinguishes "the model failed" from "the turn stopped early" (F89). They
+            // read identically in the old shape — both arrive as ok=false — and telling a person
+            // "Model inference failed" when the model worked and the BUDGET ran out sends them
+            // looking at the wrong thing.
+            const reason = typeof ev.reason === "string" ? ev.reason : "";
+            if (reason && cb.onTruncated) { sawVisibleOutput = true; cb.onTruncated(reason, ev.reply); }
+            else if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
             break;
+          }
           // A hard upstream error the proxy folded into the stream: the turn genuinely failed — surface
           // it (do NOT treat as a cold-start close to resume).
+          //
+          // ⚠ /api/chat answers 200 and folds the gateway's refusal into THIS event, so a revoked
+          // session arrives here — carrying `status: 401` and, as `message`, the gateway's raw JSON
+          // body. That body is payload-shaped, so the presenter could not read it as prose and the
+          // turn died under "Something went wrong — details are in the browser console." That was
+          // the founder's whole symptom. An auth status is now read off the event, reported to the
+          // session watcher, and rendered as the session sentence.
           case "error":
-          case "stream-error":
-            terminal = true; sawVisibleOutput = true; cb.onError(ev.message || "Chat request failed.");
+          case "stream-error": {
+            terminal = true;
+            sawVisibleOutput = true;
+            const authFailed = typeof ev.status === "number" && isAuthStatus(ev.status);
+            if (authFailed) noteAuthFailure(ev.status as number, "/api/chat");
+            cb.onError(authFailed ? SESSION_ENDED_HEADLINE : (ev.message || "Chat request failed."));
             break;
+          }
           default:
             break;
         }

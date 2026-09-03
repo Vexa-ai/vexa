@@ -1,0 +1,459 @@
+{
+  "contract": "config.v1",
+  "service": "flows-api",
+  "keys": [
+    {
+      "key": "VEXA_FLOWS_API_HOST",
+      "class": "defaulted",
+      "description": "The interface flows-api binds. LOOPBACK BY DEFAULT ON PURPOSE: this process also runs as a host lane on the dogfood rig, where 0.0.0.0 would publish its port on every interface of that box. The compose service says 0.0.0.0 in its own environment, next to the port that publishes it, rather than the code default being flipped underneath the rig.",
+      "default": "127.0.0.1",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_API_PORT",
+      "class": "defaulted",
+      "description": "The port flows-api binds.",
+      "default": "18200",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_DB_URL",
+      "class": "required-explicit",
+      "description": "The engine's Postgres DSN — the two tables the whole engine is. REQUIRED-EXPLICIT, not a capability: flows without a database is not a deployment, so there is nothing optional to be tri-stated. It used to fall back to a dogfood container lookup in `flows_steps.common.db_url`; a guessed DSN on a host running more than one stack does not fail, it addresses somebody else's data (decision 18d). `sqlite://` is the offline dialect the suite and gate:health run on.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_API_KEY",
+      "class": "required-explicit",
+      "description": "The operator key gating `POST /flows` and `POST /events` on flows-api — PRD decision 4's whole access model. No default: a weak one makes an unconfigured deployment look configured (F95).",
+      "secret": true,
+      "targets": [
+        "compose"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_ADMIN_KEY",
+      "class": "required-explicit",
+      "description": "admin-api's admin key, under the name flows reads it by. It opens `ensure_platform_user` and mints gateway tokens, so it is refused the same way as the internal secret rather than defaulting to a literal.",
+      "secret": true,
+      "targets": [
+        "compose"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
+      "key": "INTERNAL_API_SECRET",
+      "class": "required-explicit",
+      "description": "The internal-tier identity flows presents to the other domains — the ONE name the whole internal tier has used since F95. Read through `common.INTERNAL_SECRET_ENV`, which is why the brick's own declaration test scans `*_ENV` constants and not only literals.",
+      "secret": true,
+      "targets": [
+        "compose"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_TIMELINE_KEY",
+      "class": "capability",
+      "description": "A read-only key that opens `GET /timeline` and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one.",
+      "capability": "timeline_read_key",
+      "secret": true,
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_ADMIN_API_URL",
+      "class": "required-explicit",
+      "description": "identity's admin tier. NO HOST-PORT DEFAULT: `http://localhost:18057` is not 'unconfigured', it is A DIFFERENT DEPLOYMENT'S admin-api on any host running two stacks — found live 2026-09-03. A deployment default may name the SERVICE and lives in the deploy surface, never in code.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_GATEWAY_URL",
+      "class": "capability",
+      "description": "The meetings domain, reached through the gateway. UNSET MEANS THE MEETINGS DOMAIN IS NOT DEPLOYED (PRD decision 40.7 + decision 5) — a supported shape of deployment, not a misconfiguration, which is exactly what the `capability` class means. `required-explicit` was a refusal to BOOT: preflight named this door and exited before anything about meetings was asked, so flows+identity with no meetings could not start at all. The key still says GATEWAY because flows reaches meetings through the edge today; that hop is ADR-0037's to close and is not this class change.",
+      "capability": "meetings",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_AGENT_API_URL",
+      "class": "capability",
+      "description": "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.7) — a supported product, not a misconfiguration, which is exactly what the `capability` class means. `defaulted` could not express it: a default URL asserts the domain exists and the absence then arrives as a connection error that retries forever.",
+      "capability": "agent_domain",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_UI_URL",
+      "class": "capability",
+      "description": "Where a person's own terminal lives; it goes into every link this deployment mails. A PORT WITH AN OPTIONAL ADAPTER (PRD decision 4): the terminal is one adapter and the no-agents product has none. It was required-explicit, which made a step-time link decide whether flows-api could BOOT.",
+      "capability": "terminal_link",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_INBOX",
+      "class": "defaulted",
+      "description": "`imap` (default, real), `mailpit` (the dev double) or `graph` (Microsoft 365 over Graph, for a tenant with IMAP switched off).",
+      "default": "imap",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_ADDR",
+      "class": "capability",
+      "description": "The address this deployment's mailbox answers as, and the identity every allow-list is anchored on. Unset = no mail intake, which is what the no-agents MCP product runs as.",
+      "capability": "mailbox",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_APP_PASSWORD",
+      "class": "capability",
+      "description": "The IMAP/SMTP credential paired with VEXA_MAIL_ADDR.",
+      "capability": "mailbox",
+      "secret": true,
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_HOST",
+      "class": "capability",
+      "description": "Unset = Gmail SMTP over SSL; set = a plain host (the mail double).",
+      "capability": "mail_double",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PORT",
+      "class": "defaulted",
+      "description": "The port for a set VEXA_MAIL_SMTP_HOST.",
+      "default": "25",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAILPIT_URL",
+      "class": "defaulted",
+      "description": "mailpit's HTTP base, when the inbox is mailpit. THE ONE HOST-PORT DEFAULT IN THIS DECLARATION, and it states why: mailpit is a DEVELOPMENT inbox that only ever runs beside the process reading it, and the inbox mode has to be selected before the default is reached.",
+      "default": "http://127.0.0.1:8025",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAILPIT_LOOKBACK_S",
+      "class": "defaulted",
+      "description": "Re-scan window behind the mailpit watermark.",
+      "default": "300",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_NOTIFY_CHANNEL",
+      "class": "defaulted",
+      "description": "Where a notification goes; `smtp` is the only real one.",
+      "default": "smtp",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_TENANT_ID",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The Microsoft Entra tenant the mailbox lives in.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_CLIENT_ID",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The app registration's application (client) id.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_CLIENT_SECRET",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The app registration's client secret. Application permissions Mail.ReadWrite + Mail.Send with admin consent, and an Exchange ApplicationAccessPolicy scoping the app to the ONE mailbox — without that policy this credential reads every mailbox in the tenant.",
+      "secret": true,
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_MAILBOX",
+      "class": "capability",
+      "capability": "mailbox_graph",
+      "description": "The mailbox address Graph polls and sends as.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_GRAPH_BASE",
+      "class": "defaulted",
+      "default": "https://graph.microsoft.com/v1.0",
+      "description": "The Graph endpoint. An in-code dial for a national cloud (Azure Government, China) — no deploy surface sets it.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_GRAPH_LOGIN",
+      "class": "defaulted",
+      "default": "https://login.microsoftonline.com",
+      "description": "The token endpoint — the same dial, the same reason.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_GRAPH_PAGE_SIZE",
+      "class": "defaulted",
+      "default": "25",
+      "description": "`$top` on the inbox listing.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_MAIL_DOMAINS",
+      "class": "capability",
+      "description": "The domain allow-list for INBOUND mail (PRD §16.2). UNSET IS NOT `EVERYONE`: it means the mailbox's own domain. A sender who is neither a known user nor inside it gets no account, no agent turn and no model spend — only a quarantine row.",
+      "capability": "mail_intake_policy",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_MAIL_QUARANTINE_REPLY",
+      "class": "capability",
+      "description": "`1` answers a quarantined stranger ONCE with a fixed one-line template. Default off: any automatic reply to an unverified sender is a reflector.",
+      "capability": "mail_intake_policy",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_MAIL_RATE_PER_SENDER",
+      "class": "defaulted",
+      "description": "Mail-triggered agent turns one sender may cause per window; above it the mail is recorded and dropped.",
+      "default": "12",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_MAIL_RATE_GLOBAL",
+      "class": "defaulted",
+      "description": "Mail-triggered agent turns the whole deployment may run per window — the ceiling on what one inbox can cost, whoever sends it.",
+      "default": "120",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_MAIL_RATE_WINDOW_S",
+      "class": "defaulted",
+      "description": "The window both mail rate limits count over.",
+      "default": "3600",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_MAIL_BODY_MAX",
+      "class": "defaulted",
+      "description": "How much of an inbound body may enter an agent prompt, inside the untrusted block.",
+      "default": "4000",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_ATTENDEE_DOMAINS",
+      "class": "capability",
+      "description": "The OUTBOUND fan-out allow-list (PRD §16.2). Unset = the organizer's own domain.",
+      "capability": "outbound_policy",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_DATA_STATEMENT",
+      "class": "capability",
+      "description": "The deployment's own sentence about where the words live, carried in what it mails.",
+      "capability": "outbound_policy",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_BEHAVIOR_DIR",
+      "class": "capability",
+      "description": "The private behavior tree a deployment mounts (PRD decision 12). EMPTY IS THE OSS PRODUCT: the showcase baked into the image is what flows reads.",
+      "capability": "behavior_override",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_JITSI_HOSTS",
+      "class": "capability",
+      "description": "Extra Jitsi hosts a meeting link may live on, beyond meet.jit.si. The SAME setting meeting-api and the MCP service read — two parsers that disagree about what a link is accept different meetings.",
+      "capability": "jitsi_hosts",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_USER_KEY_TTL_S",
+      "class": "defaulted",
+      "description": "How long a minted gateway token lives AND how long this process reuses it. One 20-person meeting used to leave ~30 permanent full-scope tokens on the organiser's account (R-B13).",
+      "default": "900",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_TIMELINE_SCAN_ROWS",
+      "class": "defaulted",
+      "description": "How many reaction rows the timeline projection scans.",
+      "default": "2000",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_INTERNAL_SECRET",
+      "class": "capability",
+      "description": "DEPRECATED alias of INTERNAL_API_SECRET (F95) — honoured with a warning for one release, removed next. On no surface BY DESIGN: a surface that plumbed it would keep the second spelling alive. Declared so the removal is a deletion here rather than an archaeology.",
+      "capability": "deprecated_secret_aliases",
+      "secret": true,
+      "targets": []
+    },
+    {
+      "key": "VEXA_INTERNAL_API_SECRET",
+      "class": "capability",
+      "description": "The second DEPRECATED alias of INTERNAL_API_SECRET, on the same terms and the same clock.",
+      "capability": "deprecated_secret_aliases",
+      "secret": true,
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_INSTANCE_GATE",
+      "class": "capability",
+      "description": "Forces the instance gate open or shut. A RIG DIAL: a deployment's gate state is a fact about the deployment, so no surface offers a way to lie about it.",
+      "capability": "rig_dials",
+      "targets": []
+    }
+  ],
+  "capabilities": {
+    "timeline_read_key": {
+      "description": "A narrower credential for `GET /timeline` than the operator key.",
+      "when_unconfigured": "The timeline stays readable, by the operator key only."
+    },
+    "agent_domain": {
+      "description": "This deployment carries the agent domain (PRD decision 40.7: identity is the one shared dependency; meetings, agents and flows work independently and in any configuration).",
+      "when_unconfigured": "Every flow step that would dispatch an agent turn answers `not_present` instead of reaching for a door that is not there. THAT IS A PRODUCT — the no-agents MCP product — not a degraded state."
+    },
+    "terminal_link": {
+      "description": "A terminal adapter behind flows' link port (PRD decision 4). Flows owns the port; the terminal is one adapter; a deployment may have none.",
+      "when_unconfigured": "Nothing is mailed carrying a link, and any step that would compose one refuses naming VEXA_UI_URL at the moment the link would have gone out. It does not stop the process booting."
+    },
+    "mailbox": {
+      "description": "The inbound mail intake — the `flows-mailbox` lane, IMAP poll to `POST /events`.",
+      "mode": "all",
+      "when_unconfigured": "There is no mail intake. The `mailbox` compose profile is off by default for exactly this reason: a lane started without credentials restart-loops and reads as a broken deployment."
+    },
+    "mail_double": {
+      "description": "A plain SMTP host instead of Gmail over SSL — the development mail double.",
+      "when_unconfigured": "Outbound mail goes through Gmail SMTP over SSL."
+    },
+    "mail_intake_policy": {
+      "description": "Who the mailbox will act for, beyond known users (R-B12).",
+      "mode": "any",
+      "when_unconfigured": "The mailbox's own domain, and nobody else. Unset is the SAFE value here, never `everyone`."
+    },
+    "outbound_policy": {
+      "description": "Who a flow may fan out to, and what this deployment says about where the words live (PRD §16.2).",
+      "mode": "any",
+      "when_unconfigured": "Fan-out is the organizer's own domain and no data statement is carried."
+    },
+    "behavior_override": {
+      "description": "A private `behavior/` tree mounted over the showcase baked into the image (PRD decision 12).",
+      "when_unconfigured": "The in-repo showcase is what flows reads. THAT IS THE OSS PRODUCT, exactly — this repo never carries a tree shipped dark."
+    },
+    "jitsi_hosts": {
+      "description": "Self-hosted Jitsi origins this deployment recognises as meeting links.",
+      "when_unconfigured": "meet.jit.si only."
+    },
+    "deprecated_secret_aliases": {
+      "description": "The two pre-F95 spellings of INTERNAL_API_SECRET, honoured with a warning for one release.",
+      "mode": "any",
+      "when_unconfigured": "The canonical name is the only one read, which is the state this capability exists to arrive at."
+    },
+    "rig_dials": {
+      "description": "Harness overrides used by the dogfood rig and the offline suites.",
+      "mode": "any",
+      "when_unconfigured": "The real instance gate and the real transcript. This is the deployment state."
+    },
+    "meetings": {
+      "description": "This deployment carries the meetings domain — scheduling a bot into a call and reading back what it recorded (PRD decision 40.7; decision 5 for meetings).",
+      "when_unconfigured": "The meetings domain is not deployed. Flows still boots, still admits facts and still serves its queue; every flow step that would schedule or read a bot answers `meetings:not_present` — terminal, with the reason on the reaction, never a retry loop against a door that is not there."
+    },
+    "mailbox_graph": {
+      "description": "The mailbox is a Microsoft 365 tenant reached over Graph with client-credentials — inbound poll AND outbound send, for a deployment that exposes neither IMAP nor SMTP AUTH.",
+      "mode": "all",
+      "when_unconfigured": "This deployment is not on Microsoft. `VEXA_MAIL_INBOX=graph` and `VEXA_NOTIFY_CHANNEL=graph` refuse at the moment the mailbox is constructed, naming the missing keys; every other inbox is unaffected. It is a `capability` and not `required-explicit` because config.v1 cannot express a requirement conditional on another key, and refusing the boot of every non-Microsoft deployment to express one would be worse than the gap."
+    }
+  },
+  "surface_only": [
+    {
+      "key": "LOG_LEVEL",
+      "reason": "compose sets it uniformly on every service in the stack. The flows processes log through print and uvicorn's own level and read no LOG_LEVEL, so it is documented drift rather than a key this service consumes."
+    }
+  ]
+}

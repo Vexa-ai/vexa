@@ -36,11 +36,15 @@ function StatusLine({ status }: { status: TurnStatus }) {
   useEffect(() => { const t = setInterval(() => force((n) => n + 1), 1000); return () => clearInterval(t); }, []);
   const secs = Math.max(0, Math.floor((Date.now() - status.since) / 1000));
   const alert = status.phase === "reconnecting" || status.phase === "stalled";
+  // F66 (5): a turn can genuinely think for a long time. Past 30s of one phase the line says so in
+  // words — a spinner alone reads as hung, and "still working" is the difference between a product
+  // that is slow and a product that is broken.
+  const quiet = !alert && secs >= 30;
   const color = alert ? "var(--accent)" : "var(--t3)";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 12, color, fontFamily: "var(--mono)" }}>
       <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />
-      <span>{PHASE_LABEL[status.phase]}{secs >= 2 ? ` · ${secs}s` : ""}{alert ? "" : "…"}</span>
+      <span data-turn-status>{quiet ? "still working" : PHASE_LABEL[status.phase]}{secs >= 2 ? ` · ${secs}s` : ""}{alert ? "" : "…"}</span>
     </div>
   );
 }
@@ -111,9 +115,12 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
               // must not grow the transcript vertically (founder ruling 2026-08-22).
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px 5px" }}>
                 <OpRow op={t.ops[t.ops.length - 1]} />
-                {t.ops.length > 1 && (
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>· {t.ops.length} steps</span>
-                )}
+                {/* F66: the count ticks from the FIRST step. It used to appear only at two, so the
+                    one number that proves a long turn is moving was hidden exactly when the reader
+                    starts looking for it. */}
+                <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>
+                  · {t.ops.length} step{t.ops.length === 1 ? "" : "s"}
+                </span>
               </div>
             )}
             {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>

@@ -14,8 +14,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
-RUNNER = "claude-code"
+DEFAULT_RUNNER = "claude-code"
+
+
+def deployment_runner() -> str:
+    """The deployment's default harness, resolved AT CALL TIME (F92).
+
+    This used to be a module constant frozen into ``make_dispatch``'s default argument, which is the
+    exact pattern ``control_plane/config_test.py`` documents at length as a 32-hour outage: a value
+    decided ONCE at import cannot follow the environment, so an operator who changes ``VEXA_RUNNER``
+    sees nothing happen until the container is recreated, and every test that sets the variable is
+    reading whatever the interpreter saw first. The per-subject overlay (Settings → Models) stamps
+    the runner into the worker env; this is only the floor under it."""
+    return (os.environ.get("VEXA_RUNNER") or "").strip() or DEFAULT_RUNNER
+
+# The harness names a dispatch may carry. `llm/registry.HARNESS_RUNNERS` is the AUTHORITY — it maps
+# each name to the class that implements it — but `llm/` ships only in the WORKER image: the
+# control plane cannot import it (`ModuleNotFoundError: No module named 'llm'` inside
+# vexa-dogfood-agent-api-1), and it is the control plane that has to decide whether a subject's
+# stored runner preference is a name this deployment knows.
+#
+# So the list lives here, in `shared/`, which both images carry — and `llm/tests/test_registry.py`
+# asserts the two agree exactly. That is the difference between one authority with a proven mirror
+# and two copies that drift: the mirror cannot go stale without a red test naming both files.
+RUNNERS = ("claude-code", "codex", "openai-agent")
 
 
 def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:
@@ -58,7 +82,7 @@ def make_dispatch(
     tools: list[str] | tuple[str, ...] = (),
     context: dict | None = None,
     launcher: str | None = None,
-    runner: str = RUNNER,
+    runner: str = "",
     token: str | None = None,
     principal: dict | None = None,
 ) -> dict:
@@ -68,7 +92,7 @@ def make_dispatch(
     dispatch stamps it as the git author (see dispatch.py D4)."""
     inv: dict = {
         "identity": {"subject": subject, "launcher": launcher or launcher_for(trigger, subject)},
-        "runner": runner,
+        "runner": runner or deployment_runner(),
         "workspaces": workspaces or [{"id": subject, "mode": mode_for(trigger)}],
         "trigger": trigger,
         "start": start,

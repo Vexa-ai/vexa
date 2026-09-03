@@ -11,17 +11,27 @@ import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { ReportTurn } from "./ReportThis";
+import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
-import { streamChatTurn, type ChatPhase } from "./chatStream";
+import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { presentError } from "./apiClient";
+import { promptCarriesActiveContext } from "./surfaceSync";
+import type { ChatIntent } from "./chatIntent";
+import { surfaceOf, type FrictionSurface } from "./frictionApi";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
+  // `mcp__vexa__entity_upsert` → `entity_upsert`. The namespace is ours, not the reader's, and the
+  // founder's own words for what he was watching were "entity_upsert".
+  tool = tool.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
   const t = tool.toLowerCase();
   // verb-first labels: the op line reads as what the agent is DOING, not an internal tool name
   const [icon, verb] = /read|cat|open/.test(t) ? [opIcon.read, "Reading"]
@@ -35,12 +45,32 @@ function toolOp(tool: string, args?: Record<string, unknown>): Op {
   const file = typeof args?.file_path === "string" ? (args.file_path as string) : undefined;
   const wrote = !!file && /edit|write|append|notebook/.test(t);
   const name = file ? file.split("/").filter(Boolean).pop() : undefined;
-  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "done", file, wrote };
+  // RUNNING, not done (F66). Every op was appended with `status: "done"`, so the step line rendered
+  // a green TICK from the first tool call — an 18-step turn showed a finished-looking line that
+  // never moved. Founder: *"i know it's working now, but it just stays like it's stale."* The op
+  // that just started IS the one in progress; `onTool` marks the previous one done as it arrives,
+  // and the turn's end marks the last one.
+  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "running", file, wrote };
 }
 
-/** the backend history turn shape (GET /api/sessions/:session/history) */
+/** Close any step still marked running — the turn is over, so nothing in it is in progress. Errors
+ *  keep their own status: a step that FAILED did not succeed because the turn ended. */
+function settleOps(ops: Op[]): Op[] {
+  return ops.some((o) => o.status === "running")
+    ? ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o))
+    : ops;
+}
+
+/** the backend history turn shape (GET /api/sessions/:session/history).
+ *
+ *  `text` is what the MODEL was given: the worker's preambles, the control plane's grounding, and
+ *  the person's sentence at the end of it. `user_text` is what the PERSON typed — recorded as its
+ *  own field by the worker (`worker/engine.py` record_user_text) and served verbatim by
+ *  `workspace_reader.history`. It is optional because records written before the field existed do
+ *  not have it, and only because of that: for every turn taken from now on it is the only thing
+ *  this surface should render. */
 type HistoryTurn =
-  | { role: "user"; text: string }
+  | { role: "user"; text: string; user_text?: string }
   | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean }[]; commit?: string };
 
 type AgentTurn = Extract<Turn, { role: "agent" }>;
@@ -208,11 +238,23 @@ const CONTEXT_BLOCKS: Array<[RegExp, RegExp]> = [
   [/^The user is looking at the workspace/, /(?:<\/readme>\s*|context is missing\.\s*)/],
 ];
 
-// The server marks the grounding→user boundary with this sentinel (control_plane/api.py). When present,
-// ONE cut removes every folded block regardless of wording drift; the regex blocks below are the
-// fallback for chats stored before the sentinel shipped.
+// The grounding→user boundary marker (control_plane/api.py CONTEXT_SENTINEL, and the composer below
+// writes it too). When present, ONE cut removes every folded block regardless of wording drift.
 const CONTEXT_SENTINEL = "<!--vexa:user-input-below-->";
 
+/** THIS IS THE FALLBACK, AND IT IS ONLY THE FALLBACK (F47).
+ *
+ *  Every turn taken from 2026-09-02 onward carries the person's words as their own field
+ *  (`HistoryTurn.user_text`), and the loader below renders that field and never a composed prompt.
+ *  This function reconstructs the human half of an OLDER record by stripping the machinery off the
+ *  front — the sentinel when the record has one, else the wording-matched blocks above.
+ *
+ *  It is kept, and it is not to be relied on again. Reconstruction by stripping is derived from text
+ *  the SERVER owns and nothing checks the derivation, so it fails silently and completely whenever a
+ *  preamble changes shape: on 2026-09-02 the preamble set changed and every turn in the founder's
+ *  chat rendered as a grey USER bubble containing "## Referencing knowledge (always)", the mount
+ *  stack and the write-routing policy, with his own sentence buried at the bottom. Do not extend it
+ *  to cover a new preamble; the field is the answer. */
 export function stripContextBlocks(raw: string): string {
   const si = raw.lastIndexOf(CONTEXT_SENTINEL);
   if (si >= 0) {
@@ -259,6 +301,20 @@ function compactStoredUserText(text: string): string {
   // The default is the CONTEXT-STRIPPED text (sentinel/regex) — NOT the raw stored prompt. Returning
   // `text` here silently discarded the strip, leaking the whole grounding preamble into the bubble.
   return raw;
+}
+
+/** WHAT A STORED USER TURN RENDERS AS — the whole rule, in one place (F47).
+ *
+ *  `user_text` is the person's own words, recorded as their own field by the worker at the moment
+ *  the turn was composed. When it is there it is the answer, verbatim: the composed prompt is never
+ *  shown, whatever preambles happen to be in front of it this month.
+ *
+ *  Only a record written before that field existed falls through to `compactStoredUserText`, which
+ *  reconstructs the human half by stripping the machinery off the front — the sentinel if the record
+ *  carries one, else the wording-matched preamble blocks. That path is the fallback and nothing
+ *  else; see `stripContextBlocks` for why it must never be the primary again. */
+export function historyUserText(t: { text: string; user_text?: string }): string {
+  return t.user_text ?? compactStoredUserText(t.text);
 }
 
 const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
@@ -368,13 +424,19 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
   );
 }
 
-function ChatConversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
+function ChatConversation({ turns, busy, empty, surface }: { turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface }) {
   if (turns.length === 0 && empty) return <>{empty}</>;
   return (
     <>
       {turns.map((t, i) => t.role === "user"
         ? <div key={t.id} style={{ marginBottom: 16 }}><div style={userBubble}><ReferenceText text={t.text} /></div></div>
-        : <Conversation key={t.id} turns={[t]} busy={!!busy && i === turns.length - 1} />)}
+        // "REPORT THIS" ON A TURN (PRD decision 33 §2). Only the AGENT's turns carry it: the person
+        // reporting their own sentence is not a rough edge, and an action on every bubble is twice
+        // the chrome for half the meaning. The surface travels with the report — chat, kind, the open
+        // page — so nobody is asked to describe where they were.
+        : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
+            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} />
+          </ReportTurn>)}
     </>
   );
 }
@@ -443,7 +505,15 @@ function referenceContext(text: string): string {
 
 function promptWithReferences(prompt: string, userText: string): string {
   const context = referenceContext(userText);
-  return context ? `${prompt.trim()}\n\n---\n${context}` : prompt.trim();
+  // THE PERSON'S WORDS COME LAST, AND THE SENTINEL SAYS WHERE THEY START (F47). The reference block
+  // is machinery this composer wrote — token resolution instructions for the model — and it used to
+  // be appended AFTER the sentence, which put it inside everything downstream treats as "what the
+  // person said": the worker records that half as `user_text`, and the bubble would have shown a
+  // `- token: @meeting:…  kind: meeting  native_id: …` dump under every question about a meeting.
+  // Moving it in front and marking the boundary costs the model nothing (grounding first, ask last,
+  // like every other preamble) and makes the human half exact rather than approximately right. The
+  // server inserts its own sentinel in front of this whole string; both readers take the LAST one.
+  return context ? `${context}\n\n---\n${CONTEXT_SENTINEL}${prompt.trim()}` : prompt.trim();
 }
 
 function activeReference(tab: ActiveTab | null): ActiveReference | null {
@@ -472,6 +542,10 @@ const meetingLabel = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.tit
 function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   if (!ref) return "";
   if (ref.kind === "file") {
+    // PRD decision 30: this narration and the server's surface record are two answers to one
+    // question. While the record is not live the prompt keeps carrying it — dropping it first would
+    // leave the agent knowing LESS than it does today. One flag flips both halves together.
+    if (!promptCarriesActiveContext()) return "";
     return `Active context: the user is viewing the workspace file ${ref.value}. Read it with your Read tool if relevant.`;
   }
 
@@ -546,26 +620,37 @@ function routineCreationPrompt(commandText: string): string {
   ].join("\n");
 }
 
-type ChatProps = Partial<TabProps>;
+/** `emptyExtra` — whatever the host wants in the void an empty conversation leaves between its
+ *  greeting and the composer. The chat owns that layout and nothing else: it never decides what
+ *  goes there (the minutes shell derives its proposal chips), so the two stay independent. */
+type ChatProps = Partial<TabProps> & { emptyExtra?: ReactNode };
 
 
-// MINUTES empty-state greeting — per SESSION, because the chat's room decides its voice:
-// meeting chats brief or recap, the org chat sets up the tier, room threads state their scope.
+/** WHICH greeting is TRUE in this room — and in every room but one, the answer is NONE.
+ *
+ *  ── F36, founder ruling 2026-09-02 ────────────────────────────────────────────────────────────
+ *  A chat opened with `+` shows an EMPTY COMPOSER AND NOTHING ELSE. Two lines are deleted here,
+ *  not made unreachable:
+ *    · "A fresh thread in this project. Ask across everything its workspaces hold …" — the
+ *      empty-state of a plain chat, which he met in a chat he had never created;
+ *    · "👋 I'm your agent here … paste a meeting link …" — the home greeting, which greeted a chat
+ *      that was about nothing.
+ *  Both were DEFAULTS: nothing in anyone's state produced them, they filled a blank page. His words
+ *  on finding them: *"i do not like this text."*
+ *
+ *  What survives is the pair a MEETING produces, because the room is about something and the line
+ *  is true of that thing. Minutes language is only honest in a chat BOUND TO A MEETING: the old
+ *  rule asked "does this account have any held meeting?" and answered it for every session, so the
+ *  home chat greeted a brand-new account with "I kept the minutes of your meeting" (founder,
+ *  2026-09-01, on an account with no meetings at all). A `meet-` room asks about ITS OWN meeting;
+ *  everywhere else says nothing at all. */
 function minutesEmptyGreeting(session: string): string {
-  const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
-  if (session.startsWith("org-setup"))
-    return `${GLOBAL_SETUP_GREETING} ${GLOBAL_SETUP_GREETING_SUB}`;
-  if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
-    return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
-  if (session.startsWith("meet-")) {
-    const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-    return strip(held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
-  }
-  const anyHeld = liveMeetingsNow().some((mm) => ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-  return strip(anyHeld ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
+  if (!session.startsWith("meet-")) return "";
+  const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
+  return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "").replace(/\*\*/g, "");
 }
 
-export function Chat({ params = {} }: ChatProps) {
+export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
@@ -596,6 +681,12 @@ export function Chat({ params = {} }: ChatProps) {
   const activeMeeting = activeRef?.kind === "meeting"
     ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value)
     : undefined;
+  // MINUTES: the composer stops ADVERTISING the focused doc (founder, 2026-09-01 — same treatment
+  // as 722629588 gave the schedule chip). The context still flows: contextRef below continues to
+  // ground the prompt and to fill the wire bundle; only the FOCUS chip and the badge stamped on the
+  // user bubble go away. In minutes mode the open document is already visible in the panel beside
+  // the conversation, so the badge was repeating what the eye can see.
+  const advertiseFocus = !minutesOnly();
   const contextRef: ActiveReference | null = focusRef?.kind === "meeting"
     ? { kind: "meeting", value: activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value, raw: `@meeting:${activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value}` }
     : focusRef;
@@ -691,13 +782,49 @@ export function Chat({ params = {} }: ChatProps) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
-        const loaded: Turn[] = (data.turns ?? [])
+        // THE PERSON'S WORDS ARE A FIELD, NOT SOMETHING TO RECOVER (F47). `user_text` is what they
+        // typed, recorded by the worker beside the turn; `text` is the composed prompt the model
+        // was given. When the field is there it is rendered as-is and the composed prompt is never
+        // shown. `compactStoredUserText` runs only for records written before the field existed —
+        // it strips the machinery off the front by sentinel, else by matching preamble wording,
+        // which is the derivation that silently broke on 2026-09-02 and put the whole grounding
+        // prompt in a grey user bubble.
+        //
+        // `raw` stays the stored prompt either way: the filters below test the SHAPE of what was
+        // stored (an onboarding kickoff, a machinery-marked composed opening), and those marks live
+        // in the prompt, not in the person's sentence.
+        const compacted = (data.turns ?? []).map((t) =>
+          t.role === "user"
+            ? { ...t, text: historyUserText(t), raw: t.text }
+            : { ...t, raw: t.text });
+        const loaded: Turn[] = compacted
           // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
           // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.
-          .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK) && !t.text.includes(ONBOARDING_REPLY_SEP)))
+          .filter((t) => !(t.role === "user" && t.raw.includes(ONBOARDING_KICKOFF_MARK) && !t.raw.includes(ONBOARDING_REPLY_SEP)))
+          // MACHINERY IS NEVER THE PERSON'S SPEECH. A turn the product composed (a `?ask=` preset
+          // from an emailed link, a proposal chip's hidden kick) was hidden when it was sent and
+          // must stay hidden when it is read back — the founder saw his own prepare kick returned
+          // to him as a grey user bubble because nothing marked it. Unconditional, unlike the
+          // onboarding filter above: a kick has no "and then the human replied" form.
+          .filter((t) => !(t.role === "user" && t.raw.includes(MACHINERY_MARK)))
+          // LEGACY, and dated: every composed opening sent BEFORE the mark existed (2026-09-02) is
+          // already in a transcript and would keep surfacing. Those sessions cannot be rewritten —
+          // they are the users' own records — so they are recognised by their shape instead, and
+          // only in the one position a composed opening can occupy: the session's FIRST turn,
+          // opening with a bracketed preset tag (`[prep] …`, `[minutes-review] …` — the same tag
+          // the agent instructions key on), and long, because a preset body is an instruction block
+          // and a person's first line is a sentence. Delete this clause once no live session
+          // predates the mark.
+          .filter((t, i, arr) => !(t.role === "user"
+            && arr.findIndex((x) => x.role === "user") === i
+            && t.text.length >= 200
+            && /^\s*\[[a-z][a-z0-9_-]{0,63}\]\s/.test(t.text)
+            // an onboarding reply also opens with a bracketed tag and is long — it is the HUMAN's
+            // words wrapped in grounding, and the filter above already decided its fate.
+            && !t.raw.includes(ONBOARDING_KICKOFF_MARK)))
           .map((t, i) =>
             t.role === "user"
-              ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
+              ? { id: `h-u-${i}`, role: "user", text: t.text }
               : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
         updateChatState(key, (s) => {
           if (s.loaded || s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
@@ -762,19 +889,23 @@ export function Chat({ params = {} }: ChatProps) {
     return data.files ?? [];
   };
 
-  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean } = {}) => {
+  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean; scaffoldId?: string; intent?: ChatIntent } = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
     const { hidden = false, ground = true } = opts;
     const v = text.trim();
-    const basePrompt = promptWithReferences(prompt, referenceSource.trim());
+    // A HIDDEN turn is machinery, and it must be hidden in the RECORD, not only in this render.
+    // Without the mark the prompt lands in the transcript as a plain `user` message and comes back
+    // from `/api/sessions/<s>/history` on the next hydration as the person's own grey bubble.
+    const rawBase = promptWithReferences(prompt, referenceSource.trim());
+    const basePrompt = rawBase && hidden ? rawBase + MACHINERY_NOTE : rawBase;
     const key = chatKey;
     const sessionForSend = session;
     const state = getChatState(key);
     if (!v || !basePrompt || state.busy) return;
     const n = state.nextId;
     const agentId = `a-${n}`;
-    const displayText = appendReferenceToken(v, contextRef);
+    const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
     const ctrl = new AbortController();
     const newTurns = hidden
       ? [{ id: agentId, role: "agent" as const, text: "", ops: [] }]
@@ -831,18 +962,64 @@ export function Chat({ params = {} }: ChatProps) {
     const context = !ground ? undefined : buildChatContext({
       activeList, activeTab, focus: wireFocus ?? null, includeSchedule,
     });
+    // F40 — a tool call ENDS an assistant message, so the next interim text is a new paragraph.
+    // The rule itself is `joinInterim` in chatStream.ts, where it is documented and tested; this is
+    // only the flag it reads. See there for why the boundary is a tool call and not a delta count.
+    let breakBeforeNextDelta = false;
     try {
       const result = await streamChatTurn(
-        { prompt: p, session: sessionForSend, active, context },
+        // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
+        // `intent` (PRD decision 32) — an Extend/Create press is an ACT on a named file, not a
+        // sentence; it travels typed so the server can turn it into a preset without parsing prose.
+        { prompt: p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId, intent: opts.intent },
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
-          onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + text })),
-          onTool: (tool, args) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, toolOp(tool, args)] })),
-          onCommit: (sha) => patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })),
+          onDelta: (text) => patchAgentTurn(key, agentId, (t) => {
+            const joined = joinInterim(t.text ?? "", text, breakBeforeNextDelta);
+            breakBeforeNextDelta = false;
+            return { ...t, status: null, text: joined };
+          }),
+          // A FILE THIS TURN WROTE. Re-emitted for the shell, which owns the chat record's tabs —
+          // this surface never opens a document itself (F41).
+          onArtifact: (a) => window.dispatchEvent(new CustomEvent(ARTIFACT_EVENT, { detail: a })),
+          // TERMS THIS TURN PUBLISHED for a meeting's transcript (PRD decision 35). Same seam and
+          // same reason as the artifact above: the chips are part of the chat's record and the
+          // transcript renders that record — this surface forwards and stores nothing.
+          onTerms: (t) => window.dispatchEvent(new CustomEvent(TERMS_EVENT, { detail: t })),
+          onTool: (tool, args) => {
+            breakBeforeNextDelta = true;      // F40 — the assistant message ended here
+            const op = toolOp(tool, args);
+            // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
+            // chip in the reply that names this new file resolves to "not found" — which is the
+            // whole reason a turn's own chips were dead on arrival.
+            if (op.wrote) invalidateDocLinkCaches();
+            // the step that was running has finished — the arrival of the next one IS its completion
+            patchAgentTurn(key, agentId, (t) => ({
+              ...t, status: null,
+              ops: [...t.ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o)), op],
+            }));
+          },
+          onCommit: (sha) => {
+            invalidateDocLinkCaches();
+            // The panel may be showing a document this turn just CREATED. A chat declares its
+            // tabs up front (PRD decision 18), so the setup conversation opens five pages
+            // before four of them exist — and without this they stay "no page here yet" until
+            // something else happens to remount them. A commit is the durable moment the files
+            // became real, so it is the one that tells the panel to look again.
+            window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT));
+            patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha }));
+          },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
-          onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + msg })),
+          // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
+          // the turn did produce and say plainly that it is partial, so the person knows to ask
+          // again rather than reading half an answer as the whole one.
+          onTruncated: (reason, partial) => patchAgentTurn(key, agentId, (t) => {
+            const body = t.text ?? partial ?? "";
+            return { ...t, status: null, text: body + (body ? "\n\n" : "") + `_${reason}_` };
+          }),
+          onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => { if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); },
         },
         { signal: ctrl.signal },
@@ -858,12 +1035,16 @@ export function Chat({ params = {} }: ChatProps) {
             : "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." };
         });
       } else {
-        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null }));  // clean end — drop any lingering status line
+        // THE TICK ONLY AT THE END (F66): the last step settles when the turn does, never before.
+        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
       }
     } catch (e) {
       if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
-      else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }));
+      else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(e).headline }));
     } finally {
+      // whatever happened — abort, error, timeout — no step is left spinning. A spinner that
+      // outlives its turn is the same lie as a tick that precedes it.
+      patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
       updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
     }
   };
@@ -879,18 +1060,20 @@ export function Chat({ params = {} }: ChatProps) {
   sendRef.current = send;
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; hidden?: boolean; ground?: boolean; session?: string }>).detail;
+      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
       // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
       // stash it; the target session's Chat consumes it the moment it mounts.
       if (detail?.session && detail.session !== session) {
-        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, hidden: detail.hidden, ground: detail.ground })); } catch { /* ignore */ }
+        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground, scaffoldId: detail.scaffoldId })); } catch { /* ignore */ }
         return;
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      void sendRef.current(prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
+      // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
+      // the user's own sentence renders as their message, and the grounding it carries does not.
+      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId, intent: detail?.intent });
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
@@ -905,32 +1088,24 @@ export function Chat({ params = {} }: ChatProps) {
     const t = setTimeout(() => {
       try { localStorage.removeItem(key); } catch { /* ignore */ }
       try {
-        const d = JSON.parse(raw as string) as { prompt: string; hidden?: boolean; ground?: boolean };
-        if (d.prompt) void sendRef.current(d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground });
+        const d = JSON.parse(raw as string) as { prompt: string; display?: string; hidden?: boolean; ground?: boolean; scaffoldId?: string };
+        if (d.prompt) void sendRef.current(d.display || d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground, scaffoldId: d.scaffoldId });
       } catch { /* ignore */ }
     }, 600);
     return () => clearTimeout(t);
   }, [session]);
 
-  // Onboarding seeds a CACHED greeting (instant, no LLM) and arms the chat — the user's next reply carries
-  // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.
-  const onboardingArmedRef = useRef(false);
-  useEffect(() => {
-    const onSeed = () => {
-      if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      const key = chatKey;
-      updateChatState(key, (s) => (
-        s.turns.length
-          ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly()
-                ? (liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))) ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
-                : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
-      ));
-      onboardingArmedRef.current = true;
-    };
-    window.addEventListener(ONBOARDING_SEED_EVENT, onSeed);
-    return () => window.removeEventListener(ONBOARDING_SEED_EVENT, onSeed);
-  }, [layout, chatKey]);
+  // ── DELETED 2026-09-02 (F36): the cached onboarding greeting ────────────────────────────────
+  //
+  //  This listener wrote a canned agent turn into an empty chat the moment OnboardingGate fired its
+  //  seed — instantly, with no model round-trip — and armed the chat so the person's first reply
+  //  carried the discovery-loop grounding. It is what put "I'm your agent here … paste a meeting
+  //  link" in front of the founder in a chat he had never made.
+  //
+  //  A first turn nobody typed is machinery speaking as the product, and the founder's ruling is
+  //  that a new chat says nothing. The grounding it used to arm still reaches the agent — the setup
+  //  proposal chip carries it in its own kick (minutes/proposals.ts), which is a chip the person
+  //  actually pressed rather than a greeting they were handed.
 
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
@@ -954,6 +1129,14 @@ export function Chat({ params = {} }: ChatProps) {
     const v = value.trim();
     const hasAttachments = attachments.length > 0;
     if ((!v && !hasAttachments) || uploading) return;
+    // the user WROTE here — the minutes rail keeps a `touched` flag per chat and this is its
+    // only writer. Fired before the busy/queue branches, because queueing is still authorship.
+    //
+    // The TEXT rides along (F38). The rail names a chat from its first human turn, and this is the
+    // only place in the client that knows a turn is a human's: an agent turn never reaches here,
+    // and a composed opening arrives through the ask-chat path, not through the composer. So the
+    // name is taken from a message the person typed, by construction rather than by a check.
+    window.dispatchEvent(new CustomEvent(CHAT_TOUCHED_EVENT, { detail: { session, text: v } }));
     if (busy) {
       if (!v || hasAttachments) return;   // queue plain text only; attachments wait for idle
       const qid = `q-${Date.now().toString(36)}`;
@@ -986,16 +1169,15 @@ export function Chat({ params = {} }: ChatProps) {
       displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
       clearAttachments();
     }
-    // First onboarding reply: prepend the (hidden) discovery-loop grounding so the agent researches from
-    // this one answer. compactStoredUserText strips it back off on reload; the user only ever sees `displayText`.
-    if (onboardingArmedRef.current && !hasAttachments) {
-      onboardingArmedRef.current = false;
-      prompt = ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
-    }
-    // Org-setup first reply: the greeting was cached (no LLM turn) — attach the flow grounding here.
-    if (session.startsWith("org-setup") && turns.length === 0) {
-      prompt = GLOBAL_SETUP_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
-    }
+    // ── DELETED 2026-09-02 (F36/F37): the two grounding arms ────────────────────────────────
+    //
+    //  The first attached the discovery-loop grounding to whatever reply followed the cached
+    //  greeting; the second attached the org-setup flow grounding to the first turn of an
+    //  `org-setup` session. Both are gone with the paths that armed them: the greeting is deleted,
+    //  and the `org-setup` session id was minted by the rail's seeding and by nothing else, so the
+    //  branch is now unreachable — which, per the founder's stale-code ruling, means it is deleted
+    //  rather than left as a trap for the next person who wonders why it never fires. The admin
+    //  conversation is a SCAFFOLD (`kind: "admin-setup"`), opened and grounded from its record.
     void send(displayText, prompt, referenceSource);
     setValue("");
   };
@@ -1018,6 +1200,17 @@ export function Chat({ params = {} }: ChatProps) {
   const slash = value.startsWith("/");
   const skills = slash ? commands.querySkills(value) : [];
 
+  // F66 · THE COMPOSER SAYS WHAT IS HAPPENING. The step line lives up in the transcript, which
+  // scrolls away on a long turn — so the state also sits beside the stop button, where the reader's
+  // hand already is: "working · 18 steps · entity_upsert". Cleared the moment the turn completes.
+  const liveOps = busy ? (turns[turns.length - 1] as AgentTurn | undefined)?.ops ?? [] : [];
+  const liveStep = liveOps.length ? liveOps[liveOps.length - 1] : null;
+  const liveLabel = liveStep ? (liveStep.label.split(" · ").pop() ?? liveStep.label) : "";
+  const liveState = busy
+    ? ["working", liveOps.length ? `${liveOps.length} step${liveOps.length === 1 ? "" : "s"}` : "", liveLabel]
+        .filter(Boolean).join(" · ")
+    : "";
+
   const composer = (
     <>
       {slash && skills.length > 0 && (
@@ -1030,7 +1223,7 @@ export function Chat({ params = {} }: ChatProps) {
         onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
-        {(contextRef || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
+        {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
                 sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
@@ -1050,7 +1243,7 @@ export function Chat({ params = {} }: ChatProps) {
             ) : null}
             {/* B4 carve: the meeting focus is ONE chip — `Preparing · Title ×` — never a mono
                 uppercase label plus a second raw-id Focus chip for the same meeting. */}
-            {contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
+            {advertiseFocus && contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
                 <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
@@ -1064,14 +1257,14 @@ export function Chat({ params = {} }: ChatProps) {
                     style={{ background: "none", border: "none", color: mode.color, opacity: 0.7, cursor: "pointer", display: "flex", padding: 2, flex: "none" }}><Icon name="x" size={10} /></button>
                 </span>
               );
-            })() : contextRef ? (
+            })() : advertiseFocus && contextRef ? (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <ReferenceChip refToken={contextRef} />
                 <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
               </>
             ) : null}
-            {!contextRef && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
+            {(!advertiseFocus || !contextRef) && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: bundleFocus.kind === "workspace" ? "var(--blue)" : "var(--t2)", background: bundleFocus.kind === "workspace" ? "var(--bluebg)" : "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "1px 7px" }}>
@@ -1136,7 +1329,14 @@ export function Chat({ params = {} }: ChatProps) {
               : <Icon name="mic" size={15} />}
           </button>
           {busy
-            ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
+            ? <>
+              <span data-live-state title={liveState}
+                style={{ flex: "0 1 auto", minWidth: 0, marginRight: 8, fontFamily: "var(--mono)", fontSize: 11,
+                  color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {liveState}
+              </span>
+              <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
+            </>
             : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
         </div>
       </div>
@@ -1145,16 +1345,22 @@ export function Chat({ params = {} }: ChatProps) {
 
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
-      <ChatConversation turns={turns} busy={busy || loading} empty={
-        !loading && minutesOnly() && session.startsWith("org-setup")
-          // The org-setup opener is ONE profound question standing in the void — centered, spare.
-          ? <div style={{ minHeight: "calc(100vh - 260px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", maxWidth: 520, margin: "0 auto", padding: "0 22px" }}>
-              <div style={{ fontSize: 34, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.02em", lineHeight: 1.25 }}>{GLOBAL_SETUP_GREETING}</div>
-              <div style={{ fontSize: 14.5, color: "var(--t2)", lineHeight: 1.6, marginTop: 16, maxWidth: 440 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
-            </div>
-          : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
-          ? minutesEmptyGreeting(session)
-          : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />
+      {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
+          research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
+          admin onboarding, reachable only from an `org-setup` session the rail's own seeding
+          planted, and it promised the reader a research step that does not exist. The founder met
+          it in a chat he never made — *"I explain this as stale code."*
+          What is left renders the meeting greeting when there IS a meeting, and otherwise renders
+          nothing but whatever the host put in `emptyExtra`. */}
+      <ChatConversation turns={turns} busy={busy || loading} surface={surfaceOf(session, activeTab)} empty={
+        <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
+            {loading ? "Loading conversation…" : (minutesOnly()
+              ? minutesEmptyGreeting(session)
+              : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}
+            {/* NOT while the history is still loading: a chip that appears and then vanishes under
+                an arriving conversation is worse than one that arrives a beat late. */}
+            {!loading && emptyExtra}
+          </div>} />
     </AgentWindow>
   );
 }

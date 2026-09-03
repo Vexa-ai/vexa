@@ -14,13 +14,17 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
+from ..lifecycle.machine import dominant_completion_reason
 from ..sessions import new_session
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
+    MeetingStopped,
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
+    _archive_completion,
+    _stopped_reopen_detail,
     reconcile_grace_for_status,
 )
 
@@ -95,6 +99,27 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def find_active_rows(self, user_id, platform, native_meeting_id) -> list:
+        """Every non-terminal row for (user, platform, native), newest first — the user-stop's
+        eviction set. ``stopping`` is included: it is still non-terminal, and the caller
+        de-duplicates on ``data.stop_requested``, not on status."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                    Meeting.status.notin_(("completed", "failed")),
+                )
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            )
+            return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
+
     async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
         from sqlalchemy import select
 
@@ -130,6 +155,17 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def get_meeting(self, meeting_id) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            m = (
+                await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+            ).scalars().first()
+            return _row_to_dict(m) if m else None
+
     async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
@@ -138,14 +174,29 @@ class SqlAlchemyMeetingRepo:
 
         async with self._session_factory() as db:
             m = (
-                await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+                await db.execute(
+                    select(Meeting).where(Meeting.id == meeting_id).with_for_update()
+                )
             ).scalars().first()
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            # Last line of defense behind the service-level 409: a row the USER stopped is never
+            # reopened in place, by any caller. Under the row lock, so a stop committing concurrently
+            # is either visible here or lands on a row this txn has already moved.
+            if data.get("stop_requested"):
+                raise MeetingStopped(_stopped_reopen_detail(meeting_id))
+            # The same last line of defense for deletion: a row whose artifacts are erased, or being
+            # erased, is not reusable. Under the same lock, so a deletion committing concurrently is
+            # either visible here or lands on a row this txn has already moved.
+            deletion_pending = data.get("artifact_deletion") or any(
+                r.get("deletion_pending") for r in (data.get("recordings") or [])
+                if isinstance(r, dict)
+            )
+            if m.status not in ("completed", "failed") or deletion_pending:
+                raise DuplicateMeeting("Terminal meeting is no longer reusable")
             m.status = "requested"
             m.end_time = None
             m.bot_container_id = None
-            data = dict(m.data) if isinstance(m.data, dict) else {}
-            for k in ("completion_reason", "failure_stage"):
-                data.pop(k, None)
+            _archive_completion(data)
             for key, value in (data_patch or {}).items():
                 if value is None:
                     data.pop(key, None)
@@ -489,6 +540,12 @@ class SqlAlchemyMeetingRepo:
             )).scalars().first()
             if claimable is not None:
                 planned = dict(claimable.data) if isinstance(claimable.data, dict) else {}
+                # A THIS-REQUEST dispatch supersedes an earlier stop ON THE PLAN. Legacy zombie rows
+                # exist (a scheduled row a rev-193 DELETE flagged but never terminalized), and
+                # claiming one with the flag still on it would make the spawn fence abort the very
+                # bot the user just asked for. Post-fix a stop terminalizes the planned row, so it is
+                # no longer claimable at all — this only ever meets rows an older build wrote.
+                planned.pop("stop_requested", None)
                 claimable.status = "requested"
                 claimable.end_time = None
                 claimable.bot_container_id = None
@@ -526,6 +583,25 @@ class SqlAlchemyMeetingRepo:
             rows = (await db.execute(
                 select(Meeting).where(
                     Meeting.status == "scheduled",
+                    Meeting.platform_specific_id.isnot(None),
+                    Meeting.platform != "unknown",
+                )
+            )).scalars().all()
+            return [_row_to_dict(m) for m in rows]
+
+    async def list_live_meetings(self) -> list[dict]:
+        """Every row a bot currently OWNS (``auto_join.LIVE_STATUSES``) with a joinable link — the
+        auto-join sweep's duplicate-dispatch guard reads it to answer "is someone already in this
+        room?" for a due row that a sibling row (manual send, un-adopted calendar import) covers."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+        from .auto_join import LIVE_STATUSES
+
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting).where(
+                    Meeting.status.in_(LIVE_STATUSES),
                     Meeting.platform_specific_id.isnot(None),
                     Meeting.platform != "unknown",
                 )
@@ -817,7 +893,10 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
-    async def fail_meeting(self, *, meeting_id, reason, failure_stage="requested") -> Optional[dict]:
+    async def fail_meeting(
+        self, *, meeting_id, reason, failure_stage="requested",
+        completion_reason="start_failed", data=None,
+    ) -> Optional[dict]:
         """Mark a meeting ``failed`` BY ID (no session needed) — the spawn-time failure path (#718).
 
         A workload dead on arrival (kernel ``start_failed``) is refused BEFORE the ``MeetingSession``
@@ -838,9 +917,15 @@ class SqlAlchemyMeetingRepo:
                 return None
             m.status = "failed"
             merged = dict(m.data) if isinstance(m.data, dict) else {}
-            merged["failure_stage"] = failure_stage
+            merged.update(dict(data or {}))
+            # A PLANNED row cancelled before any bot existed has NO stage — inventing one would
+            # claim a spawn that never happened.
+            if failure_stage is not None:
+                merged["failure_stage"] = failure_stage
             merged["failure_reason"] = reason
-            merged["completion_reason"] = "start_failed"
+            merged["completion_reason"] = dominant_completion_reason(
+                completion_reason, stop_requested=bool(merged.get("stop_requested"))
+            )
             m.data = merged
             flag_modified(m, "data")
             now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -910,7 +995,8 @@ class HttpRuntimeClient:
         return resp.json()
 
 
-def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None):
+def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None,
+                            fetch_bot_context=None):
     """Construct the bot-spawn router with real SQLAlchemy + httpx runtime adapters from env."""
     import httpx
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -926,4 +1012,5 @@ def build_production_router(*, database_url: Optional[str] = None, runtime_api_u
     engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     http = httpx.AsyncClient(timeout=30.0)
-    return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url))
+    return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url),
+                        fetch_bot_context=fetch_bot_context)

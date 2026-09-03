@@ -1,0 +1,8 @@
+{
+  "contract": "routes.v1",
+  "domain": "workspaces",
+  "owner": "core/workspaces",
+  "edge": "gateway",
+  "note": "Empty on registration (step 0, PRD decision 47). Hosted as a library core/agent mounts (P10) — no independent routes of its own yet; the 55 workspace routes carved from core/agent/control_plane/routers/workspaces.py move here in a later step.",
+  "routes": []
+}

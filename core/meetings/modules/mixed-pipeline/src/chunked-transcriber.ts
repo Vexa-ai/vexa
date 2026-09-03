@@ -1048,9 +1048,15 @@ export class ChunkedTranscriber {
     // Map whisper segments (relative to spanStart) to audio time.
     const lang = this.cb.language || result!.language || 'en';
     const mapped = gated.map((ws) => {
-      const startMs = spanStart + (ws.start || 0) * 1000;
-      const rawEndMs = spanStart + (ws.end || 0) * 1000;
-      const endMs = Math.min(publishEnd, rawEndMs || publishEnd) || publishEnd;
+      const relativeStart = ws.start || 0;
+      const relativeEnd = ws.end || 0;
+      const startMs = spanStart + relativeStart * 1000;
+      // Provider timestamps are optional. A segment without a positive relative
+      // span represents the submitted speech window and ends at its committed edge.
+      const rawEndMs = relativeEnd > relativeStart
+        ? spanStart + relativeEnd * 1000
+        : publishEnd;
+      const endMs = Math.min(publishEnd, rawEndMs) || publishEnd;
       return {
         text: ws.text.trim(),
         startMs,

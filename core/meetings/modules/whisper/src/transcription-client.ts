@@ -35,6 +35,8 @@ export interface TranscriptionClientConfig {
   maxRetries?: number;
   /** Base delay between retries in ms. Default: 1000 */
   retryDelayMs?: number;
+  /** Per-request timeout in ms. Default: 30000 */
+  requestTimeoutMs?: number;
   /** Sample rate of input audio. Default: 16000 */
   sampleRate?: number;
   /** Max speech segment duration in seconds. Whisper forces a segment split at this length.
@@ -95,10 +97,12 @@ export class TranscriptionClient {
   private apiToken: string | undefined;
   private maxRetries: number;
   private retryDelayMs: number;
+  private requestTimeoutMs: number;
   private sampleRate: number;
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
   private model: string;
+  private responseFormat: 'verbose_json' | 'json' = 'verbose_json';
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint
     this.serviceUrl = config.serviceUrl.replace(/\/+$/, '');
@@ -108,6 +112,7 @@ export class TranscriptionClient {
     this.apiToken = config.apiToken;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryDelayMs = config.retryDelayMs ?? 1000;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
     this.sampleRate = config.sampleRate ?? 16000;
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
@@ -132,6 +137,12 @@ export class TranscriptionClient {
         const fault: TranscriptionError = err instanceof TranscriptionError
           ? err
           : new TranscriptionError(err?.name === 'AbortError' ? 'timeout' : 'unavailable', undefined, err?.message, true);
+        if (fault.kind === 'bad_request' && this.responseFormat === 'verbose_json' && /verbose_json/i.test(fault.detail ?? '')) {
+          log('[TranscriptionClient] backend rejected verbose_json; falling back to json for this and later requests');
+          this.responseFormat = 'json';
+          attempt--; // Capability negotiation does not consume a configured retry.
+          continue;
+        }
         const isLastAttempt = attempt === this.maxRetries;
 
         if (fault.retryable && !isLastAttempt) {
@@ -180,7 +191,7 @@ export class TranscriptionClient {
     parts.push(Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
-      `verbose_json\r\n`
+      `${this.responseFormat}\r\n`
     ));
 
     // Language part (if specified)
@@ -239,7 +250,7 @@ export class TranscriptionClient {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
     try {
       const response = await fetch(this.serviceUrl, {

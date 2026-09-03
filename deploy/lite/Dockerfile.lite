@@ -193,10 +193,15 @@ COPY core/agent/control_plane   /app/agent/control_plane
 COPY core/agent/worker          /app/agent/worker
 COPY core/agent/llm             /app/agent/llm
 COPY core/agent/contracts       /app/agent/contracts
-COPY core/agent/workspace-seeds /app/agent/workspace-seeds
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2) — both control_plane and
+# worker import them as `workspaces.shared.<module>`.
+COPY core/workspaces/__init__.py /app/agent/workspaces/__init__.py
+COPY core/workspaces/shared     /app/agent/workspaces/shared
+COPY behavior/workspaces /app/agent/workspace-seeds
 COPY core/agent/tools-seed      /app/agent/tools-seed
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json /app/agent/meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json      /app/agent/agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json /app/agent/workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json            /app/agent/agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                /app/agent/agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json          /app/agent/agent/contracts/routine.v1/routine.schema.json
@@ -244,7 +249,7 @@ ENV LOG_LEVEL=info \
     TRANSCRIPTION_SERVICE_URL= TRANSCRIPTION_SERVICE_TOKEN= \
     MINIO_ENDPOINT= MINIO_ACCESS_KEY= MINIO_SECRET_KEY= MINIO_BUCKET=vexa MINIO_SECURE=false \
     VEXA_AGENT_DEFAULT_SUBJECT=u_live VEXA_DISPATCH_SIGNING_KEY=dev-dispatch-signing-key \
-    VEXA_BOT_API_KEY= VEXA_AGENT_MODEL= VEXA_MEETING_MODEL= HOST_CLAUDE_CREDENTIALS= \
+    VEXA_BOT_API_KEY= VEXA_AGENT_MODEL= HOST_CLAUDE_CREDENTIALS= \
     ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= ANTHROPIC_BASE_URL= ANTHROPIC_MODEL= \
     ANTHROPIC_DEFAULT_OPUS_MODEL= ANTHROPIC_DEFAULT_SONNET_MODEL= ANTHROPIC_DEFAULT_HAIKU_MODEL= \
     VEXA_PUBLIC_API_URL=http://localhost:8056 VEXA_API_KEY= \

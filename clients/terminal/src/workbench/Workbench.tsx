@@ -26,6 +26,7 @@ import { Chat } from "../surfaces/chat";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
+import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
 import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 import { meetingsOnly, minutesOnly } from "../app/mode";
@@ -288,7 +289,7 @@ export function Workbench() {
   // persisted "sessions" → the default), so `activeList` is never "sessions" and the chat-only branch
   // never renders. Kept (rather than ripping out its render sites) to avoid a risky pane refactor the
   // owner didn't ask for; the `=== "sessions"` guards below are dead but harmless.
-  const meetOnly = meetingsOnly();
+  const meetOnly = meetingsOnly() || process.env.NEXT_PUBLIC_NO_CHAT === "1";
   const chatOnly = !meetOnly && activeList === "sessions";
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
@@ -326,7 +327,7 @@ export function Workbench() {
 
   // A `?meeting=<platform>/<native>` deep-link (clicked in a meeting note, or the cold-load URL) →
   // resolve the native id to its meeting row and open the canvas (transcript + recording).
-  const openMeetingByRef = useCallback((mid: string) => {
+  const openMeetingByRef = useCallback((mid: string, beside = false) => {
     // `?meeting=<id>` deep-link — the meeting ROW id. Open its canvas directly (the same tab a click
     // in the meetings list opens); the canvas fetches its transcript/recording by that id.
     const ref = mid.trim();
@@ -351,7 +352,8 @@ export function Workbench() {
       if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
       const stashedTitle = (() => { try { const t = localStorage.getItem("vexa.openMeetingTitle"); localStorage.removeItem("vexa.openMeetingTitle"); return t; } catch { return null; } })();
       // the emailed name wins — the row often only knows the platform·code fallback
-      layout.openTab({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"), kind: "meeting", params: { meetingId: id } });
+      const openIt = beside ? layout.openTabBeside.bind(layout) : layout.openTab.bind(layout);
+      openIt({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"), kind: "meeting", params: { meetingId: id } });
     };
     // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
     // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
@@ -434,29 +436,71 @@ export function Workbench() {
   //   nothing shared (fresh dock)       → the user's own README-onboarding (or a known live meeting)
   // `fresh` = the dock restored no tabs (a genuine first landing). A returning user with a saved layout
   // gets ONLY the explicit shared-meeting arm (they clicked a share link) — never a surprise re-pin.
-  // MINUTES admin setup: ?setup=global stashed → fire the org-tier conversation. The agent is
-  // PROACTIVE: it reads what _global already holds, infers from the admin's own identity, states
-  // hypotheses, and asks only what it cannot know. Its worker mounts _global rw (admin subjects).
-  useEffect(() => {
-    // Consume the stash ONLY when the dispatch actually fires — strict-mode double-mount runs
-    // this effect twice with a cleanup in between, and an eager consume + timer-clear eats it.
-    let stashed = false;
-    try { stashed = !!localStorage.getItem("vexa.setupGlobal"); } catch { /* ignore */ }
-    if (!stashed || !minutesOnly()) return;
-    const t = setTimeout(() => { try { localStorage.removeItem("vexa.setupGlobal"); } catch { /* ignore */ }
-      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
-      "[global-setup] You are running the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow it exactly, including its opening and research-first rules. " +
-      "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit your edits there. " +
-      "Be PROACTIVE: read what _global already holds, look at my identity and this deployment for clues, and open by TELLING me " +
-      "what you think this organisation is — then ask the few questions the file names, one at a time, confirm-or-correct. " +
-      "Write the answers into _global/README.md as you learn them, terse and factual." } })); }, 1200);
-    return () => clearTimeout(t);
-  }, []);
-
   const firstViewDone = useRef(false);
+  // The meeting id carried by the URL (`/meetings/<id>`), captured at FIRST RENDER — before any effect
+  // (including the URL-sync effect below) can rewrite the address bar. This is the durable reference:
+  // a hard reload, a pasted link, or a brand-new session all arrive here.
+  const routeMeetingId = useRef<string | null>(
+    typeof window === "undefined" ? null : meetingIdFromPath(window.location.pathname),
+  );
+
+  // ── URL SYNC — the open meeting is reflected in the address bar, so what's on screen is always
+  // referenceable. `replaceState` (not push): in-app navigation keeps its own history (Escape /
+  // Alt+Left via layout.goBack), and we never want a stack of dockview states in the browser's.
+  // Only the two shapes we own (`/`, `/meetings/<id>`) are ever rewritten; query + hash are preserved
+  // so an in-flight ?invite= / ?tshare= round-trip is untouched.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mid = activeTab?.kind === "meeting" ? String((activeTab.params as { meetingId?: unknown })?.meetingId ?? "") : "";
+    const cur = window.location.pathname;
+    if (!isOwnedPath(cur)) return;
+    const next = mid ? meetingPath(mid) : "/";
+    if (next === cur) return;
+    try { window.history.replaceState(window.history.state, "", next + window.location.search + window.location.hash); }
+    catch { /* history unavailable (sandboxed frame) — the in-app path still works */ }
+  }, [activeTab]);
+
   const resolveFirstView = async (fresh: boolean) => {
     // A `?meeting=<platform>/<native>` deep-link (App.tsx stashed the ref) — open that meeting's canvas
     // directly. Explicit navigation wins over the plan below.
+    try {
+      // A `?view=` composed layout (App.tsx stashed it): open every listed pane, in order —
+      // the last one keeps focus. The composition is the sender's to decide.
+      const composed = localStorage.getItem("vexa.composedView");
+      if (composed) {
+        localStorage.removeItem("vexa.composedView");
+        // the saved-dock restore lands after this resolver — defer so the composition is
+        // applied ON TOP of (not under) whatever the dock brings back
+        await new Promise((r) => setTimeout(r, 450));
+        // the composition is authoritative: the sender decided what this view IS, so the
+        // restored dock yields to it entirely
+        try { apiRef.current?.clear(); } catch { /* noop */ }
+        // the optimal viewer frame (founder-arranged): list rail collapsed, the reading pane
+        // takes ~2/3, the beside pane the rest
+        if (!layout.store.getState().leftCollapsed) layout.toggleLeft();
+        let first = true;
+        for (const pane of composed.split(",")) {
+          const [kind, ...rest] = pane.split(":");
+          const ref = rest.join(":");
+          const openDoc = first ? layout.openTab.bind(layout) : layout.openTabBeside.bind(layout);
+          if (kind === "meeting" && ref) openMeetingByRef(ref, !first);
+          else if (kind === "file" && ref) {
+            const base = ref.split("/").pop() || ref;
+            try { openDoc({ id: `doc:${ref}`, title: base, kind: "doc", params: { path: ref } }); } catch { /* noop */ }
+          } else if (kind === "readme") {
+            openDoc({ id: "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md" } });
+          } else { continue; }
+          first = false;
+        }
+        try {
+          const api = apiRef.current;
+          if (api && api.groups.length >= 2) {
+            api.groups[api.groups.length - 1].api.setSize({ width: Math.round(api.width * 0.36) });
+          }
+        } catch { /* noop */ }
+        return;
+      }
+    } catch { /* noop */ }
     try {
       const mref = localStorage.getItem("vexa.openMeetingRef");
       if (mref) { localStorage.removeItem("vexa.openMeetingRef"); openMeetingByRef(mref); return; }
@@ -485,7 +529,10 @@ export function Workbench() {
     };
     const openMeeting = (mid: string, reveal: boolean) => {
       if (reveal && !meetOnly) layout.setActiveList("meetings");
-      layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
+      // A meeting reached by URL is just "Meeting" until the row resolves; one reached by a share link
+      // is labelled as such. Either way the tab id is the same, so it de-dupes with a restored tab.
+      const title = mid === routeMeetingId.current && !sharedMeetingId ? "Meeting" : "Shared meeting";
+      layout.openTab({ id: `meeting:${mid}`, title, kind: "meeting", params: { meetingId: mid } });
     };
     // `forceKnowledge` = land ON the Knowledge section unconditionally (an accepted invite is explicit —
     // the shared workspace's tree must show, even for a returning user whose saved rail was Meetings/etc).
@@ -497,7 +544,7 @@ export function Workbench() {
       layout.openTab({ id: slug ? `doc:${slug}:README.md` : "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md", slug } });
     };
 
-    const plan = firstViewPlan({ sharedMeetingId, acceptedSlug, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
+    const plan = firstViewPlan({ sharedMeetingId, routeMeetingId: routeMeetingId.current, acceptedSlug, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
     switch (plan.kind) {
       case "meeting-and-workspace": openMeeting(plan.meetingId, false); pinReadme(plan.slug, !!acceptedSlug); break;  // README pinned last → focused
       case "meeting":               openMeeting(plan.meetingId, true); break;

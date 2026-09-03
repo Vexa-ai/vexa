@@ -15,6 +15,15 @@
       "description": "app log level"
     },
     {
+      "key": "VEXA_BUILD_SHA",
+      "class": "defaulted",
+      "default": "unknown",
+      "description": "the build this CONTAINER is running, stamped by whoever started it and reported verbatim by GET /api/version. Deliberately NOT derived from the source tree: the answer has to be true of the container, and a container knows nothing about the repo it was built from. The blue/green deploy sets it to the tag it is deploying (PRD decision 39); unset reads as \"unknown\", so an unstamped deployment simply never offers the terminal's reload bar",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_RUNTIME_API_URL",
       "class": "defaulted",
       "default": "http://runtime-api:8090",
@@ -66,42 +75,51 @@
     {
       "key": "VEXA_MOUNTS",
       "class": "defaulted",
-      "default": "(unset — derived per dispatch: the private baseline only)",
-      "description": "the ordered THREE-TIER mount STACK the dispatch stamps into the worker spec — a JSON list [{slug,path,role,write,primary}], one entry per mount: _global (RO) + the active workspaces (RW) + _system (RW) (AMENDMENT 4 / WP-A1.1). Runtime-injected per dispatch, never a deploy surface",
+      "default": "(unset \u2014 derived per dispatch: the private baseline only)",
+      "description": "the ordered THREE-TIER mount STACK the dispatch stamps into the worker spec \u2014 a JSON list [{slug,path,role,write,primary}], one entry per mount: _global (RO) + the active workspaces (RW) + _system (RW) (AMENDMENT 4 / WP-A1.1). Runtime-injected per dispatch, never a deploy surface",
       "targets": []
     },
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
       "class": "defaulted",
-      "default": "(unset — no _global mount; the stack degrades to the active set + _system)",
-      "description": "host path / repo dir of the platform-owned GLOBAL SYSTEM workspace (_global) mounted READ-ONLY into EVERY worker — behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Absent → the _global tier is skipped",
-      "targets": ["compose", "helm"]
+      "default": "(required for agent dispatch)",
+      "description": "host path / repo dir of the mandatory GLOBAL SYSTEM workspace (_global), first in EVERY worker stack \u2014 behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Missing or invalid configuration fails dispatch closed",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_GLOBAL_ADMIN_SUBJECTS",
       "class": "defaulted",
-      "default": "(unset — nobody writes _global)",
-      "description": "comma-separated user ids whose workers mount _global READ-WRITE — the admin setup conversation is the one sanctioned writer of the org tier; all other subjects mount it ro",
-      "targets": ["compose", "helm"]
+      "default": "(unset \u2014 nobody writes _global)",
+      "description": "comma-separated user ids whose workers mount _global READ-WRITE \u2014 the admin setup conversation is the one sanctioned writer of the org tier; all other subjects mount it ro",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_REF",
       "class": "defaulted",
-      "default": "(unset — mount HEAD/main)",
+      "default": "(unset \u2014 mount HEAD/main)",
       "description": "pin the _global mount to a ref (branch/tag/sha) for safe rollout of a global behaviour change; empty = mount HEAD (AMENDMENT 4, Q17)",
-      "targets": ["compose", "helm"]
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_PRINCIPAL_NAME",
       "class": "defaulted",
-      "default": "(unset — defaults to the dispatch subject)",
+      "default": "(unset \u2014 defaults to the dispatch subject)",
       "description": "the authenticated human principal's name the dispatch stamps for per-mount commit attribution (D4: git author = principal, committer = platform). Runtime-injected per dispatch",
       "targets": []
     },
     {
       "key": "VEXA_PRINCIPAL_EMAIL",
       "class": "defaulted",
-      "default": "(unset — defaults to <subject>@vexa.local)",
+      "default": "(unset \u2014 defaults to <subject>@vexa.local)",
       "description": "the authenticated human principal's email for per-mount commit attribution (D4). Runtime-injected per dispatch",
       "targets": []
     },
@@ -127,7 +145,7 @@
       "key": "VEXA_WS_WRITE_LOCK_TIMEOUT_S",
       "class": "defaulted",
       "default": "30",
-      "description": "Lane W: seconds a turn-commit waits on the per-shared-workspace write lock (cross-process flock serializing concurrent members' commits, shared/adapters.py) before raising WorkspaceBusyError — bounded so a wedged holder can never stall a workspace forever",
+      "description": "Lane W: seconds a turn-commit waits on the per-shared-workspace write lock (cross-process flock serializing concurrent members' commits, shared/adapters.py) before raising WorkspaceBusyError \u2014 bounded so a wedged holder can never stall a workspace forever",
       "targets": []
     },
     {
@@ -154,29 +172,17 @@
     {
       "key": "VEXA_AGENT_MODEL",
       "class": "defaulted",
-      "default": "(subscription/provider default)",
-      "description": "the claude model alias/name for chat + workspace turns"
-    },
-    {
-      "key": "VEXA_MEETING_MODEL",
-      "class": "defaulted",
-      "default": "(subscription/provider default)",
-      "description": "the streaming/meeting-copilot model label"
-    },
-    {
-      "key": "VEXA_LLM_PROVIDER",
-      "class": "defaulted",
-      "default": "(openai-compat)",
-      "description": "llm-module CompletionPort adapter key forwarded into workers by dispatch",
+      "default": "(harness CLI default)",
+      "description": "the model id every agent turn runs on \u2014 the chat turn and the write-back phase alike; the key Settings \u2192 Models writes and the dispatch stamps into every worker. Empty means the harness's own default, which exists only for the CLI harnesses: the openai-agent harness has no default host and no default model and refuses the turn with a named-key error rather than asking an endpoint for an empty model",
       "targets": [
         "compose"
       ]
     },
     {
-      "key": "VEXA_LLM_MODEL",
+      "key": "VEXA_RUNNER",
       "class": "defaulted",
-      "default": "(adapter default)",
-      "description": "llm-module deployment-default model forwarded into workers by dispatch",
+      "default": "claude-code",
+      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the WORKER reads from its dispatch-stamped env: #1415 removed them from the runtime's forward list, so they travel by stamp and never by forwarding",
       "targets": [
         "compose"
       ]
@@ -191,17 +197,19 @@
       ]
     },
     {
-      "key": "VEXA_MEETING_IDLE_TIMEOUT_SEC",
+      "key": "VEXA_MODEL_BASE_URL_ALLOW",
       "class": "defaulted",
-      "default": "14400",
-      "description": "live-meeting copilot idle timeout (s)",
-      "targets": []
+      "default": "(empty \u2014 the deployment\u2019s own gateway host(s) plus api.anthropic.com, openrouter.ai and the CCC box)",
+      "description": "operator allow-list for the base_url a SUBJECT may pin under Settings \u2192 Models (comma-separated host globs). A subject-chosen endpoint is an outbound destination picked by a non-operator and the worker carries a model credential to it, so anything unmatched is refused at dispatch with a friction record. Loopback/link-local/private addresses and single-label docker service names (redis, admin-api) need an EXACT literal entry \u2014 a wildcard never reaches the deployment\u2019s own network",
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_CHAT_IDLE_TIMEOUT_SEC",
       "class": "defaulted",
       "default": "900",
-      "description": "chat worker warm-serve window after its last turn (s) — a follow-up inside it lands on the warm worker",
+      "description": "chat worker warm-serve window after its last turn (s) \u2014 a follow-up inside it lands on the warm worker",
       "targets": []
     },
     {
@@ -251,10 +259,29 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "DOCKER-HOST path to a claude credentials JSON. agent-api does not use it itself \u2014 the RUNTIME bind-mounts it into every spawned worker at /root/.claude/.credentials.json (see the runtime's config.v1) \u2014 but the agent plane's /health surfaces whether ANY model-credential path is configured, because that is where the operator looks when chat fails",
+      "description": "DOCKER-HOST path to a claude credentials JSON. agent-api does not use it itself \u2014 the RUNTIME bind-mounts it into every spawned worker at /root/.claude/.credentials.json (see the runtime's config.v1) \u2014 but the agent plane's /health surfaces whether ANY model-credential path is configured, because that is where the operator looks when chat fails, and Settings \u2192 Models \"Test\" reads the mirrored file. PAIR IT WITH HOST_CLAUDE_DIR: the single-FILE mirror is inode-pinned and goes stale on the CLI's next token refresh",
       "targets": [
         "compose",
         "lite"
+      ]
+    },
+    {
+      "key": "HOST_CLAUDE_DIR",
+      "class": "defaulted",
+      "default": "(unset \u2014 only the legacy single-file mirror is available)",
+      "description": "DOCKER-HOST path of the claude config DIRECTORY (~/.claude), mirror-mounted READ-ONLY at /var/lib/vexa/host-claude. Settings \u2192 Models \"Test\" (control_plane.config_test) resolves .credentials.json inside it PER CALL. Same credential as HOST_CLAUDE_CREDENTIALS in the shape that survives a refresh: the CLI replaces the file via rename(2) (NEW inode) and a single-FILE bind stays pinned to the original inode, so this surface reported an already-refreshed token as expired for 32h (dogfood, 2026-08-31). Set it to the parent of HOST_CLAUDE_CREDENTIALS",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "HOST_CODEX_CREDENTIALS",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "Path to a codex subscription auth.json delivered into every spawned worker \u2014 compose bind-mounts it; on k8s/helm the runtime mounts it from a Secret (RUNTIME_K8S_SECRET_MOUNTS) and this key is set on agent-api purely so the model-credential capability reads configured (same surfacing-only semantics as HOST_CLAUDE_CREDENTIALS)",
+      "targets": [
+        "compose"
       ]
     },
     {
@@ -277,25 +304,6 @@
       "capability": "model_inference",
       "secret": true,
       "description": "claude CLI subscription OAuth token \u2014 the env-delivered credential path: dispatch stamps it (MODEL_AUTH_ENV_ALLOWLIST) into every worker spec env, the k8s/helm counterpart of the HOST_CLAUDE_CREDENTIALS mount"
-    },
-    {
-      "key": "VEXA_LLM_API_KEY",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "llm-module completion-adapter credential \u2014 dispatch stamps it into every worker spec env (adapters fall back ANTHROPIC_AUTH_TOKEN \u2192 ANTHROPIC_API_KEY when unset)",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
-      "key": "VEXA_LLM_BASE_URL",
-      "class": "defaulted",
-      "default": "(unset \u2014 adapter default; openai-compat requires one via this or ANTHROPIC_BASE_URL)",
-      "description": "llm-module completion endpoint \u2014 an endpoint selector, not a credential alternative; dispatch stamps it into every worker spec env",
-      "targets": [
-        "compose"
-      ]
     },
     {
       "key": "ANTHROPIC_BASE_URL",
@@ -324,10 +332,56 @@
       ]
     },
     {
+      "key": "INTERNAL_API_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "THE internal-tier shared secret \u2014 one name across every service (the compose/helm secret key). agent-api both PRESENTS it (Lane M: X-Internal-Secret on the admin-api membership-index edge) and BELIEVES it: `_internal_caller` compares this value, and gate 0 of the meeting room is by the code's own statement the trust boundary on who is in the room. Unset it used to mean `_internal_caller` simply returned False; the boot now refuses instead, because a half-configured internal tier is not a degrade an operator can see. Read through an alias so the deprecated VEXA_-prefixed spelling still works for one release (shared/config.py).",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
-      "default": "(unset)",
-      "description": "Lane M: X-Internal-Secret for the admin-api membership-index internal edge (same value the gateway uses)",
+      "default": "(unset \u2014 DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
+      "secret": true,
+      "description": "DEPRECATED spelling of INTERNAL_API_SECRET. One secret had three names (INTERNAL_API_SECRET in compose/helm and in admin-api/gateway/meeting-api, VEXA_INTERNAL_API_SECRET here and in the terminal, VEXA_INTERNAL_SECRET in flows) and the drift is what let a placeholder survive on one spelling's refusal list and not the others (F95). No deploy surface sets it on agent-api any more; it is still READ so an operator mid-upgrade is warned rather than 401ed. Delete once the terminal reads the canonical name too.",
+      "targets": [],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
+      "key": "VEXA_ADMIN_API_TOKEN",
+      "class": "defaulted",
+      "default": "(unset \u2014 the post-meeting room resolves no participant and mounts ZERO desks)",
+      "description": "admin-api's ADMIN token, used for ONE question: resolve a meeting participant's email address to a subject for the post-meeting room (control_plane.meeting_room). The narrow door does not exist yet \u2014 agent-api's internal-secret tier on admin-api exposes no by-email lookup, and GET /admin/users/email/{email} sits behind this much broader credential (it can also create and patch users). Empty by DEFAULT and the room degrades to ZERO desks without it, never to matching a person by name. Delete this key once admin-api serves GET /internal/users/by-email/{email} returning only {id}: agent-api already prefers that route",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MEETINGS_DB_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 a first-visit scaffold reports no invited meetings rather than guessing)",
+      "description": "Read-only DSN for the meetings database, used for ONE question: which meetings is this email address invited to, read off data.attendees. It is the only record that knows somebody was invited BEFORE they ever signed in, which is exactly the case a first visit is \u2014 an owner-keyed lookup answers 'none' for the person this exists to serve. Unset, invited_meetings is absent from the scaffold and the opening says nothing about meetings rather than asserting there are none; emptiness and ignorance are different sentences to somebody reading their first screen. Delete this key once meeting-api serves an invited-by-address route, so agent-api stops holding a second database credential.",
       "targets": [
         "compose"
       ]
@@ -343,7 +397,7 @@
       "key": "TRANSCRIPTION_SERVICE_URL",
       "class": "defaulted",
       "default": "(unset)",
-      "description": "Settings→Models Test button: the deployment-default STT backend URL probed by GET /api/transcription/test when no user/global override exists (the same env floor bot_spawn falls back to in meeting-api; rides in via env_file .env). Empty → the test reports 'no backend configured'",
+      "description": "Settings\u2192Models Test button: the deployment-default STT backend URL probed by GET /api/transcription/test when no user/global override exists (the same env floor bot_spawn falls back to in meeting-api; rides in via env_file .env). Empty \u2192 the test reports 'no backend configured'",
       "targets": [
         "compose"
       ]
@@ -352,10 +406,329 @@
       "key": "TRANSCRIPTION_SERVICE_TOKEN",
       "class": "defaulted",
       "default": "(unset)",
-      "description": "SECRET — the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings→Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
+      "description": "SECRET \u2014 the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings\u2192Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "VEXA_UI_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 POST /internal/scaffolds refuses to mint)",
+      "description": "where a person's own terminal lives \u2014 the origin every scaffold link is built on (PRD \u00a75.5). Deliberately the SAME variable name the flows lane already reads (core/flows/src/flows_steps/common.py UI_URL): one deployment fact, one name, because two spellings of a host is how a link ends up naming somewhere the person cannot reach. Unset, the mint route answers 503 rather than returning a url with no origin \u2014 a mint is what a step checks BEFORE it sends, and VEXA_UI_URL being set nowhere is exactly how every deeplink the rig ever minted pointed at a port nothing serves (PRD \u00a73.3)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MCP_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 no MCP is attached to a worker; the pre-delegation behaviour)",
+      "description": "the vexa-control MCP endpoint a spawned chat worker connects to (e.g. https://rig.dev.vexa.ai/mcp). Set together with VEXA_MCP_DELEGATION_SECRET: either alone leaves the toolbelt OFF, because an endpoint with no credential and a credential with no endpoint are both unusable",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_SECRET",
+      "class": "defaulted",
+      "default": "(unset \u2014 delegation is OFF and no worker receives an MCP credential)",
+      "description": "the symmetric HS256 key agent-api SIGNS the per-dispatch MCP delegation token with and the vexa-control MCP VERIFIES with (shared.delegation). Empty must mean ABSENT, never 'signed with nothing' \u2014 a zero-length HMAC key would authenticate anyone who guessed the token format",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_SECRETS_KEY",
+      "class": "defaulted",
+      "default": "(empty \u2014 outside production a 0600 key is generated under the workspaces secrets root on first use, with a warning; in production an empty value is a boot refusal)",
+      "secret": true,
+      "description": "server-side key the credential store seals with (saved GitHub PAT + per-workspace deploy-key private halves). EMPTY GENERATES ONE BESIDE THE CIPHERTEXT, under the workspaces secrets root \u2014 enough against a stray read, nothing against a stolen volume or a backup. It was settable on no deployment surface, so no deployment ever set it and every deployment quietly took the weaker property while the docs asserted the stronger one (R-E08). It is on compose and helm now, and with VEXA_ENV=production an unset value is a refusal naming the fix rather than a silent downgrade",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_ENV",
+      "class": "defaulted",
+      "default": "development",
+      "description": "the deployment profile, spelled as the mcp and transcription services already spell it (`transcription/main.py`, `vexa_mcp/app.py`): anything but the exact word `production`, including unset, is a development posture. agent-api reads it in ONE place \u2014 the credential store, where production turns an unset VEXA_SECRETS_KEY from a generated key beside the ciphertext into a refusal (R-E08)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_TTL_SEC",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "lifetime of a minted MCP delegation token. It only has to outlast one dispatch's warm window, so it is deliberately short: a leaked worker env goes stale on its own rather than needing the human's own credential rotated",
+      "targets": []
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_TOKEN",
+      "class": "defaulted",
+      "default": "(unset \u2014 derived per dispatch: minted by the dispatcher, never configured)",
+      "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker writes it into its gitignored .claude/mcp.json as an Authorization header. Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_OWNER",
+      "class": "defaulted",
+      "default": "(unset \u2014 derived per dispatch: the subject the dispatch acts for)",
+      "description": "the PERSON this dispatch acts for \u2014 the quota and credential-brokerage axis, and the subject the worker's timeline preamble is scoped to (PRD decision 31). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_API_URL",
+      "class": "publish-edge",
+      "description": "flows' address \u2014 the domain this service HANDS DESK FACTS TO (desk.unscaffolded, claim.proposed) and reads the worker's read-only timeline preamble from. Declared as the publish edge because that is what it is: agent-api needs no answer from flows \u2014 the publishes are bounded at 2s and swallowed (control_plane/publish.py) and an absent timeline degrades a turn rather than failing it, so unset is the no-flows PROFILE and not a degraded state. NO DEFAULT, and the class forbids one for the right reason: a fallback address to publish to, invented by us, in a deployment that deliberately runs no such domain",
+      "targets": [
+        "compose"
+      ],
+      "publishes_events": [
+        "desk.unscaffolded",
+        "claim.proposed"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_TIMELINE_KEY",
+      "class": "defaulted",
+      "default": "(unset \u2014 no timeline block)",
+      "secret": true,
+      "description": "the READ-ONLY key that opens flows-api's GET /timeline and nothing else (flows_api._timeline_key). This is the one to set: VEXA_FLOWS_API_KEY is the OPERATOR key and would let every worker container submit and activate flows",
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_API_KEY",
+      "class": "publish-edge",
+      "secret": true,
+      "description": "flows-api's OPERATOR key, sent as X-Flows-Operator-Key on the same edge (renamed by #1486; flows reads the old spelling for one more release and this edge does not send it) \u2014 flows' POST /events is authenticated, so a publish target without its credential is a publish that always 401s, and the pair is what makes the edge real. Declared as part of the edge rather than beside it: unset alongside an unset url is the no-flows profile, unset with a url set is a deployment whose facts are being refused, and one declaration shows both. The read-only VEXA_FLOWS_TIMELINE_KEY opens GET /timeline and nothing else, so it cannot stand in here",
+      "targets": [
+        "compose"
+      ],
+      "publishes_events": [
+        "desk.unscaffolded",
+        "claim.proposed"
+      ]
+    },
+    {
+      "key": "VEXA_TIMELINE_CACHE_S",
+      "class": "defaulted",
+      "default": "60",
+      "description": "how long a subject's rendered timeline block is reused across dispatches \u2014 fresh enough that a meeting that just ended is in the next turn, cheap enough that three messages in a row cost one round-trip",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_TIMEOUT_S",
+      "class": "defaulted",
+      "default": "3",
+      "description": "how long the worker waits for the timeline route before giving up on the block for this turn (a failure is cached like an answer)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_BACK",
+      "class": "defaulted",
+      "default": "5",
+      "description": "how many past events the per-dispatch timeline block states (decision 31 \u00a71: a handful of lines)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_AHEAD",
+      "class": "defaulted",
+      "default": "5",
+      "description": "how many scheduled meetings the per-dispatch timeline block states",
+      "targets": []
+    },
+    {
+      "key": "VEXA_LLM_BASE_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 falls back to ANTHROPIC_BASE_URL)",
+      "description": "openai-agent harness: the OpenAI-compatible endpoint the turn's chat/completions run against. Falls back to ANTHROPIC_BASE_URL, which is what a per-subject Settings \u2192 Models gateway arrives as \u2014 there is ONE endpoint pair and this is its second spelling, kept because the harness predates the collapse",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "openai-agent harness: the bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Falls back to ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_MODEL",
+      "class": "defaulted",
+      "default": "(unset \u2014 VEXA_AGENT_MODEL applies)",
+      "description": "openai-agent harness: the model id, when it differs from the product-wide VEXA_AGENT_MODEL. VEXA_AGENT_MODEL is the one Settings \u2192 Models writes and the one the dispatch stamps, so this is an override and not the main dial",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_EXTRA_BODY",
+      "class": "defaulted",
+      "default": "(unset \u2014 no extra fields)",
+      "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). Also settable per subject under Settings \u2192 Models",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_STREAM",
+      "class": "defaulted",
+      "default": "1",
+      "description": "openai-agent harness: stream the completion (SSE). 0/false/no sends one blocking request per step instead \u2014 for an endpoint whose SSE is unreliable",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: hard per-turn ceiling on tool calls. A turn that reaches it stops and reports the truncation on its done event",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TURN_SEC",
+      "class": "defaulted",
+      "default": "900",
+      "description": "openai-agent harness: hard per-turn wall-clock ceiling in seconds, reported the same way as the tool-call budget",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_CONTEXT_TOKENS",
+      "class": "defaulted",
+      "default": "24000",
+      "description": "openai-agent harness: estimated-token ceiling on the request. A SIZING RULE on a shared inference box rather than a nicety \u2014 a 24k-context request is about 1/29th of the CCC KV cache and an unbounded turn evicts everybody else",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_EFFORT",
+      "class": "defaulted",
+      "default": "(unset \u2014 the CLI's own default)",
+      "description": "reasoning-effort pin passed to the claude-code CLI as --effort. Stamped per subject by the dispatch overlay (Settings \u2192 Models \"effort\"); empty leaves the CLI's own default, which OpenAI-compatible backends that validate reasoning_effort reject",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CODEX_MODEL",
+      "class": "defaulted",
+      "default": "(unset \u2014 the Codex account default)",
+      "description": "codex harness: the model for the Codex app-server, when it differs from VEXA_AGENT_MODEL. Empty lets the signed-in subscription account choose, which is what stops a claude-* pin in Settings \u2192 Models from being fed to Codex",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MIDTURN_INJECT",
+      "class": "defaulted",
+      "default": "(unset \u2014 off)",
+      "description": "1 enables mid-turn user-message injection into a running harness turn (claude-code stream-json input, codex turn/steer). Off by default: an injection the harness drops is a message the person believes they sent",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_HARNESS_REAP_GRACE_SEC",
+      "class": "defaulted",
+      "default": "5",
+      "description": "seconds a harness CLI subprocess is given to exit after its stream ends before it is killed",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WRITEBACK",
+      "class": "defaulted",
+      "default": "1",
+      "description": "run the post-turn write-back phase (the entity/timeline bookkeeping that follows a chat turn). 0/false/off/no disables it",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WRITEBACK_MIN_TOKENS",
+      "class": "defaulted",
+      "default": "40",
+      "description": "shortest turn worth a write-back phase, in estimated tokens \u2014 below it the bookkeeping costs more than it records",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_RESUME_MAX_BYTES",
+      "class": "defaulted",
+      "default": "1000000",
+      "description": "largest session transcript the worker will resume from; past it the thread starts a fresh harness session rather than re-sending an unaffordable history",
+      "targets": []
+    },
+    {
+      "key": "VEXA_IDLE_TIMEOUT_SEC",
+      "class": "defaulted",
+      "default": "120",
+      "description": "the WORKER's warm-serve window: how long it keeps serving unit:<id>:in after its last turn. Dispatch-stamped per chat turn from VEXA_CHAT_IDLE_TIMEOUT_SEC; the engine's own default is deliberately tighter",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_TOOLS",
+      "class": "defaulted",
+      "default": "(unset \u2014 the engine's chat default set)",
+      "description": "the allow-set a chat turn's harness is given (comma-separated). Runtime-injected per dispatch; the harness enforces it at EXECUTION, not only on the tool list it advertises",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_SESSION",
+      "class": "defaulted",
+      "default": "main",
+      "description": "the conversation THREAD this dispatch belongs to \u2014 the worker namespaces its continuity session file by it, so several threads coexist in one user workspace. Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
+      "key": "VEXA_UNIT_ID",
+      "class": "defaulted",
+      "default": "(unset \u2014 always stamped per dispatch: build_unit_env's own workload id)",
+      "description": "the stable per-dispatch workload id (`dispatch.dispatch_id`), set on EVERY dispatch unconditionally. #1510: worker/friction.py's `fallback_session()` reads it as the friction carrier's session ref when no chat session exists at all (a scheduled/event/transcription dispatch never sets VEXA_CHAT_SESSION) \u2014 the flows carrier refuses a report with no session, so a stable id here is the honest fallback rather than a made-up string. Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_ROOM_MEETING",
+      "class": "defaulted",
+      "default": "(unset \u2014 present only on a post-meeting room dispatch)",
+      "description": "the meeting this dispatch is the POST-MEETING RUN for, stamped when a room was authorised and absent on every other dispatch. Runtime-injected per dispatch, never a deploy surface. The worker reads it for the three things decision 22 says a room run must not do: no entity write-back and no desk-README refresh against the subject's own desk (both committed there, moved HEAD, and failed the meeting on process_meeting's own detector \u2014 F103), and no bot verbs in the MCP allow-set for a meeting that is over (F104). A POSITIVE signal rather than an inference from the mount set, because a room whose other attendees have no desks yet resolves to zero room mounts \u2014 the small-team case \u2014 so the mount shape answers 'not a room run' on a run that is one",
+      "targets": []
+    },
+    {
+      "key": "VEXA_START",
+      "class": "defaulted",
+      "default": "{}",
+      "description": "the dispatch's ``start`` object as JSON (the entrypoint ask or the session ref). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_UNIT_OUT_TOPIC",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 the runtime injects unit:<id>:out per dispatch)",
+      "description": "the per-dispatch output Stream (unit:<id>:out) the worker writes its UnitEvents to. Runtime-injected per dispatch; a worker without it cannot report anything and refuses to boot (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_UNIT_IN_TOPIC",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 the runtime injects unit:<id>:in per dispatch)",
+      "description": "the per-dispatch input Stream (unit:<id>:in) the worker's serve loop reads interactive messages from. Runtime-injected per dispatch (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
+      "targets": []
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 the runtime injects the worker's connection per dispatch)",
+      "description": "the WORKER's redis connection (its unit:<id>:in/out Streams). Runtime-injected per dispatch and deliberately withheld from the model's own subprocess (llm/ports._HARNESS_SUBPROCESS_DENY_VARS) \u2014 a Bash tool holding it reaches another tenant's keys (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
+      "targets": []
     }
   ],
   "capabilities": {
@@ -367,7 +740,7 @@
     "model_inference": {
       "description": "spawned agent-workers will have a model-provider credential path available \u2014 dispatch stamps the model-auth allowlist from this service's env into every worker spec env (uniform across docker/k8s/process backends); the docker runtime additionally brokers/mounts creds itself (see the runtime's config.v1 for the mount mechanics + file probe)",
       "mode": "any",
-      "when_unconfigured": "terminal chat / workspace turns fail inside the worker ('Model inference failed: Not logged in') \u2014 set CLAUDE_CODE_OAUTH_TOKEN (subscription OAuth), an ANTHROPIC_* key, VEXA_LLM_API_KEY (completion adapters), or HOST_CLAUDE_CREDENTIALS (docker subscription mount)"
+      "when_unconfigured": "terminal chat / workspace turns fail inside the worker ('Model inference failed: Not logged in') \u2014 set CLAUDE_CODE_OAUTH_TOKEN (subscription OAuth), an ANTHROPIC_* key, or HOST_CLAUDE_CREDENTIALS (docker subscription mount)"
     }
   },
   "surface_only": [

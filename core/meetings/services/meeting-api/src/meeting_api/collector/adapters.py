@@ -59,6 +59,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _build_share_grant(mode: str, allowed_emails, expires_in_sec: int) -> "tuple[dict, str]":
+    """The share-grant record and its one-time secret. ONE definition, because there are now two
+    ways to address the meeting it is minted on — the (platform, native) pair and the ROW id — and
+    two copies of the hash-at-rest shape would be two places to get the hashing wrong."""
+    from datetime import timedelta
+
+    secret = secrets.token_urlsafe(24)
+    grant = {
+        "id": secrets.token_hex(8),
+        "secret_hash": _sha(secret),
+        "mode": mode,
+        "allowed_emails": list(allowed_emails or []),
+        "expires_at": (_now() + timedelta(seconds=int(expires_in_sec))).isoformat(),
+        "revoked": False,
+    }
+    return grant, secret
+
+
 def _iso_utc(dt) -> Optional[str]:
     """UTC ISO-8601 (``…Z``) for a naive-or-aware datetime. The meeting time columns are naive but
     hold UTC (the DB session is UTC); a bare ``isoformat()`` is zone-less, so a browser's ``new Date()``
@@ -121,70 +139,6 @@ def _remove_doc(docs: list[dict], path: str) -> list[dict]:
     return [d for d in docs if d.get("path") != path]
 
 
-def _merge_notes_by_id(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """Merge drained copilot notes into a processed view's ``doc['notes']`` list, keyed by note
-    ``id`` (== segment_id): a refining re-emit UPDATES its note in place (order preserved);
-    a new id appends. Notes without an id append as-is (nothing to key an upsert on)."""
-    out = [dict(n) for n in existing]
-    index = {str(n.get("id")): i for i, n in enumerate(out) if n.get("id") is not None}
-    for note in incoming:
-        nid = note.get("id")
-        if nid is not None and str(nid) in index:
-            out[index[str(nid)]].update(note)
-        else:
-            if nid is not None:
-                index[str(nid)] = len(out)
-            out.append(dict(note))
-    return out
-
-
-def _find_processed_view(data: dict, view_id: str) -> Optional[dict]:
-    """The view with ``view_id`` inside ``data['processed']['views']`` (None when absent)."""
-    processed = data.get("processed") if isinstance(data.get("processed"), dict) else {}
-    views = processed.get("views") if isinstance(processed.get("views"), list) else []
-    return next((v for v in views if isinstance(v, dict) and v.get("id") == view_id), None)
-
-
-def _upsert_processed_view(
-    data: dict, *, view_id: str, kind: str, notes: list[dict],
-    source_cursor: Optional[str], params: Optional[dict],
-) -> dict:
-    """Pure merge of drained copilot notes into the ADDRESSABLE, VERSIONED processed shape
-    (release DoD — multi-consumer, meeting-scoped today, mountable by N consumers later):
-
-        data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}
-
-    Upserts the view keyed by ``id`` — other views (future per-workspace/other processings) are
-    preserved untouched; merges ``notes`` into the view's ``doc['notes']`` by note id; stamps
-    ``params`` (the processing metadata APPLIED — provider/model/pipeline, stamped by the
-    producing worker — reproducibility) only when the drain carried them, so an idle drain never
-    erases provenance; ``source_cursor`` records the stream position the view reflects.
-    Returns the new ``data`` dict (the caller persists it)."""
-    from datetime import datetime, timezone
-
-    out = dict(data)
-    processed = dict(out.get("processed")) if isinstance(out.get("processed"), dict) else {}
-    views = [dict(v) for v in processed.get("views", []) if isinstance(v, dict)] \
-        if isinstance(processed.get("views"), list) else []
-    view = next((v for v in views if v.get("id") == view_id), None)
-    if view is None:
-        view = {"id": view_id, "kind": kind, "params": {}, "doc": {"notes": []}}
-        views.append(view)
-    doc = dict(view.get("doc")) if isinstance(view.get("doc"), dict) else {}
-    existing_notes = doc.get("notes") if isinstance(doc.get("notes"), list) else []
-    doc["notes"] = _merge_notes_by_id(list(existing_notes), notes)
-    view["doc"] = doc
-    view["kind"] = kind
-    if params:
-        view["params"] = params
-    if source_cursor:
-        view["source_cursor"] = source_cursor
-    view["updated_at"] = datetime.now(timezone.utc).isoformat()
-    processed["views"] = views
-    out["processed"] = processed
-    return out
-
-
 # A relative in-meeting offset never approaches this; anything at/above is an absolute epoch.
 _EPOCH_THRESHOLD_S = 1_000_000_000  # ~2001-09-09
 
@@ -226,10 +180,62 @@ def _segment_to_api(seg: dict) -> dict:
         "text": seg.get("text", ""),
         "language": seg.get("language"),
     }
-    for k in ("speaker", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time", "created_at"):
+    for k in ("speaker", "speaker_key", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time", "created_at"):
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
+
+
+# The ONE definition of a durable transcript write. Two callers reach it — the db-writer's flush
+# of a live meeting's redis hash (``upsert_segments``) and the import route's
+# ``complete_transcript_import`` — and a second copy of this statement would be a second place to
+# get the segment identity wrong. Keyed on ``(meeting_id, segment_id)`` (the partial unique index
+# ``ix_transcription_meeting_segment``): a re-write lands as an UPDATE, never a duplicate row.
+_SEGMENT_UPSERT_SQL = """
+    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
+    VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
+    ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
+    DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
+                  start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+                  language = EXCLUDED.language, created_at = EXCLUDED.created_at
+"""
+
+
+def _segment_upsert_rows(meeting_id, segments) -> "list[dict]":
+    """Normalize a batch of segments into the bind-parameter rows ``_SEGMENT_UPSERT_SQL`` takes.
+    A segment with no ``segment_id`` is skipped (0.12 ingest guarantees one; a legacy stray is
+    skipped, not guessed) and an unparseable start/end likewise."""
+    from datetime import datetime as _dt
+
+    rows = []
+    for seg in segments:
+        sid = seg.get("segment_id")
+        if not sid:
+            continue
+        try:
+            start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
+            end = float(seg.get("end", seg.get("end_time", start)) or start)
+        except (TypeError, ValueError):
+            continue
+        if end < start:
+            start, end = end, start
+        rows.append({
+            "mid": int(meeting_id), "start": start, "end": end,
+            "text": seg.get("text") or "", "speaker": seg.get("speaker"),
+            "lang": seg.get("language"), "uid": seg.get("session_uid"),
+            "segid": str(sid), "created": _dt.utcnow(),
+        })
+    return rows
+
+
+async def _write_segment_rows(db, rows) -> None:
+    """Execute the upsert for every row on an ALREADY-OPEN session, committing nothing. The caller
+    owns the transaction — which is how the import writes the segments and completes the row in one."""
+    from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
+
+    stmt = sql_text(_SEGMENT_UPSERT_SQL)
+    for row in rows:
+        await db.execute(stmt, row)
 
 
 class SqlAlchemyTranscriptStore:
@@ -324,11 +330,26 @@ class SqlAlchemyTranscriptStore:
         }
         return snap, seg_by_id, order
 
-    async def _merge_live_segments(self, pg: "tuple[dict, dict, list]") -> dict:
+    async def _merge_live_segments(
+        self, pg: "tuple[dict, dict, list]", *, viewer_is_owner: bool,
+    ) -> dict:
         """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
         assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
         is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
-        hold a snapshot/transaction open (the #508 fix). Response is byte-identical to the old build."""
+        hold a snapshot/transaction open (the #508 fix).
+
+        This is a RESPONSE edge, so ``data`` goes through ``project_response_data``: calendar sources
+        reduced to their identity + policy keys (the raw ICS event snapshot is sweep state, not anyone's
+        transcript), credential material dropped for everyone, and the owner's private configuration
+        dropped for everyone but the owner — this read authorizes a transcript-share recipient and a
+        bound-workspace member too, not only the owner.
+
+        ``viewer_is_owner`` is REQUIRED (no default) because both callers already know it: the
+        native-keyed read constrains ``Meeting.user_id == user_id`` in SQL, and the by-id read
+        evaluates an explicit owner branch inside its authorization check. Passing the decision down
+        beats re-deriving it here, where the caller's ``user_id`` is not even in scope."""
+        from .projection import project_response_data
+
         snap, seg_by_id, order = pg
         data = snap["data"]
         # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
@@ -364,7 +385,7 @@ class SqlAlchemyTranscriptStore:
             "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
-            "data": data,
+            "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
         }
 
@@ -386,9 +407,15 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        return await self._merge_live_segments(pg)
+        # The SELECT above constrains ``Meeting.user_id == user_id``, so a row reached through this
+        # path is by construction the caller's own — the native-keyed read has no share branch.
+        return await self._merge_live_segments(pg, viewer_is_owner=True)
 
     async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
         """Exact-row transcript for ``meeting.id == meeting_id``, authorized by the SAME three-way rule as
@@ -408,8 +435,12 @@ class SqlAlchemyTranscriptStore:
             if not meeting:
                 return None
             data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
+            is_owner = meeting.user_id == user_id                                   # (a) owner
             authorized = (
-                meeting.user_id == user_id                                          # (a) owner
+                is_owner
                 or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
                 or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)  # (b) bound ws member
             )
@@ -417,15 +448,18 @@ class SqlAlchemyTranscriptStore:
                 return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        return await self._merge_live_segments(pg)
+        # The response projection reuses branch (a) above — the SAME decision that authorized this
+        # read decides which tier of the blob it may carry, so the two can never disagree.
+        return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
-        from sqlalchemy import cast, func, select, union_all
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            metadata_filter=None):
+        from sqlalchemy import cast, func, literal, select, text, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
-        from .projection import DEFAULT_LIST_LIMIT, project_list_data
+        from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, project_list_data
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -434,9 +468,11 @@ class SqlAlchemyTranscriptStore:
             # #800: the branches are UNIONed, never OR-ed. A single `WHERE a OR b` plans as a backward
             # walk of the created_at index with the OR as a Filter — for a caller with few/old meetings
             # that scans most of the table (100s+ per call under production load). Each branch below is
-            # independently index-scannable (owner → ix_meeting_user_created_at, viewer →
-            # ix_meeting_transcript_viewers_gin, workspace → ix_meeting_workspace_created_at) with its
-            # own top-N ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
+            # independently index-scannable (owner → ix_meeting_user_event_order /
+            # ix_meeting_user_created_at, viewer → ix_meeting_transcript_viewers_gin, workspace →
+            # ix_meeting_workspace_event_order / ix_meeting_workspace_created_at — event-order for
+            # the list_view sort, created_at for internal enumeration) with its own top-N
+            # ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
             access = [
                 Meeting.user_id == user_id,
                 cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
@@ -448,6 +484,26 @@ class SqlAlchemyTranscriptStore:
                 fetch_bound = (offset or 0) + (limit if limit is not None else DEFAULT_LIST_LIMIT) + 1
             else:
                 fetch_bound = ((offset or 0) + limit) if limit else None
+
+            # #1222: the USER-FACING list orders by (non-terminal pin, MEETING EVENT time), not
+            # row-creation time — a calendar-managed row is created at import time, so created_at
+            # buried the meeting that was live right now under every row created since the import.
+            # The expressions are verbatim the ones in ix_meeting_user_event_order /
+            # ix_meeting_workspace_event_order (sessions/models.py): the branch top-N must stay an
+            # index walk (#800), and the planner only substitutes an expression index when the
+            # ORDER BY expression matches it structurally. `meeting_event_time()` is the IMMUTABLE
+            # SQL wrapper for COALESCE(data.scheduled_at, start_time, created_at) — created by the
+            # admin-api schema sync (MIGRATION-0005). Semantics mirrored by the fake via
+            # projection.list_order_key. Internal enumeration (get-by-id filter, /bots/status,
+            # calendar sync) keeps created_at DESC — _resolve_owned_native documents "newest owned
+            # row" against exactly that order.
+            _pin_sql = "status IN ({})".format(
+                ", ".join(f"'{s}'" for s in sorted(LIST_PIN_STATUSES)))
+            event_order = (
+                text(f"({_pin_sql}) DESC"),
+                text("meeting_event_time(data, start_time, created_at) DESC"),
+                Meeting.id.desc(),
+            )
 
             def _branch(cond):
                 s = select(Meeting.id).where(cond)
@@ -468,18 +524,34 @@ class SqlAlchemyTranscriptStore:
                     s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
+                if metadata_filter:
+                    # JSONB containment on the whole `data` blob, nesting the caller's filter under
+                    # `metadata` — `data @> '{"metadata": {...}}'`. Written against `data` (not
+                    # `data->'metadata'`) deliberately: THAT is the shape `ix_meeting_data_gin`
+                    # indexes, so this stays an index scan instead of degrading to a seq scan the
+                    # moment an account has history. Filtering in SQL rather than in Python is also
+                    # the difference between "the meetings tagged acme-42" and "the tagged ones on
+                    # the page you happened to fetch" — the latter is a wrong answer, not a slow one.
+                    s = s.where(
+                        cast(Meeting.data, JSONB).op("@>")(
+                            cast(literal(json.dumps({"metadata": metadata_filter})), JSONB)
+                        )
+                    )
                 if fetch_bound is not None:
                     # ORDER BY inside a compound member is only meaningful (and only kept by
                     # the compiler) together with LIMIT; an unbounded branch returns its full
-                    # set, so the outer ORDER BY alone decides.
-                    s = s.order_by(Meeting.created_at.desc()).limit(fetch_bound)
+                    # set, so the outer ORDER BY alone decides. The branch MUST pre-limit by the
+                    # SAME key the outer sort uses — a created_at top-N under the event-time sort
+                    # would silently drop the very rows the sort exists to surface (#1222).
+                    branch_order = event_order if list_view else (Meeting.created_at.desc(),)
+                    s = s.order_by(*branch_order).limit(fetch_bound)
                 return s
 
             ids = union_all(*[_branch(c) for c in access]).subquery()
             stmt = (
                 select(Meeting)
                 .where(Meeting.id.in_(select(ids.c.id)))
-                .order_by(Meeting.created_at.desc())
+                .order_by(*(event_order if list_view else (Meeting.created_at.desc(),)))
             )
             if list_view:
                 # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
@@ -503,6 +575,10 @@ class SqlAlchemyTranscriptStore:
                 has_more = False
 
             def _row(m):
+                # The ONE ownership decision this row makes. `shared` (the api.v1 field) and the
+                # response projection's viewer tier both read it, so a row can never claim to be the
+                # caller's while being projected as a stranger's, or the reverse.
+                is_owner = m.user_id == user_id
                 row = {
                     "id": m.id,
                     "user_id": m.user_id,
@@ -518,7 +594,7 @@ class SqlAlchemyTranscriptStore:
                     # (hoisted the same way as `_meeting_projection_from_row` in app.py).
                     "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
                     "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
-                    "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
+                    "shared": not is_owner,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),
                     # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
@@ -529,8 +605,13 @@ class SqlAlchemyTranscriptStore:
                     # materialized every byte of `data` — 180 MB for one production account, 144 MB of
                     # it `bot_logs` that no endpoint renders. Four concurrent polls demanded ~740 MB
                     # transiently and OOM-killed the pod. Only callers that genuinely need full `data`
-                    # (the detail view, calendar sync, reconciliation) leave both flags off.
-                    "data": project_list_data(m.data) if (list_view or slim)
+                    # (the detail view, calendar sync, reconciliation) leave both flags off — and
+                    # those callers project at their own response edge (app.py) or are internal.
+                    #
+                    # #1243 follow-up: the projection is VIEWER-AWARE. The owner keeps their own
+                    # webhook config here, which is where a 0.10 client reads it back
+                    # (`test_10_user_webhook_config_flow`); a share/workspace reader does not.
+                    "data": project_list_data(m.data, viewer_is_owner=is_owner) if (list_view or slim)
                     else (m.data if isinstance(m.data, dict) else {}),
                 }
                 return row
@@ -574,6 +655,46 @@ class SqlAlchemyTranscriptStore:
                     return mtg.id  # (c) redeemed an INDEPENDENT transcript-share link for this meeting
             return None
 
+    async def get_meeting_participants(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+        """OWNER-scoped (``ports.TranscriptStore.get_meeting_participants``). ONE session, two reads:
+        the newest owned row's ``data['attendees']`` (the calendar invitation's ATTENDEE lines), and
+        DISTINCT ``transcriptions.speaker`` for that row ordered by FIRST utterance.
+
+        The speaker read is a grouped aggregate, NOT a segment fetch: a long meeting has thousands of
+        rows and this endpoint wants at most a few dozen names, so ``GROUP BY speaker`` keeps the
+        response bounded by the cast rather than by the transcript's length (the #584 lesson — never
+        let a per-meeting response grow with the meeting)."""
+        from sqlalchemy import func, select
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                ).order_by(Meeting.created_at.desc()).limit(1)
+            )).scalars().first()
+            if meeting is None:
+                return None  # → 404. NOT an empty roster: the caller owns no such meeting.
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            rows = (await db.execute(
+                select(Transcription.speaker, func.min(Transcription.start_time).label("first_at"))
+                .where(
+                    Transcription.meeting_id == meeting.id,
+                    Transcription.speaker.isnot(None),
+                )
+                .group_by(Transcription.speaker)
+                .order_by(func.min(Transcription.start_time))
+            )).all()
+            attendees = data.get("attendees")
+            return {
+                "meeting_id": meeting.id,
+                "invited": attendees if isinstance(attendees, list) else [],
+                "speakers": [r[0] for r in rows if isinstance(r[0], str) and r[0].strip()],
+            }
+
     async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
         """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
         subscribe to the live transcript feed (authorize_subscribe branch b). Many meetings → one workspace
@@ -601,38 +722,69 @@ class SqlAlchemyTranscriptStore:
             await db.commit()
             return workspace_id
 
-    async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
-                                    mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
-        """OWNER-scoped: mint an INDEPENDENT transcript share grant (no workspace needed). Stored in
-        ``data.share_grants[]`` as {id, secret_hash, mode, allowed_emails, expires_at, revoked} — only the
-        HASH, never the token. Returns {id, token, ...} ONCE (token = ``<meeting_id>.<secret>`` so redeem
-        resolves the meeting). None if the caller owns no such meeting."""
-        from datetime import timedelta
-
-        from sqlalchemy import select
+    async def _mint_share_on(self, stmt, *, mode, allowed_emails, expires_in_sec) -> "Optional[dict]":
+        """Mint a grant onto whichever ONE row ``stmt`` selects. The two public mints differ only in
+        how they address the meeting; everything after the row is identical."""
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .models import Meeting
-
         async with self._session_factory() as db:
-            stmt = (select(Meeting).where(
-                Meeting.user_id == user_id, Meeting.platform == platform,
-                Meeting.platform_specific_id == native_meeting_id,
-            ).order_by(Meeting.created_at.desc()).limit(1).with_for_update())
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
-            secret = secrets.token_urlsafe(24)
-            gid = secrets.token_hex(8)
-            expires_at = (_now() + timedelta(seconds=int(expires_in_sec))).isoformat()
-            grant = {"id": gid, "secret_hash": _sha(secret), "mode": mode,
-                     "allowed_emails": list(allowed_emails or []), "expires_at": expires_at, "revoked": False}
+            grant, secret = _build_share_grant(mode, allowed_emails, expires_in_sec)
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             data["share_grants"] = list(data.get("share_grants", [])) + [grant]
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
-            return {"id": gid, "token": f"{meeting.id}.{secret}", "mode": mode, "expires_at": expires_at}
+            return {"id": grant["id"], "token": f"{meeting.id}.{secret}",
+                    "mode": mode, "expires_at": grant["expires_at"]}
+
+    async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
+                                    mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
+        """OWNER-scoped: mint an INDEPENDENT transcript share grant (no workspace needed). Stored in
+        ``data.share_grants[]`` as {id, secret_hash, mode, allowed_emails, expires_at, revoked} — only the
+        HASH, never the token. Returns {id, token, ...} ONCE (token = ``<meeting_id>.<secret>`` so redeem
+        resolves the meeting). None if the caller owns no such meeting.
+
+        Addressed by the (platform, native) PAIR, which is not a reliable identity: a row planned from
+        an invite whose url no platform matched carries ``platform='unknown'`` and an EMPTY
+        ``platform_specific_id``, so no pair addresses it at all (meeting 97, 2026-09-02 — every
+        attendee mail for it shipped with no token). Prefer ``mint_transcript_share_by_id``; this one
+        stays because 0.10 clients and the ``/transcripts/{platform}/{native}/share`` alias call it."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        return await self._mint_share_on(
+            select(Meeting).where(
+                Meeting.user_id == user_id, Meeting.platform == platform,
+                Meeting.platform_specific_id == native_meeting_id,
+            ).order_by(Meeting.created_at.desc()).limit(1).with_for_update(),
+            mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
+
+    async def mint_transcript_share_by_id(self, user_id, meeting_id, *,
+                                          mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
+        """OWNER-scoped mint addressed by the ROW's primary key — the identity that always exists.
+
+        Same grant, same hash-at-rest, same one-time token shape as the pair-keyed mint above; the
+        only difference is the WHERE. Scoped to ``user_id`` so a row the caller does not own is
+        indistinguishable from one that does not exist (404 either way) — minting a capability is an
+        owner act, and a share route that leaked existence would be worse than one that leaked
+        nothing. No ``order_by``: a primary key selects exactly one row or none."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        return await self._mint_share_on(
+            select(Meeting).where(
+                Meeting.id == mid, Meeting.user_id == user_id,
+            ).limit(1).with_for_update(),
+            mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
 
     async def redeem_transcript_share(self, user_id, user_email, token) -> "Optional[dict]":
         """Redeem a transcript share token (any authenticated user) → grants THIS user subscribe access to
@@ -723,85 +875,104 @@ class SqlAlchemyTranscriptStore:
         ``ix_transcription_meeting_segment`` in the admin-api authoritative schema), exactly the
         parent db-writer's ON CONFLICT statement: idempotent, a re-flushed rewrite lands as an
         UPDATE, never a duplicate row."""
-        from datetime import datetime as _dt
-
-        from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
-
-        rows = []
-        for seg in segments:
-            sid = seg.get("segment_id")
-            if not sid:
-                continue  # 0.12 ingest guarantees segment_id; a legacy stray is skipped, not guessed
-            try:
-                start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
-                end = float(seg.get("end", seg.get("end_time", start)) or start)
-            except (TypeError, ValueError):
-                continue
-            if end < start:
-                start, end = end, start
-            rows.append({
-                "mid": int(meeting_id), "start": start, "end": end,
-                "text": seg.get("text") or "", "speaker": seg.get("speaker"),
-                "lang": seg.get("language"), "uid": seg.get("session_uid"),
-                "segid": str(sid), "created": _dt.utcnow(),
-            })
+        rows = _segment_upsert_rows(meeting_id, segments)
         if not rows:
             return
         async with self._session_factory() as db:
-            for row in rows:
-                await db.execute(
-                    sql_text("""
-                        INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
-                        VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
-                        ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
-                        DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
-                                      start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
-                                      language = EXCLUDED.language, created_at = EXCLUDED.created_at
-                    """),
-                    row,
-                )
+            await _write_segment_rows(db, rows)
             await db.commit()
 
-    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
-        """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
-        — the last ``proc:meeting:{id}`` stream entry already durable; the db-writer resumes after it."""
-        from sqlalchemy import select
+    async def complete_transcript_import(self, user_id, meeting_id, *, segments, started_at,
+                                        ended_at, source, session_uid) -> "Optional[dict]":
+        """Land an imported transcript on the caller's row and COMPLETE it — see
+        ``ports.complete_transcript_import`` for the contract.
 
-        from .models import Meeting
+        ONE transaction, under the same per-user advisory lock ``create_planned_meeting`` and
+        ``annotate_meeting`` take, so an import serializes against a concurrent spawn/calendar-sync
+        on the same user rather than racing it. Inside it: the row lock, the idempotency check, the
+        segment upsert, the status/window write. Either the meeting is completed WITH its words or
+        neither happened — a half-import (segments under a `scheduled` row) is exactly the shape
+        that made the founder's walk read "MEETING · UPCOMING" over a finished call.
 
-        async with self._session_factory() as db:
-            m = (await db.execute(select(Meeting).where(Meeting.id == int(meeting_id)))).scalars().first()
-            if not m or not isinstance(m.data, dict):
-                return None
-            view = _find_processed_view(m.data, view_id)
-            return view.get("source_cursor") if view else None
-
-    async def merge_processed_view(
-        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
-    ) -> None:
-        """Persist drained copilot notes into the meeting row's ``data['processed']['views']``
-        JSONB (the documented meeting.data home — the same pattern recordings/notes/docs use; NO
-        schema change), in the ADDRESSABLE, VERSIONED multi-consumer shape (release DoD):
-        the view keyed ``view_id`` is upserted (other views preserved), its ``doc['notes']`` merged
-        by note id, ``params`` = the processing metadata APPLIED, ``source_cursor`` = the stream
-        position the view reflects. ONE ``SELECT … FOR UPDATE`` row lock."""
-        from sqlalchemy import select
+        ``start_time``/``end_time`` are written NAIVE UTC, matching the columns (an aware datetime is
+        an asyncpg DataError here — see ``bot_spawn.adapters.update_meeting_status``).
+        """
+        from sqlalchemy import bindparam, func, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .models import Meeting
+        from .models import Meeting, Transcription
+        from .transcript_import import IN_FLIGHT_STATUSES
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
 
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
-            meeting = (await db.execute(stmt)).scalars().first()
-            if not meeting:
-                return
-            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-            meeting.data = _upsert_processed_view(
-                data, view_id=view_id, kind=kind, notes=notes,
-                source_cursor=source_cursor, params=params,
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            # Owner-scoped: a row that is not the caller's answers exactly like one that does not
+            # exist, so this route is no existence oracle — the rule the by-id share mint follows.
+            if meeting is None:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("transcript_import")
+            if isinstance(prior, dict) and prior.get("session_uid") == session_uid:
+                # The SAME import, again. Nothing is written — not the segments, not the window.
+                # A second call is a no-op that reports what the first one did.
+                return {
+                    "meeting_id": mid, "imported": False, "status": meeting.status,
+                    "segments_imported": int(prior.get("segments") or 0),
+                    "start_time": _iso_utc(meeting.start_time),
+                    "end_time": _iso_utc(meeting.end_time),
+                    "session_uid": session_uid, "source": prior.get("source") or source,
+                    "imported_at": prior.get("imported_at"),
+                }
+            if meeting.status in IN_FLIGHT_STATUSES:
+                return {"error": "conflict", "status": meeting.status}
+
+            rows = _segment_upsert_rows(mid, segments)
+            await _write_segment_rows(db, rows)
+
+            meeting.status = "completed"
+            meeting.start_time = started_at.astimezone(timezone.utc).replace(tzinfo=None)
+            meeting.end_time = ended_at.astimezone(timezone.utc).replace(tzinfo=None)
+            # The provenance, not a completion_reason. `completion_reason` is a BOT fact — why a run
+            # ended — and no bot ran here; writing one would be the double claiming to be a
+            # recording. `transcript_import` says what actually happened, and any reader can tell an
+            # imported meeting from a captured one by asking for it.
+            data["transcript_import"] = {
+                "source": source, "session_uid": session_uid, "segments": len(rows),
+                "started_at": _iso_utc(meeting.start_time),
+                "ended_at": _iso_utc(meeting.end_time),
+                "imported_at": _now().isoformat().replace("+00:00", "Z"),
+            }
+            # The same delivery marker a terminal transition writes (#807), counted the same way —
+            # SELECT COUNT over the durable rows, so it reports what is really in the table rather
+            # than what this call believes it wrote.
+            data["segments_captured"] = (await db.execute(
+                select(func.count()).select_from(Transcription).where(Transcription.meeting_id == mid)
+            )).scalar() or 0
+            meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
+            await db.refresh(meeting)
+            return {
+                "meeting_id": mid, "imported": True, "status": meeting.status,
+                "segments_imported": len(rows),
+                "segments_captured": data["segments_captured"],
+                "start_time": _iso_utc(meeting.start_time),
+                "end_time": _iso_utc(meeting.end_time),
+                "platform": meeting.platform,
+                "native_meeting_id": meeting.platform_specific_id,
+                "session_uid": session_uid, "source": source,
+                "imported_at": data["transcript_import"]["imported_at"],
+            }
 
     async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator):
         """Owner-scoped atomic read→modify→write of ``meeting.data['docs']`` under ONE
@@ -915,10 +1086,18 @@ class SqlAlchemyTranscriptStore:
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
-                                     workspace_source=None, attendees=None) -> dict:
+                                     calendar_source=None,
+                                     workspace_source=None, attendees=None,
+                                     auto_join_last_attempt=None,
+                                     auto_join_error=None) -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
-        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate)."""
+        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
+
+        ``auto_join_last_attempt``/``auto_join_error`` seed the row with a backoff already earned
+        elsewhere — calendar sync passes them when this row replaces a terminal one the auto-join
+        sweep already dispatched for, so the replacement is not due the instant it exists. Written
+        in the INSERT, not patched after, so no sweep tick can see the row without them."""
         from sqlalchemy import bindparam, select, text
         from sqlalchemy.exc import IntegrityError
 
@@ -937,8 +1116,17 @@ class SqlAlchemyTranscriptStore:
                 data["workspace_source"] = workspace_source
         if calendar_uid:
             data["calendar_uid"] = calendar_uid
+        if calendar_source:
+            data["calendar_sources"] = [dict(calendar_source)]
+            data["calendar_connection_id"] = calendar_source["id"]
+            data["calendar_name"] = calendar_source.get("name") or "Calendar"
+            data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
+        if auto_join_last_attempt:
+            data["auto_join_last_attempt"] = auto_join_last_attempt
+        if auto_join_error:
+            data["auto_join_error"] = auto_join_error
         status = "scheduled" if scheduled_at else "idle"
 
         async with self._session_factory() as db:
@@ -968,6 +1156,210 @@ class SqlAlchemyTranscriptStore:
                 return {"error": "duplicate"}
             await db.refresh(m)
             return self._planned_row(m)
+
+    async def attach_calendar_source(self, user_id, meeting_id, *, calendar_uid,
+                                     calendar_sources=None) -> "Optional[dict]":
+        """Stamp calendar IDENTITY onto a row in ANY status (the live-row adoption path).
+
+        Deliberately narrower than ``update_planned_meeting``, which refuses an FSM-owned row: an
+        imported event whose meeting is already live must attach to THAT row rather than create a
+        sibling the auto-join sweep would send a second bot for. Identity keys only — status,
+        ``auto_join``, ``auto_join_user_set``, ``calendar_managed`` and ``scheduled_at`` are never
+        written here, so adopting a live row can never re-arm or re-dispatch it."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            if calendar_uid:
+                data["calendar_uid"] = calendar_uid
+            if calendar_sources:
+                data["calendar_sources"] = [dict(s) for s in calendar_sources]
+                primary = calendar_sources[0]
+                data["calendar_connection_id"] = primary.get("id")
+                data["calendar_name"] = primary.get("name") or "Calendar"
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            await db.refresh(meeting)
+            return self._planned_row(meeting)
+
+    # The text-search config, used for BOTH the index expression and every query. These MUST be
+    # the same string: an index on to_tsvector('english', text) is invisible to a query that says
+    # to_tsvector('simple', text), and the failure is silent — correct answers, seq scan, no error.
+    FTS_CONFIG = "english"
+
+    async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
+                                 platform=None, native_meeting_id=None) -> list[dict]:
+        """Owner-scoped FTS over transcript segments (see ports.search_transcripts).
+
+        Measured on 210k segments across two tenants (dogfood, 2026-08-29): a rare term took
+        914ms unindexed for a 400-meeting tenant and 0.108ms with the GIN index — and 45.7ms →
+        0.126ms even for a 24-meeting one, because the dominant cost is computing to_tsvector()
+        per row at query time, not finding the rows. The index is part of the feature, not a
+        later optimisation.
+        """
+        from sqlalchemy import text as sql_text
+
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        cfg = self.FTS_CONFIG
+        sql = sql_text(f"""
+            SELECT t.id                AS segment_row_id,
+                   -- `meeting_db_id`, never `meeting_id`: the INT row id must not travel
+                   -- under the name that means the platform's STRING id on every other
+                   -- tool. Emitting it as `meeting_id` is the regression this branch's
+                   -- identity gate exists to stop.
+                   t.meeting_id        AS meeting_db_id,
+                   m.platform          AS platform,
+                   m.platform_specific_id AS native_meeting_id,
+                   t.start_time        AS start,
+                   t.end_time          AS "end",
+                   t.speaker           AS speaker,
+                   t.language          AS language,
+                   ts_rank_cd(to_tsvector('{cfg}', t.text), qq) AS rank,
+                   ts_headline('{cfg}', t.text, qq,
+                       'StartSel=<mark>,StopSel=</mark>,MaxWords=24,MinWords=8,MaxFragments=2') AS snippet,
+                   t.text              AS text
+            FROM transcriptions t
+            JOIN meetings m ON m.id = t.meeting_id,
+                 websearch_to_tsquery('{cfg}', :q) AS qq
+            WHERE m.user_id = :uid
+              AND to_tsvector('{cfg}', t.text) @@ qq
+              -- Explicit casts: asyncpg cannot infer a bind parameter's type when it appears
+              -- only in `IS NULL` ("could not determine data type of parameter $3"), so an
+              -- optional filter must state its own type.
+              AND (CAST(:platform AS text) IS NULL OR m.platform = CAST(:platform AS text))
+              AND (CAST(:native AS text) IS NULL
+                   OR m.platform_specific_id = CAST(:native AS text))
+            ORDER BY rank DESC, t.meeting_id DESC, t.start_time ASC
+            LIMIT :lim OFFSET :off
+        """)
+        async with self._session_factory() as db:
+            rows = (await db.execute(sql, {
+                "q": q, "uid": user_id, "platform": platform, "native": native_meeting_id,
+                "lim": max(1, min(int(limit or 20), 100)), "off": max(0, int(offset or 0)),
+            })).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def ensure_fts_index(self) -> dict:
+        """Build the transcript FTS index CONCURRENTLY, idempotently, out of band.
+
+        Deliberately NOT part of ``_sync_indexes``: that wraps each index in a SAVEPOINT, and
+        ``CREATE INDEX CONCURRENTLY`` cannot run inside a transaction block. It also must not run
+        in-band at boot — a plain CREATE INDEX takes ACCESS EXCLUSIVE on ``transcriptions``, the
+        highest-row-count table, which would stall startup for as long as the build takes.
+
+        Safe to call on every boot BECAUSE SEARCH WORKS WITHOUT IT: a missing or half-built index
+        means a slower query, never a wrong answer and never a failed request. That is what keeps
+        this off the deploy's critical path — unlike ``meeting_event_time`` (MIGRATION-0005),
+        whose absence makes every list request fail.
+
+        Handles the one real trap: a failed CONCURRENTLY build leaves an INVALID index behind that
+        Postgres silently never uses. We detect it via ``pg_index.indisvalid``, drop it, and let
+        the next call rebuild.
+        """
+        from sqlalchemy import text as sql_text
+
+        name = "ix_transcription_text_fts"
+        # AUTOCOMMIT: CREATE/DROP INDEX CONCURRENTLY cannot run in a transaction block.
+        engine = self._session_factory.kw["bind"] if hasattr(self._session_factory, "kw") else None
+        engine = engine or getattr(self, "_engine", None)
+        if engine is None:
+            return {"status": "skipped", "reason": "no engine handle"}
+
+        async with engine.connect() as conn:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            state = (await conn.execute(sql_text(
+                "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+                "WHERE c.relname = :n"), {"n": name})).scalar()
+            if state is True:
+                return {"status": "present", "index": name}
+            if state is False:
+                # A previous CONCURRENTLY build failed. The leftover is INVALID and unusable —
+                # Postgres will not error on it, it will simply never use it. Drop and rebuild.
+                await conn.execute(sql_text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
+            await conn.execute(sql_text(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON transcriptions "
+                f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))"))
+            return {"status": "created", "index": name}
+
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None,
+                               metadata=None) -> "Optional[dict]":
+        """Caller-owned annotations on a row in ANY status (see ports.annotate_meeting).
+
+        Modelled on ``attach_calendar_source``, not on ``update_planned_meeting``: nothing written
+        here is read by the dispatch pipeline, so there is no FSM to fight and no status check."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+
+            # `title` lives in the data blob, NOT as a column — same place update_planned_meeting
+            # puts it. Both writes therefore go through `data`, and both need flag_modified.
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            touched = False
+
+            if title is not None:
+                cleaned = (title or "").strip()[:512]
+                if cleaned:
+                    data["title"] = cleaned
+                else:
+                    data.pop("title", None)   # empty string clears it
+                touched = True
+
+            if metadata is not None:
+                touched = True
+                # ALWAYS a merge. A caller can only ever affect keys it names — an explicit null
+                # deletes exactly one. There is no whole-object replace, so nothing a writer never
+                # saw can be destroyed by it.
+                current = data.get("metadata")
+                merged = dict(current) if isinstance(current, dict) else {}
+                for k, v in metadata.items():
+                    if v is None:
+                        merged.pop(k, None)
+                    else:
+                        merged[k] = v
+                # Bound the MERGED result, never the patch alone: a cap on each write is not a cap
+                # at all when writes merge. Refuse rather than truncate — silently storing part of
+                # what a caller sent is a worse failure than telling them it did not fit.
+                from .projection import check_metadata_bounds
+                reason = check_metadata_bounds(merged)
+                if reason:
+                    return {"error": "metadata_too_large", "detail": reason}
+                data["metadata"] = merged
+
+            if touched:
+                meeting.data = data
+                flag_modified(meeting, "data")
+
+            await db.commit()
+            await db.refresh(meeting)
+            return self._planned_row(meeting)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates) -> "Optional[dict]":
         """ROW-id-addressed PATCH of a planned row (intent status only). ``updates`` carries only
@@ -1045,11 +1437,31 @@ class SqlAlchemyTranscriptStore:
                     data.pop("attendees", None)
             if "auto_join" in updates:
                 data["auto_join"] = bool(updates["auto_join"])
+            # The USER's own auto-join choice, marked so calendar sync stops deriving the flag
+            # from the connected calendars' policy for this row.
+            if "auto_join_user_set" in updates:
+                if updates["auto_join_user_set"]:
+                    data["auto_join_user_set"] = True
+                else:
+                    data.pop("auto_join_user_set", None)
             if "calendar_uid" in updates:
                 if updates["calendar_uid"]:
                     data["calendar_uid"] = updates["calendar_uid"]
                 else:
                     data.pop("calendar_uid", None)
+            if "calendar_sources" in updates:
+                if updates["calendar_sources"]:
+                    data["calendar_sources"] = updates["calendar_sources"]
+                else:
+                    data.pop("calendar_sources", None)
+            for key in ("calendar_connection_id", "calendar_name"):
+                if key in updates:
+                    if updates[key]:
+                        data[key] = updates[key]
+                    else:
+                        data.pop(key, None)
+            if "calendar_managed" in updates:
+                data["calendar_managed"] = bool(updates["calendar_managed"])
 
             meeting.data = data
             flag_modified(meeting, "data")
@@ -1078,6 +1490,85 @@ class SqlAlchemyTranscriptStore:
             await db.delete(meeting)
             await db.commit()
             return True
+
+    async def prepare_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[dict]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return {"error": "conflict"}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("artifact_deletion") or {}
+            already_deleted = bool(
+                prior and prior.get("state", "completed") == "completed"
+            )
+            if not already_deleted:
+                data["artifact_deletion"] = {
+                    "state": "pending",
+                    "requested_at": prior.get("requested_at")
+                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scope": "primary_transcript_and_recording_storage",
+                    "backup_residuals": "expire_under_deployment_retention_policy",
+                }
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+            return {
+                "meeting_id": meeting.id,
+                "recordings": list(data.get("recordings") or []),
+                "already_deleted": already_deleted,
+            }
+
+    async def finalize_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[bool]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import delete, select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return False
+            await db.execute(delete(Transcription).where(Transcription.meeting_id == meeting_id))
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
+                data.pop(key, None)
+            data["artifact_deletion"] = {
+                "state": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "scope": "primary_transcript_and_recording_storage",
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            }
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+
+        # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
+        # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
+        if self._redis is not None:
+            await self._redis.delete(
+                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
+            )
+            await self._redis.srem("active_meetings", str(meeting_id))
+        return True
 
 
 class RedisStreamBus:

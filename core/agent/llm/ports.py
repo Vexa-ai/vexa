@@ -1,13 +1,15 @@
-"""ports.py — the two provider-agnostic ports of the llm module (mirrors runtime_kernel/backend.py).
+"""ports.py — the provider-agnostic port of the llm module (mirrors runtime_kernel/backend.py).
 
-Two call shapes, two ports:
+ONE call shape, one port:
 
-- ``CompletionPort`` — a plain LLM HTTP call, prompt→text. No tools, no subprocess, no workspace.
-  The meeting copilot's card beats run here (everything a beat needs is already in the prompt).
 - ``HarnessPort`` — a CLI coding agent driven over a mounted workspace: the tool loop, sessions,
-  streamed UnitEvents. Post-meeting docs, chat, and routines run here.
+  streamed UnitEvents. Chat, routines and every agent turn run here.
 
-Both are ``typing.Protocol`` — duck-typed like the runtime ``Backend`` port, so adapters need no
+There was a second, ``CompletionPort`` — a plain prompt→text HTTP call with no tools and no
+workspace — and its only caller was the live meeting copilot's card beats. PRD decision 34 removed
+that pipeline, and the port went with it.
+
+It is a ``typing.Protocol`` — duck-typed like the runtime ``Backend`` port, so adapters need no
 base class and tests inject trivial fakes. Adapter selection is env-driven in ``registry.py``.
 
 The UnitEvent stream contract every harness adapter must emit (shapes FROZEN — the terminal
@@ -22,7 +24,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
 
@@ -49,7 +50,7 @@ def scrubbed_git_env() -> dict[str, str]:
 # environment that Bash reaches the SHARED redis and can read/write ANOTHER tenant's ``tc:meeting:*`` /
 # ``unit:*:in`` keys — filesystem tenancy is mount-enforced, the data plane is not. The per-dispatch
 # identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
-# credentials (ANTHROPIC_*/VEXA_LLM_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
+# credentials (ANTHROPIC_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
 # deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
 _HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN")
 
@@ -58,31 +59,32 @@ def harness_subprocess_env() -> dict[str, str]:
     """The env for launching an UNTRUSTED model-driven harness subprocess: ``scrubbed_git_env()`` further
     stripped of the host data-plane secrets in ``_HARNESS_SUBPROCESS_DENY_VARS``. Use this — never a raw
     ``os.environ`` / ``scrubbed_git_env`` — to spawn a harness CLI: its Bash tool would otherwise inherit
-    the worker's own ``REDIS_URL`` and cross the data-plane tenancy boundary the mounts enforce on disk."""
-    return {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
+    the worker's own ``REDIS_URL`` and cross the data-plane tenancy boundary the mounts enforce on disk.
+
+    It also pins ``ENABLE_TOOL_SEARCH``, which decides whether the harness hands MCP tools to the
+    model DIRECTLY or as DEFERRED ones the model must find and load before it can call them. The
+    deferred round trip is where this product loses turns: measured on Haiku, 1 dispatch in 8 never
+    completes it and writes a confident note with nothing from the meeting in it, and others end
+    with the model explaining that "the tool appears in the deferred MCP tools list, but I don't
+    have a direct function invocation" and writing nothing at all.
+
+    The threshold is a share of the CONTEXT, not a count of tools — which is why it bites here and
+    not in a small test: a worker carries the mount preamble, a long post-meeting prompt and 53
+    tool schemas from the rig, on the smallest model. ``auto:100`` sets that share to 100%, so the
+    tools are always present. (Naming them in ``--allowedTools`` does NOT do this — that is a
+    permission gate and cannot reach the harness's context management. Measured, and corrected in
+    ``worker/engine.py``.)
+
+    Deliberately overridable: a deployment that wants the harness's own judgement sets the variable
+    itself and this leaves it alone."""
+    env = {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
+    env.setdefault("ENABLE_TOOL_SEARCH", "auto:100")
+    return env
 
 
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI
 # harness adapters so their parsers are offline-provable with a fake (no CLI, no network).
 HarnessExec = Callable[[list[str], str], Iterable[str]]
-
-
-@dataclass(frozen=True)
-class CompletionResult:
-    """One completion: the text and the model that produced it (for event attribution)."""
-
-    text: str
-    model: str = ""
-
-
-class CompletionPort(Protocol):
-    """A plain prompt→text LLM provider. Raises ``LLMAuthError`` on a rejected credential,
-    ``LLMConfigError`` on missing endpoint/model config, ``LLMError`` otherwise."""
-
-    name: str
-
-    def complete(self, prompt: str, *, system: Optional[str] = None,
-                 model: Optional[str] = None) -> CompletionResult: ...
 
 
 class HarnessPort(Protocol):
@@ -111,6 +113,14 @@ class HarnessPort(Protocol):
         """Boot-time credential sanity check — a loud warning string, or None. May no-op."""
         ...
 
+    def midturn_enabled(self) -> bool:
+        """Whether this runner accepts user input while ``run_turn`` is still active."""
+        ...
+
+    def inject_user_message(self, text: str) -> bool:
+        """Append user input to the active turn. False means leave it queued for the next turn."""
+        ...
+
 
 def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
     """Local git runner (trimmed stdout). Deliberately NOT shared.adapters._git — this module owns
@@ -125,6 +135,11 @@ def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
     return proc.stdout.strip()
 
 
+
+# The harness continuity store. Kept out of git history at the commit seam as well as by the seed's
+# `.gitignore` — see _commit_mount for why it is dropped from the index rather than excluded by a
+# pathspec.
+_CONTINUITY_DIR = ".claude"
 
 # The platform-write-only subtree of every workspace repo. Agent turns must NEVER modify it
 # (membership/invites live here — see control_plane.workspace_membership). Kept as a bare string so
@@ -249,19 +264,113 @@ def _commit_env(author: Optional[tuple[str, str]]) -> dict:
     return env
 
 
+# ── the commit SUBJECT names the change, never the agent's reply ─────────────────────────────────
+# ⚠ 2026-09-02, seen by the founder in `_global`'s own history:
+#     Done — `STRUCTURE.md` records Vexa as run solo by you, and your desk is
+#     Here's what's now in `README.md`:
+# The turn's REPLY was the commit message, cut at 72 characters. Every consequence follows from
+# that one substitution: a `git log --oneline` of the company layer reads as half-sentences
+# addressed to somebody who is not there, a truncated "Here's what's now in" promises a colon and
+# delivers nothing, and — the part that actually costs — you cannot see WHICH FILE a commit
+# touched without opening it. History is the one record a person reads when they are trying to
+# find out what happened, and it was answering a different question.
+#
+# The subject is derived from the staged tree, which is the only thing that knows what changed.
+# The reply keeps its value and goes in the BODY, where a sentence belongs.
+_SUBJECT_MAX = 72
+
+
+def _change_subject(work: Path, env: dict) -> str:
+    """`<workspace>: <path> — <what changed>`, ≤72 chars, read off the index.
+
+    Deliberately mechanical. A generated summary of a diff is a second thing that can be wrong
+    about the diff, and this line's whole job is to be the one part of the record that cannot be."""
+    slug = work.name
+    try:
+        raw = _git(work, "diff", "--cached", "--name-status", env=env) or ""
+    except subprocess.CalledProcessError:
+        raw = ""
+    rows = [ln.split("\t") for ln in raw.splitlines() if "\t" in ln]
+    if not rows:
+        return f"{slug}: workspace updated"[:_SUBJECT_MAX]
+    verbs = {"A": "added", "M": "updated", "D": "removed", "R": "renamed", "C": "copied"}
+    if len(rows) == 1:
+        code, path = rows[0][0][:1], rows[0][-1]
+        return f"{slug}: {path} — {verbs.get(code, 'changed')}"[:_SUBJECT_MAX]
+    # Several files: name the first two and count the rest, so the line still says WHERE rather
+    # than only how many — "3 files" alone sends the reader to the diff for the thing the subject
+    # exists to save them.
+    names = [r[-1] for r in rows]
+    head = ", ".join(names[:2])
+    rest = f" +{len(names) - 2}" if len(names) > 2 else ""
+    return f"{slug}: {head}{rest} — {len(names)} files changed"[:_SUBJECT_MAX]
+
+
 def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]) -> Optional[str]:
     """Commit ``work`` if its tree changed, attributed to ``author`` (committer = platform). Returns the
     new HEAD sha, or None on a clean tree. A path with no ``.git`` is skipped (a mount not yet seeded).
     Best-effort per mount: one mount failing to commit must not abort the others."""
     if not (work / ".git").exists():
         return None
-    if not _git(work, "status", "--porcelain"):
+    # Harness continuity is private runtime plumbing, never workspace knowledge. Not every legacy
+    # auxiliary mount carries the seed's `.gitignore`, so enforce the exclusion at the commit seam
+    # too (the documented contract already promises `.claude/` never enters git history).
+    #
+    # The exclusion is EXPRESSED TWICE ON PURPOSE, and NOT as an ``add`` pathspec. ``git add -A --
+    # . ':(exclude).claude'`` EXITS 1 whenever `.claude` is also matched by a `.gitignore` ("The
+    # following paths are ignored by one of your .gitignore files") — because an exclude pathspec
+    # still counts as explicitly naming the path. Every SEEDED workspace ships that `.gitignore`,
+    # so the pathspec form failed on exactly the mounts it was written for, ``check=True`` raised,
+    # the caller's ``except CalledProcessError: continue`` swallowed it, and the turn's work was
+    # left STAGED AND NEVER COMMITTED — silently, on every chat turn, for every user. Staging
+    # everything under ``.`` and then dropping `.claude` from the index is rc-0 in both worlds
+    # (with and without a `.gitignore`) and stages `.claude` in neither. ``git rm --cached
+    # --ignore-unmatch`` is the same idiom ``_revert_policy_writes`` already uses above.
+    content_pathspec = (".", ":(exclude).claude")
+    if not _git(work, "status", "--porcelain", "--", *content_pathspec):
         return None
     env = _commit_env(author)
-    _git(work, "add", "-A", env=env)
-    _git(work, "commit", "-m", (message.splitlines()[0][:72] if message else "agent turn"), env=env)
+    _git(work, "add", "-A", "--", ".", env=env)
+    _git(work, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", _CONTINUITY_DIR, env=env)
+    # SUBJECT from the tree; the agent's sentence, if there is one, as the BODY. Two `-m` flags is
+    # git's own subject/body split, so `--oneline` shows the change and `git show` still carries
+    # what the agent said about it — nothing is lost, it is filed where a reader expects it.
+    subject = _change_subject(work, env)
+    body = (message or "").strip()
+    args = ["commit", "-m", subject]
+    if body:
+        args += ["-m", body]
+    _git(work, *args, env=env)
     return _git(work, "rev-parse", "HEAD", env=env)
 
+
+
+def close_event_stream(events: object) -> None:
+    """Close a harness event stream we have stopped reading — NOW, at the boundary.
+
+    ⚠ THE HOP THAT ONLY LOOKS LIKE IT CLOSES ITSELF. A generator that wraps another one with a
+    plain ``for ev in inner:`` releases ``inner`` when its OWN frame is torn down, and that teardown
+    is a CPython implementation detail rather than a language guarantee. Measured on
+    Vexa-ai/vexa#1434: on CPython 3.12.3, closing the outer generator left the inner one ALIVE
+    (``gi_frame`` not ``None``, one referrer — itself a generator), so
+    ``llm.claude_code._exec_subprocess``'s ``finally`` never ran and the CLI child was never killed.
+    The write-back budget stopped reading the process and bounded nothing; the worker stayed exactly
+    as busy as before. The identical tree passed in 0.67 s on 3.12.13. Both interpreters satisfy
+    ``requires-python = ">=3.11"``, so this is not a supported-versus-unsupported line — it is a
+    guarantee the chain never had, on any interpreter, and got right by luck on most.
+
+    So EVERY hop of the harness event chain closes what it wraps EXPLICITLY (P22 — guarantee
+    teardown at the boundary, never delegate it to something that may not run). ``yield from``
+    already does this; a ``for`` loop does not, and this call is the whole of the difference.
+
+    A plain iterable with no ``close`` (a list, a test's fake) is a no-op, and closing an exhausted
+    or already-closed generator is one too — so it belongs in a ``finally``, on the normal path as
+    much as the early-exit one.
+    """
+    close = getattr(events, "close", None)
+    if close is None:
+        return
+    close()
 
 
 def run_harness_turn(
@@ -321,11 +430,18 @@ def run_harness_turn(
         for _mount in mounts:
             policy_baselines[str(_mount.resolve())] = _policy_head_sha(_mount)
     done: Optional[dict] = None
-    for ev in harness.run_turn(work, prompt, allowed_tools=allowed_tools, session=session,
-                               model=model, mcp_config=mcp_config):
-        if ev.get("type") == "done":
-            done = ev
-        yield ev
+    # Held in a NAME, not consumed inline, so the `finally` below has something to close. A caller
+    # may stop reading this turn mid-stream — the write-back phase's budget does exactly that — and
+    # the harness generator underneath owns the CLI subprocess. See `close_event_stream`.
+    stream = harness.run_turn(work, prompt, allowed_tools=allowed_tools, session=session,
+                              model=model, mcp_config=mcp_config)
+    try:
+        for ev in stream:
+            if ev.get("type") == "done":
+                done = ev
+            yield ev
+    finally:
+        close_event_stream(stream)
 
     if not commit:
         return

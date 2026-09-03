@@ -40,6 +40,11 @@ need 1 'serviceAccountName: vexa-vexa-runtime' "runtime SA bound"
 need 1 'key: CLAUDE_CODE_OAUTH_TOKEN' "agent-api CLAUDE_CODE_OAUTH_TOKEN secret ref"
 need 2 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret refs (agent-api + runtime)"
 need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
+# A terminating meeting-api must stay alive until EndpointSlice/kube-proxy stops routing its IP.
+# Without this drain, deleting co-located replicas produces immediate connection refusals even
+# while another replica remains Ready.
+need 1 'terminationGracePeriodSeconds: 30' "meeting-api termination budget rendered"
+need 1 '^[[:space:]]+- "sleep 5"$' "meeting-api preStop endpoint-drain delay rendered"
 # #677: agent-api MUST get VEXA_MEETING_API_URL or its live-SSE owner-lookup calls the compose-only
 # http://meeting-api:8080 (unresolvable in-cluster) → fail-closed 403 for the meeting's own owner.
 # Only agent-api carries the VEXA_-prefixed spelling, so assert exactly 1.
@@ -196,6 +201,259 @@ if grep -qE ':vMIGRATE"?$' <<< "$MIG_IMG"; then
   echo "  OK: migrations Job honors global.imageTag (pinned release image)"
 else
   echo "  FAIL: migrations Job ignored global.imageTag — schema/code skew risk (#900): $MIG_IMG"; fail=1
+fi
+
+# F-D4 — the flows tier's Postgres host/port must resolve through the chart's shared
+# vexa.dbHostEffective/vexa.dbPortEffective resolvers, same as admin-api/meeting-api/
+# job-migrations — NOT a hardcoded in-cluster component name. Before the original fix this
+# rendered "...@vexa-vexa-postgres:5432/..." even with postgres.enabled=false and database.host
+# set, so the flows tier could never deploy against an external managed Postgres. F-D5 (below)
+# moved the DSN itself from a literal Secret string to a startup-composed one (DB_HOST/DB_PORT
+# discrete env vars, same shape admin-api uses) — these assertions now read those, not a literal
+# DSN string, but the underlying claim is the same one F-D4 made.
+FLOWS_EXT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set postgres.enabled=false \
+  --set database.host=db.example.internal --set database.port=5432 \
+  --set postgres.credentialsSecretName=external-pg-creds \
+  --set agentApi.enabled=false --set terminal.enabled=false \
+  --show-only templates/flows.yaml)"
+if grep -A1 'name: DB_HOST' <<< "$FLOWS_EXT" | grep -q 'value: "db.example.internal"' \
+  && grep -A1 'name: DB_PORT' <<< "$FLOWS_EXT" | grep -q 'value: "5432"'; then
+  echo "  OK: flows tier DB_HOST/DB_PORT honor database.host/port under postgres.enabled=false (#F-D4)"
+else
+  echo "  FAIL: flows tier DB_HOST/DB_PORT did not resolve to the external database.host/port (#F-D4)"; fail=1
+fi
+if grep -q -- '-postgres' <<< "$FLOWS_EXT"; then
+  echo "  FAIL: flows tier still references an in-cluster '...-postgres' component name under postgres.enabled=false (#F-D4)"; fail=1
+else
+  echo "  OK: flows tier renders no in-cluster postgres component name under postgres.enabled=false (#F-D4)"
+fi
+FLOWS_DEFAULT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --show-only templates/flows.yaml)"
+if grep -A1 'name: DB_HOST' <<< "$FLOWS_DEFAULT" | grep -q 'value: "vexa-vexa-postgres"' \
+  && grep -A1 'name: DB_PORT' <<< "$FLOWS_DEFAULT" | grep -q 'value: "5432"'; then
+  echo "  OK: flows tier DB_HOST/DB_PORT unchanged under the default in-cluster postgres.enabled=true"
+else
+  echo "  FAIL: flows tier DB_HOST/DB_PORT changed meaning under default postgres.enabled=true"; fail=1
+fi
+
+# F-D5 — the flows tier installs on a production chart as the other services do (platform-adoption
+# scoping follow-up). Six items, checked against the SAME external/no-agent/no-terminal render
+# ($FLOWS_EXT above) unless noted:
+#
+# (1) DB credentials via the postgres-credentials Secret (secretKeyRef, same three keys admin-api
+#     reads: POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB) — never a chart value inlined into the
+#     rendered Secret. Before this, .Values.database.user/.Values.database.password (a decorative
+#     placeholder under postgres.enabled=false — the real credentials live only in the operator's
+#     pre-existing Secret) were baked into a literal DSN string.
+if grep -q 'postgres:postgres' <<< "$FLOWS_EXT"; then
+  echo "  FAIL: flows tier still inlines a literal database.user/password into the render (#F-D5.1)"; fail=1
+else
+  echo "  OK: flows tier renders no inline database.user/password literal (#F-D5.1)"
+fi
+if grep -B2 'key: POSTGRES_USER' <<< "$FLOWS_EXT" | grep -q 'name: "external-pg-creds"' \
+  && grep -B2 'key: POSTGRES_PASSWORD' <<< "$FLOWS_EXT" | grep -q 'name: "external-pg-creds"'; then
+  echo "  OK: flows tier sources DB_USER/DB_PASSWORD via secretKeyRef against postgres.credentialsSecretName (#F-D5.1)"
+else
+  echo "  FAIL: flows tier does not source DB_USER/DB_PASSWORD via the resolved credentials Secret (#F-D5.1)"; fail=1
+fi
+
+# (2) sslmode threads from database.sslMode into every composed DSN. Flows only — admin-api and
+#     meeting-api's own database modules have no DB_SSL_MODE/sslmode reader in current source (only
+#     job-migrations sets that env var, and nothing appears to consume it there either), so adding
+#     it to their Deployments would not be the one-line, provably-safe change threading it into
+#     flows's own DSN query string is.
+if grep -A1 'name: DB_SSL_MODE' <<< "$FLOWS_EXT" | grep -q 'value: "disable"' \
+  && grep -q 'sslmode=\${DB_SSL_MODE}' <<< "$FLOWS_EXT"; then
+  echo "  OK: flows tier threads database.sslMode into its composed DSNs (#F-D5.2)"
+else
+  echo "  FAIL: flows tier does not thread database.sslMode into its composed DSNs (#F-D5.2)"; fail=1
+fi
+
+# (3) the ensure-db bootstrap connection targets the APPLICATION database (database.name, via
+#     DB_NAME/POSTGRES_DB secretKeyRef) rather than Postgres's own "postgres" maintenance
+#     database — many managed Postgres offerings do not expose that database to the app's own
+#     role, but the application database is guaranteed to exist and be reachable (every other
+#     service already depends on it). Checked against the default render, where flows.databaseName
+#     ("flows") differs from database.name ("vexa") so the initContainer actually renders.
+if grep -B2 'key: POSTGRES_DB' <<< "$FLOWS_DEFAULT" | grep -q 'name: "postgres-credentials"'; then
+  echo "  OK: ensure-db bootstrap connection targets the application database via POSTGRES_DB secretKeyRef (#F-D5.3)"
+else
+  echo "  FAIL: ensure-db bootstrap connection does not target the application database (#F-D5.3)"; fail=1
+fi
+
+# (4) VEXA_FLOWS_AGENT_API_URL omitted (no agent Service in a no-agents estate) — flows_config.py
+#     declares it a `capability` key: unset means "no agent domain", not a URL pointed at nothing.
+if grep -q 'VEXA_FLOWS_AGENT_API_URL' <<< "$FLOWS_EXT"; then
+  echo "  FAIL: flows tier still renders VEXA_FLOWS_AGENT_API_URL under agentApi.enabled=false (#F-D5.4)"; fail=1
+else
+  echo "  OK: flows tier omits VEXA_FLOWS_AGENT_API_URL under agentApi.enabled=false (#F-D5.4)"
+fi
+if grep -q 'VEXA_FLOWS_AGENT_API_URL' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: flows tier still renders VEXA_FLOWS_AGENT_API_URL under the default agentApi.enabled=true (#F-D5.4)"
+else
+  echo "  FAIL: flows tier lost VEXA_FLOWS_AGENT_API_URL under the default agentApi.enabled=true (#F-D5.4)"; fail=1
+fi
+
+# (5) VEXA_UI_URL omitted (a capability: unset = no link) when terminal.enabled=false — before this
+#     it always resolved to terminal.publicUrl or the in-cluster Service address regardless, a dead
+#     link in every mail a no-terminal deployment sends.
+if grep -q 'VEXA_UI_URL' <<< "$FLOWS_EXT"; then
+  echo "  FAIL: flows tier still renders VEXA_UI_URL under terminal.enabled=false (#F-D5.5)"; fail=1
+else
+  echo "  OK: flows tier omits VEXA_UI_URL under terminal.enabled=false (#F-D5.5)"
+fi
+if grep -q 'VEXA_UI_URL' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: flows tier still renders VEXA_UI_URL under the default terminal.enabled=true (#F-D5.5)"
+else
+  echo "  FAIL: flows tier lost VEXA_UI_URL under the default terminal.enabled=true (#F-D5.5)"; fail=1
+fi
+
+# (6) the ensure-db initContainer tolerates a pre-created database / a role with no CREATEDB: the
+#     create is attempted only when the database is absent, and a privilege failure re-checks once
+#     more (another replica, or a pre-created database, may already have it) before refusing loudly
+#     rather than crash-looping on a raw permission-denied traceback. Static proof only — no live
+#     cluster to actually withhold CREATEDB from a role and watch this branch execute.
+if grep -q 'does not exist and this role could' <<< "$FLOWS_DEFAULT" \
+  && grep -q 'already exists (created by another process)' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: ensure-db initContainer codes the CREATEDB-tolerant retry/refuse path (#F-D5.6)"
+else
+  echo "  FAIL: ensure-db initContainer is missing the CREATEDB-tolerant retry/refuse path (#F-D5.6)"; fail=1
+fi
+
+# flows.databaseName — default "flows" (nothing changes for anyone); set equal to database.name to
+# put the flows tables in the application's own database instead (the shape compose already runs —
+# its flows tables live in the shared vexa database, no separate CREATE DATABASE at all). Prod
+# reason: the db-backup CronJob dumps only the named application database, so a separate "flows"
+# database is unbacked-up. When the two names match, the ensure-db initContainer is skipped
+# entirely — nothing to create, the application database already exists by definition.
+FLOWS_SHARED_DB="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set flows.databaseName=vexa --show-only templates/flows.yaml)"
+if grep -A1 'name: FLOWS_DB_NAME' <<< "$FLOWS_SHARED_DB" | grep -q 'value: "vexa"'; then
+  echo "  OK: flows.databaseName=vexa renders FLOWS_DB_NAME=vexa on every composed DSN"
+else
+  echo "  FAIL: flows.databaseName=vexa did not render FLOWS_DB_NAME=vexa"; fail=1
+fi
+if grep -q 'ensure-db' <<< "$FLOWS_SHARED_DB"; then
+  echo "  FAIL: ensure-db initContainer still renders when flows.databaseName equals database.name (should be a no-op)"; fail=1
+else
+  echo "  OK: ensure-db initContainer is skipped when flows.databaseName equals database.name"
+fi
+if grep -q 'ensure-db' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: ensure-db initContainer still renders under the default flows.databaseName (\"flows\" != \"vexa\")"
+else
+  echo "  FAIL: ensure-db initContainer missing under the default flows.databaseName"; fail=1
+fi
+
+# ── the adoption panel (PRD §16.2 item 5) ────────────────────────────────────────────────────
+# OFF BY DEFAULT and ON WHEN ASKED FOR — the red→green control direction every opt-in block in
+# this chart is held to. The panel is three ConfigMaps and no workload: this chart publishes a
+# dashboard and a datasource file, it never deploys Grafana into a customer's cluster.
+if grep -q "adoption" <<< "$RENDER"; then
+  echo "  FAIL: adoptionPanel renders under the DEFAULT values (must be opt-in)"; fail=1
+else
+  echo "  OK: adoptionPanel absent from the default render"
+fi
+
+PANEL="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set adoptionPanel.enabled=true --show-only templates/adoption-panel.yaml)"
+for want in "vexa-vexa-adoption-dashboard" "vexa-vexa-adoption-datasource" \
+            "vexa-vexa-adoption-panel-env" "grafana_dashboard" "grafana_datasource" \
+            "vexa-adoption-panel" "vexa-app-db" "vexa-flows-db"; do
+  if grep -q "$want" <<< "$PANEL"; then
+    echo "  OK: adoptionPanel renders $want"
+  else
+    echo "  FAIL: adoptionPanel enabled but $want is missing"; fail=1
+  fi
+done
+
+# The panel creates NO workload. A dashboard that quietly added a Deployment to a bank's cluster
+# would be a different change than the one that was reviewed.
+if grep -qE "^kind: (Deployment|StatefulSet|Job|Service)$" <<< "$PANEL"; then
+  echo "  FAIL: adoptionPanel renders a workload — it must be ConfigMaps only"; fail=1
+else
+  echo "  OK: adoptionPanel is ConfigMaps only (no Deployment/StatefulSet/Job/Service)"
+fi
+
+# NO CREDENTIAL IS EVER RENDERED BY THIS CHART. The datasource carries ${ENV} placeholders that
+# Grafana expands itself; the password stays in the Secret it already lives in. A rendered
+# password would be a plaintext credential inside a ConfigMap — the whole reason for the
+# placeholder shape, and the same discipline flows.yaml states for its own DSN.
+if grep -qE "password:[[:space:]]*[^\$[:space:]]" <<< "$PANEL"; then
+  echo "  FAIL: adoptionPanel rendered a literal password into a ConfigMap"; fail=1
+else
+  echo "  OK: adoptionPanel renders no literal credential (password stays an \${ENV} placeholder)"
+fi
+
+# The datasource follows PgBouncer when PgBouncer is on, like every other consumer in this
+# chart. A reporting datasource opening its own direct connections past the pooler is how a
+# dashboard becomes an incident.
+POOLED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set adoptionPanel.enabled=true --set pgbouncer.enabled=true \
+  --show-only templates/adoption-panel.yaml)"
+if grep -A1 "VEXA_DB_HOST" <<< "$POOLED" | grep -q "pgbouncer"; then
+  echo "  OK: adoptionPanel datasource host follows pgbouncer when it is enabled"
+else
+  echo "  FAIL: adoptionPanel datasource bypasses pgbouncer"; fail=1
+fi
+
+# ── the flows tier is PUBLISHABLE: {repository, tag}, not a flat string ────────────────────────
+# Until 2026-09-03 flows.image was ONE string ("vexaai/v012-flows:dev"). Two consequences, both
+# only visible from outside the repo:
+#   (a) it was the single component that ignored global.imageTag, so a release-pinned render still
+#       pulled a mutable :dev tag for the Minutes product;
+#   (b) the channel publisher pins components by merging {<component>: {image: {tag: <ref>}}} over
+#       values.yaml. Merging a map over a string REPLACES it — repository vanishes and the pin
+#       cannot be expressed at all, which is why the enterprise station gate refused every chart
+#       carrying flows as unpinned (S8) no matter what the publisher did.
+# These four assertions are the shape check. Against the flat-string chart the first three fail.
+FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set global.imageTag=vPINNED --show-only templates/flows.yaml)"
+flows_pinned_count="$(grep -cE '^\s+image: "vexaai/v012-flows:vPINNED"$' <<< "$FLOWS_PINNED" || true)"
+if [ "$flows_pinned_count" -eq 6 ]; then
+  echo "  OK: all 6 flows containers follow global.imageTag ($flows_pinned_count)"
+else
+  echo "  FAIL: flows containers following global.imageTag — want 6 got $flows_pinned_count"; fail=1
+fi
+# The publisher's exact pin shape: `flows.image.tag` set to "<version>@sha256:<digest>". This is
+# the addressability proof — a flat string has no .tag to set.
+PIN_REF='v0.12.27@sha256:1111111111111111111111111111111111111111111111111111111111111111'
+FLOWS_DIGEST="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set "flows.image.tag=$PIN_REF" --show-only templates/flows.yaml)"
+digest_count="$(grep -cE "^\s+image: \"vexaai/v012-flows:${PIN_REF//./\\.}\"$" <<< "$FLOWS_DIGEST" || true)"
+if [ "$digest_count" -eq 6 ]; then
+  echo "  OK: publisher pin shape flows.image.tag=<version>@sha256 reaches all 6 containers ($digest_count)"
+else
+  echo "  FAIL: flows.image.tag digest pin reached $digest_count of 6 containers"; fail=1
+fi
+# The default (unpinned) render must name a repository and a tag, never a mutable :dev.
+if grep -qE '^\s+image: "vexaai/v012-flows:dev"$' <<< "$FLOWS_DEFAULT"; then
+  echo "  FAIL: flows default image is still the mutable :dev tag"; fail=1
+else
+  echo "  OK: flows default image is not :dev"
+fi
+if grep -qE '^\s+image: "vexaai/v012-flows:v012"$' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: flows default image is repository:tag at the component default (v012)"
+else
+  echo "  FAIL: flows default image is not vexaai/v012-flows:v012"; fail=1
+fi
+
+# ── S6: the ensure-db initContainer is a container and must declare its resources ──────────────
+# It declared NONE — 12 findings (4 per flows Deployment: cpu/memory × requests/limits) on the
+# enterprise station gate, and the #1005 failure shape in a namespace with a small LimitRange
+# default. Assert every one of the three ensure-db blocks carries all four numbers.
+init_res=0
+for i in 1 2 3; do
+  blk="$(awk -v n="$i" '/- name: ensure-db/{c++} c==n{print} c==n && /^      containers:/{exit}' <<< "$FLOWS_DEFAULT")"
+  if grep -q 'requests: {cpu: 50m, memory: 96Mi}' <<< "$blk" \
+    && grep -q 'limits: {cpu: 250m, memory: 256Mi}' <<< "$blk"; then
+    init_res=$((init_res+1))
+  fi
+done
+if [ "$init_res" -eq 3 ]; then
+  echo "  OK: all 3 ensure-db initContainers declare cpu+memory requests AND limits (S6)"
+else
+  echo "  FAIL: only $init_res of 3 ensure-db initContainers declare resources (S6, 12 findings)"; fail=1
 fi
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
