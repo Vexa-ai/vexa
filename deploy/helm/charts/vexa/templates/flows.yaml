@@ -92,6 +92,28 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-mailbox}
     spec:
+      # F192 — the SAME ensure-db initContainer flows-worker carries above. Only flows-worker had
+      # it; flows-mailbox and flows-api (further down) crash-loop until `flows-worker` happens to
+      # win the startup race and create the `flows` database first, which is an ordering accident,
+      # not a guarantee — k8s makes no promise about which Deployment's pods come up first. Every
+      # container in this file that opens VEXA_FLOWS_DB_URL must be able to create the database it
+      # opens, not borrow a sibling's luck.
+      initContainers:
+        - name: ensure-db
+          image: {{ .Values.flows.image | quote }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              from sqlalchemy import create_engine, text
+              e = create_engine(os.environ["ADMIN_DB_URL"], isolation_level="AUTOCOMMIT")
+              with e.connect() as c:
+                  if not c.execute(text("SELECT 1 FROM pg_database WHERE datname='flows'")).first():
+                      c.execute(text("CREATE DATABASE flows"))
+                      print("created database flows")
+          envFrom:
+            - secretRef:
+                name: {{ include "vexa.componentName" (list . "flows") }}
       containers:
         - name: flows-mailbox
           image: {{ .Values.flows.image | quote }}
@@ -140,6 +162,25 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-api}
     spec:
+      # F192 — see the identical block on flows-mailbox above: every Deployment that opens
+      # VEXA_FLOWS_DB_URL must be able to create the `flows` database itself, not rely on
+      # flows-worker's pod happening to have won the startup race first.
+      initContainers:
+        - name: ensure-db
+          image: {{ .Values.flows.image | quote }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              from sqlalchemy import create_engine, text
+              e = create_engine(os.environ["ADMIN_DB_URL"], isolation_level="AUTOCOMMIT")
+              with e.connect() as c:
+                  if not c.execute(text("SELECT 1 FROM pg_database WHERE datname='flows'")).first():
+                      c.execute(text("CREATE DATABASE flows"))
+                      print("created database flows")
+          envFrom:
+            - secretRef:
+                name: {{ include "vexa.componentName" (list . "flows") }}
       containers:
         - name: flows-api
           image: {{ .Values.flows.image | quote }}

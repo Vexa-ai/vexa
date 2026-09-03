@@ -1,4 +1,4 @@
--- GENERATED from src/flows/schema_models.py (the SSOT) by scripts/gen_schema.py.
+-- GENERATED from src/flows_schema/models.py (the SSOT) by core/flows/scripts/gen_schema.py.
 -- DO NOT EDIT BY HAND — edit the models and regenerate. The engine and the sqlite
 -- test rig consume this file so they stay stdlib-pure; the drift gate keeps it honest.
 

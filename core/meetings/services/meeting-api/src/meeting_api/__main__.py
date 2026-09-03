@@ -696,6 +696,46 @@ def _attach_background_loops(
                 log.exception("signal tape janitor tick failed")
             await asyncio.sleep(signal_janitor_interval)
 
+    async def _ensure_fts_index_once() -> None:
+        """F191 / MIGRATION-0006 — ``ensure_fts_index`` (adapters.py, ``SqlAlchemyTranscriptStore``)
+        built the transcript FTS GIN index and was never called from anywhere: it shipped defined,
+        dead, and search ran a sequential scan of ``transcriptions`` from day one with nothing
+        reporting the gap.
+
+        A ONE-SHOT task, not a ``while True`` loop like its siblings above: the function's own
+        docstring already establishes it is idempotent and cheap to re-check ("safe to call on
+        every boot"), so one attempt per process lifetime is the right shape — the loop members
+        above poll because their work recurs (new segments, new webhooks); this index does not.
+        Fired here rather than folded into meeting-api's synchronous boot path for the same reason
+        the docstring gives: ``CREATE INDEX CONCURRENTLY`` cannot run inside admin-api's
+        ``ensure_schema`` transaction, and a plain (non-concurrent) build would hold
+        ``ACCESS EXCLUSIVE`` on the highest-row-count table for the whole build and stall startup.
+
+        Single-flighted like the other sweeps (not because a concurrent build corrupts anything —
+        ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` is itself safe under a race — but so
+        ``replicaCount>1`` does not have every replica open its own AUTOCOMMIT connection and hold
+        it for the full build). ``hasattr`` guards a fake/Lite transcript_store the same way
+        ``upsert_segments``/``create_planned_meeting`` are guarded above — this branch's only real
+        store is ``SqlAlchemyTranscriptStore``, but eval/test doubles that construct this function
+        with something else must not crash on a method they were never given.
+        """
+        if not hasattr(transcript_store, "ensure_fts_index"):
+            return
+
+        async def _tick():
+            result = await transcript_store.ensure_fts_index()
+            log.info("transcript FTS index: %s", result)
+
+        try:
+            await _guarded("ensure-fts-index", _tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "ensure_fts_index failed — transcript search falls back to a sequential scan "
+                "until the next boot retries it"
+            )
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
@@ -710,6 +750,7 @@ def _attach_background_loops(
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
+            asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:

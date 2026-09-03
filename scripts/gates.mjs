@@ -1020,9 +1020,11 @@ const CONFIG_ADOPTED = [
     // over less than half the seam") named this brick by hand. `core/flows/src/flows_config.py`
     // was written to make this adoption a transcription — one table, both directions asserted by
     // its own test — and this entry is that transcription arriving.
-    // ONE DECLARATION, TWO COMPOSE LANES: `flows-api` and `flows-mailbox` are the same image under
-    // different commands and carry the same environment, so the declaration belongs to the domain
-    // and the entry binds it to the API lane.
+    // ONE DECLARATION, THREE COMPOSE LANES (F190 added `flows-worker`): `flows-api`,
+    // `flows-mailbox` and `flows-worker` are the same image under different commands and carry
+    // the same environment, so the declaration belongs to the domain and the entry binds it to
+    // the API lane — the other two lanes' compose blocks are unchecked by this gate exactly as
+    // `flows-mailbox`'s always was (same reasoning: one declaration, one lane scanned for it).
     // helm/lite are EMPTY: the flows helm chart plumbs its keys through a Secret's `stringData`,
     // which the line-wise `- name:` scan cannot see, and there is no supervisord program at all.
     // Naming a surface this check cannot actually read would be worse than saying it is not read.
