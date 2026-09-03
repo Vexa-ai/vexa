@@ -332,8 +332,16 @@ services:
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
       # The AUTHENTICATED vexa-control MCP a chat worker gets. agent-api mints a short-lived, scoped,
       # revocable delegation token per dispatch and the MCP verifies it with the same secret — so a
-      # worker never holds a durable user credential. Both unset ⇒ no MCP is attached (default).
-      - VEXA_MCP_URL=${VEXA_MCP_URL:-}
+      # worker never holds a durable user credential. No secret ⇒ no MCP is attached (default),
+      # whatever the URL says.
+      #
+      # ADR-0037 / PRD decision 40.5 — the default is the GATEWAY's assembled MCP surface
+      # (`gateway` proxies `/mcp` to the `mcp` service in this same compose file), not
+      # deploy/dogfood's rig: a worker's MCP attachment is an ordinary CLIENT edge to the one
+      # assembled server, the same edge a terminal or any other MCP client reaches. A deployment
+      # that still needs the rig (or a private mounted domain's MCP) sets VEXA_MCP_URL itself —
+      # this is only the in-network default for a stack that names none.
+      - VEXA_MCP_URL=${VEXA_MCP_URL:-http://gateway:8000/mcp}
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
       # THE SCAFFOLD's link origin (PRD §5.5). The SAME variable the flows lane reads, on purpose:
       # one deployment fact, one name. Unset, POST /internal/scaffolds refuses to mint rather than
