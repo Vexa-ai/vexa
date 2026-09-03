@@ -145,6 +145,11 @@ AGENT_STEPS = {
     "ack_by_email", "open_person", "drive_person", "open_group", "drive_group",
     "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees",
     "prepare_meeting", "feedback_turn",
+    # The two desk cards (PRD decision 42.2). They RE-READ the desk before asking — the fact is
+    # old the moment it is published — and the desk is agent state. A deployment without the agent
+    # domain has no card to show and, because agent-api is what publishes the events these two
+    # react to, no reaction either: absent twice over, which is the correct absence.
+    "await_scaffold", "await_claim",
 }
 
 

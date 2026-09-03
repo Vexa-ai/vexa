@@ -11,6 +11,14 @@
       "description": "A person finished onboarding. Published by identity at POST /admin/users — the single account-creation point all five onboarding paths already share (the control MCP's sign-in verbs, its OAuth door, its account_for helper, the terminal's auth, and the flows mail door), so one publish covers all five and none of them had to be refactored. Fires in every profile including the no-agents one. `seat` is what a billing domain charges for and `org` is what it charges; `org` is empty today because identity holds no organisation for a person, and it is present-and-empty rather than absent so a consumer never has to ask a second place whether it looked."
     },
     {
+      "event": "meeting.started",
+      "owner": "flows",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "meeting_id"],
+      "source_event_id": "live-<meeting_id> — keyed to the meeting, so a redelivery dedupes at the flows intake and a second bot dispatch for the same meeting cannot open a second live reaction",
+      "description": "A call this deployment sent a bot into is happening NOW; triggers live_meeting, whose step stays pending while it runs and completes when meeting.completed for the same meeting is admitted. That pending row is what puts \"a meeting is happening right now\" in whats_waiting as a reaction rather than a /bots/status read at the edge (PRD decision 42.2) — the queue holds reactions, so anything a person is told about has to be one. OWNED BY FLOWS BECAUSE FLOWS IS WHAT PUBLISHES IT TODAY: emit_started, inside invite_intake v3. meeting-api already derives the same typed event when the bot goes ACTIVE (core/meetings/services/meeting-api/src/meeting_api/lifecycle/webhook.py:40) and that is its intended home; nothing carries it into the flows intake yet. When meetings does, this is a HANDOVER and not a second producer — the owner here becomes meetings, emit_started goes, and the flow does not change."
+    },
+    {
       "event": "meeting.completed",
       "owner": "flows",
       "cardinality": "once_per_occurrence",

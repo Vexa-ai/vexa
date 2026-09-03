@@ -10,6 +10,10 @@
   POST /flows/{name}/{v}/activate   · POST /flows/{name}/{v}/retire
   GET  /reactions[?status=…]        the operator projection
   POST /reactions/{id}/{retry|resume|cancel}    the signal verbs (audited rows)
+  GET  /queue/waiting               WHAT IS WAITING FOR ONE PERSON — the subject-scoped pending
+                                    reactions, each naming the flow that produced it and its
+                                    typed reason (PRD decision 42.2). The subject is the
+                                    authenticated caller's, never an argument.
   GET  /timeline?subject=…          ONE PERSON'S DAY, in order — facts, receipts and the
                                     meetings table merged and scoped to them (PRD decision 31).
                                     Read-only, and it takes the operator key OR the narrower
@@ -536,6 +540,49 @@ def mcp_tools_manifest():
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=503,
                             detail=f"this build carries no tool manifest: {e}") from e
+
+
+# ── the queue: what is waiting for ONE PERSON (PRD decision 42.2) ─────────────────────────────
+# *"what is waiting — maybe it's flows?"* (founder, 2026-09-03 07:43Z; agreed.) What is waiting is
+# the set of pending reactions flows already holds for a subject — nothing is unioned at the edge,
+# and no other domain contributes items. They publish EVENTS; flow definitions decide what waits.
+#
+# AT THE END OF THE FILE ON PURPOSE. The projection lives in `flows_queue` and this is a thin
+# forward, so the whole of it fits here rather than among the routes it has nothing to do with —
+# and decision 15's `auth` work lands on this same module, which a route inserted mid-file would
+# collide with for no benefit.
+import flows_queue as _flows_queue  # noqa: E402
+
+
+@app.get("/queue/waiting", dependencies=[Depends(auth)])
+def queue_waiting(subject: str = "", limit: int = 50,
+                  x_user_id: str = Header(default="")):
+    """WHAT IS WAITING FOR THIS PERSON — pending reactions, with the flow that produced each.
+
+    THE SUBJECT IS THE AUTHENTICATED CALLER'S. `X-User-Id` is what the MCP assembler stamps after
+    it has resolved identity once at the edge, and it WINS over `?subject=`: a caller who names
+    somebody else in a query argument while carrying their own bearer must read their own queue and
+    nobody else's. `?subject=` survives for the unstamped operator read that `GET /reactions`
+    already has, behind the same operator key — and that key is a SERVICE identity, not a person's,
+    which is exactly why the person's identity has to arrive separately.
+
+    Behind `auth`, not `timeline_auth`: `VEXA_FLOWS_TIMELINE_KEY` is documented as opening the
+    timeline and nothing else, and quietly widening a key's reach is how a narrow credential stops
+    being narrow.
+
+    The answer is DATA plus behavior's words: every sentence a person hears is resolved from
+    `behavior/queue/`, read hot, never from this body. See `flows_queue` for why silence there is
+    the filter rather than a keyword list here.
+    """
+    who = (x_user_id or "").strip() or (subject or "").strip()
+    if not who:
+        raise HTTPException(status_code=400, detail=(
+            "no subject — this route answers for ONE person. The edge stamps X-User-Id; an "
+            "operator calling it directly passes ?subject=<uid|email>."))
+    flows = [{"name": f.name, "version": f.version, "on": f.on.name}
+             for f in vocab.flows.values()]
+    return _flows_queue.waiting(db, subject=who, flows=flows,
+                                limit=max(1, min(int(limit), 200)))
 
 
 # THE ENTRYPOINT GUARD IS THE LAST THING IN THIS MODULE, and that is load-bearing rather than

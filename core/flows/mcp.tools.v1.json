@@ -28,6 +28,14 @@
       "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared — the route cannot be called without them."
     },
     {
+      "name": "whats_waiting",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/queue/waiting" },
+      "note": "PRD decision 42.2 — what is waiting IS flows: this subject's pending reactions, each naming the flow that produced it and its typed reason (human | failed | not_present | pending). Nothing is unioned at the edge. `auth: subject` means the person is the authenticated caller — the edge stamps X-User-Id and the tool takes no subject argument. The `auth` field itself arrives with decision 15; declared here so the merge order, not this manifest, resolves it."
+    },
+    {
       "name": "timeline",
       "identity": "user",
       "requires": ["identity", "flows"],
@@ -37,6 +45,7 @@
   ],
   "publishes_events": [
     { "event": "meeting.completed", "status": "published today", "triggers": "post_meeting v4" },
-    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v2" }
+    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v3" },
+    { "event": "meeting.started", "status": "published today by invite_intake v3 (emit_started); meeting-api's lifecycle derives the same typed event on BotStatus.ACTIVE and is the intended producer", "triggers": "live_meeting v1" }
   ]
 }
