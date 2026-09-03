@@ -46,8 +46,6 @@
   "publishes_events": [
     { "event": "meeting.completed", "status": "published today", "triggers": "post_meeting v4" },
     { "event": "invite.received", "status": "published today", "triggers": "invite_intake v3" },
-    { "event": "meeting.started", "status": "published today by invite_intake v3 (emit_started); meeting-api's lifecycle is the intended producer", "triggers": "live_meeting v1" },
-    { "event": "desk.unscaffolded", "status": "consumed, NOT published here — agent-api's to publish (control_plane/routers/workspaces.py: ws_init)", "triggers": "desk_setup v1" },
-    { "event": "claim.proposed", "status": "consumed, NOT published here — agent-api's to publish; no claim-aware route exists yet (the rig writes the claim book through the generic file route)", "triggers": "desk_claim v1" }
+    { "event": "meeting.started", "status": "published today by invite_intake v3 (emit_started); meeting-api's lifecycle derives the same typed event on BotStatus.ACTIVE and is the intended producer", "triggers": "live_meeting v1" }
   ]
 }

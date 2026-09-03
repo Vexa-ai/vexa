@@ -64,6 +64,14 @@ happening now — pending until `meeting.completed` for the same meeting is admi
 and `desk_claim` (the two desk cards, both `needs=("agent",)`, so a deployment without the agent
 domain has neither the events nor the reactions — there is no desk there to have a card on).
 
+`desk_setup` and `desk_claim` react to `desk.unscaffolded` and `claim.proposed`, which flows
+CONSUMES and does not publish — they are the agent domain's to publish, and they are deliberately
+absent from this domain's `publishes_events` for that reason. They have no producer yet: agent-api
+would publish the first at `control_plane/routers/workspaces.py` `ws_init` (a desk seeded with no
+`.scaffolded`) and the second needs a claim-aware route that does not exist, the claim book being
+written today through the generic file route. Until then the two flows never fire, which is the
+correct behaviour and not a gap in the queue.
+
 **The words are not in the code.** Every sentence a person hears is a file in `behavior/queue/`,
 resolved private-mount-first and read hot, and a pending reaction behavior says nothing about is
 counted rather than spoken. `behavior/queue/README.md` is the contract.

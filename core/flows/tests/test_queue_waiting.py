@@ -409,6 +409,40 @@ def test_the_answer_carries_the_flow_list_that_makes_a_short_queue_legible(api, 
     assert "live_meeting" in {f["name"] for f in body["flows"]}
 
 
+#: What this domain's manifest may claim to publish: an event some code in `src/` actually
+#: produces. Producing is `ctx.emit(<EventType>.name, …)` in a flow definition or `admit(…,
+#: event_type="…")` in an integration — the two ways a fact enters this engine from inside it.
+def _produced() -> set:
+    import re
+    src = (Path(__file__).resolve().parents[1] / "src")
+    text = "\n".join(f.read_text() for f in src.rglob("*.py"))
+    consts = dict(re.findall(r'^([A-Z][A-Z0-9_]*)\s*=\s*EventType\("([^"]+)"\)', text, re.M))
+    out = set(re.findall(r'event_type="([^"]+)"', text))
+    out |= {consts[c] for c in re.findall(r'\.emit\(\s*([A-Z][A-Z0-9_]*)\.name', text)
+            if c in consts}
+    return out
+
+
+def test_the_manifest_only_claims_to_publish_what_this_domain_actually_produces():
+    """A CONSUMED event in `publishes_events` is a lie about ownership, and it is the one this
+    branch told: `desk.unscaffolded` and `claim.proposed` are the AGENT domain's to publish, and
+    listing them here would register flows as their producer everywhere that field is read.
+
+    The carrier census (`core/flows/contracts/flows.v1/carriers.json`) is where one-owner-per-event
+    is enforced repository-wide once it lands; this is the same rule inside the domain, where it is
+    cheaper to be wrong, and it is the check that would have caught it."""
+    doc = json.loads((Path(__file__).resolve().parents[1] / "mcp.tools.v1.json").read_text())
+    claimed = {e["event"] for e in doc.get("publishes_events") or []}
+    produced = _produced()
+    assert claimed <= produced, (
+        f"declared as published by flows but produced by nothing in core/flows/src: "
+        f"{sorted(claimed - produced)}. An event this domain only REACTS to belongs in a flow "
+        f"registration, never in publishes_events.")
+    assert "meeting.started" in claimed, "invite_intake v3 emits it — say so where it is read"
+    for consumed in ("desk.unscaffolded", "claim.proposed"):
+        assert consumed not in claimed, f"{consumed} is the agent domain's to publish"
+
+
 def test_the_manifest_declares_the_tool_with_no_subject_argument():
     """`auth: subject` — the person is the authenticated caller, so there is no argument naming
     one. The field itself arrives with decision 15; the manifest carries it either way."""
