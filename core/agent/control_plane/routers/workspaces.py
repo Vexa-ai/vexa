@@ -12,6 +12,7 @@ from __future__ import annotations
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
+from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import system_mounts
 from control_plane import workspace_credentials as wcreds
@@ -282,8 +283,27 @@ def build(**d) -> APIRouter:
         # address, and this is the one seam that has the address.
         _ws_sync(str(subject), kind="desk", owner=str(subject), ws_dir=ws,
                  name=(request.headers.get("x-user-email") or "").strip() or None)
+        # THE DESK EXISTS AND NOBODY HAS FINISHED SETTING IT UP — the agent domain's fact to tell
+        # (PRD ruling 9; the carrier flows' `desk_setup` reacts to). Told ONLY on the call that
+        # created the desk: this route is idempotent and called on every login, so a publish per
+        # call would put one card on the queue per sign-in, forever, for the very person who never
+        # finished — and a card a person sees daily is a card they learn to ignore.
+        #
+        # `.scaffolded` is the marker a finished setup leaves (`flows_steps.common.scaffolded`); a
+        # desk that already carries one is waiting for nothing. It cannot normally be there on a
+        # freshly seeded desk, and it is checked anyway because the alternative — asking somebody
+        # to finish what they already finished — is the one failure a queue card cannot survive.
+        #
+        # Fire-and-forget. A publish is not a dependency: the return value is dropped, the call is
+        # bounded at 2s and swallowed, and a deployment with no flows domain provisions this desk
+        # in exactly the same way.
+        if not existed and not (ws / ".scaffolded").exists():
+            publish_mod.publish(publish_mod.EVENT_DESK_UNSCAFFOLDED,
+                                publish_mod.desk_source_id(subject),
+                                publish_mod.desk_refs(subject))
         return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
                 "system_seeded": not system_existed}
+
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
