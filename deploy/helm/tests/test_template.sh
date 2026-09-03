@@ -345,4 +345,56 @@ else
   echo "  FAIL: ensure-db initContainer missing under the default flows.databaseName"; fail=1
 fi
 
+# ── the adoption panel (PRD §16.2 item 5) ────────────────────────────────────────────────────
+# OFF BY DEFAULT and ON WHEN ASKED FOR — the red→green control direction every opt-in block in
+# this chart is held to. The panel is three ConfigMaps and no workload: this chart publishes a
+# dashboard and a datasource file, it never deploys Grafana into a customer's cluster.
+if grep -q "adoption" <<< "$RENDER"; then
+  echo "  FAIL: adoptionPanel renders under the DEFAULT values (must be opt-in)"; fail=1
+else
+  echo "  OK: adoptionPanel absent from the default render"
+fi
+
+PANEL="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set adoptionPanel.enabled=true --show-only templates/adoption-panel.yaml)"
+for want in "vexa-vexa-adoption-dashboard" "vexa-vexa-adoption-datasource" \
+            "vexa-vexa-adoption-panel-env" "grafana_dashboard" "grafana_datasource" \
+            "vexa-adoption-panel" "vexa-app-db" "vexa-flows-db"; do
+  if grep -q "$want" <<< "$PANEL"; then
+    echo "  OK: adoptionPanel renders $want"
+  else
+    echo "  FAIL: adoptionPanel enabled but $want is missing"; fail=1
+  fi
+done
+
+# The panel creates NO workload. A dashboard that quietly added a Deployment to a bank's cluster
+# would be a different change than the one that was reviewed.
+if grep -qE "^kind: (Deployment|StatefulSet|Job|Service)$" <<< "$PANEL"; then
+  echo "  FAIL: adoptionPanel renders a workload — it must be ConfigMaps only"; fail=1
+else
+  echo "  OK: adoptionPanel is ConfigMaps only (no Deployment/StatefulSet/Job/Service)"
+fi
+
+# NO CREDENTIAL IS EVER RENDERED BY THIS CHART. The datasource carries ${ENV} placeholders that
+# Grafana expands itself; the password stays in the Secret it already lives in. A rendered
+# password would be a plaintext credential inside a ConfigMap — the whole reason for the
+# placeholder shape, and the same discipline flows.yaml states for its own DSN.
+if grep -qE "password:[[:space:]]*[^\$[:space:]]" <<< "$PANEL"; then
+  echo "  FAIL: adoptionPanel rendered a literal password into a ConfigMap"; fail=1
+else
+  echo "  OK: adoptionPanel renders no literal credential (password stays an \${ENV} placeholder)"
+fi
+
+# The datasource follows PgBouncer when PgBouncer is on, like every other consumer in this
+# chart. A reporting datasource opening its own direct connections past the pooler is how a
+# dashboard becomes an incident.
+POOLED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set adoptionPanel.enabled=true --set pgbouncer.enabled=true \
+  --show-only templates/adoption-panel.yaml)"
+if grep -A1 "VEXA_DB_HOST" <<< "$POOLED" | grep -q "pgbouncer"; then
+  echo "  OK: adoptionPanel datasource host follows pgbouncer when it is enabled"
+else
+  echo "  FAIL: adoptionPanel datasource bypasses pgbouncer"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

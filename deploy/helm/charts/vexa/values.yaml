@@ -544,3 +544,29 @@ flows:
     perSender: "12"
     global: "120"
     windowSeconds: "3600"
+
+# ── The adoption panel (off by default; ConfigMaps only — this chart never deploys Grafana) ──
+# WHAT IT IS: a Grafana dashboard the operator runs inside their own cluster showing who is
+# actually using this deployment and whether it is spreading — users, teams covered, meetings,
+# and the second-invite rate by a non-organizer. Every number is computed from this cluster's
+# own two Postgres databases by SQL panels; nothing leaves the perimeter and nothing is sent to
+# anyone. Full per-panel definitions: charts/vexa/dashboards/README.md.
+#
+# WHY THIS SHIPS NO GRAFANA: standing an observability stack inside a customer's cluster is
+# their platform team's decision, not a side effect of installing this chart. Enabling this
+# renders three ConfigMaps — the dashboard, a datasource file whose credentials are ${ENV}
+# placeholders Grafana expands itself, and the non-secret half of that environment resolved
+# from this release. A Grafana already running with the standard sidecar picks the first two up
+# by label; an operator without a sidecar imports the JSON by hand (README).
+#
+# THE DATABASE ROLE THE DATASOURCE USES SHOULD HOLD `SELECT` AND NOTHING ELSE. The dashboard
+# issues no writes, and a test refuses to ship a panel that does.
+adoptionPanel:
+  enabled: false
+  # The labels the Grafana sidecar watches. Change them only if your sidecar is configured with
+  # non-default label keys; the VALUE is always "1", which is what the sidecar matches on.
+  dashboardLabel: grafana_dashboard
+  datasourceLabel: grafana_datasource
+  # Extra annotations on the dashboard ConfigMap — e.g. the sidecar's folder annotation
+  # (grafana_folder: "Vexa") when you want it filed somewhere other than General.
+  annotations: {}
