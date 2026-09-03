@@ -66,8 +66,17 @@ def verify(assembly: Assembly, openapi_by_domain: Dict[str, dict]) -> List[Bound
             raise ManifestError(
                 f"{tool.domain}/{tool.name}: {tool.domain} does not serve {method} {path} — the "
                 "manifest names a route its own service does not have")
-        params = {p.get("name"): (p.get("schema") or {})
-                  for p in (op.get("parameters") or []) if p.get("name")}
+        # The DESCRIPTION travels with the schema. It is the owning route's own words about that
+        # argument, and it is the only thing an agent reads before deciding what to put there —
+        # dropping it publishes a typed blank.
+        params = {}
+        for spec in (op.get("parameters") or []):
+            if not spec.get("name"):
+                continue
+            schema = dict(spec.get("schema") or {})
+            if spec.get("description") and "description" not in schema:
+                schema["description"] = spec["description"]
+            params[spec["name"]] = schema
         path_params = tuple(_PATH_PARAM.findall(path))
         declared = {}
         for arg in tool_arguments(tool):

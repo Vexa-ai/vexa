@@ -40,6 +40,12 @@ Each tool answers two different questions, and conflating them is what issue #14
   by its own door is worse than one that is absent: an agent that cannot see a tool recovers.
 - **`none`** — nothing travels.
 
+A tool's **arguments** are its `arguments` list plus the path parameters of its route, and both are
+published in the tool's input schema with the owning route's own types and descriptions — the
+manifest never restates a route, and an argument an agent cannot see is an argument that does not
+exist. Path parameters are required; declared arguments are optional. An argument the tool does not
+declare is refused rather than dropped.
+
 **Migration note (operator-visible):** `auth` is **required**. A manifest written against the
 previous shape — including one supplied through `VEXA_MCP_MANIFEST_DIR` — refuses the boot, naming
 the tool and the field. That is deliberate: a default is a guess applied silently to every tool, and

@@ -94,11 +94,22 @@ def test_an_undeclared_argument_is_not_forwarded(wired):
 
 
 def test_path_parameters_are_substituted(wired):
+    """As QUERY parameters, which is where they are now declared (issue #1468). They used to be
+    read out of the JSON body, and being undeclared is exactly why an agent could not see them:
+    the tool's input schema is derived from this route's parameters, so `reaction_signal` was
+    published taking nothing and could not be addressed at all."""
     app, seen = wired
-    r = TestClient(app).post("/tools/reaction_signal", json={"reaction_id": "r1", "verb": "retry"},
+    r = TestClient(app).post("/tools/reaction_signal?reaction_id=r1&verb=retry",
                              headers={"X-API-Key": "k"})
     assert r.status_code == 200, r.text
     assert str(seen[-1].url) == "http://flows/reactions/r1/retry"
+
+
+def test_a_path_parameter_is_required_rather_than_guessed(wired):
+    app, seen = wired
+    before = len(seen)
+    r = TestClient(app).post("/tools/reaction_signal?reaction_id=r1", headers={"X-API-Key": "k"})
+    assert r.status_code == 422 and len(seen) == before
 
 
 def test_a_missing_credential_is_refused_before_the_forward(wired):
