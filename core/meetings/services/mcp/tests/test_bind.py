@@ -38,7 +38,7 @@ def _assembly(tools):
 
 
 def test_a_bound_tool_takes_its_description_from_the_route():
-    a = _assembly([{"name": "flows_list", "identity": "operator",
+    a = _assembly([{"name": "flows_list", "identity": "operator", "auth": "subject",
                     "requires": ["identity", "flows"],
                     "route": {"method": "GET", "path": "/flows"}}])
     bound = bind.verify(a, {"flows": FLOWS_OPENAPI})
@@ -48,14 +48,14 @@ def test_a_bound_tool_takes_its_description_from_the_route():
 
 def test_a_route_the_domain_does_not_serve_fails_the_boot():
     """The manifest lying about its own service — the one failure this design could otherwise hide."""
-    a = _assembly([{"name": "x", "identity": "user", "requires": ["identity", "flows"],
+    a = _assembly([{"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
                     "route": {"method": "GET", "path": "/nope"}}])
     with pytest.raises(m.ManifestError, match="does not serve"):
         bind.verify(a, {"flows": FLOWS_OPENAPI})
 
 
 def test_the_wrong_method_on_a_real_path_fails_too():
-    a = _assembly([{"name": "x", "identity": "user", "requires": ["identity", "flows"],
+    a = _assembly([{"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
                     "route": {"method": "DELETE", "path": "/flows"}}])
     with pytest.raises(m.ManifestError, match="does not serve"):
         bind.verify(a, {"flows": FLOWS_OPENAPI})
@@ -64,7 +64,7 @@ def test_the_wrong_method_on_a_real_path_fails_too():
 def test_an_argument_the_operation_does_not_take_fails_the_boot():
     """An argument an agent can pass and the route ignores is the worst reply available: the agent
     reports success on something that did not happen."""
-    a = _assembly([{"name": "reactions_list", "identity": "operator",
+    a = _assembly([{"name": "reactions_list", "identity": "operator", "auth": "subject",
                     "requires": ["identity", "flows"],
                     "route": {"method": "GET", "path": "/reactions"},
                     "arguments": ["status", "invented"]}])
@@ -73,7 +73,7 @@ def test_an_argument_the_operation_does_not_take_fails_the_boot():
 
 
 def test_declared_arguments_carry_their_schema_from_the_operation():
-    a = _assembly([{"name": "reactions_list", "identity": "operator",
+    a = _assembly([{"name": "reactions_list", "identity": "operator", "auth": "subject",
                     "requires": ["identity", "flows"],
                     "route": {"method": "GET", "path": "/reactions"},
                     "arguments": ["status", "source_event_prefix"]}])
@@ -86,7 +86,7 @@ def test_a_path_parameter_is_an_argument_without_being_declared():
     """`/reactions/{reaction_id}/{verb}` cannot be called without them, so they are arguments
     whether or not the manifest lists them — and a manifest that had to restate them would be a
     second place to write the route."""
-    a = _assembly([{"name": "reaction_signal", "identity": "user",
+    a = _assembly([{"name": "reaction_signal", "identity": "user", "auth": "subject",
                     "requires": ["identity", "flows"],
                     "route": {"method": "POST", "path": "/reactions/{reaction_id}/{verb}"}}])
     bound = bind.verify(a, {"flows": FLOWS_OPENAPI})
@@ -97,14 +97,14 @@ def test_an_edge_owned_tool_needs_no_openapi():
     doc = {"contract": "mcp.tools.v1", "domain": "gateway", "source": "oss",
            "owner": "core/gateway/services/mcp", "base_url_env": None, "served_at": None,
            "depends_on": ["identity"],
-           "tools": [{"name": "vexa_overview", "identity": "none", "requires": ["identity"],
+           "tools": [{"name": "vexa_overview", "identity": "none", "auth": "subject", "requires": ["identity"],
                       "route": None}]}
     a = m.assemble([doc], deployed={"identity"})
     assert bind.verify(a, {}) == []
 
 
 def test_a_domain_with_no_openapi_at_all_fails_rather_than_binding_blind():
-    a = _assembly([{"name": "flows_list", "identity": "operator",
+    a = _assembly([{"name": "flows_list", "identity": "operator", "auth": "subject",
                     "requires": ["identity", "flows"],
                     "route": {"method": "GET", "path": "/flows"}}])
     with pytest.raises(m.ManifestError, match="OpenAPI"):

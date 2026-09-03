@@ -36,7 +36,7 @@ def _manifest(domain="flows", tools=None, **kw):
         "owner": f"core/{domain}", "base_url_env": f"{domain.upper()}_API_URL",
         "served_at": "/.well-known/mcp-tools.json", "depends_on": ["identity"],
         "tools": tools if tools is not None else [
-            {"name": "flows_list", "identity": "operator", "requires": ["identity", "flows"],
+            {"name": "flows_list", "identity": "operator", "auth": "subject", "requires": ["identity", "flows"],
              "route": {"method": "GET", "path": "/flows"}}],
     }
     doc.update(kw)
@@ -51,23 +51,23 @@ def test_a_manifest_may_only_depend_on_identity():
         m.validate(_manifest(depends_on=["identity", "agent"]))
     m.validate(_manifest(depends_on=["identity"]))
     m.validate(_manifest(domain="identity", depends_on=[], base_url_env="ADMIN_API_URL", tools=[
-        {"name": "settings", "identity": "user", "requires": ["identity"],
+        {"name": "settings", "identity": "user", "auth": "subject", "requires": ["identity"],
          "route": {"method": "GET", "path": "/user/settings"}}]))
 
 
 def test_a_tool_requires_its_own_domain_and_identity_only():
     with pytest.raises(m.ManifestError, match="requires"):
         m.validate(_manifest(tools=[
-            {"name": "x", "identity": "user", "requires": ["identity", "meetings"],
+            {"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "meetings"],
              "route": {"method": "GET", "path": "/x"}}]))
 
 
 def test_an_edge_owned_tool_may_have_no_route_only_when_it_has_no_door():
     m.validate(_manifest(domain="gateway", base_url_env=None, served_at=None, tools=[
-        {"name": "vexa_overview", "identity": "none", "requires": ["identity"], "route": None}]))
+        {"name": "vexa_overview", "identity": "none", "auth": "subject", "requires": ["identity"], "route": None}]))
     with pytest.raises(m.ManifestError, match="route"):
         m.validate(_manifest(tools=[
-            {"name": "x", "identity": "user", "requires": ["identity", "flows"], "route": None}]))
+            {"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"], "route": None}]))
 
 
 # ── assembly ─────────────────────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ def test_only_tools_whose_domains_are_deployed_are_served():
     """Eight configurations, not two. A tool the deployment cannot satisfy is ABSENT."""
     flows = _manifest()
     agent = _manifest(domain="agent", base_url_env="AGENT_API_URL", tools=[
-        {"name": "workspace_tree", "identity": "user", "requires": ["identity", "agent"],
+        {"name": "workspace_tree", "identity": "user", "auth": "subject", "requires": ["identity", "agent"],
          "route": {"method": "GET", "path": "/api/workspace/tree"}}])
     both = m.assemble([flows, agent], deployed={"identity", "flows", "agent"})
     assert {t.name for t in both.tools} == {"flows_list", "workspace_tree"}
@@ -87,7 +87,7 @@ def test_only_tools_whose_domains_are_deployed_are_served():
 def test_a_name_claimed_twice_fails_the_boot_and_names_both():
     a = _manifest()
     b = _manifest(domain="agent", base_url_env="AGENT_API_URL", tools=[
-        {"name": "flows_list", "identity": "user", "requires": ["identity", "agent"],
+        {"name": "flows_list", "identity": "user", "auth": "subject", "requires": ["identity", "agent"],
          "route": {"method": "GET", "path": "/x"}}])
     with pytest.raises(m.ManifestError) as e:
         m.assemble([a, b], deployed={"identity", "flows", "agent"})
@@ -98,7 +98,7 @@ def test_a_mounted_manifest_gets_no_precedence_over_an_oss_one():
     """The rule that makes a private mount safe: it collides, it does not shadow."""
     oss = _manifest()
     mounted = _manifest(domain="billing", source="mounted", base_url_env="BILLING_API_URL",
-                        tools=[{"name": "flows_list", "identity": "user",
+                        tools=[{"name": "flows_list", "identity": "user", "auth": "subject",
                                 "requires": ["identity", "billing"],
                                 "route": {"method": "GET", "path": "/seats"}}])
     with pytest.raises(m.ManifestError, match="claimed"):
@@ -163,11 +163,11 @@ def test_a_tool_may_not_take_a_credential_as_an_argument():
     for arg in ("token", "api_key", "access_token", "password"):
         with pytest.raises(m.ManifestError, match="one authentication path"):
             m.validate(_manifest(tools=[
-                {"name": "x", "identity": "user", "requires": ["identity", "flows"],
+                {"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
                  "route": {"method": "GET", "path": "/x"}, "arguments": [arg, "since"]}]))
 
 
 def test_ordinary_arguments_are_untouched():
     m.validate(_manifest(tools=[
-        {"name": "x", "identity": "user", "requires": ["identity", "flows"],
+        {"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
          "route": {"method": "GET", "path": "/x"}, "arguments": ["since", "limit", "status"]}]))

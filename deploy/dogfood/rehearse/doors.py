@@ -454,7 +454,7 @@ class LiveDoors(Doors):
         own intake with the lane key is the door built for exactly this caller.
         """
         st, body = _http("POST", f"{FLOWS_API}/events",
-                         {"X-Flows-Admin-Key": self._flows_key, "X-Actor": "rehearse"},
+                         {"X-Flows-Operator-Key": self._flows_key, "X-Actor": "rehearse"},
                          {"event_type": event_type, "source_event_id": source_event_id,
                           "refs": refs})
         if st not in (200, 202) or not isinstance(body, dict):
@@ -537,7 +537,7 @@ class LiveDoors(Doors):
         deadline = time.time() + budget_s
         while True:
             st, body = _http("GET", f"{FLOWS_API}/reactions?limit=80",
-                             {"X-Flows-Admin-Key": self._flows_key})
+                             {"X-Flows-Operator-Key": self._flows_key})
             rows = (body or {}).get("reactions", []) if isinstance(body, dict) else []
             for r in rows:
                 if r.get("flow") != flow:
@@ -588,7 +588,7 @@ class LiveDoors(Doors):
         name — never another lane user's parked work.
         """
         st, body = _http("GET", f"{FLOWS_API}/reactions?limit=100",
-                         {"X-Flows-Admin-Key": self._flows_key})
+                         {"X-Flows-Operator-Key": self._flows_key})
         rows = (body or {}).get("reactions", []) if isinstance(body, dict) else []
         if st != 200 or not isinstance(body, dict):
             raise DoorRefused(f"could not list reactions to cancel the bot leg: {st}")
@@ -601,7 +601,7 @@ class LiveDoors(Doors):
         for r in targets:
             rid = r.get("reaction_id") or r.get("id")
             cst, cb = _http("POST", f"{FLOWS_API}/reactions/{rid}/cancel",
-                            {"X-Flows-Admin-Key": self._flows_key}, {})
+                            {"X-Flows-Operator-Key": self._flows_key}, {})
             (cancelled if 200 <= cst < 300 else refused).append(f"{rid}:{cst}")
         if refused:
             raise DoorRefused(

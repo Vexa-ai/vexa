@@ -10,19 +10,23 @@
     {
       "name": "flows_list",
       "identity": "operator",
+      "auth": "subject",
       "requires": ["identity", "flows"],
       "route": { "method": "GET", "path": "/flows" }
     },
     {
       "name": "reactions_list",
-      "identity": "operator",
+      "identity": "user",
+      "auth": "subject",
       "requires": ["identity", "flows"],
       "route": { "method": "GET", "path": "/reactions" },
-      "arguments": ["status", "subject"]
+      "arguments": ["status", "subject"],
+      "note": "A person's own queue: the subject is taken from their credential, so `subject` is optional and may only name themselves."
     },
     {
       "name": "reaction_signal",
       "identity": "user",
+      "auth": "subject",
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/reactions/{reaction_id}/{verb}" },
       "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared — the route cannot be called without them."
@@ -33,11 +37,12 @@
       "auth": "subject",
       "requires": ["identity", "flows"],
       "route": { "method": "GET", "path": "/queue/waiting" },
-      "note": "PRD decision 42.2 — what is waiting IS flows: this subject's pending reactions, each naming the flow that produced it and its typed reason (human | failed | not_present | pending). Nothing is unioned at the edge. `auth: subject` means the person is the authenticated caller — the edge stamps X-User-Id and the tool takes no subject argument. The `auth` field itself arrives with decision 15; declared here so the merge order, not this manifest, resolves it."
+      "note": "PRD decision 42.2 — what is waiting IS flows: this subject's pending reactions, each naming the flow that produced it and its typed reason (human | failed | not_present | pending). Nothing is unioned at the edge. `auth: subject` means the person is the authenticated caller: flows resolves them from their own credential, and the tool takes no subject argument."
     },
     {
       "name": "timeline",
       "identity": "user",
+      "auth": "subject",
       "requires": ["identity", "flows"],
       "route": { "method": "GET", "path": "/timeline" },
       "arguments": ["subject", "since", "until", "limit"]
