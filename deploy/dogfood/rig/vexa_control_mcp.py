@@ -232,7 +232,7 @@ def _safe_ws_path(path: str) -> str:
 
 
 def _fkey():
-    return {"X-Flows-Admin-Key": FLOWS_KEY}
+    return {"X-Flows-Operator-Key": FLOWS_KEY}
 
 
 def _safe_error(e: BaseException) -> str:

@@ -59,7 +59,7 @@ Auth is two tiers, because two different callers reach this API:
   and nobody else's — this is what makes those tools work from your own Claude Code over the MCP
   endpoint. A `subject` argument naming somebody else is refused.
 - **Changing the machine** — `POST /flows`, `POST /flows/{name}/{v}/{action}`, `POST /events` and
-  `POST /events/batch` take the operator key `X-Flows-Admin-Key` and nothing else. The operator key
+  `POST /events/batch` take the operator key `X-Flows-Operator-Key` and nothing else (`X-Flows-Admin-Key` still works for one release — it named admin-api's token, which it never was). The operator key
   also opens everything above, unscoped, which is the admin console's view.
 
 New events always select the **newest active version** of each flow; running reactions are never

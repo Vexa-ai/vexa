@@ -51,7 +51,7 @@ def _extract(path: str) -> list[dict]:
 
 def _export(api: str, key: str, only: str | None) -> int:
     req = urllib.request.Request(f"{api}/flows")
-    req.add_header("X-Flows-Admin-Key", key)
+    req.add_header("X-Flows-Operator-Key", key)
     with urllib.request.urlopen(req, timeout=10) as r:
         data = json.loads(r.read())
     newest: dict[str, dict] = {}
@@ -92,7 +92,7 @@ def main() -> int:
         req = urllib.request.Request(f"{api}/flows", method="POST",
                                      data=json.dumps(d).encode())
         req.add_header("content-type", "application/json")
-        req.add_header("X-Flows-Admin-Key", key)
+        req.add_header("X-Flows-Operator-Key", key)
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 print("   →", r.read().decode().replace("\n", " ")[:120])

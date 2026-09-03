@@ -57,9 +57,9 @@ def test_health_ok():
 
 
 def test_health_takes_no_credential():
-    """The probe must not sit behind X-Flows-Admin-Key.
+    """The probe must not sit behind X-Flows-Operator-Key.
 
-    Every other route on this surface carries `Depends(auth)`. If this one ever acquires it, an
+    Every other route on this surface takes a credential. If this one ever acquires one, an
     orchestrator without the operator key reads 401 — indistinguishable from a dead process to a
     restart policy, and one more place the key has to reach.
     """

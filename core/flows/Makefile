@@ -46,10 +46,10 @@ stop: ## stop all three
 	@echo stopped
 
 status: ## the operator projection (reactions, newest first)
-	@curl -s -H "X-Flows-Admin-Key: $(KEY)" "$(API)/reactions" | $(PY) -m json.tool | head -60
+	@curl -s -H "X-Flows-Operator-Key: $(KEY)" "$(API)/reactions" | $(PY) -m json.tool | head -60
 
 flows: ## list every flow version + the step vocabulary
-	@curl -s -H "X-Flows-Admin-Key: $(KEY)" "$(API)/flows" | $(PY) -m json.tool | head -80
+	@curl -s -H "X-Flows-Operator-Key: $(KEY)" "$(API)/flows" | $(PY) -m json.tool | head -80
 
 check: ## validate a Python flow file: make check FILE=my_flow.py
 	cd $(SRC) && $(PY) flows_authoring.py check $(FILE)

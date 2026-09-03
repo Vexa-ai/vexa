@@ -31,10 +31,16 @@ operator (issue #1468):
     usable by a person at all: before it, the only way to make them answer was to hand the edge
     the operator key, and the operator key is not a person — it reads every reaction in the
     instance and cancels any of them.
-  * THE ADMIN ROUTES (`POST /flows`, `POST /events`, `POST /events/batch`,
+  * THE OPERATOR ROUTES (`POST /flows`, `POST /events`, `POST /events/batch`,
     `POST /flows/{name}/{version}/{action}`) take the operator key and nothing else. They
     configure the machine or admit facts on the instance's behalf; there is no per-person version
     of either.
+
+The operator key travels as `X-Flows-Operator-Key`. It used to be `X-Flows-Admin-Key`, which reads
+as ADMIN-API's token and is not one — that confusion is on the record: a lane start script carried
+a `changeme` for it because whoever wrote the script exported the admin-api key under the name this
+service reads. The old header is still accepted for one release, with a deprecation line printed
+once per process; a caller sending both is answered on the new one.
 
 NEVER accepts code — steps are reviewed Python in the image; this API composes them (the n8n line
 we do not cross).
@@ -157,9 +163,37 @@ def _same_key(presented: str, expected: str) -> bool:
     return hmac.compare_digest(str(presented or ""), str(expected))
 
 
-def auth(x_flows_admin_key: str = Header(default="")) -> None:
-    if not _same_key(x_flows_admin_key, API_KEY):
-        raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
+#: The header the operator key travels in, and the one it used to.
+OPERATOR_HEADER = "X-Flows-Operator-Key"
+DEPRECATED_OPERATOR_HEADER = "X-Flows-Admin-Key"
+#: Which deprecated spellings this process has already complained about. A deprecation printed per
+#: REQUEST is a flood nobody reads and a cost on the hot path; printed once it is a message.
+_DEPRECATED_HEADER_SAID: set = set()
+
+
+def _operator_key(x_flows_operator_key: str = "", x_flows_admin_key: str = "") -> str:
+    """The operator key the caller presented, under either name. "" when they presented none.
+
+    The new name wins when both are sent: a caller mid-migration sends the new one deliberately and
+    the old one because something else still adds it, and answering on the old one would make the
+    migration invisible to them.
+    """
+    key = (x_flows_operator_key or "").strip()
+    if key:
+        return key
+    key = (x_flows_admin_key or "").strip()
+    if key and DEPRECATED_OPERATOR_HEADER not in _DEPRECATED_HEADER_SAID:
+        _DEPRECATED_HEADER_SAID.add(DEPRECATED_OPERATOR_HEADER)
+        print(f"WARNING: {DEPRECATED_OPERATOR_HEADER} is DEPRECATED — send the same value as "
+              f"{OPERATOR_HEADER}. It is flows-api's OWN operator key (VEXA_FLOWS_API_KEY), never "
+              "admin-api's token; the old name said otherwise and was believed.", flush=True)
+    return key
+
+
+def auth(x_flows_operator_key: str = Header(default=""),
+         x_flows_admin_key: str = Header(default="")) -> None:
+    if not _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key), API_KEY):
+        raise HTTPException(status_code=401, detail=f"{OPERATOR_HEADER} required")
 
 
 def _bearer(authorization: str, x_api_key: str) -> str:
@@ -179,7 +213,8 @@ def _bearer(authorization: str, x_api_key: str) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
-def subject_or_operator(x_flows_admin_key: str = Header(default=""),
+def subject_or_operator(x_flows_operator_key: str = Header(default=""),
+                        x_flows_admin_key: str = Header(default=""),
                         authorization: str = Header(default=""),
                         x_api_key: str = Header(default="")) -> Caller:
     """WHO IS CALLING — the operator, or one person. The dependency of every subject-scoped route.
@@ -187,13 +222,13 @@ def subject_or_operator(x_flows_admin_key: str = Header(default=""),
     The operator key is checked first and short-circuits: it is a local constant-time comparison,
     it is what every existing caller sends, and it must keep working while identity is down.
     """
-    if _same_key(x_flows_admin_key, API_KEY):
+    if _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key), API_KEY):
         return Caller(kind="admin")
     token = _bearer(authorization, x_api_key)
     if not token:
         raise HTTPException(status_code=401, detail=(
             "this route needs your Vexa credential (Authorization: Bearer …, or X-API-Key), "
-            "or the operator key in X-Flows-Admin-Key"))
+            f"or the operator key in {OPERATOR_HEADER}"))
     try:
         return resolve(token, secret=INTERNAL_SECRET)
     except SubjectUnknown:
@@ -204,13 +239,15 @@ def subject_or_operator(x_flows_admin_key: str = Header(default=""),
             f"identity could not answer who you are ({e}) — this is our side, not your key"))
 
 
-def timeline_reader(x_flows_admin_key: str = Header(default=""),
+def timeline_reader(x_flows_operator_key: str = Header(default=""),
+                    x_flows_admin_key: str = Header(default=""),
                     authorization: str = Header(default=""),
                     x_api_key: str = Header(default="")) -> Caller:
     """`GET /timeline` alone: the narrow read-only key opens it, as well as the two tiers above."""
-    if TIMELINE_KEY and _same_key(x_flows_admin_key, TIMELINE_KEY):
+    if TIMELINE_KEY and _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key),
+                                  TIMELINE_KEY):
         return Caller(kind="admin")
-    return subject_or_operator(x_flows_admin_key, authorization, x_api_key)
+    return subject_or_operator(x_flows_operator_key, x_flows_admin_key, authorization, x_api_key)
 
 
 def scoped_subject(caller: Caller, requested: str) -> str:

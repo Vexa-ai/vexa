@@ -71,7 +71,7 @@ def fetch(uid: str, *, back: int = BACK, ahead: int = AHEAD, timeout: float = TI
         return ""
     # The window is the route's default (14 back, 30 forward); `limit` is what the block can hold.
     url = f"{api}/timeline?subject={urllib.parse.quote(str(uid))}&format=preamble&limit={back + ahead}"
-    req = urllib.request.Request(url, method="GET", headers={"X-Flows-Admin-Key": key})
+    req = urllib.request.Request(url, method="GET", headers={"X-Flows-Operator-Key": key})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             body = json.loads(r.read().decode() or "{}")

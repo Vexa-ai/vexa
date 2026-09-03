@@ -80,7 +80,7 @@ counted rather than spoken. `behavior/queue/README.md` is the contract.
 
 `flows-api` answers to two kinds of caller and the difference is who the answer is about.
 
-The **operator key** (`X-Flows-Admin-Key`, `VEXA_FLOWS_API_KEY`) is the instance: it opens every
+The **operator key** (`X-Flows-Operator-Key`, `VEXA_FLOWS_API_KEY`) is the instance: it opens every
 route, reads every reaction and steers any of them. It is what configures the machine, and there is
 no per-person version of `POST /flows` or `POST /events`.
 
@@ -91,6 +91,11 @@ a second resolver: flows is a second caller of the one that already exists. This
 edge needs, because that edge forwards the caller's own credential and holds none of its own — so
 without it the only way to make flows' four tools answer was to hand the edge the operator key, and
 the operator key is not a person.
+
+The header used to be `X-Flows-Admin-Key`, which reads as admin-api's token and is not one — a lane
+start script carried a `changeme` for it because whoever wrote it exported admin-api's key under
+this service's name. The old header is accepted for one release, with a deprecation line printed
+once per process; a caller sending both is answered on the new one.
 
 An unreachable identity answers **503**, never 401: not being able to ask who somebody is has not
 established that their credential is bad.
