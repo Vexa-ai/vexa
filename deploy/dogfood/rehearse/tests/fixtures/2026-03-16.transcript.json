@@ -1,0 +1,33 @@
+{
+ "meeting": {
+  "title": "DNA TSC 2026-03-16",
+  "platform": "zoom",
+  "native_meeting_id": "96088138284",
+  "occurrence": "2026-03-16",
+  "participants": [
+   "Olga Avramenko (Sony Pictures Imageworks)",
+   "Tommy Burnette (Lucasfilm)",
+   "Sam Richards"
+  ]
+ },
+ "segments": [
+  {
+   "t": 0.0,
+   "end": 4.2,
+   "speaker": "Olga Avramenko (Sony Pictures Imageworks)",
+   "text": "Hey, everyone. Let's start with the schema change."
+  },
+  {
+   "t": 4.2,
+   "end": 11.7,
+   "speaker": "Tommy Burnette (Lucasfilm)",
+   "text": "We reviewed it on our side. The naming still worries me."
+  },
+  {
+   "t": 11.7,
+   "end": 19.0,
+   "speaker": "Sam Richards",
+   "text": "I'll write it up and bring it back next time."
+  }
+ ]
+}
