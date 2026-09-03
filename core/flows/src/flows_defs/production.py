@@ -99,6 +99,10 @@ CLAIM_PROPOSED = EventType("claim.proposed")
 #: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives
 #: wherever the timeline already lives, present in every profile.
 FRICTION_REPORTED = EventType("friction.reported")
+#: #1510's C3 -- the close-out half. PUBLISHED BY FLOWS ITSELF too (`POST /friction/{id}/fix`,
+#: same in-process `admit()`, same no-agent-api dependency), so it is registered here beside its
+#: sibling rather than behind the agent-only half this module hands off to at the bottom.
+FRICTION_FIXED = EventType("friction.fixed")
 
 NUDGE_EVERY_S = 15 * 60
 
@@ -1703,6 +1707,14 @@ def build(reg: Registry, db) -> None:
         in every profile, agent or not."""
         return Done({"recorded": True})
 
+    @reg.step
+    def record_friction_fixed(ctx: StepCtx):
+        """#1510's C3 — the same reasoning as `record_friction`, one door over: `POST
+        /friction/{id}/fix` calls `admit()` directly, and this step exists only so THAT admission
+        creates a reaction row `flows_timeline.friction_for_subject` can fold into its `status`
+        field. No mail, no desk card, no downstream effect."""
+        return Done({"recorded": True})
+
     s = reg.steps
     # VERSION 2 — `spawn_onboardings` removed (decision 29). VERSION 3 — `emit_started` added after
     # `dispatch_bot` (PRD decision 42.2). The version bump is the whole mechanism: `match()` is
@@ -1736,6 +1748,9 @@ def build(reg: Registry, db) -> None:
     # the agent domain deployed, which is the whole point of moving its intake onto flows-api.
     reg.flow(name="friction_log", version=1, on=FRICTION_REPORTED,
              steps=[s["record_friction"]])
+    # #1510's C3 — the close-out half of the sink, registered the same way for the same reason.
+    reg.flow(name="friction_fix", version=1, on=FRICTION_FIXED,
+             steps=[s["record_friction_fixed"]])
 
     # ── the agent-only half ───────────────────────────────────────────────────
     # `meeting_prep`, `email_chat`, `desk_setup` and `desk_claim` are registered by

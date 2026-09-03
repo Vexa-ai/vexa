@@ -755,8 +755,12 @@ def friction_so_far(since: str = "", limit: int = 40,
     """
     subj = scoped_subject(caller, "")
     if caller.is_admin:
+        # #1510's C2/C3: the operator with no X-User-Id gets the WHOLE-INSTANCE view (subj stays
+        # ""), which is exactly what `friction_for_subject`'s own docstring has always promised
+        # ("the whole-instance view stays behind the caller's own authorization") — this route
+        # just never actually let an operator reach it before the rig's `friction_dump` needed to.
         subj = (x_user_id or "").strip() or subj
-    if not subj:
+    elif not subj:
         raise HTTPException(status_code=400, detail="no subject — sign in to read your own reports")
     ts = _friction_since_epoch(since) or 0.0 if since else 0.0
     rows = friction_for_subject(db, subject=subj, since=ts,
@@ -765,6 +769,36 @@ def friction_so_far(since: str = "", limit: int = 40,
     if rows is None:
         raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
     return {"subject": subj, "count": len(rows), "reports": rows}
+
+
+@app.post("/friction/{friction_id}/fix", status_code=201, dependencies=[Depends(auth)])
+def friction_fixed(friction_id: str, fix_ref: str = ""):
+    """Close one report against the change that addressed it (#1510's C3 — PRD decision 33 §4,
+    ported onto the flows carrier). OPERATOR ONLY: a fixing agent closes reports filed by ANY
+    subject, which only the operator may do — the same authority `friction_dump`'s whole-instance
+    read already requires, and the same rule the pre-cutover Redis store enforced.
+
+    `fix_ref` is required and unvalidated on purpose — a commit sha, a PR url, a branch, or one
+    sentence naming the change. A record marked fixed with nothing to point at is indistinguishable
+    from one somebody wanted off the list. The id is NOT verified against an existing
+    `friction.reported` row before admission: `admit()` is fire-and-forget everywhere else on this
+    surface (the agent-domain desk carriers do not check either, per their own census entries), and a fix for an id nobody
+    ever filed costs nothing beyond an inert reaction row — recurrence, unlike the old store, is not
+    resurrected here (see the carrier's own census entry)."""
+    fid = friction_id.strip()
+    ref = fix_ref.strip()[:300]
+    if not fid:
+        raise HTTPException(status_code=404, detail="no such friction record")
+    if not ref:
+        raise HTTPException(status_code=400, detail=(
+            "fix_ref is required — a commit, a PR, or a sentence naming the change. A record "
+            "marked fixed with nothing to point at is indistinguishable from one somebody wanted "
+            "off the list."))
+    vocab.refresh_from_db(db)          # the friction_fix flow may have been (re)submitted since boot
+    assert production.FRICTION_FIXED.name == "friction.fixed"
+    admit(db, vocab, clock, source_event_id=f"friction-fix-{fid}",
+         event_type="friction.fixed", subject_refs={"friction_id": fid, "fix_ref": ref})
+    return {"id": fid, "status": "fixed", "fix_ref": ref}
 
 
 def bind_host() -> str:

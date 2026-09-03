@@ -163,16 +163,39 @@ def read_flows(db, *, uid: str = "", email: str = "", since: float, until: float
 # proper would mean inventing a description for a shape that already has its own reader.
 
 _FRICTION_COLS = ("reaction_id", "subject_refs", "created_at")
+_FIX_COLS = ("subject_refs",)
+
+
+def _fixed_friction_ids(db, ids: set, *, scan: int = SCAN_ROWS) -> set:
+    """Every `friction_id` a `friction.fixed` row names (#1510's C3) — a set, since the read side
+    only needs OPEN vs FIXED, not which fix or how many. Scanned rather than joined by id: there is
+    no index on a JSON field in this store (same reasoning `_rows`'s other callers already accept),
+    and this read is already bounded by `scan` the way `friction_for_subject`'s own report scan is.
+    """
+    if not ids:
+        return set()
+    rows = _rows(db, f"""SELECT {", ".join(_FIX_COLS)} FROM reaction
+                         WHERE event_type = :et ORDER BY created_at DESC LIMIT {int(scan)}""",
+                {"et": "friction.fixed"}, _FIX_COLS)
+    fixed = set()
+    for r in rows:
+        fid = loads(r["subject_refs"]).get("friction_id")
+        if fid in ids:
+            fixed.add(fid)
+    return fixed
 
 
 def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: int = 40,
                          scan: int = SCAN_ROWS,
                          identity: Optional[Callable] = None) -> Optional[list[dict]]:
-    """Every `friction.reported` row at or after `since`, newest first. ``None`` when `subject`
-    was given and nobody answers to it (mirrors `list_reactions`'s contract). `subject=""` reads
-    every subject's reports — the whole-instance view stays behind the caller's own authorization
-    (an operator, in `flows_api.friction_so_far`); this function does not gate it itself, the same
-    division `list_reactions` already draws between scoping and authorizing.
+    """Every `friction.reported` row at or after `since`, newest first, each carrying a `status`
+    (`open` or `fixed`, #1510's C3 — folded from any matching `friction.fixed` row, keyed on
+    `friction_id`; "recurring" is not resurrected here, see that carrier's own census entry).
+    ``None`` when `subject` was given and nobody answers to it (mirrors `list_reactions`'s
+    contract). `subject=""` reads every subject's reports — the whole-instance view stays behind
+    the caller's own authorization (an operator, in `flows_api.friction_so_far`); this function
+    does not gate it itself, the same division `list_reactions` already draws between scoping and
+    authorizing.
     """
     rows = _rows(db, f"""SELECT {", ".join(_FRICTION_COLS)} FROM reaction
                          WHERE event_type = :et AND created_at >= :since
@@ -183,19 +206,24 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
         if not uid and not email:
             return None
         rows = [r for r in rows if concerns(loads(r["subject_refs"]), uid, email)]
+    rows = rows[:max(1, int(limit))]
+    ids = {loads(r["subject_refs"]).get("friction_id") or r["reaction_id"] for r in rows}
+    fixed_ids = _fixed_friction_ids(db, ids, scan=scan)
     out = []
-    for r in rows[:max(1, int(limit))]:
+    for r in rows:
         refs = loads(r["subject_refs"])
         at = to_epoch(r["created_at"]) or 0.0
         ctx = {k: refs[k] for k in ("tool", "meeting_id", "deployment", "worker_image", "kind")
               if refs.get(k)}
+        fid = refs.get("friction_id") or r["reaction_id"]
         out.append({
-            "id": refs.get("friction_id") or r["reaction_id"],
+            "id": fid,
             "at": iso(at), "at_epoch": round(at, 3),
             "subject": refs.get("uid", ""), "session": refs.get("session", ""),
             "severity": refs.get("severity", ""),
             "tried": refs.get("what_i_tried", ""), "happened": refs.get("what_happened", ""),
             "context": ctx,
+            "status": "fixed" if fid in fixed_ids else "open",
         })
     return out
 

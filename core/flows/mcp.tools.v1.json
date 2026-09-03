@@ -68,7 +68,8 @@
   ],
   "publishes_events": [
     { "event": "invite.received", "status": "published today", "triggers": "invite_intake v3" },
-    { "event": "friction.reported", "status": "published today", "triggers": "no flow — recorded as a fact on the timeline only; friction is a sink, not a domain (PRD 40.9 open-decision 8)" }
+    { "event": "friction.reported", "status": "published today", "triggers": "no flow — recorded as a fact on the timeline only; friction is a sink, not a domain (PRD 40.9 open-decision 8)" },
+    { "event": "friction.fixed", "status": "published today", "triggers": "friction_fix v1 — recorded as a fact on the timeline only, same as friction_log; #1510's C3 close-out half of the same sink" }
   ],
   "handed_off_events": [
     { "event": "meeting.started", "event_v2_owner": "meetings", "note": "F168/F181: meeting-api now publishes this too (config.v1 publish-edge, meeting_api/events.py), and the carrier census records meetings as owner. invite_intake v3's own emit_started keeps running unchanged — same source_event_id scheme (live-<meeting_id>), so admission dedups the two producers into one reaction (flows/admission.py) rather than firing live_meeting twice. Retiring emit_started is a follow-up, not part of this change." },
