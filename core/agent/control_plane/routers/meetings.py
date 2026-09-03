@@ -116,7 +116,13 @@ def build(**d) -> APIRouter:
                     payload = json.loads(fields.get("payload", "{}"))
                     if payload.get("type") == "session_end":
                         ending = True
-                        last.pop(tkey, None)
+                        # F166: NOT `last.pop(tkey, None)` — `last` holds only this one key, so
+                        # popping it emptied the dict and the next `r.xread(last, ...)` (a bare
+                        # `{}`) raised redis-py's `DataError: XREAD streams must be a non empty
+                        # dict`, crash-looping agent-api on every re-poll of a completed meeting's
+                        # stream. Reset to "$" (new-entries-only) instead: same "nothing before this
+                        # point matters" semantics, but `last` is never empty going into xread.
+                        last[tkey] = "$"
                         continue
                     if payload.get("type") == "retract":
                         yield from retract_event(payload)
@@ -148,7 +154,7 @@ def build(**d) -> APIRouter:
                             ptype = payload.get("type")
                             if ptype == "session_end":
                                 ending = True            # a resumed session gets one poll to appear
-                                last.pop(tkey, None)     # session_end is the last transcript entry
+                                last[tkey] = "$"         # F166: keep the key (see seed-loop note above)
                                 break
                             if ptype == "retract":
                                 yield from retract_event(payload)
