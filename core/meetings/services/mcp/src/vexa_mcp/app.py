@@ -18,6 +18,7 @@ conformance tests drive the SHIPPED app in-process with a fake gateway — the r
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -25,10 +26,16 @@ from typing import Any, Dict, List, Optional
 import httpx
 import mcp.types as mcp_types
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from . import bind as bind_mod
+from . import discover as discover_mod
+from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
@@ -83,8 +90,8 @@ def _description_of(data: "ReportIssue") -> str:
     parts = [f"What I tried:\n{data.what_i_tried}", f"What happened:\n{data.what_happened}"]
     where = data.deployment + (f" {data.version}" if data.version else "")
     parts.append(f"Deployment: {where}")
-    if data.meeting_id:
-        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.meeting_id}")
+    if data.native_meeting_id:
+        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.native_meeting_id}")
     if data.logs:
         parts.append(f"Logs:\n{data.logs}")
     return "\n\n".join(parts)
@@ -133,8 +140,8 @@ def _github_issue_body(payload: Dict[str, Any]) -> str:
     lines.append(str(payload.get("what_happened") or "—"))
     lines.append("")
     lines.append("### Join key")
-    if payload.get("meeting_id"):
-        lines.append(f"- **meeting_id:** `{payload['meeting_id']}`")
+    if payload.get("native_meeting_id"):
+        lines.append(f"- **native_meeting_id:** `{payload['native_meeting_id']}`")
         lines.append(f"- **platform:** `{payload.get('platform') or 'unknown'}`")
         entity = payload.get("entity")
         if isinstance(entity, dict):
@@ -293,6 +300,53 @@ class UpdateBotConfig(BaseModel):
     language: str = Field(..., description="New language code for transcription (e.g., 'en', 'es')")
 
 
+class AnnotateMeeting(BaseModel):
+    title: Optional[str] = Field(
+        None, description="Human-readable title for the meeting. Max 512 chars."
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Arbitrary JSON you own — CRM ids, ticket refs, tags, your own summary. Merges "
+            "key-wise with what is already there; send a key as null to delete just that key. "
+            "Retrieve these meetings later with list_meetings(metadata_filter=...)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_something_to_write(self):
+        if self.title is None and self.metadata is None:
+            raise ValueError("Nothing to annotate: provide title and/or metadata.")
+        return self
+
+
+class SpeakInMeeting(BaseModel):
+    text: str = Field(..., description="What the bot should say out loud in the meeting.")
+    language: Optional[str] = Field(None, description="Optional language/voice code, e.g. 'en'.")
+    # A MECHANICAL guard, not another warning. The prose warning is good and a cold-start agent
+    # did obey it — but this tool is one tools/call away from being audible to real people in a
+    # real conversation, and it will be loaded alongside a hundred others whose descriptions get
+    # skimmed. A required field the caller must set deliberately cannot be skimmed past.
+    asked_by_a_human: bool = Field(
+        ...,
+        description=(
+            "Must be true, and only set it if the person you are working for asked you to say "
+            "THIS. Everyone in the meeting hears it and it cannot be taken back. Never set it to "
+            "satisfy the schema, to test, or to acknowledge something."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def refuse_unless_asked(self):
+        if self.asked_by_a_human is not True:
+            raise ValueError(
+                "speak_in_meeting: refused. This says words out loud to real people and cannot be "
+                "undone. Set asked_by_a_human=true only when the person you work for asked you to "
+                "say this; otherwise do not call this tool."
+            )
+        return self
+
+
 class ParseMeetingLinkRequest(BaseModel):
     meeting_url: str = Field(..., description="Full meeting URL to parse.")
 
@@ -322,7 +376,7 @@ class ReportIssue(BaseModel):
             "plus the version if you know it (e.g. 'self-hosted 0.12.3')."
         ),
     )
-    meeting_id: Optional[str] = Field(
+    native_meeting_id: Optional[str] = Field(
         None,
         description=(
             "The native meeting id this issue concerns (e.g. 'abc-defg-hij'). Include it whenever "
@@ -373,7 +427,7 @@ class ReportIssue(BaseModel):
         self.what_i_tried = _clip(self.what_i_tried, _MAX_TEXT_CHARS)
         self.what_happened = _clip(self.what_happened, _MAX_TEXT_CHARS)
         self.deployment = _clip(self.deployment, 200)
-        self.meeting_id = _clip(self.meeting_id, 200)
+        self.native_meeting_id = _clip(self.native_meeting_id, 200)
         self.platform = _clip(self.platform, 50)
         self.version = _clip(self.version, 100)
         self._logs_truncated = bool(self.logs and len(self.logs.strip()) > _MAX_LOGS_CHARS)
@@ -381,23 +435,178 @@ class ReportIssue(BaseModel):
         return self
 
 
+# ---------------------------
+# Meeting identity — ONE vocabulary across the whole surface
+# ---------------------------
+# Every tool that RETURNS a meeting returns ``platform`` + ``native_meeting_id`` (so does the
+# public REST API: ``/transcripts/{platform}/{native_meeting_id}``). Three tools used to ACCEPT
+# ``meeting_platform`` + ``meeting_id`` instead, so no tool's output could be fed to the next
+# tool's input without a rename nothing documented. A model chaining calls reads
+# ``native_meeting_id`` off one result and passes it to the next — the correct inference, and it
+# failed. The canonical names below are the ones every tool returns; the old spellings stay as
+# deprecated aliases so no existing client breaks.
+_PLATFORM_DESC = (
+    "Meeting platform: google_meet, teams, zoom, jitsi. Same value that request_meeting_bot, "
+    "list_meetings and parse_meeting_link return as `platform`. Defaults to google_meet."
+)
+_ID_DESC = (
+    "The meeting's native id — exactly the `native_meeting_id` returned by request_meeting_bot, "
+    "list_meetings or parse_meeting_link (e.g. 'abc-defg-hij' for Google Meet)."
+)
+_LEGACY_PLATFORM_DESC = "DEPRECATED alias for `platform`. Use `platform`."
+_LEGACY_ID_DESC = "DEPRECATED alias for `native_meeting_id`. Use `native_meeting_id`."
+
+
+#: The platforms the link parser can actually produce. A value outside this set is a caller
+#: mistake, and answering it with an empty result set is the worst possible reply: a cold-start
+#: agent reported that `platform="webex"` returned a confident `count: 0`, indistinguishable from
+#: "nobody said that". Silence that looks like an answer is worse than an error.
+VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi")
+
+
+def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
+    """Reject an unknown platform loudly rather than filtering everything away."""
+    if platform is None or platform in VALID_PLATFORMS:
+        return platform
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"{tool}: unknown platform {platform!r}. Valid values: "
+            f"{', '.join(VALID_PLATFORMS)}. Omit `platform` to search every platform."
+        ),
+    )
+
+
+async def reject_unknown_arguments(request: Request) -> None:
+    """Refuse query parameters the route does not declare.
+
+    FastAPI ignores extras, so `get_meeting_transcript(limit=2)` — no such parameter — returned
+    200 with the argument silently dropped. For an agent that is the worst failure mode available:
+    a typo'd or hallucinated parameter looks like it worked, and the wrong answer is indistinguishable
+    from the right one. Named near-misses are called out, because the commonest cause is a caller
+    reaching for another tool's parameter name.
+    """
+    route = request.scope.get("route")
+    if route is None or not getattr(route, "dependant", None):
+        return
+    known = {p.alias or p.name for p in route.dependant.query_params}
+    unknown = sorted(set(request.query_params.keys()) - known)
+    if not unknown:
+        return
+    # Substring matching alone misses the commonest real case — a caller reaching for another
+    # tool's parameter name and getting the word order wrong (`meeting_id_native`). difflib
+    # catches transpositions and typos that `in` does not.
+    import difflib
+
+    hints = []
+    for got in unknown:
+        near = difflib.get_close_matches(got, sorted(known), n=1, cutoff=0.5)
+        if not near:
+            near = [k for k in sorted(known) if k != got and (got in k or k in got)][:1]
+        if near:
+            hints.append(f"`{got}` — did you mean `{near[0]}`?")
+    tool = getattr(route, "operation_id", None) or getattr(route, "name", "this tool")
+    detail = {
+        "tool": tool,
+        "message": f"{tool}: unknown argument(s) {unknown}. This tool accepts {sorted(known)}.",
+        "unknown": unknown,
+        "accepted": sorted(known),
+    }
+    if hints:
+        detail["hint"] = "; ".join(hints)
+        detail["message"] = f"{tool}: unknown argument(s) — {detail['hint']}"
+    raise HTTPException(status_code=422, detail=detail)
+
+
+def _resolve_identity(
+    tool: str,
+    platform: Optional[str],
+    native_meeting_id: Optional[str],
+    legacy_platform: Optional[str],
+    legacy_id: Optional[str],
+) -> tuple[str, str]:
+    """Accept the canonical names or the deprecated aliases; fail with a message you can act on."""
+    mid = (native_meeting_id or legacy_id or "").strip()
+    plat = (platform or legacy_platform or "google_meet").strip()
+    if not mid:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{tool}: missing the meeting id. Pass `native_meeting_id` (the field "
+                f"request_meeting_bot / list_meetings / parse_meeting_link return), optionally "
+                f"with `platform`. Received: native_meeting_id=None, meeting_id=None."
+            ),
+        )
+    return plat, mid
+
+
+# What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
+# this is the map: what Vexa is, and the one sequence that matters.
+VEXA_INSTRUCTIONS = """\
+Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi) and \
+gives you the transcript while the meeting is still running.
+
+The canonical flow:
+  1. parse_meeting_link(meeting_url)  → platform + native_meeting_id (pure; no side effects)
+  2. request_meeting_bot(meeting_url) → sends the bot. A human in the meeting must ADMIT it, so
+     expect a delay between `requested` and `active`.
+  3. get_meeting_transcript(platform, native_meeting_id) → segments, WHILE the meeting runs.
+     Poll it to follow a live meeting; pass `since_index` to get only what is new since your last
+     call instead of re-reading the whole transcript.
+  4. stop_bot(platform, native_meeting_id) when you are done.
+
+Identity: every tool returns `platform` + `native_meeting_id`, and every tool accepts those same \
+two names. Feed one tool's output straight into the next.
+
+Make the data yours: annotate_meeting attaches a title and arbitrary metadata — a CRM id, a \
+ticket, tags, your own summary — to a meeting, DURING it or after it ended. Anything you put \
+there you can find again with list_meetings(metadata_filter={...}), searched in the database \
+rather than on one page. If you learn something durable about a meeting, write it back; that is \
+what lets the next agent (or the next you) pick it up.
+
+The bot is a PARTICIPANT, not just a recorder: get_meeting_chat reads the in-call chat, and \
+speak_in_meeting says something out loud to everyone present. Speaking is irreversible and \
+visible to real people — do it only when the person you work for asked you to say that thing, \
+never to test and never on your own initiative.
+
+A meeting with status `active` and zero segments usually means the bot has not been admitted yet, \
+or nobody has spoken — it does not mean transcription is broken.
+"""
+
+
 def create_app(
     gateway_url: Optional[str] = None,
     *,
     transport: Optional[httpx.AsyncBaseTransport] = None,
+    assembly_env: Optional[dict] = None,
+    assembly_transport: Optional[httpx.BaseTransport] = None,
 ) -> FastAPI:
     """Build the MCP service app.
 
     ``gateway_url`` — the PUBLIC API base (env ``GATEWAY_URL``, compose ``http://gateway:8000``).
     ``transport``   — optional httpx transport override; the tests inject ``httpx.MockTransport``
                       so the shipped forwarding path runs with no network.
+    ``assembly_env`` / ``assembly_transport`` — the same seam for the DISCOVERY hop: which domains
+                      this deployment carries, and how their manifests are fetched. `VEXA_MCP_ASSEMBLY_OFF`
+                      skips assembly entirely, which is what the fourteen-tool surface tests want.
     """
+    # REFUSE TO BOOT MISCONFIGURED (ADR-0026), the same first move every other adopted service
+    # makes. This service shipped with eleven env keys, no declaration and no preflight — the one
+    # service whose whole job is to be the product's front door was the one nothing checked.
+    from .config_preflight import preflight
+    preflight()
+
     base_url = (gateway_url or os.getenv("GATEWAY_URL") or _DEFAULT_GATEWAY_URL).rstrip("/")
 
     _vexa_env = os.getenv("VEXA_ENV", "development")
     _public_docs = _vexa_env != "production"
     app = FastAPI(
         title="Vexa MCP Service (v0.12)",
+        # Applied to every route at once rather than injected per-signature: a tool that silently
+        # ignores an argument it does not know is the worst reply available to an agent, so this
+        # must hold for ALL of them, including any added later. The /mcp transport is an ASGI
+        # mount rather than a route, so it is unaffected.
+        dependencies=[Depends(reject_unknown_arguments)],
         docs_url="/docs" if _public_docs else None,
         redoc_url="/redoc" if _public_docs else None,
         openapi_url="/openapi.json" if _public_docs else None,
@@ -439,7 +648,55 @@ def create_app(
     # --- liveness probe (compose healthcheck) — no auth, no downstream call.
     @app.get("/health", include_in_schema=False)
     async def health():
-        return {"status": "ok", "service": "mcp"}
+        """Liveness, plus the CONFIGURED/NOT_CONFIGURED state of each named capability (ADR-0026).
+
+        A green health check on a service whose ticket sink is unset, or whose assembly reached no
+        domain, is a green light on a product that quietly does less than the operator thinks. The
+        tri-state is computed from the declaration, so it cannot drift from what the keys mean."""
+        body = {"status": "ok", "service": "mcp"}
+        try:
+            from .config_preflight import capability_states
+            body["capabilities"] = capability_states()
+        except Exception:  # noqa: BLE001 — health must answer even if the declaration is unreadable
+            pass
+        return body
+
+    # --- validation errors an agent can act on.
+    # The stock message is "Input validation error: 'meeting_id' is a required property": it names
+    # neither the tool nor what was actually sent, so a caller that guessed a near-miss parameter
+    # name has no way to self-correct except by re-reading the schema. Name the tool, echo the
+    # parameters received, and point at the near-miss.
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        tool = "unknown_tool"
+        route = request.scope.get("route")
+        if route is not None:
+            tool = getattr(route, "operation_id", None) or getattr(route, "name", None) or tool
+
+        received = sorted(set(request.query_params.keys()))
+        missing = [
+            str(err["loc"][-1]) for err in exc.errors()
+            if err.get("type") == "missing" and err.get("loc")
+        ]
+        hints = []
+        for want in missing:
+            near = [
+                got for got in received
+                if got != want and (got in want or want in got or got.endswith(want) or want.endswith(got))
+            ]
+            if near:
+                hints.append(f"you sent `{near[0]}` — this tool expects `{want}`")
+        detail = {
+            "tool": tool,
+            "message": f"{tool}: invalid arguments.",
+            "missing": missing,
+            "received": received or ["(none)"],
+            "errors": exc.errors(),
+        }
+        if hints:
+            detail["hint"] = "; ".join(hints)
+            detail["message"] = f"{tool}: invalid arguments — {detail['hint']}."
+        return JSONResponse(status_code=422, content=jsonable_encoder({"detail": detail}))
 
     # ---------------------------
     # Tools (each a FastAPI route; operation_id = MCP tool name)
@@ -506,29 +763,40 @@ def create_app(
         """
         return await make_request("GET", f"{base_url}/bots/status", api_key)
 
-    @app.put("/bot-config/{meeting_platform}/{meeting_id}", operation_id="update_bot_config")
+    @app.put("/bot-config", operation_id="update_bot_config")
     async def update_bot_config(
-        meeting_id: str,
         data: UpdateBotConfig,
-        meeting_platform: str = "google_meet",
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
         Update the configuration of an active bot (e.g., changing the transcription language).
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
-        url = f"{base_url}/bots/{meeting_platform}/{meeting_id}/config"
-        return await make_request("PUT", url, api_key, data.model_dump())
+        plat, mid = _resolve_identity(
+            "update_bot_config", platform, native_meeting_id, meeting_platform, meeting_id
+        )
+        return await make_request("PUT", f"{base_url}/bots/{plat}/{mid}/config", api_key, data.model_dump())
 
-    @app.delete("/bot/{meeting_platform}/{meeting_id}", operation_id="stop_bot")
+    @app.delete("/bot", operation_id="stop_bot")
     async def stop_bot(
-        meeting_id: str,
-        meeting_platform: str = "google_meet",
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
         Remove an active bot from a meeting.
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
-        return await make_request("DELETE", f"{base_url}/bots/{meeting_platform}/{meeting_id}", api_key)
+        plat, mid = _resolve_identity("stop_bot", platform, native_meeting_id, meeting_platform, meeting_id)
+        return await make_request("DELETE", f"{base_url}/bots/{plat}/{mid}", api_key)
 
     @app.get("/meetings", operation_id="list_meetings")
     async def list_meetings(
@@ -536,11 +804,23 @@ def create_app(
         offset: Optional[int] = Query(0, ge=0, description="Number of meetings to skip"),
         status: Optional[str] = Query(None, description="Filter by status: active, completed, failed"),
         platform: Optional[str] = Query(None, description="Filter by platform: google_meet, teams, zoom"),
+        metadata_filter: Optional[str] = Query(
+            None,
+            description=(
+                'JSON object — return only meetings whose metadata (set via annotate_meeting) '
+                'CONTAINS it, e.g. {"crm_deal":"acme-42"}. Extra keys on the meeting still match. '
+                "Filtered in the database, so this searches your whole history, not just one page."
+            ),
+        ),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        List meetings associated with your API key (pagination + status/platform filters).
+        List meetings associated with your API key (pagination + status/platform/metadata filters).
+
+        `metadata_filter` is what makes this a query rather than a log: meetings you annotated with
+        annotate_meeting can be found again by the values you put on them.
         """
+        _validate_platform("list_meetings", platform)
         params: Dict[str, Any] = {}
         if limit is not None:
             params["limit"] = limit
@@ -550,19 +830,194 @@ def create_app(
             params["status"] = status
         if platform:
             params["platform"] = platform
+        if metadata_filter:
+            # Validate here so a malformed filter is a clear tool error rather than a gateway 422
+            # the agent has to decode. A filter that silently failed to apply would be worse than
+            # an error: the agent would read a full unfiltered list as "these all match".
+            try:
+                parsed = json.loads(metadata_filter)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail="list_meetings: 'metadata_filter' must be a JSON object string, e.g. {\"crm_deal\":\"acme-42\"}",
+                )
+            if not isinstance(parsed, dict):
+                raise HTTPException(
+                    status_code=422,
+                    detail="list_meetings: 'metadata_filter' must be a JSON OBJECT, not a bare value or array.",
+                )
+            params["metadata"] = metadata_filter
         return await make_request("GET", f"{base_url}/meetings", api_key, params=params or None)
 
-    @app.get("/meeting-transcript/{meeting_platform}/{meeting_id}", operation_id="get_meeting_transcript")
+    @app.get("/meeting-transcript", operation_id="get_meeting_transcript")
     async def get_meeting_transcript(
-        meeting_id: str,
-        meeting_platform: str = "google_meet",
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        since_index: Optional[int] = Query(
+            None,
+            ge=0,
+            description=(
+                "Return only segments at or after this index. Pass the `next_index` from your "
+                "previous call to follow a live meeting without re-reading what you already have."
+            ),
+        ),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        Get the real-time transcript for a meeting (segments with speaker, timestamp, text).
-        Can be called during or after the meeting.
+        Get the transcript for a meeting (segments with speaker, timestamp, text). Works DURING the
+        meeting as well as after — poll it to follow a live one.
+
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
+
+        To follow a live meeting cheaply, pass `since_index` = the `next_index` from your previous
+        call; you get only what has been said since, instead of the whole transcript every time.
         """
-        return await make_request("GET", f"{base_url}/transcripts/{meeting_platform}/{meeting_id}", api_key)
+        plat, mid = _resolve_identity(
+            "get_meeting_transcript", platform, native_meeting_id, meeting_platform, meeting_id
+        )
+        result = await make_request("GET", f"{base_url}/transcripts/{plat}/{mid}", api_key)
+
+        # The cursor is applied here rather than at the gateway: the scarce resource is the
+        # CALLER's context window, not the hop to meeting-api. `total_segments`/`next_index` are
+        # always reported against the full transcript so a caller can tell "nothing new" from
+        # "nothing at all", and can resume after dropping its own state.
+        if isinstance(result, dict):
+            key = "segments" if isinstance(result.get("segments"), list) else (
+                "transcripts" if isinstance(result.get("transcripts"), list) else None
+            )
+            if key:
+                segments = result[key]
+                total = len(segments)
+                start = min(since_index, total) if since_index is not None else 0
+                result = {**result, key: segments[start:], "total_segments": total, "next_index": total}
+                if since_index is not None:
+                    result["since_index"] = start
+        return result
+
+    @app.get("/transcript-search", operation_id="search_transcripts")
+    async def search_transcripts(
+        q: str = Query(..., min_length=1, description=(
+            'What was said. Supports "quoted phrases", `or`, and `-excluded` terms. '
+            "Malformed input never errors, so you can pass a user's words through as-is."
+        )),
+        limit: int = Query(20, ge=1, le=100, description="Max hits (default 20)."),
+        offset: int = Query(0, ge=0),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        native_meeting_id: Optional[str] = Query(
+            None, description="Restrict the search to ONE meeting. " + _ID_DESC
+        ),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Search what was SAID across your meetings. Use this instead of pulling transcripts and
+        reading them — it returns ranked snippets, not whole transcripts.
+
+        Each hit carries the meeting's `platform` + `native_meeting_id`, the speaker, the
+        timestamp, and a snippet with the match wrapped in <mark> tags. Feed those identity fields
+        straight into get_meeting_transcript when you need the full context around a hit.
+
+        This is lexical search with stemming, not semantic: "renewal" finds "renewals" but will
+        NOT find "extend the contract". Search the words people actually said.
+
+        Related but different: list_meetings(metadata_filter=...) finds meetings you TAGGED;
+        this finds meetings where something was SAID.
+        """
+        _validate_platform("search_transcripts", platform)
+        params: Dict[str, Any] = {"q": q, "limit": limit, "offset": offset}
+        if platform:
+            params["platform"] = platform
+        if native_meeting_id:
+            params["native_meeting_id"] = native_meeting_id
+        return await make_request("GET", f"{base_url}/transcripts/search", api_key, params=params)
+
+    # --- annotations: the caller's OWN description of a meeting -----------------------------
+    # This is the join key between a Vexa meeting and everything else the agent knows. Without it
+    # an agent can read a transcript and can do nothing with the fact afterwards: there is nowhere
+    # to record that this meeting is the Acme renewal, nowhere to keep its own summary, and so no
+    # way to find the meeting again by anything other than its platform id.
+    @app.post("/meeting-annotate", operation_id="annotate_meeting")
+    async def annotate_meeting(
+        data: AnnotateMeeting,
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Set the meeting's title and/or attach arbitrary metadata to it. Works DURING a live meeting
+        and after it has ended.
+
+        `metadata` is your own JSON — a CRM id, a ticket, tags, your own summary, anything.
+        It always MERGES key-wise, and sending a key as null deletes exactly that key. You can
+        only ever affect keys you name: other agents and the human may have written annotations
+        here that you cannot see, and nothing you send can destroy them.
+
+        Find these meetings again with
+        `list_meetings(metadata_filter='{"your_key":"your_value"}')` — note the filter is a JSON
+        STRING, not an object.
+        """
+        plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id, None, None)
+        body: Dict[str, Any] = {}
+        if data.title is not None:
+            body["title"] = data.title
+        if data.metadata is not None:
+            body["metadata"] = data.metadata
+        row = await make_request("POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body)
+
+        # Return WHAT WAS WRITTEN, not the whole meeting row. Annotating is a small write to one
+        # field; the full row carries object-storage paths, a playback URL and a reference to a
+        # ~69 MB audio artifact, none of which the caller asked for and all of which land in a
+        # calling model's context. Read paths still serve the full row — this trims the WRITE's
+        # echo, which is the one place nobody requested any of it.
+        if not isinstance(row, dict):
+            return row
+        row_data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        return {
+            "platform": row.get("platform", plat),
+            "native_meeting_id": row.get("native_meeting_id", mid),
+            "meeting_db_id": row.get("id"),
+            "status": row.get("status"),
+            "title": row_data.get("title"),
+            "metadata": row_data.get("metadata", {}),
+        }
+
+    # --- the interactive bot: our bot TALKS and reads the room ------------------------------
+    # No notetaker MCP exposes this, because no notetaker has it: their bot is a recorder. Ours is
+    # a participant, so an agent connected here can answer a question out loud in the meeting it is
+    # listening to. These wrap gateway routes that already exist and were simply unreachable.
+    @app.post("/meeting-speak", operation_id="speak_in_meeting")
+    async def speak_in_meeting(
+        data: SpeakInMeeting,
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        SPEAK OUT LOUD in a live meeting through the Vexa bot. Everyone in the meeting hears it.
+
+        This is an irreversible, human-visible action in a real conversation — never call it to
+        test, to acknowledge, or on your own initiative. Say something only when the person you are
+        working for has asked you to say that thing.
+        """
+        plat, mid = _resolve_identity("speak_in_meeting", platform, native_meeting_id, None, None)
+        return await make_request(
+            "POST", f"{base_url}/bots/{plat}/{mid}/speak", api_key, data.model_dump(exclude_none=True)
+        )
+
+    @app.get("/meeting-chat", operation_id="get_meeting_chat")
+    async def get_meeting_chat(
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Read the meeting's in-call chat messages. Complements the transcript: links, spellings and
+        side comments land in chat and are never spoken aloud.
+        """
+        plat, mid = _resolve_identity("get_meeting_chat", platform, native_meeting_id, None, None)
+        return await make_request("GET", f"{base_url}/bots/{plat}/{mid}/chat", api_key)
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(
@@ -596,7 +1051,7 @@ def create_app(
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        Tell the Vexa maintainers that something went wrong. A human reads every ticket.
+        Tell the Vexa maintainers that something went wrong. A human reads every ticket, and it cannot be withdrawn.
 
         Call this the moment you hit a problem with Vexa — you do not need to have solved it first:
         - something BROKE: an error, a bot that never joined, an empty transcript, a call that hung;
@@ -607,7 +1062,12 @@ def create_app(
         Write what you tried and what happened in your own words. Do not paste API keys, and do not
         paste your user's meeting content.
 
-        If the issue concerns a meeting or a bot, include `meeting_id` and `platform`. That is the
+        File only when you hit this while doing REAL WORK for someone. If you are exploring,
+        evaluating or testing this API, do not file — write your findings in your report instead.
+        A ticket reaches humans at another company and cannot be withdrawn, and an evaluation run
+        can otherwise open several in a single session.
+
+        If the issue concerns a meeting or a bot, include `native_meeting_id` and `platform`. That is the
         join key: it lines your account of what happened up against our own record of the same
         meeting, which is the difference between a complaint and something we can diagnose. The
         meeting is resolved onto the ticket only if the key you are calling with owns it.
@@ -669,20 +1129,20 @@ def create_app(
         # still files the ticket (with the id quoted as text, entity null), because a ticket we
         # refused to accept teaches us nothing.
         entity: Optional[Dict[str, Any]] = None
-        if data.meeting_id:
+        if data.native_meeting_id:
             rows = meetings if isinstance(meetings, list) else (meetings or {}).get("meetings", [])
             for m in rows if isinstance(rows, list) else []:
                 if not isinstance(m, dict):
                     continue
-                if m.get("native_meeting_id") != data.meeting_id:
+                if m.get("native_meeting_id") != data.native_meeting_id:
                     continue
                 if data.platform and m.get("platform") != data.platform:
                     continue
                 entity = {
                     "type": "meeting",
-                    "id": data.meeting_id,
+                    "id": data.native_meeting_id,
                     "platform": m.get("platform"),
-                    "url": f"/transcripts/{m.get('platform')}/{data.meeting_id}",
+                    "url": f"/transcripts/{m.get('platform')}/{data.native_meeting_id}",
                 }
                 break
 
@@ -706,7 +1166,7 @@ def create_app(
             "deployment": data.deployment,
             "version": data.version,
             "severity": data.severity,
-            "meeting_id": data.meeting_id,
+            "native_meeting_id": data.native_meeting_id,
             "platform": data.platform,
             "entity": entity,
             "logs": data.logs,
@@ -770,9 +1230,38 @@ def create_app(
         return ack
 
     # ---------------------------
+    # ASSEMBLY (PRD decision 40) — the tools the DEPLOYED domains declare
+    # ---------------------------
+    # The fourteen tools above are this edge's own. Everything else it serves belongs to a domain:
+    # meetings owns the bots and transcripts, identity owns the person, flows owns the reaction
+    # engine, agent owns the desks. Each publishes a manifest at `/.well-known/mcp-tools.json`, this
+    # asks the ones the deployment names, and every tool becomes a route here with
+    # `operation_id=<name>` — the SAME mechanism the fourteen use, so an assembled tool and a
+    # built-in one are indistinguishable to a client.
+    #
+    # BEFORE `FastApiMCP(app, ...)`, necessarily: the MCP surface is derived from this app's
+    # OpenAPI, so a route added afterwards would be a tool nobody can see.
+    #
+    # AND IT FAILS THE BOOT. Every rule in `manifest.py` is a failure that is otherwise silent — a
+    # domain's tools quietly missing, one name claimed twice, a manifest naming a route its service
+    # does not serve. A server that started anyway would answer `tools/list` with a lie.
+    app.state.assembly = None
+    _assembly_env = assembly_env if assembly_env is not None else os.environ
+    if not _assembly_env.get("VEXA_MCP_ASSEMBLY_OFF"):
+        with httpx.Client(transport=assembly_transport) as _boot:
+            _assembly, _openapi, _bases = discover_mod.discover(_boot, env=_assembly_env)
+        _bound = bind_mod.verify(_assembly, _openapi)
+        register_mod.register(app, _bound, _bases, transport=transport, env=_assembly_env)
+        app.state.assembly = _assembly
+
+    # ---------------------------
     # MCP mount + prompts
     # ---------------------------
     mcp = FastApiMCP(app, headers=["authorization", "x-api-key"])
+    # Orientation at connect time. FastApiMCP has no `instructions` kwarg, but the lowlevel
+    # Server it wraps carries the field the spec defines — a client that connects should not have
+    # to infer what Vexa is from nine tool descriptions.
+    mcp.server.instructions = VEXA_INSTRUCTIONS
 
     @mcp.server.list_prompts()
     async def _list_prompts() -> mcp_types.ListPromptsResult:
@@ -781,6 +1270,17 @@ def create_app(
     @mcp.server.get_prompt()
     async def _get_prompt(name: str, arguments: Optional[Dict[str, str]] = None) -> mcp_types.GetPromptResult:
         return get_prompt_result(name, arguments)
+
+    # Close every tool's argument schema. Without `additionalProperties: false` an unknown
+    # argument is not rejected — fastapi-mcp silently DROPS it before the HTTP call, so the
+    # server-side guard never sees it and the tool answers 200 as if the argument had been
+    # honoured. A hallucinated or typo'd parameter then looks like it worked, and the wrong
+    # answer is indistinguishable from the right one. Closing the schema moves the refusal to
+    # where the argument actually is: the MCP validation layer.
+    for _tool in mcp.tools:
+        schema = getattr(_tool, "inputSchema", None)
+        if isinstance(schema, dict) and schema.get("type") == "object":
+            schema.setdefault("additionalProperties", False)
 
     mcp.mount_http()
     # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE

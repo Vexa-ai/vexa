@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -250,8 +250,17 @@ def build_router(
     repo: MeetingRepo,
     runtime: RuntimeClient,
     authority=None,
+    *,
+    fetch_bot_context: "Optional[Callable[[int], Awaitable[Optional[dict]]]]" = None,
 ) -> APIRouter:
-    """The bot-spawn routes over injected storage, runtime, and authority ports."""
+    """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
+
+    ``fetch_bot_context`` is the per-user spawn context from identity — the SAME edge the auto-join
+    sweep already takes (``auto_join.py:324``). It is here so that the person's default bot name is
+    resolved by the domain that OWNS the bot, on every path a bot is spawned, rather than by each
+    caller out of a store of its own: that is how one fact came to have three (founder ruling,
+    2026-09-02 — no fourth store). None = no identity edge configured (offline / self-host), which
+    is a smaller answer and never an error."""
     router = APIRouter()
 
     @router.post("/bots", status_code=201)
@@ -436,6 +445,22 @@ def build_router(
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
 
+        # THE NAME THIS PERSON'S BOT SHOWS UP AS. Precedence is auto-join's, unchanged: an explicit
+        # name on THIS request, then this person's default from identity, then the deployment's.
+        # Identity is not asked when the caller already named the bot — one fewer hop on a path a
+        # person is waiting on, and the answer could not change anything.
+        #
+        # A FAILED LOOKUP NEVER STOPS THE SPAWN. A name is a nicety; joining the call is the
+        # product, and failing it because a preference read timed out trades the thing they asked
+        # for against the label on it.
+        bot_name = body.get("bot_name")
+        if not bot_name and fetch_bot_context is not None:
+            try:
+                ctx = await fetch_bot_context(user_id)
+                bot_name = (ctx or {}).get("bot_name") or None
+            except Exception:  # noqa: BLE001
+                bot_name = None
+
         try:
             meeting = await request_bot(
                 repo,
@@ -444,7 +469,7 @@ def build_router(
                 user_id=user_id,
                 platform=platform,
                 native_meeting_id=native_meeting_id,
-                bot_name=body.get("bot_name"),
+                bot_name=bot_name,
                 passcode=passcode,
                 meeting_url=meeting_url,
                 teams_base_host=teams_base_host,
