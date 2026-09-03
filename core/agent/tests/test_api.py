@@ -450,6 +450,42 @@ def test_meeting_stream_carries_no_copilot_lane(monkeypatch):
     assert not any(k.startswith("proc:meeting:") or k.startswith("unit:agent-meet-") for k in fake.reads)
 
 
+def test_meeting_stream_on_completed_meeting_never_crashes_xread(monkeypatch):
+    """F166: when the replay tail's LAST entry is session_end — i.e. the caller opened the stream for
+    an already-COMPLETED meeting, not one that just ended live — the handler used to `last.pop(tkey,
+    None)` on the ONLY key in `last`, leaving `{}`. The next `r.xread(last, ...)` then hit real
+    redis-py's `XREAD streams must be a non empty dict` DataError and crash-looped agent-api on every
+    re-poll of a completed meeting's stream. The two FakeRedis fixtures above don't validate emptiness
+    the way real redis-py does, so they passed even with the bug present — this one does, to catch it.
+    The feed must always answer a terminal event and close with 200, never blow up mid-stream."""
+    import json
+    import redis
+
+    class FakeRedis:
+        def xrevrange(self, stream, count=1):
+            # The whole replay tail is historical and ends in session_end: nothing live to seed.
+            return [("5-0", {"payload": json.dumps({"type": "session_end"})})]
+
+        def xread(self, streams, count=500, block=15000):
+            if not streams:  # real redis-py raises here — this fake does too, faithfully
+                raise redis.exceptions.DataError("XREAD streams must be a non empty dict")
+            return []
+
+    fake = FakeRedis()
+    monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: fake)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+        meeting_owner_lookup=_fake_owner_lookup({("u_owner", "done"): "done"}),
+    ))
+
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "done", "session_uid": "done"},
+                  headers={"X-User-Id": "u_owner"}) as r:
+        body = "".join(r.iter_text())
+
+    assert r.status_code == 200
+    assert '"meeting-end"' in body
+
+
 def test_workspace_read_and_traversal_guard(tmp_path):
     from control_plane.workspace_reader import WorkspaceReader
     p = tmp_path / "u_jane" / "kg" / "entities" / "person"
