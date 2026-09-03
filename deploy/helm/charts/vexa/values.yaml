@@ -515,6 +515,15 @@ flows:
   enabled: false
   image: vexaai/v012-flows:dev        # digest-pinned per release by the publisher
   workerReplicas: 2
+  # The database the flows tables live in. Default "flows": a SEPARATE database from
+  # database.name, bootstrapped by the ensure-db initContainer (needs CREATEDB or a pre-created
+  # database — see flows.yaml). Set equal to database.name (e.g. "vexa") to put the flows tables
+  # alongside the rest of the app's tables instead — same shape compose already runs (its flows
+  # tables live in the shared vexa database, no separate CREATE DATABASE at all). When the two
+  # names match, the ensure-db initContainer is skipped entirely: there is nothing to create, the
+  # application database already exists by definition. Reason this matters in prod: a separate
+  # "flows" database is NOT covered by a backup job that only dumps the app database by name.
+  databaseName: "flows"
   apiKey: ""
   mail:
     address: ""
