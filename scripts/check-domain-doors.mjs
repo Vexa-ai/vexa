@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * The DOOR boundary checker — the HTTP twin of scripts/check-isolation-py.mjs (P9, PRD decision 46).
+ * The DOOR boundary checker — the HTTP twin of scripts/check-isolation-py.mjs (P9).
+ *
+ * THE DESIGN THIS ENFORCES is docs/adr/0037-the-target-architecture-one-edge-domains-over-identity
+ * -and-runtime.md — accepted 2026-09-03, and written as "the reference the domain-doors gate (P9)
+ * is written against". Read it before changing a rule here: the ADR is the decision, this file is
+ * only its mechanism, and the distance between the two is the allowlist.
  *
  * `gate:graph` / `gate:isolation-py` gate IMPORTS. On this branch there are zero cross-domain
  * Python imports and yet every domain reaches its neighbours anyway, because the coupling is not an
@@ -8,8 +13,8 @@
  * mechanically enforced; the door seam was enforced by nothing, so "identity is the only shared
  * dependency" was a sentence in a PRD rather than a property of the tree.
  *
- * THE RULE (PRD decision 46, the approved target architecture; 40.7; the 07:54Z ruling that runtime
- * is a primitive):
+ * THE RULE (ADR-0037 § The design; PRD decision 46 approving it; 40.7; the ruling that runtime is a
+ * primitive):
  *
  *   A DOMAIN (core/identity · core/meetings · core/flows · core/agent) may name
  *     - its own door,
@@ -20,7 +25,7 @@
  *       declared degrade, the #1453 `domain_present` pattern: unset means "that domain is not
  *       deployed" and the caller answers `not_present` instead of knocking, or
  *     - a PUBLISH edge — the domain declares `publishes_events` in its `mcp.tools.v1.json`
- *       manifest and the door is flows' event ingress (decision 46: "anything one domain wants
+ *       manifest and the door is flows' event ingress (ADR-0037: "anything one domain wants
  *       another to react to is an event in flows").
  *   A domain may never name an EDGE (the gateway, the MCP service) or a CLIENT: fronting a
  *   sibling's door with the edge does not make it not-an-edge.
@@ -70,7 +75,7 @@ const SCANNED_EXT = /\.(py|ts|tsx|js|jsx|mjs|cjs)$/;
 //       · "primitive" (runtime: spawns what it is told)
 export const UNITS = [
   // the MCP service lives under core/meetings today but is an EDGE (decision 40.5: one MCP server,
-  // assembled at the gateway from domain-owned manifests). Listed BEFORE core/meetings so the
+  // assembled at the gateway from domain-owned manifests, ADR-0037). Listed BEFORE core/meetings so the
   // longest-prefix rule classes it correctly.
   { unit: "mcp", kind: "edge", root: "core/meetings/services/mcp" },
   { unit: "identity", kind: "domain", root: "core/identity" },
@@ -342,7 +347,7 @@ export function judge(site, ctx) {
     if (KINDS[to] === "edge" || KINDS[to] === "client") return null;      // edge↔edge, edge→client mint
     const binding = ctx.bindings.get(to);
     if (binding && binding.envs.has(door)) return null;
-    return `the edge forwards to ${to} without a declared route binding — add ${to}'s routes.v1.json / mcp.tools.v1.json declaring base_url_env "${door}" (decision 46: the edge assembles routes.v1 and mcp.tools.v1 from the domains present)`;
+    return `the edge forwards to ${to} without a declared route binding — add ${to}'s routes.v1.json / mcp.tools.v1.json declaring base_url_env "${door}" (ADR-0037: the edge assembles routes.v1 and mcp.tools.v1 from the domains present)`;
   }
 
   if (kind === "client") {

@@ -1352,7 +1352,7 @@ function gateLiteMakefile() {
 }
 
 
-// gate:domain-doors (P9, PRD decision 46) — the HTTP twin of gate:graph-py. `gate:graph` bans a
+// gate:domain-doors (P9, ADR-0037) — the HTTP twin of gate:graph-py. `gate:graph` bans a
 // cross-domain IMPORT and there are none; every cross-domain edge on this tree is a DOOR — an
 // env-configured base URL plus an HTTP call — and until this gate none of the suite read one. So
 // "identity is the only shared dependency; meetings, agents and flows work independently and in
@@ -1362,7 +1362,8 @@ function gateLiteMakefile() {
 // needs a DECLARATION — class `capability` with a degrade in that domain's config contract (the
 // #1453 `domain_present` pattern) — or a PUBLISH edge into flows. The edge and the clients reach a
 // domain only through a declared route binding (routes.v1 / mcp.tools.v1). The rule, the scanner
-// and the reasons live in scripts/check-domain-doors.mjs; the doors already open on the line live
+// and the reasons live in scripts/check-domain-doors.mjs, measured against ADR-0037's figure; the
+// doors already open on the line live
 // in scripts/domain-doors.allow.json, each pinned to path:line and each naming the ruling that
 // closes it — checked in BOTH directions, so a stale entry is a failure and the list cannot rot.
 function gateDomainDoors() {
@@ -1374,7 +1375,7 @@ function gateDomainDoors() {
     errs.push(`${v.site} — ${v.from} → ${v.to} (${v.door}): ${v.why}`);
   for (const e of res.stale)
     errs.push(`STALE allowlist entry: ${e.site} (${e.from} → ${e.to}, ${e.door}) no longer matches any violation — DELETE it from ${DOORS_ALLOW}. The list is the migration backlog, not a permanent exemption.`);
-  if (errs.length) return fail([`domain-doors (P9, PRD decision 46) — undeclared cross-domain doors:`, ...errs.map((e) => "   " + e)]);
+  if (errs.length) return fail([`domain-doors (P9, ADR-0037) — undeclared cross-domain doors:`, ...errs.map((e) => "   " + e)]);
   console.log(`  ✓ gate:domain-doors — ${res.sites.length} door site(s) · every cross-domain door declared or allowlisted (${res.allowlisted} on the dated backlog in ${DOORS_ALLOW})`);
   return true;
 }
