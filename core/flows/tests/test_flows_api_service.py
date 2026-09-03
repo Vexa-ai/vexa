@@ -62,11 +62,20 @@ finally:
 #: The domain's contribution to the one MCP surface. Named here so a tool cannot leave the manifest
 #: without a test saying so — an assembly that quietly lost one still looks assembled. Written out
 #: rather than counted: a count is satisfied by a swap, and the set is the thing that matters.
-TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting"}
+TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting",
+        "report_friction", "friction_so_far"}
 
 
-def _route(path: str):
-    return next((r for r in flows_api.app.routes if getattr(r, "path", None) == path), None)
+def _route(path: str, method: str = ""):
+    """The first route at `path` — or, when `method` is given, the one route at `path` that
+    actually serves it. Two verbs on one path (`POST /friction` and `GET /friction`) are two
+    separate `APIRoute` objects with the same `.path`, and a first-match lookup would silently
+    always return the one registered first — exactly the shadow `test_no_path_is_registered_twice`
+    exists to catch, except this shape is not a collision, it is ordinary REST."""
+    matches = [r for r in flows_api.app.routes if getattr(r, "path", None) == path]
+    if method:
+        return next((r for r in matches if method in (getattr(r, "methods", None) or set())), None)
+    return matches[0] if matches else None
 
 
 def test_health_exists_and_is_open():
@@ -133,10 +142,9 @@ def test_every_tool_in_the_manifest_is_a_route_this_process_serves():
         route = tool.get("route")
         if not route:
             continue
-        r = _route(route["path"])
-        assert r is not None, f"{tool['name']} names {route['path']}, which this app does not serve"
-        assert route["method"] in (getattr(r, "methods", None) or set()), \
-            f"{tool['name']} names {route['method']} {route['path']}; the app serves {r.methods}"
+        r = _route(route["path"], route["method"])
+        assert r is not None, \
+            f"{tool['name']} names {route['method']} {route['path']}, which this app does not serve"
 
 
 def test_the_bind_address_is_configurable_and_still_defaults_to_loopback():

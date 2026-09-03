@@ -34,6 +34,20 @@ FLOWS_OPENAPI = {"paths": {
         {"name": "since", "in": "query", "schema": {"type": "string"}},
         {"name": "until", "in": "query", "schema": {"type": "string"}},
         {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    "/friction": {
+        "post": {"summary": "Tell us what did not work", "parameters": [
+            {"name": "session", "in": "query", "schema": {"type": "string"}},
+            {"name": "what_i_tried", "in": "query", "schema": {"type": "string"}},
+            {"name": "what_happened", "in": "query", "schema": {"type": "string"}},
+            {"name": "severity", "in": "query", "schema": {"type": "string"}},
+            {"name": "meeting_id", "in": "query", "schema": {"type": "string"}},
+            {"name": "tool", "in": "query", "schema": {"type": "string"}},
+            {"name": "deployment", "in": "query", "schema": {"type": "string"}},
+            {"name": "worker_image", "in": "query", "schema": {"type": "string"}},
+            {"name": "kind", "in": "query", "schema": {"type": "string"}}]},
+        "get": {"summary": "Your own filed reports, newest first", "parameters": [
+            {"name": "since", "in": "query", "schema": {"type": "string"}},
+            {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
 }}
 
 BUILT_IN = 14

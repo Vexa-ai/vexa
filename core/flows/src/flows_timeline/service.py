@@ -13,7 +13,7 @@ import time
 from typing import Callable, Optional
 
 from flows_timeline.model import (Event, concerns, event_from_meeting, event_from_receipt,
-                                  events_from_reaction, loads, merge, to_epoch)
+                                  events_from_reaction, iso, loads, merge, to_epoch)
 
 # How many reaction rows one call may look at. A person's own share of them is small, but the table
 # is org-wide, so the scan is bounded rather than the result: an unbounded ORDER BY over a table a
@@ -150,6 +150,53 @@ def read_flows(db, *, uid: str = "", email: str = "", since: float, until: float
                                 flow=str(parent.get("flow") or ""))
         if ev is not None:
             out.append(ev)
+    return out
+
+
+# ── friction (PRD 40.9 open-decision 8) ─────────────────────────────────────────────────────────
+# THE READ HALF of the sink. `POST /friction` writes one `friction.reported` reaction per report
+# (via `admit()`, through the one-step `friction_log` flow — see `flows_defs/production.py`'s
+# `record_friction`); this is the read of it, scoped exactly like `list_reactions` above and for
+# the same reason (`model.concerns` needs both identifiers). It is a SEPARATE query rather than a
+# filter added to `read_flows`/`merge`: a friction report is not a moment on a person's calendar
+# day — it carries no title, no meeting, nothing `Event` renders — so folding it into the timeline
+# proper would mean inventing a description for a shape that already has its own reader.
+
+_FRICTION_COLS = ("reaction_id", "subject_refs", "created_at")
+
+
+def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: int = 40,
+                         scan: int = SCAN_ROWS,
+                         identity: Optional[Callable] = None) -> Optional[list[dict]]:
+    """Every `friction.reported` row at or after `since`, newest first. ``None`` when `subject`
+    was given and nobody answers to it (mirrors `list_reactions`'s contract). `subject=""` reads
+    every subject's reports — the whole-instance view stays behind the caller's own authorization
+    (an operator, in `flows_api.friction_so_far`); this function does not gate it itself, the same
+    division `list_reactions` already draws between scoping and authorizing.
+    """
+    rows = _rows(db, f"""SELECT {", ".join(_FRICTION_COLS)} FROM reaction
+                         WHERE event_type = :et AND created_at >= :since
+                         ORDER BY created_at DESC LIMIT {int(scan)}""",
+                {"et": "friction.reported", "since": since}, _FRICTION_COLS)
+    if str(subject or "").strip():
+        uid, email = (identity or resolve_identity)(subject)
+        if not uid and not email:
+            return None
+        rows = [r for r in rows if concerns(loads(r["subject_refs"]), uid, email)]
+    out = []
+    for r in rows[:max(1, int(limit))]:
+        refs = loads(r["subject_refs"])
+        at = to_epoch(r["created_at"]) or 0.0
+        ctx = {k: refs[k] for k in ("tool", "meeting_id", "deployment", "worker_image", "kind")
+              if refs.get(k)}
+        out.append({
+            "id": refs.get("friction_id") or r["reaction_id"],
+            "at": iso(at), "at_epoch": round(at, 3),
+            "subject": refs.get("uid", ""), "session": refs.get("session", ""),
+            "severity": refs.get("severity", ""),
+            "tried": refs.get("what_i_tried", ""), "happened": refs.get("what_happened", ""),
+            "context": ctx,
+        })
     return out
 
 
