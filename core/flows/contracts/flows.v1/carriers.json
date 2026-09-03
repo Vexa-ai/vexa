@@ -12,18 +12,19 @@
     },
     {
       "event": "meeting.started",
-      "owner": "flows",
+      "owner": "meetings",
       "cardinality": "once_per_occurrence",
-      "refs": ["uid", "meeting_id"],
+      "refs": ["uid", "meeting_id", "native", "platform"],
       "source_event_id": "live-<meeting_id> — keyed to the meeting, so a redelivery dedupes at the flows intake and a second bot dispatch for the same meeting cannot open a second live reaction",
-      "description": "A call this deployment sent a bot into is happening NOW; triggers live_meeting, whose step stays pending while it runs and completes when meeting.completed for the same meeting is admitted. That pending row is what puts \"a meeting is happening right now\" in whats_waiting as a reaction rather than a /bots/status read at the edge (PRD decision 42.2) — the queue holds reactions, so anything a person is told about has to be one. OWNED BY FLOWS BECAUSE FLOWS IS WHAT PUBLISHES IT TODAY: emit_started, inside invite_intake v3. meeting-api already derives the same typed event when the bot goes ACTIVE (core/meetings/services/meeting-api/src/meeting_api/lifecycle/webhook.py:40) and that is its intended home; nothing carries it into the flows intake yet. When meetings does, this is a HANDOVER and not a second producer — the owner here becomes meetings, emit_started goes, and the flow does not change."
+      "description": "A call this deployment sent a bot into is happening NOW; triggers live_meeting, whose step stays pending while it runs and completes when meeting.completed for the same meeting is admitted. That pending row is what puts \"a meeting is happening right now\" in whats_waiting as a reaction rather than a /bots/status read at the edge (PRD decision 42.2) — the queue holds reactions, so anything a person is told about has to be one. HANDED OVER FROM FLOWS (F168/F181): meeting-api now publishes it (`meeting_api/events.py`, config.v1 publish-edge) the moment its own lifecycle derives the typed event on BotStatus.ACTIVE (`lifecycle/webhook.py`) — the true signal, and the fix for an ad hoc bot (MCP `request_meeting_bot`, no calendar invite) that ran no `invite_intake` reaction and so told flows nothing. `invite_intake` v3's own `emit_started` keeps running unchanged for calendar-intake meetings; it uses the SAME source_event_id scheme, so admission dedups the two producers into one reaction rather than firing `live_meeting` twice. Retiring `emit_started` (and this file's description then simplifying to one producer) is a follow-up, not done here."
     },
     {
       "event": "meeting.completed",
-      "owner": "flows",
+      "owner": "meetings",
       "cardinality": "once_per_occurrence",
-      "refs": ["subject", "meeting_id"],
-      "description": "A meeting finished and its transcript is ready to work with; triggers post_meeting. Recorded here from the producing domain's own manifest (core/flows/mcp.tools.v1.json `publishes_events`) rather than asserted afresh — this census is a reading of what the repository already declares, and gate:config-contract plus the flows suite hold the two in agreement."
+      "refs": ["uid", "meeting_id", "native", "platform", "completion_reason"],
+      "source_event_id": "done-<meeting_id> — keyed to the meeting, matching invite_intake's own emit_completed id so a redelivery, or the second producer below, dedupes at the flows intake",
+      "description": "A meeting finished and its transcript is ready to work with; triggers post_meeting. HANDED OVER FROM FLOWS (F168/F181), on the same terms as meeting.started above: meeting-api now publishes it from its own lifecycle callback the instant a meeting's DB row flips to completed, which is the fix for an ad hoc (MCP-dispatched) meeting that previously reached no flow at all. `invite_intake` v3's `emit_completed` keeps running for calendar-intake meetings and dedupes against meeting-api's publish at admission (same source_event_id), not here. NOTE the refs correction: this entry previously read `[\"subject\", \"meeting_id\"]`, but neither producer has ever emitted a `subject` key — both use `uid` (`ctx.prior[\"ensure_user\"][\"uid\"]` in flows_defs/production.py; meeting-api's own `user_id` column, the same identity user id space). Corrected here rather than carried forward; `native` is required (post_meeting's process_meeting step reads `ctx.refs[\"native\"]` with no `.get()` fallback), `platform`/`completion_reason` are extra context neither producer's own consumer strictly needs today. meeting-api's publish carries no `participants`/`group` (its domain holds no invite) — see meeting_api/events.py for the room-read trade-off that creates on the calendar-intake path."
     },
     {
       "event": "invite.received",
