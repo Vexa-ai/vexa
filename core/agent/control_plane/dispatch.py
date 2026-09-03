@@ -222,9 +222,17 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
         # THE SUBJECT'S OWN DESK keeps its write bit — the runtime needs a writable cwd to start at
         # all (F59). Their OTHER activated workspaces are still demoted: those are neither the room
         # nor the subject's own desk, and a run scoped to one meeting has no business writing them.
-        active = [dict(m) if (m.get("primary") or (group and m.get("slug") == group))
-                  else {**m, "write": False, "primary": False}
-                  for m in active]
+        #
+        # ...UNLESS THE MEETING HAS A GROUP DESK THIS SUBJECT MAY WRITE, and then the reason for
+        # the write bit is gone: that desk becomes `primary` twenty lines down, so IT is the cwd
+        # the runtime needs, and decision 22's group half says in as many words that it is "the one
+        # desk you write to in this turn". Leaving the organiser's own desk writable beside it left
+        # a second writable content desk in a run whose whole contract is that it writes no desk —
+        # and something did write it: the entity write-back phase (decision 24) authors pages into
+        # every writable mount after every turn, which moved HEAD and tripped this step's own
+        # decision-22 detector on every `#group:` meeting (F103). The narrowing is applied AFTER
+        # the group mount is resolved below, because until then we do not know whether the subject
+        # can actually write it — a viewer's group desk must not cost them their cwd.
         if group and not any(m.get("slug") == group for m in active):
             # The meeting names a group the subject has not activated — resolve it directly through
             # the authoritative Lane-A seam so the run can maintain the group's memory. Membership
@@ -232,6 +240,16 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
             g_mount = group_desk_mount(settings.workspaces_dir, subject, group)
             if g_mount is not None:
                 active.append(dict(g_mount))
+        # Now the demotion, with the group's write bit known. `writable_group` is the predicate the
+        # comment above turns on: with one, the subject's own desk joins the read-only room; with
+        # none, it keeps write and primary exactly as F59 requires.
+        writable_group = bool(group) and any(
+            m.get("slug") == group and m.get("write") for m in active)
+        active = [
+            dict(m) if ((m.get("primary") and not writable_group)
+                        or (group and m.get("slug") == group))
+            else {**m, "write": False, "primary": False}
+            for m in active]
     # THE CWD, STATED rather than reached by elimination. The group desk takes it when the meeting
     # has one AND this subject may actually write it; otherwise the subject's own desk keeps it.
     #
@@ -500,6 +518,20 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
+    # THE ROOM, STATED TO THE WORKER. Present exactly when this dispatch is a post-meeting room
+    # run, absent on every other dispatch — a POSITIVE signal we always emit, never an inference
+    # from the mount shape. The worker cannot derive it: a room whose other attendees have no desks
+    # yet resolves to zero `role: "room"` mounts, which is precisely the small-team case, so
+    # "are there room mounts?" answers `no` on a run that IS one.
+    #
+    # It is read for two things the room run must not do, both of them decision 22 ("the run reads
+    # desks and writes ONE shared artefact whose home is the meeting row"):
+    #   * the entity write-back phase does not run (it authored pages into the organiser's desk
+    #     after every post-meeting turn, moved HEAD, and tripped the detector — F103);
+    #   * the bot verbs leave the toolbelt (a turn about a meeting that is over cannot usefully
+    #     stop a bot, and it filed four `bot_stop` calls trying — F104).
+    if room and room.get("meeting_id"):
+        env["VEXA_ROOM_MEETING"] = str(room["meeting_id"])
     # Attribution (D4 / WP-A1.2): the per-mount turn commit is authored by the dispatch PRINCIPAL (the
     # authenticated human whose input drives the turn), committer stays the platform. Until membership/
     # sharing lands (later WPs) the principal IS the subject; a caller that already resolved a distinct

@@ -603,11 +603,25 @@ def test_a_non_admin_subjects_post_meeting_dispatch_can_start(tmp_path):
         desks=[("b@x.test", "u_bob"), ("c@x.test", "u_carol")], group="g_acme"))
     by = {m["slug"]: m for m in stack}
     own = next(m for m in stack if m["role"] == "private")
-    assert own["write"] is True                                # its own desk: rw
     assert all(by[f"room:{s}"]["write"] is False for s in ("u_bob", "u_carol"))   # the room: ro
     assert by["g_acme"]["write"] is True                       # the group: rw when present
     assert by["g_acme"]["primary"] is True                     # ...and it is the cwd
     assert own["primary"] is False
+    # F59'S ACTUAL PROPERTY, asserted as itself: the cwd the runtime is handed is WRITABLE, so the
+    # worker can create `<cwd>/.claude` and the turn starts. This line used to read
+    # `own["write"] is True` instead, which was a PROXY for it — and the wrong one when the meeting
+    # has a group, because then the cwd is the group desk and the subject's own desk needs no write
+    # bit at all. That over-grant left a second writable content desk in a run whose contract is
+    # that it writes no desk; the entity write-back phase (decision 24) then authored pages into
+    # the organiser's desk after the turn, moved HEAD, and tripped `process_meeting`'s own
+    # decision-22 detector on every `#group:` meeting (F103). The two group-less cases — no group,
+    # and a group this subject may only read — are covered two tests down, and there the own desk
+    # keeps both bits.
+    from control_plane.dispatch import _worker_cwd
+    cwd = _worker_cwd(str(root), "u_org", stack)
+    assert cwd == str(root / "g_acme")
+    assert next(m for m in stack if m["path"] == cwd)["write"] is True
+    assert own["write"] is False                               # it is one of the room's desks now
 
 
 def test_the_same_subject_keeps_a_writable_desk_when_no_room_is_named(tmp_path):
@@ -628,9 +642,11 @@ def test_the_meetings_group_desk_is_the_one_writable_desk(tmp_path):
                             room=_room(desks=[("b@x.test", "u_bob")], group="g_acme"))
     writable = [m["slug"] for m in stack
                 if m["write"] and m["role"] not in ("global", "system")]
-    # the subject's own desk is writable too (F59) — what the group desk is UNIQUELY is the cwd
-    own_slug = next(m["slug"] for m in stack if m["role"] == "private")
-    assert writable == [own_slug, "g_acme"]
+    # THE ONE WRITABLE DESK, which is what this test has always been called. It used to assert
+    # `[own_slug, "g_acme"]` — two of them — under a comment excusing the first as F59's doing;
+    # F59 needs a writable CWD, and here the cwd is the group desk. See the fuller note in
+    # `test_a_non_admin_subjects_post_meeting_dispatch_can_start` above (F103).
+    assert writable == ["g_acme"]
     group = next(m for m in stack if m["slug"] == "g_acme")
     # it becomes the turn's cwd, so the run maintains the group's memory rather than a ro desk
     assert group["primary"] is True

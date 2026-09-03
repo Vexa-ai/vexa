@@ -3883,6 +3883,18 @@ def bot_stop(meeting_url: str, token: str = "") -> str:
     if not platform:
         return json.dumps({"error": mid})
     st, r = _gw_http(uid, "DELETE", f"/bots/{platform}/{mid}")
+    # A MEETING THAT IS OVER IS AN ANSWER, NOT A FAILURE (F104). The gateway has no bot to stop
+    # once the meeting has ended, and this used to report that as `{"stopped": false,
+    # "status": 404}` — which reads exactly like a transient error, so a caller retries it. On
+    # 2026-09-02 the post-meeting agent called this four times in one turn against a meeting that
+    # had already finished. There is nothing to retry: say the state, and say that the thing the
+    # caller actually wants (the transcript) is there.
+    if st == 404:
+        return json.dumps({"stopped": False, "status": st, "state": "no bot in this meeting",
+                           "note": "nothing to stop — the meeting is over or the bot already "
+                                   "left. This is final, not a transient failure; do not retry. "
+                                   "meeting_transcript(meeting_url) returns everything it "
+                                   "captured."})
     return json.dumps({"stopped": st == 200, "status": st,
                        "note": "meeting_transcript(meeting_url) still returns everything "
                                "captured up to now"})

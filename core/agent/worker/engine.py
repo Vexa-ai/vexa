@@ -597,6 +597,15 @@ def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
     desk, groups = desk_mounts(mounts)
     if not desk or not desk.get("path"):
         return None
+    # THE SECOND COMMITTER, and the one that fires even when the write-back phase has nothing to
+    # do: this runs on EVERY turn and commits `README.md` whenever a section changed. On a
+    # post-meeting room run against a group-less meeting the writable primary IS the organiser's
+    # own desk, so decision 26.4's refresh moved HEAD and decision 22's detector failed the
+    # meeting (F103). Same rule as the write-back's roots above, and it has to be stated twice
+    # because these are two different writers on one surface — the group's README is still
+    # maintained here, which is decision 22's group half in as many words.
+    if room_run() and str(desk.get("role") or "private") == "private":
+        return None
     root = Path(str(desk["path"]))
     if not root.is_dir():
         return None
@@ -668,12 +677,40 @@ def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
     a two-minute model call."""
     from shared.entities import missing_names
 
-    roots = [Path(str(m.get("path") or "")) for m in (mounts if mounts is not None else active_mounts())
-             if m.get("write") and m.get("path")]
+    # A ROOM RUN DOES NO BOOKKEEPING ON THE SUBJECT'S OWN DESK (decision 22, F103). The post-meeting
+    # turn writes ONE shared artefact whose home is the meeting row; `drop_to_attendees` puts it on
+    # every desk in the room afterwards, organiser included. Decision 24 ("the agent writes entities
+    # as a phase of every turn") is right everywhere else and met this run with nothing in between:
+    # the phase authored pages into the organiser's desk after the turn, the commit moved HEAD, and
+    # `process_meeting`'s own decision-22 detector failed the meeting and its minutes mail. Both
+    # rehearsal states that reach a completed meeting died there.
+    #
+    # NARROWED, NOT DISABLED. The GROUP desk is the one desk a room run maintains, so it stays a
+    # target — and with the organiser's desk demoted for group meetings (dispatch.build_mount_set)
+    # the two cases come out right on their own: a group run has exactly one candidate root, a
+    # group-less run has none and the phase's fourth gate declines it.
+    #
+    # The write bit alone cannot express this. On a group-less room run the subject's desk is
+    # writable ON PURPOSE — the runtime needs a writable cwd to create `<cwd>/.claude` at all
+    # (F59) — so "writable" there means "the process can start", not "the turn may author here".
+    #
+    # ...and NEVER THE SYSTEM TIERS, room or no room. `_system` is chats, sessions, settings and
+    # identity — `desk_mounts` one screen up excludes it from "the desk" for exactly this reason —
+    # and `_global` is the organisation's, read-only for everyone but the admin's setup turn. They
+    # were reachable here only because both are writable, and the room narrowing would otherwise
+    # have made `_system` the LAST root standing on a group-less room run: entity pages authored
+    # into the private system tier, which is worse than what this is fixing.
+    #
     # DEFAULT FALSE (R-A15). Every other mount consumer reads the bit explicitly; this one
     # defaulted a missing key to writable, so a mount that LOST it — a fake, a future producer,
     # the read-only room mounts of a run with no primary — was silently promoted to a write
     # target for the phase. A write bit that has to be present to be true cannot be lost.
+    in_room = bool(room_run())
+    roots = [Path(str(m.get("path") or "")) for m in (mounts if mounts is not None else active_mounts())
+             if m.get("write") and m.get("path")
+             and str(m.get("role") or "private") not in ("system", "global")
+             and m.get("slug") not in ("_system", "_global")
+             and not (in_room and str(m.get("role") or "private") == "private")]
     if not roots:
         return []
     return missing_names(roots, [t for t in texts if t])
@@ -985,6 +1022,34 @@ VEXA_MCP_TOOLS = (
     # for its only verb is a turn that answers with an apology.
     "transcript_terms",
 )
+
+
+def room_run() -> str:
+    """The meeting this turn is the post-meeting run FOR, or `""` for every other dispatch.
+
+    Stamped by `control_plane.dispatch.build_unit_env` exactly when a room was authorised, so it
+    is a POSITIVE signal the platform always emits rather than an inference from the mount shape.
+    The mount shape cannot answer this: a room whose other attendees have no desks yet resolves to
+    zero `role: "room"` mounts — the small-team case — and "are there room mounts?" would then say
+    `no` on a run that is one."""
+    return (os.environ.get("VEXA_ROOM_MEETING") or "").strip()
+
+
+def room_toolbelt(tools: list[str]) -> list[str]:
+    """The MCP allow-set for a post-meeting turn: everything except the bot verbs.
+
+    The meeting is OVER. `bot_send`, `bot_stop`, `bot_say`, `bot_schedule` and `bots_running` can
+    do nothing useful about a room that has finished, and offering them is not neutral: on
+    2026-09-02 the post-meeting agent for uid 133 read the meeting as still live and called
+    `bot_stop` four times in one turn, each answered with a bare `{"stopped": false, "status":
+    404}` that reads as a transient failure rather than a terminal state (F104). A tool that
+    cannot help is a tool that can be looped on.
+
+    Advertised is not the same as callable, and both matter: the harness will not offer what is
+    not in `--allowedTools`, so this removes the option rather than relying on the model declining
+    it. `bot_stop` itself also learned to answer the state — the two fixes are independent because
+    the MCP serves callers this allow-set never reaches."""
+    return [t for t in tools if not t.startswith(f"mcp__{VEXA_MCP_SERVER}__bot")]
 
 
 def _delegation_dir(work: Path) -> "Path | None":
@@ -1412,10 +1477,14 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # must enter the allow-set too or every tool call would stall on a permission prompt that no
     # human is there to answer.
     mcp_cfg, mcp_tools = mcp_delegation_config(work)
+    room = room_run()
+    if room:
+        mcp_tools = room_toolbelt(mcp_tools)
     if mcp_cfg:
         chat_tools = chat_tools + mcp_tools
-        log.info("agent-api worker: vexa MCP attached for owner=%s (delegated, scoped, short-lived)",
-                 os.environ.get("VEXA_OWNER"))
+        log.info("agent-api worker: vexa MCP attached for owner=%s (delegated, scoped, short-lived)"
+                 "%s", os.environ.get("VEXA_OWNER"),
+                 f" — post-meeting room {room}, bot verbs withheld" if room else "")
     # One harness instance owns the whole warm worker lifetime. That makes the steering handle
     # instance-scoped (Codex JSON-RPC process / Claude stdin) instead of a vendor-global mailbox.
     import worker.worker as _w
@@ -1431,6 +1500,11 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
         # session would have to be told the whole conversation to ask one bookkeeping question.
         # Small budget by TOOLSET rather than by a step cap the harness does not expose.
+        #
+        # A ROOM RUN REACHES THIS PHASE WITH NOTHING TO DO, by construction rather than by a switch
+        # here: `writeback_candidates` refuses the subject's own desk as a target while a room is
+        # open (F103), so the pre-pass returns an empty list and gate 4 declines. On a `#group:`
+        # meeting the group's desk IS a legitimate target and the phase still runs against it.
         writeback=lambda candidates: run_turn_over_workspace(
             work, writeback_prompt(candidates), model=model,
             allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
