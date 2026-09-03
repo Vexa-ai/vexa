@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from flows import EventType, FakeClock, Registry, SqliteDB  # noqa: E402
 from flows_integrations.inbox import (  # noqa: E402
@@ -36,6 +38,19 @@ from flows_steps.emailx import register_thread  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "mailpit"
 SELF = "vexa@oenb.at"
+
+
+@pytest.fixture(autouse=True)
+def _this_deployment_serves_dna(monkeypatch):
+    """The fixture world is a deployment that serves `dna.test` — so say so.
+
+    The intake now refuses to act for an address that is neither a known user nor inside the
+    deployment's domain allow-list (R-B12), and the recorded corpus is a `dna.test` organizer and
+    a `dna.test` attendee writing to a mailbox at `oenb.at`. That combination is a real deployment
+    shape (we host the mailbox, the customer's people write to it) and it is expressed the way the
+    PRD says it must be — as a deployment value, `VEXA_FLOWS_MAIL_DOMAINS`. Without it these mails
+    are strangers, which is the correct new answer and not what this file is about."""
+    monkeypatch.setenv("VEXA_FLOWS_MAIL_DOMAINS", "dna.test")
 BEFORE_ALL = "2026-09-01T21:00:00.000000Z"
 EML = {"1InviteDnaTscZZZZZZZZZ": "invite-dna-tsc.eml",
        "2StrangerYYYYYYYYYYYYY": "not-for-us.eml",
@@ -80,12 +95,17 @@ def rig(lookback_s: float = 86_400.0):
     return db, reg, clock, inbox
 
 
-def drive(db, reg, clock, inbox, cursor: str):
-    """One poll: exactly what mailbox.main()'s loop body does, with the services injected."""
+def drive(db, reg, clock, inbox, cursor: str, known: dict | None = None):
+    """One poll: exactly what mailbox.main()'s loop body does, with the services injected.
+
+    `known` is the account directory. It defaults to Amelia — the person the registered thread
+    belongs to — because a reply on a thread now runs a turn only for that thread's own
+    participant: `In-Reply-To` says WHICH conversation, it never says who the sender is (R-B12)."""
+    known = {"amelia@dna.test": "7"} if known is None else known
     out = []
     for msg in inbox.fetch(cursor):
         out.append((msg, handle(db, reg, clock, SELF, msg,
-                                known_uid=lambda e: None,
+                                known_uid=lambda e: known.get(e.strip().lower()),
                                 is_scaffolded=lambda u: False,
                                 provision=lambda e: "99")))
         cursor = msg.cursor
@@ -115,6 +135,9 @@ def test_zoom_invite_becomes_the_exact_invite_received_refs():
         "url": "https://us02web.zoom.us/j/84123456789?pwd=aBcD1234efGH",
         "start": float(calendar.timegm(time.strptime("20300302T140000", "%Y%m%dT%H%M%S"))),
         "ics_uid": "dna-tsc-20300302@zoom.us",
+        # THE OCCURRENCE — what makes this one instance of a series rather than the series
+        # (R-B02). `RECURRENCE-ID` when the sender sends one, else the occurrence's own DTSTART.
+        "occurrence": "20300302T140000Z",
         "title": "DNA TSC weekly",
         "group": "dna-tsc",
         "participants": ["amelia@dna.test", "priya@dna.test"],
@@ -149,7 +172,7 @@ def test_meet_invites_still_parse_and_now_carry_participants():
 # ---------------------------------------------------------------------------------------------
 def test_reply_routes_by_thread_not_by_sender():
     db, reg, clock, inbox = rig()
-    drive(db, reg, clock, inbox, BEFORE_ALL)
+    drive(db, reg, clock, inbox, BEFORE_ALL, known={"amelia@dna.test": "7"})
 
     r = refs_of(db, "mail.reply")[0]
     assert r["uid"] == "7" and r["session"] == "main", "the thread row decides, never the sender"

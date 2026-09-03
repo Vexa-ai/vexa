@@ -208,8 +208,9 @@ def resolve_identity(subject: str, lookup: Optional[Callable[[str], dict]] = Non
     email = subject.lower() if "@" in subject else ""
     if lookup is None:
         def lookup(path: str) -> dict:
-            from flows_steps.common import ADMIN_API, ADMIN_KEY, http
-            _st, body = http("GET", f"{ADMIN_API}{path}", {"X-Admin-API-Key": ADMIN_KEY})
+            from flows_steps.common import ADMIN_API, http, require_admin_key
+            _st, body = http("GET", f"{ADMIN_API}{path}",
+                             {"X-Admin-API-Key": require_admin_key()})
             return body if isinstance(body, dict) else {}
     try:
         if uid and not email:

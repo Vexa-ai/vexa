@@ -429,7 +429,15 @@ def create_app() -> FastAPI:
               dependencies=[Depends(verify_admin_token)])
     async def create_user(user_in: UserCreate, response: Response,
                           db: AsyncSession = Depends(get_db)):
-        existing = (await db.execute(select(User).where(User.email == user_in.email))).scalars().first()
+        # CASE-FOLDED, like the sign-in lookup two hundred lines down (R-B08). An exact match
+        # here means `Anna.Smith@acme.com` does not find the account `anna.smith@acme.com`, so
+        # this route CREATES A SECOND ONE — a ghost with an empty desk that then receives the
+        # meeting report while the real account gets nothing. Email is case-insensitive in its
+        # domain and, in every provider we meet, in its local part too; one half of this service
+        # already knew that.
+        existing = (await db.execute(
+            select(User).where(func.lower(User.email) == user_in.email.lower())
+        )).scalars().first()
         if existing:
             response.status_code = status.HTTP_200_OK
             return UserResponse.model_validate(existing)
@@ -448,7 +456,12 @@ def create_app() -> FastAPI:
     @app.get("/admin/users/email/{email}", response_model=UserResponse,
              dependencies=[Depends(verify_admin_token)])
     async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
-        user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        # Case-folded (R-B08) — see `create_user`. This is the ASKING half of the same question,
+        # and the two disagreeing is what mints the ghost: flows asks here, is told "no such
+        # user", and creates one.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email.lower())
+        )).scalars().first()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return UserResponse.model_validate(user)
@@ -1061,7 +1074,11 @@ def create_app() -> FastAPI:
     async def internal_user_id_by_email(email: str, request: Request,
                                         db: AsyncSession = Depends(get_db)):
         _check_internal(request)
-        user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        # Case-folded (R-B08) — the mount path reads this one, so an exact match here silently
+        # drops a mixed-case signup out of every meeting room they are actually in.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email.lower())
+        )).scalars().first()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return {"id": user.id}

@@ -52,6 +52,28 @@ CREATE TABLE IF NOT EXISTS mail_seen (
 
 CREATE INDEX IF NOT EXISTS mail_seen_window ON mail_seen (source, created);
 
+CREATE TABLE IF NOT EXISTS mail_quarantine (
+	ext_id TEXT NOT NULL, 
+	from_addr TEXT NOT NULL, 
+	kind TEXT NOT NULL, 
+	reason TEXT NOT NULL, 
+	facts TEXT, 
+	at DOUBLE PRECISION NOT NULL, 
+	replied_at DOUBLE PRECISION, 
+	PRIMARY KEY (ext_id)
+);
+
+CREATE INDEX IF NOT EXISTS mail_quarantine_sender ON mail_quarantine (from_addr);
+
+CREATE TABLE IF NOT EXISTS mail_turn (
+	ext_id TEXT NOT NULL, 
+	from_addr TEXT NOT NULL, 
+	at DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (ext_id)
+);
+
+CREATE INDEX IF NOT EXISTS mail_turn_window ON mail_turn (at);
+
 CREATE TABLE IF NOT EXISTS mail_outbox_sent (
 	subject_uid TEXT NOT NULL, 
 	session TEXT NOT NULL, 

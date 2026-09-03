@@ -8,11 +8,54 @@ description: "Two small processes and a status projection: how flows run, fail, 
 | Process | Role |
 |---|---|
 | `flows-worker` (× N) | the loop: claim by lease → one step → receipt → advance. Stateless; replicas cooperate via `SKIP LOCKED`. A step-duration watchdog flags any step that blocks. |
-| mailbox integration | the front door: real IMAP inbox → facts (invites, threaded replies, new senders), durable cursor — restarts resume, never re-admit |
+| mailbox integration | the front door: real IMAP inbox → facts (invites, threaded replies, new senders), durable cursor — restarts resume, never re-admit. It decides **who it will act for** before it admits anything (below) |
 | `flows-api` | submit/manage flows; the reactions projection; signal verbs |
 
 All three speak SQL to one Postgres. Deliberately absent: message broker, scheduler service,
 sidecars, second state store.
+
+## Who the mailbox will act for
+
+The mailbox is reachable by anyone who can send email, so it answers that question before it
+admits a fact. Three populations:
+
+| sender | what happens |
+|---|---|
+| an existing user | routed as before |
+| an address inside the domain allow-list | provisioned and served as before |
+| anybody else | no account, no agent turn, no model call — one `mail_quarantine` row |
+
+**An empty allow-list is the mailbox's own domain, not everyone.** Set
+`VEXA_FLOWS_MAIL_DOMAINS` (comma-separated, `@` optional) when the mailbox is hosted on a
+different domain from the organisation it serves.
+
+`In-Reply-To` says *which conversation* a reply belongs to; it never says who the sender is. A
+reply continues a thread only for that thread's own participant — anyone else is judged on their
+own address. An invite whose **organizer** is neither a user nor allow-listed is recorded with its
+meeting facts in the quarantine row and creates nothing; re-admit it through `POST /events` once
+the organizer is known.
+
+| key | default | what it does |
+|---|---|---|
+| `VEXA_FLOWS_MAIL_DOMAINS` | the mailbox's own domain | who may be provisioned and answered |
+| `VEXA_FLOWS_MAIL_QUARANTINE_REPLY` | off | `1` answers a quarantined sender once with a fixed line — no model, no account |
+| `VEXA_FLOWS_MAIL_RATE_PER_SENDER` | `12` | mail-triggered agent turns one sender may cause per window |
+| `VEXA_FLOWS_MAIL_RATE_GLOBAL` | `120` | mail-triggered agent turns the deployment may run per window |
+| `VEXA_FLOWS_MAIL_RATE_WINDOW_S` | `3600` | the window both limits count over |
+| `VEXA_FLOWS_MAIL_BODY_MAX` | `4000` | how much of an inbound body may enter a prompt |
+
+Limits count **admitted** turns (`mail_turn`), so quarantined mail never consumes anyone's budget.
+Every refusal is a row — read them with:
+
+```
+SELECT at, from_addr, kind, reason FROM mail_quarantine ORDER BY at DESC;
+```
+
+`kind` is `stranger_mail`, `thread_mismatch`, `unverified_invite` or `rate_limited`. A sender who
+should be served appears here: add their domain to the allow-list, or create their account.
+
+An inbound body that is admitted reaches the agent quoted, delimited, length-capped and labelled
+as untrusted text from its sender. The text itself is never altered.
 
 ## Reading a reaction
 

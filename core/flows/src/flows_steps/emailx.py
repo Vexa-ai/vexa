@@ -73,19 +73,54 @@ def register_thread(db, message_id: str, subject_uid: str, session: str) -> None
                {"m": message_id, "u": subject_uid, "s": session, "t": time.time()})
 
 
+def ics_escape(value) -> str:
+    """One ICS property VALUE, escaped per RFC 5545 §3.3.11 — and de-folded first.
+
+    The iMIP reply built its whole calendar body, and its `Subject` header, by raw interpolation
+    of text that came off the invite we were answering: `UID`, `SUMMARY`, the organizer address
+    (R-B15). A `SUMMARY` containing a CRLF does not corrupt the file — it CLOSES the property and
+    opens whichever one the attacker names next, inside a REPLY we send as ourselves, signed by
+    our own mailbox, into the organizer's calendar. `ATTENDEE;PARTSTAT=ACCEPTED;CN=…:mailto:…` is
+    two lines of somebody else's text away.
+
+    Order matters: backslash first, or every escape this function adds is escaped again. Newlines
+    of every flavour become the literal `\n` the format defines, so nothing survives as a line
+    break; a bare CR would otherwise fold under `_unfold`'s own rule on the receiving side.
+    """
+    out = str(value if value is not None else "")
+    out = out.replace("\\", "\\\\")
+    for ch in (";", ","):
+        out = out.replace(ch, "\\" + ch)
+    out = out.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
+    return out
+
+
+def header_safe(value) -> str:
+    """One header VALUE with no line structure left in it. Python's `email` package raises on an
+    embedded newline for `set()`, but MIMEMultipart's `__setitem__` does not always reach that
+    check, and a `Subject` is not worth finding out — `title` comes off the same invite."""
+    return " ".join(str(value if value is not None else "").split())
+
+
 def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, title: str) -> str:
-    """iMIP REPLY from minimal fields — Google flips this mailbox to 'Yes' in the guest list."""
+    """iMIP REPLY from minimal fields — Google flips this mailbox to 'Yes' in the guest list.
+
+    Every value that came from the invite goes through `ics_escape` (and the Subject through
+    `header_safe`): the title, the UID and the organizer address are all attacker-adjacent, and
+    this is a message we sign with our own mailbox (R-B15)."""
     addr, pw = creds()
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     dtstart = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start_epoch))
     ics = "\r\n".join([
         "BEGIN:VCALENDAR", "PRODID:-//Vexa//flows//EN", "VERSION:2.0", "METHOD:REPLY",
-        "BEGIN:VEVENT", f"UID:{ics_uid}", "SEQUENCE:0", f"DTSTAMP:{stamp}", f"DTSTART:{dtstart}",
-        f"ORGANIZER:mailto:{organizer_email}",
-        f"ATTENDEE;PARTSTAT=ACCEPTED;CN=Vexa:mailto:{addr}",
-        f"SUMMARY:{title}", "END:VEVENT", "END:VCALENDAR", ""])
+        "BEGIN:VEVENT", f"UID:{ics_escape(ics_uid)}", "SEQUENCE:0", f"DTSTAMP:{stamp}",
+        f"DTSTART:{dtstart}",
+        f"ORGANIZER:mailto:{ics_escape(organizer_email)}",
+        f"ATTENDEE;PARTSTAT=ACCEPTED;CN=Vexa:mailto:{ics_escape(addr)}",
+        f"SUMMARY:{ics_escape(title)}", "END:VEVENT", "END:VCALENDAR", ""])
     msg = MIMEMultipart("mixed")
-    msg["From"], msg["To"], msg["Subject"] = f"Vexa <{addr}>", organizer_email, f"Accepted: {title}"
+    msg["From"], msg["To"] = f"Vexa <{addr}>", organizer_email
+    msg["Subject"] = header_safe(f"Accepted: {title}")
     msg["Message-ID"] = email.utils.make_msgid(domain=addr.split("@")[1])
     msg.attach(MIMEText("Vexa will attend and take the minutes.", "plain"))
     cal = MIMEText(ics, "calendar")

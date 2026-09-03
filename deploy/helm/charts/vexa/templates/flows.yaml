@@ -11,6 +11,12 @@ type: Opaque
 stringData:
   VEXA_MAIL_ADDR: {{ .Values.flows.mail.address | quote }}
   VEXA_MAIL_APP_PASSWORD: {{ .Values.flows.mail.appPassword | quote }}
+  # the inbound intake's authorization + ceilings (R-B12) — see values.yaml for what empty means
+  VEXA_FLOWS_MAIL_DOMAINS: {{ .Values.flows.mail.domains | quote }}
+  VEXA_FLOWS_MAIL_QUARANTINE_REPLY: {{ .Values.flows.mail.quarantineReply | quote }}
+  VEXA_FLOWS_MAIL_RATE_PER_SENDER: {{ .Values.flows.mailRate.perSender | quote }}
+  VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
+  VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
   VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
   VEXA_FLOWS_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.componentName" (list . "postgres") }}:{{ .Values.postgres.service.port }}/flows"
   ADMIN_DB_URL: "postgresql+psycopg://{{ .Values.database.user }}:{{ .Values.database.password }}@{{ include "vexa.componentName" (list . "postgres") }}:{{ .Values.postgres.service.port }}/postgres"
@@ -87,6 +93,22 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
+          # THE MAILBOX ASKS ADMIN-API WHO A SENDER IS, and it had no way to reach it: this pod
+          # took only the secret, so `ADMIN_API` fell back to its localhost default and every
+          # lookup failed. Harmless while an unknown sender was onboarded anyway; load-bearing
+          # now, because "is this address already a user?" is the first half of the intake's
+          # authorization decision (R-B12) — a known user outside the domain would otherwise be
+          # quarantined on a lookup that never reached anything.
+          env:
+            - name: VEXA_FLOWS_AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            - name: VEXA_FLOWS_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            - name: VEXA_FLOWS_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}

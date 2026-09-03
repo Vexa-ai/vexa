@@ -5,6 +5,7 @@ when the stack is down, and they are the drift alarm: a shape change here fails 
 it becomes a 10-minute-silent conversation in production."""
 from __future__ import annotations
 
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,13 @@ def _up(url: str) -> bool:
 
 pytestmark = pytest.mark.skipif(not _up("http://localhost:18100/health"),
                                 reason="dev stack not running")
+
+# READ AT IMPORT, which is before any fixture runs — so this is the key the OPERATOR exported,
+# never the placeholder `conftest` injects for the offline suite. The admin smoke below used to
+# hardcode `"changeme"`, a second copy of the default that R-B11 removed from the code: against
+# any real stack it answered 403, and the test had been red for exactly as long as the stack had
+# been configured correctly. A contract smoke that needs a credential runs when it is given one.
+REAL_ADMIN_KEY = (os.environ.get("VEXA_FLOWS_ADMIN_KEY") or "").strip()
 
 from flows_steps.common import ADMIN_API, AGENT_API, GATEWAY, http  # noqa: E402
 
@@ -53,12 +61,13 @@ def test_chat_post_is_a_stream_not_a_response():
         pass                                       # stream stayed open — the documented behavior
 
 
+@pytest.mark.skipif(not REAL_ADMIN_KEY,
+                    reason="VEXA_FLOWS_ADMIN_KEY not exported — the smoke needs this stack's key")
 def test_admin_user_lookup_shapes():
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/definitely-absent@nowhere.test",
-                   {"X-Admin-API-Key": "changeme"})
+    keyed = {"X-Admin-API-Key": REAL_ADMIN_KEY}
+    code, u = http("GET", f"{ADMIN_API}/admin/users/email/definitely-absent@nowhere.test", keyed)
     assert code == 404
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/anna@bank.com",
-                   {"X-Admin-API-Key": "changeme"})
+    code, u = http("GET", f"{ADMIN_API}/admin/users/email/anna@bank.com", keyed)
     if code == 200:
         assert isinstance(u.get("id"), int)        # adapters str() this — must exist
 
