@@ -77,6 +77,11 @@ from flows_steps import common as _common
 from flows_steps.common import (ensure_platform_user, mint_scaffold, platform_user_id,  # noqa: F401
                                 scaffolded, setting, ws_file)
 from flows_steps.notify import notify
+# THE ONE SCOPING PREDICATE, imported rather than re-written. `flows_timeline.model` is pure and
+# stdlib-only; `concerns` answers "is this fact about this person" over BOTH the uid and the email
+# because the two lineages spell the subject differently, and a second implementation of that in
+# this file would be a second place to get it half right (see its own docstring).
+from flows_timeline.model import concerns as _concerns
 
 INVITE = EventType("invite.received")
 ONB_PERSON = EventType("onboarding.person.needed")
@@ -99,8 +104,23 @@ CLAIM_PROPOSED = EventType("claim.proposed")
 #: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives
 #: wherever the timeline already lives, present in every profile.
 FRICTION_REPORTED = EventType("friction.reported")
+#: PUBLISHED BY IDENTITY at account creation — `core/identity/services/admin-api/src/admin_api/
+#: app/events.py`, one producer, exactly once, in every configuration. Its refs are the founder's
+#: three fields `{subject, org, seat}`: `subject` is the platform uid and there is NO `uid` key on
+#: this fact, which is why `_subject_uid` below reads both names rather than one.
+ONBOARDED = EventType("onboarding.completed")
 
 NUDGE_EVERY_S = 15 * 60
+
+#: How often the onboarding reaction looks again for this person's first transcribed meeting.
+#: It parks between looks and burns no attempt (`flows/loop.tick`), so the cost of the item
+#: existing until they try Vexa is a row and one bounded read per half-minute.
+ONBOARDING_POLL_S = 30
+
+#: HOW MANY `meeting.completed` ROWS the activation check scans back over. The same bound and the
+#: same reason `_completion_seen` and `flows_timeline` give: `subject_refs` is a JSON blob with no
+#: index to push the predicate into.
+ONBOARDING_SCAN_ROWS = 200
 
 #: How often the live reaction looks again while a call is running, and how long it may do so.
 #: The cap is not a timeout on the meeting — it is the answer to a `meeting.completed` that never
@@ -452,6 +472,70 @@ def _register_agent_flows(reg: Registry, db) -> None:
     if importlib.util.find_spec("flows_defs.production_agent") is None:
         return
     importlib.import_module("flows_defs.production_agent").build(reg, db, home=_SELF)
+
+
+#: WHERE A DEPLOYMENT NAMES ITS OWN FLOW PACKS — importable module names, comma-separated. Each is
+#: imported and its `build(reg, db)` called after everything this file registers, so a pack may add
+#: steps to the vocabulary and flows to the registry without a fork of this module.
+#:
+#: It is the THIRD of the three seams a private pack needs, and the only one that was missing:
+#:
+#:   * FLOWS AS DATA already existed — `POST /flows` writes a `flow_version` row and the worker
+#:     hot-loads it within one refresh (`Registry.refresh_from_db`). What that cannot do is add a
+#:     STEP: `flow_by_names` validates every name against the image's reviewed vocabulary and
+#:     refuses the rest, deliberately (it never accepts code — the n8n line `POST /events`'s own
+#:     docstring names). So a pack whose flow is only a re-ordering of existing steps needs
+#:     nothing at all; a pack with logic of its own needs a place to put a Python step, and this
+#:     is that place — an import, resolved by the deployment's own PYTHONPATH, reviewed by
+#:     whoever builds that deployment. The vocabulary stays closed to the API and open to the
+#:     operator, which is the same split `VEXA_BEHAVIOR_DIR` already draws for prose.
+#:   * WORDS already existed — `flows_queue._roots()` reads `$VEXA_BEHAVIOR_DIR/queue/` BEFORE the
+#:     baked showcase, so a pack ships `<flow>.pending.md` for its own flows in that tree and the
+#:     queue speaks them with no code change here.
+#:   * EVENT TYPES already worked — there is no carrier allow-list on the intake. `POST /events`
+#:     refuses a type only when NO FLOW REACTS TO IT, and answers with the list that would have
+#:     worked; register a flow on `subscription.active` and that type is admissible the same tick.
+#:     Admission is fail-closed on *nothing reacting*, never on *nobody having declared it*.
+#:
+#: ABSENT IS THE NORMAL CASE (this repo's own product sets none), and a NAMED-BUT-MISSING module
+#: is not: the first is a deployment with no pack, the second is a deployment that thinks it has
+#: one. They are told apart below, and only the first is silent.
+DEFS_EXTRA_ENV = "VEXA_FLOWS_DEFS_EXTRA"
+
+
+def _register_extra_packs(reg: Registry, db) -> None:
+    """Register the flow packs this DEPLOYMENT carries beyond the ones in this repo.
+
+    The seam `_register_agent_flows` already is, generalised one notch: that one asks a predicate
+    whether a domain is deployed, this one asks the deployment to name what else it composes. Both
+    run last, both hand over the registry a fully-built `production` has finished with, and neither
+    lets the thing it loads change anything above it — a pack adds steps and flows and cannot edit
+    one, because `Registry.step` refuses a name already bound to a different function and a flow is
+    superseded only by a HIGHER VERSION, never by an edit in place.
+
+    A MISSING NAMED MODULE RAISES, and that is the whole care in this function. Every other absence
+    in this file is tolerated because absence is a supported shape — no agent domain, no behavior
+    tree, no mailbox. Here the deployment has SAID it has a pack: if that import quietly failed,
+    flows would boot, serve, admit facts, and simply never react to the pack's events, which is the
+    failure this engine is least able to show anybody. `find_spec` first so the error names the
+    module and the variable rather than arriving as an ImportError from three frames deeper.
+    """
+    for name in [n.strip() for n in (os.environ.get(DEFS_EXTRA_ENV) or "").split(",") if n.strip()]:
+        import importlib
+        import importlib.util
+        if importlib.util.find_spec(name) is None:
+            raise ImportError(
+                f"{DEFS_EXTRA_ENV} names {name!r}, and no such module is importable. A pack this "
+                f"deployment declares is not optional: booting without it would leave flows "
+                f"reacting to none of its events, silently and for as long as nobody looked.")
+        mod = importlib.import_module(name)
+        build_fn = getattr(mod, "build", None)
+        if not callable(build_fn):
+            raise TypeError(
+                f"{DEFS_EXTRA_ENV} names {name!r}, which has no callable `build(reg, db)` — that "
+                f"is the whole contract of a flow pack (see `flows_defs.production.build`).")
+        build_fn(reg, db)
+        logger.info("flow pack registered: %s", name)
 
 
 def build(reg: Registry, db) -> None:
@@ -1646,6 +1730,96 @@ def build(reg: Registry, db) -> None:
             return Done({"meeting_id": mid, "outcome": "lapsed"})
         return Wait(seconds=LIVE_POLL_S)
 
+    # ── the first meeting (founder, 2026-09-04) ───────────────────────────────
+    # *"whats_waiting — that's the one agent must call after got installed and that one will prompt
+    # them to try a meeting"*. A person who has just connected an agent has a queue, and it is
+    # empty, and an empty queue is indistinguishable from a finished one. This flow is the row that
+    # makes it not empty: pending from the moment identity says they exist until the moment they
+    # have seen Vexa transcribe something, spoken in `behavior/queue/onboarding.pending.md`.
+    def _subject_uid(refs: dict) -> str:
+        """THE PERSON THIS FACT IS ABOUT. `onboarding.completed` spells it `subject` (identity's
+        `onboarding_refs`); every meetings fact spells the same value `uid`. Reading one name only
+        is how a flow silently scopes to nobody — and `concerns` accepts both, so the two halves
+        of this step must agree with it rather than with each other."""
+        return str(refs.get("subject") or refs.get("uid") or "").strip()
+
+    def _transcribed_completion(uid: str, seen: dict) -> tuple[str, int] | None:
+        """This person's first `meeting.completed` THAT ACTUALLY TRANSCRIBED — `(meeting_id, n)`,
+        or None.
+
+        ACTIVATION IS A TRANSCRIPT, NOT A MEETING (founder, 2026-09-04: *"activated meaning 1
+        meeting with transcription"*). A bot that joined an empty room and left completes a meeting
+        and shows the person nothing, so a completion alone must not clear the item that is asking
+        them to try one — they would be told they were finished by the one run that proved least.
+
+        THE FACT COMES FROM FLOWS' OWN TABLE and the segment count from the meetings domain,
+        deliberately in that order: the completion is already here as a reaction row the instant it
+        is admitted (`_completion_seen` says why a step must not poll another domain to find out
+        whether a fact arrived), and only the count needs a read. `seen` is the reaction's own
+        durable scratch, so a meeting already read as silent is never read twice — over the days an
+        item can be pending that is the difference between one read per meeting and one per tick.
+
+        An UNREADABLE transcript (`None`) is not recorded in `seen`: it is a gateway that was
+        restarting, not a meeting that captured nothing, and the two must not decide the same thing
+        about a person's first impression.
+        """
+        rows = db.execute("SELECT subject_refs FROM reaction WHERE event_type = :et "
+                          "ORDER BY created_at DESC LIMIT :lim",
+                          {"et": COMPLETED.name, "lim": ONBOARDING_SCAN_ROWS})
+        for row in rows:
+            try:
+                refs = json.loads(row[0]) or {}
+            except Exception:  # noqa: BLE001 — one unreadable row is not an answer about the rest
+                continue
+            if not _concerns(refs, uid=uid):
+                continue
+            mid = str(refs.get("meeting_id") or "").strip()
+            if not mid or mid in seen:
+                continue
+            n = mt.transcript_segment_count(uid, mid)
+            if n is None:
+                continue                      # unreadable — ask again next tick, do not decide
+            if n > 0:
+                return mid, n
+            seen[mid] = 0                     # read, and it captured nothing: never read it again
+        return None
+
+    # REACHES THE MEETINGS DOMAIN — it reads the transcript's segment count to tell a meeting that
+    # transcribed from one that did not. Declared, never checked in the body, for the reason
+    # `Registry.step` gives. NOT `needs=("agent",)`: this flow is the no-agents product's own
+    # onboarding and there is no turn anywhere in it — the agent that reads the queue is the
+    # person's own, on the other side of the MCP.
+    @reg.step(needs=("meetings",))
+    def first_meeting(ctx: StepCtx):
+        """PENDING UNTIL THIS PERSON HAS SEEN VEXA TRANSCRIBE SOMETHING — the queue row that is a
+        new person's first step.
+
+        It does nothing, like `attend_live`, and for the same reason: the value is the ROW. While
+        it is pending, `whats_waiting` carries `behavior/queue/onboarding.pending.md`, which tells
+        the person's agent to offer them a meeting now — meet.new, `request_meeting_bot`, admit the
+        bot, watch the words arrive. When their first transcribed meeting lands, the row completes
+        and the item disappears without anybody dismissing it, which is the property the founder
+        asked for: *"the queue advances as they go"*.
+
+        THERE IS NO CAP, unlike the live-call reaction. `attend_live` bounds itself because a
+        `meeting.completed` that never arrives would park it forever against a call that is long
+        over; here the thing being waited for is the person themselves, and an item that expired
+        would take the offer away from exactly the people who have not taken it up yet.
+
+        Reads: refs.{subject|uid} · Reaches: meetings (segment count) · Result:
+        {meeting_id, segments}."""
+        uid = _subject_uid(ctx.refs)
+        if not uid:
+            raise StepError(
+                "onboarding.completed carried no subject — there is nobody to onboard, and every "
+                "reader of this reaction identifies the person by that field.", retryable=False)
+        seen = ctx.scratch.setdefault("silent_meetings", {})
+        hit = _transcribed_completion(uid, seen)
+        if hit is None:
+            return Wait(seconds=ONBOARDING_POLL_S)
+        mid, segments = hit
+        return Done({"meeting_id": mid, "segments": segments, "activated": True})
+
     @reg.step
     def record_friction(ctx: StepCtx):
         """THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already wrote
@@ -1694,6 +1868,13 @@ def build(reg: Registry, db) -> None:
     # the agent domain deployed, which is the whole point of moving its intake onto flows-api.
     reg.flow(name="friction_log", version=1, on=FRICTION_REPORTED,
              steps=[s["record_friction"]])
+    # THE NEW PERSON'S FIRST STEP (founder, 2026-09-04). One step and no effect, the same shape as
+    # `live_meeting` and for the same reason: what it produces is a REACTION ROW in a state the
+    # queue can speak — pending from account creation until this person has watched Vexa transcribe
+    # something. `whats_waiting` is the verb an agent calls the moment it is installed, and until
+    # this flow existed it answered a brand-new person with an empty list.
+    reg.flow(name="onboarding", version=1, on=ONBOARDED,
+             steps=[s["first_meeting"]])
 
     # ── the agent-only half ───────────────────────────────────────────────────
     # `meeting_prep`, `email_chat`, `desk_setup` and `desk_claim` are registered by
@@ -1701,3 +1882,6 @@ def build(reg: Registry, db) -> None:
     # last on purpose: those flows read this module's helpers and event types, so this one must be
     # fully built before it hands the registry over. See `_register_agent_flows` for the signal.
     _register_agent_flows(reg, db)
+    # ── whatever else this DEPLOYMENT carries ─────────────────────────────────
+    # Last, for the same reason and one more: a private pack composes on top of everything above.
+    _register_extra_packs(reg, db)

@@ -543,6 +543,9 @@ def _resolve_identity(
 # What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
 # this is the map: what Vexa is, and the one sequence that matters.
 VEXA_INSTRUCTIONS = """\
+Start every session with whats_waiting: it is the queue of what your person's Vexa needs right now, \
+and for a new person it holds their first step. Follow what it says before anything else.
+
 Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi) and \
 gives you the transcript while the meeting is still running.
 
