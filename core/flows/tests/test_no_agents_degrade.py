@@ -285,9 +285,14 @@ def test_post_meeting_still_mails_the_person_with_no_agent_domain(monkeypatch):
     assert "recorded" in msg["body"].lower()
     pm = next(r for r in st["receipts"] if r["step"] == "process_meeting")
     assert pm["result"]["skipped"] == "agent:not_present"
-    for step in ("email_attendees", "drop_to_attendees"):
-        rec = next(r for r in st["receipts"] if r["step"] == step)
-        assert rec["result"]["skipped"] == "agent:not_present"
+    # `email_attendees` now DEGRADES rather than skips — it tells the room the meeting was
+    # recorded, the same way this test's own subject tells the organiser. This invite has no
+    # `participants`, so what it reports here is an empty room, not an absent agent. The mail it
+    # WOULD send to a room is `test_attendee_optout_degrade.py`'s subject.
+    attendees = next(r for r in st["receipts"] if r["step"] == "email_attendees")
+    assert attendees["result"]["skipped"] == "no inside-domain attendee"
+    drop = next(r for r in st["receipts"] if r["step"] == "drop_to_attendees")
+    assert drop["result"]["skipped"] == "agent:not_present"
 
 
 def test_the_agent_present_path_is_unchanged(monkeypatch):

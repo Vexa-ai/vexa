@@ -71,6 +71,75 @@ JITSI_URL = re.compile(
     r"https://(?:" + "|".join(re.escape(h) for h in _JITSI_HOSTS) + r")/[^\s<>\"'?#]+")
 
 
+# WINDOWS ZONE NAMES. Outlook and Exchange write `TZID:W. Europe Standard Time`, not
+# `Europe/Berlin` — the CLDR "windowsZones" spelling, which `zoneinfo` has never heard of. Before
+# this table `ZoneInfo(...)` raised `ZoneInfoNotFoundError` straight out of `parse_ics`, out of
+# `route`, and out of the mailbox poll: EVERY Exchange invite was dropped, by an exception rather
+# than by a decision, so nothing downstream could say which meeting had gone missing. The pilot's
+# organiser sends from Exchange, and `W. Europe Standard Time` is the row it lands on.
+#
+# Not the whole CLDR mapping — the zones a real invite to us arrives in, and the fallback below
+# handles the rest without a dependency. Each maps to the IANA zone CLDR itself names for it.
+_WINDOWS_ZONES = {
+    "w. europe standard time": "Europe/Berlin",
+    "central europe standard time": "Europe/Budapest",
+    "central european standard time": "Europe/Warsaw",
+    "romance standard time": "Europe/Paris",
+    "gmt standard time": "Europe/London",
+    "greenwich standard time": "Atlantic/Reykjavik",
+    "e. europe standard time": "Europe/Chisinau",
+    "fle standard time": "Europe/Kiev",
+    "gtb standard time": "Europe/Bucharest",
+    "turkey standard time": "Europe/Istanbul",
+    "israel standard time": "Asia/Jerusalem",
+    "russian standard time": "Europe/Moscow",
+    "utc": "UTC",
+    "eastern standard time": "America/New_York",
+    "central standard time": "America/Chicago",
+    "mountain standard time": "America/Denver",
+    "pacific standard time": "America/Los_Angeles",
+    "arabian standard time": "Asia/Dubai",
+    "india standard time": "Asia/Kolkata",
+    "se asia standard time": "Asia/Bangkok",
+    "china standard time": "Asia/Shanghai",
+    "singapore standard time": "Asia/Singapore",
+    "korea standard time": "Asia/Seoul",
+    "tokyo standard time": "Asia/Tokyo",
+    "aus eastern standard time": "Australia/Sydney",
+    "new zealand standard time": "Pacific/Auckland",
+    "south africa standard time": "Africa/Johannesburg",
+    "e. south america standard time": "America/Sao_Paulo",
+}
+
+# THE PER-MEETING OPT-OUT (PRD §16.2 item 3). Creator-controlled sharing is default ON — that one
+# value is the viral coefficient — and the creator's way to exclude ONE meeting is a token in the
+# invite, the only surface a meeting's creator owns without an administrator. Same shape as the
+# `#group:` token this parser already scans for, and scanned over the whole ICS for the same
+# reason: people put it in the title as readily as in the body.
+#
+# `\b` on BOTH sides, so `#noshareholders` is a hashtag about shareholders and not a silently
+# suppressed fan-out — a token that fires on a substring produces the one failure nobody reports.
+NOSHARE = re.compile(r"#noshare\b", re.I)
+
+
+def _zone(tzid: str):
+    """The IANA zone for an ICS `TZID`, or None when we cannot name it.
+
+    Three tries, cheapest first: the name as given (Google sends IANA), the Windows table above,
+    and nothing. NEVER raises — see `parse_ics`, where None means "treat this DTSTART as UTC",
+    which is exactly what the floating-DTSTART branch beside it already does with the same
+    uncertainty. A meeting an hour off still joins; an invite that raises never joins at all."""
+    from zoneinfo import ZoneInfo
+    for name in (tzid, _WINDOWS_ZONES.get(tzid.strip().lower(), "")):
+        if not name:
+            continue
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 — an unknown zone is a fact we lack, not a failure
+            continue
+    return None
+
+
 def _meeting_url(text: str) -> str | None:
     for pat in (MEET_URL, ZOOM_URL, TEAMS_URL, JITSI_URL):
         m = pat.search(text)
@@ -150,13 +219,16 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     if dt:
         import calendar as cal
         from datetime import datetime
-        from zoneinfo import ZoneInfo
         t = time.strptime(dt.group(2), "%Y%m%dT%H%M%S")
         if dt.group(3) == "Z":
             start = cal.timegm(t)
-        elif dt.group(1):
-            start = datetime(*t[:6], tzinfo=ZoneInfo(dt.group(1))).timestamp()
+        elif dt.group(1) and (tz := _zone(dt.group(1))) is not None:
+            start = datetime(*t[:6], tzinfo=tz).timestamp()
         else:
+            # A TZID WE CANNOT NAME IS TREATED AS UTC, never as an error (the Exchange incident —
+            # see `_WINDOWS_ZONES`). Falling through to the same branch as a floating DTSTART is
+            # deliberate: both are "a wall-clock time whose zone we do not have", and both answer
+            # it the same way rather than growing a second policy for the same missing fact.
             # A FLOATING DTSTART IS UTC, never the server's local time (R-B10). `time.mktime`
             # reads the tuple in whatever zone the worker happens to run in, and this value drives
             # the bot dispatch and the note filename — the two things that must not move when the
@@ -175,7 +247,13 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
             "title": (summ.group(1).strip() if summ else "Meeting"),
             "group": group,
             "participants": participants,
-            "participant_names": names}
+            "participant_names": names,
+            # TRUTHY, and only present when it is true. Admission's `_merge_refs` keeps an
+            # existing key unless its value is falsy and the incoming one is not — so a
+            # `share: False` could be silently flipped to True by any later admission for the
+            # same meeting, which is a suppressed fan-out un-suppressing itself. This spelling
+            # cannot be clobbered by that rule in either direction.
+            **({"share_opt_out": True} if NOSHARE.search(ics) else {})}
 
 
 def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
