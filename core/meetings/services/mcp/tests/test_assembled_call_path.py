@@ -112,7 +112,7 @@ def wired():
 # ── 1 · a refusal arrives as a refusal ──────────────────────────────────────────────────────────
 
 def test_an_upstream_refusal_arrives_marked_as_an_error(wired):
-    wired.upstream_answers(401, {"detail": "X-Flows-Admin-Key required"})
+    wired.upstream_answers(401, {"detail": "X-Flows-Operator-Key required"})
     result = wired.call("reactions_list")
     assert result.get("isError") is True, result
     assert "401" in json.dumps(result)

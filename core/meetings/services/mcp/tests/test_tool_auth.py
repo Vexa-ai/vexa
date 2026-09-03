@@ -67,7 +67,7 @@ def test_a_tool_must_say_how_it_is_authenticated():
 def test_the_three_values_and_no_others():
     for good in ("subject", "admin", "none"):
         m.validate(_manifest(tools=[_tool(auth=good)],
-                             admin_auth={"header": "X-Flows-Admin-Key",
+                             admin_auth={"header": "X-Flows-Operator-Key",
                                          "key_env": "VEXA_MCP_FLOWS_ADMIN_KEY"}))
     with pytest.raises(m.ManifestError, match="auth"):
         m.validate(_manifest(tools=[_tool(auth="operator")]))
@@ -84,7 +84,7 @@ def test_an_admin_tool_must_say_which_header_and_which_variable():
 
 ADMIN_MANIFEST = _manifest(
     tools=[_tool(name="flows_retire", auth="admin", path="/admin/thing", method="POST")],
-    admin_auth={"header": "X-Flows-Admin-Key", "key_env": "VEXA_MCP_FLOWS_ADMIN_KEY"})
+    admin_auth={"header": "X-Flows-Operator-Key", "key_env": "VEXA_MCP_FLOWS_ADMIN_KEY"})
 
 
 def test_an_admin_tool_whose_key_this_deployment_does_not_hold_refuses_the_boot():
@@ -153,7 +153,7 @@ def test_an_admin_tool_sends_the_deployments_key_and_not_the_callers():
     client, seen = _wire(ADMIN_MANIFEST, env)
     client.post("/tools/flows_retire", headers={"Authorization": "Bearer person-key"}, json={})
     sent = seen[-1].headers
-    assert sent["X-Flows-Admin-Key"] == "an-operator-key"
+    assert sent["X-Flows-Operator-Key"] == "an-operator-key"
     assert "person-key" not in str(dict(sent))
 
 

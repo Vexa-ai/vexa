@@ -71,7 +71,11 @@ def publish(event_type: str, source_event_id: str, subject_refs: dict,
     headers = {"content-type": "application/json"}
     key = _flows_key()
     if key:
-        headers["X-Flows-Admin-Key"] = key
+        # X-Flows-OPERATOR-Key: this is flows-api's own operator key (VEXA_FLOWS_API_KEY, read
+        # above), never admin-api's token. The header used to be spelled `X-Flows-Admin-Key`, and
+        # naming this service's own token in another service's header is precisely how a lane came
+        # to run on `changeme`. flows accepts the old name for one release.
+        headers["X-Flows-Operator-Key"] = key
     req = urllib.request.Request(f"{base}/events", data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:  # noqa: S310
