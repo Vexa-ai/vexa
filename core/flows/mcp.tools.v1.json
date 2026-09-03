@@ -1,0 +1,42 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "flows",
+  "source": "oss",
+  "owner": "core/flows",
+  "base_url_env": "FLOWS_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": ["identity"],
+  "tools": [
+    {
+      "name": "flows_list",
+      "identity": "operator",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/flows" }
+    },
+    {
+      "name": "reactions_list",
+      "identity": "operator",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/reactions" },
+      "arguments": ["status", "subject"]
+    },
+    {
+      "name": "reaction_signal",
+      "identity": "user",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/reactions/{reaction_id}/{verb}" },
+      "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared — the route cannot be called without them."
+    },
+    {
+      "name": "timeline",
+      "identity": "user",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/timeline" },
+      "arguments": ["subject", "since", "until", "limit"]
+    }
+  ],
+  "publishes_events": [
+    { "event": "meeting.completed", "status": "published today", "triggers": "post_meeting v4" },
+    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v2" }
+  ]
+}
