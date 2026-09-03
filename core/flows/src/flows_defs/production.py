@@ -94,6 +94,11 @@ STARTED = EventType("meeting.started")
 #: which is correct rather than degraded: there is no desk in that deployment to have a card on.
 DESK_UNSCAFFOLDED = EventType("desk.unscaffolded")
 CLAIM_PROPOSED = EventType("claim.proposed")
+#: PRD 40.9 open-decision 8. PUBLISHED BY FLOWS ITSELF — `POST /friction` calls `admit()` in
+#: process, no publish-edge and no agent-api dependency, which is why the carrier census owns this
+#: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives
+#: wherever the timeline already lives, present in every profile.
+FRICTION_REPORTED = EventType("friction.reported")
 
 NUDGE_EVERY_S = 15 * 60
 
@@ -1641,6 +1646,21 @@ def build(reg: Registry, db) -> None:
             return Done({"meeting_id": mid, "outcome": "lapsed"})
         return Wait(seconds=LIVE_POLL_S)
 
+    @reg.step
+    def record_friction(ctx: StepCtx):
+        """THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already wrote
+        the fact by calling `admit()` directly (`flows_integrations/flows_api.py`) — this step
+        exists ONLY so that admission has a matching flow to create a REACTION ROW for. `admit()`
+        creates one reaction per matching flow and zero for none (`flows/admission.py`): without a
+        registered flow here, `friction.reported` would be admitted into nothing, and
+        `flows_timeline` — which reads only `reaction`/`effect_receipt`, never a raw event log —
+        would never show a single report. It does nothing else: no mail, no desk card, no
+        downstream effect, and it finishes on its first tick.
+
+        Reaches no domain: `needs` is empty on purpose, so this runs — and the sink stays a sink —
+        in every profile, agent or not."""
+        return Done({"recorded": True})
+
     s = reg.steps
     # VERSION 2 — `spawn_onboardings` removed (decision 29). VERSION 3 — `emit_started` added after
     # `dispatch_bot` (PRD decision 42.2). The version bump is the whole mechanism: `match()` is
@@ -1668,6 +1688,12 @@ def build(reg: Registry, db) -> None:
     # call runs. That row is the queue. Its two siblings, the desk cards, are `production_agent`'s.
     reg.flow(name="live_meeting", version=1, on=STARTED,
              steps=[s["attend_live"]])
+    # THE SINK (PRD 40.9 open-decision 8). One step, `Done` on its first tick, no effect — see
+    # `record_friction`'s own docstring for why this exists at all. Reaches no domain, so it is
+    # registered here rather than in `production_agent.py`: friction is reportable with or without
+    # the agent domain deployed, which is the whole point of moving its intake onto flows-api.
+    reg.flow(name="friction_log", version=1, on=FRICTION_REPORTED,
+             steps=[s["record_friction"]])
 
     # ── the agent-only half ───────────────────────────────────────────────────
     # `meeting_prep`, `email_chat`, `desk_setup` and `desk_claim` are registered by

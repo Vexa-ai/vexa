@@ -63,6 +63,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Optional
@@ -84,9 +85,10 @@ from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noq
 # answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
 # in front of it hid that for as long as the route was operator-only. One name, one thing.
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
-                            build_timeline, fetch_meetings, reaction_concerns,
-                            render_preamble, render_text)
+                            build_timeline, fetch_meetings, friction_for_subject,
+                            reaction_concerns, render_preamble, render_text)
 from flows_timeline import list_reactions as reactions_for  # noqa: E402
+from flows_timeline.model import to_epoch as _friction_since_epoch  # noqa: E402
 
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
@@ -651,6 +653,118 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
                "text": (render_preamble(out, tz) if shape == "preamble"
                         else render_text(out, tz))}
     return out
+
+
+# ── friction (PRD 40.9 open-decision 8) ─────────────────────────────────────────────────────────
+# Founder, 2026-09-03 09:58Z: "friction is just a sink — we dump that somewhere in production so
+# that our dev agent can read it and fix the MCP and behaviour based on it." Friction is not a
+# domain and carries no product surface beyond `report_friction` — this route and the one below
+# ARE that surface. It lives HERE rather than on agent-api on purpose: `admit()` runs in process,
+# with no publish-edge and no config.v1 declaration to wire, which is also what makes it work in
+# the no-agents profile — nothing about filing a rough edge should depend on the agent domain being
+# deployed. See `core/flows/contracts/flows.v1/carriers.json`'s `friction.reported` entry for the
+# carrier's full reasoning and `flows_defs/production.py`'s `record_friction` step for why a flow
+# (not just `admit()` alone) has to exist for a report to be visible here at all.
+FRICTION_SEVERITIES = ("blocker", "annoyance", "papercut", "idea")
+FRICTION_KINDS = ("missing-tool", "refusal", "no-page", "wrong-workspace", "unfulfilled", "error",
+                  "ux", "other")
+FRICTION_TEXT_MAX = 900
+
+
+def _friction_id() -> str:
+    """`fr_<16 hex>` — short enough to paste into a fix reference by hand, same convention the
+    (now-retired) agent-api store used, kept for continuity across the cutover."""
+    return f"fr_{secrets.token_hex(8)}"
+
+
+@app.post("/friction", status_code=201)
+def report_friction(session: str = "", what_i_tried: str = "", what_happened: str = "",
+                    severity: str = "annoyance", meeting_id: str = "", tool: str = "",
+                    deployment: str = "", worker_image: str = "", kind: str = "",
+                    x_user_id: str = Header(default=""),
+                    caller: Caller = Depends(subject_or_operator)):
+    """Tell us what did not work. Any signed-in caller may file, from any client — a Claude Code
+    session, the rig, a worker turn — whether or not this deployment runs the agent domain at all.
+
+    `session`, `what_i_tried`, `what_happened` and `severity` are REQUIRED. `session` most of all:
+    it is the chat or meeting session this happened in, and its absence is exactly the gap this
+    carrier exists to close — the founder's own 13 reports from one live call could not be tied
+    back to the call that produced them because nothing on the old path carried an id for it. A
+    report with no session is refused rather than accepted with one more field nobody can join on
+    later (`friction_since=""` on the timeline is the only thing separating them then).
+
+    The subject is the caller's own credential, same as every other person-scoped route here
+    (`reactions_list`, `timeline`); an operator with no bearer may stamp `X-User-Id`, same as
+    `queue_waiting` — the gateway's answer when it forwards a resolved caller rather than a raw
+    bearer. The bare operator key, unstamped, attributes a report to nobody, which is refused.
+    """
+    subj = scoped_subject(caller, "")
+    if caller.is_admin:
+        subj = (x_user_id or "").strip() or subj
+    if not subj:
+        raise HTTPException(status_code=401, detail=(
+            "report_friction needs your Vexa credential — this edge cannot attribute a report to "
+            "nobody"))
+    sess = session.strip()
+    if not sess:
+        raise HTTPException(status_code=400, detail=(
+            "session is required — the chat or meeting session this happened in. A report with no "
+            "session cannot be tied back to the conversation that produced it, which is the exact "
+            "gap this carrier exists to close."))
+    tried, happened = what_i_tried.strip()[:FRICTION_TEXT_MAX], what_happened.strip()[:FRICTION_TEXT_MAX]
+    if not tried or not happened:
+        raise HTTPException(status_code=400, detail=(
+            "what_i_tried and what_happened are both required — half-formed is fine, empty is not"))
+    sev = severity.strip().lower()
+    if sev not in FRICTION_SEVERITIES:
+        raise HTTPException(status_code=400,
+                            detail={"severity": severity, "expected": list(FRICTION_SEVERITIES)})
+    knd = kind.strip().lower()
+    if knd and knd not in FRICTION_KINDS:
+        raise HTTPException(status_code=400, detail={"kind": kind, "expected": list(FRICTION_KINDS)})
+    fid = _friction_id()
+    refs = {"uid": subj, "session": sess[:128], "friction_id": fid,
+           "what_i_tried": tried, "what_happened": happened, "severity": sev}
+    for key, val in (("kind", knd), ("meeting_id", meeting_id), ("tool", tool),
+                     ("deployment", deployment), ("worker_image", worker_image)):
+        v = val.strip()[:200] if isinstance(val, str) else ""
+        if v:
+            refs[key] = v
+    vocab.refresh_from_db(db)          # the friction_log flow may have been (re)submitted since boot
+    # LITERAL, not `production.FRICTION_REPORTED.name` — `tests/test_queue_waiting.py::_produced()`
+    # proves `publishes_events` against what this domain's source actually writes to the wire by
+    # grepping for `event_type="<literal>"`, the same way it already proves `invite.received`. An
+    # attribute expression would be correct at runtime and invisible to that check.
+    assert production.FRICTION_REPORTED.name == "friction.reported"
+    admit(db, vocab, clock, source_event_id=f"friction-{fid}",
+         event_type="friction.reported", subject_refs=refs)
+    return {"id": fid, "recorded": True}
+
+
+@app.get("/friction")
+def friction_so_far(since: str = "", limit: int = 40,
+                    x_user_id: str = Header(default=""),
+                    caller: Caller = Depends(subject_or_operator)):
+    """Your own filed reports, newest first — the subject is derived from your credential, exactly
+    like `reactions_list`. `since` takes an epoch or an ISO-8601 instant; empty means everything.
+
+    The whole-instance dump and the close-out verb stay operator-side for now (the rig's
+    `friction_dump` / `friction_fixed`) — this is deliberately the narrower half PRD 40.9 asked for
+    first, pending a follow-up that gives the operator view the same treatment `GET /reactions`
+    already has.
+    """
+    subj = scoped_subject(caller, "")
+    if caller.is_admin:
+        subj = (x_user_id or "").strip() or subj
+    if not subj:
+        raise HTTPException(status_code=400, detail="no subject — sign in to read your own reports")
+    ts = _friction_since_epoch(since) or 0.0 if since else 0.0
+    rows = friction_for_subject(db, subject=subj, since=ts,
+                                limit=max(1, min(int(limit or 40), 200)),
+                                identity=_as_me(caller))
+    if rows is None:
+        raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
+    return {"subject": subj, "count": len(rows), "reports": rows}
 
 
 def bind_host() -> str:

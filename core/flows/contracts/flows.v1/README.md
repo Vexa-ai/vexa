@@ -23,11 +23,21 @@ restore, and a second producer somebody adds later.
 | `invite.received` | flows | once per occurrence |
 | `desk.unscaffolded` | agent | exactly once per subject |
 | `claim.proposed` | agent | once per occurrence |
+| `friction.reported` | flows | once per occurrence |
 
 `meeting.completed` and `invite.received` are recorded from `core/flows/mcp.tools.v1.json`'s own
 `publishes_events`; the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None
 of them is asserted afresh: this file is a reading of what the repository already declares, which is
 what makes it a census rather than a wish.
+
+`friction.reported` (PRD 40.9 open-decision 8) is owned by **flows**, not agent, even though the
+fact it describes is about using the product: the producer is flows-api's own `POST /friction`
+route, an in-process `admit()` with no publish-edge and no config.v1 declaration, because the
+route and the intake are the same process. That is deliberate — friction is not a domain and has
+no product surface beyond `report_friction`, so its one canonical ingestion point lives where the
+timeline already lives, and works whether or not the agent domain is deployed at all. `friction.
+fixed` (the close-out half) is not registered here yet; it stays on the agent-domain's operator
+surface (`friction_dump`/`friction_fixed`) pending a follow-up that gives it the same treatment.
 
 `desk.unscaffolded` claims exactly-once and its stamp is **the desk itself** rather than a column.
 That is a weaker guarantee than `onboarding.completed`'s and it is the right one here: the fact is
