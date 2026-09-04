@@ -136,8 +136,13 @@ def _vocabulary(schema: dict) -> dict:
     validator anywhere rejects a value for not being in it. The words themselves are also spelled
     out in the argument's own description, which the owning route writes. Guidance belongs in front
     of the agent; the decision about an unrecognised word belongs to the route that stores it.
+
+    BOTH KEYS ARE READ off the owning route, and that is a real case rather than defensiveness: a
+    route that has decided its own vocabulary is a suggestion publishes `examples`, and a route
+    that validates against a closed set publishes `enum`. An agent needs the words either way, and
+    either way this edge must not be the thing that refuses the call for not using them.
     """
-    values = schema.get("enum")
+    values = schema.get("enum") or schema.get("examples")
     return {"examples": list(values)} if isinstance(values, (list, tuple)) and values else {}
 
 

@@ -50,15 +50,15 @@ FLOWS_OPENAPI = {"paths": {
             {"name": "what_happened", "in": "query", "schema": {"type": "string"}},
             {"name": "severity", "in": "query", "schema": {
                 "type": "string", "description": "How much it hurt.",
-                "enum": ["blocker", "annoyance", "papercut", "idea"]}},
+                "examples": ["blocker", "annoyance", "papercut", "idea"]}},
             {"name": "meeting_id", "in": "query", "schema": {"type": "string"}},
             {"name": "tool", "in": "query", "schema": {"type": "string"}},
             {"name": "deployment", "in": "query", "schema": {"type": "string"}},
             {"name": "worker_image", "in": "query", "schema": {"type": "string"}},
             {"name": "kind", "in": "query", "schema": {
                 "type": "string", "description": "What kind of friction this was.",
-                "enum": ["missing-tool", "refusal", "no-page", "wrong-workspace", "unfulfilled",
-                         "error", "ux", "other"]}}]},
+                "examples": ["missing-tool", "refusal", "no-page", "wrong-workspace",
+                             "unfulfilled", "error", "ux", "other"]}}]},
         "get": {"summary": "Your own filed reports, newest first", "parameters": [
             {"name": "since", "in": "query", "schema": {"type": "string"}},
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
