@@ -698,8 +698,27 @@ FRICTION_TEXT_MAX = 900
 # mapping to `other`, no second field holding the "raw" word, because there is no cooked one. Any
 # argument this route does not name is KEPT too, under `extra`. The eight kinds below survive only
 # as SUGGESTIONS in the tool description; grouping happens on the data later, by whoever reads it,
-# never at the door. The only refusals left are for a report with no content to store at all — no
-# session, or no text — and those are about the report existing, not about its shape.
+# never at the door.
+#
+# F-D27, prod 2026-09-04 11:0xZ, is the SAME defect one field along, and it is why nothing about a
+# report's content is refusable either. F-D26 left two refusals standing — a report with no
+# `session` and a report with no text — on the reasoning that those were "about the report existing,
+# not about its shape". Prod disagreed within the hour: `POST /friction` answered 400 *"session is
+# required"* to a reporter who did not have one, and the report describing that very edge was itself
+# thrown away. A MISSING SESSION IS SIGNAL TOO. A report we cannot tie back to a conversation is
+# worth strictly more than no report, and the reporter is never the right party to be told no — it
+# is us who wanted the join key, so it is us who eat its absence.
+#
+# THE RULE, GENERALISED, so the next field does not need a third incident: NO VALUE A CALLER CAN
+# SEND PRODUCES A 400. Not a word, not a length, not an absence. Over-long values truncate, unknown
+# values are kept as sent, and an absent value is stored as a genuine absence — the ref is omitted
+# rather than written as `""`, and `friction_for_subject` renders it "no session" for a reader while
+# keeping `session_id` empty for a grep. The only refusals
+# this route still has are AUTHENTICATION (401 — the edge cannot attribute a report to nobody, and
+# an unattributable report is not a poorer report but a different object) and a request that is not
+# parseable at all. Note also that every argument below is typed `str`, deliberately: a non-string
+# annotation would hand FastAPI a 422 one layer above this function, which is the same refusal with
+# somebody else's name on it. `tests/test_friction.py` pins both properties.
 #
 # No migration: a report lives in `reaction.subject_refs`, which is a JSON document, so every one of
 # these is a key inside it and the ten tables in `schema.sql` are untouched.
@@ -765,12 +784,14 @@ def _friction_extra(params) -> dict:
 def report_friction(
     session: str = Query("", description=(
         "The chat or meeting session this happened in — the id of the conversation you are in "
-        "right now. Required: it is what ties the report back to what was going on.")),
+        "right now. INCLUDE IT WHENEVER YOU HAVE IT: it is how the report ties back to the "
+        "conversation that produced it, which is most of what makes a report actionable. But it "
+        "is not required and never refuses the call — if you do not have one, file anyway.")),
     what_i_tried: str = Query("", description=(
-        "What you were attempting, in your own words. Required. Half-formed is fine.")),
+        "What you were attempting, in your own words. Half-formed is fine; so is nothing.")),
     what_happened: str = Query("", description=(
-        "What actually happened instead — the error, the wrong answer, the missing page. "
-        "Required.")),
+        "What actually happened instead — the error, the wrong answer, the missing page. Say as "
+        "much as you have.")),
     severity: str = Query("annoyance", description=FRICTION_SEVERITY_DESC,
                           json_schema_extra={"examples": list(FRICTION_SEVERITIES)}),
     meeting_id: str = Query("", description="The meeting this happened on, if it was about one."),
@@ -792,8 +813,17 @@ def report_friction(
     file it. Nothing is too small, and a report is never lost for being imperfectly labelled.
 
     THE PAYLOAD IS TWO SENTENCES: `what_i_tried` (what you were attempting) and `what_happened`
-    (what happened instead). Both are required; so is `session`, the chat or meeting session you
-    are in, because a report nothing can be tied back to is the exact gap this exists to close.
+    (what happened instead). Send `session` too — the chat or meeting session you are in — whenever
+    you have one, because it is what ties the report back to the conversation that produced it and
+    that is most of what makes it actionable later.
+
+    NOTHING YOU SEND OR OMIT WILL COST YOU THE REPORT. There is no required field on this route: no
+    session, no text, an unknown word, an over-long value — all of it is filed, stored as sent, and
+    readable back. A report with no session reads as "no session" and is still a report; a missing
+    join key is our problem, not yours, and it is signal in its own right. The one thing that IS
+    refused is a call with no credential, because a report attributed to nobody is a different
+    object rather than a poorer one. Never withhold a report because you are unsure it is
+    well-formed, and never re-file one because a field felt wrong.
 
     `kind` is a HINT, NOT A MENU. These words group well with other people's reports:
     `missing-tool` (no tool exists for what was asked), `refusal` (a tool or policy said no),
@@ -820,24 +850,23 @@ def report_friction(
         raise HTTPException(status_code=401, detail=(
             "report_friction needs your Vexa credential — this edge cannot attribute a report to "
             "nobody"))
-    sess = session.strip()
-    if not sess:
-        raise HTTPException(status_code=400, detail=(
-            "session is required — the chat or meeting session this happened in. A report with no "
-            "session cannot be tied back to the conversation that produced it, which is the exact "
-            "gap this carrier exists to close."))
-    tried, happened = what_i_tried.strip()[:FRICTION_TEXT_MAX], what_happened.strip()[:FRICTION_TEXT_MAX]
-    if not tried or not happened:
-        raise HTTPException(status_code=400, detail=(
-            "what_i_tried and what_happened are both required — half-formed is fine, empty is not"))
+    # NO 400 BEYOND THIS POINT (F-D27). Everything below truncates or stores an absence; nothing
+    # rejects. `sess` empty means the reporter had no session to give — kept out of `refs` entirely
+    # rather than written as `""`, so the read model reports a genuine absence instead of a blank
+    # that could be mistaken for a session whose id happens to be empty.
+    sess = session.strip()[:128]
+    tried = what_i_tried.strip()[:FRICTION_TEXT_MAX]
+    happened = what_happened.strip()[:FRICTION_TEXT_MAX]
     # AS SENT (founder ruling, F-D26). No canonicalisation, no lowercasing, no mapping into a
     # bucket: the word the reporter chose IS the datum, and grouping it with other reports is a
     # question for whoever reads the sink, later, with all of them in front of them.
     sev = severity.strip()[:200] or "annoyance"
     knd = kind.strip()[:200]
     fid = _friction_id()
-    refs = {"uid": subj, "session": sess[:128], "friction_id": fid,
+    refs = {"uid": subj, "friction_id": fid,
            "what_i_tried": tried, "what_happened": happened, "severity": sev}
+    if sess:
+        refs["session"] = sess
     for key, val in (("kind", knd), ("meeting_id", meeting_id), ("tool", tool),
                      ("deployment", deployment), ("worker_image", worker_image)):
         v = val.strip()[:200] if isinstance(val, str) else ""
@@ -857,7 +886,7 @@ def report_friction(
     # The reply STATES what was stored, so a caller can see its own words came back unchanged and
     # can see which of its extra fields were kept — an accepted report that quietly dropped half of
     # itself is the same class of lie as a refused one.
-    out = {"id": fid, "recorded": True, "kind": knd, "severity": sev}
+    out = {"id": fid, "recorded": True, "kind": knd, "severity": sev, "session": sess}
     if extra:
         out["extra"] = sorted(extra)
     return out

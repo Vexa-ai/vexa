@@ -4,8 +4,13 @@ Founder, 2026-09-03 09:58Z: *"friction is just a sink — we dump that somewhere
 that our dev agent can read it and fix the MCP and behaviour based on it."* This is the contract
 for the one route that sink runs through:
 
-  B1  POST /friction refuses a report with no session — the exact gap this carrier exists to close
-  B2  POST /friction refuses a report with no what_i_tried / what_happened
+  B1  POST /friction STORES a report with no session and reads it back as "no session" (F-D27 —
+      this bullet used to say "refuses"; prod refused a report for having no session, and the
+      report it refused was the one describing that refusal)
+  B2  POST /friction stores a report with no what_i_tried / what_happened, same rule, same reason
+  B2b NO VALUE A CALLER SENDS OR OMITS PRODUCES A 400 — the general form B1 and B2 are instances
+      of, checked field-by-field, plus the 422 door above the handler held shut (nothing typed as
+      anything but a plain unconstrained string). The only refusal left on this route is 401.
   B3  a filed report is admitted as a `friction.reported` reaction and readable straight off it —
       no receipt, no worker tick, needed for it to show up
   B4  GET /friction (friction_so_far) is scoped to the caller, the same way reactions_list is
@@ -157,21 +162,86 @@ def _post(flows_api, client, **kw):
     return client.post("/friction", params=kw, headers=_headers(flows_api, uid))
 
 
-def test_a_report_with_no_session_is_refused(api):
+def test_a_report_with_no_session_is_stored_and_reads_back_as_no_session(api):
+    """B1, INVERTED BY F-D27. Prod, 2026-09-04 11:0xZ: this route answered 400 *"session is
+    required — … A report with no session cannot be tied back to the conversation that produced
+    it"* — and the report it refused was the one describing that refusal. A missing session is
+    signal too, and the join key is OUR want, so we eat its absence rather than bill the reporter
+    for it."""
     flows_api, client = api
     _clear(flows_api)
     r = _post(flows_api, client, what_i_tried="x", what_happened="y", severity="annoyance")
-    assert r.status_code == 400
-    assert "session" in r.json()["detail"]
+    assert r.status_code == 201, "a report with no session was refused — F-D27 all over again"
+    assert r.json()["recorded"] is True and r.json()["session"] == ""
+
+    reports = client.get("/friction", headers=_headers(flows_api)).json()["reports"]
+    assert len(reports) == 1, "filed but not stored"
+    assert reports[0]["id"] == r.json()["id"]
+    assert reports[0]["tried"] == "x" and reports[0]["happened"] == "y"
+    # The human field SAYS the absence; the machine field stays honestly empty. A reader must not
+    # have to know that "" means "none" — and a grep for a session id must not match this row.
+    assert reports[0]["session"] == "no session"
+    assert reports[0]["session_id"] == ""
 
 
-def test_a_report_with_no_what_i_tried_or_what_happened_is_refused(api):
+def test_a_session_less_report_stores_no_session_ref_at_all(api):
+    """Not `session: ""`. An empty string is a value, and a later reader cannot tell it apart from
+    a session whose id is genuinely empty — so the ref is absent, and absence is what it means."""
+    import json as _json
+
     flows_api, client = api
     _clear(flows_api)
-    assert _post(flows_api, client, session="s1", what_happened="y",
-                severity="annoyance").status_code == 400
-    assert _post(flows_api, client, session="s1", what_i_tried="x",
-                severity="annoyance").status_code == 400
+    _post(flows_api, client, what_i_tried="x", what_happened="y")
+    rows = flows_api.db.execute(
+        "SELECT subject_refs FROM reaction WHERE event_type = 'friction.reported'")
+    assert len(rows) == 1
+    refs = _json.loads(rows[0][0])
+    assert "session" not in refs, f"an empty session was written into the refs: {refs!r}"
+
+
+def test_a_report_with_no_text_at_all_is_still_stored(api):
+    """B2, INVERTED BY F-D27 for the same reason and by the same rule. `what_i_tried` and
+    `what_happened` used to 400 when either was blank. A reporter that filed at all is telling us
+    something; an empty report is a thinner datum than a full one, never a rejectable one."""
+    flows_api, client = api
+    for kw in ({"session": "s1", "what_happened": "y"},
+               {"session": "s1", "what_i_tried": "x"},
+               {"session": "s1"},
+               {}):
+        _clear(flows_api)
+        r = _post(flows_api, client, severity="annoyance", **kw)
+        assert r.status_code == 201, f"{kw!r} was refused"
+        assert client.get("/friction", headers=_headers(flows_api)).json()["count"] == 1
+
+
+def test_the_route_answers_no_400_to_any_value_a_caller_can_send(api):
+    """THE GENERAL FORM, and the point of F-D27: the audit is not "session is now optional", it is
+    that this route has no refusal left that is about a caller-supplied VALUE. Absent, blank,
+    over-long, unknown, non-ascii — every one is stored. The only refusal is authentication."""
+    flows_api, client = api
+    ugly = ("", " ", "a" * 5000, "🤷", "../../etc/passwd", "'; DROP TABLE reaction; --", "1")
+    for field in ("session", "what_i_tried", "what_happened", "severity", "kind", "meeting_id",
+                  "tool", "deployment", "worker_image"):
+        for word in ugly:
+            _clear(flows_api)
+            r = _post(flows_api, client, **{field: word})
+            assert r.status_code == 201, f"{field}={word!r} produced {r.status_code}"
+
+
+def test_no_argument_is_typed_so_that_fastapi_refuses_before_the_route_does(api):
+    """A 422 is a 400 with somebody else's name on it. If any argument here were annotated as an
+    `int`/`enum`/constrained string, pydantic would refuse the call one layer ABOVE the handler and
+    every leniency below would be unreachable — so the OpenAPI is asserted to publish each one as a
+    plain unconstrained string. This is the same defect class as the `enum` B7 keeps out of `kind`,
+    one layer up."""
+    flows_api, _ = api
+    op = _friction_op(flows_api)
+    gates = ("enum", "pattern", "minLength", "maxLength", "minimum", "maximum", "const")
+    for p in op["parameters"]:
+        schema = p["schema"]
+        assert schema.get("type") == "string", f"{p['name']} is not a plain string: {schema}"
+        assert not [g for g in gates if g in schema], f"{p['name']} carries a gate: {schema}"
+        assert not p.get("required"), f"{p['name']} is required — nothing on this route may be"
 
 
 # ── B6 · catch all signal (F-D26 + the founder's ruling) ────────────────────────────────────────
@@ -235,8 +305,9 @@ def test_the_reporter_s_own_casing_survives(api):
 
 
 def test_no_word_in_either_field_can_produce_a_400(api):
-    """The general form: whatever an agent invents for either field, the report is filed. Only
-    missing CONTENT — no session, no text — is still refusable."""
+    """The general form for the two vocabulary fields: whatever an agent invents, the report is
+    filed. (F-D27 removed the last carve-out this docstring used to name — missing content is not
+    refusable either; see `test_the_route_answers_no_400_to_any_value_a_caller_can_send`.)"""
     flows_api, client = api
     for word in ("", "OTHER", "kind-we-never-heard-of", "1", "🤷", "a" * 500):
         _clear(flows_api)
