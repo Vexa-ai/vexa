@@ -52,3 +52,6 @@ overrides:
   # protobufjs >=7.5.0 <=7.6.4: DoS via infinite loop. Enters via onnxruntime-web under
   # @huggingface/transformers. Held to ^7 — 8.x is a major bump transformers has not adopted.
   "protobufjs@>=7.5.0 <7.6.5": "^7.6.5"
+  # undici >=7.0.0 <7.29.0: one high + four moderate advisories. Dev-only here (jsdom under
+  # vitest in the terminal and join packages), but Dependabot scores the lockfile, not the scope.
+  "undici@>=7.0.0 <7.29.0": "^7.29.0"
