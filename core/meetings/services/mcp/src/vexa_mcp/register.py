@@ -116,20 +116,29 @@ def _signature(bt: BoundTool) -> inspect.Signature:
 
 
 def _vocabulary(schema: dict) -> dict:
-    """The owning route's ALLOWED VALUES, republished so an agent can read them before it guesses.
+    """The owning route's allowed values, republished so an agent can read them before it guesses —
+    AS AN ANNOTATION (`examples`), NEVER AS `enum`.
 
     An argument published as a bare `string` tells an agent nothing about which words the route
     understands, and an agent that has to guess a word guesses wrong: twelve friction reports were
     thrown away on prod in twenty minutes because `kind` reached `tools/list` as an open string
-    (F-D26). Whatever `enum` the owning route publishes now travels with it.
+    (F-D26). So the vocabulary has to travel. The question is in which key.
 
-    It travels as SCHEMA, not as validation. `json_schema_extra` reaches `tools/list` and makes
-    FastAPI reject nothing, so an agent that reads it is guided and an agent that ignores it is
-    still forwarded to the owning route, which decides what an off-vocabulary word means.
-    Enforcing it here would re-create the same loss one hop earlier, which is the whole lesson.
+    IT MUST NOT TRAVEL AS `enum`, and that was caught on the station rather than reasoned out. The
+    MCP SDK's own dispatcher validates a call's arguments against the tool's `inputSchema`
+    (`mcp/server/lowlevel/server.py`: `jsonschema.validate(instance=arguments,
+    schema=tool.inputSchema)`) and returns `isError` without ever calling the tool. A first cut
+    published `enum` here; `report_friction` with `kind="broke"` came back "Input validation error:
+    'broke' is not one of [...]" and the report was destroyed one hop EARLIER than before, by the
+    fix for the defect. The edge would have become a stricter gate than the route it fronts.
+
+    `examples` is a JSON Schema ANNOTATION: it reaches `tools/list`, an agent reads it, and no
+    validator anywhere rejects a value for not being in it. The words themselves are also spelled
+    out in the argument's own description, which the owning route writes. Guidance belongs in front
+    of the agent; the decision about an unrecognised word belongs to the route that stores it.
     """
     values = schema.get("enum")
-    return {"enum": list(values)} if isinstance(values, (list, tuple)) and values else {}
+    return {"examples": list(values)} if isinstance(values, (list, tuple)) and values else {}
 
 
 def _add(app: FastAPI, bt: BoundTool, base: str,

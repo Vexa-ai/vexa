@@ -121,16 +121,29 @@ def _schema_of(tool):
 
 
 def test_report_friction_shows_an_agent_the_kind_vocabulary_in_tools_list():
-    """F-D26, end to end: the eight words reach the agent's own view of the tool. Published as
-    schema, not as a gate — the edge still forwards a word it has never seen, and flows-api stores
-    it as `other` rather than answering 400."""
+    """F-D26, end to end: the eight words reach the agent's own view of the tool."""
     app = _boot(FLOWS_API_URL="http://flows")
     tool = next(t for t in app.state.mcp.tools if t.name == "report_friction")
     kind = _schema_of(tool).get("properties", {}).get("kind", {})
-    assert "other" in (kind.get("enum") or []), f"no vocabulary on `kind`: {kind}"
-    assert len(kind["enum"]) == 8
+    assert "other" in (kind.get("examples") or []), f"no vocabulary on `kind`: {kind}"
+    assert len(kind["examples"]) == 8
     severity = _schema_of(tool)["properties"]["severity"]
-    assert severity.get("enum") == ["blocker", "annoyance", "papercut", "idea"]
+    assert severity.get("examples") == ["blocker", "annoyance", "papercut", "idea"]
+
+
+def test_no_assembled_tool_publishes_an_enum_that_would_refuse_the_call():
+    """THE STATION FINDING, pinned. The MCP SDK validates a call's arguments against the tool's
+    `inputSchema` before dispatching (`jsonschema.validate` in `mcp/server/lowlevel/server.py`), so
+    an `enum` in a published tool schema is a HARD GATE at this edge, not documentation. The first
+    cut of the F-D26 fix published one; `report_friction` with `kind="broke"` came back "Input
+    validation error" and the report died one hop earlier than the bug being fixed. Vocabulary is
+    advertised with `examples`, which no validator enforces."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    declared = {t["name"] for t in FLOWS_MANIFEST["tools"]}
+    offenders = [(t.name, k) for t in app.state.mcp.tools if t.name in declared
+                 for k, v in (_schema_of(t).get("properties") or {}).items()
+                 if isinstance(v, dict) and v.get("enum")]
+    assert not offenders, f"an enum here refuses the call instead of guiding it: {offenders}"
 
 
 def test_report_friction_is_described_by_its_instructions_not_by_its_title():
