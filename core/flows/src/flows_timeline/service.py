@@ -187,7 +187,12 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
     for r in rows[:max(1, int(limit))]:
         refs = loads(r["subject_refs"])
         at = to_epoch(r["created_at"]) or 0.0
-        ctx = {k: refs[k] for k in ("tool", "meeting_id", "deployment", "worker_image", "kind")
+        # `kind_raw` / `severity_raw` carry the caller's OWN word when it fell outside our
+        # vocabulary (F-D26): the report is stored under the canonical value and the word they
+        # actually used travels beside it, so the dev agent reading this sink sees what was meant
+        # rather than eight buckets and no evidence of the twelve reports we used to refuse.
+        ctx = {k: refs[k] for k in ("tool", "meeting_id", "deployment", "worker_image", "kind",
+                                    "kind_raw", "severity_raw")
               if refs.get(k)}
         out.append({
             "id": refs.get("friction_id") or r["reaction_id"],

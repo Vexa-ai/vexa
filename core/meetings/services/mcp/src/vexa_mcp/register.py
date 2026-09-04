@@ -110,8 +110,26 @@ def _signature(bt: BoundTool) -> inspect.Signature:
         params.append(inspect.Parameter(
             name, inspect.Parameter.KEYWORD_ONLY,
             annotation=Optional[_PY_TYPE.get(str(schema.get("type")), str)],
-            default=Query(None, description=schema.get("description") or None)))
+            default=Query(None, description=schema.get("description") or None,
+                          json_schema_extra=_vocabulary(schema) or None)))
     return inspect.Signature(params)
+
+
+def _vocabulary(schema: dict) -> dict:
+    """The owning route's ALLOWED VALUES, republished so an agent can read them before it guesses.
+
+    An argument published as a bare `string` tells an agent nothing about which words the route
+    understands, and an agent that has to guess a word guesses wrong: twelve friction reports were
+    thrown away on prod in twenty minutes because `kind` reached `tools/list` as an open string
+    (F-D26). Whatever `enum` the owning route publishes now travels with it.
+
+    It travels as SCHEMA, not as validation. `json_schema_extra` reaches `tools/list` and makes
+    FastAPI reject nothing, so an agent that reads it is guided and an agent that ignores it is
+    still forwarded to the owning route, which decides what an off-vocabulary word means.
+    Enforcing it here would re-create the same loss one hop earlier, which is the whole lesson.
+    """
+    values = schema.get("enum")
+    return {"enum": list(values)} if isinstance(values, (list, tuple)) and values else {}
 
 
 def _add(app: FastAPI, bt: BoundTool, base: str,
