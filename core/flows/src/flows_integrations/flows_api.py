@@ -14,6 +14,11 @@
                                     reactions, each naming the flow that produced it and its
                                     typed reason (PRD decision 42.2). The subject is the
                                     authenticated caller's, never an argument.
+  GET  /queue/notices               THE STANDING NOTICES ONLY — the say text of the waiting items
+                                    whose copy declared itself one (`notice: true` in a
+                                    `behavior/queue/` file's front-matter). Same door as
+                                    /queue/waiting, a much smaller answer: it is built to be asked
+                                    on every call and to ride along with unrelated work.
   GET  /timeline?subject=…          ONE PERSON'S DAY, in order — facts, receipts and the
                                     meetings table merged and scoped to them (PRD decision 31).
                                     Read-only, and it takes the operator key OR the narrower
@@ -23,7 +28,7 @@ AUTH, TWO TIERS — because two different callers reach this surface and only on
 operator (issue #1468):
 
   * THE SUBJECT-SCOPED ROUTES (`GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`,
-    `GET /queue/waiting`, `GET /timeline`) take EITHER the operator key OR a person's own Vexa
+    `GET /queue/waiting`, `GET /queue/notices`, `GET /timeline`) take EITHER the operator key OR a person's own Vexa
     credential, as a bearer or `X-API-Key`. With a person's credential the subject is DERIVED from
     it, through identity's `/internal/validate` — the one resolver, the same one the gateway asks
     (P23) — and a `subject` argument naming anyone else is refused rather than honoured. The MCP
@@ -1024,6 +1029,40 @@ def queue_waiting(subject: str = "", limit: int = 50,
              for f in vocab.flows.values()]
     return _flows_queue.waiting(db, subject=who, flows=flows,
                                 limit=max(1, min(int(limit), 200)))
+
+
+@app.get("/queue/notices")
+def queue_notices(subject: str = "", limit: int = 50,
+                  x_user_id: str = Header(default=""),
+                  caller: Caller = Depends(subject_or_operator)):
+    """THIS PERSON'S STANDING NOTICES — the say text of each waiting item whose copy declared itself
+    one, and nothing else.
+
+    A standing notice is something that stays true BETWEEN calls rather than something that just
+    happened, so a caller is meant to read it alongside whatever it was already doing rather than
+    go looking for it. That is why this answer is the smallest one this surface has: a list of
+    sentences, no reaction ids, no flow names, no steps, no typed reasons — cheap enough to ask on
+    every call. A caller that wants any of those wants `GET /queue/waiting`.
+
+    WHICH ITEMS ARE NOTICES IS BEHAVIOR'S TO DECIDE, not this route's and not any caller's: a
+    say-file under `behavior/queue/` opens with `notice: true` in its front-matter, or it does not.
+    That is an admin's file and an admin's edit with no deploy on either side of it — the same file
+    and the same edit that already decide whether an item is spoken at all (`flows_queue`,
+    `behavior/queue/README.md`). No word of any notice is written here or anywhere in this image.
+
+    Same door as `GET /queue/waiting`, in every particular: a person is resolved from their own
+    credential and cannot name anyone else, an operator passes `?subject=` or the gateway stamps
+    `X-User-Id`, and no subject at all is a 400 because this route answers for ONE person.
+    """
+    who = scoped_subject(caller, subject)
+    if caller.is_admin:
+        who = (x_user_id or "").strip() or who
+    if not who:
+        raise HTTPException(status_code=400, detail=(
+            "no subject — this route answers for ONE person. A person is resolved from their own "
+            "credential; an operator passes ?subject=<uid|email>, or the gateway stamps "
+            "X-User-Id."))
+    return _flows_queue.notices(db, subject=who, limit=max(1, min(int(limit), 200)))
 
 
 # THE ENTRYPOINT GUARD IS THE LAST THING IN THIS MODULE, and that is load-bearing rather than
