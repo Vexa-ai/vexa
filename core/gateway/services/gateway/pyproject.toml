@@ -14,10 +14,25 @@ dependencies = [
     # pytest-asyncio drives the /ws multiplex unit tests (asyncio_mode=auto).
     # No SQLAlchemy-async here → no greenlet pin needed.
     "pytest-asyncio>=0.23",
-    # fastapi-guard — per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py).
-    # Pinned <8.0 so a major bump (which may rename SecurityConfig fields) can't silently
-    # break the gateway on a `uv sync --frozen` image rebuild.
-    "fastapi-guard>=7.2,<8.0",
+    # fastapi-guard: per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py builds and
+    # installs the SecurityConfig / SecurityMiddleware). The /ws path runs the library's own
+    # guard_websocket directly (called from run_multiplex in app.py), so no Vexa-authored guard
+    # orchestration remains for either path. History still true today: 7.8.0 joins repeated
+    # X-Forwarded-For field lines in its Starlette adapter and scans the /ws handshake through
+    # guard_websocket; 7.8.1 makes a whitelisted IP skip the /ws rate limit like the HTTP path;
+    # guard-core >= 3.15.0 makes the rate limiter honor redis_fail_open (edge_guard.py sets it
+    # True explicitly, so behavior is the same on either side of that boundary).
+    # 8.0.0 is the floor: it declares guard-core>=4.0.0. guard-core 4.0.0 redacts authorization,
+    # proxy-authorization, cookie and x-api-key (plus query-string and body secrets) on every
+    # guard log line, event and hook payload, closing the CWE-532 leak where 3.17.0 wrote those
+    # headers verbatim on every block; it also puts proxy identity headers (x-forwarded-for,
+    # x-real-ip, etc.) in the default excluded-header set, which skips only the ssrf detection
+    # category for them, so an internal address in X-Forwarded-For no longer trips an SSRF
+    # auto-ban on the proxy or the client; every other detection category still scans them.
+    # The lock sits on guard-core 4.0.0.
+    # Pinned <9.0 so a major bump (which may rename SecurityConfig fields) can't silently break
+    # the gateway on a `uv sync --frozen` image rebuild.
+    "fastapi-guard>=8.0,<9.0",
 ]
 
 [tool.uv]

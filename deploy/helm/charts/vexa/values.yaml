@@ -118,15 +118,31 @@ gateway:
   # ON by default with generous limits (600 req/min per IP); set enabled: false to opt out.
   guard:
     enabled: true
-    wsEnabled: false          # optional /ws connect guard (in-memory, per-process; opt-in)
+    # wsEnabled runs fastapi-guard's own guard_websocket directly on /ws connect. It requires
+    # enabled: true above - the gateway refuses to boot otherwise, since guard_websocket resolves
+    # its config from the HTTP guard's registered middleware. Same ban store, IP lists and
+    # per-IP rate limit (its own budget) as the HTTP layer; ban store and rate window are both
+    # Redis-shared with it when enableRedis is true, per-worker otherwise. Auto-ban violation
+    # counts are kept per path, so HTTP and WS over-limit events do not add up toward one
+    # threshold, though the resulting ban is shared. BREAKING on upgrade: a deploy that
+    # previously ran enabled: false with wsEnabled: true (a working WS-only setup under the
+    # old hand-rolled guard) now refuses to boot with a ConfigError naming both vars - set
+    # enabled: true (or turn wsEnabled off) before upgrading.
+    wsEnabled: false
     enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
     rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
     rateLimitWindow: 60
+    autoBanRateLimit: true  # auto-ban IPs exceeding the rate limit (rate_limit_exceeded). One knob for
+                            # both the HTTP pipeline and the WS connect primitive; off in guard-core
+                            # itself, ON here. Requires the ban store (on by default).
     autoBanThreshold: 10
     autoBanDuration: 3600
-    ipWhitelist: ""           # comma-separated IPs that bypass the guard
-    ipBlacklist: ""           # comma-separated IPs to block (403)
-    trustedProxies: ""        # comma-separated trusted proxy IPs (enables X-Forwarded-For)
+    # ipWhitelist / ipBlacklist / trustedProxies: comma-separated IPs or CIDR ranges (e.g.
+    # "10.0.0.0/8,203.0.113.5"). Each entry is validated at boot (stdlib `ipaddress`) - an
+    # invalid entry refuses to boot with an error naming the value and the bad entry.
+    ipWhitelist: ""           # IPs/CIDRs that bypass the guard entirely
+    ipBlacklist: ""           # IPs/CIDRs to block (403)
+    trustedProxies: ""        # IPs/CIDRs whose X-Forwarded-For is trusted for client-IP resolution
     trustXForwardedProto: false
   resources:
     requests: { cpu: 100m, memory: 256Mi }
@@ -154,10 +170,13 @@ adminApi:
   # ON by default with generous limits (600 req/min per IP); set enabled: false to opt out.
   guard:
     enabled: true
-    wsEnabled: false          # optional /ws connect guard (in-memory, per-process; opt-in)
+    wsEnabled: false          # optional /ws connect guard (ban store shared with HTTP; rate window per-process; opt-in)
     enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
     rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
     rateLimitWindow: 60
+    autoBanRateLimit: true  # auto-ban IPs exceeding the rate limit (rate_limit_exceeded). One knob for
+                            # both the HTTP pipeline and the WS connect primitive; off in guard-core
+                            # itself, ON here. Requires the ban store (on by default).
     autoBanThreshold: 10
     autoBanDuration: 3600
     ipWhitelist: ""           # comma-separated IPs that bypass the guard
