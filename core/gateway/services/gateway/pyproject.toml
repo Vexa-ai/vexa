@@ -17,18 +17,22 @@ dependencies = [
     # fastapi-guard: per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py builds and
     # installs the SecurityConfig / SecurityMiddleware). The /ws path runs the library's own
     # guard_websocket directly (called from run_multiplex in app.py), so no Vexa-authored guard
-    # orchestration remains for either path. 7.8.1 is the floor: it declares guard-core>=3.14.0,
-    # which carries the WS rate-limit primitive guard_websocket uses (3.13.0) plus the hardening
-    # on top of it (bounded in-memory stores, Retry-After on every 429, canonicalised ban
-    # addresses); 7.8.0 joins repeated X-Forwarded-For field lines in its Starlette adapter, and
-    # 7.8.1 makes a whitelisted IP skip the /ws rate limit like the HTTP path (7.8.0 did not).
-    # The lock currently sits on guard-core 3.17.0. guard-core >= 3.15.0 makes the rate
-    # limiter honor redis_fail_open (the default False now raises on a Redis outage instead
-    # of falling back); edge_guard.py sets it True explicitly, so the behavior is the same
-    # on either side of that boundary.
-    # Pinned <8.0 so a major bump (which may rename SecurityConfig fields) can't silently break
+    # orchestration remains for either path. History still true today: 7.8.0 joins repeated
+    # X-Forwarded-For field lines in its Starlette adapter and scans the /ws handshake through
+    # guard_websocket; 7.8.1 makes a whitelisted IP skip the /ws rate limit like the HTTP path;
+    # guard-core >= 3.15.0 makes the rate limiter honor redis_fail_open (edge_guard.py sets it
+    # True explicitly, so behavior is the same on either side of that boundary).
+    # 8.0.0 is the floor: it declares guard-core>=4.0.0. guard-core 4.0.0 redacts authorization,
+    # proxy-authorization, cookie and x-api-key (plus query-string and body secrets) on every
+    # guard log line, event and hook payload, closing the CWE-532 leak where 3.17.0 wrote those
+    # headers verbatim on every block; it also puts proxy identity headers (x-forwarded-for,
+    # x-real-ip, etc.) in the default excluded-header set, which skips only the ssrf detection
+    # category for them, so an internal address in X-Forwarded-For no longer trips an SSRF
+    # auto-ban on the proxy or the client; every other detection category still scans them.
+    # The lock sits on guard-core 4.0.0.
+    # Pinned <9.0 so a major bump (which may rename SecurityConfig fields) can't silently break
     # the gateway on a `uv sync --frozen` image rebuild.
-    "fastapi-guard>=7.8.1,<8.0",
+    "fastapi-guard>=8.0,<9.0",
 ]
 
 [tool.uv]
