@@ -177,16 +177,37 @@ def allowed_local_roots() -> list[Path]:
     return roots
 
 
-def _assert_allowed_local(value: str) -> None:
+def contained_local_path(value: str) -> Path:
+    """The RESOLVED path a scheme-less repository reference names, proven to sit under a configured
+    root — or ``RepoRefError``. The caller-supplied string never leaves this function.
+
+    Containment is asserted TWICE, and the order is the point:
+
+    * **lexically first**, on ``os.path.normpath(os.path.abspath(value))``. That collapses ``..``
+      without touching the filesystem, so a value that escapes a root is refused *before* it is used
+      in any path expression at all;
+    * **then again on the symlink-resolved path**, because a symlink planted inside a root points
+      wherever it likes and the lexical pass cannot see through it.
+
+    Only the resolved path is returned, so no caller can reach past the check by re-using the raw
+    string."""
     roots = allowed_local_roots()
     if not roots:
         raise RepoRefError(LOCAL_SENTENCE, kind="local")
+
+    prefixes = [os.path.normpath(os.path.abspath(str(r))) for r in roots]
+    candidate = os.path.normpath(os.path.abspath(value.strip()))
+    if not any(candidate == p or candidate.startswith(p + os.sep) for p in prefixes):
+        raise RepoRefError(LOCAL_SENTENCE, kind="local")
+
     try:
-        p = Path(value).resolve()
+        resolved = Path(candidate).resolve(strict=False)
+        real_roots = [Path(p).resolve(strict=False) for p in prefixes]
     except OSError:
         raise RepoRefError(LOCAL_SENTENCE, kind="local") from None
-    if not any(p == r or r in p.parents for r in roots):
+    if not any(resolved == r or resolved.is_relative_to(r) for r in real_roots):
         raise RepoRefError(LOCAL_SENTENCE, kind="local")
+    return resolved
 
 
 def assert_allowed_scheme(raw: Optional[str]) -> None:
@@ -208,7 +229,7 @@ def assert_allowed_scheme(raw: Optional[str]) -> None:
         return
     if _SCP.match(v):
         return
-    _assert_allowed_local(v)
+    contained_local_path(v)                 # refuses unless it resolves inside a configured root
 
 
 def assert_fetchable(raw: Optional[str]) -> None:

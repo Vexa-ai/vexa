@@ -154,6 +154,45 @@ def test_a_self_hoster_can_opt_local_paths_back_in(tmp_path, monkeypatch):
         assert_allowed_scheme(str(allowed / ".." / "elsewhere"))
 
 
+def test_a_dotdot_escape_is_refused_before_the_filesystem_is_touched(tmp_path, monkeypatch):
+    """``<root>/../secrets`` names a place outside the root. The ``..`` is collapsed lexically and the
+    containment check runs on the collapsed value, so the escape is refused rather than resolved."""
+    allowed = tmp_path / "mirrors"
+    allowed.mkdir()
+    outside = tmp_path / "secrets"
+    outside.mkdir()
+    monkeypatch.setenv(repo_ref.LOCAL_ROOTS_ENV, str(allowed))
+
+    for escape in (f"{allowed}/../secrets", f"{allowed}/proj/../../secrets", f"{allowed}/.."):
+        with pytest.raises(RepoRefError) as exc:
+            repo_ref.contained_local_path(escape)
+        assert exc.value.kind == "local"
+
+
+def test_a_symlink_out_of_the_root_is_refused(tmp_path, monkeypatch):
+    """A path that is lexically inside the root but resolves outside it — the case the lexical pass
+    cannot see. The second check runs on the symlink-resolved path, so the link is followed by the
+    GATE before it is followed by anything else."""
+    allowed = tmp_path / "mirrors"
+    allowed.mkdir()
+    outside = tmp_path / "secrets"
+    outside.mkdir()
+    (allowed / "escape").symlink_to(outside, target_is_directory=True)
+    inside = allowed / "proj"
+    inside.mkdir()
+
+    monkeypatch.setenv(repo_ref.LOCAL_ROOTS_ENV, str(allowed))
+
+    with pytest.raises(RepoRefError) as exc:
+        repo_ref.contained_local_path(str(allowed / "escape"))
+    assert exc.value.kind == "local"
+    with pytest.raises(RepoRefError):
+        assert_allowed_scheme(str(allowed / "escape" / "repo.git"))
+
+    # …and the value that survives is the RESOLVED path, never the string the caller sent.
+    assert repo_ref.contained_local_path(str(allowed / "." / "proj")) == inside.resolve()
+
+
 def test_empty_repo_is_not_a_reference(monkeypatch):
     """``repo`` omitted means "swap back to the seed" — it never reaches git, so it is not refused."""
     monkeypatch.delenv(repo_ref.LOCAL_ROOTS_ENV, raising=False)
