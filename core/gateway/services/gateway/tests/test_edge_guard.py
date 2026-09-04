@@ -636,7 +636,13 @@ class FakeWS:
     ``guard_websocket`` resolves its ``SecurityConfig`` from, replacing the old
     ``reset_ws_guard`` singleton. No inbound frames - a denied connect never reaches the
     frame loop, and a clean IP test asserts it passes the guard (then hits the auth layer,
-    which closes 4401 on a missing key)."""
+    which closes 4401 on a missing key). ``scope["path"]`` matches the real ``/ws`` route
+    (``app.py``'s ``@app.websocket("/ws")``): fastapi-guard 8.0.0 scans the handshake through
+    guard-core's own ``SuspiciousActivityCheck``, and even with ``enable_penetration_detection``
+    off, it still resolves ``url_path`` via Starlette's ``get_route_path(scope)`` for
+    ``exclude_paths`` matching before that check ever runs - ``get_route_path`` reads
+    ``scope["path"]`` unconditionally (``root_path`` defaults to ``""`` via ``.get``), so a
+    scope without it raises ``KeyError`` on every connect, guard config or not."""
 
     def __init__(
         self,
@@ -654,7 +660,7 @@ class FakeWS:
             raw_headers["x-api-key"] = api_key
         self.headers = Headers(headers=raw_headers)
         self.state = SimpleNamespace()
-        self.scope: dict[str, Any] = {"app": _ws_app_for(config)}
+        self.scope: dict[str, Any] = {"app": _ws_app_for(config), "path": "/ws"}
         self.query_params: dict[str, str] = {}
         self.sent: list[dict] = []
         self.close_code: Optional[int] = None

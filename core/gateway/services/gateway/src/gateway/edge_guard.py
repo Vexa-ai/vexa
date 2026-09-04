@@ -89,7 +89,7 @@ def _guard_csv(env: str) -> list[str]:
 
 
 # guard_core.models.CloudProvider = Literal["AWS", "GCP", "Azure", "DigitalOcean", "Linode",
-# "Vultr"] (guard-core 3.17.0, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
+# "Vultr"] (guard-core 4.0.0, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
 # six names as a frozenset - both verified in this venv). Mirrored here (not imported) so a
 # library-side rename doesn't quietly change what Vexa accepts out from under this error
 # message.
@@ -252,9 +252,9 @@ def _on_http_block(request: object, payload: dict) -> None:
     today: a 429/403 from guard's ``SecurityMiddleware`` otherwise reaches only guard-core's
     own ``logging.getLogger("guard_core")``, never Vexa's ``logevent.v1`` stream.
 
-    guard-core 3.17.0 fires this exactly once per blocked (or passive-mode-flagged) request,
+    guard-core 4.0.0 fires this exactly once per blocked (or passive-mode-flagged) request,
     from three call sites (``core/checks/pipeline.py``, ``core/bypass/handler.py``,
-    ``handlers/ratelimit_handler.py``, all via the shared ``_utils/block_events.py``), and
+    ``_utils/request_logging.py``, all via the shared ``_utils/block_events.py``), and
     ALREADY isolates it: ``invoke_block_hook`` wraps the call (and the awaited result, if the
     hook returns one) in ``try/except Exception``, logging any failure on the
     ``guard_core`` logger and never propagating it into the block response - so this callback
@@ -276,10 +276,10 @@ def _on_http_block(request: object, payload: dict) -> None:
     reading ``ip_security.py`` and ``handlers/ratelimit_handler.py`` in this venv - neither
     ever passes a ``trigger_info`` argument to ``log_activity``, so its default, ``""``, is
     what reaches the payload). For ``suspicious_activity`` in ACTIVE mode
-    (``guard_core/core/checks/implementations/suspicious_activity.py:108-113``, verified in
+    (``guard_core/core/checks/implementations/suspicious_activity.py:111-116``, verified in
     this venv), the same attacker-controlled ``trigger_info`` - built from request header and
     query-param NAMES embedded verbatim, per ``guard_core/_utils/body_content_scan.py`` (lines
-    65, 69, 91, 102 for headers; 38, 49 for query params) - is already folded into ``reason``
+    179, 186, 230, 251 for headers; 144, 159 for query params) - is already folded into ``reason``
     (``sus_specs = f"{client_ip} - {trigger_info}"``, ``reason=f"Suspicious activity detected
     for IP: {sus_specs}"``), a field this callback DOES log; dropping the separate
     ``trigger_info`` payload key there would not remove the tainted text, only the second copy
@@ -393,7 +393,7 @@ def build_guard_config() -> SecurityConfig:
         # check. guard-core < 3.15.0 always fell back regardless of this flag; 3.15.0 makes
         # the limiter honor it, and the default (False) under fail_secure=False would skip
         # the rate limit entirely for every request until Redis is back. The open pin
-        # (>=7.8.1) resolves to 3.17.0 on a fresh lock, so the flag is set explicitly to
+        # (>=8.0) resolves to 4.0.0 on a fresh lock, so the flag is set explicitly to
         # keep one behavior on both sides of that boundary. Ban checks are unaffected:
         # is_ip_banned already fails open (not banned) under fail_secure=False.
         redis_fail_open=True,
