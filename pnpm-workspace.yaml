@@ -22,10 +22,33 @@ allowBuilds:
   onnxruntime-node: true
   protobufjs: true
   sharp: true
-# Security floor (GHSA-qx2v-qp2m-jg93): next pins postcss 8.4.31 exactly; postcss 8.5.x is
-# API-compatible. clients/terminal/package.json carries the same floor for its npm lockfile.
+# Security floors for transitive deps we do not name directly. Each entry is an advisory
+# floor, not a version preference: the selector matches ONLY the vulnerable range, and the
+# replacement stays inside the same major so the depending package's own range still holds.
+# clients/terminal/package.json carries the equivalent floors for its npm lockfile (the
+# shipped terminal image is built with `npm ci`, not pnpm — see clients/terminal/Dockerfile).
 overrides:
-  "postcss@<8.5.10": ">=8.5.10"
-  # Security floor (GHSA-xcpc-8h2w-3j85): crafted-ZIP 4 GB allocation in adm-zip <0.6.0,
+  # GHSA-qx2v-qp2m-jg93 + GHSA-fxqj-rqcc-2cmp (path traversal in the previous-source-map
+  # reader) + the incomplete-fix follow-up: next pins postcss 8.4.31 exactly; 8.5.x is
+  # API-compatible.
+  "postcss@<8.5.23": ">=8.5.23"
+  # GHSA-xcpc-8h2w-3j85: crafted-ZIP 4 GB allocation in adm-zip <0.6.0,
   # reached only in onnxruntime-node's postinstall unpack of its own runtime archive.
   "adm-zip@<0.6.0": ">=0.6.0"
+  # nanoid <3.3.18: custom/non-secure generators can loop indefinitely. Enters via postcss.
+  # Held to ^3 — nanoid 4+ is ESM-only and postcss requires the 3.x CJS build.
+  "nanoid@<3.3.18": "^3.3.18"
+  # fast-uri >=3.0.0 <3.1.6: six host-confusion / SSRF advisories. Enters via ajv,
+  # ajv-formats and dependency-cruiser. Held to ^3 — 4.x is a major ajv has not adopted.
+  "fast-uri@>=3.0.0 <3.1.6": "^3.1.6"
+  # brace-expansion <1.1.18: three DoS-via-expansion advisories. Only the 1.x line is
+  # affected here (via minimatch under puppeteer-extra-plugin-stealth in the join and
+  # remote-browser modules); 2.x is untouched by this selector.
+  "brace-expansion@1": ">=1.1.18"
+  # sharp <0.35.0: inherited libvips vulnerabilities. Enters via @huggingface/transformers'
+  # IMAGE pipeline, which the audio-only mixed lane never instantiates (ADR-0004). 0.35 keeps
+  # the @img/sharp-libvips-* split, so the Category-B exception below stays valid as written.
+  "sharp@<0.35.0": ">=0.35.0"
+  # protobufjs >=7.5.0 <=7.6.4: DoS via infinite loop. Enters via onnxruntime-web under
+  # @huggingface/transformers. Held to ^7 — 8.x is a major bump transformers has not adopted.
+  "protobufjs@>=7.5.0 <7.6.5": "^7.6.5"
