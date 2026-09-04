@@ -12,12 +12,21 @@
 import { type AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
+import KeycloakProvider from "next-auth/providers/keycloak";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken } from "../adminApi";
 
 const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const isMicrosoftEnabled = () =>
   !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET);
+// Keycloak needs an ISSUER too (the realm base, e.g. https://sso.example.com/realms/vexa) — one
+// deployment's Keycloak is not another's, so there is no usable default to fall back to.
+const isKeycloakEnabled = () =>
+  !!(
+    process.env.KEYCLOAK_CLIENT_ID &&
+    process.env.KEYCLOAK_CLIENT_SECRET &&
+    process.env.KEYCLOAK_ISSUER
+  );
 
 /** Secure cookies behind HTTPS, mirroring the login route's isSecureRequest(). */
 function isSecureRequest(): boolean {
@@ -54,6 +63,16 @@ export const authOptions: AuthOptions = {
           }),
         ]
       : []),
+    ...(isKeycloakEnabled()
+      ? [
+          KeycloakProvider({
+            clientId: process.env.KEYCLOAK_CLIENT_ID!,
+            clientSecret: process.env.KEYCLOAK_CLIENT_SECRET!,
+            issuer: process.env.KEYCLOAK_ISSUER!,
+            authorization: { params: { prompt: "select_account" } },
+          }),
+        ]
+      : []),
   ],
   session: { strategy: "jwt" },
   secret: process.env.NEXTAUTH_SECRET,
@@ -63,9 +82,23 @@ export const authOptions: AuthOptions = {
   callbacks: {
     /** The load-bearing step: turn a verified OAuth identity into the terminal's `vexa-token` +
      *  `vexa-user-info` cookies, reusing the admin-api find-or-create+mint flow. Deny on any failure. */
-    async signIn({ user, account }) {
+    async signIn({ user, account, profile }) {
       const provider = account?.provider;
-      if ((provider !== "google" && provider !== "microsoft") || !user.email) return false;
+      if (
+        (provider !== "google" && provider !== "microsoft" && provider !== "keycloak") ||
+        !user.email
+      )
+        return false;
+
+      // The email IS the account key downstream (findOrCreateUserToken matches on it), so an
+      // UNVERIFIED address would let a Keycloak account claim someone else's Vexa user by
+      // registering their address. Google/Microsoft verify inherently; a self-hosted Keycloak
+      // realm may not, so require the claim explicitly rather than trusting the deployment.
+      if (provider === "keycloak" && (profile as { email_verified?: boolean })?.email_verified !== true) {
+        // eslint-disable-next-line no-console
+        console.error(`[terminal-auth] keycloak sign-in denied for ${user.email}: email not verified`);
+        return false;
+      }
 
       const result = await findOrCreateUserToken(user.email.toLowerCase());
       if (!result.ok) {

@@ -1,0 +1,66 @@
+# Keycloak SSO overlay — optional identity provider for terminal sign-in.
+#
+# Vexa's declared identity direction (docs/docs/architecture/identity-and-trust.mdx: SPIRE +
+# Keycloak + RFC 8693). This overlay is ADDITIVE and self-contained: without it the terminal's
+# existing sign-in paths are untouched, and the terminal's Keycloak provider self-gates on the
+# KEYCLOAK_* env below (absent creds -> no button, exactly like Google/Microsoft).
+#
+#   docker compose -p vexa-v012 -f docker-compose.yml -f docker-compose.keycloak.yml up -d
+#
+# Keycloak runs on its OWN postgres, not the stack's: the identity store is blast-radius isolated
+# from meeting data, and adding/removing this overlay never migrates or touches the vexa database.
+#
+# PRODUCTION: see keycloak/README.md — rotate the client secret, set KC_HOSTNAME to your public
+# https origin, put exact callback URLs in the realm, and swap `start-dev` for `start`.
+services:
+  keycloak-db:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=${KEYCLOAK_DB_PASSWORD:-keycloak}
+      - TZ=UTC
+      - PGTZ=UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USER:-admin}
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://keycloak-db:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=${KEYCLOAK_DB_PASSWORD:-keycloak}
+      # Pin the issuer to the browser-facing origin so every token carries one stable `iss`,
+      # whichever hostname a backchannel call arrives on. Mismatched issuers are the classic
+      # "token rejected as inactive" failure when browser and server reach Keycloak differently.
+      - KC_HOSTNAME=${KEYCLOAK_PUBLIC_URL:-http://localhost:18101}
+      - KC_HEALTH_ENABLED=true
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18101}:8080"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  terminal:
+    environment:
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-vexa-terminal}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-dev-terminal-secret}
+      - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-http://localhost:18101/realms/vexa}
+
+volumes:
+  keycloak-db-data:
