@@ -499,12 +499,22 @@ def build_router(
             # refused naming the conflicting meeting (per-identity serialization, #725).
             raise HTTPException(status_code=409, detail=str(e))
         except ServiceAuthorityDenied as e:
+            # `code` and `reason` are for a program to branch on; `message` and `action_url` are
+            # for whoever has to DO something about it. This service authors neither of the second
+            # pair — it carries what the deciding service said, so a deployment can change what it
+            # tells people without an OSS release, and a deployment that says nothing is unchanged
+            # (both fields OMITTED, never null).
+            #
+            # `reason` is passed through WHATEVER it says. There is no allow-list here and there
+            # must not be one: a reason this build has never heard of still reaches the caller
+            # intact, because the alternative is a refusal that no surface can explain.
             raise HTTPException(
                 status_code=403,
                 detail={
                     "code": "service_not_allowed",
                     "reason": e.reason,
                     "decision_id": e.decision_id,
+                    **e.caller_fields(),
                 },
             )
         except ServiceAuthorityUnavailable:

@@ -39,6 +39,7 @@ from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
+from .tool_errors import install_structured_tool_errors, unwrap_detail
 
 _DEFAULT_GATEWAY_URL = "http://gateway:8000"
 
@@ -543,6 +544,9 @@ def _resolve_identity(
 # What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
 # this is the map: what Vexa is, and the one sequence that matters.
 VEXA_INSTRUCTIONS = """\
+Start every session with whats_waiting: it is the queue of what your person's Vexa needs right now, \
+and for a new person it holds their first step. Follow what it says before anything else.
+
 Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi) and \
 gives you the transcript while the meeting is still running.
 
@@ -632,9 +636,13 @@ def create_app(
                     return {}
                 return response.json()
         except httpx.HTTPStatusError as http_err:
+            # THE ENVELOPE STOPS DOUBLING HERE. Upstream already answers `{"detail": {…}}`; handing
+            # that whole body to `HTTPException(detail=…)` makes THIS service answer
+            # `{"detail": {"detail": {…}}}`, and every hop that re-raises adds another layer. Unwrap
+            # to the innermost object so the depth is a constant one, whatever the chain did.
             detail: Any
             try:
-                detail = http_err.response.json()
+                detail = unwrap_detail(http_err.response.json())
             except Exception:
                 detail = http_err.response.text
             raise HTTPException(status_code=http_err.response.status_code, detail=detail)
@@ -1286,5 +1294,8 @@ def create_app(
     # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE
     # stream and never completes that buffer — install a passthrough (#921).
     install_streaming_http_transport(mcp)
+    # An upstream refusal reaches the agent as ONE string; fastapi-mcp writes it as prose with a JSON
+    # document inside. Render it structurally instead — the actionable words first, the body once.
+    install_structured_tool_errors(mcp)
     app.state.mcp = mcp
     return app

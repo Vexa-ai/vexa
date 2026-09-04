@@ -110,8 +110,40 @@ def _signature(bt: BoundTool) -> inspect.Signature:
         params.append(inspect.Parameter(
             name, inspect.Parameter.KEYWORD_ONLY,
             annotation=Optional[_PY_TYPE.get(str(schema.get("type")), str)],
-            default=Query(None, description=schema.get("description") or None)))
+            default=Query(None, description=schema.get("description") or None,
+                          json_schema_extra=_vocabulary(schema) or None)))
     return inspect.Signature(params)
+
+
+def _vocabulary(schema: dict) -> dict:
+    """The owning route's allowed values, republished so an agent can read them before it guesses —
+    AS AN ANNOTATION (`examples`), NEVER AS `enum`.
+
+    An argument published as a bare `string` tells an agent nothing about which words the route
+    understands, and an agent that has to guess a word guesses wrong: twelve friction reports were
+    thrown away on prod in twenty minutes because `kind` reached `tools/list` as an open string
+    (F-D26). So the vocabulary has to travel. The question is in which key.
+
+    IT MUST NOT TRAVEL AS `enum`, and that was caught on the station rather than reasoned out. The
+    MCP SDK's own dispatcher validates a call's arguments against the tool's `inputSchema`
+    (`mcp/server/lowlevel/server.py`: `jsonschema.validate(instance=arguments,
+    schema=tool.inputSchema)`) and returns `isError` without ever calling the tool. A first cut
+    published `enum` here; `report_friction` with `kind="broke"` came back "Input validation error:
+    'broke' is not one of [...]" and the report was destroyed one hop EARLIER than before, by the
+    fix for the defect. The edge would have become a stricter gate than the route it fronts.
+
+    `examples` is a JSON Schema ANNOTATION: it reaches `tools/list`, an agent reads it, and no
+    validator anywhere rejects a value for not being in it. The words themselves are also spelled
+    out in the argument's own description, which the owning route writes. Guidance belongs in front
+    of the agent; the decision about an unrecognised word belongs to the route that stores it.
+
+    BOTH KEYS ARE READ off the owning route, and that is a real case rather than defensiveness: a
+    route that has decided its own vocabulary is a suggestion publishes `examples`, and a route
+    that validates against a closed set publishes `enum`. An agent needs the words either way, and
+    either way this edge must not be the thing that refuses the call for not using them.
+    """
+    values = schema.get("enum") or schema.get("examples")
+    return {"examples": list(values)} if isinstance(values, (list, tuple)) and values else {}
 
 
 def _add(app: FastAPI, bt: BoundTool, base: str,

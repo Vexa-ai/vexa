@@ -70,7 +70,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
@@ -347,6 +347,21 @@ class FlowSubmission(BaseModel):
 
 @app.get("/flows")
 def list_flows(caller: Caller = Depends(subject_or_operator)):
+    """Every flow this engine knows, and the step vocabulary flows are built out of.
+
+    Read this when you need to know what this deployment can actually DO before promising it: each
+    entry names the flow, its version, the event that starts it (`on`) and its ordered steps, and
+    `source` says whether it came from the image or was submitted through the API. It answers
+    "is there a flow for X?" — it does not start one; facts start flows.
+
+    `steps_vocabulary` is every step name with its own one-line description, which is the same list
+    a submitted flow is validated against. `shadowing_versions` names any runtime version that
+    overrides an image version with fewer steps — the shape of a flow quietly doing less than the
+    code says, surfaced here because nobody reads a startup log until they already suspect it.
+
+    Takes the operator key or a person's own credential; it describes the machine, not a person, so
+    the answer is the same either way.
+    """
     code_flows = [{"name": f.name, "version": f.version, "on": f.on.name,
                    "steps": list(f.steps), "source": "image", "status": "active"}
                   for f in vocab.flows.values()]
@@ -670,6 +685,76 @@ FRICTION_KINDS = ("missing-tool", "refusal", "no-page", "wrong-workspace", "unfu
                   "ux", "other")
 FRICTION_TEXT_MAX = 900
 
+# CATCH ALL SIGNAL — NOTHING HERE IS A TAXONOMY (F-D26, prod 2026-09-04). This route used to answer
+# 400 with `{"kind": "...", "expected": [...]}` for any word outside `FRICTION_KINDS`. In twenty
+# minutes of real use it threw away TWELVE reports, because the agent filing them wrote "missing",
+# "broke" and "confusing" instead of "missing-tool", "error" and "ux" — the tool schema had told it
+# nothing, so it guessed, and the sink whose whole job is to catch what did not work refused the
+# catch over a spelling.
+#
+# FOUNDER RULING, 2026-09-04 10:2xZ, which is the shape this route now has: *"we want to catch all
+# signal, does not make sense being strict about it, we want rich data, does not have to be too
+# structured."* So `kind` and `severity` are STORED AS SENT — free text, no canonicalisation, no
+# mapping to `other`, no second field holding the "raw" word, because there is no cooked one. Any
+# argument this route does not name is KEPT too, under `extra`. The eight kinds below survive only
+# as SUGGESTIONS in the tool description; grouping happens on the data later, by whoever reads it,
+# never at the door.
+#
+# F-D27, prod 2026-09-04 11:0xZ, is the SAME defect one field along, and it is why nothing about a
+# report's content is refusable either. F-D26 left two refusals standing — a report with no
+# `session` and a report with no text — on the reasoning that those were "about the report existing,
+# not about its shape". Prod disagreed within the hour: `POST /friction` answered 400 *"session is
+# required"* to a reporter who did not have one, and the report describing that very edge was itself
+# thrown away. A MISSING SESSION IS SIGNAL TOO. A report we cannot tie back to a conversation is
+# worth strictly more than no report, and the reporter is never the right party to be told no — it
+# is us who wanted the join key, so it is us who eat its absence.
+#
+# THE RULE, GENERALISED, so the next field does not need a third incident: NO VALUE A CALLER CAN
+# SEND PRODUCES A 400. Not a word, not a length, not an absence. Over-long values truncate, unknown
+# values are kept as sent, and an absent value is stored as a genuine absence — the ref is omitted
+# rather than written as `""`, and `friction_for_subject` renders it "no session" for a reader while
+# keeping `session_id` empty for a grep. The only refusals
+# this route still has are AUTHENTICATION (401 — the edge cannot attribute a report to nobody, and
+# an unattributable report is not a poorer report but a different object) and a request that is not
+# parseable at all. Note also that every argument below is typed `str`, deliberately: a non-string
+# annotation would hand FastAPI a 422 one layer above this function, which is the same refusal with
+# somebody else's name on it. `tests/test_friction.py` pins both properties.
+#
+# No migration: a report lives in `reaction.subject_refs`, which is a JSON document, so every one of
+# these is a key inside it and the ten tables in `schema.sql` are untouched.
+#
+# EXTRAS ARE NAMESPACED, and that is not tidiness. `flows_timeline.model.concerns` decides whose
+# report this is by reading `uid`/`subject`/`owner`/`organizer`/… straight off the refs, so merging
+# caller-supplied keys into the top level would let a reporter file a report that reads as somebody
+# else's. Under `extra` they are data; at the top level they would be authority.
+FRICTION_KIND_HELP = {
+    "missing-tool": "there was no tool for what was asked (\"summarise this meeting\" and nothing "
+                    "summarises)",
+    "refusal": "a tool or policy refused (\"speak_in_meeting\" declined, the workspace forbade it)",
+    "no-page": "a link or page that should exist did not (a transcript URL 404'd)",
+    "wrong-workspace": "the answer came from the wrong account, tenant or workspace",
+    "unfulfilled": "the tool answered success but the thing did not actually happen (bot never "
+                   "joined, note never saved)",
+    "error": "something broke outright — a 500, a crash, a timeout",
+    "ux": "it worked but was confusing, slow or awkward to get right",
+    "other": "none of the above, or you are not sure — say it in `what_happened` and we will "
+             "classify it",
+}
+FRICTION_KIND_DESC = ("What kind of friction this was — a SUGGESTION, not a list you must pick "
+                      "from. Words that group well with others: "
+                      + "; ".join(f"`{k}` — {v}" for k, v in FRICTION_KIND_HELP.items())
+                      + ". If none fits, send your own word; it is stored exactly as you sent it "
+                        "and never refused.")
+FRICTION_SEVERITY_DESC = ("How much it hurt. Words that group well: `blocker` (could not "
+                          "continue), `annoyance` (worked around it), `papercut` (small and "
+                          "repeated), `idea` (nothing broke, this would just be better). Your own "
+                          "word is stored as you sent it and never refused.")
+#: Everything this route names for itself. Any OTHER query argument is a caller's own field and is
+#: kept under `extra` rather than dropped — "rich data, does not have to be too structured".
+FRICTION_OWN_ARGS = frozenset({"session", "what_i_tried", "what_happened", "severity", "meeting_id",
+                               "tool", "deployment", "worker_image", "kind"})
+FRICTION_EXTRA_MAX = 40
+
 
 def _friction_id() -> str:
     """`fr_<16 hex>` — short enough to paste into a fix reference by hand, same convention the
@@ -677,26 +762,86 @@ def _friction_id() -> str:
     return f"fr_{secrets.token_hex(8)}"
 
 
-@app.post("/friction", status_code=201)
-def report_friction(session: str = "", what_i_tried: str = "", what_happened: str = "",
-                    severity: str = "annoyance", meeting_id: str = "", tool: str = "",
-                    deployment: str = "", worker_image: str = "", kind: str = "",
-                    x_user_id: str = Header(default=""),
-                    caller: Caller = Depends(subject_or_operator)):
-    """Tell us what did not work. Any signed-in caller may file, from any client — a Claude Code
-    session, the rig, a worker turn — whether or not this deployment runs the agent domain at all.
+def _friction_extra(params) -> dict:
+    """Every argument the caller sent that this route does not name, kept as they sent it.
 
-    `session`, `what_i_tried`, `what_happened` and `severity` are REQUIRED. `session` most of all:
-    it is the chat or meeting session this happened in, and its absence is exactly the gap this
-    carrier exists to close — the founder's own 13 reports from one live call could not be tied
-    back to the call that produced them because nothing on the old path carried an id for it. A
-    report with no session is refused rather than accepted with one more field nobody can join on
-    later (`friction_since=""` on the timeline is the only thing separating them then).
+    Capped in count and length so one call cannot write an unbounded document into a refs blob, and
+    the cap DROPS THE OVERFLOW SILENTLY rather than refusing the call — losing the tail of an
+    over-large report is bad, losing the whole report is the defect this route exists to not have.
+    """
+    out: dict = {}
+    for key in sorted(params.keys()):
+        if key in FRICTION_OWN_ARGS or len(out) >= FRICTION_EXTRA_MAX:
+            continue
+        value = params.get(key)
+        text = (value if isinstance(value, str) else str(value)).strip()
+        if text:
+            out[key[:100]] = text[:FRICTION_TEXT_MAX]
+    return out
 
-    The subject is the caller's own credential, same as every other person-scoped route here
+
+@app.post("/friction", status_code=201, summary="Report friction — tell Vexa what did not work")
+def report_friction(
+    session: str = Query("", description=(
+        "The chat or meeting session this happened in — the id of the conversation you are in "
+        "right now. INCLUDE IT WHENEVER YOU HAVE IT: it is how the report ties back to the "
+        "conversation that produced it, which is most of what makes a report actionable. But it "
+        "is not required and never refuses the call — if you do not have one, file anyway.")),
+    what_i_tried: str = Query("", description=(
+        "What you were attempting, in your own words. Half-formed is fine; so is nothing.")),
+    what_happened: str = Query("", description=(
+        "What actually happened instead — the error, the wrong answer, the missing page. Say as "
+        "much as you have.")),
+    severity: str = Query("annoyance", description=FRICTION_SEVERITY_DESC,
+                          json_schema_extra={"examples": list(FRICTION_SEVERITIES)}),
+    meeting_id: str = Query("", description="The meeting this happened on, if it was about one."),
+    tool: str = Query("", description="The tool you called when it went wrong, if it was one."),
+    deployment: str = Query("", description="Which deployment you were talking to, if you know."),
+    worker_image: str = Query("", description="The worker image/version, if you know it."),
+    kind: str = Query("", description=FRICTION_KIND_DESC,
+                      json_schema_extra={"examples": list(FRICTION_KINDS)}),
+    request: Request = None,  # noqa: RUF013 — FastAPI injects it; the default keeps the signature
+    x_user_id: str = Header(default=""),
+    caller: Caller = Depends(subject_or_operator),
+):
+    """Report friction: tell us what did not work, so a developer can read it and fix it.
+
+    CALL THIS whenever you could not do what the person asked, or did it badly: there was no tool
+    for the job, a tool refused, a page or link was missing, you landed in the wrong workspace, a
+    tool said it succeeded but the thing did not happen, something errored outright, or it worked
+    but was confusing. You do not need permission and you do not need to be sure it is our fault —
+    file it. Nothing is too small, and a report is never lost for being imperfectly labelled.
+
+    THE PAYLOAD IS TWO SENTENCES: `what_i_tried` (what you were attempting) and `what_happened`
+    (what happened instead). Send `session` too — the chat or meeting session you are in — whenever
+    you have one, because it is what ties the report back to the conversation that produced it and
+    that is most of what makes it actionable later.
+
+    NOTHING YOU SEND OR OMIT WILL COST YOU THE REPORT. There is no required field on this route: no
+    session, no text, an unknown word, an over-long value — all of it is filed, stored as sent, and
+    readable back. A report with no session reads as "no session" and is still a report; a missing
+    join key is our problem, not yours, and it is signal in its own right. The one thing that IS
+    refused is a call with no credential, because a report attributed to nobody is a different
+    object rather than a poorer one. Never withhold a report because you are unsure it is
+    well-formed, and never re-file one because a field felt wrong.
+
+    `kind` is a HINT, NOT A MENU. These words group well with other people's reports:
+    `missing-tool` (no tool exists for what was asked), `refusal` (a tool or policy said no),
+    `no-page` (a link or page that should exist 404'd), `wrong-workspace` (the answer came from the
+    wrong account or tenant), `unfulfilled` (a tool reported success and the thing did not actually
+    happen), `error` (a 500, a crash, a timeout), `ux` (it worked but was confusing or awkward),
+    `other`. `severity` likewise: `blocker`, `annoyance`, `papercut`, `idea`. **If none of them fits
+    what you saw, use your own word** — both fields are stored exactly as you send them, and no
+    word you can choose will cost you the report. Never re-file because a label felt wrong.
+
+    ANYTHING ELSE YOU KNOW, SEND IT. Arguments this route does not name are kept with the report
+    rather than dropped — a stack frame, a request id, a model name, a count. Richer is better;
+    structure is somebody else's problem later.
+
+    The subject is your own credential, same as every other person-scoped route here
     (`reactions_list`, `timeline`); an operator with no bearer may stamp `X-User-Id`, same as
-    `queue_waiting` — the gateway's answer when it forwards a resolved caller rather than a raw
-    bearer. The bare operator key, unstamped, attributes a report to nobody, which is refused.
+    `queue_waiting`. The bare operator key, unstamped, attributes a report to nobody, refused.
+    Read your own reports back with `friction_so_far`.
     """
     subj = scoped_subject(caller, "")
     if caller.is_admin:
@@ -705,31 +850,31 @@ def report_friction(session: str = "", what_i_tried: str = "", what_happened: st
         raise HTTPException(status_code=401, detail=(
             "report_friction needs your Vexa credential — this edge cannot attribute a report to "
             "nobody"))
-    sess = session.strip()
-    if not sess:
-        raise HTTPException(status_code=400, detail=(
-            "session is required — the chat or meeting session this happened in. A report with no "
-            "session cannot be tied back to the conversation that produced it, which is the exact "
-            "gap this carrier exists to close."))
-    tried, happened = what_i_tried.strip()[:FRICTION_TEXT_MAX], what_happened.strip()[:FRICTION_TEXT_MAX]
-    if not tried or not happened:
-        raise HTTPException(status_code=400, detail=(
-            "what_i_tried and what_happened are both required — half-formed is fine, empty is not"))
-    sev = severity.strip().lower()
-    if sev not in FRICTION_SEVERITIES:
-        raise HTTPException(status_code=400,
-                            detail={"severity": severity, "expected": list(FRICTION_SEVERITIES)})
-    knd = kind.strip().lower()
-    if knd and knd not in FRICTION_KINDS:
-        raise HTTPException(status_code=400, detail={"kind": kind, "expected": list(FRICTION_KINDS)})
+    # NO 400 BEYOND THIS POINT (F-D27). Everything below truncates or stores an absence; nothing
+    # rejects. `sess` empty means the reporter had no session to give — kept out of `refs` entirely
+    # rather than written as `""`, so the read model reports a genuine absence instead of a blank
+    # that could be mistaken for a session whose id happens to be empty.
+    sess = session.strip()[:128]
+    tried = what_i_tried.strip()[:FRICTION_TEXT_MAX]
+    happened = what_happened.strip()[:FRICTION_TEXT_MAX]
+    # AS SENT (founder ruling, F-D26). No canonicalisation, no lowercasing, no mapping into a
+    # bucket: the word the reporter chose IS the datum, and grouping it with other reports is a
+    # question for whoever reads the sink, later, with all of them in front of them.
+    sev = severity.strip()[:200] or "annoyance"
+    knd = kind.strip()[:200]
     fid = _friction_id()
-    refs = {"uid": subj, "session": sess[:128], "friction_id": fid,
+    refs = {"uid": subj, "friction_id": fid,
            "what_i_tried": tried, "what_happened": happened, "severity": sev}
+    if sess:
+        refs["session"] = sess
     for key, val in (("kind", knd), ("meeting_id", meeting_id), ("tool", tool),
                      ("deployment", deployment), ("worker_image", worker_image)):
         v = val.strip()[:200] if isinstance(val, str) else ""
         if v:
             refs[key] = v
+    extra = _friction_extra(request.query_params) if request is not None else {}
+    if extra:
+        refs["extra"] = extra
     vocab.refresh_from_db(db)          # the friction_log flow may have been (re)submitted since boot
     # LITERAL, not `production.FRICTION_REPORTED.name` — `tests/test_queue_waiting.py::_produced()`
     # proves `publishes_events` against what this domain's source actually writes to the wire by
@@ -738,7 +883,13 @@ def report_friction(session: str = "", what_i_tried: str = "", what_happened: st
     assert production.FRICTION_REPORTED.name == "friction.reported"
     admit(db, vocab, clock, source_event_id=f"friction-{fid}",
          event_type="friction.reported", subject_refs=refs)
-    return {"id": fid, "recorded": True}
+    # The reply STATES what was stored, so a caller can see its own words came back unchanged and
+    # can see which of its extra fields were kept — an accepted report that quietly dropped half of
+    # itself is the same class of lie as a refused one.
+    out = {"id": fid, "recorded": True, "kind": knd, "severity": sev, "session": sess}
+    if extra:
+        out["extra"] = sorted(extra)
+    return out
 
 
 @app.get("/friction")

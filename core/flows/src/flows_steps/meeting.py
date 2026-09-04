@@ -186,6 +186,28 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     return "\n".join(str(g.get("text") or "") for g in segs)
 
 
+def transcript_segment_count(uid: str, meeting_id) -> int | None:
+    """HOW MANY SEGMENTS this meeting captured — or **None** when it could not be read at all.
+
+    The same read `transcript_text` does, through the same owning-service endpoint, answering the
+    one question a caller wants when it does not want the words: *did this meeting transcribe?*
+    Counting the lines of `transcript_text` would not answer it, because that function joins the
+    segment texts and a meeting that captured nothing and a read that failed both come back falsy
+    — the exact collapse of two empties R-B19 was about, one level up.
+
+    THE THREE ANSWERS ARE THREE: `None` unreadable, `0` a meeting that captured nothing, `n` a
+    meeting that did. A caller deciding *has this person seen Vexa work yet* must not read a
+    gateway restart as a person who never tried."""
+    try:
+        _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
+                         {"X-API-Key": user_api_key(str(uid))})
+    except StepError:
+        return None
+    if not isinstance(body, dict) or "segments" not in body:
+        return None
+    return len(body.get("segments") or [])
+
+
 def _tokens(text: str) -> list:
     """A name as comparable words: lowercase, split on anything that is not a letter or a digit,
     bare numbers dropped. `Anna-Maria Smith` and `anna maria smith` become the same three."""

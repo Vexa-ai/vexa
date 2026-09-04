@@ -11,14 +11,14 @@ from flows_timeline.model import (EVENT_KINDS, STEP_KINDS, Event, concerns, even
                                   event_from_receipt, events_from_reaction, iso, merge,
                                   split_around, to_epoch)
 from flows_timeline.render import render_preamble, render_text
-from flows_timeline.service import (REACTION_FOUND, REACTION_MISSING, REACTION_NOT_YOURS,
-                                    build_timeline, fetch_meetings, friction_for_subject,
-                                    list_reactions, read_flows, reaction_concerns,
-                                    resolve_identity, window)
+from flows_timeline.service import (NO_SESSION, REACTION_FOUND, REACTION_MISSING,
+                                    REACTION_NOT_YOURS, build_timeline, fetch_meetings,
+                                    friction_for_subject, list_reactions, read_flows,
+                                    reaction_concerns, resolve_identity, window)
 
 __all__ = ["EVENT_KINDS", "STEP_KINDS", "Event", "concerns", "event_from_meeting",
            "event_from_receipt", "events_from_reaction", "iso", "merge", "split_around",
-           "to_epoch", "build_timeline", "fetch_meetings", "friction_for_subject",
+           "to_epoch", "build_timeline", "fetch_meetings", "friction_for_subject", "NO_SESSION",
            "list_reactions", "read_flows",
            "reaction_concerns", "REACTION_FOUND", "REACTION_MISSING", "REACTION_NOT_YOURS",
            "resolve_identity",

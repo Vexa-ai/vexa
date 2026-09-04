@@ -40,6 +40,28 @@ class BoundTool:
         return self.tool.name
 
 
+def _describe(op: dict) -> str:
+    """The words an agent reads before it decides whether to call this tool.
+
+    THE SUMMARY IS NOT ENOUGH, and taking it first was a defect (F-D12, F-D26). FastAPI
+    SYNTHESISES `summary` from the endpoint's function name whenever the route does not set one —
+    so a route called `report_friction` publishes `summary: "Report Friction"`, and preferring it
+    published a tool whose whole description was its own title, while the route's docstring, which
+    says what friction is and which words to use, sat one key away in `description`. An agent given
+    a title guesses; twelve friction reports were lost on prod in twenty minutes to that guess.
+
+    So the DESCRIPTION (the docstring) leads, and the summary stays in front of it only when it
+    says something the description does not already say.
+    """
+    summary = str(op.get("summary") or "").strip()
+    body = str(op.get("description") or "").strip()
+    if not body:
+        return summary
+    if not summary or summary.lower() in body.lower():
+        return body
+    return f"{summary}\n\n{body}"
+
+
 def _operation(openapi: dict, method: str, path: str) -> dict | None:
     item = (openapi.get("paths") or {}).get(path)
     if not isinstance(item, dict):
@@ -90,7 +112,7 @@ def verify(assembly: Assembly, openapi_by_domain: Dict[str, dict]) -> List[Bound
             declared[arg] = params[arg]
         out.append(BoundTool(
             tool=tool,
-            description=str(op.get("summary") or op.get("description") or "").strip(),
+            description=_describe(op),
             parameters=declared,
             path_params=path_params,
         ))
