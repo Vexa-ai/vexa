@@ -10,10 +10,11 @@ for the one route that sink runs through:
       no receipt, no worker tick, needed for it to show up
   B4  GET /friction (friction_so_far) is scoped to the caller, the same way reactions_list is
   B5  the flow this admits into is registered in every profile (no agent-domain dependency)
-  B6  NO VOCABULARY WORD COSTS A REPORT — an unknown `kind` is stored as `other` and an unknown
-      `severity` as `annoyance`, each with the caller's own word kept beside it (F-D26)
-  B7  the route TELLS an agent the vocabulary: both enums reach the OpenAPI the MCP tool schema is
-      derived from, and the docstring reads as instructions rather than as the route's own title
+  B6  NO WORD COSTS A REPORT — `kind` and `severity` are stored AS SENT, free text, and an
+      argument the route does not name is kept with the report rather than dropped (F-D26 +
+      the founder's ruling of 2026-09-04: "catch all signal … rich data, not too structured")
+  B7  the route SUGGESTS a vocabulary and never imposes one: the words reach the OpenAPI the MCP
+      tool schema is derived from, and the docstring reads as instructions, not as a title
 
 Offline, like `test_queue_waiting.py`: real sqlite rows, the real app through `TestClient`, no
 network and no worker loop — `record_friction`'s own `Done` never has to run for a filed report to
@@ -173,16 +174,19 @@ def test_a_report_with_no_what_i_tried_or_what_happened_is_refused(api):
                 severity="annoyance").status_code == 400
 
 
-# ── B6 · lenient, never lossy (F-D26) ────────────────────────────────────────────────────────────
+# ── B6 · catch all signal (F-D26 + the founder's ruling) ────────────────────────────────────────
 #
 # On prod, 2026-09-04, twelve reports were thrown away in twenty minutes: the tool schema published
 # `kind` as an open string with no allowed values, the agent filing them guessed "missing", "broke"
-# and "confusing", and this route answered 400. A sink that drops a report for a spelling is the one
-# thing it must never do — so a word we do not know is now STORED, under `other`, with the caller's
-# own word kept beside it. The severity test below used to assert the 400; it now asserts the keep.
+# and "confusing", and this route answered 400. FOUNDER RULING the same morning: *"we want to catch
+# all signal, does not make sense being strict about it, we want rich data, does not have to be too
+# structured."* So `kind` and `severity` are stored AS SENT — no bucket, no canonical value, no
+# second field holding the raw word — and any argument the route does not name is kept too. The
+# severity test below used to assert a 400; it now asserts the keep.
 
-def test_the_three_words_prod_actually_sent_are_stored_as_other_not_refused(api):
-    """The exact three kinds from the 2026-09-04 loss. Each one is a report we now keep."""
+def test_the_three_words_prod_actually_sent_are_stored_as_sent(api):
+    """The exact three kinds from the 2026-09-04 loss. Each is a report we now keep, in its own
+    words: `broke` is stored as `broke`, not translated into one of ours."""
     flows_api, client = api
     for word in ("missing", "broke", "confusing"):
         _clear(flows_api)
@@ -190,46 +194,51 @@ def test_the_three_words_prod_actually_sent_are_stored_as_other_not_refused(api)
                  what_happened="nothing came back", severity="blocker", kind=word)
         assert r.status_code == 201, f"{word!r} was refused — F-D26 all over again"
         body = r.json()
-        assert body["recorded"] is True
-        assert body["kind"] == "other" and body["kind_raw"] == word
+        assert body["recorded"] is True and body["kind"] == word
 
         stored = client.get("/friction", headers=_headers(flows_api)).json()["reports"]
         assert len(stored) == 1, f"{word!r} filed but not stored"
-        assert stored[0]["context"]["kind"] == "other"
-        assert stored[0]["context"]["kind_raw"] == word
+        assert stored[0]["context"]["kind"] == word
 
 
-def test_a_kind_in_the_vocabulary_is_stored_exactly_as_it_was_sent(api):
-    """Leniency must not blur the words we DO know — and a known word carries no `kind_raw`."""
+def test_a_word_from_the_suggested_list_is_stored_the_same_way(api):
+    """There is no privileged path: a suggested word is stored exactly like an invented one."""
     flows_api, client = api
     _clear(flows_api)
     r = _post(flows_api, client, session="s-ok", what_i_tried="x", what_happened="y",
              severity="papercut", kind="missing-tool")
-    assert r.status_code == 201
-    assert r.json()["kind"] == "missing-tool" and "kind_raw" not in r.json()
-    stored = client.get("/friction", headers=_headers(flows_api)).json()["reports"][0]
-    assert stored["context"]["kind"] == "missing-tool"
-    assert "kind_raw" not in stored["context"]
+    assert r.status_code == 201 and r.json()["kind"] == "missing-tool"
+    assert client.get("/friction", headers=_headers(flows_api)).json()[
+        "reports"][0]["context"]["kind"] == "missing-tool"
 
 
-def test_an_unknown_severity_is_kept_too_not_refused(api):
-    """Same rule, same reason: severity is the other closed vocabulary on this route."""
+def test_an_unknown_severity_is_kept_as_sent_not_refused(api):
+    """Same rule, same reason: severity is the other field that used to be a closed vocabulary."""
     flows_api, client = api
     _clear(flows_api)
     r = _post(flows_api, client, session="s1", what_i_tried="x", what_happened="y",
              severity="urgent!!")
-    assert r.status_code == 201
-    assert r.json()["severity"] == "annoyance" and r.json()["severity_raw"] == "urgent!!"
-    stored = client.get("/friction", headers=_headers(flows_api)).json()["reports"][0]
-    assert stored["severity"] == "annoyance"
-    assert stored["context"]["severity_raw"] == "urgent!!"
+    assert r.status_code == 201 and r.json()["severity"] == "urgent!!"
+    assert client.get("/friction", headers=_headers(flows_api)).json()[
+        "reports"][0]["severity"] == "urgent!!"
 
 
-def test_no_vocabulary_word_can_produce_a_400(api):
-    """The general form of the rule, not just the three observed words: whatever an agent invents
-    for either field, the report is filed. Only missing CONTENT is refusable."""
+def test_the_reporter_s_own_casing_survives(api):
+    """Lowercasing is a taxonomy decision too — a small one, and still not ours to make at the
+    door. `UX` and `ux` may be the same thing; whoever groups them can decide that with both in
+    front of them."""
     flows_api, client = api
-    for word in ("", "OTHER", "  Error  ", "kind-we-never-heard-of", "1", "🤷"):
+    _clear(flows_api)
+    r = _post(flows_api, client, session="s", what_i_tried="a", what_happened="b",
+             severity="BLOCKER", kind="  UX ")
+    assert r.json()["kind"] == "UX" and r.json()["severity"] == "BLOCKER"
+
+
+def test_no_word_in_either_field_can_produce_a_400(api):
+    """The general form: whatever an agent invents for either field, the report is filed. Only
+    missing CONTENT — no session, no text — is still refusable."""
+    flows_api, client = api
+    for word in ("", "OTHER", "kind-we-never-heard-of", "1", "🤷", "a" * 500):
         _clear(flows_api)
         r = _post(flows_api, client, session="s", what_i_tried="a", what_happened="b",
                  severity=word or "annoyance", kind=word)
@@ -237,13 +246,32 @@ def test_no_vocabulary_word_can_produce_a_400(api):
         assert client.get("/friction", headers=_headers(flows_api)).json()["count"] == 1
 
 
-def test_a_known_word_in_the_wrong_case_is_canonicalised_not_kept_as_raw(api):
+def test_fields_this_route_never_heard_of_are_kept_with_the_report(api):
+    """"Rich data, does not have to be too structured" — an argument the route does not name is
+    the reporter telling us something we did not think to ask for. Dropping it silently is the
+    same loss as refusing the call, just quieter."""
     flows_api, client = api
     _clear(flows_api)
     r = _post(flows_api, client, session="s", what_i_tried="a", what_happened="b",
-             severity="BLOCKER", kind="  UX ")
-    assert r.json()["kind"] == "ux" and "kind_raw" not in r.json()
-    assert r.json()["severity"] == "blocker" and "severity_raw" not in r.json()
+             severity="blocker", model="haiku-4.5", request_id="req_9", retries="3")
+    assert r.status_code == 201
+    assert r.json()["extra"] == ["model", "request_id", "retries"]
+    ctx = client.get("/friction", headers=_headers(flows_api)).json()["reports"][0]["context"]
+    assert ctx["extra"] == {"model": "haiku-4.5", "request_id": "req_9", "retries": "3"}
+
+
+def test_an_extra_field_cannot_re_address_the_report_to_someone_else(api):
+    """`flows_timeline.model.concerns` decides whose report this is from `uid`/`subject`/`owner`
+    read off the refs. Extras are namespaced under `extra` so a reporter cannot file into another
+    person's queue by naming a field after one of those keys."""
+    flows_api, client = api
+    _clear(flows_api)
+    _post(flows_api, client, uid="126", session="s", what_i_tried="a", what_happened="b",
+         severity="blocker", subject="999", uid_="999", owner="999")
+    mine = client.get("/friction", headers=_headers(flows_api, "126")).json()
+    theirs = client.get("/friction", headers=_headers(flows_api, "999")).json()
+    assert mine["count"] == 1 and theirs["count"] == 0
+    assert mine["reports"][0]["context"]["extra"]["subject"] == "999"
 
 
 # ── B7 · the tool tells the agent the vocabulary ────────────────────────────────────────────────
@@ -261,16 +289,21 @@ def _param(op, name):
     return next(p for p in op["parameters"] if p["name"] == name)
 
 
-def test_the_route_publishes_the_kind_vocabulary_in_its_openapi_schema(api):
+def test_the_route_suggests_the_kind_words_without_making_them_a_gate(api):
+    """`examples`, never `enum`. An `enum` here would be republished at the MCP edge, whose SDK
+    validates a call against the tool schema before dispatching — the vocabulary would become a
+    refusal one hop before the route, which is F-D26 with extra steps."""
     flows_api, _ = api
     schema = _param(_friction_op(flows_api), "kind")["schema"]
-    assert schema.get("enum") == list(flows_api.FRICTION_KINDS)
+    assert schema.get("examples") == list(flows_api.FRICTION_KINDS)
+    assert "enum" not in schema
 
 
-def test_the_route_publishes_the_severity_vocabulary_too(api):
+def test_the_route_suggests_the_severity_words_the_same_way(api):
     flows_api, _ = api
     schema = _param(_friction_op(flows_api), "severity")["schema"]
-    assert schema.get("enum") == list(flows_api.FRICTION_SEVERITIES)
+    assert schema.get("examples") == list(flows_api.FRICTION_SEVERITIES)
+    assert "enum" not in schema
 
 
 def test_every_kind_carries_an_example_in_the_argument_description(api):
@@ -279,7 +312,8 @@ def test_every_kind_carries_an_example_in_the_argument_description(api):
     text = _param(_friction_op(flows_api), "kind")["schema"]["description"]
     assert set(flows_api.FRICTION_KIND_HELP) == set(flows_api.FRICTION_KINDS)
     for kind in flows_api.FRICTION_KINDS:
-        assert f"`{kind}`" in text, f"{kind} is in the enum with nothing said about it"
+        assert f"`{kind}`" in text, f"{kind} is suggested with nothing said about it"
+    assert "own word" in text, "the description must say the list is not a menu"
 
 
 def test_the_route_description_reads_as_instructions_not_as_a_title(api):
