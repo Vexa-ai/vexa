@@ -34,17 +34,31 @@ FLOWS_OPENAPI = {"paths": {
         {"name": "since", "in": "query", "schema": {"type": "string"}},
         {"name": "until", "in": "query", "schema": {"type": "string"}},
         {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    # `/friction` is spelled the way flows-api ACTUALLY publishes it, because the difference IS the
+    # F-D26 defect: a FastAPI-synthesised `summary` ("Report Friction") sitting beside the docstring
+    # that holds the real instructions, and a `kind` whose allowed values either reach the agent or
+    # do not. The old fixture here wrote a hand-made summary and a bare-string `kind`, which is why
+    # this suite was green while prod threw twelve reports away.
     "/friction": {
-        "post": {"summary": "Tell us what did not work", "parameters": [
+        "post": {"summary": "Report Friction",
+                 "description": ("Report friction: tell us what did not work, so a developer can "
+                                 "read it and fix it. `what_i_tried` and `what_happened` are the "
+                                 "payload; `session` ties it to this conversation."),
+                 "parameters": [
             {"name": "session", "in": "query", "schema": {"type": "string"}},
             {"name": "what_i_tried", "in": "query", "schema": {"type": "string"}},
             {"name": "what_happened", "in": "query", "schema": {"type": "string"}},
-            {"name": "severity", "in": "query", "schema": {"type": "string"}},
+            {"name": "severity", "in": "query", "schema": {
+                "type": "string", "description": "How much it hurt.",
+                "enum": ["blocker", "annoyance", "papercut", "idea"]}},
             {"name": "meeting_id", "in": "query", "schema": {"type": "string"}},
             {"name": "tool", "in": "query", "schema": {"type": "string"}},
             {"name": "deployment", "in": "query", "schema": {"type": "string"}},
             {"name": "worker_image", "in": "query", "schema": {"type": "string"}},
-            {"name": "kind", "in": "query", "schema": {"type": "string"}}]},
+            {"name": "kind", "in": "query", "schema": {
+                "type": "string", "description": "What kind of friction this was.",
+                "enum": ["missing-tool", "refusal", "no-page", "wrong-workspace", "unfulfilled",
+                         "error", "ux", "other"]}}]},
         "get": {"summary": "Your own filed reports, newest first", "parameters": [
             {"name": "since", "in": "query", "schema": {"type": "string"}},
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
@@ -100,6 +114,42 @@ def test_an_assembled_tool_carries_the_owning_route_s_description():
     app = _boot(FLOWS_API_URL="http://flows")
     tool = next(t for t in app.state.mcp.tools if t.name == "flows_list")
     assert "Every flow version the engine knows" in (tool.description or "")
+
+
+def _schema_of(tool):
+    return (tool.inputSchema if hasattr(tool, "inputSchema") else tool.input_schema) or {}
+
+
+def test_report_friction_shows_an_agent_the_kind_vocabulary_in_tools_list():
+    """F-D26, end to end: the eight words reach the agent's own view of the tool. Published as
+    schema, not as a gate — the edge still forwards a word it has never seen, and flows-api stores
+    it as `other` rather than answering 400."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    tool = next(t for t in app.state.mcp.tools if t.name == "report_friction")
+    kind = _schema_of(tool).get("properties", {}).get("kind", {})
+    assert "other" in (kind.get("enum") or []), f"no vocabulary on `kind`: {kind}"
+    assert len(kind["enum"]) == 8
+    severity = _schema_of(tool)["properties"]["severity"]
+    assert severity.get("enum") == ["blocker", "annoyance", "papercut", "idea"]
+
+
+def test_report_friction_is_described_by_its_instructions_not_by_its_title():
+    """The description an agent reads before it decides whether to file. `Report Friction` is what
+    FastAPI synthesises from the function name; it is not instructions to anybody."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    tool = next(t for t in app.state.mcp.tools if t.name == "report_friction")
+    assert "what did not work" in (tool.description or "")
+    assert (tool.description or "").strip() != "Report Friction"
+
+
+def test_no_assembled_flows_tool_is_described_by_its_own_name_alone():
+    """The defect class behind F-D12 (`whats_waiting` read "Queue Waiting") and F-D26."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    declared = {t["name"] for t in FLOWS_MANIFEST["tools"]}
+    thin = [t.name for t in app.state.mcp.tools
+            if t.name in declared
+            and (t.description or "").strip().lower() == t.name.replace("_", " ").lower()]
+    assert not thin, f"described by nothing but their own title: {thin}"
 
 
 def test_no_assembled_tool_takes_a_credential_argument():

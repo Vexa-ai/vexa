@@ -10,6 +10,10 @@ for the one route that sink runs through:
       no receipt, no worker tick, needed for it to show up
   B4  GET /friction (friction_so_far) is scoped to the caller, the same way reactions_list is
   B5  the flow this admits into is registered in every profile (no agent-domain dependency)
+  B6  NO VOCABULARY WORD COSTS A REPORT — an unknown `kind` is stored as `other` and an unknown
+      `severity` as `annoyance`, each with the caller's own word kept beside it (F-D26)
+  B7  the route TELLS an agent the vocabulary: both enums reach the OpenAPI the MCP tool schema is
+      derived from, and the docstring reads as instructions rather than as the route's own title
 
 Offline, like `test_queue_waiting.py`: real sqlite rows, the real app through `TestClient`, no
 network and no worker loop — `record_friction`'s own `Done` never has to run for a filed report to
@@ -169,12 +173,145 @@ def test_a_report_with_no_what_i_tried_or_what_happened_is_refused(api):
                 severity="annoyance").status_code == 400
 
 
-def test_a_report_with_an_unknown_severity_is_refused(api):
+# ── B6 · lenient, never lossy (F-D26) ────────────────────────────────────────────────────────────
+#
+# On prod, 2026-09-04, twelve reports were thrown away in twenty minutes: the tool schema published
+# `kind` as an open string with no allowed values, the agent filing them guessed "missing", "broke"
+# and "confusing", and this route answered 400. A sink that drops a report for a spelling is the one
+# thing it must never do — so a word we do not know is now STORED, under `other`, with the caller's
+# own word kept beside it. The severity test below used to assert the 400; it now asserts the keep.
+
+def test_the_three_words_prod_actually_sent_are_stored_as_other_not_refused(api):
+    """The exact three kinds from the 2026-09-04 loss. Each one is a report we now keep."""
+    flows_api, client = api
+    for word in ("missing", "broke", "confusing"):
+        _clear(flows_api)
+        r = _post(flows_api, client, session="s-fd26", what_i_tried="asked for the transcript",
+                 what_happened="nothing came back", severity="blocker", kind=word)
+        assert r.status_code == 201, f"{word!r} was refused — F-D26 all over again"
+        body = r.json()
+        assert body["recorded"] is True
+        assert body["kind"] == "other" and body["kind_raw"] == word
+
+        stored = client.get("/friction", headers=_headers(flows_api)).json()["reports"]
+        assert len(stored) == 1, f"{word!r} filed but not stored"
+        assert stored[0]["context"]["kind"] == "other"
+        assert stored[0]["context"]["kind_raw"] == word
+
+
+def test_a_kind_in_the_vocabulary_is_stored_exactly_as_it_was_sent(api):
+    """Leniency must not blur the words we DO know — and a known word carries no `kind_raw`."""
+    flows_api, client = api
+    _clear(flows_api)
+    r = _post(flows_api, client, session="s-ok", what_i_tried="x", what_happened="y",
+             severity="papercut", kind="missing-tool")
+    assert r.status_code == 201
+    assert r.json()["kind"] == "missing-tool" and "kind_raw" not in r.json()
+    stored = client.get("/friction", headers=_headers(flows_api)).json()["reports"][0]
+    assert stored["context"]["kind"] == "missing-tool"
+    assert "kind_raw" not in stored["context"]
+
+
+def test_an_unknown_severity_is_kept_too_not_refused(api):
+    """Same rule, same reason: severity is the other closed vocabulary on this route."""
     flows_api, client = api
     _clear(flows_api)
     r = _post(flows_api, client, session="s1", what_i_tried="x", what_happened="y",
              severity="urgent!!")
-    assert r.status_code == 400
+    assert r.status_code == 201
+    assert r.json()["severity"] == "annoyance" and r.json()["severity_raw"] == "urgent!!"
+    stored = client.get("/friction", headers=_headers(flows_api)).json()["reports"][0]
+    assert stored["severity"] == "annoyance"
+    assert stored["context"]["severity_raw"] == "urgent!!"
+
+
+def test_no_vocabulary_word_can_produce_a_400(api):
+    """The general form of the rule, not just the three observed words: whatever an agent invents
+    for either field, the report is filed. Only missing CONTENT is refusable."""
+    flows_api, client = api
+    for word in ("", "OTHER", "  Error  ", "kind-we-never-heard-of", "1", "🤷"):
+        _clear(flows_api)
+        r = _post(flows_api, client, session="s", what_i_tried="a", what_happened="b",
+                 severity=word or "annoyance", kind=word)
+        assert r.status_code == 201, f"{word!r} was refused"
+        assert client.get("/friction", headers=_headers(flows_api)).json()["count"] == 1
+
+
+def test_a_known_word_in_the_wrong_case_is_canonicalised_not_kept_as_raw(api):
+    flows_api, client = api
+    _clear(flows_api)
+    r = _post(flows_api, client, session="s", what_i_tried="a", what_happened="b",
+             severity="BLOCKER", kind="  UX ")
+    assert r.json()["kind"] == "ux" and "kind_raw" not in r.json()
+    assert r.json()["severity"] == "blocker" and "severity_raw" not in r.json()
+
+
+# ── B7 · the tool tells the agent the vocabulary ────────────────────────────────────────────────
+#
+# The other half of F-D26: the route was lenient nowhere and instructive nowhere either. What the
+# MCP edge publishes as `report_friction` is DERIVED from this route's OpenAPI (see
+# `core/meetings/services/mcp/src/vexa_mcp/bind.py`), so the vocabulary and the instructions have to
+# be here or they do not exist anywhere an agent can read them.
+
+def _friction_op(flows_api, method="post"):
+    return flows_api.app.openapi()["paths"]["/friction"][method]
+
+
+def _param(op, name):
+    return next(p for p in op["parameters"] if p["name"] == name)
+
+
+def test_the_route_publishes_the_kind_vocabulary_in_its_openapi_schema(api):
+    flows_api, _ = api
+    schema = _param(_friction_op(flows_api), "kind")["schema"]
+    assert schema.get("enum") == list(flows_api.FRICTION_KINDS)
+
+
+def test_the_route_publishes_the_severity_vocabulary_too(api):
+    flows_api, _ = api
+    schema = _param(_friction_op(flows_api), "severity")["schema"]
+    assert schema.get("enum") == list(flows_api.FRICTION_SEVERITIES)
+
+
+def test_every_kind_carries_an_example_in_the_argument_description(api):
+    """An enum an agent cannot interpret is eight words it still has to guess between."""
+    flows_api, _ = api
+    text = _param(_friction_op(flows_api), "kind")["schema"]["description"]
+    assert set(flows_api.FRICTION_KIND_HELP) == set(flows_api.FRICTION_KINDS)
+    for kind in flows_api.FRICTION_KINDS:
+        assert f"`{kind}`" in text, f"{kind} is in the enum with nothing said about it"
+
+
+def test_the_route_description_reads_as_instructions_not_as_a_title(api):
+    """F-D12/F-D26: the MCP tool's description IS this docstring. `Report Friction` — the title
+    FastAPI synthesises from the function name — is what an agent was given instead."""
+    flows_api, _ = api
+    op = _friction_op(flows_api)
+    body = op.get("description") or ""
+    assert len(body) > 400, "the docstring is the tool description; a title is not instructions"
+    assert body.strip().lower() != (op.get("summary") or "").strip().lower()
+    for cue in ("what_i_tried", "what_happened", "session", "blocker", "missing-tool"):
+        assert cue in body, f"an agent reading this is not told about {cue}"
+
+
+def test_every_flows_tool_the_manifest_publishes_says_more_than_its_own_name(api):
+    """The defect CLASS, not the instance: any route in `mcp.tools.v1.json` with no docstring
+    publishes an MCP tool described by nothing but its own title."""
+    import json as _json
+    import pathlib
+
+    flows_api, _ = api
+    manifest = _json.loads(
+        (pathlib.Path(__file__).resolve().parents[1] / "mcp.tools.v1.json").read_text())
+    spec = flows_api.app.openapi()
+    thin = []
+    for tool in manifest["tools"]:
+        route = tool["route"]
+        op = spec["paths"][route["path"]][route["method"].lower()]
+        body = (op.get("description") or "").strip()
+        if len(body) < 120:
+            thin.append((tool["name"], op.get("summary"), len(body)))
+    assert not thin, f"tools described by little more than their own title: {thin}"
 
 
 def test_the_bare_operator_key_with_no_stamped_identity_is_refused(api):
