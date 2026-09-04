@@ -63,7 +63,10 @@ services:
     ports:
       - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18101}:8080"
     volumes:
-      - ./keycloak:/opt/keycloak/data/import:ro
+      # Mount the realm FILE, not the directory: ./keycloak also holds themes/, and Keycloak scans
+      # its import directory — keeping the theme tree out of it avoids surprising the importer.
+      - ./keycloak/realm-vexa.json:/opt/keycloak/data/import/realm-vexa.json:ro
+      - ./keycloak/themes:/opt/keycloak/themes:ro
     depends_on:
       keycloak-db:
         condition: service_healthy

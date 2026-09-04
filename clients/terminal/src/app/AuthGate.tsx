@@ -6,6 +6,14 @@
  *  restricts it to addresses containing "test"), tucked behind a toggle. Styled to match the terminal
  *  (CSS vars from globals.css); does not redesign the workbench.
  *
+ *  SSO DEPLOYS: when an OIDC provider is configured it is not offered as one choice among several —
+ *  it IS the login. The gate redirects straight into it, so the identity provider is an implementation
+ *  detail a user never has to know the name of; its own login page (themed to match) is the only screen
+ *  they see. A card with a provider button would be a pointless extra click in front of that.
+ *  The redirect is suppressed when the URL carries ?error= — NextAuth sends failures back here, and
+ *  bouncing straight out again would spin forever and bury the reason. That case falls through to the
+ *  card, which also keeps the debug login reachable as an escape hatch when SSO itself is broken.
+ *
  *  FIRST RUN: /api/auth/instance says whether an admin exists. On a fresh instance the card becomes
  *  the one-time "Set up your instance" claim screen — first sign-in becomes the admin — through
  *  whatever auth the deploy actually has: OAuth buttons when configured, otherwise the test-mode
@@ -24,6 +32,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // NextAuth returns failures to `pages.error` ("/") with ?error=. Read it once on mount: it both
+  // suppresses the SSO auto-redirect and gives the card something honest to display.
+  const [authFailed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).has("error");
+  });
 
   useEffect(() => {
     let active = true;
@@ -43,6 +57,15 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
+
+  // SSO deploys: hand straight off to the provider rather than rendering a card whose only content
+  // would be one button. Guarded on `authFailed` so a bounced sign-in lands on the card (with its
+  // reason) instead of ping-ponging back out to the provider forever.
+  useEffect(() => {
+    if (status === "out" && providers.keycloak && !authFailed) {
+      signIn("keycloak", { callbackUrl: window.location.pathname + window.location.search });
+    }
+  }, [status, providers.keycloak, authFailed]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -68,6 +91,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (status === "in") return <>{children}</>;
   if (status === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  // Hand-off to the identity provider is in flight — hold the blank ground rather than flashing a
+  // card the user is about to be redirected away from.
+  if (status === "out" && providers.keycloak && !authFailed) {
+    return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  }
 
   const hasOAuth = providers.google || providers.microsoft || providers.keycloak;
   const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
@@ -129,10 +157,17 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             <MicrosoftMark /> Continue with Microsoft
           </button>
         )}
-        {providers.keycloak && (
-          <button onClick={() => signIn("keycloak", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
-            <KeycloakMark /> Continue with Keycloak
-          </button>
+        {/* Reached only when SSO bounced back with an error. Deliberately unbranded — the identity
+            provider is an implementation detail; the user just needs a way to try again. */}
+        {providers.keycloak && authFailed && (
+          <>
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--t2)", background: "var(--dangerbg)", border: "1px solid var(--danger)", borderRadius: 8, padding: "9px 11px" }}>
+              Sign-in didn&rsquo;t complete. Try again, or contact your administrator if it keeps failing.
+            </div>
+            <button onClick={() => signIn("keycloak", { callbackUrl: "/" })} style={oauthBtn}>
+              Try signing in again
+            </button>
+          </>
         )}
 
         {hasOAuth && (
@@ -201,18 +236,6 @@ function GoogleMark() {
       <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
       <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
       <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
-    </svg>
-  );
-}
-
-/** Keycloak's brand mark — the key glyph in Keycloak blue. */
-function KeycloakMark() {
-  return (
-    <svg width={18} height={18} viewBox="0 0 24 24" style={{ flex: "none" }} aria-hidden="true">
-      <path
-        fill="#008AAA"
-        d="M9 3a7 7 0 1 0 4.9 12l.9.9 1.5-1.5 1.5 1.5-1.5 1.5 1.5 1.5L19.3 17 13.9 11.6A7 7 0 0 0 9 3zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"
-      />
     </svg>
   );
 }

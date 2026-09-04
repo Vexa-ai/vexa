@@ -2,6 +2,7 @@
   "realm": "vexa",
   "enabled": true,
   "displayName": "Vexa",
+  "loginTheme": "vexa",
   "sslRequired": "external",
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,

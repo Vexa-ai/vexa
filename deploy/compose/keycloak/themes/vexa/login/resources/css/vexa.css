@@ -1,0 +1,211 @@
+/* Vexa login theme.
+ *
+ * Tokens mirror clients/terminal/src/app/globals.css (dark). Keep them in sync: the point of this
+ * file is that the Keycloak hop and the terminal read as one product, so a drift here is a visible
+ * seam at the exact moment a user is deciding whether to trust the page with a password.
+ */
+:root {
+  --vexa-bg: #0e0e11;
+  --vexa-panel: #222329;
+  --vexa-panel2: #2b2c34;
+  --vexa-line: rgba(255, 255, 255, 0.09);
+  --vexa-line2: rgba(255, 255, 255, 0.16);
+  --vexa-t1: #ededf0;
+  --vexa-t2: #9a9aa4;
+  --vexa-t3: #65656f;
+  --vexa-accent: #d8855c;
+  --vexa-accent-bg: rgba(216, 133, 92, 0.14);
+  --vexa-on-accent: #241008;
+  --vexa-danger: #e0645e;
+  --vexa-danger-bg: rgba(224, 100, 94, 0.12);
+  --vexa-radius: 7px;
+  --vexa-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* --- page ---------------------------------------------------------------- */
+/* The stock theme paints a tiled photographic background; replace it with the terminal's flat ground. */
+html,
+body,
+body.login-pf,
+.login-pf body,
+.login-pf-page {
+  background: var(--vexa-bg) !important;
+  background-image: none !important;
+  color: var(--vexa-t1);
+  font-family: var(--vexa-font);
+}
+
+.login-pf-page {
+  padding-top: 8vh;
+}
+
+/* --- brand header -------------------------------------------------------- */
+#kc-header,
+#kc-header-wrapper {
+  color: var(--vexa-t1) !important;
+  font-family: var(--vexa-font);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-bottom: 18px;
+  text-shadow: none;
+}
+
+/* --- the card ------------------------------------------------------------ */
+.card-pf,
+.login-pf-page .card-pf,
+.pf-v5-c-card {
+  background: var(--vexa-panel) !important;
+  border: 1px solid var(--vexa-line2) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.34) !important;
+  padding: 24px !important;
+  color: var(--vexa-t1);
+}
+
+#kc-page-title,
+.pf-v5-c-title {
+  color: var(--vexa-t1) !important;
+  font-family: var(--vexa-font);
+  font-size: 15px !important;
+  font-weight: 600 !important;
+}
+
+/* --- labels + helper copy ------------------------------------------------ */
+label,
+.pf-v5-c-form__label,
+.pf-v5-c-form__label-text,
+#kc-form-options,
+.pf-v5-c-form__helper-text {
+  color: var(--vexa-t2) !important;
+  font-family: var(--vexa-font);
+  font-size: 12px !important;
+}
+
+/* --- inputs -------------------------------------------------------------- */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="number"],
+.pf-v5-c-form-control,
+.pf-v5-c-form-control > input {
+  background: var(--vexa-panel2) !important;
+  border: 1px solid var(--vexa-line2) !important;
+  border-radius: var(--vexa-radius) !important;
+  color: var(--vexa-t1) !important;
+  font-family: var(--vexa-font);
+  font-size: 13px !important;
+  padding: 9px 10px !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+input::placeholder {
+  color: var(--vexa-t3) !important;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="email"]:focus,
+.pf-v5-c-form-control:focus-within {
+  border-color: var(--vexa-accent) !important;
+  box-shadow: 0 0 0 2px var(--vexa-accent-bg) !important;
+}
+
+/* PatternFly draws its own focus underline via a pseudo-element; silence it so the border above
+   is the only focus affordance and the field does not gain a second, differently-coloured rule. */
+.pf-v5-c-form-control::after,
+.pf-v5-c-form-control::before {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* --- buttons ------------------------------------------------------------- */
+input[type="submit"],
+button[type="submit"],
+.pf-v5-c-button.pf-m-primary,
+#kc-login {
+  background: var(--vexa-accent) !important;
+  border: none !important;
+  border-radius: var(--vexa-radius) !important;
+  color: var(--vexa-on-accent) !important;
+  font-family: var(--vexa-font);
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  padding: 10px !important;
+  width: 100%;
+  cursor: pointer;
+}
+
+input[type="submit"]:hover,
+button[type="submit"]:hover,
+.pf-v5-c-button.pf-m-primary:hover {
+  filter: brightness(1.07);
+}
+
+.pf-v5-c-button.pf-m-secondary,
+.pf-v5-c-button.pf-m-link {
+  background: transparent !important;
+  border: 1px solid var(--vexa-line2) !important;
+  border-radius: var(--vexa-radius) !important;
+  color: var(--vexa-t1) !important;
+  font-family: var(--vexa-font);
+}
+
+/* --- links --------------------------------------------------------------- */
+a,
+#kc-registration a,
+#kc-registration-container a,
+.pf-v5-c-button.pf-m-link.pf-m-inline {
+  color: var(--vexa-accent) !important;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* --- alerts -------------------------------------------------------------- */
+.pf-v5-c-alert,
+.alert-error,
+.pf-v5-c-alert.pf-m-danger {
+  background: var(--vexa-danger-bg) !important;
+  border: 1px solid var(--vexa-danger) !important;
+  border-radius: var(--vexa-radius) !important;
+  color: var(--vexa-t1) !important;
+  font-size: 12px !important;
+}
+
+.pf-v5-c-alert.pf-m-success {
+  background: var(--vexa-accent-bg) !important;
+  border: 1px solid var(--vexa-accent) !important;
+  color: var(--vexa-t1) !important;
+}
+
+.pf-v5-c-alert__title,
+.kc-feedback-text {
+  color: var(--vexa-t1) !important;
+}
+
+/* --- footer / misc ------------------------------------------------------- */
+#kc-info,
+#kc-info-wrapper,
+#kc-content-wrapper .instruction,
+.pf-v5-c-login__main-footer-band {
+  color: var(--vexa-t2) !important;
+  font-family: var(--vexa-font);
+  font-size: 12px !important;
+}
+
+/* The TOTP setup page renders a QR plus a manual key; keep both legible on the dark panel. */
+#kc-totp-secret-qr-code {
+  background: #ffffff;
+  border-radius: var(--vexa-radius);
+  padding: 8px;
+}
+
+#kc-totp-secret-key {
+  color: var(--vexa-t1) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
