@@ -1015,6 +1015,10 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     seed.mkdir()
     (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    # A scheme-less path is refused by default (it is a location on the SERVER, not a repository a
+    # caller may name — see control_plane/repo_ref). A self-hoster opts local roots back in; so does
+    # this fixture, which clones from a local bare repo to stay off the network.
+    monkeypatch.setenv("VEXA_ALLOW_LOCAL_REPO_ROOT", str(tmp_path))
 
     origin = tmp_path / "origin"
     origin.mkdir()
@@ -1047,6 +1051,46 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
 
 
+def test_workspace_swap_refuses_a_repo_this_server_alone_could_fetch(tmp_path, monkeypatch):
+    """``repo`` is an instruction to THIS SERVER to go and fetch something, so the route settles the
+    host and the transport before anything reaches git (see control_plane/repo_ref).
+
+    The assertion that matters is the 400 AND that no git process ran: ``subprocess.run`` is replaced
+    with a bomb for the duration, so a gate that fired after git started would fail the test loudly
+    instead of passing on the status code."""
+    import subprocess as _sp
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    monkeypatch.delenv("VEXA_ALLOW_LOCAL_REPO_ROOT", raising=False)
+
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(tmp_path / "ws")),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: pytest.fail(f"git started despite the gate: {a!r}"))
+    monkeypatch.setattr(_sp, "Popen", lambda *a, **k: pytest.fail(f"git started despite the gate: {a!r}"))
+
+    refused = [
+        "http://169.254.169.254/latest/meta-data",   # the cloud metadata service
+        "http://admin-api:8001/owner/repo.git",      # a deployment neighbour (a bare label)
+        "http://127.0.0.1:8000/owner/repo.git",
+        "https://[::ffff:127.0.0.1]/owner/repo.git",
+        "ext::sh -c whoami",                         # a git URL that runs a command
+        "file:///etc",                               # …and one that reads this host's disk
+        "git://github.com/owner/repo.git",
+        str(tmp_path / "origin"),                    # a path on the server is not a caller's to name
+    ]
+    for route in ("/api/workspace/swap", "/api/workspace/activate"):
+        for repo in refused:
+            r = c.post(route, headers=h, json={"repo": repo})
+            assert r.status_code == 400, f"{route} accepted {repo!r}: {r.status_code} {r.text}"
+
+
 def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):
     """POST /api/workspace/activate ADDS a repo to the active set without parking the private baseline;
     GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline can be switched off."""
@@ -1055,6 +1099,7 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
 
     seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    monkeypatch.setenv("VEXA_ALLOW_LOCAL_REPO_ROOT", str(tmp_path))   # local clone source (see above)
     origin = tmp_path / "origin"; origin.mkdir()
     run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
     run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
