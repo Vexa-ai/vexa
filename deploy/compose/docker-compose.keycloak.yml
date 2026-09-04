@@ -61,6 +61,11 @@ services:
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-vexa-terminal}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-dev-terminal-secret}
       - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-http://localhost:18101/realms/vexa}
+      # NextAuth needs an absolute origin to build the callback URL; the base .env ships this
+      # EMPTY, and an empty value makes NextAuth throw ERR_INVALID_URL — which 500s
+      # /api/auth/providers and silently hides EVERY sign-in button (Google/Microsoft too, not
+      # just Keycloak). Default it here so enabling this overlay is never a silent no-op.
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:13000}
 
 volumes:
   keycloak-db-data:
