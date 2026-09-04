@@ -68,7 +68,9 @@ def test_the_route_carries_the_whole_denial_body():
         json={"meeting_url": MEETING_URL},
     )
     assert r.status_code == 403
-    assert r.json()["detail"]["detail"] == DENIAL
+    # ONE envelope, not two: upstream's `{"detail": …}` is unwrapped before it is re-raised, so the
+    # depth does not grow by a layer per hop.
+    assert r.json()["detail"] == DENIAL
 
 
 def test_the_route_adds_nothing_when_the_decider_said_nothing():
@@ -79,7 +81,7 @@ def test_the_route_adds_nothing_when_the_decider_said_nothing():
         headers={"Authorization": f"Bearer {API_KEY}"},
         json={"meeting_url": MEETING_URL},
     )
-    body = r.json()["detail"]["detail"]
+    body = r.json()["detail"]
     assert body == bare
     assert "message" not in body and "action_url" not in body
 
