@@ -34,6 +34,32 @@ So: adding a file is how a situation becomes person-facing, and deleting one is 
 are commits here, and neither is a deploy. The count of silent reactions comes back as `quiet`, so
 an operator can always tell *nothing is happening* from *behavior is saying nothing about it*.
 
+## Front-matter: `notice: true`
+
+A file may open with a fenced block of `key: value` lines. There is one key:
+
+```markdown
+---
+notice: true
+---
+Whatever a person's agent should keep in front of it.
+```
+
+**A notice is something that stays TRUE BETWEEN calls, not something that just happened.** An
+ordinary item is read when an agent asks what is waiting. A notice is read alongside whatever the
+agent was already doing: `GET /queue/notices` returns just these files' words, it is small enough
+to ask on every call, and the MCP edge carries the answer out on the results of the meeting tools
+(`core/meetings/services/mcp/src/vexa_mcp/notices.py`). So the same sentence reaches an agent that
+never asked — which is the point, and also the reason to flag almost nothing.
+
+Everything else stays as it is: a flagged file is still an ordinary item on `GET /queue/waiting`
+(now carrying `notice: true`), the lookup is unchanged, and a file with no front-matter — which is
+every file written before this existed — declares nothing and behaves exactly as it did.
+
+Two behaviours worth knowing: **a value that is not `true`/`yes`/`on`/`1` means no** (a flag nobody
+can read is off, never guessed on), and **an unparseable fence leaves the words intact and the flag
+off** — the failure of a flag must never be the failure of a sentence a person was owed.
+
 ## What is deliberately not here
 
 There is **no first-run friction ask** (ruling 8/9, 2026-09-03): *a flow that fires once per person
