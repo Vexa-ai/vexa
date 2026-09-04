@@ -70,7 +70,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query  # noqa: E402
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
@@ -685,20 +685,29 @@ FRICTION_KINDS = ("missing-tool", "refusal", "no-page", "wrong-workspace", "unfu
                   "ux", "other")
 FRICTION_TEXT_MAX = 900
 
-# LENIENT, NEVER LOSSY (F-D26, prod 2026-09-04). This route used to answer 400 with
-# `{"kind": "...", "expected": [...]}` for any word outside `FRICTION_KINDS`. In twenty minutes of
-# real use it threw away TWELVE reports because the agent filing them wrote "missing", "broke" and
-# "confusing" instead of "missing-tool", "error" and "ux" — the tool schema had told it nothing, so
-# it guessed, and the sink whose entire job is to catch what did not work refused the catch on a
-# spelling. A vocabulary mismatch is not a malformed report: the words a person types are the most
-# faithful part of it. So an unrecognised `kind` is now STORED as `other` with the raw word kept in
-# `kind_raw`, an unrecognised `severity` as the default with the raw word kept in `severity_raw`,
-# and the response SAYS which happened so the caller can correct itself next time. The only 400s
-# left are for a report that carries no content to store at all (no session, no text).
+# CATCH ALL SIGNAL — NOTHING HERE IS A TAXONOMY (F-D26, prod 2026-09-04). This route used to answer
+# 400 with `{"kind": "...", "expected": [...]}` for any word outside `FRICTION_KINDS`. In twenty
+# minutes of real use it threw away TWELVE reports, because the agent filing them wrote "missing",
+# "broke" and "confusing" instead of "missing-tool", "error" and "ux" — the tool schema had told it
+# nothing, so it guessed, and the sink whose whole job is to catch what did not work refused the
+# catch over a spelling.
 #
-# No migration: a report lives in `reaction.subject_refs`, which is a JSON document — `kind_raw`
-# and `severity_raw` are new keys inside it, not new columns, so the ten tables in `schema.sql` are
-# untouched and an old row simply has no such key.
+# FOUNDER RULING, 2026-09-04 10:2xZ, which is the shape this route now has: *"we want to catch all
+# signal, does not make sense being strict about it, we want rich data, does not have to be too
+# structured."* So `kind` and `severity` are STORED AS SENT — free text, no canonicalisation, no
+# mapping to `other`, no second field holding the "raw" word, because there is no cooked one. Any
+# argument this route does not name is KEPT too, under `extra`. The eight kinds below survive only
+# as SUGGESTIONS in the tool description; grouping happens on the data later, by whoever reads it,
+# never at the door. The only refusals left are for a report with no content to store at all — no
+# session, or no text — and those are about the report existing, not about its shape.
+#
+# No migration: a report lives in `reaction.subject_refs`, which is a JSON document, so every one of
+# these is a key inside it and the ten tables in `schema.sql` are untouched.
+#
+# EXTRAS ARE NAMESPACED, and that is not tidiness. `flows_timeline.model.concerns` decides whose
+# report this is by reading `uid`/`subject`/`owner`/`organizer`/… straight off the refs, so merging
+# caller-supplied keys into the top level would let a reporter file a report that reads as somebody
+# else's. Under `extra` they are data; at the top level they would be authority.
 FRICTION_KIND_HELP = {
     "missing-tool": "there was no tool for what was asked (\"summarise this meeting\" and nothing "
                     "summarises)",
@@ -712,14 +721,20 @@ FRICTION_KIND_HELP = {
     "other": "none of the above, or you are not sure — say it in `what_happened` and we will "
              "classify it",
 }
-FRICTION_KIND_DESC = ("What kind of friction this was. Pick the closest of: "
+FRICTION_KIND_DESC = ("What kind of friction this was — a SUGGESTION, not a list you must pick "
+                      "from. Words that group well with others: "
                       + "; ".join(f"`{k}` — {v}" for k, v in FRICTION_KIND_HELP.items())
-                      + ". If none fits, send your own word: it is stored as `other` with your "
-                        "word kept verbatim, never refused.")
-FRICTION_SEVERITY_DESC = ("How much it hurt: `blocker` (could not continue), `annoyance` (worked "
-                          "around it), `papercut` (small and repeated), `idea` (nothing broke, "
-                          "this would just be better). An unrecognised word is stored as "
-                          "`annoyance` with your word kept, never refused.")
+                      + ". If none fits, send your own word; it is stored exactly as you sent it "
+                        "and never refused.")
+FRICTION_SEVERITY_DESC = ("How much it hurt. Words that group well: `blocker` (could not "
+                          "continue), `annoyance` (worked around it), `papercut` (small and "
+                          "repeated), `idea` (nothing broke, this would just be better). Your own "
+                          "word is stored as you sent it and never refused.")
+#: Everything this route names for itself. Any OTHER query argument is a caller's own field and is
+#: kept under `extra` rather than dropped — "rich data, does not have to be too structured".
+FRICTION_OWN_ARGS = frozenset({"session", "what_i_tried", "what_happened", "severity", "meeting_id",
+                               "tool", "deployment", "worker_image", "kind"})
+FRICTION_EXTRA_MAX = 40
 
 
 def _friction_id() -> str:
@@ -728,20 +743,22 @@ def _friction_id() -> str:
     return f"fr_{secrets.token_hex(8)}"
 
 
-def _friction_vocab(value: str, allowed: tuple, fallback: str) -> tuple:
-    """`(canonical, raw)` — the lenient read of one vocabulary field.
+def _friction_extra(params) -> dict:
+    """Every argument the caller sent that this route does not name, kept as they sent it.
 
-    `raw` is "" when the caller used a word we know (nothing to preserve) and the caller's own word
-    when they did not. Empty in, empty out: an omitted field is not a vocabulary error and must not
-    be invented into one.
+    Capped in count and length so one call cannot write an unbounded document into a refs blob, and
+    the cap DROPS THE OVERFLOW SILENTLY rather than refusing the call — losing the tail of an
+    over-large report is bad, losing the whole report is the defect this route exists to not have.
     """
-    word = (value or "").strip()
-    if not word:
-        return "", ""
-    lowered = word.lower()
-    if lowered in allowed:
-        return lowered, ""
-    return fallback, word[:200]
+    out: dict = {}
+    for key in sorted(params.keys()):
+        if key in FRICTION_OWN_ARGS or len(out) >= FRICTION_EXTRA_MAX:
+            continue
+        value = params.get(key)
+        text = (value if isinstance(value, str) else str(value)).strip()
+        if text:
+            out[key[:100]] = text[:FRICTION_TEXT_MAX]
+    return out
 
 
 @app.post("/friction", status_code=201, summary="Report friction — tell Vexa what did not work")
@@ -755,13 +772,14 @@ def report_friction(
         "What actually happened instead — the error, the wrong answer, the missing page. "
         "Required.")),
     severity: str = Query("annoyance", description=FRICTION_SEVERITY_DESC,
-                          json_schema_extra={"enum": list(FRICTION_SEVERITIES)}),
+                          json_schema_extra={"examples": list(FRICTION_SEVERITIES)}),
     meeting_id: str = Query("", description="The meeting this happened on, if it was about one."),
     tool: str = Query("", description="The tool you called when it went wrong, if it was one."),
     deployment: str = Query("", description="Which deployment you were talking to, if you know."),
     worker_image: str = Query("", description="The worker image/version, if you know it."),
     kind: str = Query("", description=FRICTION_KIND_DESC,
-                      json_schema_extra={"enum": list(FRICTION_KINDS)}),
+                      json_schema_extra={"examples": list(FRICTION_KINDS)}),
+    request: Request = None,  # noqa: RUF013 — FastAPI injects it; the default keeps the signature
     x_user_id: str = Header(default=""),
     caller: Caller = Depends(subject_or_operator),
 ):
@@ -777,16 +795,18 @@ def report_friction(
     (what happened instead). Both are required; so is `session`, the chat or meeting session you
     are in, because a report nothing can be tied back to is the exact gap this exists to close.
 
-    `kind` — pick the closest: `missing-tool` (no tool exists for what was asked), `refusal` (a
-    tool or policy said no), `no-page` (a link or page that should exist 404'd), `wrong-workspace`
-    (the answer came from the wrong account or tenant), `unfulfilled` (a tool reported success and
-    the thing did not actually happen), `error` (a 500, a crash, a timeout), `ux` (it worked but
-    was confusing or awkward), `other` (anything else). `severity` — `blocker`, `annoyance`,
-    `papercut` or `idea`.
+    `kind` is a HINT, NOT A MENU. These words group well with other people's reports:
+    `missing-tool` (no tool exists for what was asked), `refusal` (a tool or policy said no),
+    `no-page` (a link or page that should exist 404'd), `wrong-workspace` (the answer came from the
+    wrong account or tenant), `unfulfilled` (a tool reported success and the thing did not actually
+    happen), `error` (a 500, a crash, a timeout), `ux` (it worked but was confusing or awkward),
+    `other`. `severity` likewise: `blocker`, `annoyance`, `papercut`, `idea`. **If none of them fits
+    what you saw, use your own word** — both fields are stored exactly as you send them, and no
+    word you can choose will cost you the report. Never re-file because a label felt wrong.
 
-    NEITHER VOCABULARY CAN COST YOU THE REPORT. Send a word we do not know and it is stored as
-    `other` (or, for severity, `annoyance`) with your own word kept verbatim beside it, and the
-    reply tells you so. Do not re-file a report because a word was wrong; it is already in.
+    ANYTHING ELSE YOU KNOW, SEND IT. Arguments this route does not name are kept with the report
+    rather than dropped — a stack frame, a request id, a model name, a count. Richer is better;
+    structure is somebody else's problem later.
 
     The subject is your own credential, same as every other person-scoped route here
     (`reactions_list`, `timeline`); an operator with no bearer may stamp `X-User-Id`, same as
@@ -810,20 +830,22 @@ def report_friction(
     if not tried or not happened:
         raise HTTPException(status_code=400, detail=(
             "what_i_tried and what_happened are both required — half-formed is fine, empty is not"))
-    # Vocabulary is GUIDANCE, not a gate (F-D26). Both fields fall back to a canonical value and
-    # keep the caller's own word; neither can turn a filed report into a 400.
-    sev, sev_raw = _friction_vocab(severity, FRICTION_SEVERITIES, "annoyance")
-    sev = sev or "annoyance"
-    knd, knd_raw = _friction_vocab(kind, FRICTION_KINDS, "other")
+    # AS SENT (founder ruling, F-D26). No canonicalisation, no lowercasing, no mapping into a
+    # bucket: the word the reporter chose IS the datum, and grouping it with other reports is a
+    # question for whoever reads the sink, later, with all of them in front of them.
+    sev = severity.strip()[:200] or "annoyance"
+    knd = kind.strip()[:200]
     fid = _friction_id()
     refs = {"uid": subj, "session": sess[:128], "friction_id": fid,
            "what_i_tried": tried, "what_happened": happened, "severity": sev}
-    for key, val in (("kind", knd), ("kind_raw", knd_raw), ("severity_raw", sev_raw),
-                     ("meeting_id", meeting_id), ("tool", tool),
+    for key, val in (("kind", knd), ("meeting_id", meeting_id), ("tool", tool),
                      ("deployment", deployment), ("worker_image", worker_image)):
         v = val.strip()[:200] if isinstance(val, str) else ""
         if v:
             refs[key] = v
+    extra = _friction_extra(request.query_params) if request is not None else {}
+    if extra:
+        refs["extra"] = extra
     vocab.refresh_from_db(db)          # the friction_log flow may have been (re)submitted since boot
     # LITERAL, not `production.FRICTION_REPORTED.name` — `tests/test_queue_waiting.py::_produced()`
     # proves `publishes_events` against what this domain's source actually writes to the wire by
@@ -832,14 +854,12 @@ def report_friction(
     assert production.FRICTION_REPORTED.name == "friction.reported"
     admit(db, vocab, clock, source_event_id=f"friction-{fid}",
          event_type="friction.reported", subject_refs=refs)
-    # The reply STATES what was stored, including any word we could not place. A caller that sent
-    # "broke" learns it landed as `other` — and learns it after the report is safely in, not
-    # instead of filing it.
+    # The reply STATES what was stored, so a caller can see its own words came back unchanged and
+    # can see which of its extra fields were kept — an accepted report that quietly dropped half of
+    # itself is the same class of lie as a refused one.
     out = {"id": fid, "recorded": True, "kind": knd, "severity": sev}
-    if knd_raw:
-        out["kind_raw"] = knd_raw
-    if sev_raw:
-        out["severity_raw"] = sev_raw
+    if extra:
+        out["extra"] = sorted(extra)
     return out
 
 
