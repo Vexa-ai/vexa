@@ -981,37 +981,53 @@ def mcp_tools_manifest():
 import flows_queue as _flows_queue  # noqa: E402
 
 
-@app.get("/queue/waiting")
+# THE ONLY TEXT AN AGENT READS BEFORE DECIDING TO CALL THIS, and it says WHEN — which is the one
+# thing the route's own mechanics could never say. Ten ordinary sessions with the tools loaded
+# never called `whats_waiting`: they were served this route's implementation notes, and a tool
+# described by its implementation reads as something for somebody else. Header precedence and
+# status codes answer "how do I call it correctly", a question an agent that never calls it does
+# not have.
+#
+# IT IS A `summary`, AND THE ROUTE CARRIES NO DOCSTRING ON PURPOSE. The MCP edge derives a tool's
+# description from this route's OpenAPI operation, preferring the docstring and falling back to
+# the summary (`core/meetings/services/mcp/src/vexa_mcp/bind.py::_describe`). A docstring here
+# would therefore be served to every agent, in front of every call, forever. The maintainer's
+# half lives in the comment block below instead, where no agent pays for it by the token.
+WHATS_WAITING_SUMMARY = (
+    "What your person's Vexa needs right now — call it at the start of a session, after "
+    "connecting, and whenever they mention a meeting; each item's `say` is what to tell them. "
+    "Returns the queue for the authenticated caller.")
+
+# ── how this route resolves its subject (maintainer's half; deliberately not agent-facing) ─────
+#
+# THE SUBJECT IS THE AUTHENTICATED CALLER'S, and there are two ways to be one.
+#
+# A PERSON authenticates with their own Vexa credential and their subject is resolved from it
+# (issue #1468). Nothing they send can move it: a `subject` argument naming anyone else is 403,
+# and an `X-User-Id` header is ignored outright. That header is a string a caller can type, and
+# it is only ever evidence because the OPERATOR key gates it — a service vouching for a person it
+# resolved. A verified credential is stronger evidence than any header, so it wins.
+#
+# THE OPERATOR reads one person's queue on their behalf, and keeps exactly the behaviour this
+# route shipped with: `X-User-Id` is the gateway's answer and outranks `?subject=`, and
+# `?subject=` is the unstamped console read. Neither ever answers with the instance — no subject
+# at all is a 400, because this route answers for ONE person or for nobody.
+#
+# The distinction matters because this route is NOT always behind the gateway: reached through
+# the MCP edge it is addressed directly, and that edge stamps no `X-User-Id` at all — it forwards
+# the caller's own credential, which is the whole reason a person's credential has to open the
+# door here.
+#
+# Not opened by `VEXA_FLOWS_TIMELINE_KEY`: that key is documented as opening the timeline and
+# nothing else, and quietly widening a key's reach is how a narrow credential stops being narrow.
+#
+# The answer is DATA plus behavior's words: every sentence a person hears is resolved from
+# `behavior/queue/`, read hot, never from this body. See `flows_queue` for why silence there is
+# the filter rather than a keyword list here.
+@app.get("/queue/waiting", summary=WHATS_WAITING_SUMMARY)
 def queue_waiting(subject: str = "", limit: int = 50,
                   x_user_id: str = Header(default=""),
                   caller: Caller = Depends(subject_or_operator)):
-    """WHAT IS WAITING FOR THIS PERSON — pending reactions, with the flow that produced each.
-
-    THE SUBJECT IS THE AUTHENTICATED CALLER'S, and there are two ways to be one.
-
-    A PERSON authenticates with their own Vexa credential and their subject is resolved from it
-    (issue #1468). Nothing they send can move it: a `subject` argument naming anyone else is 403,
-    and an `X-User-Id` header is ignored outright. That header is a string a caller can type, and
-    it is only ever evidence because the OPERATOR key gates it — a service vouching for a person it
-    resolved. A verified credential is stronger evidence than any header, so it wins.
-
-    THE OPERATOR reads one person's queue on their behalf, and keeps exactly the behaviour this
-    route shipped with: `X-User-Id` is the gateway's answer and outranks `?subject=`, and
-    `?subject=` is the unstamped console read. Neither ever answers with the instance — no subject
-    at all is a 400, because this route answers for ONE person or for nobody.
-
-    The distinction matters because this route is NOT always behind the gateway: reached through
-    the MCP edge it is addressed directly, and that edge stamps no `X-User-Id` at all — it forwards
-    the caller's own credential, which is the whole reason a person's credential has to open the
-    door here.
-
-    Not opened by `VEXA_FLOWS_TIMELINE_KEY`: that key is documented as opening the timeline and
-    nothing else, and quietly widening a key's reach is how a narrow credential stops being narrow.
-
-    The answer is DATA plus behavior's words: every sentence a person hears is resolved from
-    `behavior/queue/`, read hot, never from this body. See `flows_queue` for why silence there is
-    the filter rather than a keyword list here.
-    """
     who = scoped_subject(caller, subject)
     if caller.is_admin:
         who = (x_user_id or "").strip() or who
