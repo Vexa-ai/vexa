@@ -190,25 +190,27 @@ def contained_local_path(value: str) -> Path:
       wherever it likes and the lexical pass cannot see through it.
 
     Only the resolved path is returned, so no caller can reach past the check by re-using the raw
-    string. The guard is written as a plain ``if`` that DOMINATES the filesystem call rather than an
-    ``any(...)`` over a generator: the containment is the same either way, but only this shape says
-    so in the control flow, where a reader — or a static analyser — can see it."""
+    string.
+
+    Both guards are a LONE ``startswith`` that dominates every use of the value they guard. The
+    obvious ``candidate == root or candidate.startswith(root + os.sep)`` says the same thing to a
+    reader and something weaker to a checker — a true disjunction proves neither half — so the
+    trailing separator carries the "or the root itself" case instead, and the containment is one
+    condition."""
     roots = allowed_local_roots()
     if not roots:
         raise RepoRefError(LOCAL_SENTENCE, kind="local")
 
-    candidate = os.path.normpath(os.path.abspath(value.strip()))
-    for prefix in (os.path.normpath(os.path.abspath(str(r))) for r in roots):
-        if candidate == prefix or candidate.startswith(prefix + os.sep):
-            # Lexically contained. ONLY here does the value touch the filesystem, and the
-            # symlink-resolved result is checked against the same root before it is returned.
-            try:
-                resolved = Path(candidate).resolve(strict=False)
-                root = Path(prefix).resolve(strict=False)
-            except OSError:
-                continue
-            if resolved == root or resolved.is_relative_to(root):
-                return resolved
+    # Trailing separator on both sides: `<root>/` matches the root itself and everything under it,
+    # and `<root>evil/` matches neither. `Path()` discards it again.
+    candidate = os.path.normpath(os.path.abspath(value.strip())) + os.sep
+    for root in (os.path.normpath(os.path.abspath(str(r))) for r in roots):
+        if candidate.startswith(root + os.sep):
+            # Lexically contained. Now the same question of the SYMLINK-RESOLVED path, which is a
+            # different one: a link planted inside the root points wherever it likes.
+            real = os.path.realpath(candidate) + os.sep
+            if real.startswith(os.path.realpath(root) + os.sep):
+                return Path(real)
     raise RepoRefError(LOCAL_SENTENCE, kind="local")
 
 
