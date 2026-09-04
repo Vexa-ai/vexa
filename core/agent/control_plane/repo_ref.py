@@ -190,24 +190,26 @@ def contained_local_path(value: str) -> Path:
       wherever it likes and the lexical pass cannot see through it.
 
     Only the resolved path is returned, so no caller can reach past the check by re-using the raw
-    string."""
+    string. The guard is written as a plain ``if`` that DOMINATES the filesystem call rather than an
+    ``any(...)`` over a generator: the containment is the same either way, but only this shape says
+    so in the control flow, where a reader — or a static analyser — can see it."""
     roots = allowed_local_roots()
     if not roots:
         raise RepoRefError(LOCAL_SENTENCE, kind="local")
 
-    prefixes = [os.path.normpath(os.path.abspath(str(r))) for r in roots]
     candidate = os.path.normpath(os.path.abspath(value.strip()))
-    if not any(candidate == p or candidate.startswith(p + os.sep) for p in prefixes):
-        raise RepoRefError(LOCAL_SENTENCE, kind="local")
-
-    try:
-        resolved = Path(candidate).resolve(strict=False)
-        real_roots = [Path(p).resolve(strict=False) for p in prefixes]
-    except OSError:
-        raise RepoRefError(LOCAL_SENTENCE, kind="local") from None
-    if not any(resolved == r or resolved.is_relative_to(r) for r in real_roots):
-        raise RepoRefError(LOCAL_SENTENCE, kind="local")
-    return resolved
+    for prefix in (os.path.normpath(os.path.abspath(str(r))) for r in roots):
+        if candidate == prefix or candidate.startswith(prefix + os.sep):
+            # Lexically contained. ONLY here does the value touch the filesystem, and the
+            # symlink-resolved result is checked against the same root before it is returned.
+            try:
+                resolved = Path(candidate).resolve(strict=False)
+                root = Path(prefix).resolve(strict=False)
+            except OSError:
+                continue
+            if resolved == root or resolved.is_relative_to(root):
+                return resolved
+    raise RepoRefError(LOCAL_SENTENCE, kind="local")
 
 
 def assert_allowed_scheme(raw: Optional[str]) -> None:
