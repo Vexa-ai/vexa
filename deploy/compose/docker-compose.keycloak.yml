@@ -31,6 +31,20 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # Local mail CATCHER, not a mail sender: Keycloak posts verification / password-reset mail here
+  # and it is trapped in a web inbox instead of reaching a real address. That makes the signup
+  # flow fully exercisable offline. PRODUCTION: delete this service and point the realm's
+  # smtpServer at your real relay (see keycloak/README.md).
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      - MP_SMTP_AUTH_ACCEPT_ANY=1
+      - MP_SMTP_AUTH_ALLOW_INSECURE=1
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-18025}:8025"
+    networks: [vexa]
+    restart: unless-stopped
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     command: ["start-dev", "--import-realm"]
@@ -53,6 +67,8 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     networks: [vexa]
     restart: unless-stopped
 

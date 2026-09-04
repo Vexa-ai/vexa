@@ -19,6 +19,41 @@ docker compose -p vexa-v012 -f docker-compose.yml -f docker-compose.keycloak.yml
 Then open the terminal and press **Continue with Keycloak**. The bundled realm ships one dev user:
 `demo` / `demo`. Keycloak's own admin console is on `http://localhost:18101` (`admin` / `admin`).
 
+## Registration, email verification and 2FA
+
+Self-registration is **on**, and the realm is configured so it is safe:
+
+| Setting | Value | Why |
+|---|---|---|
+| `registrationAllowed` | true | visitors can create an account |
+| `verifyEmail` | true | the address must be proven before the account works |
+| `registrationEmailAsUsername` | true | one identity, keyed by the address Vexa also keys on |
+| `CONFIGURE_TOTP` (default action) | on | every NEW user sets up an authenticator app at first login |
+| `bruteForceProtected` | true | lock out password guessing |
+
+`verifyEmail` and `registrationAllowed` **must move together**. Terminal sign-in refuses an identity
+whose `email_verified` is not `true`, so registration WITHOUT verification would let people sign up
+and then be silently rejected at Vexa's door — and, worse, would be the exact hole that lets someone
+register a colleague's address to reach their Vexa account.
+
+`mailpit` is a mail **catcher**: Keycloak really sends, but the message is trapped in a local web
+inbox at <http://localhost:18025> instead of reaching anyone. Register a user, open that inbox, click
+the verification link. Nothing is delivered to real addresses.
+
+TOTP is a second factor at login; it is *not* a substitute for email verification. Only the address
+proof tells us the person owns the identity Vexa keys accounts by. The bundled `demo` user is
+pre-verified and carries no required actions, so it stays a one-click login for testing.
+
+### ⚠️ Open registration meets first-run admin
+
+On an instance with no admin yet, **the first successful sign-in claims the admin role**
+(`instanceHasAdmin` / `findOrCreateUserToken` in `clients/terminal/src/app/api/auth/adminApi.ts`).
+A Keycloak login also auto-creates the matching Vexa user, so with registration open the chain is:
+*stranger registers → signs in first → owns your instance.*
+
+Set **`VEXA_ADMIN_EMAILS`** before exposing an instance. A configured allowlist means the instance
+already has admins, which switches the claim machinery off entirely.
+
 ## How an identity becomes a Vexa user
 
 Keycloak verifies the person and returns their email. The terminal then reuses the SAME
@@ -44,6 +79,9 @@ The overlay is shaped for production but ships local defaults. Change all of it:
 | Redirect URIs | `localhost:3000` / `localhost:13000` | Your exact callback URLs — keep them exact, never `*` |
 | Server mode | `start-dev` | `start` behind TLS (set `KC_PROXY_HEADERS=xforwarded` when proxied) |
 | Users | bundled `demo` user | Your own users, or federate to an upstream IdP (LDAP, or your university/company SSO) |
+| Mail | `mailpit` catcher | **Delete the mailpit service** and point `smtpServer` at a real relay with credentials — otherwise verification mail silently goes nowhere and nobody can finish signing up |
+| Admin | first sign-in claims it | Set `VEXA_ADMIN_EMAILS` **before** exposing the instance |
+| Registration | open | Decide deliberately: keep it open, restrict to invite-only, or federate and turn it off |
 
 Keycloak runs on its **own** postgres (`keycloak-db`), deliberately not the stack's: the identity
 store stays blast-radius isolated from meeting data, and enabling or removing this overlay never
