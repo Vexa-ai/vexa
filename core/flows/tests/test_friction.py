@@ -400,8 +400,19 @@ def test_the_route_description_reads_as_instructions_not_as_a_title(api):
 
 
 def test_every_flows_tool_the_manifest_publishes_says_more_than_its_own_name(api):
-    """The defect CLASS, not the instance: any route in `mcp.tools.v1.json` with no docstring
-    publishes an MCP tool described by nothing but its own title."""
+    """The defect CLASS, not the instance: any route in `mcp.tools.v1.json` that publishes an MCP
+    tool described by nothing but its own title.
+
+    MEASURED ON THE TEXT THE AGENT RECEIVES, not on the docstring. This used to read
+    `op["description"]` alone, which silently asserted that a route's agent-facing words must be
+    its DOCSTRING — and `whats_waiting` is the case that proves they must not be: an agent needs
+    to be told WHEN to call a tool, and the docstring holds header precedence, operator keys and
+    status codes, which answer a question an agent that never calls it does not have. So that
+    route now carries its words in `summary` and no docstring at all.
+
+    The edge composes exactly this way (`vexa_mcp/bind.py::_describe`): the description leads, and
+    the summary is used when there is no description. A gate that reads one field would go on
+    passing while the other one shipped a two-word title."""
     import json as _json
     import pathlib
 
@@ -413,8 +424,11 @@ def test_every_flows_tool_the_manifest_publishes_says_more_than_its_own_name(api
     for tool in manifest["tools"]:
         route = tool["route"]
         op = spec["paths"][route["path"]][route["method"].lower()]
-        body = (op.get("description") or "").strip()
-        if len(body) < 120:
+        # What `_describe` would hand the agent, by the same rule the edge uses.
+        body = (op.get("description") or "").strip() or (op.get("summary") or "").strip()
+        # A FastAPI-synthesised summary IS the function's own title — never instructions.
+        synthesised = route["path"].strip("/").replace("/", " ").replace("_", " ").title()
+        if len(body) < 120 or body.title() == synthesised:
             thin.append((tool["name"], op.get("summary"), len(body)))
     assert not thin, f"tools described by little more than their own title: {thin}"
 

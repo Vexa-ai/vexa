@@ -26,9 +26,17 @@ FLOWS_OPENAPI = {"paths": {
         {"name": "status", "in": "query", "schema": {"type": "string"}},
         {"name": "subject", "in": "query", "schema": {"type": "string"}}]}},
     "/reactions/{reaction_id}/{verb}": {"post": {"summary": "Steer one reaction", "parameters": []}},
-    "/queue/waiting": {"get": {"summary": "What is waiting for this person", "parameters": [
-        {"name": "subject", "in": "query", "schema": {"type": "string"}},
-        {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    # Spelled the way flows-api ACTUALLY publishes it: an explicit agent-facing `summary` and NO
+    # docstring, so nothing operator-facing reaches the tool. The old fixture wrote a six-word
+    # hand-made summary, which is why this suite was green while agents were served 250 words of
+    # header-precedence prose — twice.
+    "/queue/waiting": {"get": {
+        "summary": ("What your person's Vexa needs right now — call it at the start of a session, "
+                    "after connecting, and whenever they mention a meeting; each item's `say` is "
+                    "what to tell them. Returns the queue for the authenticated caller."),
+        "parameters": [
+            {"name": "subject", "in": "query", "schema": {"type": "string"}},
+            {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
     "/timeline": {"get": {"summary": "One person's day, in order", "parameters": [
         {"name": "subject", "in": "query", "schema": {"type": "string"}},
         {"name": "since", "in": "query", "schema": {"type": "string"}},
@@ -173,3 +181,34 @@ def test_no_assembled_tool_takes_a_credential_argument():
         props = set(((t.inputSchema if hasattr(t, "inputSchema") else t.input_schema) or {})
                     .get("properties", {}))
         assert not (props & banned), f"{t.name} takes {sorted(props & banned)}"
+
+
+# ── the same words, twice, back to back (2026-09-04) ────────────────────────────────────────────
+# `register.py` published `bt.description` as BOTH `summary` and `description` on the re-registered
+# route, and `fastapi_mcp` composes a tool's description as `summary + "\n\n" + description`
+# (`openapi/convert.py`) with no check that the two differ. So every assembled tool served its
+# whole text twice: on `whats_waiting`, ~250 words and then the same ~250 words.
+#
+# NOTHING UPSTREAM WAS WRONG, which is why no existing test could see it — the fixtures all set
+# `summary` or `description`, never both, and the surviving assertions used `in` rather than a
+# count, and `"X" in "X\n\nX"` is true.
+
+
+def test_no_assembled_tool_says_the_same_thing_twice():
+    app = _boot(FLOWS_API_URL="http://flows")
+    for t in app.state.mcp.tools:
+        halves = (t.description or "").strip().split("\n\n")
+        assert len(halves) < 2 or halves[0].strip() != halves[1].strip(), (
+            f"{t.name} publishes its description twice, back to back")
+
+
+def test_whats_waiting_tells_the_agent_when_to_call_it_exactly_once():
+    """The tool the MCP server's own instructions open with. It now says WHEN, and says it once."""
+    app = _boot(FLOWS_API_URL="http://flows")
+    tool = next(t for t in app.state.mcp.tools if t.name == "whats_waiting")
+    body = tool.description or ""
+    assert "call it at the start of a session" in body
+    assert body.count("call it at the start of a session") == 1, "served twice, back to back"
+    # The maintainer's half stayed upstream: none of it is in front of the agent.
+    for leak in ("X-User-Id", "VEXA_FLOWS_TIMELINE_KEY", "403"):
+        assert leak not in body

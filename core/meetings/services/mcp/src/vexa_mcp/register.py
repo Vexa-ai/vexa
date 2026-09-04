@@ -201,8 +201,16 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
     endpoint.__name__ = bt.name
     endpoint.__doc__ = bt.description or f"{bt.tool.domain}: {method} {template}"
     endpoint.__signature__ = _signature(bt)
+    # ONE TEXT, ONE KEY. This used to pass `bt.description` as BOTH `summary` and `description`,
+    # and `fastapi_mcp` composes a tool's description as `summary + "\n\n" + description`
+    # (`openapi/convert.py`) with no check that the two differ — so every assembled tool published
+    # its whole text TWICE, back to back. On `whats_waiting` that was ~250 words, then the same
+    # ~250 words, and the second copy said nothing the first had not.
+    #
+    # The description is the words. A summary that merely restates them is not a summary, so this
+    # sets none and lets FastAPI title the route from its name — two words, in front of the text,
+    # which is the shape `fastapi_mcp` is written for.
     app.add_api_route(f"/tools/{bt.name}", endpoint, methods=[method],
                       operation_id=bt.name, name=bt.name,
-                      summary=bt.description or None,
                       description=bt.description or None)
     return bt.name
