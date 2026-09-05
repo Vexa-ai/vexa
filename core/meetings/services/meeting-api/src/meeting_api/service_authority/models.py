@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
+
+_log = logging.getLogger("meeting_api.service_authority.models")
 
 AUTHORITY_VERSION = "service-authority.v1"
 LIFECYCLE_CONTRACT_VERSION = "2026-07-28"
@@ -225,6 +228,10 @@ _DECISION_KEYS = frozenset({
     "message",
     "action_url",
 })
+# THIS SET IS NOW THE CONTRACT'S CENSUS, NOT A GATE. `from_wire` ignores what it does not find here
+# (see its docstring); only `from_wire(..., strict=True)` — the contract test — refuses. Adding a
+# name here still teaches meeting-api to READ that field; leaving one out no longer costs the
+# customer their meeting.
 
 # Present-but-empty is the same as absent everywhere below, so the required set is spelled once.
 _OPTIONAL_DECISION_KEYS = frozenset({"stop_scope", "message", "action_url"})
@@ -283,11 +290,35 @@ class ServiceAuthorityDecision:
         now: datetime,
         max_age_seconds: float,
         enforced: bool = True,
+        strict: bool = False,
     ) -> "ServiceAuthorityDecision":
+        """Parse one wire decision. UNKNOWN KEYS ARE IGNORED; every known key is still validated.
+
+        WHY TOLERANT AT THE RUNTIME DOOR. This used to reject the whole response on any key it did
+        not recognise, and that is how a decider adding a field became an OUTAGE: an actionable 403
+        arrived, `from_wire` raised, the adapter mapped the raise to `ServiceAuthorityUnavailable`,
+        and the caller got a 503. The release that added `message` / `action_url` fixed that
+        instance by widening the allow-list by exactly two names — which leaves the CLASS intact and
+        recreates the outage on the next optional field anybody adds. A decider and a meeting-api
+        are separately deployed; requiring them to ship together is precisely the coupling this
+        contract exists to avoid, and the failure is asymmetric — ignoring a field we do not
+        understand costs us that field, while refusing the response costs the customer the service.
+
+        ``strict=True`` keeps the old refusal, and it is for the CONTRACT TEST only: that is where
+        an unexpected key means "our own fixture drifted from the contract" rather than "the other
+        side is newer than us". No production path passes it.
+        """
         if not isinstance(value, Mapping):
             raise ValueError("service-authority response must be an object")
-        if set(value) - _DECISION_KEYS:
+        unknown = set(value) - _DECISION_KEYS
+        if unknown and strict:
             raise ValueError("service-authority response contains unknown fields")
+        if unknown:
+            _log.debug(
+                "service-authority response carried unknown field(s) %s — ignored; "
+                "this meeting-api is older than the deciding service",
+                ",".join(sorted(unknown)),
+            )
         required = _DECISION_KEYS - _OPTIONAL_DECISION_KEYS
         if any(key not in value for key in required):
             raise ValueError("service-authority response is incomplete")

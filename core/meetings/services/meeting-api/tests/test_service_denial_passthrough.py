@@ -273,10 +273,74 @@ async def test_wire_hostile_fields_are_sanitised_without_losing_the_decision() -
     assert decision.action_url is None
 
 
+# --- A10: the trap is the CLASS, not the two names ---------------------------------------------
+
 @pytest.mark.asyncio
-async def test_genuinely_unknown_fields_are_still_rejected() -> None:
-    """Widening the allow-list by exactly two names is the change; it is not an open door."""
+async def test_an_unknown_optional_field_does_not_cost_the_customer_the_decision() -> None:
+    """THE CLASS the two-name widening left open.
+
+    `message` / `action_url` were added to the allow-list because, without them, a decider that
+    started sending them turned an actionable 403 into a 503 outage. That fixed one instance. The
+    NEXT optional field any decider adds reproduced it exactly — and a decider and a meeting-api
+    are separately deployed, which is the whole reason this contract exists.
+
+    So the runtime door now IGNORES what it does not recognise and still validates everything it
+    does. The decision survives; only the field we cannot read is lost."""
+    decision = await _wire_denial({
+        "message": "Fixture words the caller can act on.",
+        "some_field_a_newer_decider_sends": {"nested": ["anything", 1, None]},
+    })
+    assert decision.allow is False
+    assert decision.reason == "fixture_gate_closed"
+    assert decision.message == "Fixture words the caller can act on."
+    assert not hasattr(decision, "some_field_a_newer_decider_sends")
+
+
+@pytest.mark.asyncio
+async def test_tolerating_unknown_fields_does_not_stop_validating_the_known_ones() -> None:
+    """Tolerant is not lax. An unknown key rides along; a MALFORMED KNOWN key still refuses, and
+    the adapter still turns that into `ServiceAuthorityUnavailable` rather than a bad decision."""
     from meeting_api.service_authority import ServiceAuthorityUnavailable
 
     with pytest.raises(ServiceAuthorityUnavailable):
-        await _wire_denial({"totally_unexpected_field": "x"})
+        # `allow` is the field the whole decision turns on; a string is not a decision.
+        await _wire_denial({"allow": "no", "whatever_else": "x"})
+
+    with pytest.raises(ServiceAuthorityUnavailable):
+        # An admission decision may not carry a stop scope — a cross-field rule, still enforced.
+        await _wire_denial({"stop_scope": "billable_service", "whatever_else": "x"})
+
+
+def test_strict_mode_still_refuses_and_is_for_the_contract_test_only() -> None:
+    """The strictness has not been deleted — it has MOVED to where an unexpected key means our own
+    fixture drifted from the contract, rather than "the other side shipped first". No production
+    path passes `strict=True`; `adapters.HttpServiceAuthority` parses tolerantly."""
+    import inspect
+
+    from meeting_api.service_authority import adapters as authority_adapters
+
+    now = datetime.now(UTC)
+    request = ServiceAuthorityRequest.admit(
+        user_id=41,
+        request_id="meeting-session:fixture:admit",
+        service_identity="meeting-session:fixture",
+        transcription_provider="none",
+        active_concurrency=0,
+    )
+    wire = {
+        "authority_version": "service-authority.v1",
+        "decision_id": "decision-wire-1",
+        "request_id": request.request_id,
+        "service_identity": request.service_identity,
+        "allow": False,
+        "reason": "fixture_gate_closed",
+        "decided_at": now.isoformat(),
+        "a_field_the_contract_does_not_declare": "x",
+    }
+    with pytest.raises(ValueError, match="unknown fields"):
+        ServiceAuthorityDecision.from_wire(
+            wire, request=request, now=now, max_age_seconds=60, strict=True)
+    # …and the same body is a decision without the flag.
+    assert ServiceAuthorityDecision.from_wire(
+        wire, request=request, now=now, max_age_seconds=60).allow is False
+    assert "strict" not in inspect.getsource(authority_adapters.HttpServiceAuthority.decide)
