@@ -54,6 +54,24 @@ _FSM_OWNED_STATUSES = frozenset({
     "active", "stopping", "completed", "failed",
 })
 
+# ── transcript-share mint bounds (`_share_payload`) ────────────────────────────────────────────
+# THE MODE SET IS CLOSED AND THAT IS THE SECURITY-RELEVANT ONE. `validate_transcript_grant`
+# (collector/adapters.py) applies the email allow-list only when `mode == "restricted"` — every
+# other string, including a near-miss typo, is stored verbatim and read back as an OPEN share that
+# anyone authenticated can redeem. The failure is silent and it points the wrong way, so the value
+# is checked at the door instead of being trusted downstream.
+SHARE_MODES = frozenset({"open", "restricted"})
+SHARE_DEFAULT_TTL_SEC = 86_400                  # 24h — unchanged default
+SHARE_MIN_TTL_SEC = 60                          # a link nobody can redeem in time is not a share
+SHARE_MAX_TTL_SEC = 30 * 24 * 60 * 60           # 30d — a capability, not a second front door
+# The list lives in the meeting row's JSONB and is walked on every access check, so its length is
+# a cost the OWNER pays on every read of that meeting, for ever.
+SHARE_MAX_ALLOWED_EMAILS = 200
+# The search text is bound as a parameter (never interpolated), so this is a resource bound, not an
+# injection one: `websearch_to_tsquery` + `ts_headline` over an unbounded string is CPU an
+# unauthenticated-shaped request should not be able to ask for.
+SEARCH_QUERY_MAX_CHARS = 512
+
 
 async def _publish_user_meeting_status(
     redis,
@@ -156,7 +174,7 @@ def build_router(
     @router.get("/transcripts/search")
     async def search_transcripts(
         request: Request,
-        q: str = Query(..., min_length=1, description=(
+        q: str = Query(..., min_length=1, max_length=SEARCH_QUERY_MAX_CHARS, description=(
             "Search text. Supports \"quoted phrases\", `or`, and `-excluded` terms "
             "(websearch syntax). Malformed input never errors."
         )),
@@ -928,15 +946,60 @@ def build_router(
         return JSONResponse(content={"workspace_id": bound})
 
     def _share_payload(payload) -> "tuple[str, list, int]":
-        """mode | allowed_emails | ttl out of a share-mint body, defaulted the same way for both
-        address shapes. `restricted` + allowed_emails is what makes a forwarded mail grant nothing."""
+        """mode | allowed_emails | ttl out of a share-mint body, defaulted and VALIDATED the same
+        way for both address shapes.
+
+        `restricted` + allowed_emails is what makes a forwarded mail grant nothing — and that is
+        exactly why `mode` has to be checked against the closed set. `validate_transcript_grant`
+        gates on `mode == "restricted"` and nothing else, so ANY other string — `"Restricted"`,
+        `"restrcted"`, `""` — is stored verbatim and read back as an OPEN share. A typo in a caller
+        minted a link anyone authenticated could redeem, silently, while the caller believed they
+        had restricted it. Refusing an unknown mode is the whole fix; the caller finds out at mint
+        time instead of the recipient finding out later.
+
+        The other two are denial-of-service shaped rather than disclosure shaped, and both used to
+        be unbounded: a non-numeric `expires_in_sec` raised inside `int()` and became a 500 (an
+        unhandled exception on a public route), and neither the TTL nor `allowed_emails` had a
+        ceiling, so one request could plant a share lasting a century or a JSONB grant with a
+        million addresses in it — on the meeting row every read of that meeting loads."""
         if not isinstance(payload, dict):
             payload = {}
-        return (
-            str(payload.get("mode", "open")).strip() or "open",
-            payload.get("allowed_emails") or [],
-            int(payload.get("expires_in_sec", 86400) or 86400),
-        )
+
+        mode = str(payload.get("mode", "open")).strip() or "open"
+        if mode not in SHARE_MODES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'mode' must be one of {sorted(SHARE_MODES)} — got {mode!r}",
+            )
+
+        emails = payload.get("allowed_emails")
+        if emails is None or emails == "":
+            emails = []
+        if not isinstance(emails, list):
+            raise HTTPException(status_code=422, detail="'allowed_emails' must be a list")
+        if len(emails) > SHARE_MAX_ALLOWED_EMAILS:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"'allowed_emails' holds {len(emails)} entries; the maximum is "
+                        f"{SHARE_MAX_ALLOWED_EMAILS} — the list is stored on the meeting row and "
+                        "read back on every access check"),
+            )
+        emails = [str(e).strip() for e in emails if str(e).strip()]
+
+        raw_ttl = payload.get("expires_in_sec", SHARE_DEFAULT_TTL_SEC)
+        if raw_ttl in (None, ""):
+            raw_ttl = SHARE_DEFAULT_TTL_SEC
+        if isinstance(raw_ttl, bool):    # `True` is an int in python and is not a duration
+            raise HTTPException(status_code=422, detail="'expires_in_sec' must be a number")
+        try:
+            ttl = int(raw_ttl)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="'expires_in_sec' must be a number")
+        # CLAMPED, not refused: an out-of-range TTL is a caller asking for something we will not
+        # give, not a malformed request, and the safe direction is the shorter link. The floor
+        # keeps a share usable long enough to be redeemed at all.
+        ttl = max(SHARE_MIN_TTL_SEC, min(ttl, SHARE_MAX_TTL_SEC))
+        return mode, emails, ttl
 
     # --- POST /meetings/{meeting_id}/share → the SAME mint, addressed by the ROW's primary key.
     #
