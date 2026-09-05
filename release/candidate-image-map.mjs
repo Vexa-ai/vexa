@@ -17,6 +17,21 @@ export const REQUIRED_IMAGES = [
   "vexaai/vexa-lite",
 ];
 
+// schema_version 2 (v0.12.27+): the flows domain ships as its own image — one image, three
+// entrypoints (worker · mailbox · api) — because deploy/compose and the chart run it as three
+// services. Frozen schema-1 packets keep validating against the ten; a v0.12.27+ map must name
+// eleven. Production runs its own derivative (vexaai/vexa-flows-platform), so the OSS image is
+// oss_only.
+export const FLOWS_IMAGE = "vexaai/v012-flows";
+export const REQUIRED_IMAGES_V2 = [...REQUIRED_IMAGES, FLOWS_IMAGE];
+export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V2;
+
+export function requiredImagesFor(doc) {
+  if (!doc) return CURRENT_REQUIRED_IMAGES;
+  return doc.schema_version === 2 ? REQUIRED_IMAGES_V2 : REQUIRED_IMAGES;
+}
+
 export const PROD_DEPLOYED_IMAGES = new Set([
   "vexaai/v012-admin-api",
   "vexaai/v012-runtime",
@@ -78,6 +93,11 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     "tsconfig.base.json",
     "turbo.json",
     "licenses",
+  ],
+  "vexaai/v012-flows": [
+    ".dockerignore",
+    "core/flows",
+    "behavior",
   ],
   "vexaai/vexa-lite": [
     "deploy/lite",
@@ -149,6 +169,12 @@ export const BUILD_MATRIX_BY_IMAGE = {
     dockerfile: "deploy/lite/Dockerfile.lite",
     free_disk: true,
   },
+  "vexaai/v012-flows": {
+    name: "flows",
+    repository: "v012-flows",
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
+  },
 };
 
 export const RUNTIME_INPUT_PATHS = [
@@ -165,7 +191,7 @@ const fail = (message) => {
 
 export function validateCandidateMap(doc, expectedVersion) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) fail("map must be an object");
-  if (doc.schema_version !== 1) fail("schema_version must be 1");
+  if (doc.schema_version !== 1 && doc.schema_version !== 2) fail("schema_version must be 1 or 2");
   if (!VERSION.test(doc.release)) fail(`invalid stable release: ${doc.release}`);
   if (expectedVersion && doc.release !== expectedVersion) {
     fail(`map release ${doc.release} does not match requested ${expectedVersion}`);
@@ -185,13 +211,14 @@ export function validateCandidateMap(doc, expectedVersion) {
     fail("images must be an object keyed by repository");
   }
 
+  const requiredImages = requiredImagesFor(doc);
   const actual = Object.keys(doc.images).sort();
-  const required = [...REQUIRED_IMAGES].sort();
+  const required = [...requiredImages].sort();
   if (actual.join("\n") !== required.join("\n")) {
     fail(`image set mismatch\nactual=${actual.join(",")}\nrequired=${required.join(",")}`);
   }
 
-  for (const image of REQUIRED_IMAGES) {
+  for (const image of requiredImages) {
     const row = doc.images[image];
     if (!row || typeof row !== "object") fail(`${image}: row missing`);
     const expectedClass = PROD_DEPLOYED_IMAGES.has(image) ? "prod_deployed" : "oss_only";
@@ -297,7 +324,7 @@ export function runtimeInputDriftForPaths(
 }
 
 export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
-  return REQUIRED_IMAGES.flatMap((image) => {
+  return requiredImagesFor(doc).flatMap((image) => {
     const row = doc.images[image];
     const buildSource = row.build_source || doc.build_source;
     return runtimeInputDriftForPaths(
@@ -310,7 +337,7 @@ export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
 }
 
 export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) {
-  return REQUIRED_IMAGES.filter((image) => {
+  return requiredImagesFor(doc).filter((image) => {
     const row = doc.images[image];
     const buildSource = row.build_source || doc.build_source;
     return runtimeInputDriftForPaths(
@@ -323,8 +350,9 @@ export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) 
 }
 
 export function candidateBuildPlanFromChangedImages(doc, changedImages) {
+  const requiredImages = requiredImagesFor(doc);
   const changed = [...new Set(changedImages)];
-  const unknown = changed.filter((image) => !REQUIRED_IMAGES.includes(image));
+  const unknown = changed.filter((image) => !requiredImages.includes(image));
   if (unknown.length > 0) fail(`build plan contains unknown image(s): ${unknown.join(", ")}`);
 
   const botLite = ["vexaai/vexa-bot", "vexaai/vexa-lite"];
@@ -332,8 +360,8 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     changed.length === botLite.length &&
     botLite.every((image) => changed.includes(image));
   const exactFull =
-    changed.length === REQUIRED_IMAGES.length &&
-    REQUIRED_IMAGES.every((image) => changed.includes(image));
+    changed.length === requiredImages.length &&
+    requiredImages.every((image) => changed.includes(image));
 
   if (!exactBotLite && !exactFull) {
     fail(
@@ -342,7 +370,7 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     );
   }
 
-  const selected = exactFull ? REQUIRED_IMAGES : botLite;
+  const selected = exactFull ? requiredImages : botLite;
   return {
     mode: exactFull ? "full" : "bot-lite-delta",
     changed_images: selected,
@@ -361,7 +389,7 @@ export function candidateBuildPlan(doc, head = "HEAD", cwd = process.cwd()) {
   if (!doc) {
     return candidateBuildPlanFromChangedImages(
       null,
-      REQUIRED_IMAGES,
+      CURRENT_REQUIRED_IMAGES,
     );
   }
   return candidateBuildPlanFromChangedImages(
@@ -392,12 +420,12 @@ function main(argv) {
 
   if (command === "check") {
     if (!doc) usage();
-    console.log(`✓ ${doc.release}: exact ten-image candidate map is well formed`);
+    console.log(`✓ ${doc.release}: exact ${requiredImagesFor(doc).length}-image candidate map (schema ${doc.schema_version}) is well formed`);
     return;
   }
   if (command === "emit-tsv") {
     if (!doc) usage();
-    for (const image of REQUIRED_IMAGES) {
+    for (const image of requiredImagesFor(doc)) {
       const row = doc.images[image];
       console.log(`${image}\t${row.digest}\t${row.candidate_tag || doc.candidate_tag}`);
     }
@@ -405,7 +433,7 @@ function main(argv) {
   }
   if (command === "emit-platform-tsv") {
     if (!doc) usage();
-    for (const image of REQUIRED_IMAGES) {
+    for (const image of requiredImagesFor(doc)) {
       const row = doc.images[image];
       for (const platform of row.platforms) {
         const identity = row.platform_manifests[platform];

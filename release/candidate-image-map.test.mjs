@@ -9,6 +9,9 @@ import test from "node:test";
 import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
+  FLOWS_IMAGE,
+  CURRENT_REQUIRED_IMAGES,
+  requiredImagesFor,
   BUILD_MATRIX_BY_IMAGE,
   RUNTIME_INPUTS_BY_IMAGE,
   assertNoRuntimeInputDrift,
@@ -120,6 +123,33 @@ test("v0.12.23 canonical packet freezes the rc.21 train candidate", () => {
     ),
     19,
   );
+});
+
+test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () => {
+  const ten = validMap();
+  assert.equal(requiredImagesFor(ten).length, 10);
+  assert.throws(() => validateCandidateMap({ ...ten, schema_version: 2 }), /image set mismatch/);
+  const eleven = validMap();
+  eleven.schema_version = 2;
+  eleven.images[FLOWS_IMAGE] = {
+    ...eleven.images["vexaai/v012-mcp"],
+    digest: "sha256:" + "f".repeat(64),
+  };
+  const map = validateCandidateMap(eleven, eleven.release);
+  assert.equal(requiredImagesFor(map).length, 11);
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(map.images[FLOWS_IMAGE].class, "oss_only");
+  assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 1 }), /image set mismatch/);
+  const plan = candidateBuildPlan(null);
+  assert.equal(plan.mode, "full");
+  assert.equal(plan.changed_images.length, 11);
+  assert.deepEqual(plan.build_matrix.find((row) => row.name === "flows"), {
+    name: "flows",
+    repository: "v012-flows",
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
+    use_registry_cache: true,
+  });
 });
 
 test("refuses a missing image", () => {
@@ -236,7 +266,7 @@ test("the replacement build plan is bounded to Bot and Lite", () => {
 test("release-images consumes the planner's dynamic matrix instead of a literal fan-out", () => {
   assert.deepEqual(
     Object.keys(BUILD_MATRIX_BY_IMAGE),
-    REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot"),
+    CURRENT_REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot"),
   );
   const workflow = readFileSync(
     new URL("../.github/workflows/release-images.yml", import.meta.url),
@@ -288,11 +318,11 @@ test("a partial build cannot silently widen beyond the validated Bot+Lite path",
   );
 });
 
-test("a release with no prior candidate map retains the full ten-image plan", () => {
+test("a release with no prior candidate map retains the full current (eleven-image) plan", () => {
   const plan = candidateBuildPlan(null);
   assert.equal(plan.mode, "full");
-  assert.equal(plan.changed_images.length, REQUIRED_IMAGES.length);
-  assert.equal(plan.build_matrix.length, REQUIRED_IMAGES.length - 1);
+  assert.equal(plan.changed_images.length, CURRENT_REQUIRED_IMAGES.length);
+  assert.equal(plan.build_matrix.length, CURRENT_REQUIRED_IMAGES.length - 1);
   assert.ok(plan.build_matrix.every(({ use_registry_cache }) => use_registry_cache));
   assert.equal(plan.build_bot, true);
   assert.equal(plan.base_candidate_tag, null);
