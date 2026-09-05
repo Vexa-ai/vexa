@@ -56,7 +56,12 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     "core/runtime/contracts/schedule.v1/schedule.schema.json",
   ],
   "vexaai/v012-gateway": [
+    ".dockerignore",
     "core/gateway/services/gateway",
+    "core/meetings/routes.v1.json",
+    "core/meetings/services/mcp/routes.v1.json",
+    "core/identity/routes.v1.json",
+    "core/agent/routes.v1.json",
   ],
   "vexaai/v012-mcp": [
     "core/meetings/services/mcp",
@@ -122,7 +127,7 @@ export const BUILD_MATRIX_BY_IMAGE = {
   "vexaai/v012-gateway": {
     name: "gateway",
     repository: "v012-gateway",
-    context: "core/gateway/services/gateway",
+    context: ".",
     dockerfile: "core/gateway/services/gateway/Dockerfile",
   },
   "vexaai/v012-mcp": {
