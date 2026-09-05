@@ -1084,9 +1084,15 @@ def _build_production_app() -> FastAPI:
     # cannot happen.
     from control_plane import preset_library
     try:
-        preset_library.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+        # PRINTED, not logged — see `preset_library.summary`: this service configures no root
+        # logger, so every `agent_api.*` INFO record is dropped, and this one runs before uvicorn
+        # configures logging at all. The top-up changed what every agent here reads; `docker logs`
+        # has to show it.
+        print(preset_library.summary(
+            preset_library.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)),
+            flush=True)
     except Exception as exc:  # noqa: BLE001
-        logger.info("the preset library could not be topped up here: %s", exc)
+        print(f"preset library: could not be topped up here: {exc}", flush=True)
 
     # `_global` gets its history BEFORE its first writer, never after. It shipped as a bare
     # directory that was mounted into every worker and read on every turn, with nothing recording

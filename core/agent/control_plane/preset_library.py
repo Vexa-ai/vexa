@@ -92,6 +92,27 @@ def _shippable(src: Path):
             yield f
 
 
+def summary(added: list[str]) -> str:
+    """One sentence naming what `top_up` did — for the boot call site, which cannot use the logger.
+
+    ⚠ `agent_api.*` INFO RECORDS GO NOWHERE IN THIS SERVICE. Nothing configures the root logger, so
+    Python\'s `logging.lastResort` handler emits WARNING and above to stderr and drops everything
+    below — which is why `workspace_routines`\' cron warnings appear in `docker logs` and no INFO
+    line from any control-plane module ever has. `_build_production_app` runs before uvicorn
+    configures its own logging on top of that, so a boot-time record is dropped twice over.
+
+    The level is not the thing to change: adding presets is a normal, healthy deploy-time event, and
+    raising it to WARNING to make it visible would cry wolf on every fresh instance and devalue a
+    channel operators actually read. So the record stays INFO where it belongs — correct for tests
+    and for any caller that has configured logging — and the ONE caller that must be seen regardless
+    prints this. A top-up changed what every agent in this deployment reads; a log line nobody can
+    read is not a log line."""
+    if not added:
+        return "preset library: nothing to add — _global/asks/ already has every preset this image ships"
+    return (f"preset library: added {len(added)} preset(s) to _global/asks/ — {', '.join(added)}"
+            " (in this image, not on the store; an admin may edit them there)")
+
+
 def top_up(global_root: "str | Path", image_dir: "str | Path | None" = None) -> list[str]:
     """Copy every preset the image ships that `_global/asks/` does NOT already have. ADDITIVE ONLY.
 

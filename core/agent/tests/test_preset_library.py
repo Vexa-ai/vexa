@@ -167,6 +167,34 @@ def test_the_directory_name_is_the_one_scaffolds_joins(tmp_path):
         tmp_path / preset_library.ASKS_DIRNAME / "prep.md"
 
 
+# ── 2b · and it SAYS what it did, somewhere a person will actually see ───────────────────────────
+
+def test_the_summary_names_every_preset_it_added():
+    """A top-up changed what every agent in the deployment reads. Verified live 2026-09-06: this
+    service configures no root logger, so `logging.lastResort` emits WARNING+ to stderr and drops
+    every `agent_api.*` INFO record — which is why the cron warnings show in `docker logs` and no
+    INFO line ever has. The boot call site prints this instead of logging it; a log line nobody can
+    read is not a log line."""
+    line = preset_library.summary(["first-visit.md", "README.md"])
+    assert "first-visit.md" in line and "README.md" in line
+    assert "_global/asks/" in line
+
+
+def test_the_summary_says_so_when_there_was_nothing_to_add():
+    """Silence would be indistinguishable from the top-up never running — which is the shape of the
+    original defect one level up."""
+    line = preset_library.summary([])
+    assert "nothing to add" in line
+
+
+def test_the_boot_call_site_prints_the_summary_rather_than_logging_it():
+    """Pinned against a well-meaning future edit that turns this back into `logger.info` and makes
+    it invisible again. The comment above it explains why; this is what stops the regression."""
+    api = (REPO / "core" / "agent" / "control_plane" / "api.py").read_text(encoding="utf-8")
+    assert "print(preset_library.summary(" in api, \
+        "the boot top-up must PRINT its summary — an agent_api.* INFO record here reaches nobody"
+
+
 # ── 3 · the lookup order ─────────────────────────────────────────────────────────────────────────
 
 def test_the_store_wins_over_the_image(tmp_path):
