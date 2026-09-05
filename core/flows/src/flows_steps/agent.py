@@ -8,7 +8,7 @@ import urllib.parse
 
 from flows import Done, StepCtx, StepError, Wait
 
-from .common import agent_door, http, require_internal_secret, scaffolded, ws_file
+from .common import agent_door, http, require_internal_secret, scaffolded, swallowed, ws_file
 
 
 def history(uid: str, session: str) -> list:
@@ -47,7 +47,18 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
     the time a turn is dispatched it exists.
 
     Omitted entirely when there is no room, so every other dispatch in this file sends exactly the
-    body it has always sent."""
+    body it has always sent.
+
+    WHAT IS AND IS NOT "THE TURN IS RUNNING" (P21b). This used to be `except Exception: pass`, with
+    the comment above as its whole justification — and the comment is right about ONE exception and
+    wrong about every other. A client timeout while the SSE stream is open really does mean the
+    turn started: that is the 2026-08-23 double-dispatch lesson and it is preserved exactly. A
+    connection refused, a DNS failure, a 401, a 404, a 500 mean the opposite — nothing is running —
+    and swallowing them returned a baseline as though a turn had been dispatched, after which
+    `collect_reply` waited for a reply that was never coming, for as long as its caller allowed.
+    A dispatch that did not happen, reported as one that did, is the exact shape P21 names.
+
+    So: the status is checked, and only a TIMEOUT is treated as success."""
     base = len(history(uid, session))
     body = {"prompt": prompt, "session": session}
     headers = {"X-User-Id": uid}
@@ -61,10 +72,47 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
         if room.get("read_max"):
             body["room_read_max"] = int(room["read_max"])
     try:
-        http("POST", f"{agent_door()}/api/chat", headers, body, timeout=3)
-    except Exception:  # noqa: BLE001 — stream-open timeout: the turn IS running
-        pass
+        code, out = http("POST", f"{agent_door()}/api/chat", headers, body, timeout=3)
+    except StepError as e:
+        if not _is_timeout(e):
+            raise StepError(f"the agent turn for {uid}/{session} was not dispatched: {e}",
+                            retryable=True) from e
+        # THE ONE SUCCESS-SHAPED EXCEPTION, logged rather than passed over in silence (P18): a
+        # swallow nobody can see is a swallow nobody can distinguish from the failure above when
+        # this heuristic is one day wrong.
+        swallowed("flows_steps.agent.dispatch_turn", "stream-open timeout, the turn is running", e)
+        return base
+    if not _ok(code):
+        raise StepError(
+            f"the agent turn for {uid}/{session} was not dispatched: agent-api answered {code} — "
+            f"{str(out)[:200]}",
+            # 5xx and 429 are the platform having a moment; a 4xx is a fact about this call, and
+            # retrying it just delays the reaction without changing the answer.
+            retryable=code == 429 or int(code) >= 500)
     return base
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """Was this `http` failure a read timeout — the stream staying open — rather than a call that
+    never landed?
+
+    Read off the CAUSE, not off the message. `common.http` wraps everything that is not an
+    `HTTPError` in a `StepError`, and Python keeps the original on `__context__`; a socket read
+    timeout is a `TimeoutError` (which `socket.timeout` has been an alias of since 3.10), and
+    `urllib` may deliver it wrapped in a `URLError`. Matching on the formatted string would make
+    this depend on an error message, which is not a contract."""
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, TimeoutError):
+            return True
+        reason = getattr(cur, "reason", None)
+        if isinstance(reason, BaseException) and id(reason) not in seen:
+            cur = reason
+            continue
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 def collect_reply(uid: str, session: str, baseline: int):
@@ -113,9 +161,12 @@ def head_sha(uid: str) -> str:
     failing a meeting on its own blind spot."""
     try:
         code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
-    except Exception:  # noqa: BLE001 — a probe never costs the caller its step
+    except Exception as e:  # noqa: BLE001 — a probe never costs the caller its step
+        swallowed("flows_steps.agent.head_sha", "desk history unreadable", e, uid=uid)
         return ""
     if not _ok(code) or not isinstance(body, dict):
+        swallowed("flows_steps.agent.head_sha", "desk history unreadable", None,
+                  uid=uid, http=code)
         return ""
     commits = body.get("commits") or []
     if not commits or not isinstance(commits[0], dict):
@@ -127,9 +178,12 @@ def head_subjects(uid: str, limit: int = 3) -> list:
     """The newest commit subjects on a desk — for naming, in a failure, exactly what landed."""
     try:
         code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 — a probe never costs the caller its step
+        swallowed("flows_steps.agent.head_subjects", "desk history unreadable", e, uid=uid)
         return []
     if not _ok(code) or not isinstance(body, dict):
+        swallowed("flows_steps.agent.head_subjects", "desk history unreadable", None,
+                  uid=uid, http=code)
         return []
     out = []
     for c in (body.get("commits") or [])[:limit]:
