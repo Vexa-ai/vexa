@@ -1030,13 +1030,19 @@ def create_app(
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(
-        limit: int = 50,
-        offset: int = 0,
-        meeting_db_id: Optional[int] = None,
+        limit: int = Query(50, ge=1, le=200, description="Max recordings to return (default 50)."),
+        offset: int = Query(0, ge=0, description="Number of recordings to skip."),
+        meeting_db_id: Optional[int] = Query(
+            None, description="Only this meeting's recordings (the `meeting_db_id` other tools return)."
+        ),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        List recordings for the authenticated user. Wraps: GET /recordings
+        List the authenticated user's recordings, NEWEST FIRST, one page at a time.
+        Wraps: GET /recordings
+
+        Rows are summaries — id, meeting_id, status, timestamps, duration and the playback URL.
+        Call get_recording(recording_id) for one recording's full media-file detail.
         """
         params: Dict[str, Any] = {"limit": limit, "offset": offset}
         if meeting_db_id is not None:
