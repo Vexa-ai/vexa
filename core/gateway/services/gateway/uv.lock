@@ -442,7 +442,7 @@ wheels = [
 
 [[package]]
 name = "guard-core"
-version = "4.0.0"
+version = "4.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -453,9 +453,9 @@ dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/1e/7d23d9b61d93f57eb848b0754a8aadd6b6d4688f7d4981ddd0792d070b26/guard_core-4.0.0.tar.gz", hash = "sha256:b8e1a8517445d9cb5ff4804ef439465049fae42ca66af95a5456f3412e504cfc", size = 499914, upload-time = "2026-09-04T19:15:46.321Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/b2/72562d834d8fb31138ed1fba4d02441ef1109c331d524afd80c4965a17ed/guard_core-4.0.1.tar.gz", hash = "sha256:d8826ef1281617bc98c798cf3917329ed4b5f0e06c49a4903ce95b8da89939f9", size = 503461, upload-time = "2026-09-05T20:33:24.997Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/fa/a721aa291e7a786d3686142e69a06f1185204b5816daa5ba01fafbd1fb73/guard_core-4.0.0-py3-none-any.whl", hash = "sha256:a76508afecabb5ba1de910214e8816dea2fe16988d78a195a4aa747f6eafa8d1", size = 571880, upload-time = "2026-09-04T19:15:44.889Z" },
+    { url = "https://files.pythonhosted.org/packages/62/8d/ef4c5f91ccb5b08106c5457142eb9223b3864caf84a4de6c893b01e379f3/guard_core-4.0.1-py3-none-any.whl", hash = "sha256:beaed75eaffcacd243593eecd2f5c6dac61e03533a2cfc822e36a1a043b94377", size = 574545, upload-time = "2026-09-05T20:33:23.359Z" },
 ]
 
 [[package]]
