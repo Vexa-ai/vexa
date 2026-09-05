@@ -14,6 +14,7 @@ written into a deployment, for a service the deployment does not run.
 from __future__ import annotations
 
 import json
+import pytest
 import re
 from pathlib import Path
 
@@ -135,6 +136,19 @@ def test_the_host_port_is_overridable_and_bound_to_loopback():
     assert re.search(r'"127\.0\.0\.1:\$\{FLOWS_API_HOST_PORT:-\d+\}:8200"', block), block
 
 
+def _agent_carriers_are_private() -> bool:
+    """The OSS cut carries no producer for the two desk carriers: `core/flows/contracts/flows.v1/
+    carriers.json` marks `desk.unscaffolded` and `claim.proposed` as `published_by: "private"`
+    (the producer lives in the private tree). While that flag stands, the honest assertion is the
+    OPPOSITE of the one below: agent-api declares NO publish edge and compose sets none. The moment
+    a producer lands here and the flag comes off, the original assertions apply unchanged."""
+    census = json.loads((ROOT / "core/flows/contracts/flows.v1/carriers.json").read_text())
+    entries = census.get("carriers", census)
+    items = entries.values() if isinstance(entries, dict) else entries
+    agent = [c for c in items if isinstance(c, dict) and c.get("owner") == "agent"]
+    return bool(agent) and all(c.get("published_by") == "private" for c in agent)
+
+
 def test_the_agent_domain_carries_the_publish_edge_it_declares():
     """THE DESK CARDS EXIST ON THE WIRE, or they exist only in the tests.
 
@@ -148,8 +162,15 @@ def test_the_agent_domain_carries_the_publish_edge_it_declares():
     is covered the moment it is declared."""
     decl = json.loads((ROOT / "core/agent/control_plane/config.v1.json").read_text())
     edge = [k["key"] for k in decl["keys"] if k.get("class") == "publish-edge"]
-    assert edge, "agent-api declares no publish edge — the desk cards have no producer"
     block = _service("agent-api")
+    if _agent_carriers_are_private():
+        assert not edge, (
+            "the census says the desk carriers are published privately, yet agent-api declares a "
+            "publish edge here — take the flag off carriers.json or drop the declaration")
+        assert "VEXA_FLOWS_API_URL=" not in block, (
+            "compose sets a flows publish door on agent-api although the OSS cut has no producer")
+        return
+    assert edge, "agent-api declares no publish edge — the desk cards have no producer"
     for key in edge:
         assert f"- {key}=" in block, (
             f"agent-api declares {key} as part of its publish edge and the compose service sets "
@@ -164,6 +185,8 @@ def test_the_agent_publish_edge_points_at_the_flows_service_by_default():
     the full stack publishes nothing, the queue shows no desk cards, and every part of the
     mechanism reports itself healthy. Set it empty to run a deployment that genuinely has no
     flows domain."""
+    if _agent_carriers_are_private():
+        pytest.skip("desk carriers are published privately in this cut — no agent publish edge to point anywhere")
     block = _service("agent-api")
     assert re.search(r"VEXA_FLOWS_API_URL=\$\{VEXA_FLOWS_API_URL:-http://flows-api:8200\}", block), \
         "agent-api has no default route to the flows service, so the desk facts go nowhere"
