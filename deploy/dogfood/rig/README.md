@@ -81,3 +81,7 @@ raising an ImportError an agent will read as "Vexa is broken".
 Nothing here names a home directory any more. The server `rig.sh` starts is the file sitting next
 to it: the repo copy when run from the repo, and the `~/.storm` symlink to that same file when run
 from there.
+
+## The rig interpreter needs PyYAML
+
+The rehearsal package (`deploy/dogfood/rehearse/`) reads `states.yaml` with PyYAML. The control MCP imports it lazily on the first `rehearse`/`subject_reset` call, so a venv without `pyyaml` fails only then, as `ModuleNotFoundError: yaml` inside `UnexpectedToolError: Error executing tool rehearse` (seen 2026-09-06 after the lane collapse). Install into the rig's venv: `<venv>/bin/python -m pip install pyyaml`.
