@@ -1,0 +1,12 @@
+{
+  "event": "claim.proposed",
+  "owner": "agent",
+  "published_by": "private",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "uid",
+    "claim_id"
+  ],
+  "source_event_id": "claim-<uid>-<claim_id> — keyed to the person AND the claim, because the queue card is one claim",
+  "description": "An agent wrote down something it believes about a person's company and needs that person's word on it; triggers desk_claim, whose step reads the claim out of the book and blocks on its own words. Published by the agent domain at POST /api/claims, one event per claim the call actually added. THAT ROUTE EXISTS FOR THIS FACT: the book was written through the generic PUT /api/workspace/file, so a claim being proposed was indistinguishable from any other file write and nothing could publish it — a generic file route cannot announce a specific fact without inspecting paths and guessing at contents, which is how a file route quietly becomes a state machine nobody declared. `claim_id` is positional and never reused, which is what lets a card stay keyed to one claim for the life of the book. NOT PUBLISHED FROM THIS TREE (`published_by: private`), on the same terms as desk.unscaffolded above: the route and its publish-edge declaration live in the agent-api control plane, which is not in this cut, and its consumer `desk_claim` is in the optional `flows_defs/production_agent.py`."
+}
