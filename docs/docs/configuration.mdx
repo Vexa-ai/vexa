@@ -104,8 +104,14 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ADMIN_TOKEN` | `changeme` | Admin API key (`X-Admin-API-Key`) — mints users and tokens. |
-| `INTERNAL_API_SECRET` | `vexa-internal-secret` | Shared secret for service-to-service calls. |
+| `ADMIN_TOKEN` | none — you must set it | Admin API key (`X-Admin-API-Key`) — mints users and tokens, and signs every per-spawn MeetingToken (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). |
+| `INTERNAL_API_SECRET` | none — you must set it | Shared secret for service-to-service calls. |
+
+Neither has a default any more. Both services **refuse to boot** on a placeholder literal
+(`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …): a value
+published in this repository is not a secret, and a stack running on one comes up green while
+anyone who read the repo can mint an API key for any account. Generate each with
+`openssl rand -hex 32` and set the same `ADMIN_TOKEN` on every service that shares the tier.
 | `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |

@@ -20,9 +20,18 @@
   {
    "key": "ADMIN_API_TOKEN",
    "class": "defaulted",
-   "default": "changeme",
+   "default": "(unset — the admin surface then answers 500 'Admin authentication is not configured')",
    "secret": true,
-   "description": "admin bearer for the privileged admin surface; stock surfaces default it (compose 'changeme', helm/lite from env). Change it for any real deploy."
+   "description": "admin bearer for the privileged admin surface (main.py:_admin_token → os.getenv, NO code default; every /admin route and the key-minting surface behind it). It read 'changeme' here, which described the deploy surfaces rather than the code — and that is exactly what a published default is: this token MINTS AN API KEY FOR ANY USER, so a stack left on the literal hands the whole account plane to anyone who read the repository. Same refusal INTERNAL_API_SECRET got in F95, for a strictly larger blast radius (A19).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "DB_HOST",
