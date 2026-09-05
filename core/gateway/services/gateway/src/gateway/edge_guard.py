@@ -89,7 +89,7 @@ def _guard_csv(env: str) -> list[str]:
 
 
 # guard_core.models.CloudProvider = Literal["AWS", "GCP", "Azure", "DigitalOcean", "Linode",
-# "Vultr"] (guard-core 4.0.0, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
+# "Vultr"] (guard-core 4.0.1, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
 # six names as a frozenset - both verified in this venv). Mirrored here (not imported) so a
 # library-side rename doesn't quietly change what Vexa accepts out from under this error
 # message.
@@ -393,7 +393,7 @@ def build_guard_config() -> SecurityConfig:
         # check. guard-core < 3.15.0 always fell back regardless of this flag; 3.15.0 makes
         # the limiter honor it, and the default (False) under fail_secure=False would skip
         # the rate limit entirely for every request until Redis is back. The open pin
-        # (>=8.0) resolves to 4.0.0 on a fresh lock, so the flag is set explicitly to
+        # (>=8.0) resolves to 4.0.1 on a fresh lock, so the flag is set explicitly to
         # keep one behavior on both sides of that boundary. Ban checks are unaffected:
         # is_ip_banned already fails open (not banned) under fail_secure=False.
         redis_fail_open=True,
