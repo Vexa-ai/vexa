@@ -29,11 +29,13 @@ the fact survives a publish that never lands — a later sweep can replay from i
 from __future__ import annotations
 
 import json
+import logging
 import os
-import urllib.request
 from typing import Optional
 
 EVENT_ONBOARDING_COMPLETED = "onboarding.completed"
+
+log = logging.getLogger("admin_api.events")
 
 #: The org this deployment's identity knows for a person: none. Identity has no organisation
 #: concept — no column, no create field, nothing — so the ref is emitted EMPTY rather than omitted.
@@ -48,6 +50,16 @@ DEFAULT_SEAT = "member"
 
 #: Bounded on purpose. This runs inside the request that creates a person, so the ceiling on how
 #: slow flows can make sign-in is this number, not flows' own timeout.
+#:
+#: AND THE BOUND IS ONLY REAL BECAUSE THE CALL IS ASYNC. This used to be
+#: ``urllib.request.urlopen(req, timeout=TIMEOUT_S)`` — a BLOCKING call on the event loop, made
+#: from inside ``async def create_user``. Two separate defects, and the smaller one was the 2 s:
+#: urllib's ``timeout`` is a SOCKET timeout, so name resolution is not bounded by it at all — an
+#: unresolvable ``VEXA_FLOWS_API_URL`` stalled the whole admin-api process (every other request,
+#: ``/internal/validate`` and ``/health`` included) for as long as the resolver took.
+#: ``httpx.AsyncClient(timeout=…)`` bounds connect (DNS included), write, read and pool
+#: acquisition, and awaits rather than blocks: a slow flows costs THIS sign-in its bound and costs
+#: every other request nothing.
 TIMEOUT_S = 2.0
 
 
@@ -90,9 +102,11 @@ def _flows_key() -> str:
     return (os.getenv("VEXA_FLOWS_API_KEY") or "").strip()
 
 
-def publish(event_type: str, source_event_id: str, subject_refs: dict,
-            *, timeout: Optional[float] = None) -> bool:
+async def publish(event_type: str, source_event_id: str, subject_refs: dict,
+                  *, timeout: Optional[float] = None) -> bool:
     """Hand one fact to the flows intake. Returns whether it landed; NEVER raises.
+
+    AWAITED, not blocking — see ``TIMEOUT_S``. The caller is ``async def create_user``.
 
     The return value is for a caller that wants to log or count, not for one that wants to decide:
     there is no correct behaviour on a failed publish except to carry on, because the alternative is
@@ -119,11 +133,18 @@ def publish(event_type: str, source_event_id: str, subject_refs: dict,
         # naming this service's own token in another service's header is precisely how a lane came
         # to run on `changeme`. flows accepts the old name for one release.
         headers["X-Flows-Operator-Key"] = key
-    req = urllib.request.Request(f"{base}/events", data=body, headers=headers, method="POST")
+    import httpx
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:  # noqa: S310
-            return 200 <= r.status < 300
+        async with httpx.AsyncClient(timeout=timeout or TIMEOUT_S) as client:
+            r = await client.post(f"{base}/events", content=body, headers=headers)
+        return 200 <= r.status_code < 300
     except Exception:  # noqa: BLE001 — see the module docstring: a publish is not a dependency
+        # SWALLOWED, NOT SILENT. The old shape returned False from a bare `except` and left no
+        # trace, so a flows address that had been wrong since a deploy was indistinguishable from a
+        # deployment with no flows domain — on the one fact a paid deployment bills on. DEBUG
+        # because the person is already committed and a sweep can replay from the stamp.
+        log.debug("flows publish %s did not land (base=%s)", event_type, base, exc_info=True)
         return False
 
 

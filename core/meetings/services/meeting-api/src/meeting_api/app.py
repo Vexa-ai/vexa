@@ -680,7 +680,7 @@ def _mount_lifecycle(
                 _uid = _meeting_block.get("user_id")
                 if _uid is not None and _et == "meeting.started":
                     try:
-                        _flows_events.publish_meeting_started(
+                        await _flows_events.publish_meeting_started(
                             _meeting_block.get("id"),
                             _meeting_block.get("native_meeting_id"),
                             _meeting_block.get("platform"),
@@ -690,7 +690,7 @@ def _mount_lifecycle(
                         pass
                 elif _uid is not None and _et == "meeting.completed":
                     try:
-                        _flows_events.publish_meeting_completed(
+                        await _flows_events.publish_meeting_completed(
                             _meeting_block.get("id"),
                             _meeting_block.get("native_meeting_id"),
                             _meeting_block.get("platform"),

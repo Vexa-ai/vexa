@@ -454,7 +454,7 @@ def create_app() -> FastAPI:
         # None while LOOKING like a lookup — the worst version of this, because it reads as though
         # somebody checked.
         try:
-            events_mod.publish(
+            await events_mod.publish(
                 events_mod.EVENT_ONBOARDING_COMPLETED,
                 events_mod.onboarding_source_id(u.id),
                 events_mod.onboarding_refs(u.id, events_mod.NO_ORG, events_mod.DEFAULT_SEAT))
