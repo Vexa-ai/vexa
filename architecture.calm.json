@@ -1260,10 +1260,66 @@
    ]
   },
   {
+   "unique-id": "flows-defs",
+   "node-type": "module",
+   "name": "flows-defs",
+   "description": "product behaviour as DATA: each flow is a typed event trigger plus an ordered list of step FUNCTIONS, one registration per version; in-flight reactions keep the version stamped at admission",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_defs"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-steps",
+   "node-type": "module",
+   "name": "flows-steps",
+   "description": "the step implementations a flow names — one function per capability, registered by __name__; the real adapters call domain HTTP surfaces and sit OUTSIDE the engine's import graph, and fakes.py mirrors the same names so every fixture runs with zero domains attached",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_steps"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-schema",
+   "node-type": "module",
+   "name": "flows-schema",
+   "description": "the schema source of truth: declarative SQLAlchemy models from which core/flows/schema.sql is generated (scripts/gen_schema.py, drift-tested); lives outside src/flows so the engine stays stdlib-pure at import",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_schema"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-timeline",
+   "node-type": "module",
+   "name": "flows-timeline",
+   "description": "one person's day in order: the READ back over reactions and effect receipts along the time axis. It admits nothing, claims nothing and writes nothing — the read model for the timeline and queue surfaces",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_timeline"
+    }
+   ]
+  },
+  {
    "unique-id": "flows-rows",
    "node-type": "data-asset",
    "name": "flows-rows",
-   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again"
+   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again. TWO writers: flows-worker runs the steps and stamps the receipts, and flows-api admits facts (POST /events → admit() → INSERT INTO reaction) and registers flow versions (INSERT INTO flow_version) in its own process"
+  },
+  {
+   "unique-id": "flows.v1",
+   "node-type": "contract",
+   "name": "flows.v1",
+   "description": "flows.v1 — the carrier census (flows): one producing domain per event type, with the refs a consumer may rely on and the cardinality it may assume. Read by gate:config-contract (a publish-edge key's carriers must be registered here, owned by that service's domain), by gate:schema and by the flows suite. Unsealed by intent — see the contract's README",
+   "metadata": [
+    {
+     "path": "core/flows/contracts/flows.v1",
+     "domain": "flows"
+    }
+   ]
   },
   {
    "unique-id": "processed-notes.v1",
@@ -2363,9 +2419,14 @@
      "container": "flows",
      "nodes": [
       "flows-engine",
+      "flows-defs",
+      "flows-steps",
+      "flows-schema",
+      "flows-timeline",
       "flows-api",
       "flows-worker",
-      "flows-rows"
+      "flows-rows",
+      "flows.v1"
      ]
     }
    }
@@ -2376,6 +2437,25 @@
     "connects": {
      "source": {
       "node": "flows-worker"
+     },
+     "destination": {
+      "node": "flows-rows"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-api-writes-rows",
+   "description": "the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-api"
      },
      "destination": {
       "node": "flows-rows"

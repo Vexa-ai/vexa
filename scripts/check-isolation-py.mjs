@@ -14,9 +14,12 @@
  *
  * GREEN-ON-EMPTY: no Python packages → green (mirrors the other gates).
  *
- * The 7 v0.12 top-level Python packages and their src/ module names:
+ * The v0.12 Python packages and their src/ module names. A package is a pyproject.toml over a src/,
+ * and a package may hold MORE THAN ONE top-level module — every one of them is a sibling name:
  *   runtime_kernel · gateway · gateway_conformance · meeting_api ·
- *   admin_api · identity_core · agent_api
+ *   admin_api · identity_core · agent_api ·
+ *   core/flows, one package over seven: flows · flows_defs · flows_integrations · flows_schema ·
+ *     flows_steps · flows_timeline · flows_worker
  * (P2 folded the standalone transcription_collector INTO meeting_api — that package is gone.)
  *
  * Why a curated allowed-edges table instead of reading pyproject `dependencies`: the only legit
@@ -25,7 +28,7 @@
  * runtime_kernel must import NOTHING from the others (kernel depends on nothing above).
  */
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -75,14 +78,28 @@ function walkDirs(dir, acc = []) {
   return acc;
 }
 
-// the top-level module of a package = the single dir under src/ holding __init__.py
-function moduleOf(pkgDir) {
+/** EVERY top-level module of a package — each dir under src/ holding an `__init__.py`.
+ *
+ *  ⚠ This returned ONE name (`mods.length === 1 ? mods[0] : (mods[0] || null)`), and the second
+ *  branch of that ternary is the defect: a package with seven modules under src/ was registered by
+ *  its alphabetically-first one and the other six were invisible to all three Python gates. Invisible
+ *  in the direction that matters — a name absent from SIBLINGS is read as stdlib or third-party, so
+ *  an import of `flows_steps` from another package passed as an outside dependency rather than as
+ *  the cross-package edge it is. core/flows is that package: `flows`, `flows_defs`,
+ *  `flows_integrations`, `flows_schema`, `flows_steps`, `flows_timeline`, `flows_worker`.
+ *
+ *  A gate that silently narrows its own subject is the expensive kind: it prints VERIFIED over a
+ *  scan that never looked. Every module is a sibling name now, and the importing module is read from
+ *  the file's own path rather than assumed to be the package's first — so an edge is reported as the
+ *  module that actually took it.
+ */
+function modulesOf(pkgDir) {
   const src = join(pkgDir, "src");
-  if (!existsSync(src)) return null;
-  const mods = readdirSync(src, { withFileTypes: true })
+  if (!existsSync(src)) return [];
+  return readdirSync(src, { withFileTypes: true })
     .filter((e) => e.isDirectory() && existsSync(join(src, e.name, "__init__.py")))
-    .map((e) => e.name);
-  return mods.length === 1 ? mods[0] : (mods[0] || null);
+    .map((e) => e.name)
+    .sort();
 }
 
 // declared pip dependencies (best-effort parse of [project].dependencies) — used to let a future
@@ -102,9 +119,9 @@ function discover() {
     if (!existsSync(base)) continue;
     for (const d of [base, ...walkDirs(base)]) {
       if (!existsSync(join(d, "pyproject.toml")) || !existsSync(join(d, "src"))) continue;
-      const module = moduleOf(d);
-      if (!module) continue;
-      pkgs.push({ dir: d, module, srcDir: join(d, "src"), testsDir: join(d, "tests"), deps: declaredDeps(d) });
+      const modules = modulesOf(d);
+      if (!modules.length) continue;
+      pkgs.push({ dir: d, modules, srcDir: join(d, "src"), testsDir: join(d, "tests"), deps: declaredDeps(d) });
     }
   }
   return pkgs;
@@ -132,7 +149,7 @@ function imports(file) {
 
 // ── the scan ──────────────────────────────────────────────────────────────────────────────────
 const pkgs = discover();
-const SIBLINGS = new Set(pkgs.map((p) => p.module));
+const SIBLINGS = new Set(pkgs.flatMap((p) => p.modules));
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) || "--mode=isolation").split("=")[1];
 
 if (!pkgs.length) {
@@ -152,15 +169,21 @@ for (const pkg of pkgs) {
   if (!existsSync(dir)) continue;
   for (const file of pyFiles(dir)) {
     scanned++;
+    // WHICH module took the edge: the first path segment under the scanned dir, so a multi-module
+    // package reports the importer that actually exists rather than the package's first module.
+    // (For a tests/ scan that segment is a test file or dir, not a module — fall back to the
+    // package's own modules, which is what the whole package's tests are attributed to.)
+    const seg = relative(dir, file).split(sep)[0];
+    const fromMod = pkg.modules.includes(seg) ? seg : pkg.modules[0];
     for (const top of imports(file)) {
-      if (top === pkg.module) continue;          // own module (intra-package)
+      if (pkg.modules.includes(top)) continue;   // own package (intra-package, any of its modules)
       if (!SIBLINGS.has(top)) continue;          // stdlib / third-party — not a sibling package
       // a sibling import. Allowed if a declared pip dep OR a listed allowed-edge.
-      edges.add(`${pkg.module}→${top}`);
+      edges.add(`${fromMod}→${top}`);
       const declared = pkg.deps.has(top) || pkg.deps.has(top.replace(/_/g, "-"));
-      const listed = ALLOWED_EDGES[pkg.module]?.[top];
+      const listed = ALLOWED_EDGES[fromMod]?.[top];
       if (!declared && !listed) {
-        violations.push(`${relative(ROOT, file)} : ${pkg.module} → ${top} (forbidden cross-package import)`);
+        violations.push(`${relative(ROOT, file)} : ${fromMod} → ${top} (forbidden cross-package import)`);
       }
     }
   }
@@ -189,7 +212,7 @@ if (mode === "graph") {
   // 1) every real edge must be a listed allowed-edge (or a declared pip dep).
   for (const e of edges) {
     const [from, to] = e.split("→");
-    const fromPkg = pkgs.find((p) => p.module === from);
+    const fromPkg = pkgs.find((p) => p.modules.includes(from));
     const declared = fromPkg?.deps.has(to) || fromPkg?.deps.has(to.replace(/_/g, "-"));
     if (!ALLOWED_EDGES[from]?.[to] && !declared) bad.push(`unlisted edge: ${from} → ${to}`);
   }
