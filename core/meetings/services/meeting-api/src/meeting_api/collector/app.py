@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+import json
+
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -143,6 +145,48 @@ def build_router(
         )
         return JSONResponse(content=doc)
 
+    # --- GET /transcripts/search?q= → ranked, snippeted hits across the caller's OWN transcripts.
+    # Registered BEFORE /transcripts/{platform}/{native_meeting_id} so `search` is not swallowed
+    # as a platform — the same ordering `by-id` above depends on.
+    #
+    # This answers what metadata cannot: not "meetings I tagged X" but "meetings where someone
+    # SAID X". Owner-scoped only, deliberately narrower than GET /meetings (which also surfaces
+    # share-recipient and workspace rows) — a search that over-returns is a disclosure, so it
+    # fails closed until widening it has had its own review.
+    @router.get("/transcripts/search")
+    async def search_transcripts(
+        request: Request,
+        q: str = Query(..., min_length=1, description=(
+            "Search text. Supports \"quoted phrases\", `or`, and `-excluded` terms "
+            "(websearch syntax). Malformed input never errors."
+        )),
+        limit: int = Query(20, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        platform: Optional[str] = Query(None, description="Restrict to one platform."),
+        native_meeting_id: Optional[str] = Query(
+            None, description="Restrict to one ROOM — every session held on that link."),
+        meeting_id: Optional[int] = Query(
+            None, description=(
+                "Restrict to one exact meeting ROW (the `meeting_db_id` every hit carries). "
+                "Wins over native_meeting_id, which names a room and not a meeting."
+            )),
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        if not (q or "").strip():
+            raise HTTPException(status_code=422, detail="'q' must not be blank")
+        hits = await store.search_transcripts(
+            user_id, q, limit=limit, offset=offset,
+            platform=platform, native_meeting_id=native_meeting_id,
+            meeting_db_id=meeting_id,
+        )
+        log_event(
+            "transcripts_searched", audience="user", span="transcripts.search",
+            user_id=user_id,
+            fields={"query_chars": len(q), "hits": len(hits), "platform": platform},
+        )
+        return JSONResponse(content={"query": q, "hits": hits, "count": len(hits)})
+
     # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
     @router.get("/transcripts/{platform}/{native_meeting_id}")
     async def get_transcript(
@@ -196,13 +240,29 @@ def build_router(
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
         exclude_planned: bool = Query(default=False),
+        metadata: Optional[str] = Query(
+            default=None,
+            description=(
+                'JSON object. Returns only meetings whose caller-set metadata CONTAINS it — e.g. '
+                '{"crm_deal":"acme-42"}. Containment, so extra keys on the row still match. '
+                "Filtered in SQL against the data GIN index, not on the fetched page."
+            ),
+        ),
     ):
         user_id = _resolve_user_id(x_user_id)
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         status_filter = status if status is not None else (_NON_PLANNED_STATUSES if exclude_planned else None)
+        metadata_filter = None
+        if metadata:
+            try:
+                metadata_filter = json.loads(metadata)
+            except Exception:
+                raise HTTPException(status_code=422, detail="'metadata' must be a JSON object")
+            if not isinstance(metadata_filter, dict):
+                raise HTTPException(status_code=422, detail="'metadata' must be a JSON object")
         meetings, _has_more = await store.list_meetings(
             user_id, status=status_filter, platform=platform, limit=limit, offset=offset,
-            member_workspaces=member_workspaces, list_view=True,
+            member_workspaces=member_workspaces, list_view=True, metadata_filter=metadata_filter,
         )
         log_event(
             "meetings_listed",
@@ -589,6 +649,106 @@ def build_router(
     # refuses an FSM-owned row with 409). Unknown/unowned native → 404. Additive: the int routes are
     # unchanged. DELETE returns 200 + a small body (the sealed native-delete response), NOT the 204
     # the row-id route returns. ---
+    # --- POST /meetings/{platform}/{native_meeting_id}/annotate → the caller's OWN description of
+    # a meeting: `title` and arbitrary `metadata`. Works in ANY status, unlike the PATCH below.
+    #
+    # The split is by WHAT is written, not when. PATCH edits the INSTRUCTIONS for a meeting (url,
+    # schedule, auto-join) and is refused once the FSM owns the row, because changing dispatch
+    # parameters under a running bot fights it. Annotations are the caller's DESCRIPTION: nothing
+    # in the pipeline reads them, so writing them can never re-arm, re-dispatch or re-route
+    # anything — and the moments a description is most worth writing are exactly the ones the FSM
+    # owns. Mid-meeting ("this is the Acme renewal call") and after it ends (the agent's own
+    # summary) were both previously impossible: PATCH answered 409 for the entire useful life of
+    # a meeting.
+    #
+    # `metadata` ALWAYS merges key-wise; an explicit null deletes exactly one key. There is
+    # deliberately NO whole-object replace: every writer on an account shares one API key, so a
+    # replace would let any caller destroy annotations written by another agent — or by the human
+    # — that it never saw and could not have known about. Merge plus explicit nulls expresses
+    # every legitimate edit while making "corrupt what you did not write" unrepresentable.
+    def _annotation_from(payload) -> tuple:
+        """``(title, metadata)`` off an annotate body, or the 422 that says what to send."""
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+        title = payload.get("title")
+        if title is not None and not isinstance(title, str):
+            raise HTTPException(status_code=422, detail="'title' must be a string")
+        metadata = payload.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise HTTPException(status_code=422, detail="'metadata' must be an object")
+        if title is None and metadata is None:
+            raise HTTPException(
+                status_code=422,
+                detail="nothing to annotate: send 'title' and/or 'metadata'",
+            )
+        return title, metadata
+
+    # --- POST /meetings/{meeting_id}/annotate → the SAME write, addressed by the identity a
+    # meeting always has. The (platform, native) pair is not one: a Google Meet room code is
+    # reused across sessions, and `_resolve_owned_native` resolves it to the caller's NEWEST row,
+    # so an older meeting on a recurring link could be read but never annotated — an agent that
+    # pulled a transcript had nowhere to write what it learned back (fr_b6340167da32b8b6).
+    #
+    # Three segments against the pair route's four, so on segment count alone neither shadows the
+    # other — the same property `POST /meetings/{meeting_id}/share` already relies on. Owner-scoped
+    # in the store (`annotate_meeting` matches user_id), so an id belonging to someone else is a
+    # 404 exactly as an unowned native pair is.
+    @router.post("/meetings/{meeting_id}/annotate")
+    async def annotate_meeting_by_id(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        title, metadata = _annotation_from(payload)
+        row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
+        return _annotate_result(row, user_id, meeting_id, title, metadata)
+
+    def _annotate_result(row, user_id, meeting_id, title, metadata):
+        """The shared tail of both annotate routes: the not-found / too-large refusals, the log
+        line, and the row. One copy, so the two addressings cannot answer differently."""
+        if row is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        if isinstance(row, dict) and row.get("error") == "metadata_too_large":
+            # 413, not 422: the request is well-formed, it is the SIZE that is refused. Nothing is
+            # written — a partial store would be worse than the refusal.
+            raise HTTPException(status_code=413, detail=row.get("detail", "metadata too large"))
+        log_event(
+            "meeting_annotated", audience="user", span="meetings.annotate",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"title": title is not None,
+                    "metadata_keys": sorted(metadata.keys()) if metadata else [],
+                    "status": row.get("status")},
+        )
+        return JSONResponse(content=row)
+
+    @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
+    async def annotate_native_meeting(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        title, metadata = _annotation_from(payload)
+
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
+        return _annotate_result(row, user_id, meeting_id, title, metadata)
+
     @router.patch("/meetings/{platform}/{native_meeting_id}")
     async def patch_native_meeting(
         platform: str,
@@ -767,9 +927,64 @@ def build_router(
         )
         return JSONResponse(content={"workspace_id": bound})
 
+    def _share_payload(payload) -> "tuple[str, list, int]":
+        """mode | allowed_emails | ttl out of a share-mint body, defaulted the same way for both
+        address shapes. `restricted` + allowed_emails is what makes a forwarded mail grant nothing."""
+        if not isinstance(payload, dict):
+            payload = {}
+        return (
+            str(payload.get("mode", "open")).strip() or "open",
+            payload.get("allowed_emails") or [],
+            int(payload.get("expires_in_sec", 86400) or 86400),
+        )
+
+    # --- POST /meetings/{meeting_id}/share → the SAME mint, addressed by the ROW's primary key.
+    #
+    # Why it exists: the (platform, native) pair is not an identity. A meeting planned from an invite
+    # whose url matched no platform lands as platform='unknown' with an EMPTY platform_specific_id —
+    # no pair addresses it, so the pair-keyed mint below answers 404 and every attendee mail for that
+    # meeting went out with no capability at all (row 97, 2026-09-02). The row id always exists.
+    #
+    # Route ordering / shadowing: this path is THREE segments (`meetings/{id}/share`) and the pair
+    # route is FOUR — Starlette compiles a full-path regex per route, so on segment count alone
+    # neither can swallow the other, the same property the gateway's by-row-id notes rely on. The
+    # `meeting_id: int` annotation is belt-and-braces: a non-numeric id is refused by validation here
+    # rather than being resolved as some other kind of name. Registered BEFORE the pair route anyway,
+    # matching the `by-id` precedent at the top of this file.
+    #
+    # Owner-scoped: a row that is not the caller's 404s exactly like an unknown one. Minting a
+    # capability is an owner act, and a share route that distinguished the two would leak existence.
+    @router.post("/meetings/{meeting_id}/share")
+    async def mint_transcript_share_by_id(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        mode, emails, ttl = _share_payload(payload)
+        minted = await store.mint_transcript_share_by_id(
+            user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
+        )
+        if minted is None:
+            log_event(
+                "transcript_share_mint_failed", audience="system", level="warning",
+                span="meetings.transcript.share", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"mode": mode, "reason": "no such meeting for this owner"},
+            )
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"mode": mode, "by": "row_id"})
+        return JSONResponse(content=minted)
+
     # --- POST /meetings/{platform}/{native_meeting_id}/share → mint an INDEPENDENT transcript share link
     # (capability token). Owner-scoped. open|restricted(+allowed_emails), TTL. The token is returned ONCE
-    # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved. ---
+    # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved.
+    # Kept for 0.10 clients and the /transcripts/{platform}/{native}/share alias; new callers use the
+    # by-row-id route above, which can address rows this one cannot. ---
     @router.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(
         platform: str,
@@ -782,18 +997,21 @@ def build_router(
             payload = await request.json()
         except Exception:
             payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        mode = str(payload.get("mode", "open")).strip() or "open"
-        emails = payload.get("allowed_emails") or []
-        ttl = int(payload.get("expires_in_sec", 86400) or 86400)
+        mode, emails, ttl = _share_payload(payload)
         minted = await store.mint_transcript_share(
             user_id, platform, native_meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
         )
         if minted is None:
+            log_event(
+                "transcript_share_mint_failed", audience="system", level="warning",
+                span="meetings.transcript.share", user_id=user_id,
+                meeting_id=f"{platform}/{native_meeting_id}",
+                fields={"mode": mode, "reason": "no meeting addressed by this (platform, native) pair"},
+            )
             raise HTTPException(status_code=404, detail=f"Meeting not found for {platform}/{native_meeting_id}")
         log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
-                  user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}", fields={"mode": mode})
+                  user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+                  fields={"mode": mode, "by": "pair"})
         return JSONResponse(content=minted)
 
     # --- POST /transcripts/share/accept → redeem a transcript share token (any authenticated user) →

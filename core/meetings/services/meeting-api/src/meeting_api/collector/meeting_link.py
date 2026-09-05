@@ -30,6 +30,20 @@ _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 # A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
 # room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
+# Zoom's own two join paths, on a host that does not say "zoom" — see the hosted-domain branch in
+# ``parse_meeting_url``. Anchored and digit-exact so nothing else can match it.
+_ZOOM_HOSTED_PATH = re.compile(r"^/(?:meeting|j)/(\d{10,11})/?$", re.IGNORECASE)
+
+
+def _has_passcode_param(query: str) -> bool:
+    """True when the query string carries a Zoom passcode under either spelling.
+
+    Required by the hosted-domain branch: the passcode is what makes a bare `/meeting/<digits>`
+    path recognizably a Zoom join link rather than an arbitrary numeric route."""
+    from urllib.parse import parse_qs
+
+    params = parse_qs(query or "")
+    return bool((params.get("password") or [""])[0] or (params.get("pwd") or [""])[0])
 
 
 def _configured_jitsi_hosts() -> set[str]:
@@ -77,6 +91,23 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
             if short:
                 return ("teams", short.group(1))
             return None
+        # Zoom under SOMEBODY ELSE'S hostname — the twin of the MCP link parser's hosted-domain
+        # branch, and it must stay in step with it (the two parsers answer the same question on
+        # two doors: this one for a pasted/ICS link, that one for `parse_meeting_link`). An
+        # organisation can front its Zoom tenancy on its own domain, and the link then carries no
+        # "zoom" anywhere — the Linux Foundation's is
+        # zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>.
+        #
+        # Matched on the PATH SHAPE (Zoom's own two join paths, a 10-11 digit id) AND a passcode
+        # parameter, never on the hostname — the hostname is the part that was replaced. The
+        # narrowness is the point: a site with a numeric path segment must not be read as a
+        # meeting. Declared-Jitsi hosts are exempt, and `generic_hosts=False` (the ICS free-text
+        # scan) skips this entirely for the reason that flag exists — an event description full of
+        # arbitrary links must not import one as a meeting.
+        if generic_hosts and host not in _configured_jitsi_hosts() and host != "meet.jit.si":
+            hosted = _ZOOM_HOSTED_PATH.match(parsed.path)
+            if hosted and _has_passcode_param(parsed.query):
+                return ("zoom", hosted.group(1))
         # Jitsi: the canonical public deployment, plus (for a deliberately pasted link) the common
         # self-hosted conventions — a host containing "jitsi", or a bare ``meet.*`` host (jitsi's
         # own recommended naming). Known platforms are matched ABOVE, so this only fires for

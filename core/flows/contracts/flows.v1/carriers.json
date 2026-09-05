@@ -1,0 +1,62 @@
+{
+  "contract": "flows.v1",
+  "carriers": [
+    {
+      "event": "onboarding.completed",
+      "owner": "identity",
+      "cardinality": "exactly_once_per_subject",
+      "refs": ["subject", "org", "seat"],
+      "source_event_id": "onboarding-<subject> — keyed to the person, so a redelivery dedupes at the flows intake as well as at the stamp",
+      "stamp": "users.data.onboarding_completed_at, written in the same transaction as the account (admin-api POST /admin/users)",
+      "description": "A person finished onboarding. Published by identity at POST /admin/users — the single account-creation point all five onboarding paths already share (the control MCP's sign-in verbs, its OAuth door, its account_for helper, the terminal's auth, and the flows mail door), so one publish covers all five and none of them had to be refactored. Fires in every profile including the no-agents one. `seat` is what a billing domain charges for and `org` is what it charges; `org` is empty today because identity holds no organisation for a person, and it is present-and-empty rather than absent so a consumer never has to ask a second place whether it looked."
+    },
+    {
+      "event": "meeting.started",
+      "owner": "meetings",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "meeting_id", "native", "platform"],
+      "source_event_id": "live-<meeting_id> — keyed to the meeting, so a redelivery dedupes at the flows intake and a second bot dispatch for the same meeting cannot open a second live reaction",
+      "description": "A call this deployment sent a bot into is happening NOW; triggers live_meeting, whose step stays pending while it runs and completes when meeting.completed for the same meeting is admitted. That pending row is what puts \"a meeting is happening right now\" in whats_waiting as a reaction rather than a /bots/status read at the edge (PRD decision 42.2) — the queue holds reactions, so anything a person is told about has to be one. HANDED OVER FROM FLOWS (F168/F181): meeting-api now publishes it (`meeting_api/events.py`, config.v1 publish-edge) the moment its own lifecycle derives the typed event on BotStatus.ACTIVE (`lifecycle/webhook.py`) — the true signal, and the fix for an ad hoc bot (MCP `request_meeting_bot`, no calendar invite) that ran no `invite_intake` reaction and so told flows nothing. `invite_intake` v3's own `emit_started` keeps running unchanged for calendar-intake meetings; it uses the SAME source_event_id scheme, so admission dedups the two producers into one reaction rather than firing `live_meeting` twice. Retiring `emit_started` (and this file's description then simplifying to one producer) is a follow-up, not done here."
+    },
+    {
+      "event": "meeting.completed",
+      "owner": "meetings",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "meeting_id", "native", "platform", "completion_reason"],
+      "source_event_id": "done-<meeting_id> — keyed to the meeting, matching invite_intake's own emit_completed id so a redelivery, or the second producer below, dedupes at the flows intake",
+      "description": "A meeting finished and its transcript is ready to work with; triggers post_meeting. HANDED OVER FROM FLOWS (F168/F181), on the same terms as meeting.started above: meeting-api now publishes it from its own lifecycle callback the instant a meeting's DB row flips to completed, which is the fix for an ad hoc (MCP-dispatched) meeting that previously reached no flow at all. `invite_intake` v3's `emit_completed` keeps running for calendar-intake meetings and dedupes against meeting-api's publish at admission (same source_event_id), not here. NOTE the refs correction: this entry previously read `[\"subject\", \"meeting_id\"]`, but neither producer has ever emitted a `subject` key — both use `uid` (`ctx.prior[\"ensure_user\"][\"uid\"]` in flows_defs/production.py; meeting-api's own `user_id` column, the same identity user id space). Corrected here rather than carried forward; `native` is required (post_meeting's process_meeting step reads `ctx.refs[\"native\"]` with no `.get()` fallback), `platform`/`completion_reason` are extra context neither producer's own consumer strictly needs today. meeting-api's publish carries no `participants`/`group` (its domain holds no invite) — see meeting_api/events.py for the room-read trade-off that creates on the calendar-intake path."
+    },
+    {
+      "event": "invite.received",
+      "owner": "flows",
+      "cardinality": "once_per_occurrence",
+      "refs": ["subject"],
+      "description": "An invitation arrived at the shared mailbox; triggers invite_intake. Recorded here from core/flows/mcp.tools.v1.json `publishes_events`, on the same terms as meeting.completed."
+    },
+    {
+      "event": "desk.unscaffolded",
+      "owner": "agent",
+      "cardinality": "exactly_once_per_subject",
+      "refs": ["uid"],
+      "source_event_id": "desk-<uid> — keyed to the person, because the fact is about their one desk",
+      "stamp": "the desk itself: agent-api publishes only on the call that CREATED the workspace directory (control_plane/routers/workspaces.py ws_init), and existence on disk is what makes that call happen once",
+      "description": "A desk exists and nobody has finished setting it up; triggers desk_setup, whose step blocks until `.scaffolded` appears. Published by the agent domain at POST /api/workspace/init — the one seam that provisions a desk, called on every login and idempotent, so the publish is gated on the desk being CREATED rather than on the call. THE STAMP IS THE DESK: unlike onboarding.completed there is no column to write, and none is needed — the fact is re-derivable from the workspace at any time (a directory with no `.scaffolded` in it), so a publish that never lands loses a queue card and never loses the fact, and a sweep can replay from the desks. Absent from the no-agents profile (PRD decision 40.6) because the agent domain is: there is no switched-off publisher there, there is no publisher."
+    },
+    {
+      "event": "claim.proposed",
+      "owner": "agent",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "claim_id"],
+      "source_event_id": "claim-<uid>-<claim_id> — keyed to the person AND the claim, because the queue card is one claim",
+      "description": "An agent wrote down something it believes about a person's company and needs that person's word on it; triggers desk_claim, whose step reads the claim out of the book and blocks on its own words. Published by the agent domain at POST /api/claims, one event per claim the call actually added. THAT ROUTE EXISTS FOR THIS FACT: the book was written through the generic PUT /api/workspace/file, so a claim being proposed was indistinguishable from any other file write and nothing could publish it — a generic file route cannot announce a specific fact without inspecting paths and guessing at contents, which is how a file route quietly becomes a state machine nobody declared. `claim_id` is positional and never reused, which is what lets a card stay keyed to one claim for the life of the book."
+    },
+    {
+      "event": "friction.reported",
+      "owner": "flows",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "session", "friction_id", "meeting_id", "tool", "kind", "severity", "extra", "what_i_tried", "what_happened", "deployment", "worker_image"],
+      "source_event_id": "friction-<friction_id> — keyed to the report itself, not to the edge it describes: a rough edge hit a second time is a SECOND occurrence, not a duplicate, and the recurrence is the signal, so nothing here dedupes it away",
+      "description": "PRD 40.9 open-decision 8 (founder, 2026-09-03 09:58Z): \"friction is just a sink — we dump that somewhere in production so that our dev agent can read it and fix the MCP and behaviour based on it.\" Friction is not a domain and carries no product surface beyond `report_friction` — this carrier and the timeline it lands on ARE that surface. Published by flows-api itself at POST /friction, an in-process admit() with no publish-edge hop: the route needs no config.v1 declaration because the producer and the intake are the same process, which is also why this works in the no-agents profile — the fact never depends on the agent domain being deployed at all. `friction_id` is minted by the route (`fr_<hex>`) and is the join key `friction.fixed` (a later carrier, not registered here — see the follow-up issue) will reference to close a report; carrying it as a ref rather than only in `source_event_id` is what lets a reader recover the id without re-deriving it from the wire string. `session` is OPTIONAL: the ref is present only when the reporter had one and omitted entirely otherwise, and the read model renders that absence as \"no session\" while keeping `session_id` at `\"\"` for a machine reader. It was REQUIRED until F-D27 (prod 2026-09-04 11:0xZ), when this route answered 400 \"session is required\" and so threw away the report describing that very refusal — the F-D26 defect one field along. A missing join key is OUR gap and not the reporter's, a report nothing can be tied back to is worth strictly more than no report at all, and the absence is itself signal about which producers cannot see a session. Generalised so there is no third incident: NO VALUE A CALLER SENDS OR OMITS PRODUCES A 400 on this route — over-long values truncate, unknown words are stored as sent, absences are stored as absences, and the only refusal left is authentication. `meeting_id`/`tool`/`deployment`/`worker_image` are optional context, present only when the reporter had them. `kind` and `severity` ARE FREE TEXT, STORED AS SENT, and `extra` holds every argument the route does not name (namespaced, because `concerns()` reads `uid`/`subject`/`owner` off the top level and a caller-supplied key there would re-address the report). F-D26, prod 2026-09-04: twelve reports were refused in twenty minutes for saying \"broke\" instead of \"error\", and the founder ruled the same morning — \"we want to catch all signal, does not make sense being strict about it, we want rich data, does not have to be too structured\". So the eight kinds survive as SUGGESTIONS in the tool description only; nothing about a report's shape is answerable with a 400, and grouping happens on the data later, never at the door."
+    }
+  ]
+}
