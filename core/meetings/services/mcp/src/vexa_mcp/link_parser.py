@@ -33,11 +33,23 @@ _TEAMS_ENTERPRISE_HOSTS = {
 }
 
 
+def _host_is(host: str, domain: str) -> bool:
+    """True when ``host`` IS ``domain`` or a subdomain of it — never a substring test.
+
+    ``"zoom.us" in host`` also accepts ``zoom.us.evil.example`` (the attacker owns the
+    registrable domain) and ``notzoom.us``; ``host.endswith("teams.live.com")`` accepts
+    ``eviltteams.live.com``. CodeQL calls this incomplete URL substring sanitization. The fix is
+    to compare the parsed ``hostname`` exactly, and to allow only an explicit dot-separated
+    subdomain — which is what the legitimate cases are (``us05web.zoom.us``,
+    ``frbmeetings.zoomgov.com``, ``contoso.teams.microsoft.com``)."""
+    return host == domain or host.endswith("." + domain)
+
+
 def _is_teams_enterprise_host(host: str) -> bool:
     return (
         host in _TEAMS_ENTERPRISE_HOSTS
-        or host.endswith(".teams.microsoft.us")
-        or host.endswith(".teams.microsoft.com")
+        or _host_is(host, "teams.microsoft.us")
+        or _host_is(host, "teams.microsoft.com")
     )
 
 
@@ -75,7 +87,7 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         )
 
     # Teams personal (teams.live.com/meet/<digits>?p=<passcode>)
-    if host.endswith("teams.live.com"):
+    if _host_is(host, "teams.live.com"):
         m = re.match(r"^/meet/(\d{10,15})/?$", path)
         if not m:
             raise HTTPException(status_code=422, detail="Unsupported teams.live.com URL format. Expected /meet/<10-15 digit id>.")
@@ -151,14 +163,16 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         )
 
     # Zoom Events — not joinable via shareable URL (check before general zoom.us match)
-    if host in {"events.zoom.us", "ev.zoom.com"} or host.endswith(".events.zoom.us"):
+    if host in {"events.zoom.us", "ev.zoom.com"} or _host_is(host, "events.zoom.us"):
         raise HTTPException(
             status_code=422,
             detail="Zoom Events links are not supported. Attendees receive unique per-registrant join links via email; these cannot be shared with a bot.",
         )
 
-    # Zoom: zoom.us (all subdomains) and zoomgov.com
-    if "zoom.us" in host or "zoomgov.com" in host:
+    # Zoom: zoom.us and zoomgov.com, apex or ANY subdomain — vanity tenancies (us02web.zoom.us,
+    # company.zoom.us) and the government cloud (frbmeetings.zoomgov.com) are exactly the
+    # ``*.<domain>`` case, which is why the match is exact-or-dot-suffix and not a substring.
+    if _host_is(host, "zoom.us") or _host_is(host, "zoomgov.com"):
         parts = [p for p in path.split("/") if p]
         native_id = ""
         if len(parts) >= 2 and parts[0] in {"j", "w"}:
