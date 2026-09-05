@@ -267,6 +267,43 @@ def _spoken(rows: list, copy: Optional[Callable]) -> tuple:
     return items, quiet
 
 
+def _one_absence_per_flow(items: list) -> list:
+    """Collapse a flow's `not_present` items to the newest one. Everything else passes through.
+
+    A deployment that does not run a domain answers `not_present` for EVERY reaction that reaches
+    it, so on a no-agent deployment each completed meeting adds one more `post_meeting`
+    /`agent:not_present` item — all of them the same sentence, saying the same thing about the same
+    deployment. Three of them were in one person's queue on 2026-09-05 (fr_e612b14fba618eea) and
+    the count only goes up.
+
+    `NOT_PRESENT_WINDOW_S` already keeps the queue finite; this is the other half, and it is a
+    different question — the horizon bounds how LONG an absence is news, this bounds how many
+    TIMES it is news at once. `notices()` below has collapsed the identical case since it was
+    written (two reactions of one flow say the identical sentence, "which reads as two different
+    things being true"); `waiting()` simply never did.
+
+    ONLY `not_present`, and only per flow. A pending item is a distinct thing in flight and a
+    failed one is a distinct thing to look at, so both keep one item each — but an absence is a
+    fact about the DEPLOYMENT, not about the meeting that ran into it, and there is nothing a
+    person can do about the second copy that they could not do about the first. The copy already
+    says so: `behavior/queue/_not_present.md` reads "Say it once, plainly."
+
+    The newest survives so `since` is the most recent occurrence rather than the first.
+    """
+    seen: set = set()
+    out = []
+    for item in items:
+        if item["reason"]["type"] != TYPE_NOT_PRESENT:
+            out.append(item)
+            continue
+        key = (item["flow"], item["reason"].get("domain"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[float] = None,
             limit: int = 50, identity: Optional[Callable] = None,
             copy: Optional[Callable] = None) -> dict:
@@ -276,12 +313,17 @@ def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[flo
     § 9 of the destination design gives: it is what makes a short queue legible. "Nothing is
     waiting" against a list that has no `live_meeting` in it says something different from the same
     empty queue against a list that has one, and neither answer needs a field the tool invents.
+
+    The collapse happens HERE and not in `pending()`, deliberately: `pending()` is shared with
+    `notices()`, which rides out on the meeting tools' results, and a filter placed there would
+    silently change what an agent that never asked receives.
     """
     rows = pending(db, subject=subject, now=now, limit=limit, identity=identity)
     if rows is None:
         return {"subject": subject, "unresolved": True, "waiting": 0, "items": [],
                 "quiet": 0, "flows": flows or []}
     items, quiet = _spoken(rows, copy)
+    items = _one_absence_per_flow(items)
     return {"subject": subject, "waiting": len(items), "items": items,
             # COUNTED, NOT HIDDEN: an operator asking why a queue is short must be able to tell
             # "nothing is happening" from "behavior is silent about what is happening".
