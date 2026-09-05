@@ -1194,7 +1194,8 @@ class SqlAlchemyTranscriptStore:
     FTS_CONFIG = "english"
 
     async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
-                                 platform=None, native_meeting_id=None) -> list[dict]:
+                                 platform=None, native_meeting_id=None,
+                                 meeting_db_id=None) -> list[dict]:
         """Owner-scoped FTS over transcript segments (see ports.search_transcripts).
 
         Measured on 210k segments across two tenants (dogfood, 2026-08-29): a rare term took
@@ -1236,7 +1237,12 @@ class SqlAlchemyTranscriptStore:
               -- only in `IS NULL` ("could not determine data type of parameter $3"), so an
               -- optional filter must state its own type.
               AND (CAST(:platform AS text) IS NULL OR m.platform = CAST(:platform AS text))
-              AND (CAST(:native AS text) IS NULL
+              -- The EXACT row wins over the room code: a Google Meet code names a ROOM and
+              -- every session ever held on that link answers to it, so a caller who supplied
+              -- both is asking about one meeting. Same explicit-cast rule as the filters above.
+              AND (CAST(:mid AS bigint) IS NULL OR t.meeting_id = CAST(:mid AS bigint))
+              AND (CAST(:mid AS bigint) IS NOT NULL
+                   OR CAST(:native AS text) IS NULL
                    OR m.platform_specific_id = CAST(:native AS text))
             ORDER BY rank DESC, t.meeting_id DESC, t.start_time ASC
             LIMIT :lim OFFSET :off
@@ -1244,6 +1250,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             rows = (await db.execute(sql, {
                 "q": q, "uid": user_id, "platform": platform, "native": native_meeting_id,
+                "mid": meeting_db_id,
                 "lim": max(1, min(int(limit or 20), 100)), "off": max(0, int(offset or 0)),
             })).mappings().all()
         return [dict(r) for r in rows]
