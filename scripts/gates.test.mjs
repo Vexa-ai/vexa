@@ -137,6 +137,29 @@ function withEdited(relPath, find, repl, fn) {
   try { return fn(); } finally { writeFileSync(abs, orig); }
 }
 
+
+// ── gate:config-contract check 6 — the shared lite entrypoint (F130) ────────────────────────────
+// Checks 3 and 4 walk compose, helm and the supervisord program env in BOTH directions.
+// deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
+// one direction, that nothing walked: an export whose declaration AND reader were both deleted left
+// no refusal and no warning. Measured on the tip before the fix — the same plant was green.
+// entrypoint.sh is touched by no other test file, so the in-place edit below stays inside this
+// file's sequential run.
+const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
+
+test("config-contract vacuity: the committed lite entrypoint is green", () => {
+  const r = runGate("config-contract");
+  assert.equal(r.green, true, `the clean tree must be green or the fixture below proves nothing:\n${r.out}`);
+});
+
+test("an entrypoint.sh export that no adopted declaration carries is RED, named by file:line", () => {
+  const r = withEdited(LITE_ENTRYPOINT, "\nexport ", "\nexport VEXA_PHANTOM_ENTRY=1\nexport ",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `a phantom lite export passed the contract gate:\n${r.out}`);
+  assert.match(r.out, /entrypoint\.sh:\d+ exports VEXA_PHANTOM_ENTRY/,
+    `the failure must name the FILE AND LINE the operator has to open:\n${r.out}`);
+});
+
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";

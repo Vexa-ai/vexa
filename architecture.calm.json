@@ -24,7 +24,7 @@
    "unique-id": "agent",
    "node-type": "system",
    "name": "agent",
-   "description": "copilot; owns the processed (cleaned) transcript + signals",
+   "description": "the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript",
    "metadata": [
     {
      "path": "core/agent"
@@ -505,18 +505,6 @@
    ]
   },
   {
-   "unique-id": "processed-notes.v1",
-   "node-type": "contract",
-   "name": "processed-notes.v1",
-   "description": "processed-notes.v1 — sealed/published contract (agent): the proc:meeting:{row_id} cleaned-notes stream + view_end terminal marker (agent-worker → meeting-api db-writer / agent-api SSE; ADR-0027)",
-   "metadata": [
-    {
-     "path": "core/agent/contracts/processed-notes.v1",
-     "domain": "agent"
-    }
-   ]
-  },
-  {
    "unique-id": "workspace.v1",
    "node-type": "contract",
    "name": "workspace.v1",
@@ -863,41 +851,10 @@
    ]
   },
   {
-   "unique-id": "proc-stream",
-   "node-type": "data-asset",
-   "name": "proc:meeting:{id} (stream)",
-   "description": "cleaned 1:1 processed transcript, keyed by segment_id, + the view_end terminal marker (processed-notes.v1, ADR-0027); agent-worker is the writer; read by meeting-api's db-writer (durable data.processed.views) and agent-api's live SSE",
-   "controls": {
-    "ownership": {
-     "description": "single writer (P23)",
-     "requirements": [
-      {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
-       "config": {
-        "writers": [
-         "agent-worker"
-        ],
-        "match": "proc:meeting:",
-        "op": "xadd"
-       }
-      }
-     ]
-    }
-   },
-   "metadata": [
-    {
-     "contract": "transcript.v1"
-    },
-    {
-     "stage": "cleaned"
-    }
-   ]
-  },
-  {
    "unique-id": "out-stream",
    "node-type": "data-asset",
    "name": "unit:{id}:out (stream)",
-   "description": "worker output stream (cards / agent activity / message deltas — notes moved to proc-stream per ADR-0027); agent-api relays as SSE",
+   "description": "worker output stream (agent activity / message deltas); agent-api relays as SSE",
    "controls": {
     "ownership": {
      "description": "single writer (P23)",
@@ -1107,7 +1064,7 @@
    "unique-id": "agent-worker",
    "node-type": "service",
    "name": "agent-worker",
-   "description": "spawned claude-in-container worker; one dispatch turn / meeting copilot",
+   "description": "spawned isolated workspace-agent worker; selectable Claude Code or Codex app-server harness; one dispatch turn; every dispatch mounts the ordered [_global, active workspaces, _system] stack, fails closed without _global, and loads its authoritative entry context into the turn",
    "metadata": [
     {
      "path": "core/agent/worker"
@@ -1251,6 +1208,130 @@
      "external-image": "vexaai/dashboard"
     }
    ]
+  },
+  {
+   "unique-id": "flows",
+   "node-type": "system",
+   "name": "flows",
+   "description": "the reaction engine; owns the reaction row and its effect receipts",
+   "metadata": [
+    {
+     "path": "core/flows"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-engine",
+   "node-type": "module",
+   "name": "flows-engine",
+   "description": "the engine: stdlib-only at module scope — step implementations and flow definitions are values it receives, never imports",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-api",
+   "node-type": "service",
+   "name": "flows-api",
+   "description": "the flows HTTP surface: fact ingress (/events), the flow registry and lifecycle, the reaction projection, the person-scoped timeline",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_integrations"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "flows-http",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-worker",
+   "node-type": "service",
+   "name": "flows-worker",
+   "description": "the one leased loop; a SKIP LOCKED poll over next_run_at is the only clock consumer — time is a column, not a scheduler",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_worker"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-defs",
+   "node-type": "module",
+   "name": "flows-defs",
+   "description": "product behaviour as DATA: each flow is a typed event trigger plus an ordered list of step FUNCTIONS, one registration per version; in-flight reactions keep the version stamped at admission",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_defs"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-steps",
+   "node-type": "module",
+   "name": "flows-steps",
+   "description": "the step implementations a flow names — one function per capability, registered by __name__; the real adapters call domain HTTP surfaces and sit OUTSIDE the engine's import graph, and fakes.py mirrors the same names so every fixture runs with zero domains attached",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_steps"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-schema",
+   "node-type": "module",
+   "name": "flows-schema",
+   "description": "the schema source of truth: declarative SQLAlchemy models from which core/flows/schema.sql is generated (scripts/gen_schema.py, drift-tested); lives outside src/flows so the engine stays stdlib-pure at import",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_schema"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-timeline",
+   "node-type": "module",
+   "name": "flows-timeline",
+   "description": "one person's day in order: the READ back over reactions and effect receipts along the time axis. It admits nothing, claims nothing and writes nothing — the read model for the timeline and queue surfaces",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_timeline"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-rows",
+   "node-type": "data-asset",
+   "name": "flows-rows",
+   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again. TWO writers: flows-worker runs the steps and stamps the receipts, and flows-api admits facts (POST /events → admit() → INSERT INTO reaction) and registers flow versions (INSERT INTO flow_version) in its own process"
+  },
+  {
+   "unique-id": "flows.v1",
+   "node-type": "contract",
+   "name": "flows.v1",
+   "description": "flows.v1 — the carrier census (flows): one producing domain per event type, with the refs a consumer may rely on and the cardinality it may assume. Read by gate:config-contract (a publish-edge key's carriers must be registered here, owned by that service's domain), by gate:schema and by the flows suite. Unsealed by intent — see the contract's README",
+   "metadata": [
+    {
+     "path": "core/flows/contracts/flows.v1",
+     "domain": "flows"
+    }
+   ]
+  },
+  {
+   "unique-id": "processed-notes.v1",
+   "node-type": "contract",
+   "name": "processed-notes.v1",
+   "description": "processed-notes.v1 — sealed/published contract (agent): the proc:meeting:{row_id} cleaned-notes stream + view_end terminal marker (agent-worker → meeting-api db-writer / agent-api SSE; ADR-0027)",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/processed-notes.v1",
+     "domain": "agent"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1268,12 +1349,10 @@
       "task.v1",
       "tool.v1",
       "unit.v1",
-      "processed-notes.v1",
       "workspace.v1",
       "agent-worker",
       "out-stream",
       "unit-in",
-      "proc-stream",
       "va-chat"
      ]
     }
@@ -1541,24 +1620,6 @@
      },
      "destination": {
       "node": "tc-stream"
-     }
-    }
-   },
-   "metadata": [
-    {
-     "access": "read"
-    }
-   ]
-  },
-  {
-   "unique-id": "terminal-reads-processed",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "terminal"
-     },
-     "destination": {
-      "node": "proc-stream"
      }
     }
    },
@@ -2032,25 +2093,6 @@
    ]
   },
   {
-   "unique-id": "aw-proc",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "agent-worker"
-     },
-     "destination": {
-      "node": "proc-stream"
-     }
-    }
-   },
-   "description": "XADD cleaned 1:1 notes",
-   "metadata": [
-    {
-     "access": "write"
-    }
-   ]
-  },
-  {
    "unique-id": "aw-unitin",
    "relationship-type": {
     "connects": {
@@ -2369,13 +2411,140 @@
      ]
     }
    }
+  },
+  {
+   "unique-id": "flows-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "flows",
+     "nodes": [
+      "flows-engine",
+      "flows-defs",
+      "flows-steps",
+      "flows-schema",
+      "flows-timeline",
+      "flows-api",
+      "flows-worker",
+      "flows-rows",
+      "flows.v1"
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "flows-worker-writes-rows",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-worker"
+     },
+     "destination": {
+      "node": "flows-rows"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-api-writes-rows",
+   "description": "the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-api"
+     },
+     "destination": {
+      "node": "flows-rows"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-api-reads-rows",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-api"
+     },
+     "destination": {
+      "node": "flows-rows"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-worker-calls-agent-api",
+   "description": "steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-worker"
+     },
+     "destination": {
+      "node": "agent-api"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "flows-worker-calls-gateway",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-worker"
+     },
+     "destination": {
+      "node": "gateway"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "flows-worker-calls-admin-api",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-worker"
+     },
+     "destination": {
+      "node": "admin-api"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "flows-deployed",
+   "description": "helm only today (deploy/helm/charts/vexa/templates/flows.yaml); the two processes are not services in deploy/compose, so a compose stack runs no flows",
+   "relationship-type": {
+    "deployed-in": {
+     "container": "deploy",
+     "nodes": [
+      "flows-api",
+      "flows-worker"
+     ]
+    }
+   }
   }
  ],
  "flows": [
   {
    "unique-id": "live-transcript-flow",
    "name": "live transcript",
-   "description": "raw -> durable collector -> native stream -> copilot clean -> render. One render engine; terminal never re-derives.",
+   "description": "raw -> durable collector -> native stream -> render. One render engine; terminal never re-derives.",
    "transitions": [
     {
      "relationship-unique-id": "bot-writes-segments-stream",
@@ -2395,17 +2564,7 @@
     {
      "relationship-unique-id": "aw-tcnative",
      "sequence-number": 4,
-     "description": "copilot tails the native stream"
-    },
-    {
-     "relationship-unique-id": "aw-proc",
-     "sequence-number": 5,
-     "description": "copilot writes cleaned 1:1 transcript"
-    },
-    {
-     "relationship-unique-id": "terminal-reads-processed",
-     "sequence-number": 6,
-     "description": "one engine renders raw|processed; no re-derivation"
+     "description": "the agent reads the native stream for chat grounding"
     }
    ]
   },

@@ -9,7 +9,13 @@
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
+// execFileSync, not execSync, wherever a command carries a PATH we computed (ROOT is
+// process.cwd(), so every such path is an environment value): an argv array is handed to
+// execve directly, so there is no shell to reinterpret a space, a quote or a `;` in the
+// checkout path (CodeQL js/shell-command-injection-from-environment). The remaining execSync
+// calls are either constant command strings or genuine shell pipelines (grep … | grep -v …
+// || true), which need a shell by construction.
 import { createHash } from "node:crypto";
 
 const ROOT = process.cwd();
@@ -77,7 +83,7 @@ function findFile(dir, re) {
 // a Python service that stands up a FastAPI app (→ must answer gate:health). A worker carve
 // (agent-api: spawned by the runtime, liveness = workload lifecycle) builds no app → exempt.
 const hasFastApiApp = (d) => existsSync(join(d, "src")) && findFile(join(d, "src"), /\.py$/) &&
-  (() => { try { execSync(`grep -rql "FastAPI(" ${JSON.stringify(join(d, "src"))}`, { stdio: "pipe" }); return true; } catch { return false; } })();
+  (() => { try { execFileSync("grep", ["-rql", "FastAPI(", join(d, "src")], { stdio: "pipe" }); return true; } catch { return false; } })();
 const pyPackages = () => walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
 
 // a published contract is a `<domain>/contracts/X.vN` dir carrying JSON Schema file(s)
@@ -149,7 +155,7 @@ function gateIsolation() {
     .map((d) => [d, join(d, "scripts", "check-isolation.js")])
     .filter(([, s]) => existsSync(s));
   for (const [d, s] of found) {
-    try { execSync(`node ${JSON.stringify(s)}`, { stdio: "pipe" }); }
+    try { execFileSync("node", [s], { stdio: "pipe" }); }
     catch (e) { return fail([`isolation failed in ${rel(d)}: ${errText(e).slice(0, 300)}`]); }
   }
   console.log(`  ✓ gate:isolation — ${found.length} brick(s) checked`);
@@ -161,7 +167,7 @@ function gateGraph() {
   if (!packageDirs().length) { console.log("  ✓ gate:graph — no packages yet (green-on-empty)"); return true; }
   const targets = ["core", "integrations", "clients", "sdks", "schemas", "tools"]
     .filter((d) => existsSync(join(ROOT, d)));
-  try { execSync(`npx depcruise --config .dependency-cruiser.cjs --no-progress ${targets.join(" ")}`, { stdio: "pipe" }); }
+  try { execFileSync("npx", ["depcruise", "--config", ".dependency-cruiser.cjs", "--no-progress", ...targets], { stdio: "pipe" }); }
   catch (e) { return fail([`dependency-cruiser:\n${errText(e)}`]); }
   console.log("  ✓ gate:graph — acyclic + allowed-edges");
   return true;
@@ -174,7 +180,7 @@ function gateGraph() {
 // edges). A forbidden cross-package import → RED, with the file path. Green-on-empty.
 function gateIsolationPy() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
-  try { execSync(`node ${JSON.stringify(s)} --mode=isolation`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--mode=isolation"], { stdio: "pipe" }); }
   catch (e) { return fail([`python isolation:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:isolation-py — every Python sibling import is own-module, declared, or an allowed edge");
   return true;
@@ -187,7 +193,7 @@ function gateIsolationPy() {
 // with isolation-py (DRY). Green-on-empty.
 function gateGraphPy() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
-  try { execSync(`node ${JSON.stringify(s)} --mode=graph`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--mode=graph"], { stdio: "pipe" }); }
   catch (e) { return fail([`python graph:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:graph-py — Python cross-package edges acyclic + allow-listed");
   return true;
@@ -200,7 +206,7 @@ function gateGraphPy() {
 // Green-on-empty.
 function gateTestIsolation() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
-  try { execSync(`node ${JSON.stringify(s)} --mode=test-isolation`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--mode=test-isolation"], { stdio: "pipe" }); }
   catch (e) { return fail([`python test-isolation:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:test-isolation — no Python test imports a sibling module's internals (test lane gated, P2)");
   return true;
@@ -213,7 +219,7 @@ function gateTestIsolation() {
 function gateArchReport() {
   const s = join(ROOT, "scripts", "arch-report.mjs");
   if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
-  try { execSync(`node ${JSON.stringify(s)} --check`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--check"], { stdio: "pipe" }); }
   catch (e) { return fail([`arch-report:\n${errText(e).slice(0, 900)}`]); }
   console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
   return true;
@@ -247,7 +253,7 @@ function gateSchema() {
   );
   if (!contracts.length) { console.log("  ✓ gate:schema — no contracts yet (green-on-empty)"); return true; }
   for (const d of contracts) {
-    try { execSync(`node ${JSON.stringify(join(d, "validate.mjs"))} --check`, { stdio: "pipe" }); }
+    try { execFileSync("node", [join(d, "validate.mjs"), "--check"], { stdio: "pipe" }); }
     catch (e) { return fail([`schema ${rel(d)}:\n${errText(e)}`]); }
   }
   console.log(`  ✓ gate:schema — ${contracts.length} contract(s) conform (goldens ≡ schema)`);
@@ -278,6 +284,15 @@ function gateContractVersion() {
   if (changed.length) return fail(changed.map((k) =>
     `sealed contract changed: ${k} — a published .vN is frozen. BREAKING change → add the next version (vN+1); ` +
     `BACK-COMPATIBLE change → re-seal with \`pnpm seal:contracts\` in a lane:contract human-reviewed PR.`));
+  // A SEAL ENTRY WITH NO CONTRACT BEHIND IT (F93). The loop above walks the DIRS, so an entry for a
+  // deleted contract is never read and never fails — `processed-notes.v1` stayed sealed long after
+  // PRD decision 34 removed the pipeline that produced it. A stale pin is not harmless: it is the
+  // seal file asserting that something is frozen when nothing is.
+  const sealedDirs = new Set(dirs.map((d) => rel(d).replace(/\\/g, "/")));
+  const orphaned = Object.keys(seal).filter((k) => !sealedDirs.has(k));
+  if (orphaned.length) return fail(orphaned.map((k) =>
+    `sealed contract no longer exists: ${k} — remove it from contracts.seal.json (or restore the ` +
+    `contract). A pin with nothing behind it freezes nothing.`));
   const note = unsealed.length ? `; ${unsealed.length} unsealed (in development): ${unsealed.join(", ")}` : "";
   console.log(`  ✓ gate:contract-version — ${dirs.length - unsealed.length} sealed contract(s) frozen${note}`);
   return true;
@@ -330,7 +345,7 @@ function gateCompose() {
   try { execSync("docker info", { stdio: "pipe" }); }
   catch { console.log("  ✓ gate:compose — docker not available → skip (green-or-skip)"); return true; }
   if (!existsSync(runner)) return fail([`gate:compose — compose stack present but no readiness proof (deploy/compose/bin/stack-test missing)`]);
-  try { execSync(`bash ${JSON.stringify(runner)}`, { stdio: "pipe", env: { ...process.env, COMPOSE_DYNAMIC_PORTS: process.env.COMPOSE_DYNAMIC_PORTS || "1" } }); }
+  try { execFileSync("bash", [runner], { stdio: "pipe", env: { ...process.env, COMPOSE_DYNAMIC_PORTS: process.env.COMPOSE_DYNAMIC_PORTS || "1" } }); }
   catch (e) { return fail([`compose stack-readiness proof:\n${errText(e).slice(-3000)}`]); }
   console.log("  ✓ gate:compose — REAL compose stack proven bot-ready (health·auth·transcript·recording·control-plane)");
   return true;
@@ -384,7 +399,7 @@ function gateEvalBaseline() {
   const baseline = join(ROOT, "core", "meetings", "eval", "BASELINE.md");
   if (!existsSync(verify)) { console.log("  ✓ gate:eval-baseline — no worker-eval harness yet (green-on-empty)"); return true; }
   if (!existsSync(baseline)) return fail(["gate:eval-baseline — core/meetings/eval/BASELINE.md (recorded L4 ground truth) missing"]);
-  try { execSync(`bash ${JSON.stringify(verify)}`, { cwd: ROOT, stdio: "pipe" }); }
+  try { execFileSync("bash", [verify], { cwd: ROOT, stdio: "pipe" }); }
   catch (e) { return fail([`eval-baseline oracle self-test:\n${errText(e).slice(-1500)}`]); }
   console.log("  ✓ gate:eval-baseline — worker-L4 eval oracle self-test passes + BASELINE.md recorded (reusable instrument; live score is B:V1)");
   return true;
@@ -777,7 +792,7 @@ function gateExecutionEnv() {
   if (!existsSync(example)) return fail(["gate:execution-env — committed template deploy/execution-targets.example.json missing"]);
   const real = join(ROOT, "deploy", "execution-targets.json");
   const files = [example, ...(existsSync(real) ? [real] : [])];
-  try { execSync(`node ${JSON.stringify(v)} ${files.map((f) => `--file ${JSON.stringify(f)}`).join(" ")}`, { stdio: "pipe" }); }
+  try { execFileSync("node", [v, ...files.flatMap((f) => ["--file", f])], { stdio: "pipe" }); }
   catch (e) { return fail([`execution-env registry:\n${errText(e).slice(-1500)}`]); }
   console.log(`  ✓ gate:execution-env — ${files.length} registry file(s) conform to execution-targets.v1${existsSync(real) ? "" : " (template only — real registry gitignored/absent)"}`);
   return true;
@@ -826,10 +841,26 @@ function gateDataflow() {
   // without registering it here and CI goes red.
   const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
   const required = new Set();
+  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const dom of lsdirs("core")) {
     for (const s of lsdirs(`core/${dom}/services`)) required.add(`core/${dom}/services/${s}`);
     for (const m of lsdirs(`core/${dom}/modules`)) required.add(`core/${dom}/modules/${m}`);
     for (const c of lsdirs(`core/${dom}/contracts`)) if (/\.v\d+$/.test(c)) required.add(`core/${dom}/contracts/${c}`);
+    // A domain laid out as a single package — one pyproject.toml over core/<dom>/src/<pkg>… — has
+    // neither services/ nor modules/, so the two loops above ask for NOTHING from it and its modules
+    // could not drift into existence unregistered: they were never required in the first place.
+    // core/flows was exactly that. It holds seven top-level packages and the chart carried three, and
+    // the completeness check — the anti-drift guard — reported nothing, because you cannot detect
+    // drift from a set you never built. Walk core/<dom>/src/* for those domains.
+    //
+    // The one exemption: a domain whose `core/<dom>/src` is ITSELF a registered node (core/runtime,
+    // whose `runtime` service node points there) ships its src as one unit, and asking for its
+    // packages as well would demand a second node for the same code. Registering the dir is the
+    // domain saying "this src is one thing"; not registering it is what leaves the packages
+    // individually accountable.
+    if (lsdirs(`core/${dom}/services`).length || lsdirs(`core/${dom}/modules`).length) continue;
+    if (modelPaths.has(`core/${dom}/src`)) continue;
+    for (const p of lsdirs(`core/${dom}/src`)) required.add(`core/${dom}/src/${p}`);
   }
   for (const c of lsdirs("deploy/contracts")) if (/\.v\d+$/.test(c)) required.add(`deploy/contracts/${c}`);
   // a client that is composed-of (a "mapped" client, e.g. terminal) must register every src/* concern
@@ -841,7 +872,6 @@ function gateDataflow() {
     if (clNode && containers.has(clNode["unique-id"]))
       for (const d of lsdirs(`clients/${cl}/src`)) required.add(`clients/${cl}/src/${d}`);
   }
-  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const r of [...required].sort()) if (!modelPaths.has(r)) errs.push(`completeness: '${r}' exists on disk but is not registered in architecture.calm.json`);
   for (const n of nodes) for (const m of (n.metadata || [])) if (m.path && !existsSync(join(ROOT, m.path))) errs.push(`completeness: node '${n["unique-id"]}' points at missing path '${m.path}'`);
 
@@ -921,9 +951,22 @@ function gateDataflow() {
 //      declaration's `surface_only` list with a reason) — only process-plumbing vars are allowlisted;
 //   5. undeclared-read scan: every literal os.getenv/os.environ read in the service's source names a
 //      declared key (so a new env read MUST land in the declaration — the SSOT — to pass CI).
+//   6. publish edges: a `publish-edge` key names the carriers it hands over (class `publish-edge`,
+//      field `publishes_events`), and each must be registered in the flows carrier census OWNED BY
+//      THIS SERVICE'S DOMAIN. A PUBLISH EDGE IS NOT A DEPENDENCY — a dependency is a call whose
+//      answer the caller needs, a publish is a fact handed over best-effort and swallowed — and
+//      without this check the sanctioned way for two domains to couple has no declaration that
+//      says so: the only classes available all mean "this service needs this value", so declaring
+//      a publish target as one of them would assert the publisher depends on the consumer, which
+//      is the one thing it must not do. The census makes `publishes_events` load-bearing rather
+//      than a comment: one producing domain per carrier, checkable.
 const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // process-plumbing vars a surface may set without a declaration entry (kept TIGHT + documented):
 // interpreter/runtime wiring only, never product config.
+// An entry here is a hole in the SSOT, so it earns its place by a surface that actually sets it and
+// a service that actually reads it. `HOME` and `TMPDIR` were added by 01-foundation with neither and
+// were removed again on the 0.12.27 candidate: no deploy surface sets them and no adopted service
+// reads them, so all they did was pre-authorise two undeclared reads of values an operator controls.
 const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ"]);
 // literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
 const CONFIG_READ_RES = [
@@ -932,6 +975,21 @@ const CONFIG_READ_RES = [
   /os\.environ\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g,
   /os\.environ\.setdefault\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
 ];
+// The flows carrier census — the registry a publish edge's `publishes_events` is checked against.
+// GREEN-ON-EMPTY: no census yet ⇒ publish edges are still declared and still schema-checked, they
+// are simply not cross-referenced (the same rule every other gate here follows).
+const CARRIER_CENSUS = join(ROOT, "core", "flows", "contracts", "flows.v1", "carriers.json");
+function carrierOwners() {
+  if (!existsSync(CARRIER_CENSUS)) return null;
+  const owners = new Map();
+  for (const c of JSON.parse(readFileSync(CARRIER_CENSUS, "utf8")).carriers || []) owners.set(c.event, c.owner);
+  return owners;
+}
+// A service's DOMAIN is the tree it lives in — `core/identity/services/admin-api/…` → identity.
+// Derived rather than tabulated: a second table of which service is which domain is a second place
+// the answer lives, and the path already says it.
+const serviceDomain = (declPath) => declPath.split("/")[1];
+
 const CONFIG_ADOPTED = [
   {
     service: "meeting-api",
@@ -961,6 +1019,39 @@ const CONFIG_ADOPTED = [
     preflight: "core/identity/services/admin-api/src/admin_api/config_preflight.py",
     scan: ["core/identity/services/admin-api/src"],
     compose: "admin-api", helm: ["deployment-admin-api.yaml"], lite: "admin-api",
+  },
+  {
+    // PRD decision 40 — the MCP surface a person's own agent connects to. Adopted late: it shipped
+    // with ELEVEN env keys and no declaration and no preflight, so the one service whose whole job
+    // is to be the product's front door was the one service nothing checked.
+    // helm/lite are EMPTY because it has no template and no supervisord program — every key it does
+    // plumb is declared for compose, and the ones it does not are `targets: []` rather than a
+    // pretence that a surface carries them.
+    service: "mcp",
+    decl: "core/meetings/services/mcp/src/vexa_mcp/config.v1.json",
+    preflight: "core/meetings/services/mcp/src/vexa_mcp/config_preflight.py",
+    scan: ["core/meetings/services/mcp/src"],
+    compose: "mcp", helm: [], lite: null,
+  },
+  {
+    // #1453 + the compose-service branch: flows is a DEPLOYABLE DOMAIN now, not a pair of host
+    // lanes out of a rig script, and the seam backlog's B7 ("the config-contract gate is green
+    // over less than half the seam") named this brick by hand. `core/flows/src/flows_config.py`
+    // was written to make this adoption a transcription — one table, both directions asserted by
+    // its own test — and this entry is that transcription arriving.
+    // ONE DECLARATION, THREE COMPOSE LANES (F190 added `flows-worker`): `flows-api`,
+    // `flows-mailbox` and `flows-worker` are the same image under different commands and carry
+    // the same environment, so the declaration belongs to the domain and the entry binds it to
+    // the API lane — the other two lanes' compose blocks are unchecked by this gate exactly as
+    // `flows-mailbox`'s always was (same reasoning: one declaration, one lane scanned for it).
+    // helm/lite are EMPTY: the flows helm chart plumbs its keys through a Secret's `stringData`,
+    // which the line-wise `- name:` scan cannot see, and there is no supervisord program at all.
+    // Naming a surface this check cannot actually read would be worse than saying it is not read.
+    service: "flows-api",
+    decl: "core/flows/src/config.v1.json",
+    preflight: "core/flows/src/config_preflight.py",
+    scan: ["core/flows/src"],
+    compose: "flows-api", helm: [], lite: null,
   },
   {
     service: "gateway",
@@ -1007,9 +1098,31 @@ function liteProgramEnv(program) {
   const envLine = (section.match(/^environment=(.*)$/m) || [])[1] || "";
   return new Set([...envLine.matchAll(/([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]));
 }
-const liteEntrypointExports = () => new Set(
-  [...readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8")
-    .matchAll(/^export ([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]));
+// key -> the entrypoint.sh line that exports it. A Map, not a Set, so check 6 can name file:line;
+// `.has()` keeps it a drop-in for check 3's fallback use.
+const liteEntrypointExports = () => {
+  const lines = readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8").split("\n");
+  const out = new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^export ([A-Z][A-Z0-9_]*)=/);
+    if (m && !out.has(m[1])) out.set(m[1], i + 1);
+  }
+  return out;
+};
+// F130 — the keys deploy/lite/entrypoint.sh exports that NO config.v1-adopted service declares,
+// each naming the program it belongs to. entrypoint.sh is a SHARED surface: its exports land in the
+// environment every supervisord program inherits, so a key cannot be attributed to one service the
+// way a compose `environment:` block or a helm template can. The list is therefore the honest
+// alternative to attributing them wrongly — and, like `surface_only`, it is a backlog: an entry
+// leaves when its program adopts config.v1. Kept TIGHT: a key belonging to an ADOPTED service must
+// be declared, never listed here.
+const CONFIG_LITE_UNADOPTED = {
+  VEXA_PUBLIC_API_URL: "clients/terminal — the browser-visible API base; terminal has not adopted config.v1",
+  TERMINAL_PUBLIC_URL: "clients/terminal — its own public origin; same",
+  NEXTAUTH_SECRET: "clients/terminal — NextAuth's signing secret; same",
+  JWT_SECRET: "clients/terminal — the session secret; same",
+  VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
+};
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in
   const walk = (dir) => {
@@ -1038,12 +1151,14 @@ function gateConfigContract() {
   const envExample = dotEnvExampleKeys();
   const entrypointExports = liteEntrypointExports();
   const errs = [];
-  let keyCount = 0, capCount = 0;
+  const owners = carrierOwners();
+  const edgeCarriers = new Set();
+  let keyCount = 0, capCount = 0, edgeCount = 0;
   for (const svc of CONFIG_ADOPTED) {
     const declPath = join(ROOT, svc.decl);
     if (!existsSync(declPath)) { errs.push(`${svc.service}: declaration missing (${svc.decl})`); continue; }
     // 1. schema conformance (the contract's own validator — same oracle as gate:schema)
-    try { execSync(`node ${JSON.stringify(join(CONFIG_CONTRACT_DIR, "validate.mjs"))} --check --file ${JSON.stringify(declPath)}`, { stdio: "pipe" }); }
+    try { execFileSync("node", [join(CONFIG_CONTRACT_DIR, "validate.mjs"), "--check", "--file", declPath], { stdio: "pipe" }); }
     catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${errText(e).slice(-800)}`); continue; }
     // 2. the vendored preflight is the canonical one, byte for byte
     if (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical)
@@ -1055,7 +1170,9 @@ function gateConfigContract() {
     const compose = composeServiceEnv(svc.compose);
     if (!compose) { errs.push(`${svc.service}: compose service '${svc.compose}' not found`); continue; }
     const helm = helmEnvKeys(svc.helm);
-    const lite = liteProgramEnv(svc.lite);
+    // A service that is not on a surface yet declares no keys for it (`targets: []`); an
+    // absent program name means that surface simply contributes nothing to check 4.
+    const lite = svc.lite ? liteProgramEnv(svc.lite) : new Set();
     // 3. declaration → surfaces (per the key's declared targets; default = all three)
     for (const k of decl.keys || []) {
       const targets = k.targets ?? ["compose", "helm", "lite"];
@@ -1079,9 +1196,46 @@ function gateConfigContract() {
       if (!declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
         errs.push(`${svc.service}: undeclared env read ${key} at ${where} — add it to ${svc.decl}`);
     }
+    // 6. publish edges → the carrier census (one producing domain per carrier)
+    const domain = serviceDomain(svc.decl);
+    for (const k of (decl.keys || []).filter((x) => x.class === "publish-edge")) {
+      edgeCount++;
+      for (const ev of k.publishes_events || []) {
+        edgeCarriers.add(ev);
+        if (!owners) continue;                       // green-on-empty: no census to check against
+        if (!owners.has(ev)) {
+          errs.push(`${svc.service}: ${k.key} publishes ${ev}, which is in no carrier census — register it in ${rel(CARRIER_CENSUS)} (owner, refs, cardinality), or stop publishing it`);
+        } else if (owners.get(ev) !== domain) {
+          errs.push(`${svc.service}: ${k.key} publishes ${ev}, but the census records it as owned by '${owners.get(ev)}' and this service is '${domain}' — a carrier has exactly ONE producing domain, and a second producer is how a consumer that must act once acts twice`);
+        }
+      }
+    }
   }
+  // 6. the shared lite entrypoint, surface → declaration (F130). Checks 3 and 4 walk compose, helm
+  //    and the supervisord program env in BOTH directions — but entrypoint.sh was read only in the
+  //    declaration→surface direction (as check 3's fallback), so it was the one surface, in the one
+  //    direction, that nothing walked: a key DELETED from a declaration while the entrypoint still
+  //    exported it left no refusal and no warning, and the operator kept setting a value that
+  //    reached nothing. Attribution is by construction impossible here (see CONFIG_LITE_UNADOPTED),
+  //    so the rule is: SOME adopted service declares it, or it is listed with the program it serves.
+  const declaredAnywhere = new Set();
+  for (const svc of CONFIG_ADOPTED) {
+    const declPath = join(ROOT, svc.decl);
+    if (!existsSync(declPath)) continue;
+    const decl = JSON.parse(readFileSync(declPath, "utf8"));
+    for (const k of decl.keys || []) declaredAnywhere.add(k.key);
+    for (const k of decl.surface_only || []) declaredAnywhere.add(k.key);
+  }
+  for (const [key, line] of entrypointExports) {
+    if (declaredAnywhere.has(key) || CONFIG_SURFACE_ALLOW.has(key) || key in CONFIG_LITE_UNADOPTED) continue;
+    errs.push(`lite: deploy/lite/entrypoint.sh:${line} exports ${key} but no adopted service's config.v1 declares it — declare it on the service that reads it, or list it in CONFIG_LITE_UNADOPTED (scripts/gates.mjs) naming the program it serves`);
+  }
+
   if (errs.length) return fail(["config-contract (ADR-0026) — config.v1 violations:", ...errs.map((e) => "   " + e)]);
-  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities · declarations ≡ deploy surfaces ≡ code reads`);
+  const edges = edgeCount
+    ? ` · ${edgeCount} publish edge key(s) carrying ${edgeCarriers.size} carrier(s)${owners ? "" : " (no census — uncrossed)"}`
+    : " · no publish edge declared";
+  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities${edges} · ${entrypointExports.size} lite entrypoint export(s) · declarations ≡ deploy surfaces ≡ code reads (both directions, every surface)`);
   return true;
 }
 

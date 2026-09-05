@@ -60,9 +60,15 @@ class TranscriptStore(Protocol):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         member_workspaces: "Optional[set[str]]" = None,
+        metadata_filter: "Optional[dict]" = None,
     ) -> list[dict]:
         """The user's meetings, newest first — a list of api.v1 ``MeetingResponse``-shaped dicts
-        (the body of ``MeetingListResponse``)."""
+        (the body of ``MeetingListResponse``).
+
+        ``metadata_filter`` selects rows whose ``data.metadata`` CONTAINS the given object (JSONB
+        ``@>``, served by ``ix_meeting_data_gin``). It is what turns the list from a log into a
+        queryable store: an agent that stamped ``{"crm_deal": "acme-42"}`` onto its meetings can
+        ask for exactly those back instead of paging the account and filtering client-side."""
         ...
 
     async def authorize_subscribe(
@@ -88,6 +94,14 @@ class TranscriptStore(Protocol):
     ) -> "Optional[dict]":
         """OWNER-scoped: mint an INDEPENDENT transcript share grant (``data.share_grants[]``, hash-at-rest).
         Returns {id, token, ...} once, or ``None`` when the user owns no such meeting."""
+        ...
+
+    async def mint_transcript_share_by_id(
+        self, user_id: int, meeting_id: int, *,
+        mode: str = "open", allowed_emails: "Optional[list]" = None, expires_in_sec: int = 86400,
+    ) -> "Optional[dict]":
+        """OWNER-scoped mint addressed by the ROW id — the identity a meeting always has. Same grant and
+        same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
         ...
 
     async def redeem_transcript_share(
@@ -235,6 +249,80 @@ class TranscriptStore(Protocol):
         ``auto_join_user_set``, ``calendar_managed``, ``scheduled_at`` or ``status``.
 
         Returns the row (``list_meetings`` shape), or ``None`` when the user owns no such row."""
+        ...
+
+    async def search_transcripts(
+        self,
+        user_id: int,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        platform: Optional[str] = None,
+        native_meeting_id: Optional[str] = None,
+        meeting_db_id: Optional[int] = None,
+    ) -> list[dict]:
+        """Full-text search over the CALLER'S OWN transcript segments, ranked, with snippets.
+
+        ``meeting_db_id`` restricts the search to ONE row. ``native_meeting_id`` cannot: a Google
+        Meet room code is reused across sessions, so it names a room, not a meeting, and every
+        session ever held on that link answers to it. When both are given the row id wins — it is
+        the identity that is exact.
+
+        Answers the question metadata cannot: not "meetings I tagged X" but "meetings where
+        someone SAID X". Without it the only way to answer that is to pull every transcript and
+        read it — precisely the thing an agent must not do.
+
+        Lexical, not semantic: Postgres FTS over ``to_tsvector('english', text)``. The query is
+        parsed with ``websearch_to_tsquery`` so a caller gets quoted phrases, ``or`` and ``-term``
+        negation for free, and — unlike ``to_tsquery`` — malformed input never raises. Ranked by
+        ``ts_rank_cd`` (cover density: term frequency weighted by proximity; NOT BM25 — no IDF, no
+        length normalisation). Each hit carries a ``ts_headline`` snippet rather than the whole
+        segment, which is what keeps a result cheap in a calling model's context.
+
+        ``'english'`` is the text-search config for BOTH indexing and querying, and it must stay
+        the same on both sides or the index goes unused. It is not an English-only decision:
+        English stemming leaves unknown tokens (e.g. Cyrillic) untouched, so non-English terms
+        still match EXACTLY — what is lost is stemming for those languages, while ``'simple'``
+        would have thrown away English stemming for everyone.
+
+        OWNER-SCOPED ONLY — fail-closed, and deliberately narrower than ``list_meetings``, which
+        also surfaces share-recipient and workspace-member rows. Widening search to those is a
+        separate decision with its own review; a search that over-returns is a disclosure.
+
+        Each hit: ``meeting_id`` · ``platform`` · ``native_meeting_id`` · ``start``/``end`` ·
+        ``speaker`` · ``language`` · ``rank`` · ``snippet`` · ``text``. Newest-meeting-first
+        within equal rank so a tie is deterministic."""
+        ...
+
+    async def annotate_meeting(
+        self, user_id: int, meeting_id: int, *,
+        title: Optional[str] = None,
+        metadata: "Optional[dict]" = None,
+    ) -> Optional[dict]:
+        """Attach the CALLER's own annotations to a row in ANY status — including one the bot FSM
+        owns, and including one already completed.
+
+        The sibling of ``attach_calendar_source`` (identity stamped onto a live row) rather than of
+        ``update_planned_meeting`` (which refuses an FSM row, because dispatch parameters must not
+        change under a running bot). The distinction is what is being written, not when:
+        ``update_planned_meeting`` edits the INSTRUCTIONS for a meeting — url, schedule, auto-join
+        — and changing those mid-flight fights the FSM. ``title`` and ``metadata`` are the caller's
+        DESCRIPTION of a meeting. Nothing in the pipeline reads them, so writing them can never
+        re-arm, re-dispatch or re-route anything — and the moments a description is most worth
+        writing are exactly the ones the FSM owns: mid-meeting, and after it ends.
+
+        ``metadata`` is arbitrary caller-owned JSON stored at ``data.metadata``. It ALWAYS merges
+        key-wise; a key set to ``None`` deletes that one key. There is deliberately NO whole-object
+        replace: every writer shares one API key, so a replace would let a caller destroy keys
+        written by another agent — or by the human — that it never saw. Merge plus explicit nulls
+        expresses every legitimate edit while making it impossible to affect a key you did not
+        name. It is the join key between a Vexa meeting and everything else the caller knows —
+        a CRM record, a ticket, its own summary — and it is queryable through
+        ``list_meetings(metadata_filter=...)``.
+
+        Returns the updated row (``list_meetings`` shape), or ``None`` when the user owns no such
+        row (→ 404). Never returns a conflict: there is no state in which annotating is refused."""
         ...
 
     async def delete_planned_meeting(self, user_id: int, meeting_id: int) -> Optional[bool]:

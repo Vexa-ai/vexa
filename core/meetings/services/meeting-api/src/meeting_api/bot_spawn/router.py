@@ -251,7 +251,16 @@ def build_router(
     runtime: RuntimeClient,
     authority=None,
 ) -> APIRouter:
-    """The bot-spawn routes over injected storage, runtime, and authority ports."""
+    """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
+
+    NO ``fetch_bot_context`` HERE, on purpose. The person's default bot name is still resolved by
+    the domain that owns the bot, on every path a bot is spawned (founder ruling, 2026-09-02 — no
+    fourth store) — but ``request_bot`` ALREADY fetches that person's whole spawn context, on this
+    same request, to resolve the transcription backend and the capture-signal decision. A
+    router-level fetcher made `POST /bots` ask identity for the same body TWICE, with two different
+    timeouts (10s here, 5s there), for one string: up to +15s on a path a person is waiting on,
+    while each fetcher's comment claimed to be the only one. The name now comes out of the context
+    the service already has (``service._bot_name_from_context``)."""
     router = APIRouter()
 
     @router.post("/bots", status_code=201)
@@ -436,6 +445,13 @@ def build_router(
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
 
+        # THE NAME THIS PERSON'S BOT SHOWS UP AS — an explicit name on THIS request, and nothing
+        # else here. `request_bot` fills in this person's default from identity out of the bot
+        # context it already fetches (one hop, three readers: transcription backend, capture-signal
+        # decision, bot name), and the deployment default underneath that. A FAILED LOOKUP NEVER
+        # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
+        bot_name = body.get("bot_name")
+
         try:
             meeting = await request_bot(
                 repo,
@@ -444,7 +460,7 @@ def build_router(
                 user_id=user_id,
                 platform=platform,
                 native_meeting_id=native_meeting_id,
-                bot_name=body.get("bot_name"),
+                bot_name=bot_name,
                 passcode=passcode,
                 meeting_url=meeting_url,
                 teams_base_host=teams_base_host,
@@ -474,12 +490,22 @@ def build_router(
             # refused naming the conflicting meeting (per-identity serialization, #725).
             raise HTTPException(status_code=409, detail=str(e))
         except ServiceAuthorityDenied as e:
+            # `code` and `reason` are for a program to branch on; `message` and `action_url` are
+            # for whoever has to DO something about it. This service authors neither of the second
+            # pair — it carries what the deciding service said, so a deployment can change what it
+            # tells people without an OSS release, and a deployment that says nothing is unchanged
+            # (both fields OMITTED, never null).
+            #
+            # `reason` is passed through WHATEVER it says. There is no allow-list here and there
+            # must not be one: a reason this build has never heard of still reaches the caller
+            # intact, because the alternative is a refusal that no surface can explain.
             raise HTTPException(
                 status_code=403,
                 detail={
                     "code": "service_not_allowed",
                     "reason": e.reason,
                     "decision_id": e.decision_id,
+                    **e.caller_fields(),
                 },
             )
         except ServiceAuthorityUnavailable:
