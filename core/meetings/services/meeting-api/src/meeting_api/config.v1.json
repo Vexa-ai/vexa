@@ -328,6 +328,13 @@
    "targets": []
   },
   {
+   "key": "PROC_PENDING_GRACE_SEC",
+   "class": "defaulted",
+   "default": "120",
+   "description": "how long (seconds) the db-writer keeps re-draining a FINISHED meeting's copilot processed-notes stream while waiting for the producing worker's view_end marker, before giving up loudly. The copilot's final beat runs ~10s after session_end and by then the meeting has left the active sweep, so without the parked re-drain those last notes stay in redis forever (ADR 0027)",
+   "targets": []
+  },
+  {
    "key": "IMMUTABILITY_THRESHOLD",
    "class": "defaulted",
    "default": "30",
