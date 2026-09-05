@@ -99,7 +99,11 @@ services:
       - DB_NAME=${DB_NAME:-vexa}
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
-      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
+      # NO `changeme` FALLBACK (A19). This token mints an API key for ANY user; a stack that came
+      # up on the published literal handed the whole account plane to anyone who read the repo.
+      # Unset now means UNSET — admin-api's config.v1 refuses the placeholder literals by name and
+      # the admin surface answers 500 rather than accepting a secret everybody has.
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
@@ -287,7 +291,13 @@ services:
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
+      # every service that REFUSES it at boot; this line kept it, so an unconfigured stack still
+      # PRESENTED the published literal as internal-tier authority. Unset is unset (A19). The KEY
+      # NAME is the canonical one: `core/agent/control_plane/config.v1.json` declares
+      # `INTERNAL_API_SECRET` and marks `VEXA_INTERNAL_API_SECRET` DEPRECATED ("no deploy surface
+      # sets it on agent-api any more"), so the A19 fix rides the spelling this service reads.
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
       # The post-meeting room resolves a participant's email to a subject through admin-api. There
       # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
       # GET /admin/users/email/{email} sits behind this much broader credential, which can also
@@ -432,7 +442,10 @@ services:
       # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
       # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
       # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
-      - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+      # NO `changeme` FALLBACK (A19) — same credential as admin-api's ADMIN_API_TOKEN above, and
+      # meeting-api declares it required-explicit, so an unset value refuses the boot loudly
+      # instead of signing every MeetingToken with a secret published in this repository.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       # STT the spawned bot transcribes with — bot_spawn threads these into the invocation (registry
       # `stt` resource; a token that can actually transcribe — the boot probe + wizard Test verify
       # it with real audio). Unset → bot joins+captures but no transcript.
@@ -517,10 +530,17 @@ services:
       # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
       - MCP_URL=http://mcp:8010
       # THE AGENT DOMAIN'S PRESENCE SIGNAL (PRD 40.6 / 40.7). This full profile runs agents, so it
-      # names the door and the edge fronts `/agent/*`. The `no-agents` profile leaves it EMPTY —
+      # names the door and the edge fronts `/agent/*`. The `no-agents` profile sets it EMPTY —
       # the gateway then registers no /agent route and assembles no agent rows into its scope
       # table, so a request there is 404 rather than a 401 about a route this stack does not have.
       # It was a CODE default before, which made a deployment unable to say it has no agents.
+      #
+      # THE COMPOSE DEFAULT IS THE SERVICE, and moving it from a code default to here is the whole
+      # of decision 40.7 — but the move shipped with `:-` and NO default, so `agent-api` kept
+      # running in the default profile while every `/agent/*` route silently 404'd for every
+      # self-hoster: seven routes that worked at v0.12.26, gone, with nothing anywhere to read.
+      # `.env.example` never set it either. An OPT-OUT (set it empty) is a deployment saying it has
+      # no agents; a MISSING default was nobody saying anything and the product answering "no".
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
@@ -976,6 +996,17 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+      # ASSEMBLY IS ONE-SHOT AND IT IS AT BOOT. `discover()` asks each configured domain for its
+      # `/.well-known/mcp-tools.json` exactly once; a domain that is configured but not yet
+      # LISTENING contributes nothing and is never asked again, so the server comes up healthy,
+      # permanently missing that domain's tools. On a cold `docker compose up` that races
+      # flows-api — and flows carries `whats_waiting`, the tool this server's own instructions
+      # name as every session's FIRST call. Waiting for its health endpoint costs a few seconds
+      # once and removes the race; it does not make flows a boot requirement for a deployment
+      # that does not run it (a stack without the flows services has no such dependency to wait
+      # on, and `FLOWS_API_URL=` is still how you say you do not carry the domain).
+      flows-api:
+        condition: service_healthy
     networks: [vexa]
     restart: unless-stopped
 
@@ -1018,13 +1049,16 @@ services:
       - AGENT_API_URL=http://agent-api:8100
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       - VEXA_API_URL=http://gateway:8000
-      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
+      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-}
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
       # Hidden admin panel (/api/admin/*): comma-separated email allowlist — EMPTY = the panel is off
       # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
       # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
       - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
-      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
+      # every service that REFUSES it at boot; these two lines kept it, so an unconfigured stack
+      # still PRESENTED the published literal as internal-tier authority. Unset is unset (A19).
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
       # Declared self-hosted Jitsi hostnames — served to the client link parser
       # (/api/meeting/jitsi-hosts) so pasted links on these hosts are recognized in the UI,
       # matching meeting-api's and mcp's parsers (same setting).
@@ -1064,7 +1098,6 @@ services:
         condition: service_healthy
     networks: [vexa]
     restart: unless-stopped
-
   # DEPRECATED — the 0.10 dashboard, kept as an OFF-BY-DEFAULT profile while it is still
   # load-bearing (#813). It is the multi-user web UI hosted production runs against the 0.12 core
   # (the wiring below is the hosted-proven one), and some flows (authenticated-session lifecycle,
@@ -1123,7 +1156,7 @@ services:
       # compose service DNS. The dashboard talks to the gateway's hosted-compat surface.
       - VEXA_API_URL=http://gateway:8000
       - VEXA_ADMIN_API_URL=http://admin-api:8001
-      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
+      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-}
       - VEXA_PUBLIC_API_URL=${DASHBOARD_PUBLIC_API_URL:-http://localhost:18056}
       - NEXT_PUBLIC_VEXA_WS_URL=${DASHBOARD_PUBLIC_WS_URL:-ws://localhost:18056/ws}
       # Auth/session — self-hosted defaults: local registration on, no hosted-mode redirects.

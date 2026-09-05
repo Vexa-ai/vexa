@@ -283,8 +283,14 @@ class TranscriptStore(Protocol):
         offset: int = 0,
         platform: Optional[str] = None,
         native_meeting_id: Optional[str] = None,
+        meeting_db_id: Optional[int] = None,
     ) -> list[dict]:
         """Full-text search over the CALLER'S OWN transcript segments, ranked, with snippets.
+
+        ``meeting_db_id`` restricts the search to ONE row. ``native_meeting_id`` cannot: a Google
+        Meet room code is reused across sessions, so it names a room, not a meeting, and every
+        session ever held on that link answers to it. When both are given the row id wins — it is
+        the identity that is exact.
 
         Answers the question metadata cannot: not "meetings I tagged X" but "meetings where
         someone SAID X". Without it the only way to answer that is to pull every transcript and

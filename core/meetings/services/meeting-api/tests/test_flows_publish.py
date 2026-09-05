@@ -16,7 +16,10 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import socket
+import time
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -45,7 +48,7 @@ def published(monkeypatch):
     """Every fact meeting-api handed to `events_mod.publish`, recorded at the seam. No network."""
     sent = []
 
-    def fake(event_type, source_event_id, refs, **kw):
+    async def fake(event_type, source_event_id, refs, **kw):
         sent.append({"event_type": event_type, "source_event_id": source_event_id, "refs": refs})
         return True
 
@@ -54,44 +57,57 @@ def published(monkeypatch):
 
 
 # ── the wire shape (F142's own test, run here against meeting-api's copy) ──────────────────────
-def test_publish_sends_refs_not_subject_refs_and_the_operator_header(monkeypatch):
+def _record_transport(calls, status=202):
+    """An httpx transport that records the request instead of sending it. Replaces the old
+    `urlopen` monkeypatch: the publisher is `async` now precisely so it cannot block the loop."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"url": str(request.url),
+                      "headers": {k.lower(): v for k, v in request.headers.items()},
+                      "body": json.loads(request.content.decode())})
+        return httpx.Response(status)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.fixture()
+def wire(monkeypatch):
+    """Every request the publisher put on the wire, with no socket involved."""
+    calls = []
+    real = httpx.AsyncClient
+
+    def factory(*a, **kw):
+        kw["transport"] = _record_transport(calls)
+        return real(*a, **kw)
+
+    # `events.publish` does `import httpx` at call time, so patching the module attribute is what
+    # the publisher will see — there is deliberately no module-level client to reach past.
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+    return calls
+
+
+async def test_publish_sends_refs_not_subject_refs_and_the_operator_header(monkeypatch, wire):
     """`EventSubmission` is a plain pydantic model — an unknown key is IGNORED, not refused, which
     is exactly how a body spelled `subject_refs` was admitted 202 with `refs == {}` on the F142
     incident. Asserted directly against the wire body this copy of the publisher builds."""
-    calls = []
-
-    class _Resp:
-        status = 202
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
-    def fake_urlopen(req, timeout=None):
-        calls.append({"headers": {k.lower(): v for k, v in req.header_items()},
-                      "body": json.loads(req.data.decode())})
-        return _Resp()
-
     monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://flows.example")
     monkeypatch.setenv("VEXA_FLOWS_API_KEY", "op-key")
-    monkeypatch.setattr(events_mod.urllib.request, "urlopen", fake_urlopen)
 
-    ok = events_mod.publish("meeting.started", "live-9", {"uid": "1", "meeting_id": "9"})
+    ok = await events_mod.publish("meeting.started", "live-9", {"uid": "1", "meeting_id": "9"})
 
     assert ok is True
-    assert calls[0]["body"] == {
+    assert wire[0]["url"] == "http://flows.example/events"
+    assert wire[0]["body"] == {
         "event_type": "meeting.started", "source_event_id": "live-9",
         "refs": {"uid": "1", "meeting_id": "9"},
     }
-    assert calls[0]["headers"].get("x-flows-operator-key") == "op-key"
+    assert wire[0]["headers"].get("x-flows-operator-key") == "op-key"
 
 
-def test_publish_makes_no_call_and_returns_false_with_no_flows_url(monkeypatch):
+async def test_publish_makes_no_call_and_returns_false_with_no_flows_url(monkeypatch, wire):
     monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
-    called = []
-    monkeypatch.setattr(events_mod.urllib.request, "urlopen", lambda *a, **kw: called.append(1))
-    assert events_mod.publish("meeting.started", "live-1", {"uid": "1"}) is False
-    assert called == []
+    assert await events_mod.publish("meeting.started", "live-1", {"uid": "1"}) is False
+    assert wire == []
 
 
 def test_source_event_ids_match_invite_intakes_own_scheme():
@@ -174,7 +190,12 @@ def test_no_flows_configured_makes_no_http_call_and_the_callback_still_succeeds(
     monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
     monkeypatch.delenv("VEXA_FLOWS_API_KEY", raising=False)
     called = []
-    monkeypatch.setattr(events_mod.urllib.request, "urlopen", lambda *a, **kw: called.append(1))
+
+    def _no_client(*a, **kw):
+        called.append(1)
+        raise AssertionError("publish opened an HTTP client with no flows domain configured")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _no_client)
     repo = InMemoryMeetingRepo()
     _seed(repo)
     client = TestClient(create_app(meeting_repo=repo))
@@ -198,10 +219,94 @@ def test_a_publish_that_raises_never_fails_the_lifecycle_callback(monkeypatch):
     assert r.status_code == 200
 
 
-def test_the_publisher_itself_swallows_a_dead_flows_host(monkeypatch):
+async def test_the_publisher_itself_swallows_a_dead_flows_host(monkeypatch):
     monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://127.0.0.1:9")  # nothing listens
     monkeypatch.setenv("VEXA_FLOWS_API_KEY", "op-key")
-    assert events_mod.publish("meeting.started", "live-1", {"uid": "1"}) is False
+    assert await events_mod.publish("meeting.started", "live-1", {"uid": "1"}) is False
+
+
+# ── A8: the publish is AWAITED, so a hanging flows never stalls the process ─────────────────────
+async def test_a_hanging_flows_target_does_not_block_the_event_loop(monkeypatch):
+    """THE DEFECT THIS REPLACES. `publish` was `urllib.request.urlopen` called from inside
+    `async def _apply_lifecycle_event` — a BLOCKING call on the one event loop that also runs the
+    segment consumer, the db-writer, the live transcript reads and `/health`. The 2 s bound was
+    per-request; the stall was per-PROCESS. (And urllib's `timeout` is a socket timeout, so an
+    unresolvable host was not bounded by it at all.)
+
+    A real socket that accepts and never answers: the publish must hang on ITS OWN timeout while
+    every other coroutine keeps being scheduled. Pre-fix, the heartbeat below could not tick until
+    the publish returned, so its elapsed time was the publish's timeout, not its own ~0.2 s."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)                      # accepts into the backlog, answers nothing, ever
+    host, port = server.getsockname()
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", f"http://{host}:{port}")
+    monkeypatch.delenv("VEXA_FLOWS_API_KEY", raising=False)
+    try:
+        ticks = []
+
+        async def heartbeat():
+            for _ in range(10):
+                await asyncio.sleep(0.02)
+                ticks.append(time.monotonic())
+
+        publishing = asyncio.create_task(
+            events_mod.publish("meeting.started", "live-1", {"uid": "1"}, timeout=1.5))
+        started = time.monotonic()
+        await heartbeat()
+        heartbeat_took = time.monotonic() - started
+
+        assert len(ticks) == 10
+        assert heartbeat_took < 1.0, (
+            f"the loop was blocked for {heartbeat_took:.2f}s by a hanging publish — "
+            "10 × 20ms of other work should take ~0.2s")
+        assert not publishing.done(), "the publish should still be in flight, bounded by ITS timeout"
+        assert await publishing is False          # bounded, swallowed, no exception out
+    finally:
+        server.close()
+
+
+async def test_the_hanging_publish_returns_within_its_own_timeout(monkeypatch):
+    """The bound is honoured, and it covers connect (DNS included) as well as read — the half
+    urllib's socket timeout never covered."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    host, port = server.getsockname()
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", f"http://{host}:{port}")
+    try:
+        started = time.monotonic()
+        landed = await events_mod.publish("meeting.started", "live-1", {"uid": "1"}, timeout=0.25)
+        elapsed = time.monotonic() - started
+        assert landed is False
+        assert elapsed < 3.0, f"publish took {elapsed:.2f}s against a 0.25s bound"
+    finally:
+        server.close()
+
+
+def test_the_lifecycle_callback_is_not_delayed_by_a_hanging_flows(monkeypatch):
+    """The callback the BOT is waiting on. With flows pointed at a socket that never answers, the
+    transition still completes — bounded by the publisher's own timeout, never by the resolver."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    host, port = server.getsockname()
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", f"http://{host}:{port}")
+    monkeypatch.setattr(events_mod, "TIMEOUT_S", 0.25)
+    try:
+        repo = InMemoryMeetingRepo()
+        _seed(repo)
+        client = TestClient(create_app(meeting_repo=repo))
+        _post(client, {"connection_id": "sess-flows", "status": "joining",
+                       "timestamp": "2026-09-03T10:00:00Z"})
+        started = time.monotonic()
+        r = _post(client, {"connection_id": "sess-flows", "status": "active",
+                           "timestamp": "2026-09-03T10:00:10Z"})
+        elapsed = time.monotonic() - started
+        assert r.status_code == 200
+        assert elapsed < 5.0, f"the lifecycle callback took {elapsed:.2f}s on a dead flows target"
+    finally:
+        server.close()
 
 
 # ── declaration ↔ census agreement (mirrors flows' own carrier-census suite, run locally) ──────

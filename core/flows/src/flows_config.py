@@ -235,6 +235,17 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "the OUTBOUND fan-out allow-list (PRD §16.2). Unset = the organizer's own domain."),
     "VEXA_FLOWS_DATA_STATEMENT": ("capability", None, "the deployment's own sentence about where the words live."),
     "VEXA_BEHAVIOR_DIR": ("capability", None, "the private behavior mount; unset uses the in-repo showcase prompts."),
+    "VEXA_FLOWS_DEFS_EXTRA": (
+        "capability", None,
+        "flow packs this deployment composes on top of the ones in this repo — importable module "
+        "names, comma-separated, each exposing `build(reg, db)`, called last by "
+        "`flows_defs.production.build`. It is to STEPS what `VEXA_BEHAVIOR_DIR` above is to "
+        "words: the vocabulary stays closed to the API (`flow_by_names` refuses a step name the "
+        "image has not got, deliberately — the API never accepts code) and open to the operator. "
+        "Unset is this repo's own product; nothing here ships dark. A named module that will not "
+        "import REFUSES the boot rather than falling back, because a deployment that declares a "
+        "pack and starts without it reacts to none of that pack's events, silently, for as long "
+        "as nobody looks."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
     "VEXA_FLOWS_INSTANCE_GATE": ("capability", None, "forces the instance gate open or shut, for the rig."),
     "VEXA_FLOWS_USER_KEY_TTL_S": (

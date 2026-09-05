@@ -976,6 +976,10 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     seed.mkdir()
     (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    # A scheme-less path is refused by default (it is a location on the SERVER, not a repository a
+    # caller may name — see control_plane/repo_ref). A self-hoster opts local roots back in; so does
+    # this fixture, which clones from a local bare repo to stay off the network.
+    monkeypatch.setenv("VEXA_ALLOW_LOCAL_REPO_ROOT", str(tmp_path))
 
     # A bare filesystem path is NO LONGER a repository reference (control_plane.repo_ref) — that is
     # what let a caller name another user's directory in the shared store. The same local repo is
@@ -1005,6 +1009,53 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     back = c.post("/api/workspace/swap", headers=h, json={})       # repo omitted → swap back to seed
     assert back.json()["active"] == "seed" and back.json()["cloned"] is False
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+
+def test_workspace_swap_refuses_a_repo_this_server_alone_could_fetch(tmp_path, monkeypatch):
+    """``repo`` is an instruction to THIS SERVER to go and fetch something, so the route settles the
+    host and the transport before anything reaches git (see control_plane/repo_ref).
+
+    The assertion that matters is the REFUSAL and that no git process ran: ``subprocess.run`` is
+    replaced with a bomb for the duration, so a gate that fired after git started would fail the test
+    loudly instead of passing on the status code.
+
+    422, NOT 400 (0.12.27). This route's refusal for a repository field it will not accept is
+    ``_repo``'s, and ``_repo`` answers 422 on purpose — the body is well-formed JSON and
+    semantically wrong, and the detail is the sentence itself, which the terminal presents verbatim.
+    The transport and host gates this test drives were written against a route that answered 400;
+    they now run inside that one refusal, so they answer the way every other bad repository field
+    on this route already did."""
+    import subprocess as _sp
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    monkeypatch.delenv("VEXA_ALLOW_LOCAL_REPO_ROOT", raising=False)
+
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(tmp_path / "ws")),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: pytest.fail(f"git started despite the gate: {a!r}"))
+    monkeypatch.setattr(_sp, "Popen", lambda *a, **k: pytest.fail(f"git started despite the gate: {a!r}"))
+
+    refused = [
+        "http://169.254.169.254/latest/meta-data",   # the cloud metadata service
+        "http://admin-api:8001/owner/repo.git",      # a deployment neighbour (a bare label)
+        "http://127.0.0.1:8000/owner/repo.git",
+        "https://[::ffff:127.0.0.1]/owner/repo.git",
+        "ext::sh -c whoami",                         # a git URL that runs a command
+        "file:///etc",                               # …and one that reads this host's disk
+        "git://github.com/owner/repo.git",
+        str(tmp_path / "origin"),                    # a path on the server is not a caller's to name
+    ]
+    for route in ("/api/workspace/swap", "/api/workspace/activate"):
+        for repo in refused:
+            r = c.post(route, headers=h, json={"repo": repo})
+            assert r.status_code == 422, f"{route} accepted {repo!r}: {r.status_code} {r.text}"
 
 
 def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):

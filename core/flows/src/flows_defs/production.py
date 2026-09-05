@@ -576,6 +576,70 @@ def _register_agent_flows(reg: Registry, db) -> None:
     importlib.import_module("flows_defs.production_agent").build(reg, db, home=_SELF)
 
 
+#: WHERE A DEPLOYMENT NAMES ITS OWN FLOW PACKS — importable module names, comma-separated. Each is
+#: imported and its `build(reg, db)` called after everything this file registers, so a pack may add
+#: steps to the vocabulary and flows to the registry without a fork of this module.
+#:
+#: It is the THIRD of the three seams a private pack needs, and the only one that was missing:
+#:
+#:   * FLOWS AS DATA already existed — `POST /flows` writes a `flow_version` row and the worker
+#:     hot-loads it within one refresh (`Registry.refresh_from_db`). What that cannot do is add a
+#:     STEP: `flow_by_names` validates every name against the image's reviewed vocabulary and
+#:     refuses the rest, deliberately (it never accepts code — the n8n line `POST /events`'s own
+#:     docstring names). So a pack whose flow is only a re-ordering of existing steps needs
+#:     nothing at all; a pack with logic of its own needs a place to put a Python step, and this
+#:     is that place — an import, resolved by the deployment's own PYTHONPATH, reviewed by
+#:     whoever builds that deployment. The vocabulary stays closed to the API and open to the
+#:     operator, which is the same split `VEXA_BEHAVIOR_DIR` already draws for prose.
+#:   * WORDS already existed — `flows_queue._roots()` reads `$VEXA_BEHAVIOR_DIR/queue/` BEFORE the
+#:     baked showcase, so a pack ships `<flow>.pending.md` for its own flows in that tree and the
+#:     queue speaks them with no code change here.
+#:   * EVENT TYPES already worked — there is no carrier allow-list on the intake. `POST /events`
+#:     refuses a type only when NO FLOW REACTS TO IT, and answers with the list that would have
+#:     worked; register a flow on `subscription.active` and that type is admissible the same tick.
+#:     Admission is fail-closed on *nothing reacting*, never on *nobody having declared it*.
+#:
+#: ABSENT IS THE NORMAL CASE (this repo's own product sets none), and a NAMED-BUT-MISSING module
+#: is not: the first is a deployment with no pack, the second is a deployment that thinks it has
+#: one. They are told apart below, and only the first is silent.
+DEFS_EXTRA_ENV = "VEXA_FLOWS_DEFS_EXTRA"
+
+
+def _register_extra_packs(reg: Registry, db) -> None:
+    """Register the flow packs this DEPLOYMENT carries beyond the ones in this repo.
+
+    The seam `_register_agent_flows` already is, generalised one notch: that one asks a predicate
+    whether a domain is deployed, this one asks the deployment to name what else it composes. Both
+    run last, both hand over the registry a fully-built `production` has finished with, and neither
+    lets the thing it loads change anything above it — a pack adds steps and flows and cannot edit
+    one, because `Registry.step` refuses a name already bound to a different function and a flow is
+    superseded only by a HIGHER VERSION, never by an edit in place.
+
+    A MISSING NAMED MODULE RAISES, and that is the whole care in this function. Every other absence
+    in this file is tolerated because absence is a supported shape — no agent domain, no behavior
+    tree, no mailbox. Here the deployment has SAID it has a pack: if that import quietly failed,
+    flows would boot, serve, admit facts, and simply never react to the pack's events, which is the
+    failure this engine is least able to show anybody. `find_spec` first so the error names the
+    module and the variable rather than arriving as an ImportError from three frames deeper.
+    """
+    for name in [n.strip() for n in (os.environ.get(DEFS_EXTRA_ENV) or "").split(",") if n.strip()]:
+        import importlib
+        import importlib.util
+        if importlib.util.find_spec(name) is None:
+            raise ImportError(
+                f"{DEFS_EXTRA_ENV} names {name!r}, and no such module is importable. A pack this "
+                f"deployment declares is not optional: booting without it would leave flows "
+                f"reacting to none of its events, silently and for as long as nobody looked.")
+        mod = importlib.import_module(name)
+        build_fn = getattr(mod, "build", None)
+        if not callable(build_fn):
+            raise TypeError(
+                f"{DEFS_EXTRA_ENV} names {name!r}, which has no callable `build(reg, db)` — that "
+                f"is the whole contract of a flow pack (see `flows_defs.production.build`).")
+        build_fn(reg, db)
+        logger.info("flow pack registered: %s", name)
+
+
 def build(reg: Registry, db) -> None:
     # ── shared small steps ────────────────────────────────────────────────────
     @reg.step
@@ -2016,3 +2080,6 @@ def build(reg: Registry, db) -> None:
     # last on purpose: those flows read this module's helpers and event types, so this one must be
     # fully built before it hands the registry over. See `_register_agent_flows` for the signal.
     _register_agent_flows(reg, db)
+    # ── whatever else this DEPLOYMENT carries ─────────────────────────────────
+    # Last, for the same reason and one more: a private pack composes on top of everything above.
+    _register_extra_packs(reg, db)

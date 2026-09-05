@@ -158,11 +158,6 @@ def create_app(
     # bot_spawn ports
     meeting_repo: Optional["_bot_spawn.MeetingRepo"] = None,
     runtime: Optional["_bot_spawn.RuntimeClient"] = None,
-    # The per-user spawn context from identity — the SAME edge the auto-join sweep takes. It is
-    # here so the person's default bot name is resolved by the domain that owns the bot, on EVERY
-    # path a bot is spawned, rather than by each caller out of a store of its own (which is how one
-    # fact came to have three). None = no identity edge configured; a smaller answer, never an error.
-    fetch_bot_context: Optional[Callable[[int], Awaitable[Optional[dict]]]] = None,
     service_authority: Optional["object"] = None,
     # recordings ports
     recording_repo: Optional["_recordings.RecordingRepo"] = None,
@@ -264,16 +259,16 @@ def create_app(
     # id-sequence reset without a redis flush) would otherwise carry a prior generation's stale
     # session_end and the terminal would show "Meeting ended" before the first word. continue_meeting is
     # untouched (it keeps the reused row's stream). See bot_spawn.service.request_bot.
+    #
+    # No `fetch_bot_context` here: `request_bot` resolves this person's default bot name out of the
+    # spawn context it already fetches for the transcription backend and the capture-signal
+    # decision. Injecting a second fetcher made POST /bots ask identity for the same body twice.
     _stream_purge = None
-    if redis is not None and hasattr(redis, "delete"):
-        async def _stream_purge(meeting_id, _r=redis):
-            await _r.delete(f"tc:meeting:{meeting_id}")
     app.include_router(_bot_spawn.build_router(
         meeting_repo,
         runtime,
         service_authority,
         transcript_stream_purge=_stream_purge,
-        fetch_bot_context=fetch_bot_context,
     ))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
@@ -690,7 +685,7 @@ def _mount_lifecycle(
                 _uid = _meeting_block.get("user_id")
                 if _uid is not None and _et == "meeting.started":
                     try:
-                        _flows_events.publish_meeting_started(
+                        await _flows_events.publish_meeting_started(
                             _meeting_block.get("id"),
                             _meeting_block.get("native_meeting_id"),
                             _meeting_block.get("platform"),
@@ -700,7 +695,7 @@ def _mount_lifecycle(
                         pass
                 elif _uid is not None and _et == "meeting.completed":
                     try:
-                        _flows_events.publish_meeting_completed(
+                        await _flows_events.publish_meeting_completed(
                             _meeting_block.get("id"),
                             _meeting_block.get("native_meeting_id"),
                             _meeting_block.get("platform"),

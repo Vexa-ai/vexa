@@ -27,6 +27,7 @@ precedes the real property line, and an ICS's property order belongs to whoever 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -34,29 +35,68 @@ from flows_integrations.mailbox import parse_ics  # noqa: E402
 
 ZOOM = "https://us02web.zoom.us/j/84123456789?pwd=aBcD1234efGH"
 
+#: THE INVITE IS AN HOUR FROM NOW, computed on every run, and this is not tidiness.
+#:
+#: These six cases were written against a literal `DTSTART:20260902T190000Z` — the rehearsal invite
+#: that produced the bug. On 2026-09-03 that date went into the past, `parse_ics`'s own rule (*"a
+#: start >24h in the past is a parse artifact or a stale event — never admit it"*) started returning
+#: `None`, and all six failed with `TypeError: 'NoneType' object is not subscriptable`. Nothing
+#: about the ANCHOR had regressed; the fixture had expired, and it took the regression test for a
+#: confident-wrong-address defect down with it — the tests were red for a day about the wrong thing.
+#:
+#: A fixture whose validity depends on the calendar is a test that grades itself on when it runs.
+#: One hour ahead, derived: comfortably inside the 24h rule in both directions and never in the
+#: past on any clock, without pinning a year that will do this again.
+#: ONE `time.time()` for the whole module, taken at import. `_stamp` is called from `_rows` and
+#: again from `_ics`, and a second read of the clock between them would put the two a second apart
+#: — which is invisible until the exact-equality assertion on `start` fails once in sixty runs.
+_NOW = time.time()
 
-def _ics(**over) -> str:
-    # DTSTART sits in 2030, like every other ICS fixture in this suite — `parse_ics` returns None
-    # for a start more than 24h in the past (a bot would dispatch immediately on an ancient start),
-    # so a fixture dated the day it was written is a time bomb: this one carried the incident's
-    # own date, 2026-09-02T19:00Z, and every test here went red at 19:00 UTC on 2026-09-03 with
-    # `'NoneType' object is not subscriptable` on a tree nobody had touched. The DTSTAMP stays
-    # the incident's literal value — it is the string the unfixed regex captured, and it is what
-    # the reproduction below must see in the UID's shadow.
+
+def _stamp(offset_s: float) -> str:
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(_NOW + offset_s))
+
+
+#: The exact epoch the fixture's own DTSTART names — what `parse_ics` must return for it. Read off
+#: the same string the ICS carries rather than recomputed from `time.time()`, so the assertion
+#: cannot drift by the second the two calls straddle.
+def _start_epoch(dtstart: str) -> int:
+    import calendar
+    return calendar.timegm(time.strptime(dtstart.rstrip("Z"), "%Y%m%dT%H%M%S"))
+
+
+def _rows(**over) -> dict:
     rows = {
-        "DTSTART": "20300302T190000Z",
-        "DTEND": "20300302T200000Z",
+        "DTSTART": _stamp(3600),                    # an hour from now
+        "DTEND": _stamp(3600 + 3600),
         "UID": "invite-1@example.test",
-        "DTSTAMP": "20260902T183213Z",
+        # The DTSTAMP is the value the unanchored regex used to capture and mail. It stays a
+        # DIFFERENT time from the DTSTART — the trap only bites when the two are distinguishable.
+        "DTSTAMP": _stamp(-600),
         "ORGANIZER;CN=Real Person": "mailto:real@rehearse.test",
         "SUMMARY": "Platform Sync 2026-03-02",
         "DESCRIPTION": f"Join Zoom Meeting\\n{ZOOM}",
         "LOCATION": ZOOM,
     }
     rows.update(over)
-    body = "\r\n".join(f"{k}:{v}" for k, v in rows.items())
+    return rows
+
+
+def _ics(**over) -> str:
+    body = "\r\n".join(f"{k}:{v}" for k, v in _rows(**over).items())
     return f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\n{body}\r\n" \
            "END:VEVENT\r\nEND:VCALENDAR\r\n"
+
+
+def test_the_fixture_is_never_in_the_past():
+    """THE GUARD ON THE FIXTURE. Every assertion below reads `ev[...]`, so a fixture `parse_ics`
+    refuses fails them all with a `NoneType` subscript and says nothing about the anchor. This one
+    fails with the actual reason instead — and it is the test that would have caught the expiry."""
+    rows = _rows()
+    assert _start_epoch(rows["DTSTART"]) > time.time() - 86400, (
+        "the DTSTART fixture is more than 24h in the past, so parse_ics refuses it by design and "
+        "every anchor assertion in this file is about a None")
+    assert parse_ics(_ics()) is not None
 
 
 def test_the_organizer_is_the_organizer_line_not_the_word_organizer_anywhere():
@@ -88,11 +128,12 @@ def test_dtstart_is_read_from_its_own_line_for_the_same_reason():
     """`DTSTART` carried the identical unanchored shape, so it is anchored with it. Also an
     ordering guard — a wrong start is a bot dispatched at the wrong moment, or, far enough past,
     an invite silently dropped by the >24h-in-the-past rule."""
-    import calendar
-    import time
-    ev = parse_ics(_ics(UID="dtstart-notes-2026@example.test",
-                        DESCRIPTION=f"DTSTART is 7pm, do not be late\\n{ZOOM}"))
-    assert ev["start"] == calendar.timegm(time.strptime("20300302T190000", "%Y%m%dT%H%M%S"))
+    rows = _rows(UID="dtstart-notes@example.test",
+                 DESCRIPTION=f"DTSTART is 7pm, do not be late\\n{ZOOM}")
+    ev = parse_ics(_ics(**{k: v for k, v in rows.items() if k in ("UID", "DESCRIPTION")}))
+    # The DTSTART line's own value, not the DTSTAMP the unanchored pattern used to capture.
+    assert ev["start"] == _start_epoch(rows["DTSTART"])
+    assert ev["start"] != _start_epoch(rows["DTSTAMP"])
 
 
 def test_an_ordinary_invite_still_parses_exactly_as_before():

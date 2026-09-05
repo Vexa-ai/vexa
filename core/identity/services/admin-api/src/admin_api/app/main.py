@@ -27,6 +27,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Respo
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_serializer, model_validator
 from sqlalchemy import delete, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +48,26 @@ def _admin_token() -> Optional[str]:
 
 def _internal_secret() -> str:
     return os.environ.get("INTERNAL_API_SECRET", "")
+
+
+def normalise_email(email: str) -> str:
+    """The address as this service STORES it, for a row it is creating now.
+
+    An address is one account whatever case it was typed in (R-B08), and every lookup here already
+    folds case. Folding on the READ side alone leaves two holes the folding cannot close:
+
+      * two concurrent `POST /admin/users` with `Anna@x` and `anna@x` both miss the lookup and both
+        insert — the read fold has no way to serialise them. Stored folded, the SECOND one collides
+        with the `users.email` UNIQUE index that already exists, and `create_user` re-resolves it to
+        the first row. The race closes on a constraint rather than on timing.
+      * `lower(email)` cannot be unique while the stored values disagree in case, so the functional
+        index that would enforce one-address-one-account for good stays non-unique until an operator
+        reconciles the rows an instance already holds (schema/MIGRATION-0007-users-email-lower.md).
+
+    NEW ROWS ONLY. Nothing here rewrites an address already stored: an existing row's case is the
+    case its person typed, mail already goes there, and a migration that rewrote every address to
+    chase an index would be changing data to suit a query plan."""
+    return (email or "").strip().lower()
 
 
 def _dev_mode() -> bool:
@@ -438,8 +459,18 @@ def create_app() -> FastAPI:
         # meeting report while the real account gets nothing. Email is case-insensitive in its
         # domain and, in every provider we meet, in its local part too; one half of this service
         # already knew that.
+        #
+        # ORDER BY id — OLDEST WINS, on both halves of this question. An instance that already
+        # holds case-variant duplicates (which is precisely the estate this fold exists for) has
+        # more than one row matching, and `.first()` without an ORDER BY returns whichever row the
+        # PLAN happened to reach first. That is not a stable answer: it can differ between this
+        # route and `GET /admin/users/email/{email}`, and it can differ between two calls to the
+        # same route after a vacuum. "Which of these accounts is the person" then has two answers,
+        # and the desk, the meetings and the mail follow different ones. The oldest row is the one
+        # that has the history.
         existing = (await db.execute(
             select(User).where(func.lower(User.email) == user_in.email.lower())
+            .order_by(User.id)
         )).scalars().first()
         if existing:
             response.status_code = status.HTTP_200_OK
@@ -455,11 +486,30 @@ def create_app() -> FastAPI:
         # was onboarded survives a publish that never lands — a later sweep can replay from it. That
         # ordering is the whole exactly-once guarantee: it holds against a replay, a restore, and a
         # second producer somebody adds later without reading this comment.
-        u = User(email=user_in.email, name=user_in.name,
+        #
+        # STORED FOLDED — see `normalise_email`. New rows only; nothing rewrites an address already
+        # in the table. The read fold above cannot serialise two concurrent creates in different
+        # cases (both miss, both insert); folded on write, the second one hits the `users.email`
+        # UNIQUE index that has always been there, and the handler below re-resolves it to the row
+        # the first one made. The race closes on a constraint instead of on timing.
+        u = User(email=normalise_email(user_in.email), name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
         u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
         db.add(u)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # The other half of the race committed first. This is a 200 on THEIR row, exactly as if
+            # our lookup had seen it — never a 500, and never a second account.
+            await db.rollback()
+            winner = (await db.execute(
+                select(User).where(func.lower(User.email) == user_in.email.lower())
+                .order_by(User.id)
+            )).scalars().first()
+            if winner is None:
+                raise
+            response.status_code = status.HTTP_200_OK
+            return UserResponse.model_validate(winner)
         await db.refresh(u)
         # FIRE-AND-FORGET. Identity tells flows; it does not ask it. A deployment with no flows
         # domain still onboards people, and so does one where flows is down — the publisher swallows
@@ -478,7 +528,7 @@ def create_app() -> FastAPI:
         # None while LOOKING like a lookup — the worst version of this, because it reads as though
         # somebody checked.
         try:
-            events_mod.publish(
+            await events_mod.publish(
                 events_mod.EVENT_ONBOARDING_COMPLETED,
                 events_mod.onboarding_source_id(u.id),
                 events_mod.onboarding_refs(u.id, events_mod.NO_ORG, events_mod.DEFAULT_SEAT))
@@ -497,8 +547,12 @@ def create_app() -> FastAPI:
         # Case-folded (R-B08) — see `create_user`. This is the ASKING half of the same question,
         # and the two disagreeing is what mints the ghost: flows asks here, is told "no such
         # user", and creates one.
+        # ORDER BY id — the same oldest-wins rule as `create_user`, and it has to be the SAME rule:
+        # two case-folding lookups that disagree about which duplicate row is the person put the
+        # desk on one account and the meetings on another.
         user = (await db.execute(
             select(User).where(func.lower(User.email) == email.lower())
+            .order_by(User.id)
         )).scalars().first()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -868,31 +922,6 @@ def create_app() -> FastAPI:
     # `bot_name` is NOT here on purpose: a bot default is a fact about the bot, and meetings already
     # resolves one through /internal/users/{id}/bot-context.
 
-    @app.get("/user/settings")
-    async def get_user_settings(user: User = Depends(get_current_user)):
-        """How Vexa behaves for THIS person. Defaults filled in — never empty, never a missing key."""
-        return {"settings": person_settings_mod.read(user.data if isinstance(user.data, dict) else {}),
-                "what_each_means": person_settings_mod.MEANINGS}
-
-    @app.put("/user/settings")
-    async def set_user_settings(update: dict = Body(...),
-                                user: User = Depends(get_current_user_for_update),
-                                db: AsyncSession = Depends(get_db)):
-        """Change one or more settings. An unknown key is refused WITH the list, and nothing is
-        written unless every key validates: a half-applied change is a person who thinks they turned
-        two things off and turned one."""
-        from sqlalchemy.orm import attributes
-        try:
-            data = person_settings_mod.apply(user.data if isinstance(user.data, dict) else {}, update)
-        except person_settings_mod.Refused as e:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.detail) from e
-        user.data = data
-        attributes.flag_modified(user, "data")
-        db.add(user)
-        await db.commit()
-        return {"settings": person_settings_mod.read(data),
-                "what_each_means": person_settings_mod.MEANINGS}
-
     @app.put("/user/models")
     async def set_user_models(update: ModelPrefsUpdate,
                               user: User = Depends(get_current_user_for_update),
@@ -1003,6 +1032,30 @@ def create_app() -> FastAPI:
             provided = request.headers.get("X-Internal-Secret", "")
             if not hmac.compare_digest(provided, secret):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+
+    def _check_internal_no_dev_bypass(request: Request) -> None:
+        """The internal check WITHOUT the dev-mode escape — for a door that reads or writes ONE
+        NAMED PERSON'S data by path id.
+
+        `_check_internal` lets `DEV_MODE=true` with no `INTERNAL_API_SECRET` through unauthenticated.
+        For the doors it was written for — `/internal/validate`, the membership index — that is a
+        local-development convenience over data the caller could get anyway. For a route shaped
+        `/internal/users/{id}/…` it is not the same thing: the id is supplied by the CALLER, so the
+        bypass is a cross-user read (or write) of somebody's private preferences with no credential
+        at all. The two cases have opposite blast radii and had one check, which is how the weaker
+        one ended up guarding the stronger door.
+
+        Dev mode still works; it simply has to name a secret first — a one-line change to a compose
+        file against a route that otherwise answers for any person on the instance."""
+        secret = _internal_secret()
+        if not secret:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=("INTERNAL_API_SECRET not configured — this door reads/writes one named "
+                        "person's settings and is never open, dev mode included"))
+        provided = request.headers.get("X-Internal-Secret", "")
+        if not hmac.compare_digest(provided, secret):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
 
     async def _load_user(
         user_id: str,
@@ -1137,6 +1190,15 @@ def create_app() -> FastAPI:
         if data.get("is_admin") is True:
             return {"allowed": True, "reason": "", **state}
         return {"allowed": False, "reason": GATE_SENTENCE, **state}
+
+    @app.get("/admin/instance", include_in_schema=False,
+             dependencies=[Depends(verify_admin_token)])
+    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
+        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
+        no internal secret (see flows_steps/common.py), so without this door it would have to infer
+        the gate from something else -- and a service that infers the gate IS a second source of
+        truth. Same body, same computation, different transport."""
+        return await _instance_state(db)
 
     @app.post("/internal/bootstrap-admin", include_in_schema=False)
     async def bootstrap_admin(payload: dict, request: Request,
@@ -1308,34 +1370,105 @@ def create_app() -> FastAPI:
 
         An unknown user is a 404 and never a defaulted answer: "defaults for somebody who exists"
         and "defaults for somebody who does not" are opposite facts, and the second one means a flow
-        is about to mail a person who is not there."""
-        _check_internal(request)
+        is about to mail a person who is not there.
+
+        NO DEV-MODE BYPASS (see `_check_internal_no_dev_bypass`): the person is named in the PATH by
+        the caller, so an unauthenticated dev-mode answer here is a cross-user read of somebody's
+        private preferences."""
+        _check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         return person_settings_mod.read_person_facts(
             user.data if isinstance(user.data, dict) else {})
 
+    @app.put("/internal/users/{user_id}/settings", include_in_schema=False)
+    async def put_user_settings_internal(user_id: str, payload: dict, request: Request,
+                                         db: AsyncSession = Depends(get_db)):
+        """SET this person's settings — the write half of the door above.
 
-    @app.post("/internal/users/{user_id}/settings/import", include_in_schema=False)
-    async def import_user_settings(user_id: str, request: Request, legacy: dict = Body(...),
-                                   db: AsyncSession = Depends(get_db)):
-        """ONE-SHOT: take a legacy `.settings.json` and store the person facts in it.
+        WHY IT HAD TO EXIST. The read door shipped alone: `person_settings.apply` had no caller
+        anywhere, so identity could only ever answer DEFAULTS. Every person who had turned their
+        minutes off, or who lives outside UTC, silently reverted on upgrade — mail resumed, in the
+        wrong clock — and the vocabulary that was moved here to end "mail everybody everything, in
+        UTC" produced exactly that. A read-only settings store is not a settings store.
 
-        Idempotent and lossless — a key the person has already set through `/user/settings` is
-        reported under `kept` and left alone. `bot_name` and anything the vocabulary never carried
-        come back under `dropped`, so the operator running the sweep can read what it did rather
-        than trust that it did nothing surprising."""
-        _check_internal(request)
+        Partial: only the keys sent are changed. VALIDATED ALL-OR-NOTHING by `apply` — a
+        half-applied change is a person who believes they turned two things off and turned one.
+        Refusals name the vocabulary (422) rather than ignoring the key, because a setting that
+        silently does nothing is worse than an error.
+
+        `bot_name` IS REFUSED HERE, deliberately. It is a fact about the BOT, the meetings domain
+        owns it, and it already has a door (`/internal/users/{id}/bot-context`, backed by the same
+        `users.data.calendar_bot_name` this service stores). Accepting it on the PERSON's settings
+        door would be a second name for one fact. The one-shot importer below still carries it into
+        that store, which is what a migration off the old file has to do."""
+        _check_internal_no_dev_bypass(request)
+        if not isinstance(payload, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="body must be an object of settings to change")
+        if person_settings_mod.BOT_NAME_KEY in payload:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={
+                "refused": "bot_name is not a person setting",
+                "why": ("a bot default is a fact about the bot; meetings owns it and resolves it "
+                        "on every spawn path through /internal/users/{id}/bot-context"),
+                "the_settings_that_exist": person_settings_mod.read_person_facts({}),
+            })
         from sqlalchemy.orm import attributes
+
         user = await _load_user(user_id, db, for_update=True)
-        data, imported, kept, dropped = person_settings_mod.plan_import(
-            user.data if isinstance(user.data, dict) else {}, legacy)
-        if imported:
-            user.data = data
-            attributes.flag_modified(user, "data")
-            db.add(user)
-            await db.commit()
-        return {"imported": imported, "kept": kept, "dropped": dropped,
-                "settings": person_settings_mod.read(data)}
+        try:
+            user.data = person_settings_mod.apply(
+                user.data if isinstance(user.data, dict) else {}, payload)
+        except person_settings_mod.Refused as refused:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=refused.detail)
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return person_settings_mod.read_person_facts(
+            user.data if isinstance(user.data, dict) else {})
+
+    @app.post("/admin/users/{user_id}/settings/import", include_in_schema=False,
+              dependencies=[Depends(verify_admin_token)])
+    async def import_user_settings(user_id: str, payload: dict,
+                                   db: AsyncSession = Depends(get_db)):
+        """THE ONE-SHOT MIGRATION off `.settings.json`, driven by an operator.
+
+        The body is that file's own shape — a flat object, e.g.
+        ``{"timezone": "Europe/Lisbon", "mail_minutes": false, "bot_name": "Notes"}``. An operator
+        who still has those files (they lived in each person's workspace in the AGENT domain) POSTs
+        each one here; `plan_import` decides, and its three rules are the migration's whole
+        contract: a key the person has ALREADY set through the write door is KEPT (so the sweep is
+        re-runnable across an estate where somebody has since changed a preference), `bot_name` goes
+        into the BOT's own store and only when that store is empty (nobody's bot changes name in
+        either direction), and an unknown key is DROPPED rather than refused (a migration that stops
+        on one odd key leaves half the estate on the old store, and there is no second run that
+        fixes that).
+
+        ADMIN-TIER, not internal: it is an operator act on a named person, and the operator token is
+        the credential an operator has. The response says what happened to every key — imported,
+        kept, dropped — because a migration whose result you cannot read is a migration nobody can
+        confirm ran."""
+        if not isinstance(payload, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="body must be the old .settings.json object")
+        from sqlalchemy.orm import attributes
+
+        user = await _load_user(user_id, db, for_update=True)
+        new_data, imported, kept, dropped = person_settings_mod.plan_import(
+            user.data if isinstance(user.data, dict) else {}, payload)
+        user.data = new_data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return {
+            "imported": sorted(imported),
+            "kept": kept,
+            "dropped": dropped,
+            "settings": person_settings_mod.read(
+                user.data if isinstance(user.data, dict) else {}),
+        }
+
 
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):

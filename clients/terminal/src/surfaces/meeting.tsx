@@ -281,7 +281,7 @@ const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "�
 
 type MeetingActionFailure = {
   actionId: string; actionLabel: string; native: string; message: string;
-  /** Set when the service authority REFUSED (403 service_not_allowed / 503 authority-unavailable).
+  /** Set when the deciding service REFUSED (403 service_not_allowed / 503 authority-unavailable).
    *  The row renders the panel instead of the one-line message, and does not auto-clear it. */
   denial?: ServiceDenialPresentation | null;
 };
@@ -301,10 +301,10 @@ export function presentMeetingActionFailure(error: unknown): string {
     if (error.status === 404) return "This meeting is no longer active — refreshing the list.";
     if (error.status === 409) return "That meeting already has a bot.";
   }
-  // A service-authority refusal (paywall / cap / billing outage) says WHY in its own words —
-  // "Your key doesn't have access to this." is a lie about a bot the account simply cannot afford.
+  // A refusal from the deciding service says WHY in its own words — "Your key doesn't have access
+  // to this." is a lie about a bot that was refused for some other reason entirely.
   const denial = serviceDenialFromError(error);
-  if (denial) return `${denial.title} — ${denial.body}`;
+  if (denial) return denial.headline;
   return presentError(error).headline;
 }
 
@@ -735,7 +735,7 @@ function MeetingsList() {
         else if (r.status === 409) { setErrMsg("That meeting already has a bot."); }
         else if (r.status === 401) { setErrMsg("Not signed in — sign in and retry."); }
         else {
-          // 403 service_not_allowed / 503 service_authority_unavailable are the service authority
+          // 403 service_not_allowed / 503 service_authority_unavailable are the deciding service
           // refusing, not an access fault: they get their own words and their own fix.
           const state = resolveJoinError(await readFailure(r));
           if (state.kind === "denial") { setDenial(state.presentation); setErrMsg(null); refused = true; }

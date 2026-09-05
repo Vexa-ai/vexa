@@ -30,6 +30,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import agent_half  # noqa: E402
 import flows_queue  # noqa: E402
 from flows import FakeClock, Registry, admit, status, tick  # noqa: E402
 from sqlite_double import SqliteDB  # noqa: E402
@@ -127,6 +128,40 @@ def test_an_unresolvable_subject_is_unresolved_not_everything():
     out = flows_queue.waiting(db, subject="nobody@nowhere.test", now=T0,
                               identity=lambda _s: ("", ""))
     assert out["unresolved"] is True and out["items"] == []
+
+
+def test_an_email_subject_with_admin_api_down_is_unresolved_not_a_half_answer():
+    """B1/P21(c). `resolve_identity` fails SOFT: asked about an ADDRESS while admin-api is down it
+    hands back the address and an empty uid. This projection then scoped on the address alone,
+    which matches only the rows that carry one — the invite lineage — and silently drops the whole
+    completed lineage, which carries a uid and no address (`flows_timeline.model.concerns`).
+
+    So a person whose queue was full of meeting work was told `waiting: 0` from a half-scoped
+    query. "Nothing is waiting for you" and "we could not work out who you are" are different facts
+    and only one of them is about them; the docstring on `pending()` named this failure and nothing
+    detected it."""
+    db = SqliteDB()
+    _row(db, "r-mine", MINE)                       # the uid lineage — invisible to an address scope
+
+    def _admin_api_down(subject):
+        return ("", str(subject).lower())          # exactly what resolve_identity returns then
+
+    out = flows_queue.waiting(db, subject="dima@vexa.ai", now=T0, identity=_admin_api_down)
+    assert out["unresolved"] is True, "a half-resolved subject answered as if it were resolved"
+    assert out["items"] == [] and out["waiting"] == 0
+    # …and the same for the notices ride-along, which is asked on every call.
+    assert flows_queue.notices(db, subject="dima@vexa.ai", now=T0,
+                               identity=_admin_api_down)["unresolved"] is True
+
+
+def test_a_uid_with_no_address_on_record_is_still_a_real_answer():
+    """The mirror case is NOT the same case. Identity's `/internal/validate` legitimately answers a
+    user_id and an empty email — that is an account state, where an address that resolves to no uid
+    is an answer that did not arrive. Only the second one fails closed."""
+    db = SqliteDB()
+    _row(db, "r-mine", MINE)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=lambda s: (str(s), ""))
+    assert not out.get("unresolved") and [i["id"] for i in out["items"]] == ["r-mine"]
 
 
 # ── A5 · the route cannot invent a row ────────────────────────────────────────────────────────
@@ -264,6 +299,16 @@ def test_a_completion_that_never_arrives_ends_the_live_reaction_rather_than_park
     assert st["status"] == "done" and st["receipts"][-1]["result"]["outcome"] == "lapsed"
 
 
+# ── the two desk cards · agent half only ──────────────────────────────────────────────────────
+# `desk_setup` and `desk_claim` are registered by `flows_defs/production_agent.py`, which is an
+# OPTIONAL module — `production._register_agent_flows` checks `find_spec` before importing it, and
+# this cut does not carry it. The four tests below are entirely about those two flows: with no
+# module, `admit()` matches nothing, the reaction row they read never exists, and they failed on
+# `IndexError: list index out of range` — a correct tree failing tests that cannot mean anything
+# on it. Skipped by the same presence signal every other agent-half assertion in this suite uses
+# (`tests/agent_half.py`); the assertions themselves are untouched and still hold where the module
+# is. See `flows_defs/README.md` for the split.
+@agent_half.required
 def test_the_desk_cards_are_flows_and_they_need_the_agent_domain():
     reg = _registry(_StubDB())
     assert [f.name for f in reg.by_event[production.DESK_UNSCAFFOLDED.name]] == ["desk_setup"]
@@ -272,6 +317,7 @@ def test_the_desk_cards_are_flows_and_they_need_the_agent_domain():
     assert reg.needs("await_claim") == frozenset({"agent"})
 
 
+@agent_half.required
 def test_a_desk_card_blocks_when_the_card_is_still_open(monkeypatch):
     db, clock = SqliteDB(), FakeClock()
     reg = _registry(db)
@@ -287,6 +333,7 @@ def test_a_desk_card_blocks_when_the_card_is_still_open(monkeypatch):
     assert out["items"][0]["say"]
 
 
+@agent_half.required
 def test_a_desk_card_that_was_answered_in_the_meantime_does_not_ask_again(monkeypatch):
     """The fact is old the moment it is published; the step re-reads the desk."""
     db, clock = SqliteDB(), FakeClock()
@@ -301,6 +348,7 @@ def test_a_desk_card_that_was_answered_in_the_meantime_does_not_ask_again(monkey
 
 # ── A3 · the no-agents deployment ─────────────────────────────────────────────────────────────
 
+@agent_half.required
 def test_with_the_agent_domain_absent_the_queue_still_answers_and_says_which_domain(monkeypatch):
     """The row that decides whether this ships in the `no-agents` product at all (decision 40.6).
     Two of the old tool's four sources were agent-api reads."""
@@ -332,6 +380,83 @@ def test_an_old_absence_stops_being_news():
     _row(db, "r-old", MINE, status_="done", reason="agent:not_present",
          at=T0 - flows_queue.NOT_PRESENT_WINDOW_S - 60)
     assert flows_queue.waiting(db, subject="126", now=T0, identity=_identity)["waiting"] == 0
+
+
+def test_an_old_absence_goes_and_a_pending_item_stays():
+    """The horizon is about ABSENCES and nothing else — a pending reaction of the same age is
+    still in flight and is still owed to the person, however long it has been in flight."""
+    db = SqliteDB()
+    _row(db, "r-old", MINE, status_="done", reason="agent:not_present",
+         at=T0 - flows_queue.NOT_PRESENT_WINDOW_S - 60)
+    _row(db, "r-pending", MINE, at=T0 - flows_queue.NOT_PRESENT_WINDOW_S - 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert [i["id"] for i in out["items"]] == ["r-pending"]
+
+
+# ── one absence per flow · fr_e612b14fba618eea ───────────────────────────────────────────────
+
+def test_the_same_absence_is_said_once_however_many_meetings_hit_it():
+    """THE friction. A deployment that does not run a domain answers `not_present` for every
+    reaction that reaches it, so on a no-agent deployment each completed meeting adds one more
+    identical item. The person had three; the count only goes up.
+
+    `NOT_PRESENT_WINDOW_S` bounds how LONG an absence is news. This is the other half: how many
+    times it is news at once. `notices()` has collapsed the identical case since it was written.
+    """
+    db = SqliteDB()
+    for n in range(3):
+        _row(db, f"r-{n}", MINE, status_="done", reason="agent:not_present", at=T0 - n * 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert out["waiting"] == 1, "one deployment fact, said once"
+    assert out["items"][0]["reason"]["type"] == flows_queue.TYPE_NOT_PRESENT
+
+
+def test_the_survivor_is_the_most_recent_occurrence():
+    """`since` must read as when this last happened, not when it first did."""
+    db = SqliteDB()
+    _row(db, "r-first", MINE, status_="done", reason="agent:not_present", at=T0 - 3600)
+    _row(db, "r-latest", MINE, status_="done", reason="agent:not_present", at=T0 - 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert [i["id"] for i in out["items"]] == ["r-latest"]
+    assert out["items"][0]["since"] == T0 - 60
+
+
+def test_two_different_absences_are_two_different_facts():
+    """Collapsing is per (flow, domain). A deployment missing two domains is missing two things,
+    and a person told about only one of them has been told something false by omission."""
+    db = SqliteDB()
+    _row(db, "r-agent", MINE, status_="done", reason="agent:not_present", at=T0 - 60)
+    _row(db, "r-meetings", MINE, status_="done", reason="meetings:not_present", at=T0 - 120)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert {i["reason"]["domain"] for i in out["items"]} == {"agent", "meetings"}
+
+
+def test_pending_and_failed_items_are_never_collapsed():
+    """Each is a DISTINCT thing — one in flight, one to look at. Only an absence is a fact about
+    the deployment rather than about the meeting that ran into it."""
+    db = SqliteDB()
+    for n in range(3):
+        _row(db, f"r-p{n}", MINE, at=T0 - n * 60)
+    for n in range(2):
+        _row(db, f"r-f{n}", MINE, status_="failed", reason="boom", at=T0 - n * 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity,
+                              copy=lambda flow, rtype: flows_queue.Say("something"))
+    kinds = [i["reason"]["type"] for i in out["items"]]
+    assert kinds.count(flows_queue.TYPE_PENDING) == 3
+    assert kinds.count(flows_queue.TYPE_FAILED) == 2
+
+
+def test_the_standing_notices_are_untouched():
+    """`notices()` rides out on the meeting tools' results, to an agent that never asked. The
+    collapse lives in `waiting()` precisely so that answer cannot move — and `notices()` does its
+    own dedup anyway, which is where this fix's idiom came from."""
+    db = SqliteDB()
+    for n in range(3):
+        _row(db, f"r-{n}", MINE, status_="done", reason="agent:not_present", at=T0 - n * 60)
+    standing = flows_queue.Say("Vexa is watching your calendar.", notice=True)
+    out = flows_queue.notices(db, subject="126", now=T0, identity=_identity,
+                              copy=lambda flow, rtype: standing)
+    assert out["notices"] == ["Vexa is watching your calendar."]
 
 
 # ── A4 · the subject is the authenticated caller's — through the real app ─────────────────────

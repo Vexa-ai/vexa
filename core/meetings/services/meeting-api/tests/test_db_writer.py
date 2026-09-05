@@ -412,3 +412,31 @@ async def test_rest_after_completion_with_redis_wiped_serves_the_transcript(redi
     assert [s["text"] for s in body["segments"]] == ["closing words"]
     assert not (body.get("data") or {}).get("processed")
     assert_api_conforms("TranscriptionResponse", body)
+
+
+# ── A18 — REMOVED WITH ITS SUBJECT (PRD decision 34, `f95d4d5e0`) ───────────────────────
+#
+# Two tests stood here: one read `core/agent/worker/meeting.py` off disk to prove the copilot's
+# cleaned-notes producer still existed, and one asserted `flush_meeting_processed` and its
+# pending re-drain were wired into the tick and the finalize. Both were TRUE and both are now
+# assertions about a subsystem this line removed end to end: the producer, the
+# `proc:meeting:{row}` carrier, the `processed-notes.v1` contract and this drain went together.
+#
+# They are deleted rather than skipped on purpose. A skipped test for a deleted feature reads
+# as coverage somebody switched off; the honest record of the removal is the commit that made
+# it, and the negative is asserted where it belongs — `core/agent/tests/test_api.py` holds the
+# check that the copilot endpoints are gone.
+
+
+def test_the_grace_period_is_declared_config(monkeypatch):
+    """`PROC_PENDING_GRACE_SEC` is read from the environment, so gate:config-contract requires it in
+    meeting-api's declaration — an undeclared env read is a value an operator can set that reaches
+    nothing (or, here, one they cannot set at all)."""
+    import json
+    import pathlib
+
+    decl = json.loads((pathlib.Path(__file__).resolve().parents[1]
+                       / "src/meeting_api/config.v1.json").read_text())
+    entry = next((k for k in decl["keys"] if k["key"] == "PROC_PENDING_GRACE_SEC"), None)
+    assert entry is not None, "PROC_PENDING_GRACE_SEC is read by db_writer.py and declared nowhere"
+    assert entry["class"] == "defaulted" and entry["default"] == "120"

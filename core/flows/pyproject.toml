@@ -34,6 +34,8 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# tests/conftest.py puts src/ on sys.path for the ambient interpreter; declaring it here means the
-# gate runner (`uv run pytest -q`, cwd = this dir) resolves the same import path.
-pythonpath = ["src"]
+# The same `sys.path` the two entrypoints build for themselves (`sys.path.insert(0, parents[1])` at
+# the top of `flows_api` and `flows_worker`): the packages under `src/` are imported by bare name in
+# the image, and a suite that reached them any other way would exercise a layout the product has not
+# got. `tests` is on it too, for the sqlite double.
+pythonpath = ["src", "tests"]

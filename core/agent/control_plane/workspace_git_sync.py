@@ -30,7 +30,7 @@ from typing import Optional
 
 from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
-from shared.gitenv import scrubbed_git_env
+from shared.gitenv import pinned_git_env, scrubbed_git_env
 
 from control_plane.workspace_publish import PUBLISH_REMOTE, _URL_CREDENTIAL_RE, _display_url
 
@@ -75,16 +75,21 @@ def _redacted(text: str, token: Optional[str]) -> str:
 
 
 def _git(ws: Path, *args: str, token: Optional[str] = None, check: bool = True,
-         ssh_env: Optional[dict] = None) -> subprocess.CompletedProcess:
+         ssh_env: Optional[dict] = None, url: Optional[str] = None) -> subprocess.CompletedProcess:
     """Run a git command in ``ws`` with a scrubbed env + prompts disabled; failures raise a token-redacted
     ``RemoteSyncError`` (unless ``check=False``, which returns the completed process for the caller to read).
 
     ``ssh_env`` carries ``GIT_SSH_COMMAND`` from the workspace's deploy key (``deploy_keys.ssh_env``) —
     the credential for an ``ssh://``/``git@`` home. It rides the ENVIRONMENT, never the URL, so unlike a
-    PAT there is nothing to embed, nothing to redact and nothing that can be persisted by accident."""
+    PAT there is nothing to embed, nothing to redact and nothing that can be persisted by accident.
+
+    ``url`` marks this as a NETWORK op and pins git's transport allow-list to what that remote needs —
+    the home remote was written from a repository the subject supplied at attach time, so it is a
+    caller-influenced URL even though it is read back out of ``.git/config``."""
+    overrides = {"GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0", **(ssh_env or {})}
     proc = subprocess.run(
         ["git", "-C", str(ws), *args], capture_output=True, text=True,
-        env=scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {})),
+        env=pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides),
     )
     if check and proc.returncode != 0:
         raise RemoteSyncError(_redacted(f"git {' '.join(args)} failed: {proc.stderr.strip()}", token))
@@ -243,7 +248,8 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
         proto, rest = url.split("://", 1)
         auth_url = f"{proto}://{token}@{rest}"
     # Fetch from the URL directly (not a persisted remote) so the credential never lands anywhere.
-    fetch = _git(wsp, "fetch", "--quiet", auth_url, branch, token=token, ssh_env=ssh_env, check=False)
+    fetch = _git(wsp, "fetch", "--quiet", auth_url, branch, token=token, ssh_env=ssh_env,
+                 check=False, url=url)
     if fetch.returncode != 0:
         raise RemoteSyncError(_redacted(f"fetch from {remote} failed: {fetch.stderr.strip()}", token))
     fetched = _git(wsp, "rev-parse", "FETCH_HEAD", token=token, ssh_env=ssh_env).stdout.strip()

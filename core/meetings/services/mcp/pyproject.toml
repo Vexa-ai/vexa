@@ -7,7 +7,12 @@ dependencies = [
     # FastAPI app + the MCP mount. fastapi-mcp is MIT (tadata-org/fastapi_mcp); it brings the
     # official `mcp` python SDK (MIT) — both Category A per ADR-0004.
     "fastapi>=0.110,<1",
-    "fastapi-mcp>=0.4.0,<0.5",
+    # EXACT, not a range. This service wraps two PRIVATE attributes of it — `_request` (tool_errors)
+    # and `_execute_api_tool` (notices) — because they are the only points where what an agent reads
+    # on a tool call is decided. A private attribute carries no compatibility promise, so any release
+    # a range would accept could rename one. The boot also asserts both are present and names the
+    # missing one (`tool_errors.require_library_seam`); the pin is what makes that assertion rare.
+    "fastapi-mcp==0.4.0",
     # Transport to the gateway (BSD-3).
     "httpx>=0.27,<1",
     "pydantic>=2,<3",

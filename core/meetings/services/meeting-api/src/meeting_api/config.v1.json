@@ -6,7 +6,16 @@
    "key": "ADMIN_TOKEN",
    "class": "required-explicit",
    "secret": true,
-   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4)"
+   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4). A PUBLISHED PLACEHOLDER is refused on the same terms as INTERNAL_API_SECRET: the literal is in this repository, so anyone can forge a MeetingToken and upload a recording against any meeting (A19).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "DB_HOST",
@@ -316,6 +325,13 @@
    "class": "defaulted",
    "default": "300",
    "description": "how often (seconds) the db-writer runs its self-healing O(keyspace) meeting:*:segments SCAN — startup + every this-many seconds, off the DB_WRITER_INTERVAL_S hot path. The active_meetings set is authoritative in steady state; the per-tick scan saturated redis and starved /health, restarting healthy pods (#893)",
+   "targets": []
+  },
+  {
+   "key": "PROC_PENDING_GRACE_SEC",
+   "class": "defaulted",
+   "default": "120",
+   "description": "how long (seconds) the db-writer keeps re-draining a FINISHED meeting's copilot processed-notes stream while waiting for the producing worker's view_end marker, before giving up loudly. The copilot's final beat runs ~10s after session_end and by then the meeting has left the active sweep, so without the parked re-drain those last notes stay in redis forever (ADR 0027)",
    "targets": []
   },
   {

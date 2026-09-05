@@ -79,7 +79,7 @@ env:
 			echo "Seeding $(ENV_FILE) from deploy/compose/.env"; cp "$(ROOT)/deploy/compose/.env" "$(ENV_FILE)"; \
 		else \
 			echo "Creating minimal $(ENV_FILE) (edit TRANSCRIPTION_SERVICE_* for transcripts)"; \
-			printf 'ADMIN_TOKEN=changeme\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=v012\n' > "$(ENV_FILE)"; \
+			printf 'ADMIN_TOKEN=\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=v012\n' > "$(ENV_FILE)"; \
 		fi; \
 	fi
 
@@ -117,7 +117,7 @@ up: preflight
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
-	ADMIN_TK=$$(envv ADMIN_TOKEN); ADMIN_TK=$${ADMIN_TK:-changeme}; \
+	ADMIN_TK=$$(envv ADMIN_TOKEN); \
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \

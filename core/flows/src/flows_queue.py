@@ -110,7 +110,20 @@ def pending(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
     """
     now = time.time() if now is None else float(now)
     uid, email = (identity or resolve_identity)(subject)
-    if not uid and not email:
+    # NO UID IS UNRESOLVED, not a smaller answer (B1/P21). `resolve_identity` fails SOFT: asked
+    # about an address while admin-api is down or slow, it hands back the address it was given and
+    # an EMPTY uid, and this projection then scoped on the address alone — which returns exactly
+    # the rows that carry that spelling and silently drops the whole completed lineage, because
+    # that lineage carries a uid and no address (`flows_timeline.model.concerns`). A person was
+    # told `waiting: 0` from a half-scoped query, and "nothing is waiting for you" and "we could
+    # not work out who you are" are different facts of which only one is about them. The docstring
+    # below named this failure; nothing detected it.
+    #
+    # THE MIRROR CASE IS NOT THE SAME CASE and is deliberately left alone: a uid with no address is
+    # a real account shape — identity's `/internal/validate` legitimately answers a user_id and an
+    # empty email — where an address with no uid is a lookup that did not happen or a person this
+    # instance has no account for. One is a state, the other is an absence of an answer.
+    if not uid:
         return None
     states = ",".join(f"'{s}'" for s in UNFINISHED)      # a fixed literal set, never caller input
     rows = _rows(db, f"SELECT {', '.join(_COLS)} FROM reaction "
@@ -158,7 +171,59 @@ def _roots() -> list[pathlib.Path]:
     return out
 
 
-def say(flow: str, reason_type: str) -> str:
+#: The front-matter fence a say-file may open with. Everything about it is deliberately small: one
+#: `key: value` per line, between two `---` rules, at the very top or not at all.
+_FENCE = "---"
+#: The words that mean yes. A value this does not recognise means NO — a flag nobody can read is a
+#: flag that is off, never one that is guessed on.
+_TRUE = frozenset({"true", "yes", "on", "1"})
+
+
+class Say(str):
+    """A say-file's words, plus the attributes its front-matter declared.
+
+    A `str` SUBCLASS rather than a pair, and that is the whole compatibility story: every existing
+    caller of `say()` — the projection, the tests, anything a private tree wires in — keeps getting
+    something that compares, formats and serialises as the text it always was. The attributes ride
+    on it for the callers that ask.
+    """
+
+    notice: bool = False
+
+    def __new__(cls, text: str = "", *, notice: bool = False) -> "Say":
+        self = super().__new__(cls, text)
+        self.notice = bool(notice)
+        return self
+
+
+def parse(raw: str) -> Say:
+    """A say-file's text, with its front-matter read off the top.
+
+    A file with no fence is its own text and declares nothing, which is every file written before
+    this existed — the flag is ADDITIVE by construction, so a behavior tree that never heard of it
+    behaves exactly as it did.
+
+    UNPARSEABLE IS UNFLAGGED, NEVER UNSPOKEN. A fence that never closes, or a line that is not
+    `key: value`, leaves the words intact and the attributes at their defaults: the failure of a
+    flag must never be the failure of the sentence a person was owed.
+    """
+    text = (raw or "").strip()
+    if not text.startswith(_FENCE):
+        return Say(text)
+    lines = text.splitlines()
+    close = next((i for i in range(1, len(lines)) if lines[i].strip() == _FENCE), None)
+    if close is None:                      # a fence that never closes is not front-matter
+        return Say(text)
+    attrs = {}
+    for line in lines[1:close]:
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            attrs[key.strip().lower()] = value.strip().strip("\"'")
+    body = "\n".join(lines[close + 1:]).strip()
+    return Say(body, notice=attrs.get("notice", "").lower() in _TRUE)
+
+
+def say(flow: str, reason_type: str) -> Say:
     """What a person hears about this item, or "" when behavior has nothing to say about it.
 
     "" IS AN ANSWER, and it is the filter (see the module docstring): a pending reaction behavior
@@ -169,6 +234,9 @@ def say(flow: str, reason_type: str) -> str:
     The flow-and-type key rather than a flow key: *"the write-up is being prepared"* and *"the
     write-up failed"* are the same flow and opposite sentences, and a file keyed on the flow alone
     would say the first one to somebody the second had happened to.
+
+    The returned :class:`Say` is a string carrying whatever the file's front-matter declared — see
+    `parse`, and `behavior/queue/README.md` for the one attribute there is.
     """
     for name in (f"{flow}.{reason_type}.md", f"_{reason_type}.md"):
         for root in _roots():
@@ -177,10 +245,76 @@ def say(flow: str, reason_type: str) -> str:
                 if f.is_file():
                     text = f.read_text(encoding="utf-8").strip()
                     if text:
-                        return text
+                        return parse(text)
             except OSError:                # an unreadable mount is not a reason to fail a read
                 continue
-    return ""
+    return Say("")
+
+
+def _spoken(rows: list, copy: Optional[Callable]) -> tuple:
+    """``(items, quiet)`` — the rows behavior has words for, and the count of the ones it does not.
+
+    ONE reader of the copy tree for both projections below, so `waiting` and `notices` can never
+    disagree about which items are spoken or about what they say.
+
+    `copy` is the injection seam the tests already use and it may hand back a plain string, which
+    is what every caller wrote before front-matter existed; `Say` normalises it to an unflagged one.
+    """
+    speak = copy or say
+    items, quiet = [], 0
+    for r in rows:
+        words = speak(r["flow"], r["reason"]["type"])
+        if not words:
+            quiet += 1
+            continue
+        words = words if isinstance(words, Say) else Say(words)
+        items.append({"id": r["reaction_id"], "flow": r["flow"],
+                      "flow_version": r["flow_version"], "step": r["step"],
+                      "status": r["status"], "reason": r["reason"],
+                      "since": r["updated_at"], "next_run_at": r["next_run_at"],
+                      "say": str(words),
+                      # DECLARED BY THE COPY, and therefore by an admin's file rather than by a
+                      # deploy — the same place, and the same edit, that decides whether an item is
+                      # spoken at all. See `behavior/queue/README.md`.
+                      "notice": words.notice})
+    return items, quiet
+
+
+def _one_absence_per_flow(items: list) -> list:
+    """Collapse a flow's `not_present` items to the newest one. Everything else passes through.
+
+    A deployment that does not run a domain answers `not_present` for EVERY reaction that reaches
+    it, so on a no-agent deployment each completed meeting adds one more `post_meeting`
+    /`agent:not_present` item — all of them the same sentence, saying the same thing about the same
+    deployment. Three of them were in one person's queue on 2026-09-05 (fr_e612b14fba618eea) and
+    the count only goes up.
+
+    `NOT_PRESENT_WINDOW_S` already keeps the queue finite; this is the other half, and it is a
+    different question — the horizon bounds how LONG an absence is news, this bounds how many
+    TIMES it is news at once. `notices()` below has collapsed the identical case since it was
+    written (two reactions of one flow say the identical sentence, "which reads as two different
+    things being true"); `waiting()` simply never did.
+
+    ONLY `not_present`, and only per flow. A pending item is a distinct thing in flight and a
+    failed one is a distinct thing to look at, so both keep one item each — but an absence is a
+    fact about the DEPLOYMENT, not about the meeting that ran into it, and there is nothing a
+    person can do about the second copy that they could not do about the first. The copy already
+    says so: `behavior/queue/_not_present.md` reads "Say it once, plainly."
+
+    The newest survives so `since` is the most recent occurrence rather than the first.
+    """
+    seen: set = set()
+    out = []
+    for item in items:
+        if item["reason"]["type"] != TYPE_NOT_PRESENT:
+            out.append(item)
+            continue
+        key = (item["flow"], item["reason"].get("domain"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[float] = None,
@@ -192,24 +326,41 @@ def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[flo
     § 9 of the destination design gives: it is what makes a short queue legible. "Nothing is
     waiting" against a list that has no `live_meeting` in it says something different from the same
     empty queue against a list that has one, and neither answer needs a field the tool invents.
+
+    The collapse happens HERE and not in `pending()`, deliberately: `pending()` is shared with
+    `notices()`, which rides out on the meeting tools' results, and a filter placed there would
+    silently change what an agent that never asked receives.
     """
     rows = pending(db, subject=subject, now=now, limit=limit, identity=identity)
     if rows is None:
         return {"subject": subject, "unresolved": True, "waiting": 0, "items": [],
                 "quiet": 0, "flows": flows or []}
-    speak = copy or say
-    items, quiet = [], 0
-    for r in rows:
-        words = speak(r["flow"], r["reason"]["type"])
-        if not words:
-            quiet += 1
-            continue
-        items.append({"id": r["reaction_id"], "flow": r["flow"],
-                      "flow_version": r["flow_version"], "step": r["step"],
-                      "status": r["status"], "reason": r["reason"],
-                      "since": r["updated_at"], "next_run_at": r["next_run_at"],
-                      "say": words})
+    items, quiet = _spoken(rows, copy)
+    items = _one_absence_per_flow(items)
     return {"subject": subject, "waiting": len(items), "items": items,
             # COUNTED, NOT HIDDEN: an operator asking why a queue is short must be able to tell
             # "nothing is happening" from "behavior is silent about what is happening".
             "quiet": quiet, "flows": flows or []}
+
+
+def notices(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
+            identity: Optional[Callable] = None, copy: Optional[Callable] = None) -> dict:
+    """THE STANDING NOTICES only — the say text of every waiting item whose copy declared itself one.
+
+    A SEPARATE, SMALLER ANSWER rather than a filter over `waiting`, because of WHO CALLS IT and how
+    often: this is meant to ride along with unrelated work, on every call, so it answers with the
+    least it can — a list of strings — and carries no reaction ids, no flow names, no steps and no
+    typed reasons. A caller that wants any of those wants `waiting`, and should ask for it.
+
+    DEDUPED, IN ORDER. Two reactions of the same flow resolve to the same file and would otherwise
+    say the identical sentence twice in one result, which reads as two different things being true.
+    """
+    rows = pending(db, subject=subject, now=now, limit=limit, identity=identity)
+    if rows is None:
+        return {"subject": subject, "unresolved": True, "notices": []}
+    items, _ = _spoken(rows, copy)
+    out = []
+    for item in items:
+        if item["notice"] and item["say"] not in out:
+            out.append(item["say"])
+    return {"subject": subject, "notices": out}

@@ -183,6 +183,13 @@ def _fixed_friction_ids(db, ids: set, *, scan: int = SCAN_ROWS) -> set:
         if fid in ids:
             fixed.add(fid)
     return fixed
+#: The refs this row renders as named fields; everything else is passed through under `context`.
+_FRICTION_RENDERED = ("uid", "session", "friction_id", "severity", "what_i_tried", "what_happened")
+#: What a session-less report reads as. `POST /friction` stopped requiring `session` in F-D27 —
+#: prod refused a report for not having one, and the report it refused was about that refusal. So a
+#: row may genuinely carry no session, and the reader is TOLD SO in words rather than handed a blank
+#: it has to interpret. Machine callers still get the absence unambiguously: `session_id` is `""`.
+NO_SESSION = "no session"
 
 
 def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: int = 40,
@@ -213,13 +220,23 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
     for r in rows:
         refs = loads(r["subject_refs"])
         at = to_epoch(r["created_at"]) or 0.0
-        ctx = {k: refs[k] for k in ("tool", "meeting_id", "deployment", "worker_image", "kind")
-              if refs.get(k)}
+        # EVERYTHING THE REPORT CARRIED, minus the fields this row renders in its own right. A
+        # fixed key list here would have to be edited every time a reporter has something new to
+        # say, and until somebody edited it the sink would be storing data no reader could see —
+        # the F-D26 loss again, one layer down and quieter. `kind` is free text and `extra` holds
+        # whatever the caller sent that the route does not name; both arrive untouched.
+        ctx = {k: v for k, v in refs.items()
+              if k not in _FRICTION_RENDERED and v not in (None, "", {}, [])}
+        sess = str(refs.get("session") or "").strip()
         fid = refs.get("friction_id") or r["reaction_id"]
         out.append({
             "id": fid,
             "at": iso(at), "at_epoch": round(at, 3),
-            "subject": refs.get("uid", ""), "session": refs.get("session", ""),
+            "subject": refs.get("uid", ""),
+            # `session` is the HUMAN field and says "no session" when there is none; `session_id`
+            # is the machine one and is exactly what was stored, `""` included. Two fields because
+            # one cannot be both honest to a grep and readable to a person.
+            "session": sess or NO_SESSION, "session_id": sess,
             "severity": refs.get("severity", ""),
             "tried": refs.get("what_i_tried", ""), "happened": refs.get("what_happened", ""),
             "context": ctx,

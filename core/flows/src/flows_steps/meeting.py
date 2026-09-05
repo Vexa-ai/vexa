@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from flows import Done, StepCtx, StepError, Wait
+from flows import Block, Done, StepCtx, StepError, Wait
 
 # `setting` was USED below and never imported — dispatch_bot raised NameError on its first line
 # of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
@@ -248,6 +248,28 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     return "\n".join(str(g.get("text") or "") for g in segs)
 
 
+def transcript_segment_count(uid: str, meeting_id) -> int | None:
+    """HOW MANY SEGMENTS this meeting captured — or **None** when it could not be read at all.
+
+    The same read `transcript_text` does, through the same owning-service endpoint, answering the
+    one question a caller wants when it does not want the words: *did this meeting transcribe?*
+    Counting the lines of `transcript_text` would not answer it, because that function joins the
+    segment texts and a meeting that captured nothing and a read that failed both come back falsy
+    — the exact collapse of two empties R-B19 was about, one level up.
+
+    THE THREE ANSWERS ARE THREE: `None` unreadable, `0` a meeting that captured nothing, `n` a
+    meeting that did. A caller deciding *has this person seen Vexa work yet* must not read a
+    gateway restart as a person who never tried."""
+    try:
+        _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
+                         {"X-API-Key": user_api_key(str(uid))})
+    except StepError:
+        return None
+    if not isinstance(body, dict) or "segments" not in body:
+        return None
+    return len(body.get("segments") or [])
+
+
 def _tokens(text: str) -> list:
     """A name as comparable words: lowercase, split on anything that is not a letter or a digit,
     bare numbers dropped. `Anna-Maria Smith` and `anna maria smith` become the same three."""
@@ -429,11 +451,76 @@ def dispatch_bot(ctx: StepCtx):
                 provider_ref=str(body["id"]))
 
 
+#: HOW LONG THE TEARDOWN MAY TAKE before it stops being a slow stop and starts being a bot that
+#: will not leave (P22). It is generous — a bot in a call that is winding down legitimately takes
+#: tens of seconds — and it is finite, which is the whole point: the poll below used to have no
+#: deadline at all, so a stop that never completed sat on `Wait(4)` for the life of the worker,
+#: recording, while the reaction stayed `retrying` and nothing anywhere said the word "stuck".
+STOP_DEADLINE_S = 10 * 60
+#: How many DELETEs may be answered non-2xx before the step stops asking. A stop is idempotent and
+#: the platform may be restarting, so one refusal is not an answer; three in a row is.
+STOP_ATTEMPTS_MAX = 3
+#: The same bound on the READ. `_status` maps a non-200 to a named branch instead of an unknown
+#: status string, and an unreadable status is retried a bounded number of times rather than
+#: forever — a 404 on a meeting that does not exist never becomes readable by asking again.
+STATUS_UNREADABLE = "unreadable"
+STATUS_READ_ATTEMPTS_MAX = 10
+
+
 def _status(ctx: StepCtx) -> dict:
+    """The bot's own status document, or a NAMED unreadable answer.
+
+    It used to return `{"status": f"http-{st}"}` for every non-200, and no branch in `run_meeting`
+    matched a string of that shape — so a 404, a 500 and a gateway restart all fell through to the
+    bottom `Wait(6)` and were retried, identically and forever, as if the meeting were simply in a
+    state this function had not heard of. Two different things were hidden in that one string: a
+    status we do not recognise (a genuine unknown, worth waiting on) and a read that did not
+    happen (worth counting, and worth giving up on). `unreadable` is the second, and it carries the
+    code so an operator reading the reason knows which door said what."""
     d = ctx.prior["dispatch_bot"]
     key = user_api_key(ctx.prior["ensure_user"]["uid"])
-    st, body = http("GET", f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}", {"X-API-Key": key})
-    return body if st == 200 else {"status": f"http-{st}"}
+    try:
+        st, body = http("GET", f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}",
+                        {"X-API-Key": key})
+    except StepError as e:
+        return {"status": STATUS_UNREADABLE, "http": None, "detail": str(e)[:200]}
+    if st == 200 and isinstance(body, dict):
+        return body
+    return {"status": STATUS_UNREADABLE, "http": st, "detail": _http_detail(body)}
+
+
+def _stop_bot(ctx: StepCtx, d: dict):
+    """Ask the bot to leave, and CHECK THAT IT WAS ASKED (P22, E2).
+
+    The DELETE's return used to be discarded entirely: `http("DELETE", …)` on its own line, no
+    status, no branch. A teardown that 403s or 404s is then indistinguishable from one that worked,
+    and the step goes on to poll for a `stopping` that will never arrive — a bot that will not
+    leave a call records unboundedly and surfaces nowhere.
+
+    404/409 ARE SUCCESS HERE. A stop is idempotent and both of those mean the bot is already gone
+    (a retry after a partial run, or the platform's own reaper got there first) — treating them as
+    failures would escalate the one case that is already the outcome we want.
+
+    Anything else is counted in the reaction's durable scratch, so the count survives the worker:
+    once, the platform may be restarting; `STOP_ATTEMPTS_MAX` times running is a fact about this
+    meeting, and the caller escalates."""
+    key = user_api_key(ctx.prior["ensure_user"]["uid"])
+    try:
+        st, body = http("DELETE", f"{meetings_door()}/bots/{d['platform']}/{d['native']}",
+                        {"X-API-Key": key})
+    except StepError as e:
+        st, body = None, str(e)[:200]
+    try:
+        code = int(st)
+    except (TypeError, ValueError):
+        code = 0
+    if 200 <= code < 300 or code in (404, 409):
+        ctx.scratch["stop_failures"] = 0
+        return None
+    n = int(ctx.scratch.get("stop_failures") or 0) + 1
+    ctx.scratch["stop_failures"] = n
+    ctx.scratch["stop_last"] = f"HTTP {st} — {_http_detail(body)}"
+    return n
 
 
 def run_meeting(ctx: StepCtx):
@@ -441,26 +528,50 @@ def run_meeting(ctx: StepCtx):
     d = ctx.prior["dispatch_bot"]
     m = _status(ctx)
     s = m.get("status") or "?"
+    if s == STATUS_UNREADABLE:
+        # THE READ ITSELF FAILED, and that is not a meeting state. Bounded, because a 404 on a
+        # meeting this key cannot address never becomes readable by asking again — and unbounded
+        # retries against it are exactly how a reaction disappears into `retrying` with a reason
+        # that names no cause.
+        n = int(ctx.scratch.get("status_unreadable") or 0) + 1
+        ctx.scratch["status_unreadable"] = n
+        if n > STATUS_READ_ATTEMPTS_MAX:
+            raise StepError(
+                f"the bot's status has been unreadable {n} times for "
+                f"{d['platform']}/{d['native']}: {m.get('http')} — {m.get('detail')}",
+                retryable=False)
+        return Wait(seconds=6)
+    ctx.scratch["status_unreadable"] = 0
     if s in ("requested", "joining", "awaiting_admission"):
         return Wait(seconds=6)
     if s == "active":
         window = ctx.refs.get("transcribe_s", 45.0)
-        started = ctx.prior.get("run_meeting_active", {}).get("at")
-        if started is None:
-            # record activation moment as its own receipt-backed marker via a sub-effect result
-            from flows import receipts as _r  # engine receipt store — same db handle via closure
-        # simpler stateless marker: stash activation in the reaction's own receipt via Wait bookkeeping:
-        # we approximate the window from meeting start_time instead of activation to stay stateless
+        # The window is measured from the meeting's own start rather than from the moment the bot
+        # went active: this step is stateless across ticks by design, and the start is a ref.
         if ctx.clock_now - ctx.refs["start"] < window:
             return Wait(seconds=8)
-        key = user_api_key(ctx.prior["ensure_user"]["uid"])
-        http("DELETE", f"{meetings_door()}/bots/{d['platform']}/{d['native']}", {"X-API-Key": key})
+        failures = _stop_bot(ctx, d)
+        if failures and failures >= STOP_ATTEMPTS_MAX:
+            return Block(
+                reason=(f"the bot for {d['platform']}/{d['native']} would not stop after "
+                        f"{failures} attempts: {ctx.scratch.get('stop_last')}. It may still be in "
+                        f"the call and recording."),
+                deadline_s=STOP_DEADLINE_S)
         return Wait(seconds=5)
     if s == "stopping":
+        # A CEILING ON THE STOP. Without one this is `Wait(4)` for the life of the worker: the
+        # meeting never completes, the reaction never fails, and the bot that will not leave the
+        # call is visible to nobody. The deadline turns it into a blocked row with a reason, which
+        # is the surface a person actually reads.
+        since = ctx.scratch.setdefault("stopping_since", ctx.clock_now)
+        if ctx.clock_now - since > STOP_DEADLINE_S:
+            return Block(
+                reason=(f"the bot for {d['platform']}/{d['native']} has been stopping for "
+                        f"{int(ctx.clock_now - since)}s and has not left the call."),
+                deadline_s=STOP_DEADLINE_S)
         return Wait(seconds=4)
     if s == "completed":
         segs = m.get("segments") or []
-        transcript = "\n".join(f"{x.get('speaker','?')}: {x.get('text','')}" for x in segs)
         # The transcript is NOT returned. It used to come back capped at 8,000 characters so it
         # could ride inside meeting.completed — a copy of a fact the transcription domain owns,
         # and a cap that decided how much of an hour the agent would ever see. Segment count is a

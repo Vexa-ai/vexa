@@ -120,6 +120,33 @@ def test_path_parameters_are_substituted(wired):
     assert str(seen[-1].url) == "http://flows/reactions/r1/retry"
 
 
+def test_a_path_parameter_cannot_address_anything_but_its_own_route(wired):
+    """A path parameter is ONE SEGMENT of the tool's declared route. Substituted raw it was a
+    caller-supplied fragment of URL: `reaction_id="../../admin/keys"` composed
+    `/reactions/../../admin/keys/retry`, which httpx resolves before it leaves — so an agent could
+    reach any route on the owning domain's INTERNAL address, carrying whichever credential the
+    tool's `auth` names. Percent-encoded, the traversal is a literal id the route 404s."""
+    app, seen = wired
+    r = TestClient(app).post("/tools/reaction_signal",
+                             params={"reaction_id": "../../admin/keys", "verb": "retry"},
+                             headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    raw = seen[-1].url.raw_path.decode()
+    assert raw == "/reactions/..%2F..%2Fadmin%2Fkeys/retry", raw
+    assert "/admin/keys" not in raw, "the request left the route the manifest declared"
+
+
+def test_every_reserved_character_in_a_path_parameter_stays_in_its_segment(wired):
+    """`?` and `#` end a path just as `/` ends a segment — an unencoded one would push the rest of
+    the value into the query string or the fragment, where the owning route never sees it."""
+    app, seen = wired
+    TestClient(app).post("/tools/reaction_signal",
+                         params={"reaction_id": "a?b#c/d", "verb": "retry"},
+                         headers={"X-API-Key": "k"})
+    raw = seen[-1].url.raw_path.decode()
+    assert raw == "/reactions/a%3Fb%23c%2Fd/retry", raw
+
+
 def test_a_path_parameter_is_required_rather_than_guessed(wired):
     app, seen = wired
     before = len(seen)
@@ -214,3 +241,20 @@ def test_a_body_only_call_with_nothing_declared_still_passes_the_raw_body_throug
                          json={"reason": "operator override"}, headers={"X-API-Key": "k"})
     import json as _json
     assert _json.loads(seen[-1].content) == {"reason": "operator override"}
+# ── the vocabulary an agent reads, and the shape it must NOT arrive in ──────────────────────────
+#
+# F-D26 had two halves and this edge is where they meet. An argument published as a bare string
+# makes an agent guess (twelve prod reports lost in twenty minutes); an argument published with an
+# `enum` makes the MCP SDK REFUSE the guess before the tool is ever called, which loses the same
+# report one hop earlier. Both were shipped, in that order, on this branch.
+
+def test_the_owning_route_s_words_are_republished_as_examples_never_as_enum():
+    for key in ("enum", "examples"):
+        out = register._vocabulary({"type": "string", key: ["error", "ux", "other"]})
+        assert out == {"examples": ["error", "ux", "other"]}, f"lost the words from {key!r}"
+        assert "enum" not in out, "an enum here refuses the call instead of guiding it"
+
+
+def test_an_argument_with_no_vocabulary_publishes_none():
+    assert register._vocabulary({"type": "string"}) == {}
+    assert register._vocabulary({"type": "string", "enum": []}) == {}

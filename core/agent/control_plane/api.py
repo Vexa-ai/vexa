@@ -66,6 +66,7 @@ from control_plane.workspace_attach import (
     workspace_dir_for,
     workspace_slot_dir,
 )
+from control_plane.repo_ref import RepoRefError, assert_fetchable
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane import publish as publish_mod
 from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_origin, remote_status
@@ -501,7 +502,14 @@ def create_app(
         422 rather than 400 because the field is well-formed JSON and semantically wrong — and the
         detail is the sentence itself, which the terminal's presenter shows verbatim."""
         try:
-            return repo_ref.normalize(raw)
+            url = repo_ref.normalize(raw)
+            # …and the TRANSPORT gate, on the CANONICAL url rather than the raw one: normalize has
+            # already expanded the bare `owner/repo` shorthand, which names no scheme and would
+            # otherwise read as a path on this server. `ext::sh -c …` is a git URL that runs a shell
+            # command and `file:///etc` is one that reads this host's disk; both are well-formed,
+            # which is exactly why a shape check alone does not catch them.
+            repo_ref.assert_fetchable(url)
+            return url
         except repo_ref.RepoRefError as exc:
             # LOG THE KIND, NEVER THE VALUE. "someone pasted a token" is the operational signal; the
             # token is the thing we are refusing to have anywhere at all.

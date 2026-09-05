@@ -71,6 +71,57 @@ def test_a_bound_tool_takes_its_description_from_the_route():
     assert bound[0].name == "flows_list", "the MCP name is the manifest's, not the operationId's"
 
 
+# ── the description an agent actually reads (F-D12, F-D26) ──────────────────────────────────────
+#
+# FastAPI SYNTHESISES `summary` from the endpoint's function name when the route sets none, so
+# every flows route publishes one whether or not anybody wrote it. Preferring it published tools
+# whose whole description was their own title — `whats_waiting` read "Queue Waiting", and
+# `report_friction` read "Report Friction" while its docstring, naming the eight `kind` words, sat
+# one key away. On 2026-09-04 an agent guessed those words and twelve prod reports were refused.
+
+def _bind_one(op, arguments=()):
+    tool = {"name": "flows_list", "identity": "operator", "auth": "subject",
+            "requires": ["identity", "flows"], "route": {"method": "GET", "path": "/flows"}}
+    if arguments:
+        tool["arguments"] = list(arguments)
+    return bind.verify(_assembly([tool]), {"flows": {"paths": {"/flows": {"get": op}}}})[0]
+
+
+def test_a_synthesised_title_does_not_beat_the_route_s_own_docstring():
+    bt = _bind_one({"summary": "Report Friction", "parameters": [],
+                    "description": "Tell us what did not work, and which `kind` word to use."})
+    assert bt.description.endswith("which `kind` word to use.")
+    assert bt.description != "Report Friction", "the tool is described by its own title"
+
+
+def test_a_real_summary_is_kept_in_front_of_the_description_not_dropped():
+    bt = _bind_one({"summary": "What is waiting for this person", "parameters": [],
+                    "description": "The pending reactions, each naming the flow behind it."})
+    assert bt.description.startswith("What is waiting for this person")
+    assert "each naming the flow behind it" in bt.description
+
+
+def test_a_summary_the_description_already_says_is_not_repeated():
+    bt = _bind_one({"summary": "Tell us what did not work", "parameters": [],
+                    "description": "Tell us what did not work, so a developer can fix it."})
+    assert bt.description == "Tell us what did not work, so a developer can fix it."
+
+
+def test_a_route_with_only_a_summary_is_still_described_by_it():
+    assert _bind_one({"summary": "Every flow version",
+                      "parameters": []}).description == "Every flow version"
+
+
+def test_an_argument_s_allowed_values_survive_the_binding():
+    """`kind` reaching an agent as a bare string with no allowed values is half of F-D26."""
+    op = {"summary": "s", "description": "d", "parameters": [
+        {"name": "kind", "in": "query", "description": "which kind",
+         "schema": {"type": "string", "enum": ["error", "ux", "other"]}}]}
+    bt = _bind_one(op, arguments=["kind"])
+    assert bt.parameters["kind"]["enum"] == ["error", "ux", "other"]
+    assert bt.parameters["kind"]["description"] == "which kind"
+
+
 def test_a_route_the_domain_does_not_serve_fails_the_boot():
     """The manifest lying about its own service — the one failure this design could otherwise hide."""
     a = _assembly([{"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],

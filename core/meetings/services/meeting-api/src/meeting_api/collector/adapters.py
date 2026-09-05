@@ -974,6 +974,47 @@ class SqlAlchemyTranscriptStore:
                 "imported_at": data["transcript_import"]["imported_at"],
             }
 
+    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
+        """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
+        — the last ``proc:meeting:{id}`` stream entry already durable; the db-writer resumes after it."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            m = (await db.execute(select(Meeting).where(Meeting.id == int(meeting_id)))).scalars().first()
+            if not m or not isinstance(m.data, dict):
+                return None
+            view = _find_processed_view(m.data, view_id)
+            return view.get("source_cursor") if view else None
+
+    async def merge_processed_view(
+        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
+    ) -> None:
+        """Persist drained copilot notes into the meeting row's ``data['processed']['views']``
+        JSONB (the documented meeting.data home — the same pattern recordings/notes/docs use; NO
+        schema change), in the ADDRESSABLE, VERSIONED multi-consumer shape (release DoD):
+        the view keyed ``view_id`` is upserted (other views preserved), its ``doc['notes']`` merged
+        by note id, ``params`` = the processing metadata APPLIED, ``source_cursor`` = the stream
+        position the view reflects. ONE ``SELECT … FOR UPDATE`` row lock."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            meeting.data = _upsert_processed_view(
+                data, view_id=view_id, kind=kind, notes=notes,
+                source_cursor=source_cursor, params=params,
+            )
+            flag_modified(meeting, "data")
+            await db.commit()
+
     async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator):
         """Owner-scoped atomic read→modify→write of ``meeting.data['docs']`` under ONE
         ``SELECT … FOR UPDATE`` row lock. Returns the updated docs list, or ``None`` when the
@@ -1201,7 +1242,8 @@ class SqlAlchemyTranscriptStore:
     FTS_CONFIG = "english"
 
     async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
-                                 platform=None, native_meeting_id=None) -> list[dict]:
+                                 platform=None, native_meeting_id=None,
+                                 meeting_db_id=None) -> list[dict]:
         """Owner-scoped FTS over transcript segments (see ports.search_transcripts).
 
         Measured on 210k segments across two tenants (dogfood, 2026-08-29): a rare term took
@@ -1243,7 +1285,12 @@ class SqlAlchemyTranscriptStore:
               -- only in `IS NULL` ("could not determine data type of parameter $3"), so an
               -- optional filter must state its own type.
               AND (CAST(:platform AS text) IS NULL OR m.platform = CAST(:platform AS text))
-              AND (CAST(:native AS text) IS NULL
+              -- The EXACT row wins over the room code: a Google Meet code names a ROOM and
+              -- every session ever held on that link answers to it, so a caller who supplied
+              -- both is asking about one meeting. Same explicit-cast rule as the filters above.
+              AND (CAST(:mid AS bigint) IS NULL OR t.meeting_id = CAST(:mid AS bigint))
+              AND (CAST(:mid AS bigint) IS NOT NULL
+                   OR CAST(:native AS text) IS NULL
                    OR m.platform_specific_id = CAST(:native AS text))
             ORDER BY rank DESC, t.meeting_id DESC, t.start_time ASC
             LIMIT :lim OFFSET :off
@@ -1251,6 +1298,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             rows = (await db.execute(sql, {
                 "q": q, "uid": user_id, "platform": platform, "native": native_meeting_id,
+                "mid": meeting_db_id,
                 "lim": max(1, min(int(limit or 20), 100)), "off": max(0, int(offset or 0)),
             })).mappings().all()
         return [dict(r) for r in rows]

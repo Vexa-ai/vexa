@@ -3,8 +3,11 @@
 // (a) intra-package — a relative path OR the `@/*` tsconfig alias (→ ./src/*), (b) a Node/
 // browser builtin, or (c) a DECLARED dep in package.json. An undeclared bare/npm import →
 // violation (the app must declare what it pulls in, so it installs + builds standalone).
-// ESM ("type":"module" not set on this app, but node runs .js as ESM here via the import syntax
-// — the gate invokes `node scripts/check-isolation.js`).
+// ESM — the app declares `"type": "module"`, so node loads this .js as ESM directly. Without that
+// declaration node still reparsed it as ESM, but emitted a ~230-char MODULE_TYPELESS_PACKAGE_JSON
+// warning on stderr, and gate:isolation only forwards the first 300 chars of a failing brick's
+// stderr: the warning pushed the actual violation list out of the diagnostic. A gate whose failure
+// message is a warning about module resolution tells the reader nothing about what it caught.
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

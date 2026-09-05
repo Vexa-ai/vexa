@@ -85,11 +85,20 @@
     {
       "key": "VEXA_FLOWS_TIMELINE_KEY",
       "class": "capability",
-      "description": "A read-only key that opens `GET /timeline` and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one.",
+      "description": "A read-only key that opens `GET /timeline` for one NAMED subject and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one. It is its own caller kind (`Caller(kind=\"timeline\")`), never an admin: as an admin it read any person's reactions and queue and minted a gateway token on the named third party's account (E1/P20).",
       "capability": "timeline_read_key",
       "secret": true,
       "targets": [
         "compose"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
       ]
     },
     {
@@ -388,6 +397,13 @@
       "description": "Forces the instance gate open or shut. A RIG DIAL: a deployment's gate state is a fact about the deployment, so no surface offers a way to lie about it.",
       "capability": "rig_dials",
       "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_DEFS_EXTRA",
+      "class": "capability",
+      "description": "Flow packs this deployment composes on top of the ones in this repo — importable module names, comma-separated, each exposing `build(reg, db)`, called last by `flows_defs.production.build`. THE ONE SEAM A PRIVATE PACK NEEDED THAT DID NOT ALREADY EXIST: flows-as-data (`POST /flows`) already authors a flow version from existing steps and the worker hot-loads it; `VEXA_BEHAVIOR_DIR` already carries that flow's queue words ahead of the baked showcase; and the intake already admits any event type a registered flow reacts to. What none of them can do is add a STEP — `Registry.flow_by_names` validates every name against the image's reviewed vocabulary and refuses the rest, deliberately, because the API never accepts code. So the vocabulary stays closed to the API and open to the operator, the same split behavior already draws for prose. UNSET IS THIS REPO'S OWN PRODUCT. A named module that cannot be imported is a REFUSAL, never a fallback: a deployment that declares a pack and boots without it reacts to none of that pack's events, silently, for as long as nobody looks.",
+      "capability": "flow_packs",
+      "targets": []
     }
   ],
   "capabilities": {
@@ -444,10 +460,15 @@
       "description": "This deployment carries the meetings domain — scheduling a bot into a call and reading back what it recorded (PRD decision 40.7; decision 5 for meetings).",
       "when_unconfigured": "The meetings domain is not deployed. Flows still boots, still admits facts and still serves its queue; every flow step that would schedule or read a bot answers `meetings:not_present` — terminal, with the reason on the reaction, never a retry loop against a door that is not there."
     },
-    "mailbox_graph": {
-      "description": "The mailbox is a Microsoft 365 tenant reached over Graph with client-credentials — inbound poll AND outbound send, for a deployment that exposes neither IMAP nor SMTP AUTH.",
-      "mode": "all",
-      "when_unconfigured": "This deployment is not on Microsoft. `VEXA_MAIL_INBOX=graph` and `VEXA_NOTIFY_CHANNEL=graph` refuse at the moment the mailbox is constructed, naming the missing keys; every other inbox is unaffected. It is a `capability` and not `required-explicit` because config.v1 cannot express a requirement conditional on another key, and refusing the boot of every non-Microsoft deployment to express one would be worse than the gap."
+      "mailbox_graph": {
+        "description": "The mailbox is a Microsoft 365 tenant reached over Graph with client-credentials — inbound poll AND outbound send, for a deployment that exposes neither IMAP nor SMTP AUTH.",
+        "mode": "all",
+        "when_unconfigured": "This deployment is not on Microsoft. `VEXA_MAIL_INBOX=graph` and `VEXA_NOTIFY_CHANNEL=graph` refuse at the moment the mailbox is constructed, naming the missing keys; every other inbox is unaffected. It is a `capability` and not `required-explicit` because config.v1 cannot express a requirement conditional on another key, and refusing the boot of every non-Microsoft deployment to express one would be worse than the gap."
+      },
+      "flow_packs": {
+        "description": "Flow definitions this deployment carries beyond the ones published in this repo — the operator's seam for steps of its own, alongside the two that already exist for words (`behavior_override`) and for flow versions (`POST /flows`).",
+        "mode": "any",
+        "when_unconfigured": "Only the flows in `flows_defs` run. That is this repo's product exactly — nothing here is shipped dark."
     }
   },
   "surface_only": [

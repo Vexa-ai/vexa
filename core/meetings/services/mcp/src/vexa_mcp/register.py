@@ -52,6 +52,7 @@ from __future__ import annotations
 import inspect
 import os
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -127,11 +128,48 @@ def _signature(bt: BoundTool) -> inspect.Signature:
             continue
         annotation = Optional[_PY_TYPE.get(str(schema.get("type")), str)]
         description = schema.get("description") or None
-        default = (Body(None, embed=True, description=description) if name in bt.body_params
-                  else Query(None, description=description))
+        vocabulary = _vocabulary(schema) or None
+        # QUERY OR BODY, decided by where the OWNING ROUTE publishes the argument (bind.py read its
+        # `requestBody`), never guessed here — see the module docstring for why `embed=True` is
+        # unconditional. The vocabulary annotation rides either one: an agent needs the words
+        # whichever half of the forward the argument travels in.
+        default = (Body(None, embed=True, description=description, json_schema_extra=vocabulary)
+                   if name in bt.body_params
+                   else Query(None, description=description, json_schema_extra=vocabulary))
         params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY,
                                         annotation=annotation, default=default))
     return inspect.Signature(params)
+
+
+def _vocabulary(schema: dict) -> dict:
+    """The owning route's allowed values, republished so an agent can read them before it guesses —
+    AS AN ANNOTATION (`examples`), NEVER AS `enum`.
+
+    An argument published as a bare `string` tells an agent nothing about which words the route
+    understands, and an agent that has to guess a word guesses wrong: twelve friction reports were
+    thrown away on prod in twenty minutes because `kind` reached `tools/list` as an open string
+    (F-D26). So the vocabulary has to travel. The question is in which key.
+
+    IT MUST NOT TRAVEL AS `enum`, and that was caught on the station rather than reasoned out. The
+    MCP SDK's own dispatcher validates a call's arguments against the tool's `inputSchema`
+    (`mcp/server/lowlevel/server.py`: `jsonschema.validate(instance=arguments,
+    schema=tool.inputSchema)`) and returns `isError` without ever calling the tool. A first cut
+    published `enum` here; `report_friction` with `kind="broke"` came back "Input validation error:
+    'broke' is not one of [...]" and the report was destroyed one hop EARLIER than before, by the
+    fix for the defect. The edge would have become a stricter gate than the route it fronts.
+
+    `examples` is a JSON Schema ANNOTATION: it reaches `tools/list`, an agent reads it, and no
+    validator anywhere rejects a value for not being in it. The words themselves are also spelled
+    out in the argument's own description, which the owning route writes. Guidance belongs in front
+    of the agent; the decision about an unrecognised word belongs to the route that stores it.
+
+    BOTH KEYS ARE READ off the owning route, and that is a real case rather than defensiveness: a
+    route that has decided its own vocabulary is a suggestion publishes `examples`, and a route
+    that validates against a closed set publishes `enum`. An agent needs the words either way, and
+    either way this edge must not be the thing that refuses the call for not using them.
+    """
+    values = schema.get("enum") or schema.get("examples")
+    return {"examples": list(values)} if isinstance(values, (list, tuple)) and values else {}
 
 
 def _add(app: FastAPI, bt: BoundTool, base: str,
@@ -162,7 +200,14 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             value = argument.get(name)
             if value in (None, ""):
                 raise HTTPException(status_code=422, detail=f"{bt.name} needs {name}")
-            path = path.replace("{" + name + "}", str(value))
+            # PERCENT-ENCODED, EVERY CHARACTER, `/` INCLUDED. A path parameter is one segment of the
+            # tool's own route and nothing else; substituted raw it is a caller-supplied fragment of
+            # URL. `reaction_id="../../admin/keys"` composed `/reactions/../../admin/keys/retry`,
+            # which httpx resolves before it goes out — so an agent could address ANY route on the
+            # owning domain's internal address, under whichever credential the tool's `auth` names.
+            # `safe=""` leaves nothing that can end the segment, so the request stays under the
+            # route the manifest declared and a traversal attempt arrives as a literal 404 id.
+            path = path.replace("{" + name + "}", quote(str(value), safe=""))
 
         params = {n: argument[n] for n in query_declared if argument.get(n) is not None}
         for n in query_declared:
@@ -204,8 +249,16 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
     endpoint.__name__ = bt.name
     endpoint.__doc__ = bt.description or f"{bt.tool.domain}: {method} {template}"
     endpoint.__signature__ = _signature(bt)
+    # ONE TEXT, ONE KEY. This used to pass `bt.description` as BOTH `summary` and `description`,
+    # and `fastapi_mcp` composes a tool's description as `summary + "\n\n" + description`
+    # (`openapi/convert.py`) with no check that the two differ — so every assembled tool published
+    # its whole text TWICE, back to back. On `whats_waiting` that was ~250 words, then the same
+    # ~250 words, and the second copy said nothing the first had not.
+    #
+    # The description is the words. A summary that merely restates them is not a summary, so this
+    # sets none and lets FastAPI title the route from its name — two words, in front of the text,
+    # which is the shape `fastapi_mcp` is written for.
     app.add_api_route(f"/tools/{bt.name}", endpoint, methods=[method],
                       operation_id=bt.name, name=bt.name,
-                      summary=bt.description or None,
                       description=bt.description or None)
     return bt.name

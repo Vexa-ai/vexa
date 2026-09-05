@@ -31,7 +31,7 @@ from typing import Callable, Optional
 
 from shared.git_redaction import redact
 from control_plane.repo_ref import RepoRefError, assert_not_credential, assert_public_host, valid_ref
-from shared.gitenv import scrubbed_git_env
+from shared.gitenv import pinned_git_env, scrubbed_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 
 log = logging.getLogger(__name__)
@@ -163,17 +163,28 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
       cloned ``.git/config`` or the synced workspace (P15 — mirrors ``GitHubVcs.push``).
 
     Git is run with prompts disabled so a missing/invalid credential FAILS LOUD instead of hanging on a
-    terminal prompt. Any failure raises ``CloneError`` with the token redacted from the message."""
+    terminal prompt. Any failure raises ``CloneError`` with the token redacted from the message.
+
+    The repository is validated BEFORE any subprocess exists: ``git clone`` is a fetch this server
+    performs, so a URL naming an address only this server can reach turns the attach dialog into a
+    server-side request forge (``http://169.254.169.254/…``, ``http://admin-api:8001/…``) with the
+    outcome readable in the clone error. The check is repeated here rather than trusted from the route
+    so it also covers the MCP, a future route, and a test that forgot — the same stance the token
+    redaction takes. The transport allow-list (``pinned_git_env``) is the second half: a URL may not
+    reach a transport that runs a command (``ext::``) or reads this host's disk (``file://``), and an
+    ``https`` clone may not redirect down into one."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     # scrubbed env: a hook-exported GIT_DIR would re-point every op below at the hook's repo
-    # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud.
+    # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud; the transport
+    # allow-list is pinned to what this URL legitimately needs.
     assert_not_credential(repo_url)   # never hand a secret to a subprocess (see repo_ref)
     assert_public_host(repo_url)      # …nor make this server fetch its own neighbours (R-D15)
     ref = valid_ref(ref)              # …and never hand it a git OPTION either (R-E14)
-    env = scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {}))
+    env = pinned_git_env(repo_url, GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {}))
     url = _authenticated_url(repo_url, token)
 
     try:
+        # `--` so a repository beginning with `-` is a repository and not an option to `git clone`.
         subprocess.run(["git", "clone", "--quiet", "--", url, str(dest)],
                        check=True, capture_output=True, text=True, env=env)
         if token:  # never persist the credential in the cloned repo's origin (P15)

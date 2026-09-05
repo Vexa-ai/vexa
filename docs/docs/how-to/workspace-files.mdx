@@ -134,6 +134,13 @@ A private repo needs a credential, and Vexa's first answer is not to ask you for
 mint its own **ed25519 deploy key**: you add the *public* half to your repository, and nothing of yours
 travels to us. The private half is generated server-side, sealed at rest, and exists on disk only for the
 length of one git operation.
+`repo` must be an `https://`, `ssh://` or `git@host:owner/repo` URL pointing at a public or company
+git host. A host inside the deployment is refused: a loopback, private, link-local, reserved or
+multicast address, or an unqualified name with no dot. Local filesystem paths are refused too,
+unless the operator sets `VEXA_ALLOW_LOCAL_REPO_ROOT` to an `os.pathsep`-separated list of
+directories (`:` on Linux and macOS) that a local path must resolve inside.
+
+Omit `repo` to swap back to the seed workspace. Check what's attached:
 
 ```bash
 curl -X POST "$API_BASE/agent/workspace/<workspace_id>/deploy-key" \

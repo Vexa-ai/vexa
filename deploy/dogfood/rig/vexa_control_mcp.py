@@ -426,33 +426,51 @@ SETTINGS_PATH = ".settings.json"        # legacy: the file this used to write. R
 # are already three stores for that one fact (identity's `calendar_bot_name` → bot-context →
 # meeting-api's auto-join, a per-calendar override, and this file). Moving it into identity's person
 # settings would make a fourth. Held for the founder; see the PR.
+def _internal_headers() -> dict:
+    """The internal edge's credential. The person-settings doors moved from the person's own
+    `/user/settings` to `/internal/users/{id}/settings`, which is named-by-path and therefore
+    carries NO dev-mode bypass — this rig is an internal caller and authenticates as one."""
+    return {"X-Internal-Secret": INTERNAL_SECRET}
+
+
 def _settings(uid: str) -> dict:
     """This person's preferences, defaults filled in. Never raises, never empty.
 
-    All of them come from identity now, including `bot_name` — which identity stores in
-    `users.data.calendar_bot_name`, the ONE place meeting-api already reads a person's default from
-    on both spawn paths. This server holds no vocabulary and no copy of any value."""
-    st, body = _http("GET", f"{ADMIN_API}/user/settings", {"X-API-Key": _user_key(uid)})
-    return dict(body.get("settings") or {}) if st == 200 and isinstance(body, dict) else {}
+    The FIVE person facts, from identity. `bot_name` is NOT among them and that is deliberate: it is
+    a fact about the bot, meetings owns it, and it has its own door — see `_bot_default_name`. This
+    server holds no vocabulary and no copy of any value."""
+    st, body = _http("GET", f"{ADMIN_API}/internal/users/{uid}/settings", _internal_headers())
+    return dict(body) if st == 200 and isinstance(body, dict) else {}
+
+
+def _bot_default_name(uid: str) -> str:
+    """This person's default bot name, from the domain that owns it. One fact, one store: identity
+    keeps it in `users.data.calendar_bot_name` and serves it on the bot-context door meeting-api
+    already reads on both spawn paths. It is refused on the settings door on purpose."""
+    st, body = _http("GET", f"{ADMIN_API}/internal/users/{uid}/bot-context", _internal_headers())
+    return str((body or {}).get("bot_name") or "") if st == 200 and isinstance(body, dict) else ""
 
 
 def _settings_meanings() -> dict:
-    """What each setting means, from the domain that owns it — never a second copy of the list."""
-    st, body = _http("GET", f"{ADMIN_API}/user/settings",
-                     {"X-API-Key": _user_key(_subject() or "")})
-    return dict(body.get("what_each_means") or {}) if st == 200 and isinstance(body, dict) else {}
+    """What each setting means — EMPTY, and honestly so.
+
+    The line's `GET /user/settings` served `what_each_means` beside the values; the internal door
+    that replaced it answers the facts alone. Rather than keep a second copy of identity's
+    vocabulary here (the thing this rig deliberately does not do), callers fall back to the key
+    name. If the meanings are wanted over the wire again they belong on identity's door, not here."""
+    return {}
 
 
 def _settings_set(uid: str, key: str, value):
     """Set one setting. Returns (settings, refusal-or-None) — identity owns the vocabulary AND the
     coercion, so "off"/"no"/"yes" are parsed once, there, and not in every caller."""
-    st, body = _http("PUT", f"{ADMIN_API}/user/settings", {"X-API-Key": _user_key(uid)},
+    st, body = _http("PUT", f"{ADMIN_API}/internal/users/{uid}/settings", _internal_headers(),
                      {key: value})
     if st == 422 and isinstance(body, dict):
         return _settings(uid), body.get("detail") if isinstance(body.get("detail"), dict) else body
     if st != 200:
         return _settings(uid), {"refused": "identity could not be reached", "status": st}
-    return dict((body or {}).get("settings") or {}), None
+    return dict(body or {}), None
 
 
 def _person_tz(uid: str, set_to: str = "") -> str:
@@ -3685,7 +3703,7 @@ def bot_send(meeting_url: str, bot_name: str = "") -> str:
     title_for_say = (meeting_url or "").strip() or f"{platform}/{mid}"
     # What the room will actually see, resolved ONCE by the domain that decides it, so the sentence
     # we say back and the name on the bot cannot differ.
-    said_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
+    said_name = bot_name or _bot_default_name(uid) or "Vexa"
     body = {"platform": platform, "native_meeting_id": mid,
             "meeting_url": meeting_url.strip(),
             **({"bot_name": bot_name} if bot_name else {})}

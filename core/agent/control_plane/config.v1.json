@@ -394,6 +394,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "os.pathsep-separated list of directories a caller-supplied workspace repository may live under as a scheme-less local path (POST /api/workspace/swap|activate). Unset — the default and every hosted deployment — refuses local paths outright; a self-hosted deployment that legitimately clones from a disk mirror names its roots here. Values are resolved and proven contained before any filesystem access (control_plane/repo_ref.py)",
+      "targets": []
+    },
+    {
       "key": "TRANSCRIPTION_SERVICE_URL",
       "class": "defaulted",
       "default": "(unset)",

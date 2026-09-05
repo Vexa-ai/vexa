@@ -152,12 +152,24 @@ def validate(doc: dict) -> dict:
         if not isinstance(requires, list) or not requires:
             raise ManifestError(f"{domain}/{name}: requires must name at least one domain")
         allowed = {domain, "identity"}
-        if domain == "rehearse":                 # the dev harness drives every door on purpose
+        # A HARNESS DECLARES ITSELF; IT IS NOT RECOGNISED BY NAME. This exemption used to be
+        # `if domain == "rehearse"` — one deployment's domain name, hard-coded in the assembler, so
+        # a second harness could not ship without a change landing here first. `composes: true`
+        # says the same thing in the manifest that needs it: the door across domains is opened by
+        # whoever owns the manifest, on the record, once.
+        #
+        # MEMBERSHIP IS STILL CLOSED. `composes` widens the set to the domains this assembler
+        # knows; it does not admit a name `DOMAINS` has never heard of. A manifest for an unknown
+        # domain is already refused above, and declaring a composition does not buy past that —
+        # the two rules answer different questions ("is this a domain" vs "may this tool reach
+        # across domains") and only the second one is delegated to the manifest.
+        if doc.get("composes") is True:
             allowed = DOMAINS
         if not set(requires) <= allowed:
             raise ManifestError(
                 f"{domain}/{name}: requires may name {sorted(allowed)} (got {sorted(requires)}) — "
-                "a tool that needs another domain is a composition, and a composition has an owner")
+                "a tool that needs another domain is a composition, and a composition has an owner. "
+                'A manifest whose whole job IS composing across domains declares `"composes": true`')
         # PRD 40.8: one authentication path. A tool may not take a credential as an ARGUMENT.
         for arg in t.get("arguments") or []:
             if str(arg).strip().lower() in CREDENTIAL_ARGUMENTS:

@@ -66,6 +66,8 @@ the guess was wrong for the four it was applied to.
 | `get_recording` | `GET /recordings/{recording_id}` |
 | `report_issue` | `GET /meetings` to authenticate the caller, then the ticket is POSTed to `VEXA_TICKET_SINK_URL` |
 
+**Zoom URLs `parse_meeting_link` accepts:** `zoom.us` and any subdomain of it (`us02web.`, a company vanity subdomain) plus `zoomgov.com`, on `/j/<id>`, `/w/<id>` or `/wc/join/<id>`, passcode read from `?pwd=` or `?password=`; **and** a tenancy fronted on an organisation's OWN hostname, which carries no "zoom" anywhere — any host whose path is `/meeting/<10-11 digits>` or `/j/<10-11 digits>` **and** which carries `?password=` or `?pwd=` (e.g. `https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>`), answered with a warning saying the platform was read from the path shape rather than recognised from the host. `/my/<personal-room>` and `events.zoom.us` links are refused 422 with the reason.
+
 **Prompts (4):** `vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
 `vexa.teams_link_help` (ported; edited only where they referenced unported tools).
 
@@ -123,8 +125,9 @@ pointer** — theirs is `linode_id`, ours is `meeting_id` + `platform`. The agen
 (`what_i_tried` / `what_happened` / `deployment` / `version`) are composed into that pair
 server-side, so the MCP tool and any later HTTP ticket surface land **one shape** in the sink.
 Alongside it the sink receives capped `logs` with a `logs_truncated` flag, a server-side
-`reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint` — a salted
-SHA-256 prefix of the caller's API key. The response mirrors Linode's ticket object: `id`,
+`reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint` — a
+salt-keyed BLAKE2b fingerprint of the caller's API key (16 hex chars; the key itself is never
+stored, logged, or sent). The response mirrors Linode's ticket object: `id`,
 `status`, `severity`, `opened`, `updated`, `opened_by`, `entity`.
 
 **The caller is authenticated before the operator's credential is spent.** Every ticket is filed
@@ -143,7 +146,7 @@ accept teaches us nothing.
 
 | Property | How it is held |
 |---|---|
-| **The API key is never forwarded to the sink** | only `caller_fingerprint`, a salted SHA-256 prefix; asserted with a negative control in `tests/test_app.py` |
+| **The API key is never forwarded to the sink** | only `caller_fingerprint`, a salt-keyed BLAKE2b fingerprint; asserted with a negative control in `tests/test_app.py` |
 | **Ticket text is data, never instruction** | forwarded verbatim, never parsed, never executed, never fed to an agent of ours |
 | **SSRF closed by construction** | there is no url-shaped field, and **nothing a caller sends is ever dereferenced**. The only URL this route opens is the operator's `VEXA_TICKET_SINK_URL`. Links belong in the text, where a human reads them |
 | **No path to account state** | the service has no DB, no ORM, no redis — a test walks the package's imports to keep it that way, so a ticket write cannot touch meetings or users |

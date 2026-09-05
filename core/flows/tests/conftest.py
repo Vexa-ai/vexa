@@ -56,3 +56,58 @@ OFFLINE_DOORS = {
 # deployment does before it boots.
 for _key, _value in OFFLINE_DOORS.items():
     os.environ.setdefault(_key, _value)
+
+
+#: `sys.path` also carries the TEST directory, so `from sqlite_double import SqliteDB` resolves the
+#: same way `fixtures.py` already resolves it when a test is collected from the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-operator-key")
+
+
+# ── the production registry, composed per test ───────────────────────────────────────────────────
+# `fixtures.rig()` builds the FAKE world (`flows_steps.fakes`) against `flows_defs.defs` — the right
+# rig for the failure matrix and the storm, and the wrong one for a test that is about what
+# `flows_defs.production.build` composes in a deployment. These three fixtures are that second rig:
+# the real definitions, the real steps, no world. They are separate fixtures rather than a second
+# `rig()` so nothing above changes shape.
+@pytest.fixture
+def db():
+    from sqlite_double import SqliteDB
+    return SqliteDB()
+
+
+@pytest.fixture
+def clock():
+    from flows import FakeClock
+    return FakeClock(1_000_000.0)
+
+
+@pytest.fixture
+def registry(db, monkeypatch):
+    """NO DOOR IS NAMED UNLESS A TEST NAMES IT.
+
+    `domain_present` reads the module attributes `AGENT_API` / `MEETINGS_API`, which are resolved
+    from the environment — so a developer with a stack's env sourced would compose a different
+    registry than CI does, and the agent half would register or not depending on their shell. The
+    same applies to `VEXA_FLOWS_DEFS_EXTRA`: a pack in someone's environment must not join the
+    registry a test is asserting about.
+
+    Scoped to this fixture on purpose. As an autouse it would also blank the doors `OFFLINE_DOORS`
+    declares for the whole suite above, and `test_no_agents.py` is precisely about owning that
+    unset itself.
+    """
+    from flows import Registry
+    from flows_defs import production
+    from flows_steps import common
+    monkeypatch.setattr(common, "AGENT_API", "", raising=False)
+    monkeypatch.setattr(common, "MEETINGS_API", "http://meetings.invalid", raising=False)
+    monkeypatch.delenv("VEXA_FLOWS_DEFS_EXTRA", raising=False)
+    monkeypatch.delenv("VEXA_BEHAVIOR_DIR", raising=False)
+    reg = Registry()
+    production.build(reg, db)
+    return reg
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]

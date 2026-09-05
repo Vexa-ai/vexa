@@ -14,6 +14,11 @@
                                     reactions, each naming the flow that produced it and its
                                     typed reason (PRD decision 42.2). The subject is the
                                     authenticated caller's, never an argument.
+  GET  /queue/notices               THE STANDING NOTICES ONLY — the say text of the waiting items
+                                    whose copy declared itself one (`notice: true` in a
+                                    `behavior/queue/` file's front-matter). Same door as
+                                    /queue/waiting, a much smaller answer: it is built to be asked
+                                    on every call and to ride along with unrelated work.
   GET  /timeline?subject=…          ONE PERSON'S DAY, in order — facts, receipts and the
                                     meetings table merged and scoped to them (PRD decision 31).
                                     Read-only, and it takes the operator key OR the narrower
@@ -23,7 +28,7 @@ AUTH, TWO TIERS — because two different callers reach this surface and only on
 operator (issue #1468):
 
   * THE SUBJECT-SCOPED ROUTES (`GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`,
-    `GET /queue/waiting`, `GET /timeline`) take EITHER the operator key OR a person's own Vexa
+    `GET /queue/waiting`, `GET /queue/notices`, `GET /timeline`) take EITHER the operator key OR a person's own Vexa
     credential, as a bearer or `X-API-Key`. With a person's credential the subject is DERIVED from
     it, through identity's `/internal/validate` — the one resolver, the same one the gateway asks
     (P23) — and a `subject` argument naming anyone else is refused rather than honoured. The MCP
@@ -35,6 +40,22 @@ operator (issue #1468):
     `POST /flows/{name}/{version}/{action}`) take the operator key and nothing else. They
     configure the machine or admit facts on the instance's behalf; there is no per-person version
     of either.
+
+THE OPERATOR TIER IS MEDIATED TOO (P20/E1, 2026-09-05). The operator key is a credential, not a
+person: `Caller(kind="admin")` carries no uid, no email and no owner, so a subject-scoped route it
+opened WITHOUT a subject had nothing left to authorize against — and answered with the instance.
+`GET /reactions` returned every row a deployment held, and `POST /reactions/{id}/{verb}` gated
+ownership behind `if subj:`, so an operator who simply omitted `subject` cancelled ANYONE's
+reaction with no check at all. `VEXA_FLOWS_API_KEY` is exported into five compose services. So:
+every subject-scoped route now REQUIRES a named subject from any credential that is not a person
+(`?subject=`, or the gateway's `X-User-Id` where the route takes one), the ownership check on the
+verb runs unconditionally, and there is no instance-wide read left on this surface.
+
+`VEXA_FLOWS_TIMELINE_KEY` is its own tier for the same reason. It used to resolve to
+`Caller(kind="admin")` — one line that turned "a key that can do exactly one thing" into a key
+that read any person's queue and, through `meetings=true`, minted a gateway token on the named
+third party's account. It is now `Caller(kind="timeline")`: `GET /timeline` for a named subject,
+no meetings hop, and 403 on every other route by name.
 
 The operator key travels as `X-Flows-Operator-Key`. It used to be `X-Flows-Admin-Key`, which reads
 as ADMIN-API's token and is not one — that confusion is on the record: a lane start script carried
@@ -70,7 +91,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query  # noqa: E402
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
@@ -90,6 +111,32 @@ from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
                             reaction_concerns, render_preamble, render_text)
 from flows_timeline import list_reactions as reactions_for  # noqa: E402
 from flows_timeline.model import to_epoch as _friction_since_epoch  # noqa: E402
+
+#: The placeholder literals to fall back on when the declaration cannot be read. DELIBERATELY the
+#: superset of the four this file used to carry inline: a fallback that is narrower than the
+#: contract is the drift this function exists to end.
+_FALLBACK_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme", "change-me",
+                          "CHANGE-ME", "default", "secret")
+
+
+def _forbidden_values(key: str) -> tuple:
+    """The placeholder literals THE DECLARATION forbids for `key` — read, never re-typed.
+
+    This file used to carry its own list of four (`changeme`, `change-me`, `default`, `secret`)
+    while `config.v1.json` declared seven, so `VEXA_FLOWS_API_KEY=vexa-internal-secret` — a literal
+    published in this repository, therefore not a secret — booted green. Two hand-maintained copies
+    of one list drift the moment one of them is edited; there is now one copy, and it is the one
+    `gate:config-contract` reads.
+    """
+    try:
+        from config_preflight import load_declaration
+        for entry in load_declaration().get("keys") or []:
+            if entry.get("key") == key:
+                return tuple(entry.get("forbidden_values") or ())
+    except Exception:  # noqa: BLE001 — a declaration we cannot read must not weaken the check
+        pass
+    return _FALLBACK_PLACEHOLDERS
+
 
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
@@ -144,9 +191,18 @@ def _timeline_key() -> str:
 
     Unset ⇒ only the operator key opens the route. That is the right default: a deployment that has
     not thought about this gets the narrower reach (nobody but the operator), never the wider one.
+
+    A PLACEHOLDER IS REFUSED, not coerced to "". It used to be coerced, which reads as prudent and
+    is not: an operator who set the key to a published literal got no error and no effect, and the
+    literal is one anybody can present. Same refusal, same reason, same declared list as the
+    operator key above.
     """
     key = (os.environ.get("VEXA_FLOWS_TIMELINE_KEY") or "").strip()
-    return "" if key in ("changeme", "change-me", "default", "secret") else key
+    if key and key in _forbidden_values("VEXA_FLOWS_TIMELINE_KEY"):
+        raise RuntimeError(
+            f"VEXA_FLOWS_TIMELINE_KEY is the placeholder {key!r} — refusing to start. Unset it, or "
+            "mint a real value; a published literal is not a narrow credential.")
+    return key
 
 
 TIMELINE_KEY = _timeline_key()
@@ -241,8 +297,18 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
     The operator key is checked first and short-circuits: it is a local constant-time comparison,
     it is what every existing caller sends, and it must keep working while identity is down.
     """
-    if _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key), API_KEY):
+    presented = _operator_key(x_flows_operator_key, x_flows_admin_key)
+    if _same_key(presented, API_KEY):
         return Caller(kind="admin")
+    # THE NARROW KEY IS REFUSED HERE, BY NAME. It reaches this dependency only on a route it does
+    # not open, and the honest answer to "you presented a key that opens something else" is 403 —
+    # not the 401 the caller would otherwise get for holding no bearer, which reads as "your
+    # credential is unknown" and sends the operator to check a key that is fine.
+    if TIMELINE_KEY and _same_key(presented, TIMELINE_KEY):
+        raise HTTPException(status_code=403, detail=(
+            "VEXA_FLOWS_TIMELINE_KEY opens GET /timeline for one named subject and nothing else. "
+            "This route needs a person's own Vexa credential, or the operator key in "
+            f"{OPERATOR_HEADER}."))
     token = _bearer(authorization, x_api_key)
     if not token:
         raise HTTPException(status_code=401, detail=(
@@ -254,26 +320,51 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
         raise HTTPException(status_code=401, detail="that credential does not identify anyone")
     except IdentityUnavailable as e:
         # 503, NEVER 401. We did not reach a verdict on the credential — see subject_auth.
+        #
+        # AND THE REASON IS LOGGED, NOT SERVED (P15). `IdentityUnavailable` carries the transport
+        # exception, which names the internal admin-api address — and this 503 fires BEFORE
+        # identity has vouched for anyone, so the reader of that sentence is an unauthenticated
+        # caller. The operator needs the detail and has the log; the caller needs to know it is
+        # not their key.
+        logger.warning("identity could not answer who a caller is: %s", e)
         raise HTTPException(status_code=503, detail=(
-            f"identity could not answer who you are ({e}) — this is our side, not your key"))
+            "identity could not answer who you are — this is our side, not your key"))
 
 
 def timeline_reader(x_flows_operator_key: str = Header(default=""),
                     x_flows_admin_key: str = Header(default=""),
                     authorization: str = Header(default=""),
                     x_api_key: str = Header(default="")) -> Caller:
-    """`GET /timeline` alone: the narrow read-only key opens it, as well as the two tiers above."""
+    """`GET /timeline` alone: the narrow read-only key opens it, as well as the two tiers above.
+
+    THE NARROW KEY IS ITS OWN KIND, not an operator (P20/E1). It used to return
+    `Caller(kind="admin")`, and that one line made "a key that can do exactly one thing" a key that
+    could do every subject-scoped thing this service has: it read any person's reactions and queue,
+    and — with `meetings=true`, the default — reached `common.user_api_key` and MINTED a gateway
+    token on the named third party's account. `Caller(kind="timeline")` reaches exactly one route,
+    must name its subject like the operator must, and never mints (see `timeline()`).
+    """
     if TIMELINE_KEY and _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key),
                                   TIMELINE_KEY):
-        return Caller(kind="admin")
+        return Caller(kind="timeline")
     return subject_or_operator(x_flows_operator_key, x_flows_admin_key, authorization, x_api_key)
 
 
-def scoped_subject(caller: Caller, requested: str) -> str:
-    """The subject these rows are about — derived, never asserted.
+def scoped_subject(caller: Caller, requested: str, *, stamped: str = "") -> str:
+    """The subject these rows are about — derived, never asserted, and never absent.
 
-    For the OPERATOR nothing changes: `subject` is whatever they asked for, including nothing,
-    which is the unscoped console read this surface has always served.
+    THE OPERATOR MUST NAME ONE (P20/E1). It used to be allowed to name nothing, and nothing meant
+    the whole instance: `GET /reactions` returned every row a deployment held and
+    `POST /reactions/{id}/{verb}` steered any of them. `Caller(kind="admin")` carries no uid, no
+    email and no owner, so with no subject there is nothing left to authorize against — the check
+    is not weak there, it is absent. A credential that is not a person now says whose rows it wants,
+    every time, on every subject-scoped route; asking about everyone is not a thing this surface
+    does any more.
+
+    `stamped` is the gateway's `X-User-Id` on the routes that take it, and it outranks `?subject=`
+    for the same reason it always did: it is a service identity vouching for a person it resolved,
+    where `?subject=` is the unstamped console read. Both are ways for a non-person credential to
+    name a subject; neither is a way to name none.
 
     For a PERSON the subject is who their credential says they are. A `subject` argument is still
     accepted, because the tool schema advertises one and a client that holds its own uid or address
@@ -282,8 +373,15 @@ def scoped_subject(caller: Caller, requested: str) -> str:
     would be the difference between "here is your queue" and "here is someone else's".
     """
     asked = str(requested or "").strip()
-    if caller.is_admin:
-        return asked
+    if caller.must_name_a_subject:
+        subj = str(stamped or "").strip() or asked
+        if not subj:
+            raise HTTPException(status_code=400, detail={
+                "subject_required": True,
+                "note": ("this credential is not a person, so it must name the person it is asking "
+                         "about: send ?subject=<uid|email> (or the gateway's X-User-Id where the "
+                         "route takes one). There is no instance-wide read on this surface.")})
+        return subj
     if asked and asked.lower() not in caller.names:
         raise HTTPException(status_code=403, detail={
             "not_your_subject": asked,
@@ -299,8 +397,11 @@ def _as_me(caller: Caller):
     `flows_timeline` otherwise asks admin-api to turn a uid into an address, which for this caller
     is a second hop for a fact `/internal/validate` already returned — and one more thing that can
     be down in the middle of a read.
+
+    `None` for every credential that is NOT a person — the operator key and the timeline key both
+    carry no pair to hand over, so the model does its own lookup for the subject they named.
     """
-    if caller.is_admin:
+    if not caller.uid:
         return None
     return lambda _subject: (caller.uid, caller.email)
 
@@ -361,6 +462,21 @@ class FlowSubmission(BaseModel):
 
 @app.get("/flows")
 def list_flows(caller: Caller = Depends(subject_or_operator)):
+    """Every flow this engine knows, and the step vocabulary flows are built out of.
+
+    Read this when you need to know what this deployment can actually DO before promising it: each
+    entry names the flow, its version, the event that starts it (`on`) and its ordered steps, and
+    `source` says whether it came from the image or was submitted through the API. It answers
+    "is there a flow for X?" — it does not start one; facts start flows.
+
+    `steps_vocabulary` is every step name with its own one-line description, which is the same list
+    a submitted flow is validated against. `shadowing_versions` names any runtime version that
+    overrides an image version with fewer steps — the shape of a flow quietly doing less than the
+    code says, surfaced here because nobody reads a startup log until they already suspect it.
+
+    Takes the operator key or a person's own credential; it describes the machine, not a person, so
+    the answer is the same either way.
+    """
     code_flows = [{"name": f.name, "version": f.version, "on": f.on.name,
                    "steps": list(f.steps), "source": "image", "status": "active"}
                   for f in vocab.flows.values()]
@@ -382,6 +498,18 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
 
 @app.post("/flows", status_code=201, dependencies=[Depends(auth)])
 def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
+    """Author a new version of a flow: an event to react to, and the ordered steps to run.
+
+    `steps` may only name steps this deployment already carries — `GET /flows` lists the whole
+    vocabulary under `steps_vocabulary`, and an unknown name is refused with the list rather
+    than accepted and discovered at run time. The API never accepts code: a flow is data.
+
+    Versions are minted, never overwritten. Submitting a name that already exists files the
+    NEXT version beside it, and reactions already in flight keep the version they were admitted
+    on. `activate` (default true) makes it live within about ten seconds; false files it as a
+    draft for `POST /flows/{name}/{version}/activate` later.
+
+    Operator-gated: this door reads the deployment's own operator key, never the caller's."""
     _refuse_if_gated("flows_submit")
     missing = [s for s in sub.steps if s not in vocab.steps]
     if missing:
@@ -530,6 +658,15 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
 
 @app.post("/flows/{name}/{version}/{action}", dependencies=[Depends(auth)])
 def set_flow_status(name: str, version: int, action: str):
+    """Activate or retire ONE version of a flow, addressed by its name and version number.
+
+    `action` is `activate` or `retire` and nothing else. Activating makes that version the one
+    new facts react on, within about ten seconds; retiring stops it being chosen without
+    deleting it or disturbing reactions already running on it — a retired version can be
+    activated again, so this is reversible and is the safe way to take a flow out of service.
+
+    Use `GET /flows` to see which versions exist and which one is active. Operator-gated: this
+    door reads the deployment's own operator key, never the caller's."""
     if action not in ("activate", "retire"):
         raise HTTPException(status_code=404, detail="activate | retire")
     _refuse_if_gated(f"flows_{action}")
@@ -581,22 +718,26 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
 
     The check used to run only when the CALLER passed `subject`, which meant a caller who simply
     omitted it got the unscoped behaviour — and every caller reached this route holding the same
-    operator key, so nobody's identity ever reached this decision. Now a person's subject comes
-    from their credential and the check always runs; an operator with no subject keeps the unscoped
-    console behaviour, because the admin console steers reactions it does not own.
+    operator key, so nobody's identity ever reached this decision.
+
+    IT NOW RUNS UNCONDITIONALLY, and the `if subj:` it used to sit behind is gone (P20/E1). That
+    guard was the last instance-wide write on this surface: an operator who simply omitted
+    `subject` cancelled ANYONE's reaction with no check at all — not a weak check, no check — and
+    `VEXA_FLOWS_API_KEY` is exported into five compose services. `scoped_subject` now refuses a
+    credential that names nobody, so `subj` is always a person and the ownership question is
+    always asked. An operator steering a reaction they do not own still can: they say whose it is.
     """
     fns = {"retry": retry, "resume": resume, "cancel": cancel, "wake": wake}
     if verb not in fns:
         raise HTTPException(status_code=404, detail="retry | resume | cancel | wake")
     subj = scoped_subject(caller, subject)
-    if subj:
-        owns = reaction_concerns(db, reaction_id, subject=subj, identity=_as_me(caller))
-        if owns == REACTION_MISSING:
-            raise HTTPException(status_code=404, detail="no such reaction")
-        if owns != REACTION_FOUND:
-            # Deliberately NOT 404: the caller named a real id and a real account, and telling them
-            # "no such reaction" for something that exists sends them off to re-derive it.
-            raise HTTPException(status_code=403, detail="that reaction is not yours")
+    owns = reaction_concerns(db, reaction_id, subject=subj, identity=_as_me(caller))
+    if owns == REACTION_MISSING:
+        raise HTTPException(status_code=404, detail="no such reaction")
+    if owns != REACTION_FOUND:
+        # Deliberately NOT 404: the caller named a real id and a real account, and telling them
+        # "no such reaction" for something that exists sends them off to re-derive it.
+        raise HTTPException(status_code=403, detail="that reaction is not yours")
     ok = fns[verb](db, reaction_id, actor=x_actor, clock=clock, reason=body.get("reason"))
     if not ok:
         raise HTTPException(status_code=409, detail=f"{verb} not applicable in current status")
@@ -649,9 +790,16 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
         raise HTTPException(status_code=400, detail={
             "not_a_subject": subj,
             "expected": "a platform uid (digits) or an email address"})
+    # THE NARROW KEY NEVER MINTS. `fetch_meetings` reaches `flows_steps.common.user_api_key`, which
+    # asks admin-api for a `["bot","browser","tx"]` gateway token ON THE NAMED SUBJECT'S ACCOUNT —
+    # a write, on a third party, from a credential documented as read-only and one-route. So the
+    # meetings half is dropped for this tier rather than gated: the answer degrades to this
+    # database's own rows, which is the offline shape `meetings=false` already serves and already
+    # tests. A person's own credential and the operator key are unchanged.
+    want_meetings = bool(meetings) and not caller.is_timeline
     out = build_timeline(db, subj, since=since or None, until=until or None,
                          limit=max(1, min(int(limit or 20), 200)),
-                         meetings=fetch_meetings if meetings else None,
+                         meetings=fetch_meetings if want_meetings else None,
                          identity=_as_me(caller))
     if out.get("unresolved"):
         raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
@@ -684,6 +832,126 @@ FRICTION_KINDS = ("missing-tool", "refusal", "no-page", "wrong-workspace", "unfu
                   "ux", "other")
 FRICTION_TEXT_MAX = 900
 
+# CATCH ALL SIGNAL — NOTHING HERE IS A TAXONOMY (F-D26, prod 2026-09-04). This route used to answer
+# 400 with `{"kind": "...", "expected": [...]}` for any word outside `FRICTION_KINDS`. In twenty
+# minutes of real use it threw away TWELVE reports, because the agent filing them wrote "missing",
+# "broke" and "confusing" instead of "missing-tool", "error" and "ux" — the tool schema had told it
+# nothing, so it guessed, and the sink whose whole job is to catch what did not work refused the
+# catch over a spelling.
+#
+# FOUNDER RULING, 2026-09-04 10:2xZ, which is the shape this route now has: *"we want to catch all
+# signal, does not make sense being strict about it, we want rich data, does not have to be too
+# structured."* So `kind` and `severity` are STORED AS SENT — free text, no canonicalisation, no
+# mapping to `other`, no second field holding the "raw" word, because there is no cooked one. Any
+# argument this route does not name is KEPT too, under `extra`. The eight kinds below survive only
+# as SUGGESTIONS in the tool description; grouping happens on the data later, by whoever reads it,
+# never at the door.
+#
+# F-D27, prod 2026-09-04 11:0xZ, is the SAME defect one field along, and it is why nothing about a
+# report's content is refusable either. F-D26 left two refusals standing — a report with no
+# `session` and a report with no text — on the reasoning that those were "about the report existing,
+# not about its shape". Prod disagreed within the hour: `POST /friction` answered 400 *"session is
+# required"* to a reporter who did not have one, and the report describing that very edge was itself
+# thrown away. A MISSING SESSION IS SIGNAL TOO. A report we cannot tie back to a conversation is
+# worth strictly more than no report, and the reporter is never the right party to be told no — it
+# is us who wanted the join key, so it is us who eat its absence.
+#
+# THE RULE, GENERALISED, so the next field does not need a third incident: NO VALUE A CALLER CAN
+# SEND PRODUCES A 400. Not a word, not a length, not an absence. Over-long values truncate, unknown
+# values are kept as sent, and an absent value is stored as a genuine absence — the ref is omitted
+# rather than written as `""`, and `friction_for_subject` renders it "no session" for a reader while
+# keeping `session_id` empty for a grep. The only refusals
+# this route still has are AUTHENTICATION (401 — the edge cannot attribute a report to nobody, and
+# an unattributable report is not a poorer report but a different object) and a request that is not
+# parseable at all. Note also that every argument below is typed `str`, deliberately: a non-string
+# annotation would hand FastAPI a 422 one layer above this function, which is the same refusal with
+# somebody else's name on it. `tests/test_friction.py` pins both properties.
+#
+# No migration: a report lives in `reaction.subject_refs`, which is a JSON document, so every one of
+# these is a key inside it and the ten tables in `schema.sql` are untouched.
+#
+# EXTRAS ARE NAMESPACED, and that is not tidiness. `flows_timeline.model.concerns` decides whose
+# report this is by reading `uid`/`subject`/`owner`/`organizer`/… straight off the refs, so merging
+# caller-supplied keys into the top level would let a reporter file a report that reads as somebody
+# else's. Under `extra` they are data; at the top level they would be authority.
+FRICTION_KIND_HELP = {
+    "missing-tool": "there was no tool for what was asked (\"summarise this meeting\" and nothing "
+                    "summarises)",
+    "refusal": "a tool or policy refused (\"speak_in_meeting\" declined, the workspace forbade it)",
+    "no-page": "a link or page that should exist did not (a transcript URL 404'd)",
+    "wrong-workspace": "the answer came from the wrong account, tenant or workspace",
+    "unfulfilled": "the tool answered success but the thing did not actually happen (bot never "
+                   "joined, note never saved)",
+    "error": "something broke outright — a 500, a crash, a timeout",
+    "ux": "it worked but was confusing, slow or awkward to get right",
+    "other": "none of the above, or you are not sure — say it in `what_happened` and we will "
+             "classify it",
+}
+FRICTION_KIND_DESC = ("What kind of friction this was — a SUGGESTION, not a list you must pick "
+                      "from. Words that group well with others: "
+                      + "; ".join(f"`{k}` — {v}" for k, v in FRICTION_KIND_HELP.items())
+                      + ". If none fits, send your own word; it is stored exactly as you sent it "
+                        "and never refused.")
+FRICTION_SEVERITY_DESC = ("How much it hurt. Words that group well: `blocker` (could not "
+                          "continue), `annoyance` (worked around it), `papercut` (small and "
+                          "repeated), `idea` (nothing broke, this would just be better). Your own "
+                          "word is stored as you sent it and never refused.")
+#: Everything this route names for itself. Any OTHER query argument is a caller's own field and is
+#: kept under `extra` rather than dropped — "rich data, does not have to be too structured".
+FRICTION_OWN_ARGS = frozenset({"session", "what_i_tried", "what_happened", "severity", "meeting_id",
+                               "tool", "deployment", "worker_image", "kind"})
+FRICTION_EXTRA_MAX = 40
+
+
+#: Whether this process has already said that the query-parameter spelling of `POST /friction` is
+#: deprecated. Once per process, like the operator-header deprecation above and for the same
+#: reason: printed per request it is a flood on the hot path and nobody reads it.
+_FRICTION_QUERY_SAID: set = set()
+
+
+def _friction_query_sent(params) -> bool:
+    """True when the caller put any of this route's own fields in the URL."""
+    try:
+        return any(name in FRICTION_OWN_ARGS for name in params.keys())
+    except Exception:  # noqa: BLE001 — a deprecation notice must never cost a report
+        return False
+
+
+def _say_query_friction_is_deprecated() -> None:
+    if "friction-query" in _FRICTION_QUERY_SAID:
+        return
+    _FRICTION_QUERY_SAID.add("friction-query")
+    print("WARNING: POST /friction's QUERY-PARAMETER fields are DEPRECATED — send the report as a "
+          "JSON body instead. A report is a person's words about a failure and a query string puts "
+          "them in every access log between the caller and this service. Both spellings work for "
+          "one release; the body wins when a field is sent twice.", flush=True)
+
+
+async def _friction_body(request: Request) -> dict:
+    """The report's JSON body, or `{}` — and NEVER a refusal (B7 + F-D27).
+
+    A dependency rather than a `Body(...)` parameter, and the difference is the whole rule of this
+    route: FastAPI validates a declared body BEFORE the handler runs, so a malformed one answers
+    422 — which is a 400 with somebody else's name on it, one layer above every leniency below.
+    `tests/test_friction.py::test_no_argument_is_typed_so_that_fastapi_refuses_before_the_route_does`
+    already holds that door shut for the query arguments; this keeps it shut for the body.
+
+    ASYNC, and it is the only async callable on this surface: it awaits reading the request body and
+    nothing else. The route itself stays `def`, so FastAPI keeps running its database work in the
+    threadpool rather than on the event loop.
+    """
+    try:
+        raw = await request.body()
+    except Exception:  # noqa: BLE001 — a body we cannot read is an absent body, never a refusal
+        return {}
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:  # noqa: BLE001 — malformed JSON is the reporter's tooling, not the reporter
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
 
 def _friction_id() -> str:
     """`fr_<16 hex>` — short enough to paste into a fix reference by hand, same convention the
@@ -691,88 +959,176 @@ def _friction_id() -> str:
     return f"fr_{secrets.token_hex(8)}"
 
 
-#: `severity`, AS THE SERVED CONTRACT DESCRIBES IT (F-D20 d). The accepted set lived only in
-#: `FRICTION_SEVERITIES` and in the 400 this handler raises, so the OpenAPI document — the thing
-#: every generated client and every tool manifest is built from — said any string would do, and a
-#: caller learned the four words by sending a fifth and reading the refusal.
-#:
-#: `json_schema_extra`, NOT a `Literal` or an `Enum` type. Those would move the rejection into
-#: FastAPI's own validation, which answers 422 with a pydantic error body — a different status and
-#: a different shape from the 400 this route already returns, carrying `expected` for exactly this
-#: purpose. The contract is what was missing; the refusal was not, and changing it would break
-#: every caller that reads it. One source of truth, `FRICTION_SEVERITIES`, feeding both.
-#:
-#: `kind` has the SAME GAP against `FRICTION_KINDS` and is deliberately not changed here — it is
-#: optional (empty means "infer it from the words"), so its schema needs an enum AND a nullable
-#: empty, which is a contract decision rather than a transcription. Named, not fixed.
-_SEVERITY = Query(default="annoyance",
-                  description="How much this got in the way. One of: "
-                              + ", ".join(FRICTION_SEVERITIES) + ".",
-                  json_schema_extra={"enum": list(FRICTION_SEVERITIES)})
+def _friction_extra(params) -> dict:
+    """Every argument the caller sent that this route does not name, kept as they sent it.
 
+    Capped in count and length so one call cannot write an unbounded document into a refs blob, and
+    the cap DROPS THE OVERFLOW SILENTLY rather than refusing the call — losing the tail of an
+    over-large report is bad, losing the whole report is the defect this route exists to not have.
 
-@app.post("/friction", status_code=201)
-def report_friction(session: str = "", what_i_tried: str = "", what_happened: str = "",
-                    severity: str = _SEVERITY, meeting_id: str = "", tool: str = "",
-                    deployment: str = "", worker_image: str = "", kind: str = "",
-                    x_user_id: str = Header(default=""),
-                    caller: Caller = Depends(subject_or_operator)):
-    """Tell us what did not work. Any signed-in caller may file, from any client — a Claude Code
-    session, the rig, a worker turn — whether or not this deployment runs the agent domain at all.
-
-    `session`, `what_i_tried`, `what_happened` and `severity` are REQUIRED. `session` most of all:
-    it is the chat or meeting session this happened in, and its absence is exactly the gap this
-    carrier exists to close — the founder's own 13 reports from one live call could not be tied
-    back to the call that produced them because nothing on the old path carried an id for it. A
-    report with no session is refused rather than accepted with one more field nobody can join on
-    later (`friction_since=""` on the timeline is the only thing separating them then).
-
-    The subject is the caller's own credential, same as every other person-scoped route here
-    (`reactions_list`, `timeline`); an operator with no bearer may stamp `X-User-Id`, same as
-    `queue_waiting` — the gateway's answer when it forwards a resolved caller rather than a raw
-    bearer. The bare operator key, unstamped, attributes a report to nobody, which is refused.
+    Takes a query string or a JSON object indifferently: both are mappings of what the caller sent,
+    and which transport carried a field is not a fact about the report.
     """
-    subj = scoped_subject(caller, "")
-    if caller.is_admin:
-        subj = (x_user_id or "").strip() or subj
-    if not subj:
+    out: dict = {}
+    for key in sorted(params.keys()):
+        if key in FRICTION_OWN_ARGS or len(out) >= FRICTION_EXTRA_MAX:
+            continue
+        value = params.get(key)
+        text = (value if isinstance(value, str) else str(value)).strip()
+        if text:
+            out[key[:100]] = text[:FRICTION_TEXT_MAX]
+    return out
+
+
+@app.post("/friction", status_code=201, summary="Report friction — tell Vexa what did not work")
+def report_friction(
+    session: str = Query("", description=(
+        "The chat or meeting session this happened in — the id of the conversation you are in "
+        "right now. INCLUDE IT WHENEVER YOU HAVE IT: it is how the report ties back to the "
+        "conversation that produced it, which is most of what makes a report actionable. But it "
+        "is not required and never refuses the call — if you do not have one, file anyway.")),
+    what_i_tried: str = Query("", description=(
+        "What you were attempting, in your own words. Half-formed is fine; so is nothing.")),
+    what_happened: str = Query("", description=(
+        "What actually happened instead — the error, the wrong answer, the missing page. Say as "
+        "much as you have.")),
+    severity: str = Query("annoyance", description=FRICTION_SEVERITY_DESC,
+                          json_schema_extra={"examples": list(FRICTION_SEVERITIES)}),
+    meeting_id: str = Query("", description="The meeting this happened on, if it was about one."),
+    tool: str = Query("", description="The tool you called when it went wrong, if it was one."),
+    deployment: str = Query("", description="Which deployment you were talking to, if you know."),
+    worker_image: str = Query("", description="The worker image/version, if you know it."),
+    kind: str = Query("", description=FRICTION_KIND_DESC,
+                      json_schema_extra={"examples": list(FRICTION_KINDS)}),
+    report: dict = Depends(_friction_body),
+    request: Request = None,  # noqa: RUF013 — FastAPI injects it; the default keeps the signature
+    x_user_id: str = Header(default=""),
+    caller: Caller = Depends(subject_or_operator),
+):
+    """Report friction: tell us what did not work, so a developer can read it and fix it.
+
+    CALL THIS whenever you could not do what the person asked, or did it badly: there was no tool
+    for the job, a tool refused, a page or link was missing, you landed in the wrong workspace, a
+    tool said it succeeded but the thing did not happen, something errored outright, or it worked
+    but was confusing. You do not need permission and you do not need to be sure it is our fault —
+    file it. Nothing is too small, and a report is never lost for being imperfectly labelled.
+
+    THE PAYLOAD IS TWO SENTENCES: `what_i_tried` (what you were attempting) and `what_happened`
+    (what happened instead). Send `session` too — the chat or meeting session you are in — whenever
+    you have one, because it is what ties the report back to the conversation that produced it and
+    that is most of what makes it actionable later.
+
+    NOTHING YOU SEND OR OMIT WILL COST YOU THE REPORT. There is no required field on this route: no
+    session, no text, an unknown word, an over-long value — all of it is filed, stored as sent, and
+    readable back. A report with no session reads as "no session" and is still a report; a missing
+    join key is our problem, not yours, and it is signal in its own right. The one thing that IS
+    refused is a call with no credential, because a report attributed to nobody is a different
+    object rather than a poorer one. Never withhold a report because you are unsure it is
+    well-formed, and never re-file one because a field felt wrong.
+
+    `kind` is a HINT, NOT A MENU. These words group well with other people's reports:
+    `missing-tool` (no tool exists for what was asked), `refusal` (a tool or policy said no),
+    `no-page` (a link or page that should exist 404'd), `wrong-workspace` (the answer came from the
+    wrong account or tenant), `unfulfilled` (a tool reported success and the thing did not actually
+    happen), `error` (a 500, a crash, a timeout), `ux` (it worked but was confusing or awkward),
+    `other`. `severity` likewise: `blocker`, `annoyance`, `papercut`, `idea`. **If none of them fits
+    what you saw, use your own word** — both fields are stored exactly as you send them, and no
+    word you can choose will cost you the report. Never re-file because a label felt wrong.
+
+    ANYTHING ELSE YOU KNOW, SEND IT. Arguments this route does not name are kept with the report
+    rather than dropped — a stack frame, a request id, a model name, a count. Richer is better;
+    structure is somebody else's problem later.
+
+    The subject is your own credential, same as every other person-scoped route here
+    (`reactions_list`, `timeline`); an operator with no bearer may stamp `X-User-Id`, same as
+    `queue_waiting`. The bare operator key, unstamped, attributes a report to nobody, refused.
+    Read your own reports back with `friction_so_far`.
+    """
+    if caller.must_name_a_subject and not (x_user_id or "").strip():
         raise HTTPException(status_code=401, detail=(
             "report_friction needs your Vexa credential — this edge cannot attribute a report to "
             "nobody"))
-    sess = session.strip()
-    if not sess:
-        raise HTTPException(status_code=400, detail=(
-            "session is required — the chat or meeting session this happened in. A report with no "
-            "session cannot be tied back to the conversation that produced it, which is the exact "
-            "gap this carrier exists to close."))
-    tried, happened = what_i_tried.strip()[:FRICTION_TEXT_MAX], what_happened.strip()[:FRICTION_TEXT_MAX]
-    if not tried or not happened:
-        raise HTTPException(status_code=400, detail=(
-            "what_i_tried and what_happened are both required — half-formed is fine, empty is not"))
-    sev = severity.strip().lower()
-    if sev not in FRICTION_SEVERITIES:
-        raise HTTPException(status_code=400,
-                            detail={"severity": severity, "expected": list(FRICTION_SEVERITIES)})
-    knd = kind.strip().lower()
-    if knd and knd not in FRICTION_KINDS:
-        raise HTTPException(status_code=400, detail={"kind": kind, "expected": list(FRICTION_KINDS)})
+    subj = scoped_subject(caller, "", stamped=x_user_id)
+    # THE BODY WINS, THE QUERY STILL WORKS (B7). Every field used to arrive as a QUERY PARAMETER,
+    # which puts a person's own words about a failure — up to 900 characters of them — into the
+    # URL, where every proxy and ingress access log in front of this service copies them down. That
+    # flows-api itself does not log them is a property of ONE line (`uvicorn … log_level="warning"`
+    # in `main()`), not of the design.
+    #
+    # The query spelling is KEPT FOR ONE RELEASE, deprecated, because the MCP manifest that is
+    # already deployed sends these nine names as query arguments (`vexa_mcp/register.py` puts every
+    # DECLARED argument in `params=`), and a sink that starts refusing the transport its own
+    # shipped edge uses is the F-D26 failure with a new cause. Same rule as `X-Flows-Admin-Key`
+    # above: accept both, prefer the new one, say so once per process.
+    body_fields = report if isinstance(report, dict) else {}
+    def _field(name: str, sent: str) -> str:
+        """The body's value for `name`, else the query's. Absence, not emptiness, decides."""
+        if name in body_fields and body_fields[name] is not None:
+            value = body_fields[name]
+            return value if isinstance(value, str) else str(value)
+        return sent
+    if request is not None and not body_fields and _friction_query_sent(request.query_params):
+        _say_query_friction_is_deprecated()
+    # NO 400 BEYOND THIS POINT (F-D27). Everything below truncates or stores an absence; nothing
+    # rejects. `sess` empty means the reporter had no session to give — kept out of `refs` entirely
+    # rather than written as `""`, so the read model reports a genuine absence instead of a blank
+    # that could be mistaken for a session whose id happens to be empty.
+    sess = _field("session", session).strip()[:128]
+    tried = _field("what_i_tried", what_i_tried).strip()[:FRICTION_TEXT_MAX]
+    happened = _field("what_happened", what_happened).strip()[:FRICTION_TEXT_MAX]
+    # AS SENT (founder ruling, F-D26). No canonicalisation, no lowercasing, no mapping into a
+    # bucket: the word the reporter chose IS the datum, and grouping it with other reports is a
+    # question for whoever reads the sink, later, with all of them in front of them.
+    sev = _field("severity", severity).strip()[:200] or "annoyance"
+    knd = _field("kind", kind).strip()[:200]
     fid = _friction_id()
-    refs = {"uid": subj, "session": sess[:128], "friction_id": fid,
+    refs = {"uid": subj, "friction_id": fid,
            "what_i_tried": tried, "what_happened": happened, "severity": sev}
-    for key, val in (("kind", knd), ("meeting_id", meeting_id), ("tool", tool),
-                     ("deployment", deployment), ("worker_image", worker_image)):
+    if sess:
+        refs["session"] = sess
+    for key, val in (("kind", knd),
+                     ("meeting_id", _field("meeting_id", meeting_id)),
+                     ("tool", _field("tool", tool)),
+                     ("deployment", _field("deployment", deployment)),
+                     ("worker_image", _field("worker_image", worker_image))):
         v = val.strip()[:200] if isinstance(val, str) else ""
         if v:
             refs[key] = v
+    extra = dict(_friction_extra(request.query_params) if request is not None else {})
+    extra.update(_friction_extra(body_fields))
+    extra = dict(sorted(extra.items())[:FRICTION_EXTRA_MAX])
+    if extra:
+        refs["extra"] = extra
     vocab.refresh_from_db(db)          # the friction_log flow may have been (re)submitted since boot
     # LITERAL, not `production.FRICTION_REPORTED.name` — `tests/test_queue_waiting.py::_produced()`
     # proves `publishes_events` against what this domain's source actually writes to the wire by
     # grepping for `event_type="<literal>"`, the same way it already proves `invite.received`. An
     # attribute expression would be correct at runtime and invisible to that check.
     assert production.FRICTION_REPORTED.name == "friction.reported"
-    admit(db, vocab, clock, source_event_id=f"friction-{fid}",
-         event_type="friction.reported", subject_refs=refs)
-    return {"id": fid, "recorded": True}
+    created = admit(db, vocab, clock, source_event_id=f"friction-{fid}",
+                    event_type="friction.reported", subject_refs=refs)
+    # `recorded` IS THE ADMISSION'S ANSWER, not this route's intention (B6). It used to be the
+    # literal `True`, so a deployment whose `friction_log` flow was retired — or whose registry
+    # never loaded it — told every reporter their report was recorded while `admit()` created
+    # nothing and the row did not exist. A sink that lies about catching is worse than one that
+    # refuses: the reporter stops filing, and nobody learns anything. `admit()` returns how many
+    # reactions it created; 0 means no flow matched `friction.reported` (or this exact report was
+    # already filed), and the caller is told that in the same field it already reads.
+    if not created:
+        logger.error(
+            "friction %s was NOT recorded: admit() created no reaction for friction.reported "
+            "(no flow matches it in this registry, or the report was a duplicate). "
+            "%d flow(s) loaded.", fid, len(vocab.flows))
+    # The reply STATES what was stored, so a caller can see its own words came back unchanged and
+    # can see which of its extra fields were kept — an accepted report that quietly dropped half of
+    # itself is the same class of lie as a refused one.
+    out = {"id": fid, "recorded": bool(created), "kind": knd, "severity": sev, "session": sess}
+    if not created:
+        out["note"] = ("this deployment admitted the report into no flow, so it is not readable "
+                       "back — the report is not lost on your side, it was never stored on ours")
+    if extra:
+        out["extra"] = sorted(extra)
+    return out
 
 
 @app.get("/friction")
@@ -787,15 +1143,11 @@ def friction_so_far(since: str = "", limit: int = 40,
     first, pending a follow-up that gives the operator view the same treatment `GET /reactions`
     already has.
     """
-    subj = scoped_subject(caller, "")
-    if caller.is_admin:
-        # #1510's C2/C3: the operator with no X-User-Id gets the WHOLE-INSTANCE view (subj stays
-        # ""), which is exactly what `friction_for_subject`'s own docstring has always promised
-        # ("the whole-instance view stays behind the caller's own authorization") — this route
-        # just never actually let an operator reach it before the rig's `friction_dump` needed to.
-        subj = (x_user_id or "").strip() or subj
-    elif not subj:
-        raise HTTPException(status_code=400, detail="no subject — sign in to read your own reports")
+    if caller.must_name_a_subject and not (x_user_id or "").strip():
+        raise HTTPException(status_code=400, detail=(
+            "no subject — sign in to read your own reports, or stamp X-User-Id. There is no "
+            "instance-wide dump behind the operator key on this route."))
+    subj = scoped_subject(caller, "", stamped=x_user_id)
     ts = _friction_since_epoch(since) or 0.0 if since else 0.0
     rows = friction_for_subject(db, subject=subj, since=ts,
                                 limit=max(1, min(int(limit or 40), 200)),
@@ -852,8 +1204,28 @@ def bind_host() -> str:
     return (os.environ.get("VEXA_FLOWS_API_HOST") or "127.0.0.1").strip()
 
 
+def contract_preflight() -> dict:
+    """THE CONFIG.V1 DECLARATION, checked against this process's environment (E6/ADR-0026).
+
+    `config_preflight.py` is vendored here, byte-identical to `deploy/contracts/config.v1/`, and
+    until now NOTHING under `core/flows/src` imported it: the validator every adopted service runs
+    at boot was dead code in the one service that declares 35 keys. What flows checked instead was
+    `flows_config.preflight()` over `DOOR_KEYS`, which is a different and much narrower question —
+    so the seven `forbidden_values` the declaration carries were enforced by a hand-copied list of
+    four inside this file, and `VEXA_FLOWS_API_KEY=vexa-internal-secret` booted green.
+
+    This is the call the MCP already makes (`vexa_mcp/app.py`: `from .config_preflight import
+    preflight; preflight()`), in the same position — first thing, before anything is served.
+    It does NOT replace `flows_config.preflight()`: that one refuses a deployment that cannot name
+    a door, which is flows' own rule and is not in the declaration.
+    """
+    from config_preflight import preflight as _contract_preflight
+    return _contract_preflight()
+
+
 def main() -> int:  # pragma: no cover — process entrypoint
     import uvicorn
+    contract_preflight()
     port = int(os.environ.get("VEXA_FLOWS_API_PORT", "18200"))
     host = bind_host()
     print(f"flows-api up on {host}:{port} · vocabulary of {len(vocab.steps)} steps", flush=True)
@@ -898,49 +1270,92 @@ def mcp_tools_manifest():
 import flows_queue as _flows_queue  # noqa: E402
 
 
-@app.get("/queue/waiting")
+# THE ONLY TEXT AN AGENT READS BEFORE DECIDING TO CALL THIS, and it says WHEN — which is the one
+# thing the route's own mechanics could never say. Ten ordinary sessions with the tools loaded
+# never called `whats_waiting`: they were served this route's implementation notes, and a tool
+# described by its implementation reads as something for somebody else. Header precedence and
+# status codes answer "how do I call it correctly", a question an agent that never calls it does
+# not have.
+#
+# IT IS A `summary`, AND THE ROUTE CARRIES NO DOCSTRING ON PURPOSE. The MCP edge derives a tool's
+# description from this route's OpenAPI operation, preferring the docstring and falling back to
+# the summary (`core/meetings/services/mcp/src/vexa_mcp/bind.py::_describe`). A docstring here
+# would therefore be served to every agent, in front of every call, forever. The maintainer's
+# half lives in the comment block below instead, where no agent pays for it by the token.
+WHATS_WAITING_SUMMARY = (
+    "What your person's Vexa needs right now — call it at the start of a session, after "
+    "connecting, and whenever they mention a meeting; each item's `say` is what to tell them. "
+    "Returns the queue for the authenticated caller.")
+
+# ── how this route resolves its subject (maintainer's half; deliberately not agent-facing) ─────
+#
+# THE SUBJECT IS THE AUTHENTICATED CALLER'S, and there are two ways to be one.
+#
+# A PERSON authenticates with their own Vexa credential and their subject is resolved from it
+# (issue #1468). Nothing they send can move it: a `subject` argument naming anyone else is 403,
+# and an `X-User-Id` header is ignored outright. That header is a string a caller can type, and
+# it is only ever evidence because the OPERATOR key gates it — a service vouching for a person it
+# resolved. A verified credential is stronger evidence than any header, so it wins.
+#
+# THE OPERATOR reads one person's queue on their behalf, and keeps exactly the behaviour this
+# route shipped with: `X-User-Id` is the gateway's answer and outranks `?subject=`, and
+# `?subject=` is the unstamped console read. Neither ever answers with the instance — no subject
+# at all is a 400, because this route answers for ONE person or for nobody.
+#
+# The distinction matters because this route is NOT always behind the gateway: reached through
+# the MCP edge it is addressed directly, and that edge stamps no `X-User-Id` at all — it forwards
+# the caller's own credential, which is the whole reason a person's credential has to open the
+# door here.
+#
+# Not opened by `VEXA_FLOWS_TIMELINE_KEY`: that key is documented as opening the timeline and
+# nothing else, and quietly widening a key's reach is how a narrow credential stops being narrow.
+#
+# The answer is DATA plus behavior's words: every sentence a person hears is resolved from
+# `behavior/queue/`, read hot, never from this body. See `flows_queue` for why silence there is
+# the filter rather than a keyword list here.
+@app.get("/queue/waiting", summary=WHATS_WAITING_SUMMARY)
 def queue_waiting(subject: str = "", limit: int = 50,
                   x_user_id: str = Header(default=""),
                   caller: Caller = Depends(subject_or_operator)):
-    """WHAT IS WAITING FOR THIS PERSON — pending reactions, with the flow that produced each.
-
-    THE SUBJECT IS THE AUTHENTICATED CALLER'S, and there are two ways to be one.
-
-    A PERSON authenticates with their own Vexa credential and their subject is resolved from it
-    (issue #1468). Nothing they send can move it: a `subject` argument naming anyone else is 403,
-    and an `X-User-Id` header is ignored outright. That header is a string a caller can type, and
-    it is only ever evidence because the OPERATOR key gates it — a service vouching for a person it
-    resolved. A verified credential is stronger evidence than any header, so it wins.
-
-    THE OPERATOR reads one person's queue on their behalf, and keeps exactly the behaviour this
-    route shipped with: `X-User-Id` is the gateway's answer and outranks `?subject=`, and
-    `?subject=` is the unstamped console read. Neither ever answers with the instance — no subject
-    at all is a 400, because this route answers for ONE person or for nobody.
-
-    The distinction matters because this route is NOT always behind the gateway: reached through
-    the MCP edge it is addressed directly, and that edge stamps no `X-User-Id` at all — it forwards
-    the caller's own credential, which is the whole reason a person's credential has to open the
-    door here.
-
-    Not opened by `VEXA_FLOWS_TIMELINE_KEY`: that key is documented as opening the timeline and
-    nothing else, and quietly widening a key's reach is how a narrow credential stops being narrow.
-
-    The answer is DATA plus behavior's words: every sentence a person hears is resolved from
-    `behavior/queue/`, read hot, never from this body. See `flows_queue` for why silence there is
-    the filter rather than a keyword list here.
-    """
-    who = scoped_subject(caller, subject)
-    if caller.is_admin:
-        who = (x_user_id or "").strip() or who
-    if not who:
-        raise HTTPException(status_code=400, detail=(
-            "no subject — this route answers for ONE person. A person is resolved from their own "
-            "credential; an operator passes ?subject=<uid|email>, or the gateway stamps "
-            "X-User-Id."))
+    who = scoped_subject(caller, subject, stamped=x_user_id)
     flows = [{"name": f.name, "version": f.version, "on": f.on.name}
              for f in vocab.flows.values()]
+    # `identity=` — the same pair the other three subject-scoped routes hand down (B1). Without it
+    # this route re-asked admin-api to turn the caller's uid into their address, for a fact
+    # `/internal/validate` already returned on the way in; and when admin-api was slow or down that
+    # lookup came back half-empty, which drops the whole invite lineage (it carries an organizer
+    # address and no uid — `flows_timeline.model.concerns`) out of the hottest read in the product.
     return _flows_queue.waiting(db, subject=who, flows=flows,
-                                limit=max(1, min(int(limit), 200)))
+                                limit=max(1, min(int(limit), 200)),
+                                identity=_as_me(caller))
+
+
+@app.get("/queue/notices")
+def queue_notices(subject: str = "", limit: int = 50,
+                  x_user_id: str = Header(default=""),
+                  caller: Caller = Depends(subject_or_operator)):
+    """THIS PERSON'S STANDING NOTICES — the say text of each waiting item whose copy declared itself
+    one, and nothing else.
+
+    A standing notice is something that stays true BETWEEN calls rather than something that just
+    happened, so a caller is meant to read it alongside whatever it was already doing rather than
+    go looking for it. That is why this answer is the smallest one this surface has: a list of
+    sentences, no reaction ids, no flow names, no steps, no typed reasons — cheap enough to ask on
+    every call. A caller that wants any of those wants `GET /queue/waiting`.
+
+    WHICH ITEMS ARE NOTICES IS BEHAVIOR'S TO DECIDE, not this route's and not any caller's: a
+    say-file under `behavior/queue/` opens with `notice: true` in its front-matter, or it does not.
+    That is an admin's file and an admin's edit with no deploy on either side of it — the same file
+    and the same edit that already decide whether an item is spoken at all (`flows_queue`,
+    `behavior/queue/README.md`). No word of any notice is written here or anywhere in this image.
+
+    Same door as `GET /queue/waiting`, in every particular: a person is resolved from their own
+    credential and cannot name anyone else, an operator passes `?subject=` or the gateway stamps
+    `X-User-Id`, and no subject at all is a 400 because this route answers for ONE person.
+    """
+    who = scoped_subject(caller, subject, stamped=x_user_id)
+    return _flows_queue.notices(db, subject=who, limit=max(1, min(int(limit), 200)),
+                                identity=_as_me(caller))
 
 
 # THE ENTRYPOINT GUARD IS THE LAST THING IN THIS MODULE, and that is load-bearing rather than

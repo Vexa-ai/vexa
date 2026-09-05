@@ -86,9 +86,14 @@ system platform  # shared infra backing the services
 
 system flows  # the reaction engine; owns the reaction row and its effect receipts
   module flows-engine
+  module flows-defs
+  module flows-steps
+  module flows-schema
+  module flows-timeline
   service flows-api
   service flows-worker
   data-asset flows-rows
+  contract flows.v1
 
 edges:
   bot -write-> segments-stream
@@ -140,6 +145,7 @@ edges:
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
   flows-worker -write-> flows-rows
+  flows-api -write-> flows-rows  # the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer
   flows-api -read-> flows-rows
   flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
   flows-worker -req-> gateway

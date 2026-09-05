@@ -633,6 +633,16 @@ def create_app(
             "POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/annotate"), request
         )
 
+    # Annotate by ROW id — the identity a meeting always has. The (platform, native) pair is not
+    # one: a Google Meet room code is reused across sessions and downstream resolves it to the
+    # caller's NEWEST row, so an older meeting on a recurring link could be READ (that is what
+    # /transcripts/by-id above is for) but never written back to. Three segments against the pair
+    # route's four, so neither shadows the other on segment count — the same property
+    # POST /meetings/{meeting_id}/share below already relies on.
+    @app.post("/meetings/{meeting_id}/annotate")
+    async def annotate_meeting_by_id(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/annotate"), request)
+
     # Mint by ROW id — the identity a meeting always has. The (platform, native) pair is not one: a
     # row planned from an invite whose url matched no platform is platform='unknown' with an empty
     # native, so the pair route below 404s on it and the caller (the attendee-mail fan-out) shipped

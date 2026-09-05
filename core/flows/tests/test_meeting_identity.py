@@ -74,7 +74,7 @@ def test_it_degrades_to_the_ref_rather_than_failing_to_send(monkeypatch, scaffol
 # ── R-B10 · a floating DTSTART is UTC, never the server's zone ───────────────────────────────
 FLOATING = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:u-1\nDTSTART:20300302T140000\n"
             "ORGANIZER:mailto:a@bank.test\nSUMMARY:Pilot\n"
-            "LOCATION:https://meet.google.com/jrn-qwko-mqp\nEND:VEVENT\nEND:VCALENDAR\n")
+            "LOCATION:https://meet.google.com/abc-defg-hij\nEND:VEVENT\nEND:VCALENDAR\n")
 
 
 @pytest.mark.parametrize("tz", ["UTC", "Pacific/Kiritimati", "Pacific/Niue", "Europe/Vienna"])

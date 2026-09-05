@@ -23,6 +23,23 @@ import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
 
 
+@pytest.fixture(autouse=True)
+def _person_settings_are_declared(monkeypatch):
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it an admin key — and for
+    the same reason, one door along.
+
+    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
+    reached `setting()` without saying so got them from a swallowed exception: there is no identity
+    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
+    person prefers the defaults". 0.12.27 makes an unreachable identity RETRYABLE instead
+    (`SettingsUnavailable`), so a test standing on that swallow now fails — correctly. The suite
+    declares what a deployment declares. Tests that are ABOUT a preference still set their own;
+    this is the baseline underneath them."""
+    common.forget_person_settings()
+    monkeypatch.setattr(common, "person_settings", lambda uid: dict(common._SETTING_DEFAULTS))
+
+
+
 class FakeChannel:
     """Records instead of sending. `link` arrives SEPARATELY from `body` — the port's whole
     point — so the assertions can read the call to action without parsing prose."""

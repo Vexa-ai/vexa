@@ -54,6 +54,24 @@ _FSM_OWNED_STATUSES = frozenset({
     "active", "stopping", "completed", "failed",
 })
 
+# ── transcript-share mint bounds (`_share_payload`) ────────────────────────────────────────────
+# THE MODE SET IS CLOSED AND THAT IS THE SECURITY-RELEVANT ONE. `validate_transcript_grant`
+# (collector/adapters.py) applies the email allow-list only when `mode == "restricted"` — every
+# other string, including a near-miss typo, is stored verbatim and read back as an OPEN share that
+# anyone authenticated can redeem. The failure is silent and it points the wrong way, so the value
+# is checked at the door instead of being trusted downstream.
+SHARE_MODES = frozenset({"open", "restricted"})
+SHARE_DEFAULT_TTL_SEC = 86_400                  # 24h — unchanged default
+SHARE_MIN_TTL_SEC = 60                          # a link nobody can redeem in time is not a share
+SHARE_MAX_TTL_SEC = 30 * 24 * 60 * 60           # 30d — a capability, not a second front door
+# The list lives in the meeting row's JSONB and is walked on every access check, so its length is
+# a cost the OWNER pays on every read of that meeting, for ever.
+SHARE_MAX_ALLOWED_EMAILS = 200
+# The search text is bound as a parameter (never interpolated), so this is a resource bound, not an
+# injection one: `websearch_to_tsquery` + `ts_headline` over an unbounded string is CPU an
+# unauthenticated-shaped request should not be able to ask for.
+SEARCH_QUERY_MAX_CHARS = 512
+
 
 async def _publish_user_meeting_status(
     redis,
@@ -156,14 +174,20 @@ def build_router(
     @router.get("/transcripts/search")
     async def search_transcripts(
         request: Request,
-        q: str = Query(..., min_length=1, description=(
+        q: str = Query(..., min_length=1, max_length=SEARCH_QUERY_MAX_CHARS, description=(
             "Search text. Supports \"quoted phrases\", `or`, and `-excluded` terms "
             "(websearch syntax). Malformed input never errors."
         )),
         limit: int = Query(20, ge=1, le=100),
         offset: int = Query(0, ge=0),
         platform: Optional[str] = Query(None, description="Restrict to one platform."),
-        native_meeting_id: Optional[str] = Query(None, description="Restrict to one meeting."),
+        native_meeting_id: Optional[str] = Query(
+            None, description="Restrict to one ROOM — every session held on that link."),
+        meeting_id: Optional[int] = Query(
+            None, description=(
+                "Restrict to one exact meeting ROW (the `meeting_db_id` every hit carries). "
+                "Wins over native_meeting_id, which names a room and not a meeting."
+            )),
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
@@ -172,6 +196,7 @@ def build_router(
         hits = await store.search_transcripts(
             user_id, q, limit=limit, offset=offset,
             platform=platform, native_meeting_id=native_meeting_id,
+            meeting_db_id=meeting_id,
         )
         log_event(
             "transcripts_searched", audience="user", span="transcripts.search",
@@ -659,21 +684,10 @@ def build_router(
     # replace would let any caller destroy annotations written by another agent — or by the human
     # — that it never saw and could not have known about. Merge plus explicit nulls expresses
     # every legitimate edit while making "corrupt what you did not write" unrepresentable.
-    @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
-    async def annotate_native_meeting(
-        platform: str,
-        native_meeting_id: str,
-        request: Request,
-        x_user_id: Optional[str] = Header(default=None),
-    ):
-        user_id = _resolve_user_id(x_user_id)
-        try:
-            payload = await request.json()
-        except Exception:
-            raise HTTPException(status_code=422, detail="invalid JSON body")
+    def _annotation_from(payload) -> tuple:
+        """``(title, metadata)`` off an annotate body, or the 422 that says what to send."""
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
-
         title = payload.get("title")
         if title is not None and not isinstance(title, str):
             raise HTTPException(status_code=422, detail="'title' must be a string")
@@ -685,14 +699,36 @@ def build_router(
                 status_code=422,
                 detail="nothing to annotate: send 'title' and/or 'metadata'",
             )
+        return title, metadata
 
-        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
-        if meeting_id is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
-            )
+    # --- POST /meetings/{meeting_id}/annotate → the SAME write, addressed by the identity a
+    # meeting always has. The (platform, native) pair is not one: a Google Meet room code is
+    # reused across sessions, and `_resolve_owned_native` resolves it to the caller's NEWEST row,
+    # so an older meeting on a recurring link could be read but never annotated — an agent that
+    # pulled a transcript had nowhere to write what it learned back (fr_b6340167da32b8b6).
+    #
+    # Three segments against the pair route's four, so on segment count alone neither shadows the
+    # other — the same property `POST /meetings/{meeting_id}/share` already relies on. Owner-scoped
+    # in the store (`annotate_meeting` matches user_id), so an id belonging to someone else is a
+    # 404 exactly as an unowned native pair is.
+    @router.post("/meetings/{meeting_id}/annotate")
+    async def annotate_meeting_by_id(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        title, metadata = _annotation_from(payload)
         row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
+        return _annotate_result(row, user_id, meeting_id, title, metadata)
+
+    def _annotate_result(row, user_id, meeting_id, title, metadata):
+        """The shared tail of both annotate routes: the not-found / too-large refusals, the log
+        line, and the row. One copy, so the two addressings cannot answer differently."""
         if row is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
         if isinstance(row, dict) and row.get("error") == "metadata_too_large":
@@ -707,6 +743,29 @@ def build_router(
                     "status": row.get("status")},
         )
         return JSONResponse(content=row)
+
+    @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
+    async def annotate_native_meeting(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        title, metadata = _annotation_from(payload)
+
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
+        return _annotate_result(row, user_id, meeting_id, title, metadata)
 
     @router.patch("/meetings/{platform}/{native_meeting_id}")
     async def patch_native_meeting(
@@ -887,15 +946,60 @@ def build_router(
         return JSONResponse(content={"workspace_id": bound})
 
     def _share_payload(payload) -> "tuple[str, list, int]":
-        """mode | allowed_emails | ttl out of a share-mint body, defaulted the same way for both
-        address shapes. `restricted` + allowed_emails is what makes a forwarded mail grant nothing."""
+        """mode | allowed_emails | ttl out of a share-mint body, defaulted and VALIDATED the same
+        way for both address shapes.
+
+        `restricted` + allowed_emails is what makes a forwarded mail grant nothing — and that is
+        exactly why `mode` has to be checked against the closed set. `validate_transcript_grant`
+        gates on `mode == "restricted"` and nothing else, so ANY other string — `"Restricted"`,
+        `"restrcted"`, `""` — is stored verbatim and read back as an OPEN share. A typo in a caller
+        minted a link anyone authenticated could redeem, silently, while the caller believed they
+        had restricted it. Refusing an unknown mode is the whole fix; the caller finds out at mint
+        time instead of the recipient finding out later.
+
+        The other two are denial-of-service shaped rather than disclosure shaped, and both used to
+        be unbounded: a non-numeric `expires_in_sec` raised inside `int()` and became a 500 (an
+        unhandled exception on a public route), and neither the TTL nor `allowed_emails` had a
+        ceiling, so one request could plant a share lasting a century or a JSONB grant with a
+        million addresses in it — on the meeting row every read of that meeting loads."""
         if not isinstance(payload, dict):
             payload = {}
-        return (
-            str(payload.get("mode", "open")).strip() or "open",
-            payload.get("allowed_emails") or [],
-            int(payload.get("expires_in_sec", 86400) or 86400),
-        )
+
+        mode = str(payload.get("mode", "open")).strip() or "open"
+        if mode not in SHARE_MODES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'mode' must be one of {sorted(SHARE_MODES)} — got {mode!r}",
+            )
+
+        emails = payload.get("allowed_emails")
+        if emails is None or emails == "":
+            emails = []
+        if not isinstance(emails, list):
+            raise HTTPException(status_code=422, detail="'allowed_emails' must be a list")
+        if len(emails) > SHARE_MAX_ALLOWED_EMAILS:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"'allowed_emails' holds {len(emails)} entries; the maximum is "
+                        f"{SHARE_MAX_ALLOWED_EMAILS} — the list is stored on the meeting row and "
+                        "read back on every access check"),
+            )
+        emails = [str(e).strip() for e in emails if str(e).strip()]
+
+        raw_ttl = payload.get("expires_in_sec", SHARE_DEFAULT_TTL_SEC)
+        if raw_ttl in (None, ""):
+            raw_ttl = SHARE_DEFAULT_TTL_SEC
+        if isinstance(raw_ttl, bool):    # `True` is an int in python and is not a duration
+            raise HTTPException(status_code=422, detail="'expires_in_sec' must be a number")
+        try:
+            ttl = int(raw_ttl)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="'expires_in_sec' must be a number")
+        # CLAMPED, not refused: an out-of-range TTL is a caller asking for something we will not
+        # give, not a malformed request, and the safe direction is the shorter link. The floor
+        # keeps a share usable long enough to be redeemed at all.
+        ttl = max(SHARE_MIN_TTL_SEC, min(ttl, SHARE_MAX_TTL_SEC))
+        return mode, emails, ttl
 
     # --- POST /meetings/{meeting_id}/transcript-import → complete a meeting FROM A TRANSCRIPT.
     #

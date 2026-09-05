@@ -9,7 +9,13 @@
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
+// execFileSync, not execSync, wherever a command carries a PATH we computed (ROOT is
+// process.cwd(), so every such path is an environment value): an argv array is handed to
+// execve directly, so there is no shell to reinterpret a space, a quote or a `;` in the
+// checkout path (CodeQL js/shell-command-injection-from-environment). The remaining execSync
+// calls are either constant command strings or genuine shell pipelines (grep … | grep -v …
+// || true), which need a shell by construction.
 import { createHash } from "node:crypto";
 import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
@@ -79,7 +85,7 @@ function findFile(dir, re) {
 // a Python service that stands up a FastAPI app (→ must answer gate:health). A worker carve
 // (agent-api: spawned by the runtime, liveness = workload lifecycle) builds no app → exempt.
 const hasFastApiApp = (d) => existsSync(join(d, "src")) && findFile(join(d, "src"), /\.py$/) &&
-  (() => { try { execSync(`grep -rql "FastAPI(" ${JSON.stringify(join(d, "src"))}`, { stdio: "pipe" }); return true; } catch { return false; } })();
+  (() => { try { execFileSync("grep", ["-rql", "FastAPI(", join(d, "src")], { stdio: "pipe" }); return true; } catch { return false; } })();
 const pyPackages = () => walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
 
 // a published contract is a `<domain>/contracts/X.vN` dir carrying JSON Schema file(s)
@@ -151,7 +157,7 @@ function gateIsolation() {
     .map((d) => [d, join(d, "scripts", "check-isolation.js")])
     .filter(([, s]) => existsSync(s));
   for (const [d, s] of found) {
-    try { execSync(`node ${JSON.stringify(s)}`, { stdio: "pipe" }); }
+    try { execFileSync("node", [s], { stdio: "pipe" }); }
     catch (e) { return fail([`isolation failed in ${rel(d)}: ${errText(e).slice(0, 300)}`]); }
   }
   console.log(`  ✓ gate:isolation — ${found.length} brick(s) checked`);
@@ -163,7 +169,7 @@ function gateGraph() {
   if (!packageDirs().length) { console.log("  ✓ gate:graph — no packages yet (green-on-empty)"); return true; }
   const targets = ["core", "integrations", "clients", "sdks", "schemas", "tools"]
     .filter((d) => existsSync(join(ROOT, d)));
-  try { execSync(`npx depcruise --config .dependency-cruiser.cjs --no-progress ${targets.join(" ")}`, { stdio: "pipe" }); }
+  try { execFileSync("npx", ["depcruise", "--config", ".dependency-cruiser.cjs", "--no-progress", ...targets], { stdio: "pipe" }); }
   catch (e) { return fail([`dependency-cruiser:\n${errText(e)}`]); }
   console.log("  ✓ gate:graph — acyclic + allowed-edges");
   return true;
@@ -176,7 +182,7 @@ function gateGraph() {
 // edges). A forbidden cross-package import → RED, with the file path. Green-on-empty.
 function gateIsolationPy() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
-  try { execSync(`node ${JSON.stringify(s)} --mode=isolation`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--mode=isolation"], { stdio: "pipe" }); }
   catch (e) { return fail([`python isolation:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:isolation-py — every Python sibling import is own-module, declared, or an allowed edge");
   return true;
@@ -189,7 +195,7 @@ function gateIsolationPy() {
 // with isolation-py (DRY). Green-on-empty.
 function gateGraphPy() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
-  try { execSync(`node ${JSON.stringify(s)} --mode=graph`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--mode=graph"], { stdio: "pipe" }); }
   catch (e) { return fail([`python graph:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:graph-py — Python cross-package edges acyclic + allow-listed");
   return true;
@@ -202,7 +208,7 @@ function gateGraphPy() {
 // Green-on-empty.
 function gateTestIsolation() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
-  try { execSync(`node ${JSON.stringify(s)} --mode=test-isolation`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--mode=test-isolation"], { stdio: "pipe" }); }
   catch (e) { return fail([`python test-isolation:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:test-isolation — no Python test imports a sibling module's internals (test lane gated, P2)");
   return true;
@@ -215,7 +221,7 @@ function gateTestIsolation() {
 function gateArchReport() {
   const s = join(ROOT, "scripts", "arch-report.mjs");
   if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
-  try { execSync(`node ${JSON.stringify(s)} --check`, { stdio: "pipe" }); }
+  try { execFileSync("node", [s, "--check"], { stdio: "pipe" }); }
   catch (e) { return fail([`arch-report:\n${errText(e).slice(0, 900)}`]); }
   console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
   return true;
@@ -249,7 +255,7 @@ function gateSchema() {
   );
   if (!contracts.length) { console.log("  ✓ gate:schema — no contracts yet (green-on-empty)"); return true; }
   for (const d of contracts) {
-    try { execSync(`node ${JSON.stringify(join(d, "validate.mjs"))} --check`, { stdio: "pipe" }); }
+    try { execFileSync("node", [join(d, "validate.mjs"), "--check"], { stdio: "pipe" }); }
     catch (e) { return fail([`schema ${rel(d)}:\n${errText(e)}`]); }
   }
   console.log(`  ✓ gate:schema — ${contracts.length} contract(s) conform (goldens ≡ schema)`);
@@ -352,7 +358,7 @@ function gateCompose() {
   try { execSync("docker info", { stdio: "pipe" }); }
   catch { console.log("  ✓ gate:compose — docker not available → skip (green-or-skip)"); return true; }
   if (!existsSync(runner)) return fail([`gate:compose — compose stack present but no readiness proof (deploy/compose/bin/stack-test missing)`]);
-  try { execSync(`bash ${JSON.stringify(runner)}`, { stdio: "pipe", env: { ...process.env, COMPOSE_DYNAMIC_PORTS: process.env.COMPOSE_DYNAMIC_PORTS || "1" } }); }
+  try { execFileSync("bash", [runner], { stdio: "pipe", env: { ...process.env, COMPOSE_DYNAMIC_PORTS: process.env.COMPOSE_DYNAMIC_PORTS || "1" } }); }
   catch (e) { return fail([`compose stack-readiness proof:\n${errText(e).slice(-3000)}`]); }
   console.log("  ✓ gate:compose — REAL compose stack proven bot-ready (health·auth·transcript·recording·control-plane)");
   return true;
@@ -406,7 +412,7 @@ function gateEvalBaseline() {
   const baseline = join(ROOT, "core", "meetings", "eval", "BASELINE.md");
   if (!existsSync(verify)) { console.log("  ✓ gate:eval-baseline — no worker-eval harness yet (green-on-empty)"); return true; }
   if (!existsSync(baseline)) return fail(["gate:eval-baseline — core/meetings/eval/BASELINE.md (recorded L4 ground truth) missing"]);
-  try { execSync(`bash ${JSON.stringify(verify)}`, { cwd: ROOT, stdio: "pipe" }); }
+  try { execFileSync("bash", [verify], { cwd: ROOT, stdio: "pipe" }); }
   catch (e) { return fail([`eval-baseline oracle self-test:\n${errText(e).slice(-1500)}`]); }
   console.log("  ✓ gate:eval-baseline — worker-L4 eval oracle self-test passes + BASELINE.md recorded (reusable instrument; live score is B:V1)");
   return true;
@@ -799,7 +805,7 @@ function gateExecutionEnv() {
   if (!existsSync(example)) return fail(["gate:execution-env — committed template deploy/execution-targets.example.json missing"]);
   const real = join(ROOT, "deploy", "execution-targets.json");
   const files = [example, ...(existsSync(real) ? [real] : [])];
-  try { execSync(`node ${JSON.stringify(v)} ${files.map((f) => `--file ${JSON.stringify(f)}`).join(" ")}`, { stdio: "pipe" }); }
+  try { execFileSync("node", [v, ...files.flatMap((f) => ["--file", f])], { stdio: "pipe" }); }
   catch (e) { return fail([`execution-env registry:\n${errText(e).slice(-1500)}`]); }
   console.log(`  ✓ gate:execution-env — ${files.length} registry file(s) conform to execution-targets.v1${existsSync(real) ? "" : " (template only — real registry gitignored/absent)"}`);
   return true;
@@ -848,10 +854,26 @@ function gateDataflow() {
   // without registering it here and CI goes red.
   const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
   const required = new Set();
+  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const dom of lsdirs("core")) {
     for (const s of lsdirs(`core/${dom}/services`)) required.add(`core/${dom}/services/${s}`);
     for (const m of lsdirs(`core/${dom}/modules`)) required.add(`core/${dom}/modules/${m}`);
     for (const c of lsdirs(`core/${dom}/contracts`)) if (/\.v\d+$/.test(c)) required.add(`core/${dom}/contracts/${c}`);
+    // A domain laid out as a single package — one pyproject.toml over core/<dom>/src/<pkg>… — has
+    // neither services/ nor modules/, so the two loops above ask for NOTHING from it and its modules
+    // could not drift into existence unregistered: they were never required in the first place.
+    // core/flows was exactly that. It holds seven top-level packages and the chart carried three, and
+    // the completeness check — the anti-drift guard — reported nothing, because you cannot detect
+    // drift from a set you never built. Walk core/<dom>/src/* for those domains.
+    //
+    // The one exemption: a domain whose `core/<dom>/src` is ITSELF a registered node (core/runtime,
+    // whose `runtime` service node points there) ships its src as one unit, and asking for its
+    // packages as well would demand a second node for the same code. Registering the dir is the
+    // domain saying "this src is one thing"; not registering it is what leaves the packages
+    // individually accountable.
+    if (lsdirs(`core/${dom}/services`).length || lsdirs(`core/${dom}/modules`).length) continue;
+    if (modelPaths.has(`core/${dom}/src`)) continue;
+    for (const p of lsdirs(`core/${dom}/src`)) required.add(`core/${dom}/src/${p}`);
   }
   for (const c of lsdirs("deploy/contracts")) if (/\.v\d+$/.test(c)) required.add(`deploy/contracts/${c}`);
   // a client that is composed-of (a "mapped" client, e.g. terminal) must register every src/* concern
@@ -863,7 +885,6 @@ function gateDataflow() {
     if (clNode && containers.has(clNode["unique-id"]))
       for (const d of lsdirs(`clients/${cl}/src`)) required.add(`clients/${cl}/src/${d}`);
   }
-  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const r of [...required].sort()) if (!modelPaths.has(r)) errs.push(`completeness: '${r}' exists on disk but is not registered in architecture.calm.json`);
   for (const n of nodes) for (const m of (n.metadata || [])) if (m.path && !existsSync(join(ROOT, m.path))) errs.push(`completeness: node '${n["unique-id"]}' points at missing path '${m.path}'`);
 
@@ -955,6 +976,16 @@ function gateDataflow() {
 const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // process-plumbing vars a surface may set without a declaration entry (kept TIGHT + documented):
 // interpreter/runtime wiring only, never product config.
+// An entry here is a hole in the SSOT, so it earns its place by a surface that actually sets it and
+// a service that actually reads it. `HOME` and `TMPDIR` were added by 01-foundation with neither and
+// were removed again on the 0.12.27 candidate: no deploy surface sets them and no adopted service
+// reads them, so all they did was pre-authorise two undeclared reads of values an operator controls.
+// HOME and TMPDIR are back (0.12.27). The candidate dropped them as dead entries, and that was
+// true of ITS tree and false of the merged one: `core/agent/llm/claude_code.py` reads HOME to
+// find `~/.claude`, and `core/agent/worker/friction.py` reads TMPDIR for its fallback log —
+// both line-only files, both with a literal fallback. Neither is deployment configuration: a
+// process environment every OS supplies is exactly what this allow-list is for, and declaring
+// them in a service config.v1 would assert an operator must set them.
 const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ", "HOME", "TMPDIR"]);
 // literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
 const CONFIG_READ_RES = [
@@ -1150,7 +1181,7 @@ function gateConfigContract() {
     const declPath = join(ROOT, svc.decl);
     if (!existsSync(declPath)) { errs.push(`${svc.service}: declaration missing (${svc.decl})`); continue; }
     // 1. schema conformance (the contract's own validator — same oracle as gate:schema)
-    try { execSync(`node ${JSON.stringify(join(CONFIG_CONTRACT_DIR, "validate.mjs"))} --check --file ${JSON.stringify(declPath)}`, { stdio: "pipe" }); }
+    try { execFileSync("node", [join(CONFIG_CONTRACT_DIR, "validate.mjs"), "--check", "--file", declPath], { stdio: "pipe" }); }
     catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${errText(e).slice(-800)}`); continue; }
     // 2. the vendored preflight is the canonical one, byte for byte
     if (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical)

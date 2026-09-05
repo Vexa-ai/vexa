@@ -18,6 +18,7 @@ onboarding completing without the event — because that is a person who is sign
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -39,7 +40,9 @@ def published(monkeypatch):
     """Every event identity published, recorded at the seam. No network."""
     sent = []
 
-    def fake(event_type, source_event_id, subject_refs, **kw):
+    # `publish` is a coroutine function (A8 — it is awaited from `create_user`, never blocking the
+    # loop), so the seam that stands in for it must be one too.
+    async def fake(event_type, source_event_id, subject_refs, **kw):
         sent.append({"event_type": event_type, "source_event_id": source_event_id,
                      "subject_refs": subject_refs})
         return True
@@ -197,4 +200,4 @@ def test_the_publisher_itself_swallows_everything(monkeypatch):
     """Asserted on the publisher, not only through the route: the next caller of `publish` gets the
     same guarantee without having to know to wrap it."""
     monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://127.0.0.1:9")   # nothing listens
-    assert events_mod.publish("onboarding.completed", "x", {"subject": "1"}) is False
+    assert asyncio.run(events_mod.publish("onboarding.completed", "x", {"subject": "1"})) is False

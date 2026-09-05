@@ -35,10 +35,12 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from . import bind as bind_mod
 from . import discover as discover_mod
+from . import notices as notices_mod
 from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
+from .tool_errors import install_structured_tool_errors, unwrap_detail
 
 _DEFAULT_GATEWAY_URL = "http://gateway:8000"
 
@@ -209,13 +211,23 @@ def _caller_fingerprint(api_key: str) -> str:
     """A pseudonymous, stable handle for the caller — NEVER the API key itself.
 
     Deliberate choice: the ticket sink is an operator surface, not an auth boundary, so it
-    receives a salted SHA-256 prefix of the key instead of the credential. That is enough to
+    receives a salted keyed FINGERPRINT of the key instead of the credential. That is enough to
     join two tickets from the same account (and, with the same salt, to match an account
     server-side) while a leak of the sink or its logs leaks no usable Vexa credential.
-    The raw key is forwarded to the GATEWAY only, exactly as every other tool does.
+    The raw key is forwarded to the GATEWAY only, exactly as every other tool does. The raw key
+    is never stored, logged, or returned.
+
+    ``blake2b`` keyed with the deployment salt, not a bare SHA-256: this is a keyed fingerprint,
+    not password storage (there is nothing here to verify a secret AGAINST), and the keyed
+    construction is the right primitive for it — a plain digest of a low-entropy input is
+    guessable by whoever holds the salt-free hash.
     """
     salt = os.getenv("VEXA_TICKET_FINGERPRINT_SALT") or _DEFAULT_CALLER_SALT
-    return hashlib.sha256(f"{salt}|{api_key}".encode("utf-8")).hexdigest()[:16]
+    # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing]: this is a keyed
+    # fingerprint of a credential used as a sink handle, never password storage or verification —
+    # the key is the secret and the digest is never compared against user input; a slow hash here
+    # would only slow every ticket. Reviewed 2026-09-05 (v0.12.27 car 11).
+    return hashlib.blake2b(api_key.encode("utf-8"), key=salt.encode("utf-8")[:64], digest_size=8).hexdigest()  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing] keyed fingerprint, not password storage — see the note above
 
 # Standard bearer-token auth parsing. We treat the token value as the Vexa API key.
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -455,6 +467,18 @@ _ID_DESC = (
 )
 _LEGACY_PLATFORM_DESC = "DEPRECATED alias for `platform`. Use `platform`."
 _LEGACY_ID_DESC = "DEPRECATED alias for `native_meeting_id`. Use `native_meeting_id`."
+# A room code is not a meeting. `platform` + `native_meeting_id` names the ROOM, and a Google Meet
+# link is reused for every session of a recurring call, so the pair resolves to the caller's NEWEST
+# row on that link — the only session of a recurring meeting an agent could reach was the latest
+# one. It could read an older transcript (list_meetings returns every row) and then had nowhere to
+# write what it learned back to (fr_b6340167da32b8b6). The row id is the identity a meeting always
+# has, every tool already returns it, and it never moves.
+_DB_ID_DESC = (
+    "The meeting's exact database row id — the `meeting_db_id` (or `id`) that list_meetings, "
+    "request_meeting_bot, annotate_meeting and search_transcripts return. Takes precedence over "
+    "`platform` + `native_meeting_id`, which name the ROOM and therefore resolve to the NEWEST "
+    "meeting held on that link. Use it whenever you mean one specific past meeting."
+)
 
 
 #: The platforms the link parser can actually produce. A value outside this set is a caller
@@ -524,17 +548,25 @@ def _resolve_identity(
     native_meeting_id: Optional[str],
     legacy_platform: Optional[str],
     legacy_id: Optional[str],
+    *,
+    accepts_db_id: bool = False,
 ) -> tuple[str, str]:
-    """Accept the canonical names or the deprecated aliases; fail with a message you can act on."""
+    """Accept the canonical names or the deprecated aliases; fail with a message you can act on.
+
+    Only reached when no `meeting_db_id` was supplied, so on the tools that take one the refusal
+    names it too — a caller looking at a row they already hold should be told the shortest way in.
+    """
     mid = (native_meeting_id or legacy_id or "").strip()
     plat = (platform or legacy_platform or "google_meet").strip()
     if not mid:
+        also = (" Or pass `meeting_db_id` — the exact row id every tool returns, which addresses "
+                "ONE meeting rather than the newest one in a room." if accepts_db_id else "")
         raise HTTPException(
             status_code=422,
             detail=(
                 f"{tool}: missing the meeting id. Pass `native_meeting_id` (the field "
                 f"request_meeting_bot / list_meetings / parse_meeting_link return), optionally "
-                f"with `platform`. Received: native_meeting_id=None, meeting_id=None."
+                f"with `platform`.{also} Received: native_meeting_id=None, meeting_id=None."
             ),
         )
     return plat, mid
@@ -543,6 +575,9 @@ def _resolve_identity(
 # What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
 # this is the map: what Vexa is, and the one sequence that matters.
 VEXA_INSTRUCTIONS = """\
+Start every session with whats_waiting: it is the queue of what your person's Vexa needs right now, \
+and for a new person it holds their first step. Follow what it says before anything else.
+
 Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi) and \
 gives you the transcript while the meeting is still running.
 
@@ -632,9 +667,13 @@ def create_app(
                     return {}
                 return response.json()
         except httpx.HTTPStatusError as http_err:
+            # THE ENVELOPE STOPS DOUBLING HERE. Upstream already answers `{"detail": {…}}`; handing
+            # that whole body to `HTTPException(detail=…)` makes THIS service answer
+            # `{"detail": {"detail": {…}}}`, and every hop that re-raises adds another layer. Unwrap
+            # to the innermost object so the depth is a constant one, whatever the chain did.
             detail: Any
             try:
-                detail = http_err.response.json()
+                detail = unwrap_detail(http_err.response.json())
             except Exception:
                 detail = http_err.response.text
             raise HTTPException(status_code=http_err.response.status_code, detail=detail)
@@ -853,6 +892,7 @@ def create_app(
     async def get_meeting_transcript(
         native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
         platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_db_id: Optional[int] = Query(None, description=_DB_ID_DESC),
         since_index: Optional[int] = Query(
             None,
             ge=0,
@@ -870,15 +910,22 @@ def create_app(
         meeting as well as after — poll it to follow a live one.
 
         Identify the meeting with `platform` + `native_meeting_id` — the exact field names
-        request_meeting_bot, list_meetings and parse_meeting_link hand back.
+        request_meeting_bot, list_meetings and parse_meeting_link hand back — or with
+        `meeting_db_id` for ONE exact past meeting. The pair names the ROOM, so on a recurring
+        link it returns the NEWEST session held there; `meeting_db_id` never moves.
 
         To follow a live meeting cheaply, pass `since_index` = the `next_index` from your previous
         call; you get only what has been said since, instead of the whole transcript every time.
         """
-        plat, mid = _resolve_identity(
-            "get_meeting_transcript", platform, native_meeting_id, meeting_platform, meeting_id
-        )
-        result = await make_request("GET", f"{base_url}/transcripts/{plat}/{mid}", api_key)
+        if meeting_db_id is not None:
+            url = f"{base_url}/transcripts/by-id/{meeting_db_id}"
+        else:
+            plat, mid = _resolve_identity(
+                "get_meeting_transcript", platform, native_meeting_id, meeting_platform,
+                meeting_id, accepts_db_id=True,
+            )
+            url = f"{base_url}/transcripts/{plat}/{mid}"
+        result = await make_request("GET", url, api_key)
 
         # The cursor is applied here rather than at the gateway: the scarce resource is the
         # CALLER's context window, not the hop to meeting-api. `total_segments`/`next_index` are
@@ -907,7 +954,11 @@ def create_app(
         offset: int = Query(0, ge=0),
         platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
         native_meeting_id: Optional[str] = Query(
-            None, description="Restrict the search to ONE meeting. " + _ID_DESC
+            None, description="Restrict the search to ONE ROOM — every session held on that "
+                              "link. " + _ID_DESC
+        ),
+        meeting_db_id: Optional[int] = Query(
+            None, description="Restrict the search to ONE exact meeting. " + _DB_ID_DESC
         ),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
@@ -931,6 +982,10 @@ def create_app(
             params["platform"] = platform
         if native_meeting_id:
             params["native_meeting_id"] = native_meeting_id
+        if meeting_db_id is not None:
+            # Sent under the REST spelling. The row id travels as `meeting_db_id` on every tool
+            # surface precisely so it can never be confused with the platform's string id.
+            params["meeting_id"] = meeting_db_id
         return await make_request("GET", f"{base_url}/transcripts/search", api_key, params=params)
 
     # --- annotations: the caller's OWN description of a meeting -----------------------------
@@ -943,11 +998,17 @@ def create_app(
         data: AnnotateMeeting,
         native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
         platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_db_id: Optional[int] = Query(None, description=_DB_ID_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
         Set the meeting's title and/or attach arbitrary metadata to it. Works DURING a live meeting
         and after it has ended.
+
+        To annotate ONE PAST meeting, pass `meeting_db_id`. `platform` + `native_meeting_id` name
+        the ROOM, and a recurring link is the same room every week, so the pair always writes to
+        the NEWEST meeting held there — which is not the one you just read if you read an older
+        one.
 
         `metadata` is your own JSON — a CRM id, a ticket, tags, your own summary, anything.
         It always MERGES key-wise, and sending a key as null deletes exactly that key. You can
@@ -958,13 +1019,19 @@ def create_app(
         `list_meetings(metadata_filter='{"your_key":"your_value"}')` — note the filter is a JSON
         STRING, not an object.
         """
-        plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id, None, None)
+        plat = mid = None
+        if meeting_db_id is not None:
+            url = f"{base_url}/meetings/{meeting_db_id}/annotate"
+        else:
+            plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id,
+                                          None, None, accepts_db_id=True)
+            url = f"{base_url}/meetings/{plat}/{mid}/annotate"
         body: Dict[str, Any] = {}
         if data.title is not None:
             body["title"] = data.title
         if data.metadata is not None:
             body["metadata"] = data.metadata
-        row = await make_request("POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body)
+        row = await make_request("POST", url, api_key, body)
 
         # Return WHAT WAS WRITTEN, not the whole meeting row. Annotating is a small write to one
         # field; the full row carries object-storage paths, a playback URL and a reference to a
@@ -975,9 +1042,12 @@ def create_app(
             return row
         row_data = row.get("data") if isinstance(row.get("data"), dict) else {}
         return {
+            # The row's own identity, falling back to what was asked for. When the caller
+            # addressed by db id there is no pair to fall back TO, so the row is the only source —
+            # which is the right way round: it is what was actually written.
             "platform": row.get("platform", plat),
             "native_meeting_id": row.get("native_meeting_id", mid),
-            "meeting_db_id": row.get("id"),
+            "meeting_db_id": row.get("id", meeting_db_id),
             "status": row.get("status"),
             "title": row_data.get("title"),
             "metadata": row_data.get("metadata", {}),
@@ -1021,13 +1091,19 @@ def create_app(
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(
-        limit: int = 50,
-        offset: int = 0,
-        meeting_db_id: Optional[int] = None,
+        limit: int = Query(50, ge=1, le=200, description="Max recordings to return (default 50)."),
+        offset: int = Query(0, ge=0, description="Number of recordings to skip."),
+        meeting_db_id: Optional[int] = Query(
+            None, description="Only this meeting's recordings (the `meeting_db_id` other tools return)."
+        ),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        List recordings for the authenticated user. Wraps: GET /recordings
+        List the authenticated user's recordings, NEWEST FIRST, one page at a time.
+        Wraps: GET /recordings
+
+        Rows are summaries — id, meeting_id, status, timestamps, duration and the playback URL.
+        Call get_recording(recording_id) for one recording's full media-file detail.
         """
         params: Dict[str, Any] = {"limit": limit, "offset": offset}
         if meeting_db_id is not None:
@@ -1245,6 +1321,12 @@ def create_app(
     # AND IT FAILS THE BOOT. Every rule in `manifest.py` is a failure that is otherwise silent — a
     # domain's tools quietly missing, one name claimed twice, a manifest naming a route its service
     # does not serve. A server that started anyway would answer `tools/list` with a lie.
+    #
+    # A CONFIGURED DOMAIN THAT NEVER ANSWERS IS ONE OF THOSE, and it did NOT fail the boot until
+    # now: `discover` swallowed every exception, so a refusing port cost a whole domain its tools
+    # permanently and quietly. It refuses by name instead — after waiting the domain out, because a
+    # cold `compose up` starts everything at once and the first refused connection is a race, not a
+    # fault. That wait is why this call can take a few seconds on a cold start; see `discover`.
     app.state.assembly = None
     _assembly_env = assembly_env if assembly_env is not None else os.environ
     if not _assembly_env.get("VEXA_MCP_ASSEMBLY_OFF"):
@@ -1286,5 +1368,15 @@ def create_app(
     # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE
     # stream and never completes that buffer — install a passthrough (#921).
     install_streaming_http_transport(mcp)
+    # An upstream refusal reaches the agent as ONE string; fastapi-mcp writes it as prose with a JSON
+    # document inside. Render it structurally instead — the actionable words first, the body once.
+    install_structured_tool_errors(mcp)
+    # STANDING NOTICES ride out on the meeting tools' results (`notices.py`) — the ones that
+    # answered and the ones that were REFUSED (#1549). An agent reads what it asked for; a fact that
+    # stays true between calls has to travel on that, or it travels on a tool somebody has to
+    # remember to call — and a refusal is the result it most has to act on. Never an error, never a
+    # new tool: when the deployment names no flows domain, or it does not answer inside two seconds,
+    # the result is the result and the refusal is the refusal.
+    notices_mod.install(mcp, transport=transport, env=_assembly_env)
     app.state.mcp = mcp
     return app

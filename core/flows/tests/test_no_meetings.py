@@ -141,7 +141,10 @@ def test_every_meetings_url_is_built_from_the_access_time_door():
     cleanly and fail at the first call in a deployment nobody tests."""
     text = (SRC / "flows_steps" / "meeting.py").read_text()
     assert "{GATEWAY}" not in text, "a call site still names the module-level door constant"
-    assert text.count("meetings_door()") == 11, "the eleven sites resolve the door per call"
+    # TWELVE after 0.12.27: the candidate's `transcript_segment_count` — the read that answers
+    # "did this meeting transcribe?" without joining the words — is a twelfth call site. The
+    # property is per-call door resolution, not the count; the count is recomputed, never guessed.
+    assert text.count("meetings_door()") == 12, "the twelve sites resolve the door per call"
 
 
 # ── the declarations on the steps ────────────────────────────────────────────────────────────

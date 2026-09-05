@@ -252,19 +252,17 @@ def build_router(
     authority=None,
     *,
     transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
-    fetch_bot_context: "Optional[Callable[[int], Awaitable[Optional[dict]]]]" = None,
 ) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
 
-    ``transcript_stream_purge`` (redis-backed in prod, None offline) clears a fresh meeting's transcript
-    stream so it never inherits a reused row id's stale data — see ``request_bot``.
-
-    ``fetch_bot_context`` is the per-user spawn context from identity — the SAME edge the auto-join
-    sweep already takes (``auto_join.py:324``). It is here so that the person's default bot name is
-    resolved by the domain that OWNS the bot, on every path a bot is spawned, rather than by each
-    caller out of a store of its own: that is how one fact came to have three (founder ruling,
-    2026-09-02 — no fourth store). None = no identity edge configured (offline / self-host), which
-    is a smaller answer and never an error."""
+    NO ``fetch_bot_context`` HERE, on purpose. The person's default bot name is still resolved by
+    the domain that owns the bot, on every path a bot is spawned (founder ruling, 2026-09-02 — no
+    fourth store) — but ``request_bot`` ALREADY fetches that person's whole spawn context, on this
+    same request, to resolve the transcription backend and the capture-signal decision. A
+    router-level fetcher made `POST /bots` ask identity for the same body TWICE, with two different
+    timeouts (10s here, 5s there), for one string: up to +15s on a path a person is waiting on,
+    while each fetcher's comment claimed to be the only one. The name now comes out of the context
+    the service already has (``service._bot_name_from_context``)."""
     router = APIRouter()
 
     @router.post("/bots", status_code=201)
@@ -449,21 +447,12 @@ def build_router(
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
 
-        # THE NAME THIS PERSON'S BOT SHOWS UP AS. Precedence is auto-join's, unchanged: an explicit
-        # name on THIS request, then this person's default from identity, then the deployment's.
-        # Identity is not asked when the caller already named the bot — one fewer hop on a path a
-        # person is waiting on, and the answer could not change anything.
-        #
-        # A FAILED LOOKUP NEVER STOPS THE SPAWN. A name is a nicety; joining the call is the
-        # product, and failing it because a preference read timed out trades the thing they asked
-        # for against the label on it.
+        # THE NAME THIS PERSON'S BOT SHOWS UP AS — an explicit name on THIS request, and nothing
+        # else here. `request_bot` fills in this person's default from identity out of the bot
+        # context it already fetches (one hop, three readers: transcription backend, capture-signal
+        # decision, bot name), and the deployment default underneath that. A FAILED LOOKUP NEVER
+        # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
         bot_name = body.get("bot_name")
-        if not bot_name and fetch_bot_context is not None:
-            try:
-                ctx = await fetch_bot_context(user_id)
-                bot_name = (ctx or {}).get("bot_name") or None
-            except Exception:  # noqa: BLE001
-                bot_name = None
 
         try:
             meeting = await request_bot(
@@ -504,12 +493,22 @@ def build_router(
             # refused naming the conflicting meeting (per-identity serialization, #725).
             raise HTTPException(status_code=409, detail=str(e))
         except ServiceAuthorityDenied as e:
+            # `code` and `reason` are for a program to branch on; `message` and `action_url` are
+            # for whoever has to DO something about it. This service authors neither of the second
+            # pair — it carries what the deciding service said, so a deployment can change what it
+            # tells people without an OSS release, and a deployment that says nothing is unchanged
+            # (both fields OMITTED, never null).
+            #
+            # `reason` is passed through WHATEVER it says. There is no allow-list here and there
+            # must not be one: a reason this build has never heard of still reaches the caller
+            # intact, because the alternative is a refusal that no surface can explain.
             raise HTTPException(
                 status_code=403,
                 detail={
                     "code": "service_not_allowed",
                     "reason": e.reason,
                     "decision_id": e.decision_id,
+                    **e.caller_fields(),
                 },
             )
         except ServiceAuthorityUnavailable:

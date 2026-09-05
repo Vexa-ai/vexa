@@ -35,7 +35,14 @@ export DB_PASSWORD="${DB_PASSWORD:-postgres}"
 # ─── Defaults for every var supervisord interpolates (empty is fine; must be SET) ─────────────────
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
-export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-changeme}}"
+# The admin tier, on the same terms as the internal tier below and for a LARGER blast radius:
+# this token mints an API key for ANY user and HS256-signs every per-spawn MeetingToken. It
+# defaulted to the published literal `changeme`, so every lite stack nobody configured shared one
+# admin secret that is in this repository (A19). lite is ONE container, so the fallback can be
+# MINTED per boot: admin-api, meeting-api, the dashboard, the terminal and provision-key all read
+# it from this same environment. Set ADMIN_API_TOKEN (or ADMIN_TOKEN) explicitly when something
+# outside the container has to present it.
+export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}}"
 # The internal tier. lite is ONE container, so every service that shares this secret shares this
 # process's environment — which means the fallback can be MINTED per boot instead of shipped as
 # a literal. `lite-internal-secret` was published in this repository and was the exact value

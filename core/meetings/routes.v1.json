@@ -92,6 +92,13 @@
     },
     {
       "method": "POST",
+      "path": "/meetings/{meeting_id}/annotate",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/meetings/{meeting_id}/share",
       "scopes": [
         "tx"

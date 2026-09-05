@@ -171,3 +171,49 @@ def test_ordinary_arguments_are_untouched():
     m.validate(_manifest(tools=[
         {"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
          "route": {"method": "GET", "path": "/x"}, "arguments": ["since", "limit", "status"]}]))
+
+
+# ── a domain name is MEMBERSHIP, and a cross-domain reach is DECLARED ────────────────────────────
+#
+# Two rules that used to be one. `DOMAINS` stays a closed set: an assembler that accepts any
+# well-shaped name cannot tell a typo from a mount, and `deployed` is not a spell-checker. What is
+# NOT decided by the name any more is the cross-domain exemption — that used to read
+# `if domain == "rehearse"`, which put one deployment's harness in the assembler and meant a second
+# harness could not ship without a change landing here first.
+
+def test_a_name_that_could_not_be_a_domain_is_refused():
+    for bad in ("Flows", "flows api", "9flows", "", "flows/../identity", None, 7, "f" * 40, "seats"):
+        doc = _manifest(tools=[])
+        doc["domain"] = bad
+        with pytest.raises(m.ManifestError, match="domain"):
+            m.validate(doc)
+
+
+def test_a_required_domain_must_be_a_domain_this_assembler_knows():
+    with pytest.raises(m.ManifestError, match="composition has an owner"):
+        m.validate(_manifest(tools=[
+            {"name": "x", "identity": "user", "auth": "subject",
+             "requires": ["identity", "../admin"], "route": {"method": "GET", "path": "/x"}}]))
+
+
+def test_a_manifest_that_composes_across_domains_declares_it_rather_than_being_recognised():
+    """The cross-domain exemption used to be `if domain == "rehearse"`. A manifest whose job IS
+    driving every door says so on the record, and every other manifest is unchanged."""
+    tools = [{"name": "rehearsal", "identity": "admin", "auth": "subject",
+              "requires": ["identity", "meetings", "flows"],
+              "route": {"method": "POST", "path": "/rehearse"}}]
+    with pytest.raises(m.ManifestError, match="composition has an owner"):
+        m.validate(_manifest(domain="rehearse", base_url_env="REHEARSE_API_URL", tools=tools))
+    m.validate(_manifest(domain="rehearse", base_url_env="REHEARSE_API_URL", composes=True,
+                         tools=tools))
+
+
+def test_declaring_a_composition_does_not_buy_past_membership():
+    """The two rules are independent: `composes` opens the door BETWEEN domains, it does not make
+    an unknown name into one. Otherwise the closed set would be advisory."""
+    doc = _manifest(domain="seats", base_url_env="SEATS_API_URL", source="mounted", tools=[
+        {"name": "seats_list", "identity": "admin", "auth": "subject",
+         "requires": ["identity", "seats"], "route": {"method": "GET", "path": "/seats"}}])
+    doc["composes"] = True
+    with pytest.raises(m.ManifestError, match="domain"):
+        m.validate(doc)
