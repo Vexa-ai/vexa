@@ -357,6 +357,29 @@ test("v0.12.25 canonical packet binds the rc.1 train candidate", () => {
   );
 });
 
+test("v0.12.27 canonical packet binds the rc.3 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.27/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "b1dcb262b7d55048fddf2859758540035e9c70da57aa9af597a64fe8896ea0d6",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.27");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.12.27-rc.3");
+  assert.equal(map.build_source, "78be718f940a68253a8cd0188e7cfe8edd51d41c");
+  assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:e4be25d82b29b3bda1a50a33bd7fcc7db1b715dbfa887dc991819e7b1f581537");
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
+  );
+});
+
 test("v0.12.26 canonical packet binds the rc.1 train candidate", () => {
   const raw = readFileSync(
     new URL("../releases/v0.12.26/candidate-images.json", import.meta.url),
