@@ -3,7 +3,7 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.26 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.27 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
 > 📌 **These docs reflect Vexa `v0.12.26`** — the current release candidate control-plane. Older self-hosts
@@ -1047,6 +1047,80 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
 - **Custom STT: JSON-only Voxtral models now transcribe meetings.** Vexa negotiates down from
   `verbose_json` to `json` once when a backend rejects verbose output, while Whisper backends keep
   their richer segment metadata. See [Use a custom STT endpoint](/how-to/custom-stt).
+
+- **Two flows names change, both honoured for one release (#1456).** admin-api reads
+  `VEXA_FLOWS_API_URL`; the bare `FLOWS_API_URL` still works and the new name wins when both are
+  set. flows-api's operator key travels as `X-Flows-Operator-Key`; `X-Flows-Admin-Key` is still
+  accepted and warns once per process. The old name read as admin-api's token, which it never was —
+  a start script once carried `changeme` for it on exactly that misreading. Migrate before 0.12.28.
+
+- **Workflows: three new services and ten Postgres tables (#1456).** `flows-api`, `flows-worker` and
+  the optional `flows-mailbox` (one image, three commands) run durable product workflows — a fact
+  from the outside world becomes one reaction row, a worker runs one step and records a receipt.
+  They share the stack's Postgres and add ten tables of their own; no message broker, no scheduler.
+  `flows-worker` is not behind a profile: a deployment that admits facts and never advances them is
+  the failure this shape exists to avoid. See [Workflows](/flows/overview) and
+  [Operating workflows](/flows/operations).
+
+- **The gateway strips authority headers by family, not by name (#1456).** A public client could
+  previously send `x-internal-secret` — the value shipped in `docker-compose.yml` — and be believed
+  by the internal tier, because the strip was an eight-name list of `x-user-*` spellings. Any header
+  beginning `x-user-`, `x-internal-` or `x-vexa-internal-`, plus `x-admin-api-key` and
+  `x-gateway-verified`, is now dropped from every client request. **Upgrade the gateway with, or
+  before, the services behind it.**
+
+- **A person's settings live in identity, not in their workspace (#1456).** Timezone and the mail
+  switches are read from admin-api rather than from a `.settings.json` file in the workspace, so one
+  answer serves every service. **Existing deployments must run the one-shot import** — an
+  operator-triggered migration on admin-api reads the old files in — or everyone starts on the
+  defaults: mail on, clock in UTC.
+
+- **Breaking: boot refuses the published placeholder secrets (#1456).** A service whose
+  `INTERNAL_API_SECRET` is one of the literals printed in this repo (`vexa-internal-secret`,
+  `lite-internal-secret`, `changeme`, …) now stops at startup naming the variable, instead of
+  running on a secret every reader of the source already has. Generate one per deployment
+  (`openssl rand -hex 32`) and set the same value on every service before upgrading. Vexa Lite mints
+  a random one on each boot and needs nothing set. `VEXA_FLOWS_API_KEY` is refused the same way and
+  has no default at all. See [Configuration](/configuration).
+
+- **Search your transcripts, annotate a meeting, share by id (#1456).** `GET /transcripts/search`
+  runs full-text search over your own segments (the index builds itself on first boot, without
+  locking the table). `POST /meetings/{id}/annotate` attaches a title and arbitrary metadata to a
+  meeting during or after it, and `GET /meetings?metadata=` filters on what you wrote (16 KB and 64
+  keys per meeting). Meetings can now be addressed by their row id — `POST /meetings/{id}/share`
+  beside the existing platform/native pair. See [Meetings API](/api/meetings).
+
+- **`whats_waiting`, onboarding and friction reporting over MCP (#1532, #1545).** An agent asks
+  `whats_waiting` at the start of a session and gets what its person's Vexa needs right now, each
+  item carrying the sentence to say; a person with no meeting yet gets a first step instead of an
+  empty queue. `report_friction` files what did not work — no field is required and no value a
+  caller can send is refused — and `friction_so_far` reads your own reports back. See
+  [Authoring workflows](/flows/authoring).
+
+- **Standing notices ride along, and refusals arrive as structure (#1546, #1551).** An item whose
+  copy declares itself a standing notice now travels on the meeting tools' own results — and on
+  their refusals — so an agent hears it without going looking; `GET /queue/notices` asks for just
+  those sentences. A refused tool call reaches the agent as fields (`reason`, `message`,
+  `action_url`, the upstream body) instead of prose with JSON inside it. **Anything scraping the old
+  single-sentence error text needs updating.**
+
+- **A refusal carries the deciding service's own words (#1550).** When a service declines a request
+  it returns `message` and `action_url` alongside the reason, and the API and terminal render those
+  verbatim rather than mapping the reason onto copy of their own. A deployment's refusals now say
+  what that deployment means, not what this repo once guessed.
+
+- **The agent surface is unchanged (#1553).** `/agent/*` keeps the seven routes it served at
+  0.12.26, now declared in `core/agent/routes.v1.json` like every other domain. Compose keeps its
+  default `AGENT_API_URL`; a deployment that leaves the variable unset serves no agent surface and
+  answers `404` there.
+
+- **Meeting links are matched on the exact hostname (#1553).** `parse_meeting_link` and the
+  pasted-link/calendar parser used to decide the platform with a substring test, so
+  `teams.live.com.evil.example` and `notzoom.us` were read as Teams and Zoom. They now match the
+  hostname exactly, or as an explicit subdomain — vanity and government tenancies
+  (`us02web.zoom.us`, `company.zoom.us`, `frbmeetings.zoomgov.com`, `contoso.teams.microsoft.com`)
+  are unaffected, and a look-alike hostname is refused instead of sending a bot somewhere on its
+  say-so. See [MCP tools](/mcp).
 
 ## Versioning
 
