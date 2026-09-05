@@ -163,7 +163,13 @@ def build_router(
         limit: int = Query(20, ge=1, le=100),
         offset: int = Query(0, ge=0),
         platform: Optional[str] = Query(None, description="Restrict to one platform."),
-        native_meeting_id: Optional[str] = Query(None, description="Restrict to one meeting."),
+        native_meeting_id: Optional[str] = Query(
+            None, description="Restrict to one ROOM — every session held on that link."),
+        meeting_id: Optional[int] = Query(
+            None, description=(
+                "Restrict to one exact meeting ROW (the `meeting_db_id` every hit carries). "
+                "Wins over native_meeting_id, which names a room and not a meeting."
+            )),
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
@@ -172,6 +178,7 @@ def build_router(
         hits = await store.search_transcripts(
             user_id, q, limit=limit, offset=offset,
             platform=platform, native_meeting_id=native_meeting_id,
+            meeting_db_id=meeting_id,
         )
         log_event(
             "transcripts_searched", audience="user", span="transcripts.search",
@@ -659,21 +666,10 @@ def build_router(
     # replace would let any caller destroy annotations written by another agent — or by the human
     # — that it never saw and could not have known about. Merge plus explicit nulls expresses
     # every legitimate edit while making "corrupt what you did not write" unrepresentable.
-    @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
-    async def annotate_native_meeting(
-        platform: str,
-        native_meeting_id: str,
-        request: Request,
-        x_user_id: Optional[str] = Header(default=None),
-    ):
-        user_id = _resolve_user_id(x_user_id)
-        try:
-            payload = await request.json()
-        except Exception:
-            raise HTTPException(status_code=422, detail="invalid JSON body")
+    def _annotation_from(payload) -> tuple:
+        """``(title, metadata)`` off an annotate body, or the 422 that says what to send."""
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
-
         title = payload.get("title")
         if title is not None and not isinstance(title, str):
             raise HTTPException(status_code=422, detail="'title' must be a string")
@@ -685,14 +681,36 @@ def build_router(
                 status_code=422,
                 detail="nothing to annotate: send 'title' and/or 'metadata'",
             )
+        return title, metadata
 
-        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
-        if meeting_id is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
-            )
+    # --- POST /meetings/{meeting_id}/annotate → the SAME write, addressed by the identity a
+    # meeting always has. The (platform, native) pair is not one: a Google Meet room code is
+    # reused across sessions, and `_resolve_owned_native` resolves it to the caller's NEWEST row,
+    # so an older meeting on a recurring link could be read but never annotated — an agent that
+    # pulled a transcript had nowhere to write what it learned back (fr_b6340167da32b8b6).
+    #
+    # Three segments against the pair route's four, so on segment count alone neither shadows the
+    # other — the same property `POST /meetings/{meeting_id}/share` already relies on. Owner-scoped
+    # in the store (`annotate_meeting` matches user_id), so an id belonging to someone else is a
+    # 404 exactly as an unowned native pair is.
+    @router.post("/meetings/{meeting_id}/annotate")
+    async def annotate_meeting_by_id(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        title, metadata = _annotation_from(payload)
         row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
+        return _annotate_result(row, user_id, meeting_id, title, metadata)
+
+    def _annotate_result(row, user_id, meeting_id, title, metadata):
+        """The shared tail of both annotate routes: the not-found / too-large refusals, the log
+        line, and the row. One copy, so the two addressings cannot answer differently."""
         if row is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
         if isinstance(row, dict) and row.get("error") == "metadata_too_large":
@@ -707,6 +725,29 @@ def build_router(
                     "status": row.get("status")},
         )
         return JSONResponse(content=row)
+
+    @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
+    async def annotate_native_meeting(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        title, metadata = _annotation_from(payload)
+
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
+        return _annotate_result(row, user_id, meeting_id, title, metadata)
 
     @router.patch("/meetings/{platform}/{native_meeting_id}")
     async def patch_native_meeting(
