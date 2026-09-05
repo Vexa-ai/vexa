@@ -112,7 +112,10 @@ export interface CsrcPollOptions {
   receivers?: () => CsrcReceiverLike[];
   /** Poll cadence in ms. Default 100 — the granularity the transport itself updates at. */
   pollMs?: number;
-  /** How long a source stays active after its last observed contribution. Default 400 ms. */
+  /** How long a source stays active after its last observed contribution. Default 400 ms — a
+   *  packet-gap window; a caller with a measured speech-pause window passes its own. A value that
+   *  is not finite or is shorter than one poll is unusable (NaN makes both liveness comparisons
+   *  false and flips every source on every poll) and is replaced by the default, said via `log`. */
   inactiveMs?: number;
   /** Epoch-ms clock (injectable for tests). */
   now?: () => number;
@@ -182,12 +185,17 @@ const isAudioReceiver = (r: CsrcReceiverLike): boolean =>
  */
 export function createCsrcPoll(opts: CsrcPollOptions): CsrcPoll {
   const pollMs = opts.pollMs ?? CSRC_POLL_MS;
-  const inactiveMs = opts.inactiveMs ?? CSRC_INACTIVE_MS;
+  const requestedInactiveMs = opts.inactiveMs;
+  const inactiveMs = typeof requestedInactiveMs === 'number' && Number.isFinite(requestedInactiveMs)
+    && requestedInactiveMs >= pollMs ? requestedInactiveMs : CSRC_INACTIVE_MS;
   const now = opts.now ?? (() => Date.now());
   const timeOrigin = opts.timeOrigin
     ?? (() => Number((globalThis as unknown as { performance?: { timeOrigin?: number } }).performance?.timeOrigin ?? 0));
   const receivers = opts.receivers ?? hookedReceivers;
   const log = opts.log ?? (() => { /* silent */ });
+  if (requestedInactiveMs !== undefined && inactiveMs !== requestedInactiveMs) {
+    log(`inactiveMs=${String(requestedInactiveMs)} is not a usable window (finite, >= the ${pollMs}ms poll) — using ${CSRC_INACTIVE_MS}ms`);
+  }
 
   /** csrc → the last moment (epoch ms) it was observed contributing, plus its last carried levels. */
   const live = new Map<number, { lastSeen: number; audioLevel?: number; rtpTimestamp?: number }>();
