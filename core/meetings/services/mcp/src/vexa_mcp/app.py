@@ -1311,6 +1311,12 @@ def create_app(
     # AND IT FAILS THE BOOT. Every rule in `manifest.py` is a failure that is otherwise silent — a
     # domain's tools quietly missing, one name claimed twice, a manifest naming a route its service
     # does not serve. A server that started anyway would answer `tools/list` with a lie.
+    #
+    # A CONFIGURED DOMAIN THAT NEVER ANSWERS IS ONE OF THOSE, and it did NOT fail the boot until
+    # now: `discover` swallowed every exception, so a refusing port cost a whole domain its tools
+    # permanently and quietly. It refuses by name instead — after waiting the domain out, because a
+    # cold `compose up` starts everything at once and the first refused connection is a race, not a
+    # fault. That wait is why this call can take a few seconds on a cold start; see `discover`.
     app.state.assembly = None
     _assembly_env = assembly_env if assembly_env is not None else os.environ
     if not _assembly_env.get("VEXA_MCP_ASSEMBLY_OFF"):

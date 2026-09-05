@@ -171,3 +171,47 @@ def test_ordinary_arguments_are_untouched():
     m.validate(_manifest(tools=[
         {"name": "x", "identity": "user", "auth": "subject", "requires": ["identity", "flows"],
          "route": {"method": "GET", "path": "/x"}, "arguments": ["since", "limit", "status"]}]))
+
+
+# ── a domain NAME is a shape, not a membership ──────────────────────────────────────────────────
+#
+# This module used to hold a closed set of domain names, and that set spelled out surfaces this
+# repository does not ship (a private harness, a billing domain) — an OSS assembler teaching a
+# reader the shape of a paid product, and a private deployment unable to mount a domain without a
+# change landing here first, which is exactly what `load_mounted` exists to avoid. What has to be
+# true of a name is that it can be a key: in `depends_on`, in `requires`, and in `<DOMAIN>_API_URL`.
+
+def test_a_domain_this_repository_has_never_heard_of_assembles():
+    """The mount's whole promise. A private domain composes onto the line with no line of it here."""
+    doc = _manifest(domain="seats", base_url_env="SEATS_API_URL", source="mounted", tools=[
+        {"name": "seats_list", "identity": "admin", "auth": "subject",
+         "requires": ["identity", "seats"], "route": {"method": "GET", "path": "/seats"}}])
+    assembled = m.assemble([doc], deployed={"identity", "seats"})
+    assert [t.name for t in assembled.tools] == ["seats_list"]
+
+
+def test_a_name_that_could_not_be_a_key_is_still_refused():
+    for bad in ("Flows", "flows api", "9flows", "", "flows/../identity", None, 7, "f" * 40):
+        doc = _manifest(tools=[])
+        doc["domain"] = bad
+        with pytest.raises(m.ManifestError, match="domain"):
+            m.validate(doc)
+
+
+def test_a_required_domain_must_be_a_domain_name_too():
+    with pytest.raises(m.ManifestError, match="not domain names"):
+        m.validate(_manifest(tools=[
+            {"name": "x", "identity": "user", "auth": "subject",
+             "requires": ["identity", "../admin"], "route": {"method": "GET", "path": "/x"}}]))
+
+
+def test_a_manifest_that_composes_across_domains_declares_it_rather_than_being_recognised():
+    """The cross-domain exemption used to be `if domain == "<a hosted harness>"`. A manifest whose
+    job IS driving every door says so on the record, and every other manifest is unchanged."""
+    tools = [{"name": "rehearsal", "identity": "admin", "auth": "subject",
+              "requires": ["identity", "meetings", "flows"],
+              "route": {"method": "POST", "path": "/rehearse"}}]
+    with pytest.raises(m.ManifestError, match="composition has an owner"):
+        m.validate(_manifest(domain="harness", base_url_env="HARNESS_API_URL", tools=tools))
+    m.validate(_manifest(domain="harness", base_url_env="HARNESS_API_URL", composes=True,
+                         tools=tools))

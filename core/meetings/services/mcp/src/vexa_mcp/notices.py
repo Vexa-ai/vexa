@@ -41,7 +41,7 @@ from typing import Any, Iterable, List, Optional
 import httpx
 
 from .discover import DOMAIN_URL_ENV
-from .tool_errors import UpstreamToolError
+from .tool_errors import UpstreamToolError, require_library_seam
 
 #: The route that answers with a subject's standing notices. Its auth is the caller's own
 #: credential, so this hop forwards what the caller sent and holds nothing of its own.
@@ -195,7 +195,11 @@ def install(mcp: Any, *, transport: Optional[httpx.AsyncBaseTransport] = None,
     exits take the same hop, so a standing fact reaches the agent whichever way the call went. The
     refusal is re-raised with the same `status_code` and `body`: only the words an agent reads grow.
     Anything else that was raised is not this module's to touch and passes through untouched.
+
+    The seam is a PRIVATE attribute of a pinned library, so the boot asserts it is there and names it
+    if it is not — see :func:`tool_errors.require_library_seam`.
     """
+    require_library_seam(mcp, "_execute_api_tool")
     original = mcp._execute_api_tool
 
     async def _standing(tool_name, http_request_info) -> List[str]:

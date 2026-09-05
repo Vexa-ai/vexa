@@ -41,6 +41,7 @@ from __future__ import annotations
 import inspect
 import os
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -172,7 +173,14 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             value = argument.get(name)
             if value in (None, ""):
                 raise HTTPException(status_code=422, detail=f"{bt.name} needs {name}")
-            path = path.replace("{" + name + "}", str(value))
+            # PERCENT-ENCODED, EVERY CHARACTER, `/` INCLUDED. A path parameter is one segment of the
+            # tool's own route and nothing else; substituted raw it is a caller-supplied fragment of
+            # URL. `reaction_id="../../admin/keys"` composed `/reactions/../../admin/keys/retry`,
+            # which httpx resolves before it goes out — so an agent could address ANY route on the
+            # owning domain's internal address, under whichever credential the tool's `auth` names.
+            # `safe=""` leaves nothing that can end the segment, so the request stays under the
+            # route the manifest declared and a traversal attempt arrives as a literal 404 id.
+            path = path.replace("{" + name + "}", quote(str(value), safe=""))
 
         params = {n: argument[n] for n in declared if argument.get(n) is not None}
         for n in declared:

@@ -26,7 +26,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from vexa_mcp import create_app
+from vexa_mcp import create_app, notices, tool_errors
 from vexa_mcp.tool_errors import render_tool_error, unwrap_detail
 from conftest import API_KEY, GATEWAY_URL
 
@@ -152,3 +152,76 @@ def test_the_agent_is_not_handed_a_sentence_with_json_in_it():
 def test_a_message_less_refusal_still_names_the_code():
     text = _call(BARE)["content"][0]["text"]
     assert text.splitlines()[0] == "HTTP 403 service_not_allowed", text
+
+
+# ── the body is bounded ─────────────────────────────────────────────────────────────────────────
+#
+# Whatever the deciding service said reaches the agent — but an upstream that answers an error with
+# a stack trace, an HTML error page or a megabyte of rows would put all of it in the agent's context
+# window, on a call that FAILED, ahead of everything the agent has left to do. The first line is
+# what it acts on; the body is evidence, and evidence has a size.
+
+def test_a_non_json_upstream_body_is_truncated_with_the_elision_stated():
+    text = render_tool_error(502, "x" * 20_000)
+    lines = text.splitlines()
+    assert lines[0] == "HTTP 502"
+    assert len(lines[1]) < 20_000, "the whole page reached the agent"
+    assert lines[1].startswith("x" * 100)
+    assert "elided" in lines[1], "a silent cut reads as the upstream having sent that much"
+    assert str(20_000 - tool_errors._MAX_BODY_CHARS) in lines[1], "say what it costs to go and look"
+
+
+def test_a_dumped_json_body_is_truncated_the_same_way():
+    body = json.dumps({"code": "boom", "reason": REASON, "message": MESSAGE,
+                       "rows": ["r" * 200 for _ in range(200)]})
+    text = render_tool_error(500, body)
+    lines = text.splitlines()
+    assert lines[0] == f"{REASON}: {MESSAGE}", "the actionable words survive intact"
+    assert len(lines[-1]) < len(body)
+    assert "elided" in lines[-1]
+
+
+def test_an_ordinary_refusal_is_not_touched():
+    """Every authored refusal is orders of magnitude under the bound — truncation must be a thing
+    that happens to accidents, never to the shape this module exists to render."""
+    text = render_tool_error(403, json.dumps(FULL))
+    assert "elided" not in text
+    assert json.loads(text.splitlines()[-1]) == FULL
+
+
+def test_the_block_keeps_its_line_count_when_it_is_truncated():
+    """`notices.render_error` addresses this block by line and puts its field on the LAST one, so a
+    bound that introduced a newline would move the body out from under it."""
+    assert len(render_tool_error(502, "x" * 20_000).splitlines()) == 2
+
+
+# ── the library seams this service wraps ────────────────────────────────────────────────────────
+
+def test_a_missing_library_seam_fails_the_boot_and_names_the_attribute():
+    """`fastapi-mcp` is pinned to an exact version because `_request` and `_execute_api_tool` are
+    PRIVATE attributes carrying no compatibility promise. The pin makes a rename unlikely; this
+    makes it loud — an AttributeError from inside `create_app` names a line, not the contract."""
+    class NotTheLibrary:
+        pass
+
+    with pytest.raises(RuntimeError) as e:
+        tool_errors.install_structured_tool_errors(NotTheLibrary())
+    assert "_request" in str(e.value) and tool_errors.FASTAPI_MCP_PIN in str(e.value)
+
+
+def test_the_notices_seam_is_asserted_too():
+    class HasOnlyRequest:
+        async def _request(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
+            raise AssertionError("never called")
+
+    with pytest.raises(RuntimeError) as e:
+        notices.install(HasOnlyRequest())
+    assert "_execute_api_tool" in str(e.value)
+
+
+def test_the_pinned_library_actually_carries_both_seams():
+    """The other direction, and the one that catches a bad bump: the version resolved right now."""
+    from fastapi_mcp import FastApiMCP
+
+    for attribute in ("_request", "_execute_api_tool"):
+        assert hasattr(FastApiMCP, attribute), f"the pin moved and {attribute} went with it"
