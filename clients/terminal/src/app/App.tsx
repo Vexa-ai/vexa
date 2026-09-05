@@ -21,6 +21,7 @@ import { OnboardingGate } from "./OnboardingGate";
 import { SetupGate } from "./SetupGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import { redeemScaffoldShare } from "../minutes/scaffold";
+import { beginArrival } from "../minutes/arrival";
 import "../surfaces";
 
 const roleLabel = (role: string) => (role === "viewer" ? "read-only" : "read & write");
@@ -103,32 +104,37 @@ function InviteGate({ children }: { children: ReactNode }) {
   // chat from it, and the agent is handed the same record — one record, two renderers, so neither
   // side composes from whatever was there before.
   //
-  // Same stash-and-clean discipline as `?ask=`: the URL is cleaned on landing so a reload does not
-  // re-open a spent arrival, and the id travels to MinutesShell through storage.
+  // THE ARRIVAL FINISHES IN THIS DOCUMENT — and that is what makes `?s=` different from every
+  // other deep-link above. They clean their URL by RELOADING (`location.replace`), on purpose, so
+  // the stash is in place before the grid mounts. This one must not, and the difference is the
+  // whole of the 2026-09-05 defect: MinutesShell's effect runs BEFORE this one (React does children
+  // first), so by the time the reload fired it had already taken the id out of storage and had a
+  // `GET /api/scaffolds/<id>` in flight. The navigation aborted that request, the second document
+  // found nothing pending, and neither the chat nor the refusal card ever rendered — a real
+  // first-time invitee landed on an empty "New chat". `beginArrival` stashes the id, takes `?s=`
+  // off the URL with `history.replaceState` (no request, no unload, nothing aborted) and says
+  // *look now*, so either effect order lands. The rules are stated in `minutes/arrival.ts`.
   //
   //  THE SHARE COMES OFF THE RECORD, NOT OFF THE URL (R-A08). When the meeting is not the reader's
   //  own, the scaffold carries a restricted transcript grant. It used to ride this same link as
   //  `&tshare=`, where a bearer credential enters every access log and proxy trace between us and
   //  the inbox. It is redeemed here instead — one authenticated POST against the id the link
-  //  already carries — and the URL is cleaned only AFTER, because `location.replace` aborts the
-  //  request in flight. `redeemScaffoldShare` never throws and answers null for the ordinary
-  //  no-share case, so the arrival is never held up by it.
+  //  already carries — and it runs ALONGSIDE the arrival rather than in front of it:
+  //  `redeemScaffoldShare` never throws and answers null for the ordinary no-share case, so the
+  //  arrival is never held up by it. It used to gate the URL clean, because `location.replace`
+  //  would have aborted it; there is no navigation left to sequence against.
   useEffect(() => {
     if (!scaffold) return;
-    try { localStorage.setItem("vexa.pendingScaffold", scaffold); } catch { /* locked-down storage */ }
-    let live = true;
+    beginArrival(scaffold);
     void (async () => {
       const token = await redeemScaffoldShare(scaffold);
-      if (token) {
-        try {
-          const r = await acceptTranscriptShare(token);
-          if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
-        } catch (e) { console.error("scaffold transcript share redeem failed:", e); }
-      }
-      if (live && !invite && !tshare) window.location.replace(window.location.pathname);
+      if (!token) return;
+      try {
+        const r = await acceptTranscriptShare(token);
+        if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+      } catch (e) { console.error("scaffold transcript share redeem failed:", e); }
     })();
-    return () => { live = false; };
-  }, [scaffold, invite, tshare]);
+  }, [scaffold]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.

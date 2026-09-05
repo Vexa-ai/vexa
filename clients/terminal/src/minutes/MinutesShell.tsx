@@ -16,7 +16,7 @@ import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
-import { ensureMeetingKnown, useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
+import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
   readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile,
   listSharedMemberships, listWorkspaceTree, type Membership,
@@ -35,7 +35,8 @@ import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
 import { Rail } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { fetchScaffold, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
+import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
+import { useScaffoldArrival } from "./arrival";
 import { artifactsFromTokens, artifactViewEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -896,11 +897,6 @@ export function MinutesShell() {
   // The chat is created TOUCHED: today nothing distinguishes a link the user clicked from one a
   // flow injected, and the safe reading of an ambiguous case is "the human meant to be here".
   const presetFired = useRef(false);
-  const meetingsLoaded = useLiveMeetingsLoaded();
-  // A bounded wait, so a meetings list that never answers cannot leave the click with nothing: the
-  // preset fires anyway after this, naming the meeting less well rather than not at all.
-  const [presetWaited, setPresetWaited] = useState(false);
-  const presetTimer = useRef(false);
 
   /** THE ONE PATH from "a link was clicked" to "a chat exists" (PRD §5.5 step 3).
    *
@@ -927,12 +923,17 @@ export function MinutesShell() {
       scaffold: rec.scaffold,
       scaffoldId: sc.kind === "hand-link" ? undefined : sc.id,
     });
+    // AND THE OFFER IS SPENT, for the same reason a chip click spends it (`runProposal`): the first
+    // move has been made. The chips render in the void an empty conversation leaves, and an
+    // arrival's kick is hidden and settle-delayed — so without this the chat a link just opened
+    // sits for a beat under "Set up a workspace for me", inviting the reader to start the thing
+    // they have this second been sent.
+    setSpent(rec.id);
   }, [addChat]);
 
   // A scaffold that would not open. Held so the reader is TOLD — a person who clicked a real link
   // and landed on a blank chat cannot tell a spent invitation from a broken product.
   const [scaffoldRefusal, setScaffoldRefusal] = useState<ScaffoldRefusal | null>(null);
-  const scaffoldFired = useRef(false);
 
   // WHO THE SERVER THINKS IS ASKING (F48). A refusal is a judgement about an identity, and the
   // reader cannot see which identity that was — so the card names it. Probed only when a refusal
@@ -952,31 +953,25 @@ export function MinutesShell() {
   // `?s=<id>` — THE SCAFFOLD (PRD §5.5 step 3). One record per arrival: the server says which
   // workspaces, which documents, and what the opening is; the terminal renders a chat from it and
   // NOTHING here is composed from what was there before. The right panel keeps rendering from the
-  // chat record only — the decision-18 contract — so this effect's whole job is to write that
-  // record correctly and then get out of the way.
-  useEffect(() => {
-    if (scaffoldFired.current) return;
-    let id: string | null = null;
-    try { id = localStorage.getItem("vexa.pendingScaffold"); } catch { /* ignore */ }
-    if (!id) return;
-    // NO WAIT ON THE MEETINGS LIST. The record carries `native` itself, so nothing here needs the
-    // list to resolve the note tab — which matters because the list is exactly what may not have
-    // loaded yet when an emailed link lands, and the preset path's 8s wait exists only because it
-    // had to hunt for that id. One record, and it is complete.
-    scaffoldFired.current = true;
-    // (The scaffold used to CLAIM the opening here — `setPresetInFlight(true)` — so the cached
-    // greeting would stand down. There is no greeting left to race: F36 deleted it.)
-    try { localStorage.removeItem("vexa.pendingScaffold"); } catch { /* ignore */ }
-    void (async () => {
-      const got = await fetchScaffold(id);
-      if (!got.ok) {
-        console.error("scaffold " + id + " did not open:", got.refusal.reason, got.refusal.detail);
-        setScaffoldRefusal(got.refusal);
-        return;
-      }
-      openFromScaffold(got.scaffold);
-    })();
-  }, [addChat, meetings, meetingsLoaded, presetWaited]);
+  // chat record only — the decision-18 contract — so this end of the arrival writes that record
+  // correctly, or says why it could not, and then gets out of the way.
+  //
+  // THE HANDOVER IS IN `arrival.ts`, and so is the reason this is no longer an effect of its own.
+  // This component is a CHILD of the one that reads the URL and React runs a child's effects first,
+  // so the version that took the id out of storage on READ then lost it — along with the request it
+  // had already sent — to the parent's clean-up reload, and the reader saw an empty chat. The hook
+  // checks the stash AND waits to be told, and settles the stash on the server's answer rather than
+  // on having read it, so neither order and no torn-down document can drop an arrival.
+  //
+  // NO WAIT ON THE MEETINGS LIST. The record carries `native` itself, so nothing here needs the
+  // list to resolve the note tab — which matters because the list is exactly what may not have
+  // loaded yet when an emailed link lands. One record, and it is complete. (The old effect
+  // re-ran on the meetings list for no stated reason; what that actually bought was a second look
+  // at a stash that had not arrived yet — an accident doing, badly, the job the hook now does.)
+  //
+  // (The scaffold used to CLAIM the opening here — `setPresetInFlight(true)` — so the cached
+  // greeting would stand down. There is no greeting left to race: F36 deleted it.)
+  useScaffoldArrival({ onOpen: openFromScaffold, onRefuse: setScaffoldRefusal });
 
   useEffect(() => {
     if (presetFired.current) return;
