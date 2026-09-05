@@ -128,6 +128,7 @@ states:
         door: flows-api
         flow: invite_intake
         source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        subject: '{{subject_user.uid}}'
     artefacts:
       mail: "RSVP (\"Accepted\") and \"Prepare: {{title}}\" to {{subject}}"
       link: the prepare mail's only link is /?s=<scaffold id> (kind `prep`)
@@ -358,6 +359,7 @@ states:
         door: flows-api
         flow: invite_intake
         source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        subject: '{{subject_user.uid}}'
     artefacts:
       mail: "\"Prepare: {{title}}\" to {{subject}}"
       link: "/?s=<scaffold id> (kind `prep`) whose refs carry `state: warm`"

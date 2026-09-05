@@ -132,7 +132,7 @@ class Doors:
         raise NotImplementedError
     def await_reaction(self, flow: str, since: float = 0.0, budget_s: int = 300) -> dict:
         raise NotImplementedError
-    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+    def cancel_bot_leg(self, flow: str, source_contains: str = "", subject: str = "") -> dict:
         raise NotImplementedError
 
     # ── the per-subject harness (decisions 37 + 38) ──────────────────────────────────────────
@@ -573,7 +573,7 @@ class LiveDoors(Doors):
                               f"{st} {str(body)[:200]}")
         return {"subject": str(subject), "runner": runner, "config": cfg}
 
-    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+    def cancel_bot_leg(self, flow: str, source_contains: str = "", subject: str = "") -> dict:
         """Cancel this recipe's own parked reaction — `POST /reactions/{id}/cancel`, the product's
         audited lifecycle verb.
 
@@ -587,7 +587,7 @@ class LiveDoors(Doors):
         Scoped by `source_contains` so it can only reach a reaction this recipe's own derived ids
         name — never another lane user's parked work.
         """
-        st, body = _http("GET", f"{FLOWS_API}/reactions?limit=100",
+        st, body = _http("GET", f"{FLOWS_API}/reactions?limit=100" + (f"&subject={subject}" if subject else ""),
                          {"X-Flows-Operator-Key": self._flows_key})
         rows = (body or {}).get("reactions", []) if isinstance(body, dict) else []
         if st != 200 or not isinstance(body, dict):
@@ -600,7 +600,7 @@ class LiveDoors(Doors):
         cancelled, refused = [], []
         for r in targets:
             rid = r.get("reaction_id") or r.get("id")
-            cst, cb = _http("POST", f"{FLOWS_API}/reactions/{rid}/cancel",
+            cst, cb = _http("POST", f"{FLOWS_API}/reactions/{rid}/cancel" + (f"?subject={subject}" if subject else ""),
                             {"X-Flows-Operator-Key": self._flows_key}, {})
             (cancelled if 200 <= cst < 300 else refused).append(f"{rid}:{cst}")
         if refused:
