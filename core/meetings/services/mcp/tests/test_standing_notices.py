@@ -8,7 +8,7 @@ would otherwise be silent:
   S1  the meeting tools carry them — field in the body, trailing line in the text, once per result
   S2  the tools that are not about a meeting do not, and `whats_waiting` never does (it already says it)
   S3  no notices, no flows domain, a slow domain, a broken answer → the result is exactly the result
-  S4  a refusal carries the refusal and nothing else
+  S4  a REFUSAL carries them too — the same trailing line, once, the refusal itself intact (#1549)
   S5  the surface is unchanged: no new tool, no new argument
 
 Autonomous, like the rest of the suite: `create_app` takes the transport as an injected port, so a
@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from conftest import API_KEY, GATEWAY_URL
 from vexa_mcp import create_app, notices
+from vexa_mcp.tool_errors import render_tool_error
 
 FLOWS_URL = "http://flows.test"
 STANDING = "A fixture sentence that stays true between calls."
@@ -224,17 +225,111 @@ def test_nothing_that_can_go_wrong_reaches_the_agent(agent, kwargs):
         call.close()
 
 
-def test_a_refusal_carries_the_refusal_and_nothing_else(agent):
-    """S4. A result an agent must act on carries one thing."""
-    def gateway(request):
-        return httpx.Response(403, json={"detail": {"reason": "a_fixture_reason"}})
+# ── S4 · a refusal is a result too (#1549) ────────────────────────────────────────────────────
 
-    call = agent(_app(body={"notices": [STANDING]}, gateway=gateway))
+REFUSAL = {"code": "insufficient_balance", "reason": "a_fixture_reason",
+           "message": "A fixture message the decider authored.",
+           "action_url": "https://example.invalid/account"}
+
+
+def _refusing(status=403, detail=None):
+    def gateway(request):
+        return httpx.Response(status, json={"detail": detail if detail is not None else REFUSAL})
+    return gateway
+
+
+def test_a_refusal_carries_the_notice_too(agent):
+    """S4, and the measured defect: a 403 reached the agent with reason, message and action_url and
+    WITHOUT the standing sentence that said why. A refusal is the result an agent most has to act
+    on; it is the last place a standing fact should be missing."""
+    call = agent(_app(body={"notices": [STANDING]}, gateway=_refusing()))
+    try:
+        result = call("get_bot_status")
+        text = _text(result)
+        assert result.get("isError") is True, text
+        assert "a_fixture_reason" in text, "the refusal itself is intact"
+        assert f"{notices.PREFIX}{STANDING}" in text, "and the standing sentence rode along"
+    finally:
+        call.close()
+
+
+def test_the_refusal_says_the_notice_once(agent):
+    """ONCE: the field on the body line, then the trailing line. Not twice in either channel."""
+    call = agent(_app(body={"notices": [STANDING]}, gateway=_refusing()))
+    try:
+        text = _text(call("get_bot_status"))
+        assert text.count(STANDING) == 2, text
+        assert text.count(f"{notices.PREFIX}{STANDING}") == 1, text
+    finally:
+        call.close()
+
+
+def test_the_refusal_body_line_carries_the_field(agent):
+    """BOTH CHANNELS on a refusal: `render_tool_error` puts the machine-readable body last, so a
+    caller that parses a refusal finds the notices where it already looks."""
+    call = agent(_app(body={"notices": [STANDING]}, gateway=_refusing()))
+    try:
+        block = _text(call("get_bot_status")).split(f"\n\n{notices.PREFIX}")[0]
+        body = json.loads(block.splitlines()[-1])
+        assert body["notices"] == [STANDING]
+        assert body["reason"] == "a_fixture_reason", "the decider's own fields survive"
+        assert body["action_url"] == REFUSAL["action_url"]
+    finally:
+        call.close()
+
+
+def test_the_refusals_own_lines_are_untouched(agent):
+    """A notice is ADDITIVE here too: the actionable first line and the `action_url:` line are byte
+    for byte what `tool_errors` rendered."""
+    plain = agent(_app(body={"notices": []}, gateway=_refusing()))
+    withit = agent(_app(body={"notices": [STANDING]}, gateway=_refusing()))
+    try:
+        bare = _text(plain("get_bot_status")).splitlines()
+        rich = _text(withit("get_bot_status")).splitlines()
+        assert rich[:2] == bare[:2], (bare, rich)
+    finally:
+        plain.close()
+        withit.close()
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"flows_url": ""},                       # this deployment carries no flows domain
+    {"delay": True},                         # the domain is there and slow
+    {"status": 500},                         # the domain answered badly
+    {"body": {}},                            # no field at all
+    {"body": {"notices": "not a list"}},     # the answer is not the shape this expects
+])
+def test_a_refusal_with_no_notices_reaches_the_agent_exactly_as_it_was(agent, kwargs):
+    """NEVER AN ERROR, on the raised path: whatever happens on the notices hop, the refusal the
+    agent must act on is the refusal — unchanged, still marked an error."""
+    reference = agent(_app(body={"notices": []}, gateway=_refusing()))
+    try:
+        expected = _text(reference("get_bot_status"))
+    finally:
+        reference.close()
+
+    call = agent(_app(gateway=_refusing(), **kwargs))
     try:
         result = call("get_bot_status")
         assert result.get("isError") is True
-        assert "a_fixture_reason" in _text(result)
-        assert STANDING not in _text(result)
+        assert _text(result) == expected
+        assert notices.PREFIX not in _text(result)
+    finally:
+        call.close()
+
+
+def test_a_refusal_with_a_body_the_renderer_could_not_parse_keeps_its_shape(agent):
+    """No JSON body means nowhere to put the field — so the trailing line carries it alone, exactly
+    as `render` does for an array-shaped success."""
+    def gateway(request):
+        return httpx.Response(502, content=b"<html>Bad Gateway</html>")
+
+    call = agent(_app(body={"notices": [STANDING]}, gateway=gateway))
+    try:
+        text = _text(call("get_bot_status"))
+        assert text.startswith("HTTP 502\n<html>Bad Gateway</html>"), text
+        assert text.endswith(f"{notices.PREFIX}{STANDING}")
+        assert text.count(STANDING) == 1, "one channel, because there is only one"
     finally:
         call.close()
 
@@ -274,6 +369,37 @@ def test_render_leaves_a_body_that_already_carries_the_field_alone():
 
 def test_render_with_no_notices_changes_nothing():
     assert notices.render('{"a": 1}', []) == '{"a": 1}'
+
+
+def test_render_error_with_no_notices_changes_nothing():
+    block = render_tool_error(403, json.dumps({"detail": REFUSAL}))
+    assert notices.render_error(block, []) == block
+
+
+def test_render_error_puts_the_field_on_the_body_line_and_the_lines_after_the_block():
+    block = render_tool_error(403, json.dumps({"detail": REFUSAL}))
+    got = notices.render_error(block, [STANDING, SECOND])
+    head, *tail = got.split("\n\n")
+    assert head.splitlines()[:2] == block.splitlines()[:2], "the words the decider authored"
+    assert json.loads(head.splitlines()[-1]) == {**REFUSAL, "notices": [STANDING, SECOND]}
+    assert tail == [f"{notices.PREFIX}{STANDING}", f"{notices.PREFIX}{SECOND}"]
+
+
+def test_render_error_leaves_a_block_with_no_json_body_shaped_exactly_as_it_was():
+    block = render_tool_error(502, "<html>Bad Gateway</html>")
+    got = notices.render_error(block, [STANDING])
+    assert got == f"{block}\n\n{notices.PREFIX}{STANDING}"
+
+
+def test_render_error_leaves_a_body_that_already_carries_the_field_alone():
+    block = render_tool_error(403, json.dumps({"detail": {**REFUSAL, "notices": ["already here"]}}))
+    body = json.loads(notices.render_error(block, [STANDING]).split("\n\n")[0].splitlines()[-1])
+    assert body["notices"] == ["already here"]
+
+
+def test_render_error_on_a_status_rendered_alone_still_carries_the_line():
+    assert notices.render_error(render_tool_error(500, ""), [STANDING]) == (
+        f"HTTP 500\n\n{notices.PREFIX}{STANDING}")
 
 
 def test_clean_dedupes_in_order_and_drops_everything_that_is_not_a_sentence():

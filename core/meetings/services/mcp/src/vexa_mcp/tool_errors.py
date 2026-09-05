@@ -46,6 +46,10 @@ def render_tool_error(status_code: int, body_text: str) -> str:
     Line 1 is what a human or an agent can act on — ``<reason>: <message>`` when the decider authored
     a message, else ``HTTP <status> <code>``. Line 2 is ``action_url: …`` when there is somewhere to
     go. The last line is the unwrapped body, compact, exactly once.
+
+    That last line is the block's last line as this module writes it. ``notices`` may append standing
+    sentences after the whole block, and puts its field on that body line when it is an object — the
+    reason it can is that the body's position here is defined and stable.
     """
     raw = body_text or ""
     try:
