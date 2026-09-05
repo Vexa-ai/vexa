@@ -4686,9 +4686,14 @@ def settings(key: str = "", value: str = "") -> str:
     on/off settings accept on/off, true/false, yes/no."""
     uid = me()
     if not key:
+        # OMITTED WHEN EMPTY, never sent as `{}`. The vocabulary moved to identity and this server
+        # keeps no copy of it (see `_settings_meanings`), so every caller was handed
+        # `"what_each_means": {}` — which reads as "these settings mean nothing" rather than "the
+        # meanings are not served here", and an agent that believes the first invents its own.
+        meanings = _settings_meanings()
         return json.dumps({
             "settings": _settings(uid),
-            "what_each_means": _settings_meanings(),
+            **({"what_each_means": meanings} if meanings else {}),
             "to_change": "settings(key=..., value=...) — one at a time",
         })
     after, refused = _settings_set(uid, key, value)
@@ -5017,29 +5022,44 @@ def friction_so_far(since: str = "", limit: int = 40) -> str:
 @mcp.tool()
 @_anon_guard
 def friction_dump(since: str = "", status: str = "open") -> str:
-    """THE FIXER'S BRIEF: every rough edge across the WHOLE instance, grouped by likely cause.
+    """THE FIXER'S BRIEF: YOUR OWN rough edges, grouped by likely cause.
 
-    #1510: reads flows' `GET /friction` as the operator (the whole-instance view, not just your
-    own — flows_timeline.friction_for_subject's own contract), grouped here by (kind, tool). This
-    replaced the old Redis store's dedup/status-machine renderer — flows admits one row per
-    report with no dedup at admission, so counts here are ROWS, not deduplicated occurrences, and
-    "recurring" is not a status this reports (see the friction.fixed carrier's own census entry).
+    NOT an instance-wide dump, and it no longer says it is. This read flows' `GET /friction` with
+    the operator key and NO subject, on the belief that the key bought a whole-instance view; the
+    route refuses exactly that — *"no subject … there is no instance-wide dump behind the operator
+    key on this route"* — so the tool answered 400 while its docstring promised every user's
+    reports. It stamps `X-User-Id` with the caller's own uid now, the same scoping
+    `friction_so_far` uses. What it adds over that tool is the GROUPING, by (kind, tool), so a
+    fixing agent opens each tool's code once rather than once per row.
+
+    A whole-instance view is not smuggled in behind an operator key. If one is wanted it belongs on
+    flows' door, scoped and named there, the way `GET /reactions` already has it.
+
+    Counts are ROWS, not deduplicated occurrences — flows admits one row per report with no dedup
+    at admission — and "recurring" is not a status this reports (see the friction.fixed carrier's
+    own census entry).
 
     since: "" (everything) · "2h" · "3d" · an ISO instant.
     status: "open" (the default — everything not fixed) · "fixed" · "" for all.
 
-    When you fix something from it, close it: `friction_fixed([ids], "<commit or PR>")`.
+    When you fix something from it, close it: `friction_fixed([ids], "<commit or PR>")` — that verb
+    is operator-only and does close across subjects.
 
-    OPERATOR ONLY (R-D21). This is the WHOLE INSTANCE's ledger — other people's workspace names,
-    file paths, meeting ids and free text — and it was open to any signed-in caller. A person's own
-    reports come back from `friction_so_far`, which is scoped to them."""
+    OPERATOR ONLY (R-D21) stays as the gate. It narrows who reaches the fixer's lens; it no longer
+    stands in for authority over anybody else's rows."""
     _actor, _refused = _operator_gate(
-        "friction_dump", "An instance admin can run this — it reads every user's reports. Your own "
-                         "are in friction_so_far().")
+        "friction_dump", "An instance admin can run this. Your own reports are in "
+                         "friction_so_far().")
     if _refused:
         return _refused
+    # THE SUBJECT IS ALWAYS STAMPED. `_operator_gate` answers "service" for the internal key, which
+    # names no person and has no reports of its own — `me()` refuses that caller by name rather than
+    # letting an unsubjected read through the door that just refused one.
+    uid = _actor if (_actor and _actor != "service") else me()
     q = urllib.parse.urlencode({"since": since, "limit": 200})
-    st, body = _http("GET", f"{FLOWS_API}/friction?{q}", _fkey())
+    headers = dict(_fkey())
+    headers["X-User-Id"] = uid
+    st, body = _http("GET", f"{FLOWS_API}/friction?{q}", headers)
     if not (200 <= st < 300) or not isinstance(body, dict):
         return json.dumps({"error": f"flows-api answered {st}", "detail": str(body)[:300],
                            "do": "the dump is unreadable — say so plainly; do not invent one"})
