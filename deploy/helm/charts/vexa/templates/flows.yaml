@@ -51,7 +51,7 @@ spec:
       {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
-          image: {{ .Values.flows.image | quote }}
+          image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
           args:
             - |
@@ -120,7 +120,7 @@ spec:
       {{- end }}
       containers:
         - name: flows-worker
-          image: {{ .Values.flows.image | quote }}
+          image: {{ include "vexa.flowsImage" . | quote }}
           # Composes VEXA_FLOWS_DB_URL from secretKeyRef-sourced parts (F-D5 item 1) rather than
           # a literal DSN in the Secret — see the file header. sslmode threads from database.sslMode
           # (F-D5 item 2); the target database is flows.databaseName (default "flows", separate
@@ -156,10 +156,15 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             {{- /* AGENT DOMAIN PRESENCE (F-D5 item 4): unset means "no agent domain deployed" to
             flows_config.py (a `capability` key, degrades via flows_steps.common.domain_present) —
-            NOT a URL pointed at a Service that does not exist in a no-agents estate. */}}
+            NOT a URL pointed at a Service that does not exist in a no-agents estate.
+            THE GUARD AND THE VALUE WERE INVERTED (A12): the key rendered as an EMPTY STRING
+            exactly when agentApi.enabled, and `_is_set` reads "" as UNSET — so a chart that runs
+            the agent domain told flows it does not, and every agent step answered `not_present`
+            on an estate where agent-api was up. The guard was right; the value was the empty
+            half of it. Omitted when disabled, the SERVICE ADDRESS when enabled. */}}
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: ""
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
@@ -178,6 +183,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
+          {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
+          `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
+          sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
+          and an `exec` probe over the same Postgres these processes already poll would report
+          the database's health, not the loop's. The compose file says the same thing about the
+          same two processes. Giving these a real liveness surface needs a health endpoint in
+          flows itself; that is E4's work, not this template's. */}}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 512Mi}
@@ -208,7 +220,7 @@ spec:
       {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
-          image: {{ .Values.flows.image | quote }}
+          image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
           args:
             - |
@@ -265,7 +277,7 @@ spec:
       {{- end }}
       containers:
         - name: flows-mailbox
-          image: {{ .Values.flows.image | quote }}
+          image: {{ include "vexa.flowsImage" . | quote }}
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
           args:
@@ -304,7 +316,7 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: ""
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
@@ -317,6 +329,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
+          {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
+          `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
+          sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
+          and an `exec` probe over the same Postgres these processes already poll would report
+          the database's health, not the loop's. The compose file says the same thing about the
+          same two processes. Giving these a real liveness surface needs a health endpoint in
+          flows itself; that is E4's work, not this template's. */}}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
@@ -342,7 +361,7 @@ spec:
       {{- if ne .Values.flows.databaseName .Values.database.name }}
       initContainers:
         - name: ensure-db
-          image: {{ .Values.flows.image | quote }}
+          image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
           args:
             - |
@@ -399,7 +418,7 @@ spec:
       {{- end }}
       containers:
         - name: flows-api
-          image: {{ .Values.flows.image | quote }}
+          image: {{ include "vexa.flowsImage" . | quote }}
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
           args:
@@ -430,6 +449,59 @@ spec:
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
               value: {{ .Values.flows.databaseName | quote }}
+            {{- /* THE LISTENER. flows_api.py defaults VEXA_FLOWS_API_HOST to 127.0.0.1 on purpose
+            (it also runs as a host lane on the dogfood rig, where 0.0.0.0 would publish that box's
+            every interface). In a POD, loopback is this container's loopback: the Service below
+            selects the pod and connects to nothing, and every probe times out. The compose service
+            says 0.0.0.0 in its own environment for exactly this reason; this Deployment did not,
+            so flows-api was unreachable in-cluster from the first render (A12). */}}
+            - name: VEXA_FLOWS_API_HOST
+              value: "0.0.0.0"
+            - name: VEXA_FLOWS_API_PORT
+              value: "18200"
+            {{- /* THE DOORS AND THE CREDENTIALS THE WORKER AND MAILBOX ALREADY CARRY (A12). This
+            container had NONE of them, and VEXA_FLOWS_ADMIN_API_URL is `required-explicit` in
+            flows' config.v1 — so `preflight()` raised at boot and flows-api crash-looped on any
+            chart with flows.enabled=true. Same four values as the two lanes above, kept in the
+            same order so a diff between the three containers reads as one list. */}}
+            - name: VEXA_FLOWS_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            - name: VEXA_FLOWS_GATEWAY_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            {{- if .Values.agentApi.enabled }}
+            - name: VEXA_FLOWS_AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
+            {{- if .Values.terminal.enabled }}
+            - name: VEXA_UI_URL
+              value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
+            {{- end }}
+            - name: VEXA_FLOWS_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+          {{- /* PROBES. `/health` is liveness-grade only — it answers ok with Postgres
+          unreachable (E4 in the 0.12.27 review) — so readiness here means "the process is
+          listening and serving", not "the tier is well". That is still strictly more than the
+          nothing this Deployment carried: without a readiness gate the Service routes to a pod
+          that has not finished binding, and without liveness a wedged process is never restarted.
+          A capability-row readiness that can actually fail on a database outage is E4's, not
+          this template's. */}}
+          startupProbe:
+            httpGet: {path: /health, port: 18200}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /health, port: 18200}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /health, port: 18200}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
