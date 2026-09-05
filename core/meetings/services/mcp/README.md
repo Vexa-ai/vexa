@@ -66,6 +66,8 @@ the guess was wrong for the four it was applied to.
 | `get_recording` | `GET /recordings/{recording_id}` |
 | `report_issue` | `GET /meetings` to authenticate the caller, then the ticket is POSTed to `VEXA_TICKET_SINK_URL` |
 
+**Zoom URLs `parse_meeting_link` accepts:** `zoom.us` and any subdomain of it (`us02web.`, a company vanity subdomain) plus `zoomgov.com`, on `/j/<id>`, `/w/<id>` or `/wc/join/<id>`, passcode read from `?pwd=` or `?password=`; **and** a tenancy fronted on an organisation's OWN hostname, which carries no "zoom" anywhere — any host whose path is `/meeting/<10-11 digits>` or `/j/<10-11 digits>` **and** which carries `?password=` or `?pwd=` (e.g. `https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>`), answered with a warning saying the platform was read from the path shape rather than recognised from the host. `/my/<personal-room>` and `events.zoom.us` links are refused 422 with the reason.
+
 **Prompts (4):** `vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
 `vexa.teams_link_help` (ported; edited only where they referenced unported tools).
 
