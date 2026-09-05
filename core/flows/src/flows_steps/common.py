@@ -323,6 +323,27 @@ def db_url() -> str:
     return flows_config.require("VEXA_FLOWS_DB_URL")
 
 
+def swallowed(source: str, kind: str, exc: BaseException | None = None, **facts) -> None:
+    """SAY THAT SOMETHING WAS SWALLOWED. One line, at warning, naming who swallowed it and why.
+
+    P18. This brick has fourteen `except: pass` sites and, before this, not one of them logged —
+    so a Postgres outage during a refresh surfaced to an operator as *"flow retired by deploy"*,
+    which is a different event with a different owner and a different fix. A degradation nobody can
+    see is indistinguishable from the healthy path it degrades to, which is the whole reason the
+    swallow was safe to write in the first place.
+
+    `source` is the function that decided to continue and `kind` is what it decided to continue
+    PAST — deliberately two fields rather than one sentence, so a reader grepping the logs can
+    count occurrences of a kind without parsing prose.
+
+    `print`, not `logging`, because that is this brick's convention end to end (`flows_worker`,
+    `mailbox`, `flows_api` all print to stdout and the deployment collects it); introducing a
+    second logging mechanism for one helper would be the drift this file's own rules are about."""
+    tail = "".join(f" {k}={v!r}" for k, v in facts.items())
+    detail = f": {type(exc).__name__}: {exc}" if exc is not None else ""
+    print(f"warning: swallowed source={source} kind={kind!r}{tail}{detail}"[:600], flush=True)
+
+
 def http(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 20):
     req = urllib.request.Request(url, method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
