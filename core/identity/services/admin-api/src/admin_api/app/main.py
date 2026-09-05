@@ -27,6 +27,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Respo
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_serializer, model_validator
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +47,26 @@ def _admin_token() -> Optional[str]:
 
 def _internal_secret() -> str:
     return os.environ.get("INTERNAL_API_SECRET", "")
+
+
+def normalise_email(email: str) -> str:
+    """The address as this service STORES it, for a row it is creating now.
+
+    An address is one account whatever case it was typed in (R-B08), and every lookup here already
+    folds case. Folding on the READ side alone leaves two holes the folding cannot close:
+
+      * two concurrent `POST /admin/users` with `Anna@x` and `anna@x` both miss the lookup and both
+        insert — the read fold has no way to serialise them. Stored folded, the SECOND one collides
+        with the `users.email` UNIQUE index that already exists, and `create_user` re-resolves it to
+        the first row. The race closes on a constraint rather than on timing.
+      * `lower(email)` cannot be unique while the stored values disagree in case, so the functional
+        index that would enforce one-address-one-account for good stays non-unique until an operator
+        reconciles the rows an instance already holds (schema/MIGRATION-0007-users-email-lower.md).
+
+    NEW ROWS ONLY. Nothing here rewrites an address already stored: an existing row's case is the
+    case its person typed, mail already goes there, and a migration that rewrote every address to
+    chase an index would be changing data to suit a query plan."""
+    return (email or "").strip().lower()
 
 
 def _dev_mode() -> bool:
@@ -414,8 +435,18 @@ def create_app() -> FastAPI:
         # meeting report while the real account gets nothing. Email is case-insensitive in its
         # domain and, in every provider we meet, in its local part too; one half of this service
         # already knew that.
+        #
+        # ORDER BY id — OLDEST WINS, on both halves of this question. An instance that already
+        # holds case-variant duplicates (which is precisely the estate this fold exists for) has
+        # more than one row matching, and `.first()` without an ORDER BY returns whichever row the
+        # PLAN happened to reach first. That is not a stable answer: it can differ between this
+        # route and `GET /admin/users/email/{email}`, and it can differ between two calls to the
+        # same route after a vacuum. "Which of these accounts is the person" then has two answers,
+        # and the desk, the meetings and the mail follow different ones. The oldest row is the one
+        # that has the history.
         existing = (await db.execute(
             select(User).where(func.lower(User.email) == user_in.email.lower())
+            .order_by(User.id)
         )).scalars().first()
         if existing:
             response.status_code = status.HTTP_200_OK
@@ -431,11 +462,30 @@ def create_app() -> FastAPI:
         # was onboarded survives a publish that never lands — a later sweep can replay from it. That
         # ordering is the whole exactly-once guarantee: it holds against a replay, a restore, and a
         # second producer somebody adds later without reading this comment.
-        u = User(email=user_in.email, name=user_in.name,
+        #
+        # STORED FOLDED — see `normalise_email`. New rows only; nothing rewrites an address already
+        # in the table. The read fold above cannot serialise two concurrent creates in different
+        # cases (both miss, both insert); folded on write, the second one hits the `users.email`
+        # UNIQUE index that has always been there, and the handler below re-resolves it to the row
+        # the first one made. The race closes on a constraint instead of on timing.
+        u = User(email=normalise_email(user_in.email), name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
         u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
         db.add(u)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # The other half of the race committed first. This is a 200 on THEIR row, exactly as if
+            # our lookup had seen it — never a 500, and never a second account.
+            await db.rollback()
+            winner = (await db.execute(
+                select(User).where(func.lower(User.email) == user_in.email.lower())
+                .order_by(User.id)
+            )).scalars().first()
+            if winner is None:
+                raise
+            response.status_code = status.HTTP_200_OK
+            return UserResponse.model_validate(winner)
         await db.refresh(u)
         # FIRE-AND-FORGET. Identity tells flows; it does not ask it. A deployment with no flows
         # domain still onboards people, and so does one where flows is down — the publisher swallows
@@ -473,8 +523,12 @@ def create_app() -> FastAPI:
         # Case-folded (R-B08) — see `create_user`. This is the ASKING half of the same question,
         # and the two disagreeing is what mints the ghost: flows asks here, is told "no such
         # user", and creates one.
+        # ORDER BY id — the same oldest-wins rule as `create_user`, and it has to be the SAME rule:
+        # two case-folding lookups that disagree about which duplicate row is the person put the
+        # desk on one account and the meetings on another.
         user = (await db.execute(
             select(User).where(func.lower(User.email) == email.lower())
+            .order_by(User.id)
         )).scalars().first()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
