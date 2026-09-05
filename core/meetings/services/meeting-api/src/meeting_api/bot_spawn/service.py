@@ -292,8 +292,24 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     (the N bots that ran against this meeting row). This rides in ``data.sessions`` (the api.v1
     ``data`` field is an open object — see the contract note in the bot_spawn README) so the
     SEALED ``MeetingResponse`` schema is honoured without an edit; a public typed ``sessions``
-    field would need a ``vN+1`` (flagged)."""
-    data = dict(row.get("data")) if isinstance(row.get("data"), dict) else {}
+    field would need a ``vN+1`` (flagged).
+
+    ``data`` goes through ``collector.projection.project_response_data`` — the ONE response-edge
+    projection every other meeting-serving route already uses (``GET /meetings``,
+    ``GET /meetings/{id}``, the transcript reads, the PATCH echo). This route was the one that did
+    not, and the spawn it answers is the very request that WRITES the webhook signing secret onto
+    the row three hundred lines below: ``POST /bots`` handed the caller's own
+    ``data.webhook_secret`` straight back in clear (found in production through the MCP's
+    ``request_meeting_bot`` result, 2026-09-05, fr_2261a6306224c6f8).
+
+    ``viewer_is_owner=True`` because a spawn response is only ever served to the spawner — the row
+    was created or reused under their ``user_id`` — so the v0.10 contract's ``webhook_url`` /
+    ``webhook_events`` still ride back, exactly as they do on ``GET /meetings``. What goes is tier
+    1: the signing secret, the share grants, the session userdata path, and anything else
+    credential-SHAPED, which is dropped on name shape before anyone has thought to name it."""
+    from ..collector.projection import project_response_data
+
+    data = project_response_data(row.get("data"), viewer_is_owner=True)
     if sessions is not None:
         data["sessions"] = list(sessions)
     return {
