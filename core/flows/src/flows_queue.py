@@ -110,7 +110,20 @@ def pending(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
     """
     now = time.time() if now is None else float(now)
     uid, email = (identity or resolve_identity)(subject)
-    if not uid and not email:
+    # NO UID IS UNRESOLVED, not a smaller answer (B1/P21). `resolve_identity` fails SOFT: asked
+    # about an address while admin-api is down or slow, it hands back the address it was given and
+    # an EMPTY uid, and this projection then scoped on the address alone — which returns exactly
+    # the rows that carry that spelling and silently drops the whole completed lineage, because
+    # that lineage carries a uid and no address (`flows_timeline.model.concerns`). A person was
+    # told `waiting: 0` from a half-scoped query, and "nothing is waiting for you" and "we could
+    # not work out who you are" are different facts of which only one is about them. The docstring
+    # below named this failure; nothing detected it.
+    #
+    # THE MIRROR CASE IS NOT THE SAME CASE and is deliberately left alone: a uid with no address is
+    # a real account shape — identity's `/internal/validate` legitimately answers a user_id and an
+    # empty email — where an address with no uid is a lookup that did not happen or a person this
+    # instance has no account for. One is a state, the other is an absence of an answer.
+    if not uid:
         return None
     states = ",".join(f"'{s}'" for s in UNFINISHED)      # a fixed literal set, never caller input
     rows = _rows(db, f"SELECT {', '.join(_COLS)} FROM reaction "
