@@ -246,7 +246,7 @@ class StubDoors(Doors):
         other = [f for f in files if "/meeting/" not in f and not f.endswith("index.md")]
         return "warm" if other else "pile"
 
-    def cancel_bot_leg(self, flow: str, source_contains: str = "") -> dict:
+    def cancel_bot_leg(self, flow: str, source_contains: str = "", subject: str = "") -> dict:
         live = [r for r in self.reactions
                 if r["flow"] == flow and r["state"] in ("admitted", "running", "retrying")]
         for r in live:
