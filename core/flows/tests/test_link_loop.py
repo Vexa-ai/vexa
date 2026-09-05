@@ -109,6 +109,26 @@ def scaffolds(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _person_settings_are_declared(monkeypatch):
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest._admin_key_present` gives it an
+    admin key — and for the same reason, one door along.
+
+    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
+    reached `setting()` without saying so got them from a swallowed exception: there is no identity
+    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
+    person prefers the defaults". That is a test standing on the very behaviour R-P7 removed — an
+    unconfigured read and an unreachable one answering the same thing as a real preference.
+
+    Now the read raises, so the suite declares what a deployment declares. The tests that are ABOUT
+    a preference still set their own (`monkeypatch.setattr(production, "setting", …)`); this is the
+    baseline underneath them.
+    """
+    common.forget_person_settings()
+    monkeypatch.setattr(common, "person_settings",
+                        lambda uid: dict(common._SETTING_DEFAULTS))
+
+
+@pytest.fixture(autouse=True)
 def _no_admin_mail_override(monkeypatch):
     """THE MAIL READER IS STUBBED, and it has to be said out loud rather than assumed.
 
