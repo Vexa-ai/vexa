@@ -1298,10 +1298,12 @@ def create_app(
     # An upstream refusal reaches the agent as ONE string; fastapi-mcp writes it as prose with a JSON
     # document inside. Render it structurally instead — the actionable words first, the body once.
     install_structured_tool_errors(mcp)
-    # STANDING NOTICES ride out on the meeting tools' results (`notices.py`). An agent reads what
-    # it asked for; a fact that stays true between calls has to travel on that, or it travels on a
-    # tool somebody has to remember to call. Never an error, never a new tool: when the deployment
-    # names no flows domain, or it does not answer inside two seconds, the result is the result.
+    # STANDING NOTICES ride out on the meeting tools' results (`notices.py`) — the ones that
+    # answered and the ones that were REFUSED (#1549). An agent reads what it asked for; a fact that
+    # stays true between calls has to travel on that, or it travels on a tool somebody has to
+    # remember to call — and a refusal is the result it most has to act on. Never an error, never a
+    # new tool: when the deployment names no flows domain, or it does not answer inside two seconds,
+    # the result is the result and the refusal is the refusal.
     notices_mod.install(mcp, transport=transport, env=_assembly_env)
     app.state.mcp = mcp
     return app
