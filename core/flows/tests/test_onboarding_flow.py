@@ -109,6 +109,49 @@ def test_pending_while_the_person_has_no_meeting(db, registry, clock):
     assert out.seconds == production.ONBOARDING_POLL_S
 
 
+# ── the poll is bounded even though the item is not (R-B3) ───────────────────────────────────────
+def test_the_first_look_is_soon_and_the_hundredth_is_not():
+    """The property, on the pure function. Thirty seconds is right in the minutes after somebody
+    signs up — that is when they are going to try it — and meaningless on day nine, when the same
+    person costs a 200-row scan and a transcript read every half-minute for as long as the account
+    exists."""
+    assert production.onboarding_backoff(0) == 30
+    assert production.onboarding_backoff(1) == 60
+    assert production.onboarding_backoff(2) == 120
+    assert production.onboarding_backoff(100) == production.ONBOARDING_POLL_MAX_S == 900
+    # monotonic, and it never exceeds the ceiling on the way there
+    waits = [production.onboarding_backoff(n) for n in range(40)]
+    assert waits == sorted(waits) and max(waits) == production.ONBOARDING_POLL_MAX_S
+
+
+def test_the_step_walks_the_backoff_across_looks(db, registry, clock):
+    """…and it walks it out of the reaction's own DURABLE scratch, so a worker restart resumes at
+    the interval this reaction had reached rather than starting the ramp again."""
+    _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
+           refs={"subject": "77"})
+    scratch: dict = {}
+    seen = []
+    for _ in range(8):
+        out = registry.steps["first_meeting"](_ctx(db, "onboarding", clock=clock, scratch=scratch))
+        assert isinstance(out, Wait)
+        seen.append(out.seconds)
+    assert seen == [30, 60, 120, 240, 480, 900, 900, 900]
+    assert scratch["looks"] == 8, "the count is durable state, not a worker-memory counter"
+
+
+def test_the_item_still_never_expires_and_never_fails(db, registry, clock):
+    """THE HALF THAT DID NOT CHANGE, and it is a founder ruling (2026-09-04): activation is one
+    meeting with transcription, and the offer is not taken away from the people who have not taken
+    it up yet. So the interval is capped and the ITEM is not — a thousand looks later this is still
+    a `Wait`, never a `Done`, never a `StepError`. `attend_live`'s `LIVE_CAP_S` is the other
+    question: that one waits on a FACT about a call that is long over, this one waits on a PERSON."""
+    _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
+           refs={"subject": "77"})
+    out = registry.steps["first_meeting"](
+        _ctx(db, "onboarding", clock=clock, scratch={"looks": 1000}))
+    assert isinstance(out, Wait) and out.seconds == production.ONBOARDING_POLL_MAX_S
+
+
 def test_completes_when_their_meeting_transcribed(db, registry, clock, monkeypatch):
     _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
            refs={"subject": "77"})
