@@ -835,10 +835,26 @@ function gateDataflow() {
   // without registering it here and CI goes red.
   const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
   const required = new Set();
+  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const dom of lsdirs("core")) {
     for (const s of lsdirs(`core/${dom}/services`)) required.add(`core/${dom}/services/${s}`);
     for (const m of lsdirs(`core/${dom}/modules`)) required.add(`core/${dom}/modules/${m}`);
     for (const c of lsdirs(`core/${dom}/contracts`)) if (/\.v\d+$/.test(c)) required.add(`core/${dom}/contracts/${c}`);
+    // A domain laid out as a single package — one pyproject.toml over core/<dom>/src/<pkg>… — has
+    // neither services/ nor modules/, so the two loops above ask for NOTHING from it and its modules
+    // could not drift into existence unregistered: they were never required in the first place.
+    // core/flows was exactly that. It holds seven top-level packages and the chart carried three, and
+    // the completeness check — the anti-drift guard — reported nothing, because you cannot detect
+    // drift from a set you never built. Walk core/<dom>/src/* for those domains.
+    //
+    // The one exemption: a domain whose `core/<dom>/src` is ITSELF a registered node (core/runtime,
+    // whose `runtime` service node points there) ships its src as one unit, and asking for its
+    // packages as well would demand a second node for the same code. Registering the dir is the
+    // domain saying "this src is one thing"; not registering it is what leaves the packages
+    // individually accountable.
+    if (lsdirs(`core/${dom}/services`).length || lsdirs(`core/${dom}/modules`).length) continue;
+    if (modelPaths.has(`core/${dom}/src`)) continue;
+    for (const p of lsdirs(`core/${dom}/src`)) required.add(`core/${dom}/src/${p}`);
   }
   for (const c of lsdirs("deploy/contracts")) if (/\.v\d+$/.test(c)) required.add(`deploy/contracts/${c}`);
   // a client that is composed-of (a "mapped" client, e.g. terminal) must register every src/* concern
@@ -850,7 +866,6 @@ function gateDataflow() {
     if (clNode && containers.has(clNode["unique-id"]))
       for (const d of lsdirs(`clients/${cl}/src`)) required.add(`clients/${cl}/src/${d}`);
   }
-  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const r of [...required].sort()) if (!modelPaths.has(r)) errs.push(`completeness: '${r}' exists on disk but is not registered in architecture.calm.json`);
   for (const n of nodes) for (const m of (n.metadata || [])) if (m.path && !existsSync(join(ROOT, m.path))) errs.push(`completeness: node '${n["unique-id"]}' points at missing path '${m.path}'`);
 
