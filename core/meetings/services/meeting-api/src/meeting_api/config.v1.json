@@ -6,7 +6,16 @@
    "key": "ADMIN_TOKEN",
    "class": "required-explicit",
    "secret": true,
-   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4)"
+   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4). A PUBLISHED PLACEHOLDER is refused on the same terms as INTERNAL_API_SECRET: the literal is in this repository, so anyone can forge a MeetingToken and upload a recording against any meeting (A19).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "DB_HOST",
