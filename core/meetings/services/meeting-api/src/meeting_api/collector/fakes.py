@@ -187,9 +187,22 @@ class InMemoryTranscriptStore:
         return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            metadata_filter=None):
         from .projection import DEFAULT_LIST_LIMIT, list_order_key, project_list_data
         mws = member_workspaces or set()
+
+        def metadata_matches(m):
+            """Mirror of the adapter's JSONB `@>` on `data.metadata`: every key in the filter must
+            be present with an equal value. Containment, not equality — extra keys on the row do
+            not disqualify it."""
+            if not metadata_filter:
+                return True
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            stored = data.get("metadata")
+            if not isinstance(stored, dict):
+                return False
+            return all(stored.get(k) == v for k, v in metadata_filter.items())
 
         def accessible(m):
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
@@ -204,6 +217,7 @@ class InMemoryTranscriptStore:
                                     else m["status"] == status))
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
+            and metadata_matches(m)
         ]
         if list_view:
             # #1222: the USER-FACING list orders by (non-terminal pin, event time) — the meeting
@@ -304,22 +318,34 @@ class InMemoryTranscriptStore:
         self._meetings[mid]["data"]["workspace_id"] = workspace_id
         return workspace_id
 
+    def _mint_share_on(self, mid, mode, allowed_emails, expires_in_sec):
+        """The grant, once, for both address shapes — mirrors the SqlAlchemy store's ``_mint_share_on``."""
+        from .adapters import _build_share_grant
+
+        if mid is None or mid not in self._meetings:
+            return None
+        grant, secret = _build_share_grant(mode, allowed_emails, expires_in_sec)
+        self._meetings[mid]["data"].setdefault("share_grants", []).append(grant)
+        return {"id": grant["id"], "token": f"{mid}.{secret}",
+                "mode": mode, "expires_at": grant["expires_at"]}
+
     async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
                                     mode="open", allowed_emails=None, expires_in_sec=86400):
-        from datetime import timedelta
+        return self._mint_share_on(self._find(user_id, platform, native_meeting_id),
+                                   mode, allowed_emails, expires_in_sec)
 
-        from .adapters import _now, _sha
-        mid = self._find(user_id, platform, native_meeting_id)
-        if mid is None:
+    async def mint_transcript_share_by_id(self, user_id, meeting_id, *,
+                                          mode="open", allowed_emails=None, expires_in_sec=86400):
+        """Owner-scoped by primary key. A row that is not this caller's reads exactly like one that
+        does not exist — the store never tells a non-owner that an id is taken."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
             return None
-        import secrets
-        secret = secrets.token_urlsafe(24)
-        gid = secrets.token_hex(8)
-        expires_at = (_now() + timedelta(seconds=int(expires_in_sec))).isoformat()
-        grant = {"id": gid, "secret_hash": _sha(secret), "mode": mode,
-                 "allowed_emails": list(allowed_emails or []), "expires_at": expires_at, "revoked": False}
-        self._meetings[mid]["data"].setdefault("share_grants", []).append(grant)
-        return {"id": gid, "token": f"{mid}.{secret}", "mode": mode, "expires_at": expires_at}
+        row = self._meetings.get(mid)
+        if row is None or row.get("user_id") != user_id:
+            return None
+        return self._mint_share_on(mid, mode, allowed_emails, expires_in_sec)
 
     async def redeem_transcript_share(self, user_id, user_email, token):
         from .adapters import _sha, validate_transcript_grant
@@ -477,6 +503,116 @@ class InMemoryTranscriptStore:
             primary = calendar_sources[0]
             data["calendar_connection_id"] = primary.get("id")
             data["calendar_name"] = primary.get("name") or "Calendar"
+        return self._planned_row(meeting_id)
+
+    async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
+                                 platform=None, native_meeting_id=None):
+        """A DELIBERATELY CRUDE stand-in for Postgres FTS — enough to test the ROUTE's contract
+        (owner scoping, filters, paging, hit shape), never the search semantics.
+
+        Case-insensitive whole-word AND matching, quoted phrases, `-term` negation. It does NOT
+        stem, does NOT rank by cover density, and does NOT implement `or`. Anything asserting real
+        tsquery behaviour must run against Postgres — meeting-api has no `requires_docker` lane
+        the way admin-api does, so that assertion lives in this branch's live validation.
+        Pretending otherwise here would produce tests that pass while production is wrong.
+        """
+        import re as _re
+
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        phrases = _re.findall(r'"([^"]+)"', q)
+        rest = _re.sub(r'"[^"]*"', " ", q)
+        negations = [w[1:].lower() for w in rest.split() if w.startswith("-") and len(w) > 1]
+        terms = [w.lower() for w in rest.split() if not w.startswith("-")]
+
+        def matches(text: str) -> bool:
+            low = text.lower()
+            words = set(_re.findall(r"\w+", low))
+            if any(n in words for n in negations):
+                return False
+            if not all(p.lower() in low for p in phrases):
+                return False
+            return all(t in words for t in terms)
+
+        hits = []
+        for mid, m in self._meetings.items():
+            if m["user_id"] != user_id:
+                continue          # owner-scoped, fail-closed — mirrors the adapter
+            if platform and m["platform"] != platform:
+                continue
+            if native_meeting_id and m["native_meeting_id"] != native_meeting_id:
+                continue
+            for seg in m["segments"].values():
+                text = seg.get("text") or ""
+                if not matches(text):
+                    continue
+                low = text.lower()
+                needle = (phrases + terms or [""])[0].lower()
+                i = low.find(needle)
+                snippet = text if i < 0 else (
+                    ("…" if i > 30 else "") + text[max(0, i - 30): i + len(needle) + 60] + "…"
+                )
+                hits.append({
+                    "segment_row_id": seg.get("segment_id"),
+                    # `meeting_db_id`, never `meeting_id`: the int row id must not travel under
+                    # the name that means the platform's STRING id everywhere else.
+                    "meeting_db_id": mid,
+                    "platform": m["platform"],
+                    "native_meeting_id": m["native_meeting_id"],
+                    "start": float(seg.get("start", 0.0)),
+                    "end": float(seg.get("end", 0.0)),
+                    "speaker": seg.get("speaker"),
+                    "language": seg.get("language"),
+                    # A flat count, NOT ts_rank_cd — enough to make ordering deterministic in a
+                    # test, not a claim about relevance.
+                    "rank": float(sum(low.count(t) for t in terms) + len(phrases)),
+                    "snippet": snippet,
+                    "text": text,
+                })
+        hits.sort(key=lambda h: (-h["rank"], -h["meeting_db_id"], h["start"]))
+        lim = max(1, min(int(limit or 20), 100))
+        off = max(0, int(offset or 0))
+        return hits[off:off + lim]
+
+    async def ensure_fts_index(self):
+        """No index to build without Postgres. The fake always answers 'search works anyway',
+        which is exactly the property that makes skipping the real build safe."""
+        return {"status": "skipped", "reason": "in-memory store"}
+
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None):
+        """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:
+        nothing written here is read by the dispatch pipeline, so there is no FSM to fight."""
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        data = m["data"]
+        # `title` lives in the data blob, NOT as a top-level field — mirrors the adapter and
+        # update_planned_meeting. Writing it anywhere else persists nothing.
+        if title is not None:
+            cleaned = (title or "").strip()[:512]
+            if cleaned:
+                data["title"] = cleaned
+            else:
+                data.pop("title", None)
+        if metadata is not None:
+            # ALWAYS a merge — mirrors the adapter. No whole-object replace exists, so a caller
+            # can never destroy a key it did not name.
+            current = data.get("metadata")
+            merged = dict(current) if isinstance(current, dict) else {}
+            for k, v in metadata.items():
+                if v is None:
+                    merged.pop(k, None)   # explicit null deletes exactly one key
+                else:
+                    merged[k] = v
+            # Bound the MERGED result, never the patch alone — mirrors the adapter. Checked
+            # BEFORE anything is stored, so a refusal writes nothing at all.
+            from .projection import check_metadata_bounds
+            reason = check_metadata_bounds(merged)
+            if reason:
+                return {"error": "metadata_too_large", "detail": reason}
+            data["metadata"] = merged
         return self._planned_row(meeting_id)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):

@@ -226,6 +226,11 @@ def build_production_app():
 
     app = create_app(
         transcript_store=transcript_store,
+        # The person's default bot name reaches the DIRECT spawn path too, resolved by the domain
+        # that owns the bot — same edge, same value, same precedence as the auto-join sweep.
+        fetch_bot_context=_bot_context_fetcher(
+            (os.getenv("ADMIN_API_URL") or "").rstrip("/"),
+            os.getenv("INTERNAL_API_SECRET") or ""),
         redis=segment_bus,
         meeting_repo=meeting_repo,
         runtime=runtime_client,
@@ -558,25 +563,9 @@ def _attach_background_loops(
             return
         import json as _json
 
-        import httpx
-
         from .bot_spawn.auto_join import auto_join_tick
 
-        fetch_bot_context = None
-        if admin_api_url and internal_secret:
-            async def fetch_bot_context(user_id: int):
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        r = await client.get(
-                            f"{admin_api_url}/internal/users/{user_id}/bot-context",
-                            headers={"X-Internal-Secret": internal_secret},
-                        )
-                    if r.status_code != 200:
-                        return None
-                    body = r.json()
-                    return body if isinstance(body, dict) else None
-                except Exception:
-                    return None  # identity unreachable → the sweep skips the row this tick
+        fetch_bot_context = _bot_context_fetcher(admin_api_url, internal_secret)
 
         async def publish_status(*, user_id, meeting_id, native_id, status, when):
             frame = {"type": "meeting.status", "meeting_id": meeting_id,
@@ -705,6 +694,46 @@ def _attach_background_loops(
                 log.exception("signal tape janitor tick failed")
             await asyncio.sleep(signal_janitor_interval)
 
+    async def _ensure_fts_index_once() -> None:
+        """F191 / MIGRATION-0006 — ``ensure_fts_index`` (adapters.py, ``SqlAlchemyTranscriptStore``)
+        built the transcript FTS GIN index and was never called from anywhere: it shipped defined,
+        dead, and search ran a sequential scan of ``transcriptions`` from day one with nothing
+        reporting the gap.
+
+        A ONE-SHOT task, not a ``while True`` loop like its siblings above: the function's own
+        docstring already establishes it is idempotent and cheap to re-check ("safe to call on
+        every boot"), so one attempt per process lifetime is the right shape — the loop members
+        above poll because their work recurs (new segments, new webhooks); this index does not.
+        Fired here rather than folded into meeting-api's synchronous boot path for the same reason
+        the docstring gives: ``CREATE INDEX CONCURRENTLY`` cannot run inside admin-api's
+        ``ensure_schema`` transaction, and a plain (non-concurrent) build would hold
+        ``ACCESS EXCLUSIVE`` on the highest-row-count table for the whole build and stall startup.
+
+        Single-flighted like the other sweeps (not because a concurrent build corrupts anything —
+        ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` is itself safe under a race — but so
+        ``replicaCount>1`` does not have every replica open its own AUTOCOMMIT connection and hold
+        it for the full build). ``hasattr`` guards a fake/Lite transcript_store the same way
+        ``upsert_segments``/``create_planned_meeting`` are guarded above — this branch's only real
+        store is ``SqlAlchemyTranscriptStore``, but eval/test doubles that construct this function
+        with something else must not crash on a method they were never given.
+        """
+        if not hasattr(transcript_store, "ensure_fts_index"):
+            return
+
+        async def _tick():
+            result = await transcript_store.ensure_fts_index()
+            log.info("transcript FTS index: %s", result)
+
+        try:
+            await _guarded("ensure-fts-index", _tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "ensure_fts_index failed — transcript search falls back to a sequential scan "
+                "until the next boot retries it"
+            )
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
@@ -719,6 +748,7 @@ def _attach_background_loops(
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
+            asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:
@@ -740,6 +770,33 @@ def __getattr__(name: str):
     if name == "app":
         return build_production_app()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+
+def _bot_context_fetcher(admin_api_url: str, internal_secret: str):
+    """The per-user spawn context from identity, or None when no identity edge is configured.
+
+    ONE builder for BOTH spawn paths. The auto-join sweep has taken this edge since it existed; the
+    direct `POST /bots` path did not, which is why the same person's bot showed up under one name
+    when a calendar armed it and another when they asked for it in chat. Two fetchers would be two
+    answers to one question, so there is one, here.
+    """
+    if not admin_api_url or not internal_secret:
+        return None
+    import httpx as _httpx
+
+    async def fetch(user_id: int):
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{admin_api_url}/internal/users/{user_id}/bot-context",
+                    headers={"X-Internal-Secret": internal_secret},
+                )
+            return r.json() if r.status_code == 200 else None
+        except Exception:  # noqa: BLE001 — a preference read never stops a bot joining
+            return None
+
+    return fetch
 
 
 def main() -> None:

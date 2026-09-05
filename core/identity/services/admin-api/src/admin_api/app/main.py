@@ -19,18 +19,22 @@ exercises:
 """
 import hmac
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_serializer, model_validator
+from sqlalchemy import func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..schema.models import APIToken, PlatformSetting, User
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
+from . import events as events_mod
+from . import person_settings as person_settings_mod
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -245,8 +249,39 @@ _SETUP_FIELDS = ("models", "transcription", "completed")
 # Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
 # default) because _validate_config_fields' one rulebook is string-only.
 _DIAGNOSTICS_FIELDS = ("capture_signal",)
+# "global_setup" is THE INSTANCE GATE (PRD S9 decision 17; founder 2026-09-02: "global needs to be
+# setup by admin, it just should not let him start the service before that"). `state` is "completed"
+# once an admin has written and committed the thin company layer into `_global`; ABSENT-OR-ANYTHING-
+# ELSE means missing, because this value is read FAIL-CLOSED by everything that can SEND. A fresh
+# instance, a cleared row and a half-written value therefore all mean the same thing: this Vexa
+# serves nobody yet. `company` is the company name the layer opens with -- evidence of WHAT was
+# accepted, never a second source of truth -- and `completed_at` is when. The only writer is
+# agent-api's verifier (POST /api/global/ready), which reads the files and the commit before it
+# flips anything: nothing may mark itself ready.
+_GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
 SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
-                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS}
+                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
+                "global_setup": _GLOBAL_SETUP_FIELDS}
+
+# One vocabulary for the gate, so no caller invents its own spelling of "not ready".
+GLOBAL_SETUP_COMPLETED = "completed"
+GLOBAL_SETUP_MISSING = "missing"
+
+# The one sentence a refused visitor sees, spelled once. Every service that refuses on this gate
+# quotes THIS wording; a paraphrase in one client is how a person learns to distrust the product.
+GATE_SENTENCE = "This Vexa is being set up by its administrator."
+
+
+def global_setup_state(value: dict) -> str:
+    """Read the gate out of the stored `global_setup` row -- FAIL-CLOSED.
+
+    Anything that is not exactly "completed" is "missing": an absent row, a cleared field, a typo,
+    a value half-written by a crashed run. The expensive direction of this decision is a flow
+    mailing strangers on behalf of a company nobody has described yet; the cheap direction is
+    showing an admin a wizard they have already finished."""
+    if isinstance(value, dict) and str(value.get("state", "")).strip() == GLOBAL_SETUP_COMPLETED:
+        return GLOBAL_SETUP_COMPLETED
+    return GLOBAL_SETUP_MISSING
 
 
 class ModelPrefsUpdate(BaseModel):
@@ -373,15 +408,58 @@ def create_app() -> FastAPI:
               dependencies=[Depends(verify_admin_token)])
     async def create_user(user_in: UserCreate, response: Response,
                           db: AsyncSession = Depends(get_db)):
-        existing = (await db.execute(select(User).where(User.email == user_in.email))).scalars().first()
+        # CASE-FOLDED, like the sign-in lookup two hundred lines down (R-B08). An exact match
+        # here means `Anna.Smith@acme.com` does not find the account `anna.smith@acme.com`, so
+        # this route CREATES A SECOND ONE — a ghost with an empty desk that then receives the
+        # meeting report while the real account gets nothing. Email is case-insensitive in its
+        # domain and, in every provider we meet, in its local part too; one half of this service
+        # already knew that.
+        existing = (await db.execute(
+            select(User).where(func.lower(User.email) == user_in.email.lower())
+        )).scalars().first()
         if existing:
             response.status_code = status.HTTP_200_OK
             return UserResponse.model_validate(existing)
+        # ── the one point a person enters ────────────────────────────────────────────────────
+        # FIVE independent paths onboard somebody — the control MCP's sign-in verbs, its OAuth door,
+        # its shared account_for helper, the terminal's own auth, and the flows mail door when an
+        # invite arrives from a stranger. They look like five places to publish `onboarding.completed`
+        # and they are not: all five create the account HERE. The single point they already share is
+        # where the fact belongs, which is why nothing else had to be refactored to make it true.
+        #
+        # The STAMP is written in the same transaction as the account, so the record that this person
+        # was onboarded survives a publish that never lands — a later sweep can replay from it. That
+        # ordering is the whole exactly-once guarantee: it holds against a replay, a restore, and a
+        # second producer somebody adds later without reading this comment.
         u = User(email=user_in.email, name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
+        u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
         db.add(u)
         await db.commit()
         await db.refresh(u)
+        # FIRE-AND-FORGET. Identity tells flows; it does not ask it. A deployment with no flows
+        # domain still onboards people, and so does one where flows is down — the publisher swallows
+        # everything and the person is already committed above.
+        # Guarded HERE as well as inside the publisher, and neither one alone is load-bearing: the
+        # publisher swallows transport failures, this swallows a publisher that changes shape. The
+        # thing being protected is a person's sign-in, and it must not depend on anyone remembering.
+        #
+        # `org` IS EMPTY, AND IT IS PRESENT. Identity holds no organisation for a person — there is
+        # no org column, no org field on the create body, and no org anywhere in this service — so
+        # the honest value is the empty one. It is emitted rather than omitted because a consumer
+        # that finds the key missing cannot tell "identity has no org for them" from "identity did
+        # not look", and would go and infer one from the email domain: a second place the answer
+        # lives, which is what stating every ref exists to prevent. The earlier shape here read
+        # `u.data.get("org")` on the dict assigned two lines above, so it was never anything but
+        # None while LOOKING like a lookup — the worst version of this, because it reads as though
+        # somebody checked.
+        try:
+            events_mod.publish(
+                events_mod.EVENT_ONBOARDING_COMPLETED,
+                events_mod.onboarding_source_id(u.id),
+                events_mod.onboarding_refs(u.id, events_mod.NO_ORG, events_mod.DEFAULT_SEAT))
+        except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+            pass
         response.status_code = status.HTTP_201_CREATED
         return UserResponse.model_validate(u)
 
@@ -392,7 +470,12 @@ def create_app() -> FastAPI:
     @app.get("/admin/users/email/{email}", response_model=UserResponse,
              dependencies=[Depends(verify_admin_token)])
     async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
-        user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        # Case-folded (R-B08) — see `create_user`. This is the ASKING half of the same question,
+        # and the two disagreeing is what mints the ghost: flows asks here, is told "no such
+        # user", and creates one.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email.lower())
+        )).scalars().first()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return UserResponse.model_validate(user)
@@ -682,6 +765,16 @@ def create_app() -> FastAPI:
         await db.commit()
         return data.get(data_key) or {}
 
+
+    # ── person facts (settings-to-identity) ───────────────────────────────────────────────────
+    # `timezone` and the mail preferences moved here out of `.settings.json`, a file in a workspace
+    # in the AGENT domain. That made flows and the control MCP depend on a third domain for a fact
+    # about a PERSON — so a deployment without agents had people with no clock and no way to stop
+    # the mail. Identity is the only domain everyone may depend on; these are its kind of fact.
+    #
+    # `bot_name` is NOT here on purpose: a bot default is a fact about the bot, and meetings already
+    # resolves one through /internal/users/{id}/bot-context.
+
     @app.put("/user/models")
     async def set_user_models(update: ModelPrefsUpdate,
                               user: User = Depends(get_current_user_for_update),
@@ -824,10 +917,35 @@ def create_app() -> FastAPI:
         )).first()
         return row is not None
 
+    async def _instance_state(db: AsyncSession) -> dict:
+        """THE INSTANCE GATE, computed in exactly ONE place.
+
+        Every other service (the terminal, agent-api, the flows engine) reads the gate through one
+        of the two doors below -- never by reaching into platform_settings itself. One source of
+        truth, one reader function per service, is the whole design: a surface with two readers of
+        a lifecycle value does not error when they disagree, it just behaves differently in two
+        places and nobody can say which is right."""
+        row = await db.get(PlatformSetting, "global_setup")
+        value = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+        return {
+            "admin_exists": await _admin_exists(db),
+            "global_setup": global_setup_state(value),
+            "company": value.get("company") or None,
+        }
+
     @app.get("/internal/instance", include_in_schema=False)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
         return {"admin_exists": await _admin_exists(db)}
+
+    @app.get("/admin/instance", include_in_schema=False,
+             dependencies=[Depends(verify_admin_token)])
+    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
+        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
+        no internal secret (see flows_steps/common.py), so without this door it would have to infer
+        the gate from something else -- and a service that infers the gate IS a second source of
+        truth. Same body, same computation, different transport."""
+        return await _instance_state(db)
 
     @app.post("/internal/bootstrap-admin", include_in_schema=False)
     async def bootstrap_admin(payload: dict, request: Request,
@@ -924,6 +1042,22 @@ def create_app() -> FastAPI:
     async def _platform_setting(key: str, db: AsyncSession) -> dict:
         row = await db.get(PlatformSetting, key)
         return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
+
+    @app.get("/internal/users/{user_id}/settings", include_in_schema=False)
+    async def get_user_settings_internal(user_id: str, request: Request,
+                                         db: AsyncSession = Depends(get_db)):
+        """This person's settings, for flows. An allowed door: flows may call identity, and reading
+        `.settings.json` off agent-api — which is what this replaces — was not.
+
+        An unknown user is a 404 and never a defaulted answer: "defaults for somebody who exists"
+        and "defaults for somebody who does not" are opposite facts, and the second one means a flow
+        is about to mail a person who is not there."""
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        return person_settings_mod.read_person_facts(
+            user.data if isinstance(user.data, dict) else {})
+
 
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):

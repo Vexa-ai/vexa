@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
+from urllib.parse import urlparse
 
 
 AUTHORITY_VERSION = "service-authority.v1"
@@ -21,6 +22,51 @@ def _utc(value: datetime) -> datetime:
 
 def _wire_time(value: datetime) -> str:
     return _utc(value).isoformat()
+
+
+# The deciding service owns the WORDS. This module carries them; it never authors them and never
+# reads them: no vocabulary here, no plan names, no URLs, nothing that has to change when a
+# deployment changes what it sells. A refusal a caller cannot act on is the defect these two
+# optional fields close — the reason code says WHICH gate closed, the message says what a person
+# can DO about it, and only the deployment that decided knows the second one.
+MESSAGE_MAX_CHARS = 512
+ACTION_URL_MAX_CHARS = 2048
+
+
+def clean_message(value: Any) -> Optional[str]:
+    """A refusal message that may be shown to a caller, or None.
+
+    Sanitising rather than rejecting is deliberate: a malformed courtesy field must never turn a
+    decidable 403 into an opaque 503. The decision is the load-bearing part and the words are an
+    improvement on it, so a bad one is dropped and the refusal still stands.
+    """
+    if not isinstance(value, str):
+        return None
+    # Control characters (newlines included) are stripped rather than escaped: this string is
+    # inlined into an error line an agent reads, and a smuggled newline could forge a second line.
+    text = "".join(ch for ch in value if ch.isprintable()).strip()
+    if not text:
+        return None
+    return text[:MESSAGE_MAX_CHARS]
+
+
+def clean_action_url(value: Any) -> Optional[str]:
+    """An https URL a caller can open, or None.
+
+    https only — never a scheme that executes in the reader (``javascript:``) or carries its own
+    payload (``data:``). A non-https value is dropped, never rewritten.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > ACTION_URL_MAX_CHARS:
+        return None
+    if any(not ch.isprintable() for ch in text):
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    return text
 
 
 def parse_time(value: Any, field: str) -> datetime:
@@ -172,7 +218,16 @@ _DECISION_KEYS = frozenset({
     "reason",
     "decided_at",
     "stop_scope",
+    # Optional, and OPTIONAL IS LOAD-BEARING: a deciding service that starts sending these must not
+    # break a deployment that has not been rebuilt. Before they were listed here the strict
+    # unknown-field check rejected the whole response, so a decision carrying plain words for the
+    # caller became "authority unavailable" — a 503 in place of an actionable 403.
+    "message",
+    "action_url",
 })
+
+# Present-but-empty is the same as absent everywhere below, so the required set is spelled once.
+_OPTIONAL_DECISION_KEYS = frozenset({"stop_scope", "message", "action_url"})
 
 
 @dataclass(frozen=True)
@@ -186,6 +241,10 @@ class ServiceAuthorityDecision:
     decided_at: datetime
     stop_scope: Optional[Literal["billable_service"]] = None
     enforced: bool = True
+    # What a caller can read and act on. Authored by the deciding service, carried verbatim (after
+    # sanitising) and never interpreted here.
+    message: Optional[str] = None
+    action_url: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.authority_version != AUTHORITY_VERSION:
@@ -207,6 +266,12 @@ class ServiceAuthorityDecision:
             raise ValueError("unsupported service-authority stop scope")
         if self.allow and self.stop_scope is not None:
             raise ValueError("an allowed decision cannot carry a stop scope")
+        for field_name in ("message", "action_url"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(
+                    f"service-authority {field_name} must be a string when present"
+                )
         _utc(self.decided_at)
 
     @classmethod
@@ -223,7 +288,7 @@ class ServiceAuthorityDecision:
             raise ValueError("service-authority response must be an object")
         if set(value) - _DECISION_KEYS:
             raise ValueError("service-authority response contains unknown fields")
-        required = _DECISION_KEYS - {"stop_scope"}
+        required = _DECISION_KEYS - _OPTIONAL_DECISION_KEYS
         if any(key not in value for key in required):
             raise ValueError("service-authority response is incomplete")
         decided_at = parse_time(value["decided_at"], "decided_at")
@@ -240,6 +305,8 @@ class ServiceAuthorityDecision:
             decided_at=decided_at,
             stop_scope=value.get("stop_scope"),
             enforced=enforced,
+            message=clean_message(value.get("message")),
+            action_url=clean_action_url(value.get("action_url")),
         )
         if (
             decision.request_id != request.request_id
@@ -262,8 +329,25 @@ class ServiceAuthorityDecision:
             )
         return decision
 
+    def caller_fields(self) -> dict[str, Any]:
+        """The optional caller-facing half of a decision, with ABSENT fields omitted.
+
+        Omission, not a null: a caller that reads ``message`` off the body must be able to tell
+        "this deployment said nothing" from "this deployment said an empty thing", and a null in a
+        JSON error body reads as the latter.
+        """
+        fields: dict[str, Any] = {}
+        if self.message is not None:
+            fields["message"] = self.message
+        if self.action_url is not None:
+            fields["action_url"] = self.action_url
+        return fields
+
     def to_record(self) -> dict[str, Any]:
+        # Same omit-when-absent rule as the wire: this dict is merged into meeting metadata, and a
+        # persisted `"message": null` is indistinguishable from a message that was blanked.
         return {
+            **self.caller_fields(),
             "authority_version": self.authority_version,
             "decision_id": self.decision_id,
             "request_id": self.request_id,

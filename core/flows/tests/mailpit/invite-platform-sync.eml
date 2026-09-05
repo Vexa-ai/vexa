@@ -1,0 +1,39 @@
+From: Robin Vale <Organizer@Example.test>
+To: vexa@example.com
+Subject: Invitation: Platform Sync weekly @ Sat Mar 2, 2030 2pm (UTC)
+Message-ID: <invite-platform-sync-1@example.test>
+Date: Tue, 01 Sep 2026 21:14:02 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset="utf-8"
+
+You have been invited to Platform Sync weekly.
+
+--b1
+Content-Type: text/calendar; charset="utf-8"; method=REQUEST; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+PRODID:-//Zoom//Zoom Calendar//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20300302T140000Z
+DTEND:20300302T150000Z
+UID:platform-sync-20300302@zoom.us
+ORGANIZER;CN=Robin Vale:mailto:Organizer@Example.test
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=Cas
+ ey Lund:mailto:Casey@Example.test
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;CN=Priya Raman:mailto:priya@
+ example.test
+ATTENDEE;CN=Vexa;PARTSTAT=NEEDS-ACTION:mailto:VEXA@example.com
+SUMMARY:Platform Sync weekly
+DESCRIPTION:Join Zoom Meeting #group:platform-sync\nhttps://us02web.zoom.us
+ /j/84123456789?pwd=aBcD1234efGH
+LOCATION:https://us02web.zoom.us/j/84123456789?pwd=aBcD1234efGH
+END:VEVENT
+END:VCALENDAR
+
+--b1--

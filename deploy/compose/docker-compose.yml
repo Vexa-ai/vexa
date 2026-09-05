@@ -100,8 +100,15 @@ services:
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
+      # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
+      # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —
+      # a deployment with no flows domain still onboards people, and the fact stays stamped on
+      # the person either way. The key authenticates the same edge; flows' POST /events is not open.
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
       interval: 10s
@@ -298,7 +305,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -339,6 +346,15 @@ services:
       - VEXA_SYSTEM_WEBHOOK_SECRET=${VEXA_SYSTEM_WEBHOOK_SECRET:-}
       - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
       - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
+      # F168/F181: meetings→flows publish edge (config.v1 publish-edge, meeting_api/events.py) —
+      # meeting-api telling flows a bot it dispatched went active / completed, best-effort and
+      # swallowed on failure, the same as admin-api's onboarding.completed edge just below it in
+      # spirit (this file has no admin-api block above to point at, so: deploy/compose/
+      # docker-compose.yml's admin-api service, VEXA_FLOWS_API_URL line). Empty here is the no-flows
+      # profile — a deployment with no flows domain still runs meetings exactly as one with a
+      # flows domain does, and the fact stays out of `whats_waiting` rather than the boot refusing.
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -368,8 +384,11 @@ services:
 
   gateway:
     build:
-      context: ../../core/gateway/services/gateway
-      dockerfile: Dockerfile
+      # THE REPO ROOT, like meeting-api and agent-api. The edge reads each domain's
+      # routes.v1.json BY PATH at import (routes_manifest.py), so the image must carry the
+      # manifests of the domains it fronts; a context scoped to the service cannot reach them.
+      context: ../..
+      dockerfile: core/gateway/services/gateway/Dockerfile
     image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${API_GATEWAY_HOST_PORT:-18056}:8000"
@@ -381,8 +400,14 @@ services:
       # NOT a depends_on: mcp itself depends on the gateway (GATEWAY_URL), and compose refuses a
       # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
       - MCP_URL=http://mcp:8010
+      # THE AGENT DOMAIN'S PRESENCE SIGNAL (PRD 40.6 / 40.7). This full profile runs agents, so it
+      # names the door and the edge fronts `/agent/*`. The `no-agents` profile leaves it EMPTY —
+      # the gateway then registers no /agent route and assembles no agent rows into its scope
+      # table, so a request there is 404 rather than a 401 about a route this stack does not have.
+      # It was a CODE default before, which made a deployment unable to say it has no agents.
+      - AGENT_API_URL=${AGENT_API_URL:-}
       - REDIS_URL=redis://redis:6379/0
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -420,6 +445,322 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # flows-api — the reaction engine's HTTP surface, and one of the domains the MCP assembly asks
+  # for a tool manifest (PRD decision 40).
+  #
+  # WHAT THIS REPLACES. The flows lanes run on the dogfood rig as HOST processes out of
+  # `flows-up.sh`, on loopback :18200/:18201, and the compose-network `mcp` service was pointed at
+  # the docker BRIDGE ADDRESS of that host lane so it could fetch /.well-known/mcp-tools.json — a
+  # host-specific IP written into a deployment, for a service the deployment did not run. This is
+  # the service. The host lane keeps working unchanged until the estate cuts over: the bind address
+  # defaults to loopback in code and is widened HERE, in the container's own environment, so the
+  # exposure is visible next to the port that publishes it.
+  #
+  # ONE IMAGE, THREE ENTRYPOINTS, ONE CONFIGURATION. `flows-api`, `flows-mailbox` and
+  # `flows-worker` (below) differ by `command` and by nothing else, so they carry the SAME
+  # environment: the config.v1 declaration belongs to the flows domain, not to one of its
+  # processes, and a lane configured differently from its siblings is how a mail policy comes to
+  # hold in one place and not the other. The WORKER is the image's default command; it used not
+  # to be started here (F190 — a deployment that admits facts through `flows-api` but never runs
+  # the process that advances them), and now is, right after `flows-mailbox` below.
+  flows-api:
+    build:
+      # The repo ROOT: the image COPYs core/flows/src AND the behavior showcase at behavior/.
+      context: ../..
+      dockerfile: core/flows/Dockerfile
+    image: vexaai/v012-flows:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "flows_integrations.flows_api"]
+    ports:
+      # Loopback-published for debugging, like every other service here; overridable so two stacks
+      # can share a host.
+      - "127.0.0.1:${FLOWS_API_HOST_PORT:-18200}:8200"
+    environment:
+      # ── the listener ────────────────────────────────────────────────────────────────────────
+      # In a container, loopback is THIS container's loopback — nothing else on the network can
+      # reach it. That is the whole reason the bridge-address hack existed. Said out loud here
+      # rather than flipped as a code default, which would have published the rig's host lane on
+      # every interface of that box the day it merged.
+      - VEXA_FLOWS_API_HOST=0.0.0.0
+      - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
+      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
+      # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
+      # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
+      # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
+      # placeholder literals by name. No `:?` either, though it is tempting: compose evaluates it
+      # while PARSING THE FILE, so it fails `docker compose config` for the entire stack, including
+      # deployments that do not run flows at all. The refusal belongs to the process that needs the
+      # secret, where it names itself and stops only itself — and it is already there, and tested.
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      # admin-api's OWN token, under the name flows reads it by. One credential, two spellings, is
+      # what F95 was; this is the second spelling of ADMIN_TOKEN and it is passed through, never
+      # re-defaulted to a literal of its own.
+      - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
+      # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
+      # Service names on the compose network. An unnamed door is a loud refusal at the moment it
+      # would have been used, so naming them here is what makes the refusal never fire in a stack
+      # that does run these domains.
+      - VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8000
+      # OPTIONAL DOMAIN, and the reason it is a variable rather than a service name: decision 40
+      # says a deployment may not run the agent domain at all. Unset, steps that need it answer
+      # `not_present` instead of reaching for a door that is not there (#1453).
+      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
+      # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
+      # that would compose one refuses naming this key — it no longer decides whether flows BOOTS.
+      - VEXA_UI_URL=${VEXA_UI_URL:-}
+      # ── the mailbox (read by the flows-mailbox lane below; one image, one declaration) ───────
+      - VEXA_MAIL_INBOX=${VEXA_MAIL_INBOX:-imap}
+      - VEXA_MAIL_ADDR=${VEXA_MAIL_ADDR:-}
+      - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
+      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
+      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
+      - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
+      - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
+      # ── who the mailbox will act for (R-B12) ────────────────────────────────────────────────
+      # UNSET IS NOT `EVERYONE`: unset means the mailbox's own domain. Empty here is therefore the
+      # safe value and not a hole.
+      - VEXA_FLOWS_MAIL_DOMAINS=${VEXA_FLOWS_MAIL_DOMAINS:-}
+      - VEXA_FLOWS_MAIL_QUARANTINE_REPLY=${VEXA_FLOWS_MAIL_QUARANTINE_REPLY:-}
+      - VEXA_FLOWS_MAIL_RATE_PER_SENDER=${VEXA_FLOWS_MAIL_RATE_PER_SENDER:-12}
+      - VEXA_FLOWS_MAIL_RATE_GLOBAL=${VEXA_FLOWS_MAIL_RATE_GLOBAL:-120}
+      - VEXA_FLOWS_MAIL_RATE_WINDOW_S=${VEXA_FLOWS_MAIL_RATE_WINDOW_S:-3600}
+      - VEXA_FLOWS_MAIL_BODY_MAX=${VEXA_FLOWS_MAIL_BODY_MAX:-4000}
+      # ── behaviour and content ───────────────────────────────────────────────────────────────
+      - VEXA_FLOWS_ATTENDEE_DOMAINS=${VEXA_FLOWS_ATTENDEE_DOMAINS:-}
+      - VEXA_FLOWS_DATA_STATEMENT=${VEXA_FLOWS_DATA_STATEMENT:-}
+      # The private behavior tree a deployment mounts (decision 12). EMPTY IS THE OSS PRODUCT: the
+      # showcase baked into the image at /behavior is what flows reads.
+      - VEXA_BEHAVIOR_DIR=${VEXA_BEHAVIOR_DIR:-}
+      - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
+      - VEXA_FLOWS_USER_KEY_TTL_S=${VEXA_FLOWS_USER_KEY_TTL_S:-900}
+      - VEXA_TIMELINE_SCAN_ROWS=${VEXA_TIMELINE_SCAN_ROWS:-2000}
+      # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
+      # not read it. Carried in the declaration's `surface_only` list with that reason, so
+      # `gate:config-contract` records the drift instead of ignoring it.
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      # WHAT IT CANNOT BOOT WITHOUT, and nothing else: its own database, and IDENTITY — the one
+      # domain decision 40.7 lets everybody depend on. Not meeting-api, not agent-api, not the
+      # terminal: flows reaches those at STEP time, and 40.7's whole point is that a deployment may
+      # not carry them. A depends_on there would turn an optional domain into a boot requirement.
+      postgres:
+        condition: service_healthy
+      admin-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  # flows-mailbox — the inbound mail lane: IMAP poll → `POST /events` on the engine. Same image,
+  # same configuration, different command.
+  #
+  # UNDER A PROFILE, and that is the product statement: mail is an OPTIONAL INTAKE. The no-agents
+  # MCP product boots identity + meetings + flows + mcp + gateway and never touches a mailbox, so
+  # a lane that needs a real IMAP credential must not be in the default `docker compose up` — it
+  # would restart-loop on a stock stack and read as a broken deployment. `--profile mailbox`, or
+  # `COMPOSE_PROFILES=mailbox`, turns it on once the mail credentials are actually set.
+  #
+  # SINGLE WRITER: the IMAP cursor is single-writer by design (helm pins replicas: 1 for the same
+  # reason). Do not scale this service.
+  flows-mailbox:
+    profiles: ["mailbox"]
+    build:
+      context: ../..
+      dockerfile: core/flows/Dockerfile
+    image: vexaai/v012-flows:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "flows_integrations.mailbox"]
+    environment:
+      # ── the listener ────────────────────────────────────────────────────────────────────────
+      # In a container, loopback is THIS container's loopback — nothing else on the network can
+      # reach it. That is the whole reason the bridge-address hack existed. Said out loud here
+      # rather than flipped as a code default, which would have published the rig's host lane on
+      # every interface of that box the day it merged.
+      - VEXA_FLOWS_API_HOST=0.0.0.0
+      - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
+      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
+      # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
+      # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
+      # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
+      # placeholder literals by name. No `:?` either, though it is tempting: compose evaluates it
+      # while PARSING THE FILE, so it fails `docker compose config` for the entire stack, including
+      # deployments that do not run flows at all. The refusal belongs to the process that needs the
+      # secret, where it names itself and stops only itself — and it is already there, and tested.
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      # admin-api's OWN token, under the name flows reads it by. One credential, two spellings, is
+      # what F95 was; this is the second spelling of ADMIN_TOKEN and it is passed through, never
+      # re-defaulted to a literal of its own.
+      - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
+      # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
+      # Service names on the compose network. An unnamed door is a loud refusal at the moment it
+      # would have been used, so naming them here is what makes the refusal never fire in a stack
+      # that does run these domains.
+      - VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8000
+      # OPTIONAL DOMAIN, and the reason it is a variable rather than a service name: decision 40
+      # says a deployment may not run the agent domain at all. Unset, steps that need it answer
+      # `not_present` instead of reaching for a door that is not there (#1453).
+      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
+      # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
+      # that would compose one refuses naming this key — it no longer decides whether flows BOOTS.
+      - VEXA_UI_URL=${VEXA_UI_URL:-}
+      # ── the mailbox (read by the flows-mailbox lane below; one image, one declaration) ───────
+      - VEXA_MAIL_INBOX=${VEXA_MAIL_INBOX:-imap}
+      - VEXA_MAIL_ADDR=${VEXA_MAIL_ADDR:-}
+      - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
+      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
+      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
+      - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
+      - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
+      # ── who the mailbox will act for (R-B12) ────────────────────────────────────────────────
+      # UNSET IS NOT `EVERYONE`: unset means the mailbox's own domain. Empty here is therefore the
+      # safe value and not a hole.
+      - VEXA_FLOWS_MAIL_DOMAINS=${VEXA_FLOWS_MAIL_DOMAINS:-}
+      - VEXA_FLOWS_MAIL_QUARANTINE_REPLY=${VEXA_FLOWS_MAIL_QUARANTINE_REPLY:-}
+      - VEXA_FLOWS_MAIL_RATE_PER_SENDER=${VEXA_FLOWS_MAIL_RATE_PER_SENDER:-12}
+      - VEXA_FLOWS_MAIL_RATE_GLOBAL=${VEXA_FLOWS_MAIL_RATE_GLOBAL:-120}
+      - VEXA_FLOWS_MAIL_RATE_WINDOW_S=${VEXA_FLOWS_MAIL_RATE_WINDOW_S:-3600}
+      - VEXA_FLOWS_MAIL_BODY_MAX=${VEXA_FLOWS_MAIL_BODY_MAX:-4000}
+      # ── behaviour and content ───────────────────────────────────────────────────────────────
+      - VEXA_FLOWS_ATTENDEE_DOMAINS=${VEXA_FLOWS_ATTENDEE_DOMAINS:-}
+      - VEXA_FLOWS_DATA_STATEMENT=${VEXA_FLOWS_DATA_STATEMENT:-}
+      # The private behavior tree a deployment mounts (decision 12). EMPTY IS THE OSS PRODUCT: the
+      # showcase baked into the image at /behavior is what flows reads.
+      - VEXA_BEHAVIOR_DIR=${VEXA_BEHAVIOR_DIR:-}
+      - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
+      - VEXA_FLOWS_USER_KEY_TTL_S=${VEXA_FLOWS_USER_KEY_TTL_S:-900}
+      - VEXA_TIMELINE_SCAN_ROWS=${VEXA_TIMELINE_SCAN_ROWS:-2000}
+      # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
+      # not read it. Carried in the declaration's `surface_only` list with that reason, so
+      # `gate:config-contract` records the drift instead of ignoring it.
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    init: true
+    depends_on:
+      # The same two, and for the same reason — plus flows-api, because this lane's whole output is
+      # `POST /events` against it. That is not a domain dependency; it is this process talking to
+      # its own domain's API.
+      postgres:
+        condition: service_healthy
+      admin-api:
+        condition: service_healthy
+      flows-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  # flows-worker — THE reaction engine (F190): claim → one step → receipts → advance, on the same
+  # `reaction` table `flows-api` admits facts into. Same image, same configuration, different
+  # command — see "ONE IMAGE, THREE ENTRYPOINTS" above `flows-api`. NOT behind a profile, unlike
+  # `flows-mailbox`: the mailbox is an optional intake gated on a real IMAP credential, but a
+  # deployment that runs `flows-api` and never runs the process that advances what it admits is
+  # not an optional shape, it is silently broken — every reaction would sit `pending` forever.
+  #
+  # NO PORT, NO HTTP HEALTHCHECK: `flows_worker/__main__.py` has no server, it is
+  # `while True: tick(...); sleep(POLL_S)`. Its liveness is the `flows-worker up · N flows ·
+  # M steps` line it prints on boot, then the reaction rows it advances — there is no `/health` to
+  # poll, so this service carries none, exactly like `flows-mailbox` above it.
+  #
+  # depends_on ONLY postgres + admin-api, not flows-api: the worker never calls flows-api over
+  # HTTP, it opens the SAME Postgres DSN directly (`postgres_db(db_url())`) and reads/writes the
+  # `reaction` table flows-api also writes to — a dependency on flows-api's `/health` would couple
+  # two processes that do not actually talk to each other, exactly the reasoning the comment on
+  # flows-api's own depends_on block already gives for stopping at postgres + admin-api.
+  flows-worker:
+    build:
+      context: ../..
+      dockerfile: core/flows/Dockerfile
+    image: vexaai/v012-flows:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "flows_worker"]
+    environment:
+      # ── the listener ────────────────────────────────────────────────────────────────────────
+      # In a container, loopback is THIS container's loopback — nothing else on the network can
+      # reach it. That is the whole reason the bridge-address hack existed. Said out loud here
+      # rather than flipped as a code default, which would have published the rig's host lane on
+      # every interface of that box the day it merged.
+      - VEXA_FLOWS_API_HOST=0.0.0.0
+      - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
+      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
+      # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
+      # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
+      # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
+      # placeholder literals by name. No `:?` either, though it is tempting: compose evaluates it
+      # while PARSING THE FILE, so it fails `docker compose config` for the entire stack, including
+      # deployments that do not run flows at all. The refusal belongs to the process that needs the
+      # secret, where it names itself and stops only itself — and it is already there, and tested.
+      - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      # admin-api's OWN token, under the name flows reads it by. One credential, two spellings, is
+      # what F95 was; this is the second spelling of ADMIN_TOKEN and it is passed through, never
+      # re-defaulted to a literal of its own.
+      - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
+      # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
+      # Service names on the compose network. An unnamed door is a loud refusal at the moment it
+      # would have been used, so naming them here is what makes the refusal never fire in a stack
+      # that does run these domains.
+      - VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8000
+      # OPTIONAL DOMAIN, and the reason it is a variable rather than a service name: decision 40
+      # says a deployment may not run the agent domain at all. Unset, steps that need it answer
+      # `not_present` instead of reaching for a door that is not there (#1453).
+      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
+      # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
+      # that would compose one refuses naming this key — it no longer decides whether flows BOOTS.
+      - VEXA_UI_URL=${VEXA_UI_URL:-}
+      # ── the mailbox (read by the flows-mailbox lane above; one image, one declaration) ───────
+      - VEXA_MAIL_INBOX=${VEXA_MAIL_INBOX:-imap}
+      - VEXA_MAIL_ADDR=${VEXA_MAIL_ADDR:-}
+      - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
+      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
+      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
+      - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
+      - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
+      # ── who the mailbox will act for (R-B12) ────────────────────────────────────────────────
+      # UNSET IS NOT `EVERYONE`: unset means the mailbox's own domain. Empty here is therefore the
+      # safe value and not a hole.
+      - VEXA_FLOWS_MAIL_DOMAINS=${VEXA_FLOWS_MAIL_DOMAINS:-}
+      - VEXA_FLOWS_MAIL_QUARANTINE_REPLY=${VEXA_FLOWS_MAIL_QUARANTINE_REPLY:-}
+      - VEXA_FLOWS_MAIL_RATE_PER_SENDER=${VEXA_FLOWS_MAIL_RATE_PER_SENDER:-12}
+      - VEXA_FLOWS_MAIL_RATE_GLOBAL=${VEXA_FLOWS_MAIL_RATE_GLOBAL:-120}
+      - VEXA_FLOWS_MAIL_RATE_WINDOW_S=${VEXA_FLOWS_MAIL_RATE_WINDOW_S:-3600}
+      - VEXA_FLOWS_MAIL_BODY_MAX=${VEXA_FLOWS_MAIL_BODY_MAX:-4000}
+      # ── behaviour and content ───────────────────────────────────────────────────────────────
+      - VEXA_FLOWS_ATTENDEE_DOMAINS=${VEXA_FLOWS_ATTENDEE_DOMAINS:-}
+      - VEXA_FLOWS_DATA_STATEMENT=${VEXA_FLOWS_DATA_STATEMENT:-}
+      # The private behavior tree a deployment mounts (decision 12). EMPTY IS THE OSS PRODUCT: the
+      # showcase baked into the image at /behavior is what flows reads.
+      - VEXA_BEHAVIOR_DIR=${VEXA_BEHAVIOR_DIR:-}
+      - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
+      - VEXA_FLOWS_USER_KEY_TTL_S=${VEXA_FLOWS_USER_KEY_TTL_S:-900}
+      - VEXA_TIMELINE_SCAN_ROWS=${VEXA_TIMELINE_SCAN_ROWS:-2000}
+      # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
+      # not read it. Carried in the declaration's `surface_only` list with that reason, so
+      # `gate:config-contract` records the drift instead of ignoring it.
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      admin-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
   # MCP service — the Model Context Protocol front for the PUBLIC API (v0.12 port of 0.10.6
   # services/mcp). Stateless: every tool call forwards the caller's key to the gateway as
   # X-API-Key. Fronted at the gateway edge under /mcp (#795) — an MCP client points at the
@@ -435,6 +776,25 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:8000
       - PORT=8010
+      # ── assembly (PRD decision 40) ─────────────────────────────────────────────────────────
+      # The domains this deployment carries. A domain whose URL is set is ASKED for its tool
+      # manifest at /.well-known/mcp-tools.json and its tools join the one MCP surface; a domain
+      # whose URL is unset is never asked and its tools are simply absent. That is the whole of the
+      # eight-configuration story — identity plus any subset of meetings, flows and agent — and it
+      # needs no profile name, because a profile name would be a second place to say what these
+      # URLs already say.
+      - ADMIN_API_URL=http://admin-api:8001
+      - MEETING_API_URL=http://meeting-api:8080
+      - AGENT_API_URL=${AGENT_API_URL:-}
+      # DEFAULTS TO THE SERVICE. It used to default to empty, so a stack that ran flows still
+      # assembled without its tools unless somebody supplied a URL by hand — which is how a
+      # docker bridge address came to be the answer. Override to point at a flows elsewhere;
+      # set it empty to run a deployment that genuinely does not carry the domain.
+      - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # A private deployment mounts its own manifests here — billing, seats, entitlement — and they
+      # are assembled exactly like the OSS ones, competing for names in the same space so a mount
+      # can collide but never shadow. EMPTY IS THE OSS PRODUCT, exactly.
+      - VEXA_MCP_MANIFEST_DIR=${VEXA_MCP_MANIFEST_DIR:-}
       - VEXA_ENV=${VEXA_ENV:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
@@ -551,7 +911,6 @@ services:
         condition: service_healthy
     networks: [vexa]
     restart: unless-stopped
-
   # DEPRECATED — the 0.10 dashboard, kept as an OFF-BY-DEFAULT profile while it is still
   # load-bearing (#813). It is the multi-user web UI hosted production runs against the 0.12 core
   # (the wiring below is the hosted-proven one), and some flows (authenticated-session lifecycle,

@@ -603,6 +603,8 @@ async def request_bot(
         raise ServiceAuthorityDenied(
             authority_decision.reason,
             authority_decision.decision_id,
+            message=authority_decision.message,
+            action_url=authority_decision.action_url,
         )
     authority_record = {
         **authority_decision.to_record(),
