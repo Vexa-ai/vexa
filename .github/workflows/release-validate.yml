@@ -486,7 +486,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       # Runtime uses the Docker Engine create API with pull disabled. Prove the daemon contract
       # red→green here, then leave the exact published bot bytes resident for stack-test.
       - name: Prove and preload the published bot image for runtime spawn
@@ -554,7 +554,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
       # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
@@ -593,7 +593,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
       # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
@@ -630,7 +630,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       # The runtime spawns bots through the docker socket API, which does NOT implicit-pull —
       # the published bot image must already be on the daemon.
       - name: Pre-pull the published bot image
