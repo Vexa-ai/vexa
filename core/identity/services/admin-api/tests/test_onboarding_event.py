@@ -18,6 +18,7 @@ onboarding completing without the event — because that is a person who is sign
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -199,4 +200,4 @@ def test_the_publisher_itself_swallows_everything(monkeypatch):
     """Asserted on the publisher, not only through the route: the next caller of `publish` gets the
     same guarantee without having to know to wrap it."""
     monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://127.0.0.1:9")   # nothing listens
-    assert events_mod.publish("onboarding.completed", "x", {"subject": "1"}) is False
+    assert asyncio.run(events_mod.publish("onboarding.completed", "x", {"subject": "1"})) is False
