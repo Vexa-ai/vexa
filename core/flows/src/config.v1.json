@@ -85,11 +85,20 @@
     {
       "key": "VEXA_FLOWS_TIMELINE_KEY",
       "class": "capability",
-      "description": "A read-only key that opens `GET /timeline` and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one.",
+      "description": "A read-only key that opens `GET /timeline` for one NAMED subject and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one. It is its own caller kind (`Caller(kind=\"timeline\")`), never an admin: as an admin it read any person's reactions and queue and minted a gateway token on the named third party's account (E1/P20).",
       "capability": "timeline_read_key",
       "secret": true,
       "targets": [
         "compose"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
       ]
     },
     {

@@ -129,6 +129,40 @@ def test_an_unresolvable_subject_is_unresolved_not_everything():
     assert out["unresolved"] is True and out["items"] == []
 
 
+def test_an_email_subject_with_admin_api_down_is_unresolved_not_a_half_answer():
+    """B1/P21(c). `resolve_identity` fails SOFT: asked about an ADDRESS while admin-api is down it
+    hands back the address and an empty uid. This projection then scoped on the address alone,
+    which matches only the rows that carry one — the invite lineage — and silently drops the whole
+    completed lineage, which carries a uid and no address (`flows_timeline.model.concerns`).
+
+    So a person whose queue was full of meeting work was told `waiting: 0` from a half-scoped
+    query. "Nothing is waiting for you" and "we could not work out who you are" are different facts
+    and only one of them is about them; the docstring on `pending()` named this failure and nothing
+    detected it."""
+    db = SqliteDB()
+    _row(db, "r-mine", MINE)                       # the uid lineage — invisible to an address scope
+
+    def _admin_api_down(subject):
+        return ("", str(subject).lower())          # exactly what resolve_identity returns then
+
+    out = flows_queue.waiting(db, subject="dima@vexa.ai", now=T0, identity=_admin_api_down)
+    assert out["unresolved"] is True, "a half-resolved subject answered as if it were resolved"
+    assert out["items"] == [] and out["waiting"] == 0
+    # …and the same for the notices ride-along, which is asked on every call.
+    assert flows_queue.notices(db, subject="dima@vexa.ai", now=T0,
+                               identity=_admin_api_down)["unresolved"] is True
+
+
+def test_a_uid_with_no_address_on_record_is_still_a_real_answer():
+    """The mirror case is NOT the same case. Identity's `/internal/validate` legitimately answers a
+    user_id and an empty email — that is an account state, where an address that resolves to no uid
+    is an answer that did not arrive. Only the second one fails closed."""
+    db = SqliteDB()
+    _row(db, "r-mine", MINE)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=lambda s: (str(s), ""))
+    assert not out.get("unresolved") and [i["id"] for i in out["items"]] == ["r-mine"]
+
+
 # ── A5 · the route cannot invent a row ────────────────────────────────────────────────────────
 
 def test_every_item_traces_to_a_reaction_that_exists():
