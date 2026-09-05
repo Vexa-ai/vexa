@@ -5,6 +5,8 @@ with the caller's key as X-API-Key, and auth is fail-closed (401 with a Bearer h
 """
 import json
 
+import pytest
+
 from conftest import API_KEY, FakeGateway
 
 
@@ -13,7 +15,17 @@ from conftest import API_KEY, FakeGateway
 def test_health_no_auth(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "service": "mcp"}
+    body = r.json()
+    assert body["status"] == "ok" and body["service"] == "mcp"
+
+
+def test_health_states_each_capability(client):
+    """ADR-0026. A green health check on a service whose ticket sink is unset, or whose assembly
+    reached no domain, is a green light on a product that quietly does less than the operator
+    thinks — so the tri-state rides the same response, computed from the declaration."""
+    caps = client.get("/health").json()["capabilities"]
+    assert set(caps) == {"assembly", "private_domains", "ticket_sink"}
+    assert set(caps.values()) <= {"configured", "not_configured", "misconfigured"}
 
 
 # --- auth: fail-closed + the three accepted credential forms -----------------
@@ -104,7 +116,9 @@ def test_request_meeting_bot_409_reports_already_exists(client, gateway: FakeGat
 
 
 def test_update_bot_config_path_and_payload(client, gateway, auth):
-    r = client.put("/bot-config/teams/9361792952021", headers=auth, json={"language": "es"})
+    r = client.put(
+        "/bot-config?platform=teams&native_meeting_id=9361792952021", headers=auth, json={"language": "es"}
+    )
     assert r.status_code == 200
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("PUT", "/bots/teams/9361792952021/config")
@@ -112,9 +126,48 @@ def test_update_bot_config_path_and_payload(client, gateway, auth):
 
 
 def test_stop_bot_path(client, gateway, auth):
-    client.delete("/bot/google_meet/abc-defg-hij", headers=auth)
+    client.delete("/bot?platform=google_meet&native_meeting_id=abc-defg-hij", headers=auth)
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("DELETE", "/bots/google_meet/abc-defg-hij")
+
+
+# --- one identity vocabulary across the surface ------------------------------
+# Every tool RETURNS `platform` + `native_meeting_id`; three tools used to ACCEPT
+# `meeting_platform` + `meeting_id`, so no tool's output could be fed to the next tool's
+# input without a rename nothing documented. Canonical names must work, the deprecated
+# aliases must keep working, and platform must default rather than being mandatory.
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "platform=zoom&native_meeting_id=12345678901",   # canonical
+        "meeting_platform=zoom&meeting_id=12345678901",  # deprecated aliases
+        "platform=zoom&meeting_id=12345678901",          # mixed
+    ],
+)
+def test_transcript_accepts_canonical_and_legacy_identity(client, gateway, auth, query):
+    r = client.get(f"/meeting-transcript?{query}", headers=auth)
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("GET", "/transcripts/zoom/12345678901")
+
+
+def test_transcript_platform_defaults_to_google_meet(client, gateway, auth):
+    client.get("/meeting-transcript?native_meeting_id=abc-defg-hij", headers=auth)
+    assert gateway.requests[-1].url.path == "/transcripts/google_meet/abc-defg-hij"
+
+
+def test_stop_bot_accepts_legacy_identity(client, gateway, auth):
+    client.delete("/bot?meeting_platform=teams&meeting_id=9361792952021", headers=auth)
+    assert gateway.requests[-1].url.path == "/bots/teams/9361792952021"
+
+
+def test_missing_meeting_id_names_the_tool_and_the_field(client, gateway, auth):
+    r = client.get("/meeting-transcript?platform=zoom", headers=auth)
+    assert r.status_code == 422
+    detail = str(r.json()["detail"])
+    assert "get_meeting_transcript" in detail
+    assert "native_meeting_id" in detail
 
 
 def test_list_meetings_params(client, gateway, auth):
@@ -125,9 +178,50 @@ def test_list_meetings_params(client, gateway, auth):
 
 
 def test_get_meeting_transcript_path(client, gateway, auth):
-    client.get("/meeting-transcript/zoom/12345678901", headers=auth)
+    client.get("/meeting-transcript?platform=zoom&native_meeting_id=12345678901", headers=auth)
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("GET", "/transcripts/zoom/12345678901")
+
+
+# --- following a live meeting without re-reading it --------------------------
+# The scarce resource is the CALLER's context window, not the hop to meeting-api: polling a live
+# meeting used to re-download every segment spoken so far on every call. `since_index` returns
+# only what is new; `total_segments`/`next_index` always describe the FULL transcript so a caller
+# can tell "nothing new" from "nothing at all" and can resume after losing its own state.
+
+def _transcript_route(gateway, n):
+    gateway.routes[("GET", "/transcripts/google_meet/abc-defg-hij")] = (
+        200,
+        {"status": "active", "segments": [{"speaker": "A", "text": f"line {i}"} for i in range(n)]},
+    )
+
+
+def test_transcript_since_index_returns_only_new_segments(client, gateway, auth):
+    _transcript_route(gateway, 6)
+    body = client.get(
+        "/meeting-transcript?native_meeting_id=abc-defg-hij&since_index=4", headers=auth
+    ).json()
+    assert [s["text"] for s in body["segments"]] == ["line 4", "line 5"]
+    assert (body["total_segments"], body["next_index"], body["since_index"]) == (6, 6, 4)
+
+
+def test_transcript_without_cursor_returns_everything(client, gateway, auth):
+    _transcript_route(gateway, 3)
+    body = client.get("/meeting-transcript?native_meeting_id=abc-defg-hij", headers=auth).json()
+    assert len(body["segments"]) == 3
+    assert body["next_index"] == 3
+    assert "since_index" not in body
+
+
+def test_transcript_cursor_past_the_end_is_empty_not_an_error(client, gateway, auth):
+    """The steady state of following a live meeting: caller is caught up, nothing new was said."""
+    _transcript_route(gateway, 2)
+    body = client.get(
+        "/meeting-transcript?native_meeting_id=abc-defg-hij&since_index=99", headers=auth
+    ).json()
+    assert body["segments"] == []
+    assert body["total_segments"] == 2
+    assert body["next_index"] == 2
 
 
 def test_list_recordings_params(client, gateway, auth):
@@ -167,7 +261,7 @@ TICKET = {
     "what_i_tried": "POST /bots for a google_meet room via the MCP request_meeting_bot tool",
     "what_happened": "The bot never appeared in the meeting and bot-status stayed empty for 3 min",
     "deployment": "self-hosted 0.12.3",
-    "meeting_id": "abc-defg-hij",
+    "native_meeting_id": "abc-defg-hij",
     "platform": "google_meet",
     "logs": "RuntimeError: admission timeout",
 }
@@ -186,9 +280,9 @@ def test_report_issue_without_sink_returns_503(client, gateway, auth, monkeypatc
 
 
 # Filing spends the OPERATOR's sink credential, so the caller's own credential is checked first.
-# The ticket carrying no meeting_id is the case that matters: it is the one with no other reason
+# The ticket carrying no native_meeting_id is the case that matters: it is the one with no other reason
 # to touch the gateway, so it is the one an unvalidated key would ride through.
-TICKET_NO_MEETING = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
+TICKET_NO_MEETING = {k: v for k, v in TICKET.items() if k not in ("native_meeting_id", "platform")}
 
 
 def test_report_issue_refuses_a_credential_the_gateway_rejects(client, gateway: FakeGateway, auth, monkeypatch):
@@ -219,7 +313,7 @@ def test_report_issue_files_a_ticket_that_names_no_meeting(client, gateway: Fake
 
     assert r.status_code == 200
     body = json.loads(_sink_requests(gateway)[-1].content)
-    assert body["meeting_id"] is None
+    assert body["native_meeting_id"] is None
     assert body["entity"] is None
 
 
@@ -236,7 +330,7 @@ def test_report_issue_forwards_ticket_to_sink(client, gateway: FakeGateway, auth
     assert body["what_happened"] == TICKET["what_happened"]
     assert body["deployment"] == "self-hosted 0.12.3"
     # the join key onto the cluster's own record of the same meeting
-    assert body["meeting_id"] == "abc-defg-hij"
+    assert body["native_meeting_id"] == "abc-defg-hij"
     assert body["platform"] == "google_meet"
     assert body["logs"] == "RuntimeError: admission timeout"
     assert body["logs_truncated"] is False
@@ -355,10 +449,10 @@ def test_report_issue_sink_failure_surfaces_as_502(client, gateway: FakeGateway,
     assert "sink rejected" in str(r.json()["detail"])
 
 
-def test_report_issue_without_meeting_id_still_authenticates_the_caller(client, gateway: FakeGateway, auth, monkeypatch):
+def test_report_issue_without_native_meeting_id_still_authenticates_the_caller(client, gateway: FakeGateway, auth, monkeypatch):
     """With no entity to resolve there is still a credential to check, and it is checked once."""
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
-    payload = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
+    payload = {k: v for k, v in TICKET.items() if k not in ("native_meeting_id", "platform")}
     client.post("/report-issue", headers=auth, json=payload)
     hops = [r for r in gateway.requests if r.url.host == "gateway.test"]
     assert [(r.method, r.url.path) for r in hops] == [("GET", "/meetings")]
@@ -388,7 +482,7 @@ def test_report_issue_resolves_entity_only_for_a_meeting_the_caller_owns(
     assert json.loads(_sink_requests(gateway)[-1].content)["entity"]["id"] == "abc-defg-hij"
 
 
-def test_report_issue_unowned_meeting_id_files_without_an_entity(client, gateway: FakeGateway, auth, monkeypatch):
+def test_report_issue_unowned_native_meeting_id_files_without_an_entity(client, gateway: FakeGateway, auth, monkeypatch):
     """A quoted id the caller does not own is text, never a resolved join — and never fatal.
 
     The gateway answers with the caller's OWN meetings, so an id belonging to someone else is
@@ -396,12 +490,12 @@ def test_report_issue_unowned_meeting_id_files_without_an_entity(client, gateway
     """
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     gateway.routes[("GET", "/meetings")] = (200, [{"native_meeting_id": "mine", "platform": "google_meet"}])
-    r = client.post("/report-issue", headers=auth, json={**TICKET, "meeting_id": "someone-elses"})
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "native_meeting_id": "someone-elses"})
     assert r.status_code == 200
     assert r.json()["entity"] is None
     body = json.loads(_sink_requests(gateway)[-1].content)
     assert body["entity"] is None
-    assert body["meeting_id"] == "someone-elses"     # quoted, not resolved
+    assert body["native_meeting_id"] == "someone-elses"     # quoted, not resolved
 
 
 def test_report_issue_meeting_absent_from_callers_meetings_does_not_resolve(
@@ -431,7 +525,7 @@ def test_report_issue_has_no_url_shaped_field_and_fetches_nothing(client, gatewa
 
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     poisoned = {
-        **{k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")},
+        **{k: v for k, v in TICKET.items() if k not in ("native_meeting_id", "platform")},
         "what_happened": "see http://169.254.169.254/latest/meta-data/ and file:///etc/passwd",
         "logs": "http://localhost:6379/ http://internal.svc/admin",
     }
@@ -498,7 +592,7 @@ def test_raw_is_the_default_and_is_byte_unchanged(client, gateway: FakeGateway, 
     assert set(body) == {
         "source", "tool", "reported_at", "fingerprint", "caller_fingerprint", "summary",
         "description", "what_i_tried", "what_happened", "deployment", "version", "severity",
-        "meeting_id", "platform", "entity", "logs", "logs_truncated",
+        "native_meeting_id", "platform", "entity", "logs", "logs_truncated",
     }
     assert req.headers["content-type"] == "application/json"
     assert req.headers["authorization"] == "Bearer sink-secret"
@@ -553,7 +647,7 @@ def test_github_body_calls_out_the_meeting_join_key(client, gateway: FakeGateway
 
 def test_github_body_states_when_no_meeting_was_supplied(client, gateway: FakeGateway, auth, monkeypatch):
     _gh(monkeypatch)
-    ticket = {k: v for k, v in TICKET.items() if k not in {"meeting_id", "platform"}}
+    ticket = {k: v for k, v in TICKET.items() if k not in {"native_meeting_id", "platform"}}
     client.post("/report-issue", headers=auth, json=ticket)
     md = json.loads(_sink_requests(gateway)[-1].content)["body"]
     assert "### Join key" in md
@@ -593,3 +687,188 @@ def test_github_format_still_never_forwards_the_api_key(client, gateway: FakeGat
     req = _sink_requests(gateway)[-1]
     assert API_KEY not in req.content.decode()
     assert API_KEY not in json.dumps(dict(req.headers))
+
+
+# --- annotations: the caller's own description of a meeting ------------------
+# The join key between a Vexa meeting and everything else the agent knows. Previously impossible:
+# PATCH /meetings answered 409 for the entire useful life of a meeting (once a bot was dispatched),
+# and there was no metadata field at all.
+
+def test_annotate_forwards_title_and_metadata(client, gateway, auth):
+    r = client.post(
+        "/meeting-annotate?platform=google_meet&native_meeting_id=abc-defg-hij",
+        headers=auth,
+        json={"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"}},
+    )
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("POST", "/meetings/google_meet/abc-defg-hij/annotate")
+    assert gateway.last_json() == {"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"}}
+
+
+def test_replace_is_refused_outright_not_silently_ignored(client, gateway, auth):
+    """There is no whole-object replace: a caller sharing an account's API key must not be able to
+    destroy annotations another agent — or the human — wrote and it never saw.
+
+    It is REFUSED rather than dropped. A caller that believes it replaced the object and was
+    silently merged holds a false model of the stored state, which is worse than an error."""
+    before = len(gateway.requests)
+    r = client.post(
+        "/meeting-annotate?native_meeting_id=abc-defg-hij&replace=true",
+        headers=auth, json={"metadata": {"only": "this"}},
+    )
+    assert r.status_code == 422
+    assert "replace" in r.text
+    assert len(gateway.requests) == before, "an unknown argument must not reach the gateway"
+
+
+def test_annotate_requires_something_to_write(client, gateway, auth):
+    r = client.post("/meeting-annotate?native_meeting_id=abc-defg-hij", headers=auth, json={})
+    assert r.status_code == 422
+
+
+def test_list_meetings_forwards_metadata_filter(client, gateway, auth):
+    client.get('/meetings?metadata_filter={"crm_deal":"acme-42"}', headers=auth)
+    assert dict(gateway.requests[-1].url.params)["metadata"] == '{"crm_deal":"acme-42"}'
+
+
+def test_list_meetings_rejects_a_malformed_metadata_filter(client, gateway, auth):
+    """A filter that silently failed to apply is WORSE than an error: the agent would read a full
+    unfiltered list as 'these all match'."""
+    before = len(gateway.requests)
+    r = client.get("/meetings?metadata_filter=not-json", headers=auth)
+    assert r.status_code == 422
+    assert "metadata_filter" in str(r.json()["detail"])
+    assert len(gateway.requests) == before, "must not reach the gateway with a bad filter"
+
+
+def test_list_meetings_rejects_a_non_object_metadata_filter(client, gateway, auth):
+    r = client.get("/meetings?metadata_filter=[1,2]", headers=auth)
+    assert r.status_code == 422
+
+
+# --- the interactive bot: ours talks, theirs records -------------------------
+
+def test_speak_forwards_to_the_bot_speak_route(client, gateway, auth):
+    r = client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth,
+        json={"text": "Dmitry asked me to say the numbers are in the deck.",
+              "asked_by_a_human": True},
+    )
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("POST", "/bots/teams/9361792952021/speak")
+    assert gateway.last_json()["text"].startswith("Dmitry asked me")
+
+
+# --- speaking out loud needs a MECHANICAL guard, not only a warning ----------
+# This tool is one tools/call from being audible to real people in a real conversation, and it
+# will be loaded alongside a hundred others whose descriptions get skimmed. A required field
+# cannot be skimmed past the way a paragraph can.
+
+def test_speak_is_refused_without_the_explicit_acknowledgement(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "hello"},
+    )
+    assert r.status_code == 422
+    assert len(gateway.requests) == before, "nothing may reach the meeting without the acknowledgement"
+
+
+def test_speak_is_refused_when_the_acknowledgement_is_false(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "hello", "asked_by_a_human": False},
+    )
+    assert r.status_code == 422
+    assert len(gateway.requests) == before
+
+
+def test_the_acknowledgement_is_not_forwarded_as_speech(client, gateway, auth):
+    """It is a gate on the caller, not a field the bot should carry downstream."""
+    client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "hello", "asked_by_a_human": True},
+    )
+    assert "hello" in gateway.last_json()["text"]
+
+
+def test_get_meeting_chat_path(client, gateway, auth):
+    client.get("/meeting-chat?native_meeting_id=abc-defg-hij", headers=auth)
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("GET", "/bots/google_meet/abc-defg-hij/chat")
+
+
+# --- an empty result must never be a guess -----------------------------------
+# A cold-start agent reported `platform="webex"` returning a confident `count: 0` — silence that
+# looks like an answer. "Nobody said that" and "you filtered everything away" must not be the
+# same reply.
+
+def test_unknown_platform_is_refused_not_answered_with_zero(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.get("/transcript-search", params={"q": "panel", "platform": "webex"}, headers=auth)
+    assert r.status_code == 422
+    detail = str(r.json()["detail"])
+    assert "webex" in detail and "google_meet" in detail, "the error must name the valid values"
+    assert len(gateway.requests) == before
+
+
+def test_unknown_platform_is_refused_on_list_meetings_too(client, auth):
+    assert client.get("/meetings", params={"platform": "webex"}, headers=auth).status_code == 422
+
+
+def test_a_valid_platform_still_works(client, gateway, auth):
+    assert client.get("/meetings", params={"platform": "zoom"}, headers=auth).status_code == 200
+
+
+def test_omitting_platform_searches_everything(client, gateway, auth):
+    r = client.get("/transcript-search", params={"q": "panel"}, headers=auth)
+    assert r.status_code == 200
+    assert "platform" not in dict(gateway.requests[-1].url.params)
+
+
+# --- a typo must not look like success ---------------------------------------
+# FastAPI ignores unknown query params, so `get_meeting_transcript(limit=2)` — no such parameter —
+# returned 200 with the argument dropped. For an agent that is the worst failure available: the
+# wrong answer is indistinguishable from the right one.
+
+def test_an_unknown_argument_is_refused(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.get("/meeting-transcript",
+                   params={"native_meeting_id": "abc-defg-hij", "limit": 2}, headers=auth)
+    assert r.status_code == 422
+    assert "limit" in r.text
+    assert len(gateway.requests) == before, "an unknown argument must not reach the gateway"
+
+
+def test_a_near_miss_argument_gets_a_suggestion(client, auth):
+    r = client.get("/transcript-search", params={"q": "x", "meeting_id_native": "abc"}, headers=auth)
+    assert r.status_code == 422
+    assert "did you mean" in str(r.json()["detail"]).lower()
+
+
+def test_the_accepted_arguments_are_listed_in_the_error(client, auth):
+    detail = client.get("/meetings", params={"totally_bogus": 1}, headers=auth).json()["detail"]
+    assert "accepted" in detail and "platform" in detail["accepted"]
+
+
+# --- a write echoes what it wrote, not the whole meeting ----------------------
+
+def test_annotate_returns_only_what_was_written(client, gateway, auth):
+    """The full row carries object-storage paths, a playback URL and a ~69 MB audio reference —
+    none of it requested, all of it landing in a calling model's context."""
+    gateway.routes[("POST", "/meetings/google_meet/abc-defg-hij/annotate")] = (200, {
+        "id": 1, "platform": "google_meet", "native_meeting_id": "abc-defg-hij", "status": "active",
+        "data": {"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"},
+                 "recordings": [{"playback_url": "https://minio/…", "bytes": 69_000_000}],
+                 "webhook_url": "https://hooks.example/x"},
+    })
+    body = client.post("/meeting-annotate?native_meeting_id=abc-defg-hij",
+                       headers=auth, json={"metadata": {"crm_deal": "acme-42"}}).json()
+    assert body["metadata"] == {"crm_deal": "acme-42"}
+    assert body["title"] == "Acme renewal"
+    assert body["native_meeting_id"] == "abc-defg-hij" and body["meeting_db_id"] == 1
+    assert "recordings" not in body and "data" not in body and "webhook_url" not in body

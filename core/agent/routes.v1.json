@@ -1,0 +1,66 @@
+{
+  "contract": "routes.v1",
+  "domain": "agent",
+  "owner": "core/agent",
+  "edge": "gateway",
+  "note": "The agent control plane (agent-api): chat · sessions · routines · workspace · models · history. Per-RESOURCE authorization behind these rows is still the open Stage-3 gap (the strict-xfail in the gateway's tests/test_proxy.py); this manifest only settles which KEYS reach the door. The whole domain is OPTIONAL (PRD 40.7): a deployment that leaves AGENT_API_URL unset serves none of these rows, and a cut that drops the agent surface drops this file with it.",
+  "presence_env": "AGENT_API_URL",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/agent/chat",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/agent/meeting/stream",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    }
+  ]
+}
