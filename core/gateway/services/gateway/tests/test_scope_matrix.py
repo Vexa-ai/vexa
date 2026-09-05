@@ -23,7 +23,9 @@ from fastapi.testclient import TestClient
 
 import gateway.app as app_module
 from gateway import ROUTE_SCOPES, UNSCOPED_ROUTES, create_app, undeclared_routes
-from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
+from gateway import app as gateway_app
+from gateway import routes_manifest
+from conftest import AGENT_CARRIED, VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis, needs_agent
 
 AUTH = {"x-api-key": VALID_KEY}
 
@@ -46,10 +48,14 @@ CASES = [
     ("GET", "/meetings/42", "/meetings/{meeting_id}"),
     ("PATCH", "/meetings/42", "/meetings/{meeting_id}"),
     ("DELETE", "/meetings/42", "/meetings/{meeting_id}"),
+    ("GET", "/transcripts/search", "/transcripts/search"),
     ("PATCH", "/meetings/google_meet/abc-defg-hij", "/meetings/{platform}/{native_meeting_id}"),
     ("DELETE", "/meetings/google_meet/abc-defg-hij", "/meetings/{platform}/{native_meeting_id}"),
     ("PUT", "/meetings/google_meet/abc-defg-hij/intent",
      "/meetings/{platform}/{native_meeting_id}/intent"),
+    ("POST", "/meetings/google_meet/abc-defg-hij/annotate",
+     "/meetings/{platform}/{native_meeting_id}/annotate"),
+    ("POST", "/meetings/42/share", "/meetings/{meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/share",
      "/meetings/{platform}/{native_meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace",
@@ -114,8 +120,25 @@ CASES = [
 
 SCOPES = ["bot", "tx", "browser"]
 
+# CASES IS THE FULL PRODUCT'S DECLARATION LIST AND STAYS WHOLE — it is reviewed once, above, and a
+# list that shrinks with the tree is a list that cannot catch a row going missing. What varies is
+# which rows THIS BUILD can exercise: a build with no agent manifest serves no /agent route, so
+# those rows are marked `needs_agent` and pytest reports them SKIPPED, with the reason, instead of
+# vanishing from the count.
+def _agent_row(template):
+    return template.startswith("/agent")
+
+
+#: The rows this build actually serves. Used by the tests that sweep every route, so their
+#: expectation is DERIVED from the tree rather than asserted against a table it does not have.
+#: Without this, `test_a_bot_and_tx_key_reaches_every_route` passes vacuously in a no-agent build:
+#: it asserts `!= 403`, and an absent route answers 404.
+CARRIED_CASES = [c for c in CASES if AGENT_CARRIED or not _agent_row(c[2])]
+
 MATRIX = [
-    (method, url, template, scope)
+    pytest.param(method, url, template, scope,
+                 marks=[needs_agent] if _agent_row(template) else [],
+                 id=f"{method} {url} [{scope}]")
     for method, url, template in CASES
     for scope in SCOPES
 ]
@@ -137,10 +160,7 @@ def _request(client, method, url):
     return client.request(method, url, headers=AUTH, json=body)
 
 
-@pytest.mark.parametrize(
-    "method,url,template,scope", MATRIX,
-    ids=[f"{m} {u} [{s}]" for m, u, _t, s in MATRIX],
-)
+@pytest.mark.parametrize("method,url,template,scope", MATRIX)
 def test_scope_matrix(method, url, template, scope):
     """Every protected route × every single-scope key → allow or deny, per ROUTE_SCOPES.
 
@@ -164,7 +184,7 @@ def test_browser_only_key_reaches_no_route_at_all():
     ``POST /bots``, which really did schedule a container on staging.
     """
     client = _client(["browser"])
-    for method, url, _template in CASES:
+    for method, url, _template in CARRIED_CASES:
         assert _request(client, method, url).status_code == 403, f"{method} {url} let a browser key in"
 
 
@@ -204,7 +224,7 @@ def test_a_bot_and_tx_key_reaches_every_route():
     """The shape every real key has (the terminal mints bot+tx+browser; the docs' own mint example
     is bot+tx) is unaffected end to end — no route in the matrix regresses to 403."""
     client = _client(["bot", "tx"])
-    for method, url, _template in CASES:
+    for method, url, _template in CARRIED_CASES:
         assert _request(client, method, url).status_code != 403, f"{method} {url} regressed"
 
 
@@ -230,43 +250,61 @@ def test_the_guard_actually_catches_an_undeclared_route():
     assert undeclared_routes(app) == [("PUT", "/user/quota")]
 
 
-def test_an_undeclared_route_is_denied_at_request_time():
+
+def _without(monkeypatch, method: str, path: str):
+    """Build the app as if the OWNING DOMAIN had failed to declare one route.
+
+    These two tests used to `del ROUTE_SCOPES[...]` — the table was a module-level literal and the
+    app read it live. It is assembled from each domain's `routes.v1.json` now, so removing the row
+    at its source is removing it from the assembly the app is built with. Same invariant, one layer
+    out: the hole is a domain's missing declaration rather than an edit to the edge's own dict."""
+    real = routes_manifest.load
+
+    def _short(present, **kw):
+        a = real(present, **kw)
+        a.scopes.pop((method, path), None)
+        a.unscoped.discard((method, path))
+        return a
+
+    monkeypatch.setattr(routes_manifest, "load", _short)
+
+
+def test_an_undeclared_route_is_denied_at_request_time(monkeypatch):
     """The second wall, exercised through the real request path: with its declaration removed, a
     route refuses a FULL-scope key rather than forwarding it. So the failure mode of forgetting a
     declaration is a 403 the author trips over — never an open door."""
-    app = create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis())
-    client = TestClient(app)
-    assert client.get("/bots/status", headers=AUTH).status_code == 200  # bot+tx+browser key
+    assert TestClient(create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis())).get(
+        "/bots/status", headers=AUTH).status_code == 200            # bot+tx+browser key
 
-    saved = dict(ROUTE_SCOPES)
-    try:
-        del ROUTE_SCOPES[("GET", "/bots/status")]
-        r = client.get("/bots/status", headers=AUTH)
-        assert r.status_code == 403
-        assert r.json()["detail"] == "Insufficient scope for this endpoint"
-    finally:
-        ROUTE_SCOPES.clear()
-        ROUTE_SCOPES.update(saved)
+    _without(monkeypatch, "GET", "/bots/status")
+    # The BUILD-time wall fires first and by design, so this app is constructed with the check
+    # relaxed — the point here is the REQUEST path, which is the second wall behind it.
+    monkeypatch.setattr(gateway_app, "undeclared_routes", lambda *a, **k: [])
+    client = TestClient(create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis()))
+    r = client.get("/bots/status", headers=AUTH)
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Insufficient scope for this endpoint"
 
 
-def test_an_undeclared_route_cannot_be_built():
+def test_an_undeclared_route_cannot_be_built(monkeypatch):
     """The first wall: create_app refuses to return an app whose router has an undeclared route.
     An under-declared gateway does not boot — the hole cannot reach an image."""
-    saved = dict(ROUTE_SCOPES)
-    try:
-        del ROUTE_SCOPES[("POST", "/bots")]
-        with pytest.raises(RuntimeError) as exc:
-            create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis())
-        assert "POST /bots" in str(exc.value)
-    finally:
-        ROUTE_SCOPES.clear()
-        ROUTE_SCOPES.update(saved)
+    _without(monkeypatch, "POST", "/bots")
+    with pytest.raises(RuntimeError) as exc:
+        create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis())
+    assert "POST /bots" in str(exc.value)
+    assert "routes.v1.json" in str(exc.value), "the refusal must name where the declaration goes"
 
 
 def test_matrix_covers_every_declared_route():
     """The matrix above is exhaustive over ROUTE_SCOPES — no declaration goes unexercised, and no
-    stale CASES row survives a route being removed."""
-    covered = {(method, template) for method, _url, template in CASES}
+    stale CASES row survives a route being removed.
+
+    Both sides are read from the same build: `ROUTE_SCOPES` is what this build publishes, and
+    `CARRIED_CASES` is the rows it can exercise. So this stays an EXACT equality in a build that
+    fronts four domains (62 rows) as much as in one that fronts five (69) — it never degrades to a
+    subset check, which would be the one way for a declaration to go unexercised unnoticed."""
+    covered = {(method, template) for method, _url, template in CARRIED_CASES}
     assert covered == set(ROUTE_SCOPES), (
         f"declared but unexercised: {sorted(set(ROUTE_SCOPES) - covered)}; "
         f"exercised but undeclared: {sorted(covered - set(ROUTE_SCOPES))}"

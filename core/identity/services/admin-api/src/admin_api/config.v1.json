@@ -6,7 +6,16 @@
    "key": "INTERNAL_API_SECRET",
    "class": "required-explicit",
    "secret": true,
-   "description": "shared internal secret the /internal/validate endpoint requires (fail-closed guard, main.py). Unset, gateway's validation hop 503s and every API-key check fails — so the boot refuses instead of coming up green and rejecting every call (the 2026-04-23 failure shape, #526)."
+   "description": "shared internal secret the /internal/validate endpoint requires (fail-closed guard, main.py). Unset, gateway's validation hop 503s and every API-key check fails — so the boot refuses instead of coming up green and rejecting every call (the 2026-04-23 failure shape, #526). The same value gates /internal/bootstrap-admin and /internal/users/by-email, so a published placeholder is refused outright (F95).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "ADMIN_API_TOKEN",
@@ -101,6 +110,21 @@
    "class": "defaulted",
    "default": "info",
    "description": "log verbosity"
+  },
+  {
+   "key": "VEXA_FLOWS_API_URL",
+   "class": "publish-edge",
+   "publishes_events": ["onboarding.completed"],
+   "description": "flows' intake, told that a person finished onboarding. IDENTITY TELLS FLOWS; IT DOES NOT ASK IT — the publish is best-effort, bounded at 2s and swallowed, so a deployment with no flows domain onboards people exactly as one with a flows domain does, and so does one where flows is simply down. Unset is therefore not a degraded state, it is a profile. The fact itself is stamped on the person in the same transaction as the account, so the record survives a publish that never lands (app/events.py, app/main.py POST /admin/users). Spelled bare FLOWS_API_URL until F208 — the only one of the three flows publishers not carrying the VEXA_ prefix this repo uses for its own keys; app/events.py still reads that name for one release, with a boot warning, so an unmigrated deployment keeps publishing.",
+   "targets": ["compose"]
+  },
+  {
+   "key": "VEXA_FLOWS_API_KEY",
+   "class": "publish-edge",
+   "publishes_events": ["onboarding.completed"],
+   "secret": true,
+   "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). The header was spelled X-Flows-Admin-Key until #1486 and flows still accepts that name for one release; admin-api sends only the new one. Declared as part of the edge rather than beside it: a publish target without its credential is a publish that always 401s, and the pair is what makes the edge real. Unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused, which is why both are visible on one declaration.",
+   "targets": ["compose"]
   },
   {
    "key": "HOST",

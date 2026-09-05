@@ -33,7 +33,12 @@ const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", ".venv"])
 const skippable = (n) => n.startsWith(".") || SKIP.has(n);
 
 // The trees that may hold Python packages (do NOT touch services/ / bbb / prod).
-const ROOTS = ["core/runtime", "core/gateway", "core/meetings", "core/identity", "core/agent"];
+// `core/flows` was missing from this list for as long as the domain has existed, so its 21k lines
+// were the only Python in `core/` that gate:isolation-py, gate:graph-py and gate:test-isolation had
+// never read — the domain whose own README states the strictest boundary rule in the tree ("the
+// engine imports stdlib only at module scope") was the one nothing checked.
+const ROOTS = ["core/runtime", "core/gateway", "core/meetings", "core/identity", "core/agent",
+               "core/flows"];
 
 // ── allowed cross-package edges ───────────────────────────────────────────────────────────────
 // importer-module → set of sibling modules it MAY import (src→src). Each edge carries a reason so
