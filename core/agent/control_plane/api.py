@@ -1076,21 +1076,23 @@ def _build_production_app() -> FastAPI:
     from control_plane import transcription_watcher
     transcription_watcher.start(settings.redis_url, dispatcher, app.state.live_meetings)
 
-    # `_global` gets its history BEFORE its first writer, never after. It shipped as a bare
-    # directory that was mounted into every worker and read on every turn, with nothing recording
-    # who changed it or what it said yesterday — and one admin edit changes how every agent in the
-    # deployment behaves. Best-effort: a store that is read-only here (the host-path mirror) is a
-    # legitimate deployment shape, and it must not stop the service from booting.
     # THE PRESET LIBRARY IS TOPPED UP BEFORE THE REPO IS INITIALISED, so a fresh instance's very
     # first commit carries the presets this build ships rather than acquiring them as an untracked
     # afterthought. Additive: a file already in `_global/asks/` is the admin's and is never touched.
-    # Best-effort for the same reason `ensure_repo` is — a read-only `_global` is a real deployment
-    # shape, and `read_preset`'s fallback to the image is what holds when the write cannot happen.
+    # Best-effort for the same reason `ensure_repo` below is — a read-only `_global` is a real
+    # deployment shape, and `read_preset`'s fallback to the image is what holds when the write
+    # cannot happen.
     from control_plane import preset_library
     try:
         preset_library.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
     except Exception as exc:  # noqa: BLE001
         logger.info("the preset library could not be topped up here: %s", exc)
+
+    # `_global` gets its history BEFORE its first writer, never after. It shipped as a bare
+    # directory that was mounted into every worker and read on every turn, with nothing recording
+    # who changed it or what it said yesterday — and one admin edit changes how every agent in the
+    # deployment behaves. Best-effort: a store that is read-only here (the host-path mirror) is a
+    # legitimate deployment shape, and it must not stop the service from booting.
     try:
         global_layer.ensure_repo(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
     except Exception as exc:  # noqa: BLE001
