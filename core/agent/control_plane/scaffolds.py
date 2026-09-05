@@ -53,6 +53,8 @@ import time
 from pathlib import Path
 from typing import Iterable, Optional
 
+from control_plane import preset_library
+
 logger = logging.getLogger("agent_api.scaffolds")
 
 # What a person's own workspace is CALLED to that person. The terminal holds the same constant
@@ -205,16 +207,47 @@ def preset_path(global_root: str | Path, name: str) -> Path:
     return Path(global_root) / "asks" / f"{name}.md"
 
 
-def read_preset(global_root: str | Path, name: str) -> tuple[dict, str]:
-    """`(frontmatter, body)` for one admin-owned preset. Raises `ScaffoldError` when it is absent
-    or empty — which is the point: a mint whose preset does not exist must fail at MINT, where a
-    step can still refuse to send, rather than at click, where a person meets an empty chat."""
+#: Sentinel for "the caller did not say" — distinct from an explicit `image_root=None`, which means
+#: "look in `_global` and nowhere else" and is how the tests pin the pre-fallback failure.
+_LIBRARY_DEFAULT = object()
+
+
+def read_preset(global_root: str | Path, name: str, *,
+                image_root: "str | Path | None | object" = _LIBRARY_DEFAULT) -> tuple[dict, str]:
+    """`(frontmatter, body)` for one preset. Raises `ScaffoldError` when it is absent everywhere or
+    empty — which is the point: a mint whose preset does not exist must fail at MINT, where a step
+    can still refuse to send, rather than at click, where a person meets an empty chat.
+
+    TWO LOOKUP ROOTS, IN THIS ORDER: `_global/asks/` (admin-owned, read hot, edited in the product)
+    and then the copy baked into this image (`preset_library`). The admin's file always wins — it is
+    looked at first — and the image is what answers when the store's library is merely BEHIND the
+    build, which on 2026-09-05 handed a first-time visitor an empty desk because `first-visit.md`
+    had been added to the repo one day after that instance's `_global/asks/` was populated by hand.
+    `preset_library.top_up` normally closes that gap by copying the file in, so an admin can see and
+    edit what the product reads; the fallback is what holds when it cannot — a `_global` mounted
+    read-only is a legitimate deployment shape.
+
+    ABSENCE FALLS THROUGH, EMPTINESS DOES NOT. A file that is present and blank in `_global` is a
+    present-but-broken ADMIN file, and answering it with the image's copy would be a deploy
+    overruling a human edit — the same thing the additive top-up refuses to do one layer up."""
     f = preset_path(global_root, name)
+    fallback = preset_library.image_asks_dir() if image_root is _LIBRARY_DEFAULT else (
+        Path(image_root) if image_root is not None else None)
     try:
         raw = f.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
-        raise ScaffoldError(f"preset asks/{name}.md cannot be read here ({e.__class__.__name__}) — "
-                            "the link would open nothing") from e
+        alt = (fallback / f"{name}.md") if fallback is not None else None
+        if alt is None or not alt.is_file():
+            raise ScaffoldError(f"preset asks/{name}.md cannot be read here ({e.__class__.__name__}) — "
+                                "the link would open nothing") from e
+        logger.info("scaffolds: preset %s is not on the store — reading the copy this image ships "
+                    "(%s). preset_library.top_up puts it in _global/asks/ where an admin can edit it.",
+                    name, alt)
+        try:
+            raw = alt.read_text(encoding="utf-8", errors="replace")
+        except OSError as e2:
+            raise ScaffoldError(f"preset asks/{name}.md cannot be read here ({e2.__class__.__name__}) — "
+                                "the link would open nothing") from e2
     if not raw.strip():
         raise ScaffoldError(f"preset asks/{name}.md is empty — the link would open nothing")
     fm: dict = {}

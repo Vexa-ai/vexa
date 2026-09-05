@@ -148,6 +148,13 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=403,
                                 detail="only the instance admin may accept the company layer")
         root = _global_store()
+        # The SECOND top-up point. Start is the one that matters for a running instance; this one
+        # catches the instance that was started before its store existed, or whose `_global` became
+        # writable later — and it runs BEFORE the commit below, so anything added rides into the
+        # admin's own acceptance commit instead of sitting untracked. Additive, never overwriting,
+        # and never raising (it logs what it could not write) — so it cannot fail an acceptance.
+        from control_plane import preset_library
+        preset_library.top_up(root)
         st = global_layer.state(root)
         if not st["ready"]:
             return JSONResponse(status_code=409, content={

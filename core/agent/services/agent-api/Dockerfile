@@ -56,6 +56,15 @@ COPY core/workspaces/shared ./workspaces/shared
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
 # workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY behavior/workspaces ./workspace-seeds
+# THE PRESET LIBRARY (`_global/asks/`). Before this line the image carried no `behavior/` at all,
+# so nothing a deploy did could put a new preset in front of a running instance: `_global/asks/`
+# was populated by hand and blank-instance.sh keeps it on purpose (the admin owns those files). On
+# 2026-09-05 a first-time visitor met an empty desk because `first-visit.md` was added to the repo
+# one day after that instance's library was copied across. `control_plane/preset_library.py` tops
+# `_global/asks/` up from here ADDITIVELY at start and at global-ready, and `scaffolds.read_preset`
+# falls back to here when the store's copy is merely behind. The destination is pinned to
+# `preset_library.DEFAULT_IMAGE_ASKS_DIR` by test_preset_library.py.
+COPY behavior/asks ./behavior/asks
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves

@@ -1081,6 +1081,16 @@ def _build_production_app() -> FastAPI:
     # who changed it or what it said yesterday — and one admin edit changes how every agent in the
     # deployment behaves. Best-effort: a store that is read-only here (the host-path mirror) is a
     # legitimate deployment shape, and it must not stop the service from booting.
+    # THE PRESET LIBRARY IS TOPPED UP BEFORE THE REPO IS INITIALISED, so a fresh instance's very
+    # first commit carries the presets this build ships rather than acquiring them as an untracked
+    # afterthought. Additive: a file already in `_global/asks/` is the admin's and is never touched.
+    # Best-effort for the same reason `ensure_repo` is — a read-only `_global` is a real deployment
+    # shape, and `read_preset`'s fallback to the image is what holds when the write cannot happen.
+    from control_plane import preset_library
+    try:
+        preset_library.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("the preset library could not be topped up here: %s", exc)
     try:
         global_layer.ensure_repo(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
     except Exception as exc:  # noqa: BLE001
