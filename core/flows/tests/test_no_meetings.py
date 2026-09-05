@@ -29,6 +29,7 @@ import pathlib
 import subprocess
 import sys
 
+import agent_half
 import flows_config
 import pytest
 from flows import FakeClock, admit, status, tick
@@ -44,10 +45,18 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 #: `_meeting_stamp` / `_scaffold_refs`, which call `mt.meeting_start`. Written out rather than
 #: derived, for the reason `test_no_agents.AGENT_STEPS` gives: the point of the list is to be READ
 #: in review, and the contract test below is the net underneath it.
-MEETINGS_STEPS = {
-    "await_start", "dispatch_bot", "run_meeting",
-    "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees", "prepare_meeting",
+#:
+#: `first_meeting` is here because the onboarding flow reads the TRANSCRIPT SEGMENT COUNT to tell a
+#: meeting that transcribed from one that did not (`mt.transcript_segment_count`) — it was added
+#: with the queue's onboarding row and this list was not updated with it, which is a list that
+#: stopped being read rather than a step that stopped declaring.
+MEETINGS_STEPS_CORE = {
+    "await_start", "dispatch_bot", "run_meeting", "first_meeting",
+    "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees",
 }
+#: `prepare_meeting` needs BOTH domains and lives in the optional `flows_defs/production_agent.py`,
+#: so it is in this contract only where that module is (see `tests/agent_half.py`).
+MEETINGS_STEPS = MEETINGS_STEPS_CORE | agent_half.only_if_present({"prepare_meeting"})
 
 
 class _StubDB:
@@ -138,10 +147,35 @@ def test_the_step_vocabulary_imports_in_a_process_that_names_no_meetings_door():
 
 def test_every_meetings_url_is_built_from_the_access_time_door():
     """The net under the assertion above: a site that went back to a module constant would import
-    cleanly and fail at the first call in a deployment nobody tests."""
+    cleanly and fail at the first call in a deployment nobody tests.
+
+    DERIVED FROM THE CALL SITES, not pinned to a number. It used to read `count(...) == 11`, and
+    that assertion says nothing about the property — it says how many HTTP calls this file happened
+    to contain on the day it was written. It went red the moment `ensure_meeting_row` left with the
+    agent half (its only caller is `prepare_meeting`, in the optional
+    `flows_defs/production_agent.py`), which is a *correct* tree failing a *stale* count; and it
+    would have gone GREEN for an eleventh call site that named no door at all, as long as some other
+    line kept the total at eleven.
+
+    So ask the real question: **every `http(` in this module builds its url from `meetings_door()`**
+    — one door resolution per call, resolved at access rather than at import."""
     text = (SRC / "flows_steps" / "meeting.py").read_text()
     assert "{GATEWAY}" not in text, "a call site still names the module-level door constant"
-    assert text.count("meetings_door()") == 11, "the eleven sites resolve the door per call"
+    tree = ast.parse(text)
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "http"]
+    assert calls, "no http() call site found — this scan has stopped seeing the thing it checks"
+    for call in calls:
+        url = call.args[1] if len(call.args) > 1 else None
+        assert isinstance(url, ast.JoinedStr), (
+            f"meeting.py:{call.lineno} builds its url without an f-string, so it cannot be "
+            f"resolving the door per call")
+        assert "meetings_door()" in ast.unparse(url), (
+            f"meeting.py:{call.lineno} calls http() against a url that does not come from "
+            f"meetings_door() — that is a door bound somewhere other than the call")
+    assert text.count("meetings_door()") == len(calls), (
+        "meetings_door() is resolved somewhere that is not an http() call site — one resolution "
+        "per call, and no module-level binding")
 
 
 # ── the declarations on the steps ────────────────────────────────────────────────────────────
@@ -157,13 +191,16 @@ def test_every_meetings_reaching_production_step_declares_it():
     assert {s for s, n in reg.step_needs.items() if "meetings" in n} == MEETINGS_STEPS
 
 
-def test_a_step_may_need_two_domains_and_five_of_these_do():
-    """`process_meeting` and its four siblings dispatch an agent turn AND read the meeting. Both
-    declarations ride the same decorator; the engine answers on the first absent one."""
+def test_a_step_may_need_two_domains_and_four_of_these_do():
+    """`process_meeting` and its siblings dispatch an agent turn AND read the meeting. Both
+    declarations ride the same decorator; the engine answers on the first absent one.
+
+    FIVE where the agent half is in the tree, four where it is not: `prepare_meeting` is
+    `production_agent`'s and needs both."""
     reg = _production_registry()
     both = {s for s, n in reg.step_needs.items() if {"agent", "meetings"} <= set(n)}
     assert both == {"process_meeting", "email_minutes", "email_attendees",
-                    "drop_to_attendees", "prepare_meeting"}
+                    "drop_to_attendees"} | agent_half.only_if_present({"prepare_meeting"})
 
 
 # ── the contract ─────────────────────────────────────────────────────────────────────────────
@@ -183,9 +220,21 @@ def test_every_production_reaction_reaches_a_terminal_state_with_meetings_absent
         calls.append(str(a[:2]))
         raise AssertionError(f"the meetings door was knocked on: {a[:2]}")
 
-    for attr in ("meeting_start", "meeting_row", "ensure_meeting_row", "transcript_text",
+    for attr in ("meeting_start", "meeting_row", "transcript_text", "transcript_segment_count",
                  "room_order", "mint_transcript_share", "speaking_seconds"):
         monkeypatch.setattr(production.mt, attr, _forbidden)
+    # `ensure_meeting_row` IS THE AGENT HALF'S HELPER — `prepare_meeting`, in the optional
+    # `flows_defs/production_agent.py`, is its only caller — so a cut that omits that module omits
+    # the helper with it. Patched where it exists; where it does not, its absence is asserted
+    # AGAINST THE SAME PRESENCE SIGNAL rather than shrugged at, so a helper that vanished for any
+    # other reason still fails here instead of quietly going unpatched. `monkeypatch.setattr(...,
+    # raising=False)` would have been the shrug: it makes every future deletion invisible.
+    if agent_half.PRESENT:
+        monkeypatch.setattr(production.mt, "ensure_meeting_row", _forbidden)
+    else:
+        assert not hasattr(production.mt, "ensure_meeting_row"), (
+            "flows_steps/meeting.py has ensure_meeting_row but this tree has no agent half — "
+            "either the helper has a second caller now, or agent_half.PRESENT is reading wrong")
     monkeypatch.setattr(common, "MEETINGS_API", "")
 
     # THE REAL PREDICATE, over the door emptied above — not a lambda standing in for it. A
@@ -221,5 +270,5 @@ def test_the_agent_contract_still_holds_alongside_it():
     """Two optional domains, not one that replaced the other: the same registry still answers
     `agent:not_present` when the agent domain is the absent one."""
     reg = _production_registry()
-    assert {s for s, n in reg.step_needs.items() if "agent" in n} >= {
-        "process_meeting", "email_minutes", "feedback_turn"}
+    assert {s for s, n in reg.step_needs.items() if "agent" in n} >= (
+        {"process_meeting", "email_minutes"} | agent_half.only_if_present({"feedback_turn"}))

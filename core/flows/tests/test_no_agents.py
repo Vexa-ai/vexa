@@ -12,6 +12,7 @@ exception, never a silent skip, and the absent door never knocked on.**
 """
 from __future__ import annotations
 
+import agent_half
 import flows_config
 import pytest
 from flows import Done, FakeClock, NotPresent, Registry, StepCtx, admit, status, tick
@@ -142,16 +143,22 @@ def test_the_rename_carries_the_declaration_with_the_function():
 #: Every production step whose body reaches the agent domain — `ag.*`, `mint_scaffold`, `ws_file`
 #: or `scaffolded`. Written out rather than derived, because the point of the list is to be READ in
 #: review; `test_no_production_step_reaches_the_agent_domain_undeclared` is the net underneath it.
-AGENT_STEPS = {
+#:
+#: `production.py`'s own half — registered in every tree.
+AGENT_STEPS_CORE = {
     "ack_by_email", "open_person", "drive_person", "open_group", "drive_group",
     "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees",
-    "prepare_meeting", "feedback_turn",
-    # The two desk cards (PRD decision 42.2). They RE-READ the desk before asking — the fact is
-    # old the moment it is published — and the desk is agent state. A deployment without the agent
-    # domain has no card to show and, because agent-api is what publishes the events these two
-    # react to, no reaction either: absent twice over, which is the correct absence.
-    "await_scaffold", "await_claim",
 }
+#: `production_agent.py`'s half — registered only where that OPTIONAL module is in the tree, and
+#: `agent_half` is the same `find_spec` signal `production._register_agent_flows` reads. The two
+#: desk cards (PRD decision 42.2) RE-READ the desk before asking — the fact is old the moment it is
+#: published — and the desk is agent state. A deployment without the agent domain has no card to
+#: show and, because agent-api is what publishes the events these two react to, no reaction either:
+#: absent twice over, which is the correct absence.
+AGENT_STEPS_AGENT_HALF = {"prepare_meeting", "feedback_turn", "await_scaffold", "await_claim"}
+assert AGENT_STEPS_AGENT_HALF == set(agent_half.STEPS)      # one list, two readers
+#: The set this tree must register. Composed, never loosened: `==` still holds on both trees.
+AGENT_STEPS = AGENT_STEPS_CORE | agent_half.only_if_present(AGENT_STEPS_AGENT_HALF)
 
 
 def _production_registry() -> Registry:
