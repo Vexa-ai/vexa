@@ -39,7 +39,9 @@ def published(monkeypatch):
     """Every event identity published, recorded at the seam. No network."""
     sent = []
 
-    def fake(event_type, source_event_id, subject_refs, **kw):
+    # `publish` is a coroutine function (A8 — it is awaited from `create_user`, never blocking the
+    # loop), so the seam that stands in for it must be one too.
+    async def fake(event_type, source_event_id, subject_refs, **kw):
         sent.append({"event_type": event_type, "source_event_id": source_event_id,
                      "subject_refs": subject_refs})
         return True
