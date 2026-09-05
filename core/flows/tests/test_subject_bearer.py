@@ -150,14 +150,32 @@ def test_a_persons_own_bearer_lists_their_own_reactions(client, identity):
     assert {x["id"] for x in r.json()["reactions"]} == {"r-anna-uid", "r-anna-email"}
 
 
-def test_the_operator_key_still_lists_every_reaction(client, identity):
-    """The unscoped operator read this route has always had — and the reason A1 could never have
-    been observed before: the route function shadowed the model function it calls, so every
+def test_the_operator_key_reads_one_named_subject(client, identity):
+    """The operator read — NOW SCOPED, always (P20/E1). It used to answer with the instance when no
+    subject was named, and the route function also shadowed the model function it calls, so every
     authenticated call raised `TypeError: list_reactions() got multiple values for argument
-    'status'` and answered 500. The 401 in front of it is what hid that for as long as it did."""
-    r = client.get("/reactions", headers=admin())
+    'status'` and answered 500. The 401 in front of it is what hid that for as long as it did.
+
+    Ben's row is the assertion that matters: a named subject is a scope, not a label. Anna's INVITE
+    row is absent here and that is honest — the operator key carries no (uid, address) pair of its
+    own, so the model asks admin-api for the other half, admin-api is `127.0.0.1:1` in this suite,
+    and the address lineage cannot be matched. A person's own credential carries both halves and
+    sees both rows (the test above)."""
+    r = client.get("/reactions", params={"subject": "126"}, headers=admin())
     assert r.status_code == 200, r.text
-    assert {x["id"] for x in r.json()["reactions"]} == set(ROWS)
+    assert {x["id"] for x in r.json()["reactions"]} == {"r-anna-uid"}
+    assert "r-ben" not in r.text
+
+
+def test_the_operator_key_with_no_subject_reads_nothing(client, identity):
+    """THE P20 HOLE, closed. `Caller(kind="admin")` carries no uid, no email and no owner, so with
+    no subject there was nothing left to authorize against and this route answered with every
+    reaction the deployment held — flow names, step names, failure reasons and reaction ids, for
+    every tenant. `VEXA_FLOWS_API_KEY` is exported into five compose services."""
+    r = client.get("/reactions", headers=admin())
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["subject_required"] is True
+    assert "r-ben" not in r.text
 
 
 def test_the_api_key_header_carries_a_bearer_too(client, identity):
@@ -263,7 +281,8 @@ def test_the_answer_states_which_subject_it_is_about(client, identity):
     """An argument silently overridden is the same defect as one silently dropped: the caller has
     to be able to see whose rows came back."""
     assert client.get("/reactions", headers=bearer("anna-key")).json()["subject"] == "126"
-    assert client.get("/reactions", headers=admin()).json()["subject"] == ""
+    assert client.get("/reactions", params={"subject": "512"},
+                      headers=admin()).json()["subject"] == "512"
 
 
 def test_an_operator_may_still_read_any_subject(client, identity):
@@ -327,11 +346,13 @@ def test_the_operator_key_travels_under_a_name_that_says_what_it_is(client, iden
     key. The two have been confused on a live deployment, which is how a lane came to run on the
     string `changeme`. Splitting this surface into two tiers is the moment the name has to stop
     lying."""
-    assert client.get("/reactions", headers=admin()).status_code == 200
+    assert client.get("/reactions", params={"subject": "126"},
+                      headers=admin()).status_code == 200
 
 
 def test_the_old_name_still_opens_the_door_for_one_release(client, identity):
-    assert client.get("/reactions", headers=admin_old_name()).status_code == 200
+    assert client.get("/reactions", params={"subject": "126"},
+                      headers=admin_old_name()).status_code == 200
     assert client.post("/events", headers=admin_old_name(), json={
         "event_type": "meeting.completed", "source_event_id": "s-old", "refs": {}}
     ).status_code != 401
@@ -347,8 +368,9 @@ def test_the_old_name_says_once_that_it_is_deprecated(client, identity, capsys):
 
 
 def test_the_new_name_wins_when_both_are_sent(client, identity):
-    r = client.get("/reactions", headers={"X-Flows-Operator-Key": OPERATOR,
-                                          "X-Flows-Admin-Key": "not-the-key"})
+    r = client.get("/reactions", params={"subject": "126"},
+                   headers={"X-Flows-Operator-Key": OPERATOR,
+                            "X-Flows-Admin-Key": "not-the-key"})
     assert r.status_code == 200
 
 
@@ -365,8 +387,11 @@ def queue_subject(monkeypatch):
     here; `tests/test_queue_waiting.py` owns what the projection answers."""
     asked = []
 
-    def waiting(_db, *, subject, flows, limit):
-        asked.append(subject)
+    def waiting(_db, *, subject, flows, limit, identity=None):
+        # `identity=` is B1: the route hands the projection the (uid, email) pair it already
+        # resolved from the caller's own credential, rather than making it re-ask admin-api for a
+        # fact `/internal/validate` returned on the way in.
+        asked.append((subject, identity))
         return {"items": [], "flows": []}
 
     monkeypatch.setattr(fa._flows_queue, "waiting", waiting)
@@ -376,7 +401,10 @@ def queue_subject(monkeypatch):
 def test_the_queue_takes_a_persons_bearer_and_answers_about_them(client, identity, queue_subject):
     r = client.get("/queue/waiting", headers=bearer("anna-key"))
     assert r.status_code == 200, r.text
-    assert queue_subject == ["126"]
+    (subject, identity_fn), = queue_subject
+    assert subject == "126"
+    assert identity_fn is not None and identity_fn("126") == ("126", "anna@vexa.test"), (
+        "B1: the queue was left to re-resolve a pair the credential already carried")
 
 
 def test_the_queue_refuses_a_subject_that_is_not_yours(client, identity, queue_subject):
@@ -394,7 +422,7 @@ def test_a_stamped_user_id_does_not_beat_an_authenticated_person(client, identit
     directly, and the edge stamps no `X-User-Id` at all."""
     r = client.get("/queue/waiting", headers={**bearer("anna-key"), "X-User-Id": "512"})
     assert r.status_code == 200
-    assert queue_subject == ["126"], "a header overrode a verified credential"
+    assert [s for s, _ in queue_subject] == ["126"], "a header overrode a verified credential"
 
 
 def test_the_operator_read_still_honours_the_stamped_identity(client, identity, queue_subject):
@@ -402,7 +430,7 @@ def test_the_operator_read_still_honours_the_stamped_identity(client, identity, 
     `?subject=` — `tests/test_queue_waiting.py` owns that row and it must keep passing."""
     r = client.get("/queue/waiting", params={"subject": "999"},
                    headers={**admin(), "X-User-Id": "126"})
-    assert r.status_code == 200 and queue_subject == ["126"]
+    assert r.status_code == 200 and [s for s, _ in queue_subject] == ["126"]
 
 
 def test_the_queue_needs_a_credential(client, identity, queue_subject):

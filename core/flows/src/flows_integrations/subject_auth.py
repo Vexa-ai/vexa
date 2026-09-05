@@ -46,13 +46,25 @@ class SubjectUnknown(Exception):
     """Identity answered, and nobody answers to this credential."""
 
 
+#: The caller kinds that carry NO identity of their own and therefore must NAME the person every
+#: subject-scoped read is about. `is_admin` is the operator key; `timeline` is
+#: `VEXA_FLOWS_TIMELINE_KEY`, which opens `GET /timeline` for a named subject and nothing else.
+#: Neither has a uid, so neither can be compared against a resource — which is exactly why an
+#: instance-wide default was the P20 hole: with no subject there was nothing left to authorize.
+MEDIATED_KINDS = ("admin", "timeline")
+
+
 @dataclass(frozen=True)
 class Caller:
-    """Who is on the other end of this request, and in which of the two tiers.
+    """Who is on the other end of this request, and in which of the three tiers.
 
-    ``admin`` is the operator key: unscoped, every route, the behaviour this service has always
-    had. ``subject`` is one person, and every subject-scoped route derives its subject from
-    ``uid`` — never from an argument the caller sent.
+    ``admin`` is the operator key: every route, and — since the P20 fix — never an instance-wide
+    read: it must name the subject it is asking about. ``subject`` is one person, and every
+    subject-scoped route derives its subject from ``uid``, never from an argument the caller sent.
+    ``timeline`` is the narrow read-only key: it names a subject like the operator does, opens
+    `GET /timeline` and nothing else, and is deliberately NOT an admin — it used to be one, which
+    silently made "a key that can do exactly one thing" a key that read any person's queue and
+    minted a gateway token on their account.
     """
     kind: str
     uid: str = ""
@@ -61,6 +73,17 @@ class Caller:
     @property
     def is_admin(self) -> bool:
         return self.kind == "admin"
+
+    @property
+    def is_timeline(self) -> bool:
+        """The narrow read-only key. NOT an operator: it opens one route, for one named subject."""
+        return self.kind == "timeline"
+
+    @property
+    def must_name_a_subject(self) -> bool:
+        """True for the credentials that are not a person — they carry no subject of their own, so
+        they have to say whose rows they are asking for (P20: no instance-wide default)."""
+        return self.kind in MEDIATED_KINDS
 
     @property
     def names(self) -> set:
