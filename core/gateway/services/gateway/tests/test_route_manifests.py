@@ -42,7 +42,7 @@ AGENT_ROWS = frozenset({
 #: What shipped. A count, not a copy of the table: a second copy of 67 rows is a second thing to
 #: keep in step, and `test_the_assembled_table_matches_the_app_exactly` is what proves the
 #: CONTENT — against the routes themselves, which is a stronger anchor than a literal.
-FULL_SCOPED, FULL_UNSCOPED = 67, 2
+FULL_SCOPED, FULL_UNSCOPED = 68, 2
 #: What THIS BUILD publishes — the full profile, less the agent rows when the build omits them.
 #: DERIVED, so the count stays exact in either build rather than softening to a range or a
 #: subset check. 67 on the line; 60 in a build with no agent manifest.

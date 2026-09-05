@@ -506,7 +506,7 @@ class InMemoryTranscriptStore:
         return self._planned_row(meeting_id)
 
     async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
-                                 platform=None, native_meeting_id=None):
+                                 platform=None, native_meeting_id=None, meeting_db_id=None):
         """A DELIBERATELY CRUDE stand-in for Postgres FTS — enough to test the ROUTE's contract
         (owner scoping, filters, paging, hit shape), never the search semantics.
 
@@ -542,7 +542,12 @@ class InMemoryTranscriptStore:
                 continue          # owner-scoped, fail-closed — mirrors the adapter
             if platform and m["platform"] != platform:
                 continue
-            if native_meeting_id and m["native_meeting_id"] != native_meeting_id:
+            # The EXACT row wins over the room code, and is checked first: a caller that has
+            # both is asking about one meeting, not about every session held on that link.
+            if meeting_db_id is not None:
+                if mid != meeting_db_id:
+                    continue
+            elif native_meeting_id and m["native_meeting_id"] != native_meeting_id:
                 continue
             for seg in m["segments"].values():
                 text = seg.get("text") or ""
