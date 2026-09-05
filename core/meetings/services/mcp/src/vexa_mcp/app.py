@@ -223,7 +223,11 @@ def _caller_fingerprint(api_key: str) -> str:
     guessable by whoever holds the salt-free hash.
     """
     salt = os.getenv("VEXA_TICKET_FINGERPRINT_SALT") or _DEFAULT_CALLER_SALT
-    return hashlib.blake2b(
+    # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing]: this is a keyed
+    # fingerprint of a credential used as a sink handle, never password storage or verification —
+    # the key is the secret and the digest is never compared against user input; a slow hash here
+    # would only slow every ticket. Reviewed 2026-09-05 (v0.12.27 car 11).
+    return hashlib.blake2b(  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing]
         api_key.encode("utf-8"),
         key=salt.encode("utf-8")[:64],   # blake2b keys are capped at 64 bytes
         digest_size=8,                   # 8 bytes → the same 16 hex chars this has always emitted
