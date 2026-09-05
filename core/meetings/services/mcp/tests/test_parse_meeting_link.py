@@ -184,6 +184,59 @@ class TestZoom:
     def test_zoom_events_rejected(self):
         assert_422("https://events.zoom.us/ev/abc123", "zoom events")
 
+    def test_password_spelling_is_read_as_well_as_pwd(self):
+        """A dropped passcode is invisible: the bot sits in a prompt nobody can see."""
+        assert parse("https://zoom.us/j/12345678901?password=Abc123").passcode == "Abc123"
+
+
+class TestZoomHostedDomains:
+    """Zoom served under somebody else's hostname (fr_042129f5d53aa543).
+
+    An organisation can front its Zoom tenancy on its own domain, and the link it hands out then
+    carries no "zoom" anywhere. Recognised on the PATH SHAPE — Zoom's own two join paths, a 10-11
+    digit id, AND a passcode — never on the hostname, because the hostname is the part that was
+    replaced. Narrow on purpose: answering a wrong platform confidently is worse than the 422.
+    """
+
+    #: The exact link that 422'd in production, 2026-09-05.
+    LFX = ("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284"
+           "?password=6a3b1c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d")
+
+    def test_the_linux_foundation_link_that_422d(self):
+        r = parse(self.LFX)
+        assert r.platform == "zoom"
+        assert r.native_meeting_id == "96088138284"
+        assert r.passcode == "6a3b1c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d"
+
+    def test_the_hosted_read_says_so(self):
+        """A host we inferred rather than recognised is reported, the way the jitsi inference is."""
+        assert any("path shape" in w for w in parse(self.LFX).warnings)
+
+    def test_the_j_path_on_a_hosted_domain(self):
+        r = parse("https://meetings.example.org/j/98765432101?pwd=s3cret")
+        assert (r.platform, r.native_meeting_id, r.passcode) == ("zoom", "98765432101", "s3cret")
+
+    def test_without_a_passcode_it_is_not_claimed(self):
+        """THE negative case. A bare numeric path on an unknown host is not a meeting — the
+        passcode is what makes the shape recognizable, so it stays a 422."""
+        assert_422("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284",
+                   "unknown provider")
+
+    def test_a_nine_digit_id_is_not_claimed(self):
+        """9-digit legacy ids are accepted on zoom.us, where the HOST already proves the platform.
+        On an unknown host the id length is part of the evidence, so the shape stays 10-11."""
+        assert_422("https://portal.example.org/meeting/123456789?password=x", "unknown provider")
+
+    def test_an_ordinary_page_with_a_number_in_it_is_not_claimed(self):
+        assert_422("https://news.example.org/article/96088138284?password=x", "unknown provider")
+
+    def test_a_declared_jitsi_host_is_not_overruled(self, monkeypatch):
+        """An operator who named a host in VEXA_JITSI_HOSTS has said what it is, and a heuristic
+        must not overrule them. The link still fails — a two-segment path is not a jitsi room —
+        but it fails as JITSI, which is the branch that owns that host."""
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "video.corp.example")
+        assert_422("https://video.corp.example/j/12345678901?pwd=x", "jitsi")
+
 
 class TestJitsi:
     def test_canonical_room(self):

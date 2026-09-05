@@ -107,3 +107,48 @@ class TestConstructMeetingUrl:
 
     def test_zoom_still_requires_explicit_url(self):
         assert construct_meeting_url("zoom", "84335626851") is None
+
+
+class TestParseZoomHostedDomain:
+    """Zoom served under somebody else's hostname — the twin of the MCP link parser's
+    hosted-domain branch (fr_042129f5d53aa543), kept in step with it deliberately: the two
+    parsers answer the same question on two doors, and a link that parses on one and 422s on the
+    other is the worst of both.
+
+    Matched on the PATH SHAPE plus a passcode parameter, never on the hostname — the hostname is
+    the part a hosted front door replaces.
+    """
+
+    LFX = ("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284"
+           "?password=6a3b1c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d")
+
+    def test_the_linux_foundation_link(self):
+        assert parse_meeting_url(self.LFX) == ("zoom", "96088138284")
+
+    def test_a_host_that_does_not_say_zoom_at_all(self):
+        assert parse_meeting_url("https://meetings.example.org/j/98765432101?pwd=s3cret") == (
+            "zoom", "98765432101",
+        )
+
+    def test_without_a_passcode_it_is_not_claimed(self):
+        """The negative case: a bare numeric path on an unknown host is not a meeting."""
+        assert parse_meeting_url("https://meetings.example.org/meeting/98765432101") is None
+
+    def test_an_ordinary_page_with_a_number_in_it_is_not_claimed(self):
+        assert parse_meeting_url("https://news.example.org/article/96088138284?password=x") is None
+
+    def test_the_ics_free_text_scan_does_not_infer_it(self):
+        """``generic_hosts=False`` exists so a calendar description full of arbitrary links does
+        not import one as a meeting; a hostname-free inference is exactly what it excludes."""
+        hostname_free = "https://meetings.example.org/j/98765432101?pwd=s3cret"
+        assert parse_meeting_url(hostname_free, generic_hosts=False) is None
+        assert find_meeting_link(f"join here {hostname_free} thanks") is None
+        # The LFX host is a different case and is unaffected: it literally contains "zoom", so the
+        # long-standing hostname branch claims it in every mode, free-text scan included.
+        assert find_meeting_link(f"join here {self.LFX} thanks") == (
+            "zoom", "96088138284", self.LFX,
+        )
+
+    def test_a_declared_jitsi_host_is_not_overruled(self, monkeypatch):
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "video.corp.example")
+        assert parse_meeting_url("https://video.corp.example/j/12345678901?pwd=x") is None
