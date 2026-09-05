@@ -49,7 +49,10 @@ while [ $# -gt 0 ]; do
 done
 
 PG="${STACK}-postgres-1"
-AGENT="${STACK}-agent-api-1"
+# the container that mounts the workspaces volume: the SERVING agent-api when the stack runs
+# blue/green (deploy.sh records it in state.json), else the compose-named one.
+AGENT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["services"]["agent-api"]["container"])' "$HOME/.vexa-bluegreen/${STACK}/state.json" 2>/dev/null || true)
+AGENT="${AGENT:-${STACK}-agent-api-1}"
 psql_vexa() { docker exec "$PG" psql -U postgres -d vexa -tAc "$1"; }
 
 say()   { printf '  %s\n' "$*"; }
