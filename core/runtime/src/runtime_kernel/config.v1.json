@@ -399,6 +399,34 @@
       ]
     },
     {
+      "key": "VEXA_SEARCH_URL",
+      "class": "defaulted",
+      "default": "(unset — spawned workers get no WebSearch)",
+      "description": "the operator-supplied search endpoint the worker's WebSearch built-in queries, brokered into spawned workers. The runtime does not use it itself; it FORWARDS it, which is the only reason it is declared here",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_SEARCH_DIALECT",
+      "class": "defaulted",
+      "default": "searxng",
+      "description": "the wire format VEXA_SEARCH_URL speaks (`searxng` | `brave`), brokered into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_SEARCH_API_KEY",
+      "class": "defaulted",
+      "default": "(unset — searxng needs none)",
+      "secret": true,
+      "description": "credential for VEXA_SEARCH_URL (brave's X-Subscription-Token), brokered into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_CODEX_MODEL",
       "class": "defaulted",
       "default": "(subscription account default)",

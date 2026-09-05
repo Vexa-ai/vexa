@@ -217,7 +217,11 @@ def test_the_qwen_lane_dials_are_declared():
 # 87 since VEXA_ENV was declared beside VEXA_SECRETS_KEY (R-E08): the profile word decides whether
 # an unset store key is a generated one or a boot refusal, so the two are read together and are
 # declared together.
-EXPECTED_DECLARED_KEYS = 90  # +1: VEXA_UNIT_ID, #1510 (fallback_session reads it)
+# 90: +1 VEXA_UNIT_ID, #1510 (fallback_session reads it).
+# +3: VEXA_SEARCH_URL / VEXA_SEARCH_DIALECT / VEXA_SEARCH_API_KEY — the openai-agent harness's
+# WebSearch adapter. The endpoint is the OPERATOR'S (no search engine ships with Vexa), so all
+# three are deployment configuration this service stamps into every worker.
+EXPECTED_DECLARED_KEYS = 93
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():

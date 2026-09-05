@@ -116,6 +116,7 @@
           "configuration",
           "authenticated-bots",
           "model-credentials-licensing",
+        "agent-web-search",
           "security-compliance",
           "troubleshooting",
           "troubleshooting/completion-reasons",

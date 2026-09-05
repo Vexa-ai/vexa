@@ -34,14 +34,30 @@ trivial fakes.
 |---|---|---|---|---|
 | `claude-code` (default) | the `claude` CLI, `--output-format stream-json` | the CLI's own (Read/Write/Edit/Bash/Web...) + MCP via `--mcp-config` | CLI transcripts under `.claude/projects` | mid-turn stdin injection |
 | `codex` | Codex app-server over JSON-RPC | Codex's own + MCP | durable threads | `turn/steer` |
-| `openai-agent` | **this repo's loop**, raw httpx to `POST {base}/chat/completions` | `Read`/`Write`/`Edit`/`Glob`/`Grep` implemented here, sandboxed to the mounts, plus every MCP tool in the same `mcp.json` (http **and** stdio) | JSONL written in the CLI's on-disk shape, so `workspace_reader.history` reads it unchanged | none (one request at a time) |
+| `openai-agent` | **this repo's loop**, raw httpx to `POST {base}/chat/completions` | `Read`/`Write`/`Edit`/`Glob`/`Grep` implemented here, sandboxed to the mounts, `WebSearch`/`WebFetch` (`web_tools.py`), plus every MCP tool in the same `mcp.json` (http **and** stdio) | JSONL written in the CLI's on-disk shape, so `workspace_reader.history` reads it unchanged | none (one request at a time) |
 
-`openai-agent` exists for PRD decision 37: run the service on a model we host. It has **no `Bash`,
-no `WebSearch`/`WebFetch` and no skills discovery** — a name in the allow-set it does not implement
-is simply not attached. It carries a hard per-turn budget (tool calls + wall clock) and trims
-context oldest-tool-result-first, because the box it was built for holds ~29 requests at 24k
-context. Qwen on that box needs `VEXA_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}`
-or it spends the whole budget reasoning.
+`openai-agent` exists for PRD decision 37: run the service on a model we host. It has **no `Bash`
+and no skills discovery** — a name in the allow-set it does not implement is simply not attached. It
+carries a hard per-turn budget (tool calls + wall clock) and trims context oldest-tool-result-first,
+because the box it was built for holds ~29 requests at 24k context. Qwen on that box needs
+`VEXA_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}` or it spends the whole
+budget reasoning.
+
+### Web reach — an adapter, never a dependency (`web_tools.py`)
+
+`WebFetch` is always attached; `WebSearch` is attached only when the operator has named a search
+endpoint. **No search engine ships with Vexa** — no image, no compose service, no vendored code —
+and that is a licence decision as much as a deployment one: the obvious self-hosted metasearch is
+AGPL-3.0. The interface is `VEXA_SEARCH_URL` + `VEXA_SEARCH_DIALECT` (`searxng` | `brave`), and a
+third dialect is one ~20-line function in `_DIALECTS`: take a client, a URL, a query and a count,
+return `[{"title","url","snippet"}]`.
+
+`WebFetch` carries the guard search does not need — a URL the MODEL chose is an outbound destination
+picked by a non-operator — so it refuses loopback / link-local / private / reserved targets and
+re-checks every redirect hop, exempting only the operator's own `VEXA_SEARCH_URL` host. The rule is
+`control_plane/model_endpoint.py`'s, **re-stated rather than imported**: the worker image ships
+`worker/`, `llm/`, `shared/` and `contracts/` and deliberately not `control_plane/`, so an import
+would be an ImportError in the only process that runs this code.
 
 Raw `httpx`, no vendor SDKs — the protocols are ~10 lines each and a pinned SDK is a heavier
 supply-chain surface than the dialect itself.
@@ -58,6 +74,9 @@ supply-chain surface than the dialect itself.
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
 | `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
 | `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
+| `VEXA_SEARCH_URL` | operator-supplied search endpoint for `WebSearch` | empty → `WebSearch` is not attached |
+| `VEXA_SEARCH_DIALECT` | wire format of that endpoint: `searxng` \| `brave` | `searxng` |
+| `VEXA_SEARCH_API_KEY` | credential for that endpoint (brave needs one; searxng does not) | empty |
 | `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter ONLY | — |
 | `HOST_CODEX_CREDENTIALS`, `OPENAI_API_KEY` | codex adapter subscription-file / API-key auth | — |
 

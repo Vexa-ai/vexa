@@ -685,3 +685,74 @@ def test_a_trimmed_turn_says_so_on_done(tmp_path, monkeypatch):
     done = evs[-1]
     assert done["type"] == "done" and done["ok"] is True
     assert "context-trimmed" in done["reason"]
+
+
+# ── the web tools inside the loop (the adapter's own unit tests live in test_llm_web_tools.py) ───
+
+def _web(handler):
+    return httpx.MockTransport(handler)
+
+
+def test_websearch_is_not_advertised_when_no_backend_is_configured(tmp_path, monkeypatch):
+    """The harness's rule, applied to the one tool that needs an operator to exist: a `WebSearch`
+    advertised with nothing behind it teaches the model that searching does not work, and that
+    lesson outlives the turn. `WebFetch` needs no backend and is always there."""
+    monkeypatch.delenv("VEXA_SEARCH_URL", raising=False)
+    seen = []
+    h = _harness(_server([_msg("nothing to do")], seen))
+    h.prepare(tmp_path)
+    _events(h, tmp_path, "hi")
+    names = {t["function"]["name"] for t in seen[0]["tools"]}
+    assert "WebSearch" not in names
+    assert "WebFetch" in names and "Read" in names
+
+
+def test_websearch_is_advertised_once_an_endpoint_is_named(tmp_path, monkeypatch):
+    monkeypatch.setenv("VEXA_SEARCH_URL", "http://searx.internal:8080")
+    seen = []
+    h = _harness(_server([_msg("nothing to do")], seen))
+    h.prepare(tmp_path)
+    _events(h, tmp_path, "hi")
+    assert "WebSearch" in {t["function"]["name"] for t in seen[0]["tools"]}
+
+
+def test_a_web_search_call_runs_through_the_loop_and_feeds_the_answer_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("VEXA_SEARCH_URL", "http://searx.internal:8080")
+    seen = []
+    h = _harness(_server([_msg("", [("c1", "WebSearch", {"query": "aswf"})]), _msg("found it")], seen),
+                 web_transport=_web(lambda r: httpx.Response(200, json={"results": [
+                     {"title": "ASWF", "url": "https://www.aswf.io/", "content": "a neutral forum"}]})))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "who is aswf", allowed_tools=["WebSearch"])
+    result = next(e for e in evs if e["type"] == "tool-result")
+    assert result["ok"] is True and "aswf.io" in result["summary"]
+    # the result reached the NEXT request as a tool message — that is what "feeds back" means
+    assert any(m.get("role") == "tool" and "aswf.io" in m["content"] for m in seen[1]["messages"])
+    assert evs[-1]["ok"] is True and evs[-1]["reply"] == "found it"
+
+
+def test_a_web_fetch_result_is_trimmed_to_the_tool_result_ceiling(tmp_path, monkeypatch):
+    from llm.openai_agent import _TOOL_RESULT_MAX_CHARS
+    monkeypatch.setattr("llm.web_tools._resolve", lambda h: ["93.184.216.34"])
+    huge = "<html><title>T</title><body><p>" + ("word " * 200_000) + "</p></body></html>"
+    h = _harness(_server([_msg("", [("c1", "WebFetch", {"url": "https://www.aswf.io/",
+                                                        "max_chars": 10 ** 9})]), _msg("ok")]),
+                 web_transport=_web(lambda r: httpx.Response(
+                     200, headers={"content-type": "text/html"}, text=huge)))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "read it", allowed_tools=["WebFetch"])
+    assert next(e for e in evs if e["type"] == "tool-result")["ok"] is True
+    stored = [m for m in _transcript(tmp_path) if m.get("type") == "user"]
+    # the ceiling is enforced on the message fed back to the model, which is the one that costs context
+    tool_msgs = [m for m in stored if isinstance(m.get("oa"), dict) and m["oa"].get("role") == "tool"]
+    assert tool_msgs and len(tool_msgs[-1]["oa"]["content"]) <= _TOOL_RESULT_MAX_CHARS
+
+
+def test_a_private_address_is_refused_inside_the_loop(tmp_path):
+    h = _harness(_server([_msg("", [("c1", "WebFetch", {"url": "http://169.254.169.254/latest/"})]),
+                          _msg("understood")]))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "read the metadata service", allowed_tools=["WebFetch"])
+    result = next(e for e in evs if e["type"] == "tool-result")
+    assert result["ok"] is False and "169.254.169.254" in result["summary"]
+    assert evs[-1]["ok"] is True          # a refusal is an ordinary result; the turn goes on

@@ -294,6 +294,14 @@ class DockerBackend:
             "VEXA_AGENT_MAX_TURN_SEC",
             "VEXA_AGENT_CONTEXT_TOKENS",
             "VEXA_AGENT_STREAM",
+            # The worker's reach onto the open web (the openai-agent harness's WebSearch/WebFetch).
+            # THE ENDPOINT IS THE OPERATOR'S — nothing search-shaped ships with this product — so it
+            # arrives as deployment env and has to be forwarded like every other worker-read dial: a
+            # VEXA_SEARCH_URL that stops at the runtime is a deployment that reads as configured and
+            # hands every turn no search tool at all.
+            "VEXA_SEARCH_URL",
+            "VEXA_SEARCH_DIALECT",
+            "VEXA_SEARCH_API_KEY",
             # codex harness API-key auth (subscription auth is the read-only bind above)
             "OPENAI_API_KEY",
             "CODEX_API_KEY",

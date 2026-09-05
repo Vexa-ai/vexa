@@ -397,7 +397,7 @@
       "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
       "class": "defaulted",
       "default": "(unset)",
-      "description": "os.pathsep-separated list of directories a caller-supplied workspace repository may live under as a scheme-less local path (POST /api/workspace/swap|activate). Unset — the default and every hosted deployment — refuses local paths outright; a self-hosted deployment that legitimately clones from a disk mirror names its roots here. Values are resolved and proven contained before any filesystem access (control_plane/repo_ref.py)",
+      "description": "os.pathsep-separated list of directories a caller-supplied workspace repository may live under as a scheme-less local path (POST /api/workspace/swap|activate). Unset \u2014 the default and every hosted deployment \u2014 refuses local paths outright; a self-hosted deployment that legitimately clones from a disk mirror names its roots here. Values are resolved and proven contained before any filesystem access (control_plane/repo_ref.py)",
       "targets": []
     },
     {
@@ -590,6 +590,34 @@
       "class": "defaulted",
       "default": "1",
       "description": "openai-agent harness: stream the completion (SSE). 0/false/no sends one blocking request per step instead \u2014 for an endpoint whose SSE is unreliable",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_SEARCH_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 WebSearch is NOT attached to the turn)",
+      "description": "openai-agent harness: the search endpoint the WebSearch built-in queries. THE OPERATOR SUPPLIES IT \u2014 no search engine ships with Vexa, and that is a licence decision as much as a deployment one (the obvious self-hosted metasearch is AGPL-3.0). Unset, WebSearch is simply not attached and the turn's tool list says so; WebFetch needs no backend and is always attached",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_SEARCH_DIALECT",
+      "class": "defaulted",
+      "default": "searxng",
+      "description": "openai-agent harness: which wire format VEXA_SEARCH_URL speaks \u2014 `searxng` (JSON output, `?format=json`, which the operator must enable) or `brave` (Brave Search API, needs VEXA_SEARCH_API_KEY). An unknown value is a failed tool result naming the dialects this build speaks, never a silent no-op",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_SEARCH_API_KEY",
+      "class": "defaulted",
+      "default": "(unset \u2014 fine for a dialect that needs no credential)",
+      "secret": true,
+      "description": "openai-agent harness: the credential for VEXA_SEARCH_URL. `brave` sends it as X-Subscription-Token; `searxng` needs none",
       "targets": [
         "compose"
       ]

@@ -33,11 +33,20 @@ Three seams make that true and each one is load-bearing:
   the tools are exposed to the model under the same `mcp__<server>__<tool>` names the allow-set and
   the event conventions are written against.
 
-WHAT IT DELIBERATELY DOES NOT HAVE. No `Bash`, no `WebSearch`/`WebFetch`, no skills discovery, no
-mid-turn injection. The file tools are ours (`Read`/`Write`/`Edit`/`Glob`/`Grep`), minimal, and
-sandboxed to the mount roots — a path outside them is refused rather than clamped, because a write
-that silently lands somewhere else is worse than a failed call. Names in the allow-set that this
-harness does not implement are simply not attached, and the turn says so through the tools it has.
+WHAT IT DELIBERATELY DOES NOT HAVE. No `Bash`, no skills discovery, no mid-turn injection. The file
+tools are ours (`Read`/`Write`/`Edit`/`Glob`/`Grep`), minimal, and sandboxed to the mount roots — a
+path outside them is refused rather than clamped, because a write that silently lands somewhere else
+is worse than a failed call. Names in the allow-set that this harness does not implement are simply
+not attached, and the turn says so through the tools it has.
+
+WHAT IT GAINED, AND WHY IT IS AN ADAPTER. `WebSearch` and `WebFetch` (``llm/web_tools.py``), because
+the onboarding playbook has said *research first, ask last* since it shipped and under this harness
+there was nothing behind the sentence — the first admin walking a blank instance on our own model
+reported it as "my research tools here can't reach the open web". Search speaks to an endpoint THE
+OPERATOR RUNS (``VEXA_SEARCH_URL`` + ``VEXA_SEARCH_DIALECT``) and is NOT attached when none is
+configured: no search engine ships with this product, which is a licence decision (the obvious
+self-hosted one is AGPL-3.0) as much as a deployment one. `WebFetch` needs no backend, is therefore
+always attached, and refuses any URL that resolves into the deployment's own network.
 
 SIZING (CCC-Inference-Deployment): the KV cache holds ~29 requests at 24k context, so the loop
 carries a HARD per-turn budget — max tool calls, max wall seconds — and trims context (oldest tool
@@ -47,7 +56,8 @@ Config: ``VEXA_LLM_BASE_URL`` · ``VEXA_LLM_API_KEY`` (optional — CCC has no a
 ``VEXA_LLM_MODEL`` / ``VEXA_AGENT_MODEL`` · ``VEXA_LLM_EXTRA_BODY`` (merged into EVERY request —
 Qwen needs `{"chat_template_kwargs":{"enable_thinking":false}}` or it reasons its whole budget away
 and returns nothing parseable) · ``VEXA_AGENT_MAX_TOOL_CALLS`` · ``VEXA_AGENT_MAX_TURN_SEC`` ·
-``VEXA_AGENT_CONTEXT_TOKENS`` · ``VEXA_AGENT_STREAM``.
+``VEXA_AGENT_CONTEXT_TOKENS`` · ``VEXA_AGENT_STREAM`` · ``VEXA_SEARCH_URL`` ·
+``VEXA_SEARCH_DIALECT`` · ``VEXA_SEARCH_API_KEY``.
 """
 from __future__ import annotations
 
@@ -60,7 +70,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Iterator, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 import httpx
 
@@ -70,6 +80,7 @@ from llm.errors import LLMAuthError, LLMConfigError, LLMError
 from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _short, _written_artifact)
 from llm.ports import harness_subprocess_env
+from llm import web_tools
 
 
 def _parse_extra_body(raw: object) -> dict:
@@ -383,7 +394,35 @@ BUILTIN_SPECS: dict[str, dict] = {
                  "pattern": {"type": "string"}, "path": {"type": "string"},
                  "glob": {"type": "string"}, "case_insensitive": {"type": "boolean"}},
                  "required": ["pattern"]}},
+    # The two WEB tools. Same discipline as the file tools — spec here, execution in `run_builtin`,
+    # result trimmed by the loop, counted against the turn's tool-call budget. WebSearch is attached
+    # only when a backend is configured (`_attached`).
+    "WebSearch": {"description": "Search the open web. Returns JSON: "
+                                 "{query, results:[{title,url,snippet}]}. Use it before asking the "
+                                 "person a question you could answer yourself, then WebFetch the "
+                                 "URLs worth reading in full.",
+                  "parameters": {"type": "object", "properties": {
+                      "query": {"type": "string"},
+                      "max_results": {"type": "integer", "description": "default 8, max 25"}},
+                      "required": ["query"]}},
+    "WebFetch": {"description": "Fetch one http(s) page and return its readable text. Returns JSON: "
+                                "{url, final_url, status, title, text}. Refuses any address on this "
+                                "deployment's own network.",
+                 "parameters": {"type": "object", "properties": {
+                     "url": {"type": "string"},
+                     "max_chars": {"type": "integer", "description": "default 12000"}},
+                     "required": ["url"]}},
 }
+
+#: Built-ins whose attachment is CONDITIONAL. The harness's rule is that a tool it cannot serve is
+#: simply not attached and the turn's tool list says so — advertising a `WebSearch` with no backend
+#: behind it teaches the model that searching does not work, and that lesson outlives the turn.
+_CONDITIONAL: dict[str, Callable[[], bool]] = {"WebSearch": web_tools.search_configured}
+
+
+def _attached(name: str) -> bool:
+    gate = _CONDITIONAL.get(name)
+    return True if gate is None else bool(gate())
 
 _GREP_MAX_HITS = 200
 _READ_MAX_CHARS = 100_000
@@ -471,8 +510,23 @@ class _Sandbox:
                          f"({', '.join(str(r) for r in roots)})")
 
 
-def run_builtin(tool: str, args: dict, sandbox: _Sandbox) -> tuple[bool, str]:
-    """One built-in file tool → ``(ok, text)``. Never raises: a bad call is a failed tool result."""
+def run_builtin(tool: str, args: dict, sandbox: _Sandbox,
+                web: Optional[httpx.Client] = None) -> tuple[bool, str]:
+    """One built-in tool → ``(ok, text)``. Never raises: a bad call is a failed tool result.
+
+    ``web`` is the harness's own http client for the two web tools (so a test can hand it a
+    transport); omitted, each call opens and closes its own."""
+    # The web tools take no path and touch no mount, so they are answered before the sandbox is
+    # consulted at all. Their own refusals (no backend, a private address) are ordinary failed
+    # results — the model reads them and picks another move.
+    if tool == "WebSearch":
+        return web_tools.web_search(str(args.get("query") or ""),
+                                    args.get("max_results") or web_tools.DEFAULT_MAX_RESULTS,
+                                    client=web)
+    if tool == "WebFetch":
+        return web_tools.web_fetch(str(args.get("url") or ""),
+                                   args.get("max_chars") or web_tools.DEFAULT_FETCH_CHARS,
+                                   client=web)
     try:
         if tool == "Read":
             path = sandbox.resolve(str(args.get("file_path") or ""))
@@ -762,7 +816,8 @@ class OpenAIAgentHarness:
     def __init__(self, *, base_url: Optional[str] = None, api_key: Optional[str] = None,
                  model: Optional[str] = None, extra_body: Optional[dict] = None,
                  timeout: float = 300.0, transport: Optional[httpx.BaseTransport] = None,
-                 mcp_http_client: Optional[httpx.Client] = None) -> None:
+                 mcp_http_client: Optional[httpx.Client] = None,
+                 web_transport: Optional[httpx.BaseTransport] = None) -> None:
         self._base = (base_url or os.environ.get("VEXA_LLM_BASE_URL")
                       or os.environ.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
         self._key = (api_key or os.environ.get("VEXA_LLM_API_KEY")
@@ -772,6 +827,13 @@ class OpenAIAgentHarness:
         self._extra = _parse_extra_body(extra_body if extra_body is not None
                                         else os.environ.get("VEXA_LLM_EXTRA_BODY"))
         self._client = httpx.Client(timeout=timeout, transport=transport)
+        # A SEPARATE client for the web tools, and deliberately so: the model endpoint's timeout is
+        # a 300s inference wait, redirects there are meaningless, and a page the MODEL chose must
+        # never ride the connection pool carrying the deployment's model credential.
+        # `follow_redirects=False` because `web_fetch` walks the hops itself — every one of them is
+        # re-checked against the SSRF guard, which is the whole point.
+        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT, transport=web_transport,
+                                 follow_redirects=False)
         self._mcp_http = mcp_http_client
         self._chat_root: Optional[Path] = None
 
@@ -854,7 +916,7 @@ class OpenAIAgentHarness:
         servers, mcp_index = _load_mcp(mcp_config, http_client=self._mcp_http)
         try:
             specs = [{"type": "function", "function": {"name": n, **BUILTIN_SPECS[n]}}
-                     for n in BUILTIN_SPECS if _allowed(n, allow)]
+                     for n in BUILTIN_SPECS if _allowed(n, allow) and _attached(n)]
             specs += [s for s in _mcp_specs(mcp_index) if _allowed(s["function"]["name"], allow)]
 
             budget_calls = _int_env("VEXA_AGENT_MAX_TOOL_CALLS", _DEFAULT_MAX_TOOL_CALLS)
@@ -962,9 +1024,10 @@ class OpenAIAgentHarness:
             srv, tool = mcp_index[name]
             return srv.call(tool, args if isinstance(args, dict) else {})
         if name in BUILTIN_SPECS:
-            return run_builtin(name, args if isinstance(args, dict) else {}, sandbox)
+            return run_builtin(name, args if isinstance(args, dict) else {}, sandbox, self._web)
+        attached = {n for n in BUILTIN_SPECS if _attached(n)} | set(mcp_index)
         return False, (f"no tool named {name} is attached to this turn — the attached tools are "
-                       f"{sorted(set(BUILTIN_SPECS) | set(mcp_index))}")
+                       f"{sorted(attached)}")
 
     def _complete(self, messages: list[dict], specs: list[dict], model: str) -> Iterator[dict]:
         """One `chat/completions` round trip. Yields ``message-delta`` events while the text
