@@ -14,6 +14,7 @@ import importlib
 import os
 from urllib.parse import parse_qs, urlparse
 
+import agent_half
 import flows_defs.production as production
 import flows_steps.common as common
 import flows_steps.mailtext as mailtext
@@ -208,6 +209,7 @@ def test_email_minutes_still_obeys_the_person_switch(monkeypatch):
     assert ch.sent == []
 
 
+@agent_half.required
 def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, scaffolds):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
@@ -229,6 +231,7 @@ def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, s
     assert len(notify_mod.compose(msg["body"], msg["link"]).strip().splitlines()) <= 5
 
 
+@agent_half.required
 def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
@@ -239,6 +242,7 @@ def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     assert ch.sent == []
 
 
+@agent_half.required
 def test_prepare_meeting_resolves_the_row_id_from_the_url(monkeypatch, scaffolds):
     """No meeting_id in refs — the step asks the platform which row this url is, because the
     terminal deeplink names a ROW, and an invite carries only the meeting url."""
@@ -268,7 +272,15 @@ def test_the_prep_fact_is_emitted_inside_invite_intake():
     # DECISION 29: three touches and no others — RSVP accept, the ack mail, the prepare mail.
     assert "spawn_onboardings" not in steps
     assert ("onboard_person", 1) not in reg.flows and ("onboard_group", 1) not in reg.flows
-    assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
+    # THE CONSUMER OF THE FACT is `meeting_prep`, and it lives in the optional
+    # `flows_defs/production_agent.py` — so the emit above is asserted in every tree and the
+    # subscription only where the module is. A deployment with no agent half emits `meeting.upcoming`
+    # and nothing reacts to it, which is `admit()`'s documented zero-flow case and not a defect: the
+    # prepare touch IS an agent conversation, and there is nothing for it to degrade to.
+    if agent_half.PRESENT:
+        assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
+    else:
+        assert not [n for (n, _v) in reg.flows if n in agent_half.FLOWS]
     emitted = []
     ctx = _ctx({"ics_uid": "u-1", "organizer": "a@b.test"},
                {"ensure_user": {"uid": "7"}})
