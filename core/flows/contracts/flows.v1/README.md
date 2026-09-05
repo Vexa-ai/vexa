@@ -16,19 +16,27 @@ billing on the paid product, so its stamp is written in the same transaction as 
 describes — the guarantee is the stamp, not the code path, which is why it holds against a replay, a
 restore, and a second producer somebody adds later.
 
+The table below is a rendering of `carriers.json`, in file order — read it off the census, never the
+other way round. It said `meeting.completed | flows` and omitted `meeting.started` entirely until the
+0.12.27 candidate; both carriers had been handed over to **meetings** (F168/F181, meeting-api
+publishes them from its own lifecycle) and the prose here still named the previous producer, which is
+the one thing a census may not get wrong.
+
 | carrier | owner | cardinality |
 |---|---|---|
 | `onboarding.completed` | identity | exactly once per subject |
-| `meeting.completed` | flows | once per occurrence |
+| `meeting.started` | meetings | once per occurrence |
+| `meeting.completed` | meetings | once per occurrence |
 | `invite.received` | flows | once per occurrence |
 | `desk.unscaffolded` | agent | exactly once per subject |
 | `claim.proposed` | agent | once per occurrence |
 | `friction.reported` | flows | once per occurrence |
 
-`meeting.completed` and `invite.received` are recorded from `core/flows/mcp.tools.v1.json`'s own
-`publishes_events`; the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None
-of them is asserted afresh: this file is a reading of what the repository already declares, which is
-what makes it a census rather than a wish.
+`meeting.started` and `meeting.completed` are recorded from meeting-api's `config.v1.json`
+publish-edge keys, `invite.received` from `core/flows/mcp.tools.v1.json`'s own `publishes_events`,
+and the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None of them is
+asserted afresh: this file is a reading of what the repository already declares, which is what makes
+it a census rather than a wish.
 
 `friction.reported` (PRD 40.9 open-decision 8) is owned by **flows**, not agent, even though the
 fact it describes is about using the product: the producer is flows-api's own `POST /friction`
@@ -58,9 +66,16 @@ loses a card and never loses the fact.
 
 ## Registered, not yet sealed
 
-It is registered in `architecture.calm.json` (node `flows.v1`) — `gate:dataflow`'s completeness
-check requires every contract dir on disk to appear in the chart, so registration is not optional
-and not deferrable.
+It is registered in `architecture.calm.json` as node `flows.v1` (`metadata.path`
+`core/flows/contracts/flows.v1`, `domain` `flows`), inside the `flows-composed` container —
+`gate:dataflow`'s completeness check requires every contract dir on disk to appear in the chart, so
+registration is not optional and not deferrable.
+
+⚠ From the commit that created this contract until the 0.12.27 candidate, this paragraph said the
+registration existed and it did not: there was no `flows.v1` node, `gate:dataflow` was RED on exactly
+that, and `gate:arch-report` was red behind it. A README asserting the state a gate is failing on is
+worse than silence — it answers the question a reader would otherwise have gone and checked. Landed
+with the node, so the sentence and the chart move together.
 
 It carries no entry in `contracts.seal.json`, so `gate:contract-version` reports it as *in
 development* — and that part is deliberate. Sealing publishes a frozen `.vN`; freezing a shape on
