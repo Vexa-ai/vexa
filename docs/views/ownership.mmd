@@ -46,4 +46,5 @@ flowchart LR
   gateway -.->|read| va_chat
   admin_api -->|write| identity_db
   flows_worker -->|write| flows_rows
+  flows_api -->|write| flows_rows
   flows_api -.->|read| flows_rows

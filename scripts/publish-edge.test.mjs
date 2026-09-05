@@ -16,14 +16,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, readdirSync, mkdirSync, symlinkSync, rmSync, mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG_VALIDATE = join(ROOT, "deploy", "contracts", "config.v1", "validate.mjs");
-const ADMIN_DECL = join(ROOT, "core", "identity", "services", "admin-api", "src", "admin_api", "config.v1.json");
+// Repo-relative + POSIX-separated, because withShadowRepo (below) shadows the tree by that address.
+const ADMIN_DECL_REL = "core/identity/services/admin-api/src/admin_api/config.v1.json";
+const ADMIN_DECL = join(ROOT, ...ADMIN_DECL_REL.split("/"));
 const CENSUS = join(ROOT, "core", "flows", "contracts", "flows.v1", "carriers.json");
 
 // BOTH streams, always. A gate prints its summary to stdout and its REFUSALS to stderr, so a
@@ -31,10 +33,10 @@ const CENSUS = join(ROOT, "core", "flows", "contracts", "flows.v1", "carriers.js
 // an empty string (the exact defect gates.mjs' own errText comment records: an empty Buffer is
 // truthy, so a || chain discards the diagnostic).
 const both = (e) => [e?.stdout, e?.stderr].map((b) => (b ?? "").toString()).join("");
-const gate = (name) => {
+const gate = (name, cwd = ROOT) => {
   try {
     const r = execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), name],
-      { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+      { cwd, encoding: "utf8", stdio: "pipe" });
     return { ok: true, out: r };
   } catch (e) {
     return { ok: false, out: both(e) };
@@ -68,11 +70,33 @@ const PUBLISH_KEY = {
   targets: ["compose"],
 };
 
-// Restores whatever it replaced, whether the body passes, fails or throws.
-function withReplaced(file, body, fn) {
-  const original = readFileSync(file, "utf8");
-  writeFileSync(file, body);
-  try { return fn(); } finally { writeFileSync(file, original); }
+// Runs `fn(cwd)` against a SHADOW of the repository: a scratch directory whose entries are symlinks
+// back into the real tree, except for `relFile` — a real file, under real directories, holding the
+// sabotaged body. gates.mjs takes its ROOT from `process.cwd()` and reads everything through node's
+// fs (symlinks are transparent to it), so a gate run with the shadow as its cwd sees the sabotage
+// and NOTHING in the checkout is written.
+//
+// The previous shape rewrote the tracked declaration in place and restored it in a `finally`. That
+// is a shared write surface: `node --test scripts/*.test.mjs` runs each file in its OWN process, in
+// parallel, and scripts/gates.test.mjs runs the same gate over the same tree — so it read whichever
+// half of this test's write window it happened to land in and failed, deterministically, on a file
+// it does not own. A test that has to mutate the tree it is asserting about mutates a copy.
+function withShadowRepo(relFile, body, fn) {
+  const shadow = mkdtempSync(join(tmpdir(), "vexa-shadow-"));
+  try {
+    const parts = relFile.split("/");
+    let real = ROOT, here = shadow;
+    for (let i = 0; i < parts.length; i++) {
+      const keep = parts[i];
+      for (const entry of readdirSync(real)) if (entry !== keep) symlinkSync(join(real, entry), join(here, entry));
+      if (i === parts.length - 1) { writeFileSync(join(here, keep), body); break; }
+      mkdirSync(join(here, keep));
+      real = join(real, keep); here = join(here, keep);
+    }
+    return fn(shadow);
+  } finally {
+    rmSync(shadow, { recursive: true, force: true });
+  }
 }
 
 // ── the class exists, and says the one thing the other three cannot ─────────────────────────────
@@ -118,7 +142,7 @@ test("a publish edge whose carrier is in nobody's census is refused", () => {
   // by the publishing domain. Without that check `publishes_events` is a comment.
   const decl = JSON.parse(readFileSync(ADMIN_DECL, "utf8"));
   for (const k of decl.keys) if (k.class === "publish-edge") k.publishes_events = ["nobody.owns.this"];
-  const r = withReplaced(ADMIN_DECL, JSON.stringify(decl, null, 1) + "\n", () => gate("config-contract"));
+  const r = withShadowRepo(ADMIN_DECL_REL, JSON.stringify(decl, null, 1) + "\n", (cwd) => gate("config-contract", cwd));
   assert.equal(r.ok, false, "an unregistered carrier passed the gate");
   assert.match(r.out, /nobody\.owns\.this/);
 });
@@ -131,7 +155,7 @@ test("a publish edge claiming a carrier another domain owns is refused", () => {
   assert.ok(foreign, "the census records no carrier owned by another domain — this test is inert");
   const decl = JSON.parse(readFileSync(ADMIN_DECL, "utf8"));
   for (const k of decl.keys) if (k.class === "publish-edge") k.publishes_events = [foreign.event];
-  const r = withReplaced(ADMIN_DECL, JSON.stringify(decl, null, 1) + "\n", () => gate("config-contract"));
+  const r = withShadowRepo(ADMIN_DECL_REL, JSON.stringify(decl, null, 1) + "\n", (cwd) => gate("config-contract", cwd));
   assert.equal(r.ok, false, `${foreign.event} is owned by ${foreign.owner} and identity published it`);
   assert.match(r.out, new RegExp(foreign.owner));
 });
