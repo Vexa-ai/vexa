@@ -886,6 +886,30 @@ def create_app() -> FastAPI:
             if not hmac.compare_digest(provided, secret):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
 
+    def _check_internal_no_dev_bypass(request: Request) -> None:
+        """The internal check WITHOUT the dev-mode escape — for a door that reads or writes ONE
+        NAMED PERSON'S data by path id.
+
+        `_check_internal` lets `DEV_MODE=true` with no `INTERNAL_API_SECRET` through unauthenticated.
+        For the doors it was written for — `/internal/validate`, the membership index — that is a
+        local-development convenience over data the caller could get anyway. For a route shaped
+        `/internal/users/{id}/…` it is not the same thing: the id is supplied by the CALLER, so the
+        bypass is a cross-user read (or write) of somebody's private preferences with no credential
+        at all. The two cases have opposite blast radii and had one check, which is how the weaker
+        one ended up guarding the stronger door.
+
+        Dev mode still works; it simply has to name a secret first — a one-line change to a compose
+        file against a route that otherwise answers for any person on the instance."""
+        secret = _internal_secret()
+        if not secret:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=("INTERNAL_API_SECRET not configured — this door reads/writes one named "
+                        "person's settings and is never open, dev mode included"))
+        provided = request.headers.get("X-Internal-Secret", "")
+        if not hmac.compare_digest(provided, secret):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+
     async def _load_user(
         user_id: str,
         db: AsyncSession,
@@ -1052,11 +1076,104 @@ def create_app() -> FastAPI:
 
         An unknown user is a 404 and never a defaulted answer: "defaults for somebody who exists"
         and "defaults for somebody who does not" are opposite facts, and the second one means a flow
-        is about to mail a person who is not there."""
-        _check_internal(request)
+        is about to mail a person who is not there.
+
+        NO DEV-MODE BYPASS (see `_check_internal_no_dev_bypass`): the person is named in the PATH by
+        the caller, so an unauthenticated dev-mode answer here is a cross-user read of somebody's
+        private preferences."""
+        _check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         return person_settings_mod.read_person_facts(
             user.data if isinstance(user.data, dict) else {})
+
+    @app.put("/internal/users/{user_id}/settings", include_in_schema=False)
+    async def put_user_settings_internal(user_id: str, payload: dict, request: Request,
+                                         db: AsyncSession = Depends(get_db)):
+        """SET this person's settings — the write half of the door above.
+
+        WHY IT HAD TO EXIST. The read door shipped alone: `person_settings.apply` had no caller
+        anywhere, so identity could only ever answer DEFAULTS. Every person who had turned their
+        minutes off, or who lives outside UTC, silently reverted on upgrade — mail resumed, in the
+        wrong clock — and the vocabulary that was moved here to end "mail everybody everything, in
+        UTC" produced exactly that. A read-only settings store is not a settings store.
+
+        Partial: only the keys sent are changed. VALIDATED ALL-OR-NOTHING by `apply` — a
+        half-applied change is a person who believes they turned two things off and turned one.
+        Refusals name the vocabulary (422) rather than ignoring the key, because a setting that
+        silently does nothing is worse than an error.
+
+        `bot_name` IS REFUSED HERE, deliberately. It is a fact about the BOT, the meetings domain
+        owns it, and it already has a door (`/internal/users/{id}/bot-context`, backed by the same
+        `users.data.calendar_bot_name` this service stores). Accepting it on the PERSON's settings
+        door would be a second name for one fact. The one-shot importer below still carries it into
+        that store, which is what a migration off the old file has to do."""
+        _check_internal_no_dev_bypass(request)
+        if not isinstance(payload, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="body must be an object of settings to change")
+        if person_settings_mod.BOT_NAME_KEY in payload:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={
+                "refused": "bot_name is not a person setting",
+                "why": ("a bot default is a fact about the bot; meetings owns it and resolves it "
+                        "on every spawn path through /internal/users/{id}/bot-context"),
+                "the_settings_that_exist": person_settings_mod.read_person_facts({}),
+            })
+        from sqlalchemy.orm import attributes
+
+        user = await _load_user(user_id, db, for_update=True)
+        try:
+            user.data = person_settings_mod.apply(
+                user.data if isinstance(user.data, dict) else {}, payload)
+        except person_settings_mod.Refused as refused:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=refused.detail)
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return person_settings_mod.read_person_facts(
+            user.data if isinstance(user.data, dict) else {})
+
+    @app.post("/admin/users/{user_id}/settings/import", include_in_schema=False,
+              dependencies=[Depends(verify_admin_token)])
+    async def import_user_settings(user_id: str, payload: dict,
+                                   db: AsyncSession = Depends(get_db)):
+        """THE ONE-SHOT MIGRATION off `.settings.json`, driven by an operator.
+
+        The body is that file's own shape — a flat object, e.g.
+        ``{"timezone": "Europe/Lisbon", "mail_minutes": false, "bot_name": "Notes"}``. An operator
+        who still has those files (they lived in each person's workspace in the AGENT domain) POSTs
+        each one here; `plan_import` decides, and its three rules are the migration's whole
+        contract: a key the person has ALREADY set through the write door is KEPT (so the sweep is
+        re-runnable across an estate where somebody has since changed a preference), `bot_name` goes
+        into the BOT's own store and only when that store is empty (nobody's bot changes name in
+        either direction), and an unknown key is DROPPED rather than refused (a migration that stops
+        on one odd key leaves half the estate on the old store, and there is no second run that
+        fixes that).
+
+        ADMIN-TIER, not internal: it is an operator act on a named person, and the operator token is
+        the credential an operator has. The response says what happened to every key — imported,
+        kept, dropped — because a migration whose result you cannot read is a migration nobody can
+        confirm ran."""
+        if not isinstance(payload, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="body must be the old .settings.json object")
+        from sqlalchemy.orm import attributes
+
+        user = await _load_user(user_id, db, for_update=True)
+        new_data, imported, kept, dropped = person_settings_mod.plan_import(
+            user.data if isinstance(user.data, dict) else {}, payload)
+        user.data = new_data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return {
+            "imported": sorted(imported),
+            "kept": kept,
+            "dropped": dropped,
+            "settings": person_settings_mod.read(
+                user.data if isinstance(user.data, dict) else {}),
+        }
 
 
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
