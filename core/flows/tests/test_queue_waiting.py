@@ -334,6 +334,83 @@ def test_an_old_absence_stops_being_news():
     assert flows_queue.waiting(db, subject="126", now=T0, identity=_identity)["waiting"] == 0
 
 
+def test_an_old_absence_goes_and_a_pending_item_stays():
+    """The horizon is about ABSENCES and nothing else — a pending reaction of the same age is
+    still in flight and is still owed to the person, however long it has been in flight."""
+    db = SqliteDB()
+    _row(db, "r-old", MINE, status_="done", reason="agent:not_present",
+         at=T0 - flows_queue.NOT_PRESENT_WINDOW_S - 60)
+    _row(db, "r-pending", MINE, at=T0 - flows_queue.NOT_PRESENT_WINDOW_S - 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert [i["id"] for i in out["items"]] == ["r-pending"]
+
+
+# ── one absence per flow · fr_e612b14fba618eea ───────────────────────────────────────────────
+
+def test_the_same_absence_is_said_once_however_many_meetings_hit_it():
+    """THE friction. A deployment that does not run a domain answers `not_present` for every
+    reaction that reaches it, so on a no-agent deployment each completed meeting adds one more
+    identical item. The person had three; the count only goes up.
+
+    `NOT_PRESENT_WINDOW_S` bounds how LONG an absence is news. This is the other half: how many
+    times it is news at once. `notices()` has collapsed the identical case since it was written.
+    """
+    db = SqliteDB()
+    for n in range(3):
+        _row(db, f"r-{n}", MINE, status_="done", reason="agent:not_present", at=T0 - n * 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert out["waiting"] == 1, "one deployment fact, said once"
+    assert out["items"][0]["reason"]["type"] == flows_queue.TYPE_NOT_PRESENT
+
+
+def test_the_survivor_is_the_most_recent_occurrence():
+    """`since` must read as when this last happened, not when it first did."""
+    db = SqliteDB()
+    _row(db, "r-first", MINE, status_="done", reason="agent:not_present", at=T0 - 3600)
+    _row(db, "r-latest", MINE, status_="done", reason="agent:not_present", at=T0 - 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert [i["id"] for i in out["items"]] == ["r-latest"]
+    assert out["items"][0]["since"] == T0 - 60
+
+
+def test_two_different_absences_are_two_different_facts():
+    """Collapsing is per (flow, domain). A deployment missing two domains is missing two things,
+    and a person told about only one of them has been told something false by omission."""
+    db = SqliteDB()
+    _row(db, "r-agent", MINE, status_="done", reason="agent:not_present", at=T0 - 60)
+    _row(db, "r-meetings", MINE, status_="done", reason="meetings:not_present", at=T0 - 120)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity)
+    assert {i["reason"]["domain"] for i in out["items"]} == {"agent", "meetings"}
+
+
+def test_pending_and_failed_items_are_never_collapsed():
+    """Each is a DISTINCT thing — one in flight, one to look at. Only an absence is a fact about
+    the deployment rather than about the meeting that ran into it."""
+    db = SqliteDB()
+    for n in range(3):
+        _row(db, f"r-p{n}", MINE, at=T0 - n * 60)
+    for n in range(2):
+        _row(db, f"r-f{n}", MINE, status_="failed", reason="boom", at=T0 - n * 60)
+    out = flows_queue.waiting(db, subject="126", now=T0, identity=_identity,
+                              copy=lambda flow, rtype: flows_queue.Say("something"))
+    kinds = [i["reason"]["type"] for i in out["items"]]
+    assert kinds.count(flows_queue.TYPE_PENDING) == 3
+    assert kinds.count(flows_queue.TYPE_FAILED) == 2
+
+
+def test_the_standing_notices_are_untouched():
+    """`notices()` rides out on the meeting tools' results, to an agent that never asked. The
+    collapse lives in `waiting()` precisely so that answer cannot move — and `notices()` does its
+    own dedup anyway, which is where this fix's idiom came from."""
+    db = SqliteDB()
+    for n in range(3):
+        _row(db, f"r-{n}", MINE, status_="done", reason="agent:not_present", at=T0 - n * 60)
+    standing = flows_queue.Say("Vexa is watching your calendar.", notice=True)
+    out = flows_queue.notices(db, subject="126", now=T0, identity=_identity,
+                              copy=lambda flow, rtype: standing)
+    assert out["notices"] == ["Vexa is watching your calendar."]
+
+
 # ── A4 · the subject is the authenticated caller's — through the real app ─────────────────────
 
 # UNREACHABLE Postgres DSN (port 1 is never a service) — `db_from_url` only accepts Postgres now
