@@ -116,6 +116,15 @@ anyone who read the repo can mint an API key for any account. Generate each with
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
 
+<Warning>
+**From 0.12.27 the published placeholders are refused at boot.** A service whose
+`INTERNAL_API_SECRET` is one of the strings this repo has printed (`vexa-internal-secret`,
+`changeme`, …) stops at startup naming the variable, instead of running on a secret every reader
+of the source already has. Generate one per deployment before upgrading — `openssl rand -hex 32`
+— and set the same value on every service that talks to another. Vexa Lite mints a fresh random
+one on every boot and needs nothing set.
+</Warning>
+
 ## Bot participant name
 
 `DEFAULT_BOT_NAME` on meeting-api names the bot, and compose, Lite and helm ship it as `Vexa`. To
@@ -210,6 +219,24 @@ stack still boots.
 | `AUTO_JOIN_RETRY_BACKOFF_S` | `300` | Wait after a loud auto-join failure (cap/quota/spawn) before retrying that meeting. |
 | `CALENDAR_SYNC_INTERVAL_S` | `300` | How often connected ICS feeds are re-fetched and upserted. |
 | `ADMIN_API_URL` | — | admin-api base URL for the sweeps' internal lookups (spawn context, calendar configs). |
+
+## Workflows (flows)
+
+The three flows processes — `flows-api`, `flows-worker` and the optional `flows-mailbox` — are one
+image with three commands and one declaration. These are the keys they boot on; the mail allow-list
+and rate knobs live with the process that reads them, on
+[Operating workflows](/flows/operations).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_FLOWS_API_KEY` | — | **Required. flows-api refuses to start without it**, and refuses a recognised placeholder (`changeme`, `change-me`, `default`, `secret`) by name. The operator key, sent as `X-Flows-Operator-Key`: it configures the machine and reads or cancels any reaction in the instance. Compose passes it through with no default, on purpose. |
+| `VEXA_FLOWS_TIMELINE_KEY` | — | A second, narrower key that opens `GET /timeline` and nothing else, so the agent worker — which reads the timeline on every dispatch — does not need the operator key in every container. Unset (or a placeholder) means only the operator key opens the route. |
+| `VEXA_FLOWS_DB_URL` | — | Postgres DSN for the ten flows tables. The stack's own database is the expected home. |
+| `VEXA_FLOWS_API_HOST` / `VEXA_FLOWS_API_PORT` | `127.0.0.1` / `18200` | Listener. The compose service sets the host to `0.0.0.0` in its own environment, where the exposure is visible beside the port binding; the host lane keeps loopback. |
+| `VEXA_FLOWS_ADMIN_API_URL` · `VEXA_FLOWS_GATEWAY_URL` | — | The doors flows calls out through. Unnamed, a step that needs one refuses loudly at the moment it would have been used. |
+| `VEXA_FLOWS_AGENT_API_URL` | — | The **optional** agent domain. Unset, steps that need an agent answer `not_present` instead of reaching for a door that is not there. |
+| `VEXA_FLOWS_API_URL` | — | Where admin-api and meeting-api publish facts to. Empty (the stock default) means they publish nothing. Formerly `FLOWS_API_URL`, honoured for one release. |
+| `VEXA_UI_URL` | — | The link port. Unset, nothing is mailed with a link. |
 
 ## Images & runtime
 

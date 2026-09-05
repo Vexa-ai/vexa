@@ -14,6 +14,34 @@ description: "Two small processes and a status projection: how flows run, fail, 
 All three speak SQL to one Postgres. Deliberately absent: message broker, scheduler service,
 sidecars, second state store.
 
+## The two keys flows-api boots with
+
+| key | required | what it opens |
+|---|---|---|
+| `VEXA_FLOWS_API_KEY` | **yes — there is no default** | the operator key, travelling as `X-Flows-Operator-Key`. It configures the machine (`POST /flows`, `POST /events`, the activate/retire verbs) and it also opens every person-scoped route unscoped — it reads any reaction in the instance and cancels any of them. |
+| `VEXA_FLOWS_TIMELINE_KEY` | no | `GET /timeline`, and nothing else. |
+
+**Unset, flows-api refuses to start**, and so does a value the code recognises as a published
+placeholder (`changeme`, `change-me`, `default`, `secret`). This is deliberate and it is a breaking
+upgrade step: the variable used to default to `changeme`, was never set on any deployment, and the
+string is printed in the source — so the intake accepted a key anyone could read. A weak default
+makes an unconfigured deployment look configured and fails no test. Mint a real value into a
+mode-600 file on the deployment host and export it from the start script; never put it in the repo.
+
+`VEXA_FLOWS_TIMELINE_KEY` exists because the agent worker reads the timeline on **every** dispatch,
+so the credential lands in every worker container. Handing those containers the operator key to read
+a list of times would widen the operator key's blast radius by one container per person per turn.
+Unset, only the operator key opens the timeline — a deployment that has not thought about this gets
+the narrower reach, never the wider one. It is refused as a placeholder the same way, except that a
+placeholder here is treated as unset rather than as a boot failure.
+
+<Warning>
+The operator tier is **not resource-scoped in 0.12.27**: an operator-key caller may name any
+subject on `/reactions`, `/timeline`, `/queue/*` and `/friction`, and `GET /reactions` with no
+subject returns every row. Treat both keys as instance-wide credentials, keep them off shared
+containers, and prefer a person's own Vexa credential wherever the caller is a person.
+</Warning>
+
 ## Who the mailbox will act for
 
 The mailbox is reachable by anyone who can send email, so it answers that question before it
