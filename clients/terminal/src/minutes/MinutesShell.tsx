@@ -16,7 +16,7 @@ import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
-import { useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
+import { ensureMeetingKnown, useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
 import {
   readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile,
   listSharedMemberships, listWorkspaceTree, type Membership,
@@ -284,6 +284,10 @@ export function MinutesShell() {
    *  what lets the artifacts effect trust that `sel.chatId` and `pages` describe the same chat. */
   const openChat = useCallback(async (c: ChatRec) => {
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
+    // BOUND TO A ROW THIS CLIENT HAS NEVER LISTED — the bot the chat sent moments ago. Ask the list
+    // for it instead of laying the room out as though the meeting did not exist; `pagesForPhase`
+    // below reads `m`, so an unlisted row silently produced the wrong room AND a dead transcript.
+    if (c.meeting && !m) ensureMeetingKnown(c.meeting);
     await mountSet(c.workspaces);
     const roomPages = async (): Promise<Page[]> => {
       if (c.meeting) {
@@ -588,6 +592,10 @@ export function MinutesShell() {
     // identity, moves the page to the RIGHT end beside the current one, and caps at 12 by evicting
     // the oldest UNPINNED entry. Pins sit at the left edge and never age out.
     setPages((prev) => touchHistory(prev, { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label }, Date.now()));
+    // THE CHOKE POINT for a meeting id reaching the canvas: every route into the panel comes
+    // through here, including a `meeting:<id>` artifact the agent wrote this turn. If the store has
+    // never listed that row, ask for it now — the canvas is about to render it.
+    if (pg.kind === "meeting") ensureMeetingKnown(pg.path);
     setDocPath(pg.path); setDocSlug(pg.slug); setDocKind(pg.kind === "meeting" ? "meeting" : "doc");
     setListing(null); setDocNonce((n) => n + 1);
   }, []);
@@ -747,7 +755,7 @@ export function MinutesShell() {
   // list (so you can flip back) and opened.
   useEffect(() => {
     const onEntity = async (e: Event) => {
-      const d = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string }>).detail || {};
+      const d = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; exact?: boolean }>).detail || {};
       const r = await resolveDocRef(d, { path: d.docPath, slug: d.slug }).catch(() => null);
       // NEVER A DEAD CLICK: an unresolved link opens its canonical path anyway, so the panel
       // answers with the empty state instead of the click vanishing (pageForDocRef).
@@ -759,8 +767,9 @@ export function MinutesShell() {
       if (!ref) return;
       const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
       const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
-      // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing.
-      if (m) void openMeeting(m); else openPage(pageForMeetingRef(ref));
+      // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing —
+      // and asks the list for the row, so the next render of that ref can do better than the notes.
+      if (m) void openMeeting(m); else { ensureMeetingKnown(native); openPage(pageForMeetingRef(ref)); }
     };
     // A CLICK IS THE READER CHOOSING. Both of these arrive from something the person pressed in
     // the conversation, so from here on an artifact appends behind them rather than in front.
@@ -824,7 +833,9 @@ export function MinutesShell() {
     if (!ref) return;
     const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
     const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
-    if (m) void openMeeting(m, { touched: true });
+    // The link is spent on the first non-empty list, so a row created between the click and that
+    // list would be lost outright — ask for it rather than dropping the deeplink on the floor.
+    if (m) void openMeeting(m, { touched: true }); else ensureMeetingKnown(native);
   }, [meetings, openMeeting]);
 
   const session = sel.chatId;

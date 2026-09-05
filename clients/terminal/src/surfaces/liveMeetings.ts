@@ -296,6 +296,36 @@ export function refreshMeetings(): void {
   void snapshot();
 }
 
+/** BIND-TIME REPAIR — the id that arrives before the row does.
+ *
+ *  A meeting row created MID-SESSION (the chat sends a bot; meeting-api makes row 132) does not
+ *  enter this store until something re-snapshots. `applyFrame` re-snapshots on a `meeting.status`
+ *  frame naming an unknown row, but that frame either does not fire on creation or races the
+ *  subscription — so whatever binds the new id first (a chat's `meeting`, a `meeting:` artifact, a
+ *  `?meeting=` deeplink, a chip) is holding an id this list cannot resolve, and the canvas called
+ *  that "Meeting not found" for a meeting the gateway was serving 200.
+ *
+ *  So BINDING an unknown id ASKS, once. Throttled per id, because every one of those call sites
+ *  fires from a render path: the amplification lesson `snapshot()` already carries (2026-09-02, one
+ *  idle browser turned into 519 `GET /api/meetings` in three minutes) counts double for something a
+ *  re-render can trigger. A row that is PRESENT costs nothing and clears its own throttle, so an id
+ *  that goes away and comes back is asked for again rather than remembered as hopeless. */
+const REBIND_ASK_MS = 10_000;
+const askedFor = new Map<string, number>();
+export function ensureMeetingKnown(id: string | null | undefined): void {
+  const key = (id ?? "").trim();
+  if (!key || typeof window === "undefined") return;
+  // Match the way every consumer addresses a meeting: the ROW id, or the native code a deeplink or
+  // a chip carries. Either one being present means there is nothing to ask for.
+  if (meetings.some((m) => m.id === key || m.native_id === key)) { askedFor.delete(key); return; }
+  const now = Date.now();
+  const last = askedFor.get(key);
+  if (last !== undefined && now - last < REBIND_ASK_MS) return;
+  for (const [k, at] of askedFor) if (now - at >= REBIND_ASK_MS) askedFor.delete(k);
+  askedFor.set(key, now);
+  void snapshot();
+}
+
 /** Subscribe a component to the live `meeting.status` stream's CONNECTION state. `false` means the
  *  rows are the last snapshot, not live truth — state-bearing controls (Stop bot …) must degrade
  *  to indeterminate/disabled until it is `true` again (ws.v1 is the authoritative state channel). */

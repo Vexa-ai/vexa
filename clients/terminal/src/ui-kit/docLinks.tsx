@@ -90,16 +90,69 @@ function activeSlugs(): Promise<(string | undefined)[]> {
   return mountedSet().then((s) => s.mounts.map((m) => (isHomeMount(m, s.subject) ? undefined : m.slug)));
 }
 
+/** THE REACHABLE SET — every workspace this reader can OPEN, which is not the set the chat has
+ *  in FOCUS.
+ *
+ *  `readActiveSet` describes FOCUS: what this conversation mounts right now. Membership is a
+ *  PERMISSION, and parking a workspace is a focus choice rather than a revocation — the rail
+ *  already says exactly this ("a membership whose workspace is not mounted right now is still the
+ *  reader's to open … PRD §5.2: the mount set is soft", navigatorApi.buildWorkspaces).
+ *
+ *  Resolving a NAMED workspace against the FOCUS set is the defect (founder, 2026-09-05:
+ *  "workspace links can open wrong workspaces — we have unique workspace but it does not work"): a
+ *  workspace the reader belongs to but has not focused was simply absent from the table, so its
+ *  name either chipped nothing or fell through to whatever happened to be mounted.
+ *
+ *  NAMES resolve here; READS still resolve against the mounts (`activeSlugs` → `searchOrder`), and
+ *  that split is deliberate. A membership says a workspace exists and is ours — never where it is
+ *  mounted, nor what is inside it — so putting memberships in the search order would buy one tree
+ *  fetch per membership for every link in every reply, to answer a question nobody asked. */
+let reachableCache: { at: number; p: Promise<MountedSet> } | null = null;
+function reachableSet(): Promise<MountedSet> {
+  if (reachableCache && Date.now() - reachableCache.at < CACHE_TTL_MS) return reachableCache.p;
+  const p = (async (): Promise<MountedSet> => {
+    const mounted = await mountedSet();
+    const memberships = await import("../surfaces/workspaceApi")
+      .then((api) => api.listSharedMemberships())
+      .catch(() => [] as { workspace_id: string }[]);
+    const mounts = [...mounted.mounts];
+    for (const ms of memberships) {
+      const slug = (ms.workspace_id ?? "").trim();
+      // `path: ""` is the honest value — a membership names a workspace, it does not say where the
+      // worker mounted it. Everything that SPLITS a worker path skips path-less rows already.
+      if (slug && !mounts.some((m) => m.slug === slug)) mounts.push({ slug, path: "", primary: false });
+    }
+    return { subject: mounted.subject, mounts };
+  })();
+  reachableCache = { at: Date.now(), p };
+  return p;
+}
+
+/** Does this path NAME a workspace this reader can reach?
+ *
+ *  `undefined` is not a name: it is the home mount, or an unknown root whose `kg/` tail was all we
+ *  could address. Neither claims a room, so neither forecloses the search. A slug we cannot PLACE
+ *  (a legacy `.attached/<dir>/` storage name, a path quoted from a session whose mounts we never
+ *  saw) does not claim one either — there is no such room to open, so the best available answer is
+ *  a copy we can actually serve. Only a REACHABLE slug is a claim, and a claim is honoured. */
+async function namesReachableWorkspace(slug: string | undefined): Promise<boolean> {
+  if (slug === undefined) return false;
+  if (slug === GLOBAL) return true;
+  const { mounts } = await reachableSet();
+  return mounts.some((m) => m.slug === slug);
+}
+
 // ── the known-workspace set (a SYNCHRONOUS snapshot, for the transform layer) ─────
 // Recognizing a workspace NAME in a reply has to happen while rewriting a string, which cannot
-// await. So the mount table is mirrored into a snapshot the transform reads directly, and the
+// await. So the reachable set is mirrored into a snapshot the transform reads directly, and the
 // renderer primes it once and recompiles when it lands. Empty snapshot ⇒ no workspace chips —
 // never a guess.
 let mountedSnapshot: MountedSet = EMPTY_MOUNTS;
-/** The mounted workspaces as last read. Synchronous; empty until primeKnownWorkspaces resolves. */
+/** The workspaces this reader can NAME, as last read. Synchronous; empty until
+ *  primeKnownWorkspaces resolves. */
 export function knownWorkspaces(): Mount[] { return mountedSnapshot.mounts; }
-/** Fill the snapshot (idempotent, shares the mount-table cache). */
-export async function primeKnownWorkspaces(): Promise<void> { mountedSnapshot = await mountedSet(); }
+/** Fill the snapshot (idempotent, shares the caches). */
+export async function primeKnownWorkspaces(): Promise<void> { mountedSnapshot = await reachableSet(); }
 
 /** `_global` is the org tier every subject reads; `personal` is this client's own LABEL for the
  *  private baseline (slug `undefined` — see PagesPanel's `slug ?? "personal"`). Neither appears in
@@ -107,16 +160,34 @@ export async function primeKnownWorkspaces(): Promise<void> { mountedSnapshot = 
 const ORG_TIER = "_global";
 const PERSONAL = "personal";
 
+/** The private baseline answers to several NAMES — `personal` (this client's label), `seed` (the
+ *  server's slug for the slot) and the subject uid — and not one of them IDENTIFIES it. The PRIMARY
+ *  MOUNT does. Keying on a name is how a shared workspace legitimately called `seed` would swallow
+ *  every home read, which is the trap `isHomeMount` already documents one level down. */
+function isHomeAlias(t: string): boolean {
+  if (t === PERSONAL) return true;
+  const { mounts, subject } = mountedSnapshot;
+  if (subject && t === subject) return true;
+  const home = mounts.find((m) => isHomeMount(m, subject));
+  return !!home && t === home.slug;
+}
+
 /** Resolve a token a reply used to NAME a workspace → the workspace it means, or undefined.
  *
- *  A CLOSED set: the mounted slugs, plus `_global` and `personal`. Never a fuzzy match on
- *  slug-shaped words — a chip that opens nothing is the defect being fixed here, not a smaller
- *  version of it. (founder, 2026-09-01: "workspace reference must be a link to its readme".) */
+ *  A CLOSED set: every workspace this reader can REACH (mounted or merely a member of — see
+ *  `reachableSet`), plus `_global` and `personal`. Never a fuzzy match on slug-shaped words — a
+ *  chip that opens nothing is the defect being fixed here, not a smaller version of it. (founder,
+ *  2026-09-01: "workspace reference must be a link to its readme".)
+ *
+ *  EXACT, never a prefix and never a fallback: `vexa-team-3183d1` and `vexa-team-a2a023` are two
+ *  different rooms, so a token that half-matches must chip NOTHING rather than the other one, and
+ *  an unknown token stays plain prose. Silence is the only safe wrong answer here — the alternative
+ *  is a link that opens somebody else's workspace and looks like it worked. */
 export function lookupWorkspace(token: string): { slug?: string; label: string } | undefined {
   const t = token.trim();
   if (!t) return undefined;
-  if (t === PERSONAL) return { slug: undefined, label: t };
   if (t === ORG_TIER) return { slug: ORG_TIER, label: t };
+  if (isHomeAlias(t)) return { slug: undefined, label: t };
   const hit = mountedSnapshot.mounts.find((m) => m.slug === t);
   if (!hit) return undefined;
   return { slug: isHomeMount(hit, mountedSnapshot.subject) ? undefined : hit.slug, label: t };
@@ -132,6 +203,7 @@ export const isDistinctiveWorkspaceToken = (t: string): boolean => /[-_]/.test(t
 export function invalidateDocLinkCaches(): void {
   treeCache.clear();
   mountedCache = null;
+  reachableCache = null;
   lastMissRefresh = 0;
 }
 
@@ -150,7 +222,9 @@ function refreshOnMiss(): boolean {
 }
 
 // ── the resolver ──────────────────────────────────────────────────────────────────
-export interface DocRef { path?: string; wikilink?: string }
+/** `slug` + `exact` travel with a ref that NAMES its workspace (the workspace chip). Everything
+ *  else leaves the workspace to `meta`, where it is a search ORDER rather than a destination. */
+export interface DocRef { path?: string; wikilink?: string; slug?: string; exact?: boolean }
 export interface DocMeta { path?: string; slug?: string }
 export interface ResolvedDoc { path: string; slug?: string; type?: string }
 
@@ -246,10 +320,28 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
     // { path, slug } unconditionally, so `/workspaces/<slug>/kg/templates/person.md` quoted by an
     // agent opened a live tab on a skeleton and it read like a record.
     if (/(?:^|\/)kg\/templates\//.test(worker ? worker.path : normalizeDocPath(ref.path, meta.path))) return undefined;
+    // AN EXACT REF IS ANSWERED BY THE WORKSPACE IT NAMES, and by no other. The workspace chip is
+    // the only thing that sets it, and its target is `README.md` — a filename every workspace has,
+    // so ANY search would find a stranger's copy first and open it as though it were the one asked
+    // for. Not verifying is the point: an unwritten README opens its empty state in the room the
+    // reader named, which is the same contract every other chip keeps.
+    if (ref.exact) {
+      const target = worker ?? { path: normalizeDocPath(ref.path, meta.path), slug: ref.slug };
+      return { path: target.path, slug: target.slug };
+    }
     if (worker) {
       const tree = await workspaceTree(worker.slug);
       if (tree.includes(worker.path)) return { path: worker.path, slug: worker.slug };
-      // attached-store slug didn't resolve — try the rest of the search order before giving up
+      // A NAMED WORKSPACE ANSWERS FOR ITSELF, whether or not it holds the file. The search below
+      // used to run here unconditionally, and that is the mechanism of the founder's bug: with
+      // `/workspaces/<a-workspace-not-in-focus>/README.md` the named tree came back empty (not
+      // mounted, so the read 403s), the search ran, and the first ACTIVE mount holding a
+      // `README.md` won — a link to one workspace opening another, silently and plausibly.
+      // Landing on the honest empty state in the RIGHT room beats landing on the wrong room's real
+      // document, and there is no third option: every workspace has a README.
+      if (await namesReachableWorkspace(worker.slug)) return { path: worker.path, slug: worker.slug };
+      // Only a slug that claims NO reachable room searches — home, an unknown root's `kg/` tail, or
+      // a legacy `.attached/<dir>/` storage name. Nothing was claimed, so nothing can be betrayed.
       for (const ws of await searchOrder(meta)) {
         if (ws !== worker.slug && (await workspaceTree(ws)).includes(worker.path)) return { path: worker.path, slug: ws };
       }
@@ -401,7 +493,7 @@ export function WorkspaceRef({ token }: { token: string }) {
   const ws = lookupWorkspace(token);
   if (!ws) return <>{token}</>;    // the snapshot moved under us — plain text, never a dead chip
   return (
-    <span role="link" onClick={() => openEntity({ path: "README.md", slug: ws.slug })}
+    <span role="link" onClick={() => openEntity({ path: "README.md", slug: ws.slug, exact: true })}
       title={`Open the ${ws.label} workspace README`}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",

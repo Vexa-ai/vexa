@@ -15,16 +15,21 @@ import { docPathExists, invalidateDocLinkCaches, primeKnownWorkspaces, lookupWor
 
 const trees: Record<string, string[]> = {};
 let active: { slug: string; path: string; primary?: boolean }[] = [];
+// What the reader BELONGS to, which is not what this chat has in focus. A tree read for a workspace
+// that is a membership but not a mount answers empty here, exactly as the server's 403 does.
+let memberships: { workspace_id: string; role: string }[] = [];
 let subject = "57";
 vi.mock("../../surfaces/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => trees[opts?.slug ?? ""] ?? []),
   readActiveSet: vi.fn(async () => ({ subject, active })),
+  listSharedMemberships: vi.fn(async () => memberships),
 }));
 
 beforeEach(async () => {
   invalidateDocLinkCaches();
   for (const k of Object.keys(trees)) delete trees[k];
   subject = "57";
+  memberships = [];
   // The server calls the private baseline `seed`, NOT the subject uid (verified live on the rig):
   // only `primary` / the `<root>/<subject>` path identify the workspace this client reads with no
   // slug. A test that names it "57" would pass while the real client sent every home read to a
@@ -142,6 +147,105 @@ describe("fenced code blocks are never touched", () => {
     expect(out).toContain('<WorkspaceRef token="vexa-team-3183d1" />');
     expect(out).toContain("```\n/workspaces/vexa-team-3183d1/README.md\n```");
     expect(out).toContain('<DocPath path="README.md" />');
+  });
+});
+
+/** THE 2026-09-05 DEFECT — "workspace links can open wrong workspaces — we have unique workspace
+ *  but it does not work" (founder).
+ *
+ *  The reader is a member of two team workspaces and has ONE of them in focus. `README.md` is a
+ *  filename every workspace on earth has. So a link naming the unfocused one found nothing in its
+ *  own (unmounted, therefore unreadable) tree, fell through to the search across the ACTIVE mounts,
+ *  and opened the first README it met — a link to one room opening another, silently, and looking
+ *  for all the world like it had worked.
+ *
+ *  Two rules answer it, and they are the same rule at two altitudes: a NAME resolves against
+ *  everything the reader can REACH (membership is a permission; focus is a preference), and a NAMED
+ *  workspace is then answered by that workspace alone.
+ */
+describe("a workspace link opens THAT workspace — never a neighbour", () => {
+  beforeEach(async () => {
+    // in focus: the desk + 3183d1. A member of, but parked: a2a023.
+    memberships = [
+      { workspace_id: "vexa-team-3183d1", role: "owner" },
+      { workspace_id: "vexa-team-a2a023", role: "contributor" },
+    ];
+    trees[""] = ["README.md"];               // every workspace has one — that is the whole trap
+    trees["_global"] = ["README.md"];
+    trees["vexa-team-3183d1"] = ["README.md"];
+    // trees["vexa-team-a2a023"] deliberately absent: parked ⇒ the read comes back empty
+    invalidateDocLinkCaches();
+    await primeKnownWorkspaces();
+  });
+
+  it("names a workspace the reader BELONGS to but has not focused — focus is not the permission", () => {
+    expect(lookupWorkspace("vexa-team-a2a023")).toEqual({ slug: "vexa-team-a2a023", label: "vexa-team-a2a023" });
+    expect(lookupWorkspace("vexa-team-3183d1")).toEqual({ slug: "vexa-team-3183d1", label: "vexa-team-3183d1" });
+  });
+
+  it("THE BUG: the parked workspace's README resolves to ITS OWN room, not to the first mount holding one", async () => {
+    expect(await resolveDocRef({ path: "/workspaces/vexa-team-a2a023/README.md" }, {}))
+      .toEqual({ path: "README.md", slug: "vexa-team-a2a023" });
+  });
+
+  it("…and not even when the reading doc lives in the other room (meta must not win over a name)", async () => {
+    expect(await resolveDocRef({ path: "/workspaces/vexa-team-a2a023/README.md" },
+      { path: "kg/entities/company/acme.md", slug: "vexa-team-3183d1" }))
+      .toEqual({ path: "README.md", slug: "vexa-team-a2a023" });
+  });
+
+  it("the chip's ref is EXACT: it opens the room it names from anywhere, resolved or not", async () => {
+    expect(await resolveDocRef({ path: "README.md", slug: "vexa-team-a2a023", exact: true },
+      { path: "kg/entities/company/acme.md", slug: "vexa-team-3183d1" }))
+      .toEqual({ path: "README.md", slug: "vexa-team-a2a023" });
+    // the same chip pointed at the desk still means the desk, not "no workspace given"
+    expect(await resolveDocRef({ path: "README.md", slug: undefined, exact: true }, { slug: "vexa-team-3183d1" }))
+      .toEqual({ path: "README.md", slug: undefined });
+  });
+
+  it("EXACT beats PREFIX — two slugs sharing a stem stay two rooms", async () => {
+    expect(lookupWorkspace("vexa-team")).toBeUndefined();
+    expect(lookupWorkspace("vexa-team-3183d")).toBeUndefined();
+    expect(lookupWorkspace("vexa-team-a2a023x")).toBeUndefined();
+    expect(await resolveDocRef({ path: "/workspaces/vexa-team-3183d1/README.md" }, {}))
+      .toEqual({ path: "README.md", slug: "vexa-team-3183d1" });
+    expect(await resolveDocRef({ path: "/workspaces/vexa-team-a2a023/README.md" }, {}))
+      .toEqual({ path: "README.md", slug: "vexa-team-a2a023" });
+  });
+
+  it("an UNKNOWN slug chips NOTHING — the no-false-chips rule", () => {
+    expect(lookupWorkspace("vexa-team-ffffff")).toBeUndefined();
+    expect(transformDocRefs("**vexa-team-ffffff**")).toBe("**vexa-team-ffffff**");
+  });
+
+  it("a slug we cannot PLACE still searches — the exact rule is about rooms the reader HAS", async () => {
+    // Deliberate, and `docLinks.test.ts` owns the older half of it ("falls back to home when the
+    // attached slug's tree doesn't have the file"). An unreachable slug names no room we could open
+    // even in principle, so a copy we can actually serve beats a dead end. The founder's defect was
+    // never this: his workspace was one he BELONGS to, and the fix is that belonging now counts.
+    expect(await resolveDocRef({ path: "/workspaces/vexa-team-ffffff/README.md" }, {}))
+      .toEqual({ path: "README.md", slug: "_global" });
+  });
+
+  it("the PERSONAL alias is keyed on the PRIMARY MOUNT, never on the name `seed`", async () => {
+    expect(lookupWorkspace("personal")).toEqual({ slug: undefined, label: "personal" });
+    expect(lookupWorkspace("seed")).toEqual({ slug: undefined, label: "seed" });      // = the primary mount's slug
+    expect(lookupWorkspace("57")).toEqual({ slug: undefined, label: "57" });          // = the subject uid
+    // Move the primary elsewhere and `seed` stops meaning home — the mount decides, not the word.
+    active = [
+      { slug: "desk-9f", path: "/workspaces/57", primary: true },
+      { slug: "seed", path: "/workspaces/seed" },
+    ];
+    invalidateDocLinkCaches();
+    await primeKnownWorkspaces();
+    expect(lookupWorkspace("desk-9f")).toEqual({ slug: undefined, label: "desk-9f" });
+    expect(lookupWorkspace("seed")).toEqual({ slug: "seed", label: "seed" });
+  });
+
+  it("a cross-mount link inside a doc still SEARCHES — the exact rule constrains names, not paths", async () => {
+    trees["vexa-team-3183d1"] = ["README.md", "kg/entities/person/jane.md"];
+    expect(await resolveDocRef({ path: "kg/entities/person/jane.md" }, { path: "README.md" }))
+      .toEqual({ path: "kg/entities/person/jane.md", slug: "vexa-team-3183d1" });
   });
 });
 

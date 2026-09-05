@@ -854,6 +854,59 @@ export function meetingResolution(m: MeetingMock | undefined, listLoaded: boolea
   return listLoaded ? "not-found" : "resolving";
 }
 
+/** How long a bound-but-not-yet-listed id gets to ARRIVE before the canvas calls it dead. One
+ *  snapshot round-trip, not a poll: the canvas asks once and then waits out the answer. */
+export const MEETING_LOOKUP_GRACE_MS = 8_000;
+
+/** What the canvas SHOWS for a requested id — `meetingResolution` plus the one state it lacked.
+ *
+ *  The founder's chat sent a bot into `google_meet/edh-vofu-jxm`, the gateway served
+ *  `GET /meetings/132` 200 and listed it, and the Transcript tab said "Meeting not found — Nothing
+ *  here matches 132". `meetingResolution` was correct about its own inputs and wrong about the
+ *  world: it reads `listLoaded` as "the list is COMPLETE", when all the flag can honestly mean is
+ *  "the list ANSWERED once" — and a row created mid-session is absent from that answer.
+ *
+ *  So an absent id gets one more question before it gets a verdict: `searching` while a fresh
+ *  snapshot is in flight, `not-found` only once that has come back without it. The P0 is untouched —
+ *  an unanswered list still resolves forever, so a network blip still cannot make a live meeting
+ *  look deleted. This adds a bounded wait; it removes no gate. */
+export type MeetingLookup = MeetingResolution | "searching";
+export function meetingLookupState(m: MeetingMock | undefined, listLoaded: boolean, graceExpired: boolean): MeetingLookup {
+  const base = meetingResolution(m, listLoaded);
+  return base === "not-found" && !graceExpired ? "searching" : base;
+}
+
+/** Ask once, then wait a BOUNDED moment — returns whether the grace for `meetingId` is spent.
+ *
+ *  Two effects rather than one, and that is the whole subtlety: a single effect holding both the
+ *  request and the timer clears its own timeout every time its inputs move, which is how a "bounded"
+ *  grace silently becomes an unbounded one. The request is guarded by a ref (exactly one per id — a
+ *  re-render must never become a request) and the deadline is an absolute timestamp, so re-running
+ *  the timer effect re-arms the SAME instant instead of restarting the clock.
+ *
+ *  The wait ends on that clock and not on the answer, because a snapshot that legitimately lacks the
+ *  row changes nothing and therefore notifies nobody. */
+function useMeetingLookupGrace(missing: boolean, meetingId: string): boolean {
+  const [expiredFor, setExpiredFor] = useState<string | null>(null);
+  const askedFor = useRef<string | null>(null);
+  const deadline = useRef<{ id: string; at: number } | null>(null);
+
+  useEffect(() => {
+    if (!missing || askedFor.current === meetingId) return;
+    askedFor.current = meetingId;
+    refreshMeetings();
+  }, [missing, meetingId]);
+
+  useEffect(() => {
+    if (!missing || expiredFor === meetingId) return;
+    if (deadline.current?.id !== meetingId) deadline.current = { id: meetingId, at: Date.now() + MEETING_LOOKUP_GRACE_MS };
+    const t = window.setTimeout(() => setExpiredFor(meetingId), Math.max(0, deadline.current.at - Date.now()));
+    return () => window.clearTimeout(t);
+  }, [missing, meetingId, expiredFor]);
+
+  return expiredFor === meetingId;
+}
+
 /** The clean terminal state for an id that isn't ours (deleted, mistyped, someone else's un-shared
  *  meeting). A dead reference is a normal outcome of a shareable URL, so it reads as an answer — not an
  *  error, not a spinner that never ends. Pure (no services) so it renders in a test as-is. */
@@ -878,6 +931,24 @@ export function MeetingNotFound({ meetingId, onOpenToday }: { meetingId: string;
   );
 }
 
+/** The neutral face of `searching`. NOT a verdict and NOT an error — it says the app is still
+ *  asking, which at that instant is the only true thing it can say. Pure, like its twin, so the
+ *  test renders it as-is. */
+export function MeetingLookingUp({ meetingId }: { meetingId: string }) {
+  return (
+    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 380, textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Looking for this meeting…</div>
+        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+          {meetingId
+            ? <>Fetching the latest list for <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. A meeting that was just created can take a moment to appear here.</>
+            : <>Fetching the latest meetings list.</>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MeetingTab({ params }: TabProps) {
   const layout = useService(LayoutServiceId);
   const liveList = useLiveMeetings();
@@ -890,11 +961,18 @@ function MeetingTab({ params }: TabProps) {
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
   const header = meetingHeaderState(m, connected);
+  // An id the list does not carry is a QUESTION before it is an answer: re-ask the list once, and
+  // only call the meeting missing if the fresh snapshot still lacks it (see meetingLookupState).
+  const graceExpired = useMeetingLookupGrace(!m && listLoaded, requestedMeetingId);
+  const lookup = meetingLookupState(m, listLoaded, graceExpired);
+
+  // Still asking — say so, neutrally. A row the chat created moments ago lands here.
+  if (lookup === "searching") return <MeetingLookingUp meetingId={requestedMeetingId} />;
 
   // An unknown id — a stale/foreign/mistyped meeting URL — is a clean dead end, never a crash and never
-  // an endless "Connecting…". Only once the list has actually answered (P0: an offline list keeps
-  // resolving, so a network blip can't make a live meeting look deleted).
-  if (meetingResolution(m, listLoaded) === "not-found") {
+  // an endless "Connecting…". Only once the list has actually answered AND been re-asked (P0: an
+  // offline list keeps resolving, so a network blip can't make a live meeting look deleted).
+  if (lookup === "not-found") {
     return (
       <MeetingNotFound
         meetingId={requestedMeetingId}

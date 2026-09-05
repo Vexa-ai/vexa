@@ -15,8 +15,13 @@ import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 
 // ── contexts ─────────────────────────────────────────────────────────────────────
 /** `slug` (when the key is PRESENT) pins the target workspace — including `undefined`
- *  meaning the home workspace; when the key is absent the doc's own workspace applies. */
-export type DocNavigate = (detail: { path?: string; wikilink?: string; slug?: string }) => void;
+ *  meaning the home workspace; when the key is absent the doc's own workspace applies.
+ *
+ *  `exact` is the stronger claim: this ref NAMES its workspace, so resolve there and NOWHERE else.
+ *  A pinned slug is still only a starting point for the search (that is what lets a link inside a
+ *  shared doc reach a sibling mount); an exact ref forbids the search outright. Only the workspace
+ *  chip sets it, because only it is addressing a workspace rather than a document. */
+export type DocNavigate = (detail: { path?: string; wikilink?: string; slug?: string; exact?: boolean }) => void;
 /** Obsidian-style in-place navigation: the hosting doc pane provides a navigate fn so
  *  links replace the pane's content (with its own back/forward history). Outside a doc
  *  pane (chat, demo page) links fall back to opening a workbench tab. */

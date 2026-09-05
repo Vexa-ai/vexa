@@ -313,7 +313,7 @@ export function Workbench() {
   // source doc's workspace first, then home, then the rest of the mounted set).
   useEffect(() => {
     const onOpenEntity = async (e: Event) => {
-      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; beside?: boolean }>).detail || {};
+      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; beside?: boolean; exact?: boolean }>).detail || {};
       const r = await resolveDocRef(detail, { path: detail.docPath, slug: detail.slug });
       if (!r) return;
       if (layout.store.getState().activeList === "sessions") layout.setActiveList("files");  // reveal the center
