@@ -227,11 +227,7 @@ def _caller_fingerprint(api_key: str) -> str:
     # fingerprint of a credential used as a sink handle, never password storage or verification —
     # the key is the secret and the digest is never compared against user input; a slow hash here
     # would only slow every ticket. Reviewed 2026-09-05 (v0.12.27 car 11).
-    return hashlib.blake2b(  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing]
-        api_key.encode("utf-8"),
-        key=salt.encode("utf-8")[:64],   # blake2b keys are capped at 64 bytes
-        digest_size=8,                   # 8 bytes → the same 16 hex chars this has always emitted
-    ).hexdigest()
+    return hashlib.blake2b(api_key.encode("utf-8"), key=salt.encode("utf-8")[:64], digest_size=8).hexdigest()  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing] keyed fingerprint, not password storage — see the note above
 
 # Standard bearer-token auth parsing. We treat the token value as the Vexa API key.
 bearer_scheme = HTTPBearer(auto_error=False)
