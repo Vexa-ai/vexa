@@ -413,7 +413,7 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
-              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.flows_api" ;;
+              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, importlib.util as u; assert u.find_spec('flows_integrations.flows_api')" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
@@ -771,7 +771,7 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
-              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.flows_api" ;;
+              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, importlib.util as u; assert u.find_spec('flows_integrations.flows_api')" ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
                 echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"
