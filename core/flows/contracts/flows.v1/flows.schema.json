@@ -42,6 +42,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Where the producer's durable record of having emitted this fact lives (required in spirit for exactly_once_per_subject: the guarantee is the stamp, not the code path). Written in the SAME transaction as the thing it describes, so the record survives a publish that never lands and a later sweep can replay from it."
+        },
+        "published_by": {
+          "enum": ["repository", "private"],
+          "default": "repository",
+          "description": "WHERE THE PRODUCER LIVES, and it exists because the census is checked against this repository in both directions. `repository` (the meaning when the field is absent) says a producer in THIS tree declares the publish — a domain manifest's `publishes_events`, or a `config.v1` publish-edge key — and the census test requires one to be there. `private` says the producing surface is NOT in this cut: the fact is real, the consumer contract is real, and a deployment that mounts that domain receives it, but no declaration can exist here to point at. It is a statement about the TREE, never about the fact, and it is the narrow honest answer to a question that otherwise has only dishonest ones — deleting the entry (a consumer contract that describes a fact this deployment can still receive), or leaving it looking like an unproduced wish (which is exactly what the census's other direction exists to catch, so it would have to be switched off for everybody)."
         }
       },
       "allOf": [

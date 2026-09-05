@@ -45,7 +45,7 @@ STRANGER = "attacker@evil.test"
 
 ICS = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:u-42\nDTSTART:20300302T140000Z\n"
        "ORGANIZER:mailto:{org}\nATTENDEE:mailto:someone@acme.test\nSUMMARY:Pilot sync\n"
-       "LOCATION:https://meet.google.com/jrn-qwko-mqp\nEND:VEVENT\nEND:VCALENDAR\n")
+       "LOCATION:https://meet.google.com/abc-defg-hij\nEND:VEVENT\nEND:VCALENDAR\n")
 
 
 def msg(frm, *, body="hello", subject="hi", headers=None, ics=None, mid=None):
@@ -207,7 +207,7 @@ def test_an_unplaceable_organizers_invite_records_the_facts_and_creates_nothing(
     assert kind == mail_policy.UNVERIFIED_INVITE and "boss@evil.test" in reason
     kept = json.loads(facts)
     assert kept["ics_uid"] == "u-42" and kept["title"] == "Pilot sync"
-    assert kept["url"] == "https://meet.google.com/jrn-qwko-mqp", "the meeting facts survive"
+    assert kept["url"] == "https://meet.google.com/abc-defg-hij", "the meeting facts survive"
 
 
 def test_an_invite_from_inside_the_allow_list_is_admitted_as_before():
@@ -314,5 +314,5 @@ def test_a_recurrence_id_beats_the_dtstart():
     ics = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:series-9\nDTSTART:20300302T140000Z\n"
            "RECURRENCE-ID;TZID=Europe/Vienna:20300309T150000\n"
            "ORGANIZER:mailto:a@acme.test\nSUMMARY:Daily\n"
-           "LOCATION:https://meet.google.com/jrn-qwko-mqp\nEND:VEVENT\nEND:VCALENDAR\n")
+           "LOCATION:https://meet.google.com/abc-defg-hij\nEND:VEVENT\nEND:VCALENDAR\n")
     assert parse_ics(ics, SELF)["occurrence"] == "20300309T150000"

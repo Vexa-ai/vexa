@@ -112,10 +112,36 @@ ONBOARDED = EventType("onboarding.completed")
 
 NUDGE_EVERY_S = 15 * 60
 
-#: How often the onboarding reaction looks again for this person's first transcribed meeting.
-#: It parks between looks and burns no attempt (`flows/loop.tick`), so the cost of the item
-#: existing until they try Vexa is a row and one bounded read per half-minute.
+#: How often the onboarding reaction looks again for this person's first transcribed meeting —
+#: THE FIRST INTERVAL, then doubling to `ONBOARDING_POLL_MAX_S`. It parks between looks and burns
+#: no attempt (`flows/loop.tick`), so the cost is a row and one bounded read per interval.
+#:
+#: IT USED TO BE THIS EVERY TIME, FOREVER (R-B3). Thirty seconds is right for the first minutes
+#: after somebody signs up — that is when they are actually going to try it, and the queue item
+#: should clear while they are still looking at the screen. It is wrong on day nine: the same
+#: person, never activated, costs a 200-row scan and a transcript read every half-minute for as
+#: long as the account exists, and by then nothing about them changes in thirty seconds.
+#:
+#: THE BACKOFF IS THE WHOLE FIX, AND THERE IS STILL NO CAP ON THE ITEM. The founder's ruling
+#: (2026-09-04) is that activation is one meeting with transcription and the offer is not taken
+#: away from the people who have not taken it up yet — so this reaction never expires and never
+#: fails; what changes is only how often it asks. `attend_live`'s `LIVE_CAP_S` is a different
+#: question (a `meeting.completed` that never arrives, against a call that is long over) and the
+#: two must not be confused: that one is waiting on a FACT, this one is waiting on a PERSON.
 ONBOARDING_POLL_S = 30
+#: The ceiling the interval doubles up to. Fifteen minutes: still far inside the window in which
+#: "you have your first transcript" is a useful thing to be told, and ~1/30th of the reads.
+ONBOARDING_POLL_MAX_S = 15 * 60
+
+
+def onboarding_backoff(looks: int) -> float:
+    """The wait before look number `looks + 1` — 30s, 60s, 120s … capped at 15 min.
+
+    A pure function of how many times this reaction has already looked, so it is decided by the
+    reaction's own durable scratch rather than by anything in the worker's memory: a restart
+    resumes at the interval it had reached, and a replay of the same reaction produces the same
+    schedule."""
+    return float(min(ONBOARDING_POLL_S * (2 ** max(int(looks), 0)), ONBOARDING_POLL_MAX_S))
 
 #: HOW MANY `meeting.completed` ROWS the activation check scans back over. The same bound and the
 #: same reason `_completion_seen` and `flows_timeline` give: `subject_refs` is a JSON blob with no
@@ -1806,6 +1832,16 @@ def build(reg: Registry, db) -> None:
         over; here the thing being waited for is the person themselves, and an item that expired
         would take the offer away from exactly the people who have not taken it up yet.
 
+        THE INTERVAL IS BOUNDED EVEN THOUGH THE ITEM IS NOT (R-B3), and the two are different
+        questions. This looked every thirty seconds forever, per person who had never activated:
+        a 200-row scan plus a transcript read, every half-minute, for the life of every dormant
+        account. Thirty seconds is right in the minutes after somebody signs up and meaningless on
+        day nine, so the wait doubles to fifteen minutes (`onboarding_backoff`) — the offer stays
+        open, the cost stops growing with the number of people who have not taken it yet.
+
+        The look count lives in the reaction's own durable scratch, so a worker restart resumes at
+        the interval this reaction had reached rather than starting the ramp again.
+
         Reads: refs.{subject|uid} · Reaches: meetings (segment count) · Result:
         {meeting_id, segments}."""
         uid = _subject_uid(ctx.refs)
@@ -1816,7 +1852,9 @@ def build(reg: Registry, db) -> None:
         seen = ctx.scratch.setdefault("silent_meetings", {})
         hit = _transcribed_completion(uid, seen)
         if hit is None:
-            return Wait(seconds=ONBOARDING_POLL_S)
+            looks = int(ctx.scratch.get("looks") or 0)
+            ctx.scratch["looks"] = looks + 1
+            return Wait(seconds=onboarding_backoff(looks))
         mid, segments = hit
         return Done({"meeting_id": mid, "segments": segments, "activated": True})
 
