@@ -1,6 +1,6 @@
 ---
 title: "Agent web search"
-description: "How to give agent turns WebSearch and WebFetch: you supply the search endpoint, Vexa speaks to it. No search engine ships with Vexa."
+description: "How to give agent turns WebSearch and WebFetch: you supply the search endpoint, Vexa speaks to it. One opt-in compose profile runs a SearXNG for you."
 ---
 
 Agent turns can read the open web with two tools:
@@ -15,17 +15,14 @@ These are built-ins of the `openai-agent` harness (`VEXA_RUNNER=openai-agent` �
 against a model you host yourself). The `claude-code` and `codex` runners bring their own web tools.
 </Note>
 
-## Vexa ships no search engine
+## The backend is yours
 
-There is no search image, no compose service and no bundled search code in this repository. Vexa
-speaks a small adapter to an endpoint **you already run or already pay for**, and the whole interface
-is two environment variables.
+Vexa speaks a small adapter to **any endpoint of the right shape** — one you already run, one you
+already pay for, or the SearXNG the `search` compose profile starts for you. The whole interface is
+two environment variables, and no search code is built into Vexa.
 
-This is deliberate, and part of it is a licence decision: the obvious self-hosted metasearch program
-([SearXNG](https://github.com/searxng/searxng)) is **AGPL-3.0**. An operator is free to run it —
-it is their deployment and their choice — but it is not part of Vexa and Vexa does not distribute it.
-The [Brave Search API](https://brave.com/search/api/) is a hosted alternative that needs no server of
-your own. Neither is required: leave the variables empty and agent turns simply have no `WebSearch`.
+The [Brave Search API](https://brave.com/search/api/) is a hosted option that needs no server of your
+own. Nothing is required: leave the variables empty and agent turns simply have no `WebSearch`.
 
 ## Configure it
 
@@ -51,12 +48,48 @@ VEXA_SEARCH_API_KEY=<your Brave subscription token>
 the model's tool list rather than present and always failing, because a tool that fails every time
 teaches the model to stop reaching for it.
 
+## Running the bundled-by-profile SearXNG
+
+If you would rather not stand one up yourself, compose ships a SearXNG service behind an opt-in
+profile:
+
+```bash
+docker compose --profile search up -d searxng
+```
+
+Then point the harness at it (in `deploy/compose/.env`):
+
+```bash
+VEXA_SEARCH_URL=http://searxng:8080
+VEXA_SEARCH_DIALECT=searxng
+```
+
+<Note>
+**[SearXNG](https://github.com/searxng/searxng) is AGPL-3.0 and is not part of Vexa.** The profile
+pins an unmodified upstream image that **you** pull from SearXNG's own registry and run as a separate
+service beside the stack — it is never bundled into a `vexaai/*` image, so no AGPL obligation
+attaches to Vexa's Apache-2.0 artifacts; it rests with the upstream image you run. Declared as a
+sidecar in `image-licenses.json`, the same disposition as MinIO. Nothing starts unless you ask for
+the profile by name.
+</Note>
+
+Its settings live at `deploy/compose/searxng/settings.yml` — read-only in the container, and yours to
+edit. Two lines there are load-bearing: `search.formats` includes `json` (SearXNG's JSON output is
+**off by default** and the endpoint answers `403` without it), and `server.limiter: false` (the bot
+detection refuses the JSON format for a non-browser client, which is exactly what the harness is).
+The secret key comes from `SEARXNG_SECRET` in the environment — SearXNG does not expand `${...}`
+inside that file. Set `SEARXNG_HOST_PORT` to change the loopback publish port.
+
+**Kubernetes operators run their own.** There is no chart component for this, deliberately: the Helm
+chart deploys Vexa, and the search endpoint is a thing you point it at.
+
 ### If you run SearXNG yourself
 
-Its JSON output is **off by default**; the endpoint answers `403` until you enable it in your own
-`settings.yml`:
+Same two settings, in your own `settings.yml`:
 
 ```yaml
+server:
+  limiter: false
 search:
   formats:
     - html

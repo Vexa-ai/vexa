@@ -1181,6 +1181,55 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # ─── The operator's search endpoint (opt-in) ──────────────────────────────────────────────────
+  # SearXNG — the metasearch program that answers `WebSearch` for the openai-agent harness.
+  #
+  # SearXNG is AGPL-3.0 and is NOT part of Vexa. This block PINS an UNMODIFIED upstream image that
+  # the OPERATOR pulls from SearXNG's own registry and runs as a SIDECAR, a separate service beside
+  # the stack. No search code is built into, or redistributed inside, any vexaai/* artifact, so no
+  # AGPL source-offer obligation attaches to Vexa's Apache-2.0 images — the obligation rests with
+  # the upstream image the operator runs. A deliberate, reviewed sidecar allowance, declared in
+  # image-licenses.json exactly as minio/minio is (ADR-0004).
+  #
+  # OFF by default: the harness speaks to ANY endpoint of this shape, and plenty of deployments
+  # already run one or pay for Brave instead. Start it explicitly:
+  #     docker compose --profile search up -d searxng
+  # Then name it to the harness in .env (the runtime forwards these into every spawned worker):
+  #     VEXA_SEARCH_URL=http://searxng:8080
+  #     VEXA_SEARCH_DIALECT=searxng
+  # See docs/docs/agent-web-search.mdx. Kubernetes operators run their own; there is no chart
+  # component for this, by the same reasoning.
+  searxng:
+    profiles: ["search"]
+    # PINNED BY DIGEST, deliberately: an unmodified third-party artifact we vouch for by its exact
+    # bytes, not by a moving tag. Bump it on purpose, never implicitly. (= searxng/searxng:latest
+    # at SearXNG 2026.9.5-c7f3080aa.)
+    image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
+    networks: [vexa]     # MUST match the stack: on the default network the workers cannot resolve it
+    ports:
+      - "127.0.0.1:${SEARXNG_HOST_PORT:-18481}:8080"
+    volumes:
+      # Read-only: the settings are ours to state, not the container's to rewrite. The image's
+      # entrypoint only generates a settings.yml when none is mounted, so this file wins outright.
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # The image defaults granian to `::`. A docker network without IPv6 has no `::` to bind to and
+      # the server dies at socket init — the container comes up, stays up, and the port answers
+      # nothing. Bind v4 explicitly; this line is load-bearing, not a preference.
+      - GRANIAN_HOST=0.0.0.0
+      # SearXNG reads the secret from the ENVIRONMENT and overrides server.secret_key with it. It
+      # does NOT expand ${...} inside the mounted settings.yml, which is why the secret lives here
+      # (docker does expand this) — see ./searxng/settings.yml. Override in .env for any deployment
+      # that is not a local stack.
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-dev-searxng-secret}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   redis-data:
   postgres-data:

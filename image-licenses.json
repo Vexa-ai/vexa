@@ -38,6 +38,12 @@
       "reason": "MinIO client, used only by the compose/helm bucket-init Job. Same disposition as minio/minio: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."
     },
     {
+      "name": "searxng/searxng",
+      "license": "AGPL-3.0-or-later",
+      "disposition": "sidecar",
+      "reason": "Search endpoint the operator pulls DIRECTLY from SearXNG's own registry, unmodified and pinned by digest — it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. OFF by default behind the `search` compose profile; it answers WebSearch for the openai-agent harness through VEXA_SEARCH_URL, which accepts any endpoint of that shape. A deliberate, reviewed sidecar allowance (ADR-0004), same disposition as minio/minio. Not a bundled component, and not a Helm chart component."
+    },
+    {
       "name": "litellm/litellm",
       "license": "MIT",
       "disposition": "sidecar",

@@ -46,11 +46,13 @@ budget reasoning.
 ### Web reach — an adapter, never a dependency (`web_tools.py`)
 
 `WebFetch` is always attached; `WebSearch` is attached only when the operator has named a search
-endpoint. **No search engine ships with Vexa** — no image, no compose service, no vendored code —
-and that is a licence decision as much as a deployment one: the obvious self-hosted metasearch is
-AGPL-3.0. The interface is `VEXA_SEARCH_URL` + `VEXA_SEARCH_DIALECT` (`searxng` | `brave`), and a
-third dialect is one ~20-line function in `_DIALECTS`: take a client, a URL, a query and a count,
-return `[{"title","url","snippet"}]`.
+endpoint. **No search code ships in this module or inside any `vexaai/*` image** — the backend is
+whatever endpoint the operator names. Compose can start one for them: an OFF-by-default `search`
+profile running an unmodified, digest-pinned SearXNG (AGPL-3.0) as a sidecar the OPERATOR pulls,
+a reviewed allowance declared in `image-licenses.json` alongside MinIO. The interface is
+`VEXA_SEARCH_URL` + `VEXA_SEARCH_DIALECT` (`searxng` | `brave`), and a third dialect is one ~20-line
+function in `_DIALECTS`: take a client, a URL, a query and a count, return
+`[{"title","url","snippet"}]`.
 
 `WebFetch` carries the guard search does not need — a URL the MODEL chose is an outbound destination
 picked by a non-operator — so it refuses loopback / link-local / private / reserved targets and
