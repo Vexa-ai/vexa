@@ -345,4 +345,91 @@ else
   echo "  FAIL: ensure-db initContainer missing under the default flows.databaseName"; fail=1
 fi
 
+
+# ── 0.12.27 car 2 — A2 (gateway names the agent domain only when it is deployed) and A12 (the
+#    flows tier's own container is configured like the two beside it). These assert VALUES, not
+#    just key NAMES: every defect below rendered a key with the right name and the wrong content,
+#    and the name-only greps above all passed while the tier could not boot.
+
+# A2 — AGENT_API_URL is what puts `agent` in the gateway's present set, and the present set is
+# loaded strictly (a named domain with no routes.v1 manifest is a ManifestError at import, i.e. a
+# crash-loop). It was rendered unconditionally, so a chart with agentApi.enabled=false named a
+# Service that does not exist in that release. BOTH branches asserted.
+GW_NO_AGENT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set agentApi.enabled=false --show-only templates/deployment-gateway.yaml)"
+if grep -q 'AGENT_API_URL' <<< "$GW_NO_AGENT"; then
+  echo "  FAIL: gateway still names AGENT_API_URL under agentApi.enabled=false — strict manifest load, crash-loop (#A2)"; fail=1
+else
+  echo "  OK: gateway omits AGENT_API_URL under agentApi.enabled=false (#A2)"
+fi
+GW_AGENT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --show-only templates/deployment-gateway.yaml)"
+if grep -A1 'name: AGENT_API_URL' <<< "$GW_AGENT" | grep -q 'value: "http://vexa-vexa-agent-api:8100"'; then
+  echo "  OK: gateway names the agent-api Service under the default agentApi.enabled=true (#A2)"
+else
+  echo "  FAIL: gateway does not name the agent-api Service under the default agentApi.enabled=true (#A2)"; fail=1
+fi
+
+# A12.1 — VEXA_FLOWS_AGENT_API_URL was rendered as an EMPTY STRING exactly when the agent domain
+# WAS enabled, and flows' `_is_set` reads "" as unset: the guard and the value were inverted, so
+# every agent step answered not_present on an estate running agent-api. Value-level, both branches.
+if grep -A1 'name: VEXA_FLOWS_AGENT_API_URL' <<< "$FLOWS_DEFAULT" | grep -q 'value: "http://vexa-vexa-agent-api:8100"'; then
+  echo "  OK: flows names the agent-api Service when agentApi.enabled (not an empty string) (#A12)"
+else
+  echo "  FAIL: flows renders VEXA_FLOWS_AGENT_API_URL with no Service address — unset by any reader (#A12)"; fail=1
+fi
+
+# A12.2 — the flows-api container carries the doors and credentials the worker/mailbox carry.
+# VEXA_FLOWS_ADMIN_API_URL is required-explicit in flows' config.v1, so its absence was a boot
+# refusal, not a degrade. Asserted on the flows-api container specifically (the render is split at
+# the flows-api Deployment so a value on the worker cannot satisfy a claim about the api).
+# The flows-api DEPLOYMENT document alone. helm orders a render by install kind, not by source
+# order, so "everything after the first line naming flows-api" is the Service, not the Deployment —
+# and a claim about the api container would then be satisfied by the worker's env twenty lines
+# down. Select the document by its own kind + component label instead.
+FLOWS_API_ONLY="$(awk 'BEGIN{RS="\n---\n"} /kind: Deployment/ && /component: flows-api/' <<< "$FLOWS_DEFAULT")"
+for kv in \
+  'VEXA_FLOWS_ADMIN_API_URL|value: "http://vexa-vexa-admin-api:8001"' \
+  'VEXA_FLOWS_GATEWAY_URL|value: "http://vexa-vexa-gateway:8000"' \
+  'VEXA_FLOWS_API_HOST|value: "0.0.0.0"' ; do
+  k="${kv%%|*}"; v="${kv##*|}"
+  if grep -A1 "name: $k" <<< "$FLOWS_API_ONLY" | grep -qF "$v"; then
+    echo "  OK: flows-api carries $k = ${v#value: } (#A12)"
+  else
+    echo "  FAIL: flows-api is missing $k = ${v#value: } (#A12)"; fail=1
+  fi
+done
+if grep -q 'key: ADMIN_API_TOKEN' <<< "$FLOWS_API_ONLY"; then
+  echo "  OK: flows-api sources VEXA_FLOWS_ADMIN_KEY from the admin-token Secret (#A12)"
+else
+  echo "  FAIL: flows-api does not source VEXA_FLOWS_ADMIN_KEY (#A12)"; fail=1
+fi
+
+# A12.3 — probes on flows-api (it has a /health; the worker and mailbox have no server at all and
+# carry a rendered comment saying so).
+if grep -q 'livenessProbe' <<< "$FLOWS_API_ONLY" && grep -q 'readinessProbe' <<< "$FLOWS_API_ONLY"; then
+  echo "  OK: flows-api carries liveness + readiness probes on /health (#A12)"
+else
+  echo "  FAIL: flows-api carries no probes (#A12)"; fail=1
+fi
+
+# A12.4 — the flows image follows global.imageTag like every other service instead of a mutable
+# `:dev`, and an explicit flows.image still wins (that is how a publisher digest-pins a release).
+FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set global.imageTag=vPIN --show-only templates/flows.yaml)"
+if grep -q 'image: "vexaai/v012-flows:vPIN"' <<< "$FLOWS_PINNED" \
+  && ! grep -q 'v012-flows:dev' <<< "$FLOWS_PINNED"; then
+  echo "  OK: flows image honors global.imageTag (no mutable :dev left) (#A12)"
+else
+  echo "  FAIL: flows image ignored global.imageTag (#A12)"; fail=1
+fi
+FLOWS_OVERRIDE="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set global.imageTag=vPIN \
+  --set flows.image=reg.example/flows@sha256:abc --show-only templates/flows.yaml)"
+if grep -q 'image: "reg.example/flows@sha256:abc"' <<< "$FLOWS_OVERRIDE"; then
+  echo "  OK: an explicit flows.image still wins over global.imageTag (#A12)"
+else
+  echo "  FAIL: an explicit flows.image no longer wins over global.imageTag (#A12)"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
