@@ -44,6 +44,7 @@ COPY core/gateway/services/gateway/routes.v1.json ./core/gateway/services/gatewa
 COPY core/meetings/routes.v1.json                 ./core/meetings/routes.v1.json
 COPY core/meetings/services/mcp/routes.v1.json    ./core/meetings/services/mcp/routes.v1.json
 COPY core/identity/routes.v1.json                 ./core/identity/routes.v1.json
+COPY core/agent/routes.v1.json                    ./core/agent/routes.v1.json
 
 EXPOSE 8000
 # python -m gateway → uvicorn gateway.adapters:app (HOST/PORT from env).

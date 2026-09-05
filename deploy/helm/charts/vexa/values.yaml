@@ -509,7 +509,15 @@ podDisruptionBudgets:
 # ── Vexa Minutes flows tier (off by default; the channel publisher pins the image digest) ──
 flows:
   enabled: false
-  image: vexaai/v012-flows:dev        # digest-pinned per release by the publisher
+  # THE FLOWS TIER FOLLOWS global.imageTag like every other service (A12). `image` is the explicit
+  # full-ref override and wins when set (that is how a publisher digest-pins a release); leave it
+  # empty and the ref is imageRepository:global.imageTag, falling back to imageRepository:imageTag.
+  # It was a hardcoded `vexaai/v012-flows:dev` — a mutable tag that no release pin could reach, so
+  # a chart pinned to a release ran every other service at that release and flows at whatever
+  # `:dev` was that morning.
+  image: ""
+  imageRepository: vexaai/v012-flows
+  imageTag: v012
   workerReplicas: 2
   # The database the flows tables live in. Default "flows": a SEPARATE database from
   # database.name, bootstrapped by the ensure-db initContainer (needs CREATEDB or a pre-created
