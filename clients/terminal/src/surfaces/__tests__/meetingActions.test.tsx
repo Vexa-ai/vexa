@@ -113,19 +113,30 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     expect(warn).toHaveBeenCalledWith("meeting action failed", expect.objectContaining({ actionId: "stop", message: "Failed to fetch" }));
   });
 
-  it("a 403 service_not_allowed on Send now yields the DENIAL, never 'your key doesn't have access' (Vexa-ai/vexa-platform#291)", async () => {
+  it("a 403 service_not_allowed on Send now yields the DECIDER'S WORDS, never 'your key doesn't have access' (Vexa-ai/vexa-platform#291)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const onFailure = vi.fn();
     fetchMock.mockResolvedValueOnce({
       ok: false, status: 403, statusText: "Forbidden", url: "/api/bots",
-      json: async () => ({ detail: { code: "service_not_allowed", reason: "insufficient_balance", decision_id: "d-1" } }),
+      json: async () => ({ detail: {
+        code: "service_not_allowed", reason: "quantum_flux_exceeded", decision_id: "d-1",
+        message: "Only the deciding service knows why.",
+        action_url: "https://billing.example.invalid/account",
+      } }),
     } as unknown as Response);
 
     await actionsFor(row("idle")).find((a) => a.id === "send")!.run(onFailure);
 
     const failure = onFailure.mock.calls[0][0];
-    expect(failure.denial).toMatchObject({ kind: "paywall", title: "Out of credit" });
-    expect(failure.message).toContain("Out of credit");
+    // A reason this build has never heard of, rendered as well as any other.
+    expect(failure.denial).toMatchObject({
+      reason: "quantum_flux_exceeded",
+      code: "service_not_allowed",
+      headline: "quantum_flux_exceeded: Only the deciding service knows why.",
+      detail: "HTTP 403 service_not_allowed",
+      actionUrl: "https://billing.example.invalid/account",
+    });
+    expect(failure.message).toBe("quantum_flux_exceeded: Only the deciding service knows why.");
     expect(failure.message).not.toMatch(/doesn't have access/i);
     warn.mockRestore();
   });
