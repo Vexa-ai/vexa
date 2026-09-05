@@ -125,8 +125,9 @@ pointer** — theirs is `linode_id`, ours is `meeting_id` + `platform`. The agen
 (`what_i_tried` / `what_happened` / `deployment` / `version`) are composed into that pair
 server-side, so the MCP tool and any later HTTP ticket surface land **one shape** in the sink.
 Alongside it the sink receives capped `logs` with a `logs_truncated` flag, a server-side
-`reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint` — a salted
-SHA-256 prefix of the caller's API key. The response mirrors Linode's ticket object: `id`,
+`reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint` — a
+salt-keyed BLAKE2b fingerprint of the caller's API key (16 hex chars; the key itself is never
+stored, logged, or sent). The response mirrors Linode's ticket object: `id`,
 `status`, `severity`, `opened`, `updated`, `opened_by`, `entity`.
 
 **The caller is authenticated before the operator's credential is spent.** Every ticket is filed
@@ -145,7 +146,7 @@ accept teaches us nothing.
 
 | Property | How it is held |
 |---|---|
-| **The API key is never forwarded to the sink** | only `caller_fingerprint`, a salted SHA-256 prefix; asserted with a negative control in `tests/test_app.py` |
+| **The API key is never forwarded to the sink** | only `caller_fingerprint`, a salt-keyed BLAKE2b fingerprint; asserted with a negative control in `tests/test_app.py` |
 | **Ticket text is data, never instruction** | forwarded verbatim, never parsed, never executed, never fed to an agent of ours |
 | **SSRF closed by construction** | there is no url-shaped field, and **nothing a caller sends is ever dereferenced**. The only URL this route opens is the operator's `VEXA_TICKET_SINK_URL`. Links belong in the text, where a human reads them |
 | **No path to account state** | the service has no DB, no ORM, no redis — a test walks the package's imports to keep it that way, so a ticket write cannot touch meetings or users |
