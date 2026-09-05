@@ -208,6 +208,7 @@ test("a root .dockerignore-only change invalidates every affected candidate", (t
     "vexaai/v012-agent-worker: .dockerignore",
     "vexaai/v012-agent-api: .dockerignore",
     "vexaai/v012-meeting-api: .dockerignore",
+    "vexaai/v012-gateway: .dockerignore",
     "vexaai/vexa-bot: .dockerignore",
   ]);
 });
