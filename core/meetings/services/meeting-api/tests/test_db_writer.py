@@ -11,12 +11,9 @@ the redis-wired in-memory store mirroring the prod topology — no docker):
   * the FLIPPED INCIDENT — redis wiped after a flush ⇒ GET /transcripts still serves from durable;
   * parent semantics — the mutable tail (young ``updated_at``) stays in redis; empty text is
     dropped not stored; a failed durable write leaves the hash INTACT (trim-after-confirm);
-  * completion finalization — the lifecycle callback's terminal advance flushes EVERYTHING left.
-
-A whole section used to sit beside these: the processed-doc drain — ``proc:meeting:{row_id}``
-notes into ``data['processed']``, its ``view_end`` end-of-processing protocol and the bounded
-``processed_pending`` re-drain. PRD decision 34 removed the producer of that stream, so there is
-one body of a transcript and one drain to prove.
+  * completion finalization — the lifecycle callback's terminal advance flushes EVERYTHING left;
+  * processed-doc durability — ``proc:meeting:{row_id}`` notes persist into ``data['processed']``,
+    and a SECOND meeting on the same native link never clobbers the first row's persisted doc.
 """
 from __future__ import annotations
 
@@ -30,9 +27,13 @@ from fastapi.testclient import TestClient
 from meeting_api.collector import consume_segments
 from meeting_api.collector.db_writer import (
     ACTIVE_MEETINGS_KEY,
+    PROC_PENDING_KEY,
+    PROC_VIEW_ID,
     db_writer_tick,
     finalize_meeting,
+    flush_meeting_processed,
     flush_meeting_segments,
+    proc_stream_key,
     segments_hash_key,
 )
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
@@ -357,6 +358,145 @@ async def test_nonterminal_advance_does_not_finalize(redis_c, goldens):
     assert await redis_c.hlen(segments_hash_key(1)) == 1
 
 
+# ── (d) processed-doc durability + the re-send clobber fix ──────────────────────────────────────
+
+def _note(nid: str, text: str) -> dict:
+    return {"id": nid, "speaker": "Alice", "text": text}
+
+
+def _view(store, meeting_id: int, view_id: str = PROC_VIEW_ID) -> dict:
+    """The persisted processed VIEW — data.processed.views[] upserted by id (the addressable,
+    versioned multi-consumer shape the release DoD rules)."""
+    views = store._meetings[meeting_id]["data"]["processed"]["views"]
+    return next(v for v in views if v["id"] == view_id)
+
+
+async def test_processed_doc_persists_into_meeting_data_as_versioned_view(store, redis_c):
+    params = {"provider": "anthropic", "model": "claude-x", "pipeline": "meeting-copilot/proc-notes", "version": 1}
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Cleaned one.")),
+                                            "params": json.dumps(params)})
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s2", "Cleaned two.")),
+                                            "params": json.dumps(params)})
+
+    assert await flush_meeting_processed(redis_c, store, 1) == 2
+    view = _view(store, 1)
+    assert view["kind"] == "cleaned_transcript"
+    assert [n["text"] for n in view["doc"]["notes"]] == ["Cleaned one.", "Cleaned two."]
+    assert view["params"] == params        # the processing metadata APPLIED — reproducibility
+    assert view["source_cursor"]           # the stream position this view reflects
+    assert view["updated_at"]
+
+    # Cursor resume: nothing new ⇒ nothing re-merged; a refining re-emit UPDATES in place.
+    assert await flush_meeting_processed(redis_c, store, 1) == 0
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s2", "Cleaned two, better."))})
+    assert await flush_meeting_processed(redis_c, store, 1) == 1
+    view = _view(store, 1)
+    assert [n["text"] for n in view["doc"]["notes"]] == ["Cleaned one.", "Cleaned two, better."]
+    assert view["params"] == params        # a params-less drain never erases provenance
+
+
+async def test_processed_views_are_multi_consumer_other_views_preserved(store, redis_c):
+    """The views LIST is the multi-consumer seam: a future per-workspace/other processing's view
+    must survive the copilot view's upsert untouched."""
+    other = {"id": "ws-team:summary", "kind": "summary", "params": {"model": "m"},
+             "doc": {"text": "…"}, "source_cursor": "9-0", "updated_at": "2026-06-20T09:00:00Z"}
+    store._meetings[1]["data"]["processed"] = {"views": [dict(other)]}
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Copilot note."))})
+
+    await flush_meeting_processed(redis_c, store, 1)
+    views = store._meetings[1]["data"]["processed"]["views"]
+    assert [v["id"] for v in views] == ["ws-team:summary", PROC_VIEW_ID]
+    assert views[0] == other  # untouched
+
+
+async def test_second_meeting_on_same_native_does_not_clobber_first_processed_doc(redis_c):
+    """The clobber defect: proc docs were keyed by the NATIVE id, which a re-sent bot REUSES —
+    meeting 2's copilot output landed on meeting 1's doc. Keyed by the ROW id and persisted per
+    row, each meeting keeps its own processed doc across completion and a re-send."""
+    store = InMemoryTranscriptStore(redis_client=redis_c)
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id=NATIVE, meeting_id=1,
+                       created_at="2026-06-20T08:59:00Z")
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("a1", "First meeting note."))})
+    await finalize_meeting(redis_c, store, 1)  # meeting 1 completes; its doc is durable
+
+    # The bot is RE-SENT to the same native link → a NEW meeting row (id 2), its own proc stream.
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id=NATIVE, meeting_id=2,
+                       created_at="2026-06-20T10:00:00Z")
+    await redis_c.xadd(proc_stream_key(2), {"note": json.dumps(_note("b1", "Second meeting note."))})
+    await finalize_meeting(redis_c, store, 2)
+
+    first = _view(store, 1)["doc"]["notes"]
+    second = _view(store, 2)["doc"]["notes"]
+    assert [n["text"] for n in first] == ["First meeting note."]    # SURVIVED the re-send
+    assert [n["text"] for n in second] == ["Second meeting note."]
+
+
+async def test_db_writer_tick_also_drains_processed_notes(store, bus, redis_c):
+    """The periodic tick persists the processed doc for ACTIVE meetings too (not only at
+    completion) — a crash mid-meeting keeps everything cleaned so far."""
+    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "raw")])["payload"]))
+    await consume_segments(store, bus)  # puts meeting 1 in active_meetings
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Cleaned mid-meeting."))})
+
+    await db_writer_tick(redis_c, store, now=LATER)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Cleaned mid-meeting."]
+
+
+# ── the end-of-processing protocol (ADR 0027 / processed-notes.v1 view_end) ─────────────────────
+# The copilot's final beat lands ~10s AFTER session_end, i.e. AFTER finalize_meeting's inline drain
+# — and the meeting then leaves the tick's sweep, so those notes were stranded in redis forever
+# (run-46: durable cursor froze below the stream tail). The protocol: finalize PARKS an
+# incomplete meeting in `processed_pending`; the tick re-drains it until the worker's `view_end`
+# marker is drained-through (or a bounded deadline passes — the dead-worker guarantee).
+
+async def _pending_ids(redis_c):
+    return [m.decode() if isinstance(m, bytes) else m
+            for m in await redis_c.zrange(PROC_PENDING_KEY, 0, -1)]
+
+
+async def test_late_final_beat_notes_land_after_finalize_via_view_end(store, redis_c):
+    """The run-46 regression: notes written AFTER the completion flush reach the durable row on the
+    next tick, and the parking clears exactly when the view_end marker is drained-through."""
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Mid-meeting note."))})
+    await finalize_meeting(redis_c, store, 1)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Mid-meeting note."]
+    assert await _pending_ids(redis_c) == ["1"]        # no marker yet → parked, not forgotten
+
+    # The final post-session_end beat lands AFTER the finalize drain — then the marker.
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Final polished note."))})
+    marker_id = await redis_c.xadd(proc_stream_key(1), {"type": "view_end", "cursor": "9-0"})
+
+    await db_writer_tick(redis_c, store, now=LATER)
+    view = _view(store, 1)
+    assert [n["text"] for n in view["doc"]["notes"]] == ["Final polished note."]  # upgraded in place
+    assert view["source_cursor"] == (marker_id.decode() if isinstance(marker_id, bytes) else marker_id)
+    assert await _pending_ids(redis_c) == []           # drained-through the marker → unparked
+
+
+async def test_finalize_already_marker_complete_does_not_park(store, redis_c):
+    """A worker that finished BEFORE the terminal callback (marker already on the stream): the
+    finalize drain goes through the marker in one pass — nothing parks."""
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Done early."))})
+    await redis_c.xadd(proc_stream_key(1), {"type": "view_end"})
+
+    await finalize_meeting(redis_c, store, 1)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Done early."]
+    assert await _pending_ids(redis_c) == []
+
+
+async def test_pending_redrain_gives_up_at_deadline_keeping_what_arrived(store, redis_c):
+    """A worker that died markerless: the parking expires at its deadline (bounded, P22's hard
+    guarantee) — everything that DID arrive is durable, the zset never grows unbounded."""
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Only note."))})
+    await finalize_meeting(redis_c, store, 1)
+    assert await _pending_ids(redis_c) == ["1"]
+
+    past_deadline = datetime.now(timezone.utc) + timedelta(seconds=600)  # > PROC_PENDING_GRACE_SEC
+    await db_writer_tick(redis_c, store, now=past_deadline)
+    assert await _pending_ids(redis_c) == []                             # gave up, loudly (logged)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Only note."]  # kept
+
+
 # ── the REST surface, during AND after (DoD 8): api.v1 responses, both phases ───────────────────
 
 def _rest(store):
@@ -387,19 +527,18 @@ async def test_rest_mid_meeting_serves_merged_postgres_plus_redis_tail(store, bu
     assert_api_conforms("TranscriptionResponse", body)
 
 
-async def test_rest_after_completion_with_redis_wiped_serves_the_transcript(redis_c, goldens):
-    """AFTER the meeting — the observed defect: stop the bot, redis evicted ⇒ (pre-fix) the
-    transcript read EMPTY. Post-fix: completion finalizes it into postgres and GET /transcripts
-    serves the full transcript from the durable row alone — conformant to the sealed api.v1 shape.
-
-    It also used to assert a second body on the same response: ``data.processed.views[]``, the
-    copilot's cleaned view. PRD decision 34 removed the producer; a legacy row may still carry the
-    key (the free-form ``data`` field is unchanged), but nothing writes or reads one."""
+async def test_rest_after_completion_with_redis_wiped_serves_transcript_and_processed_view(redis_c, goldens):
+    """AFTER the meeting — the observed defects, both: stop the bot, redis evicted ⇒ (pre-fix) the
+    transcript read EMPTY and the processed output was UNREACHABLE. Post-fix: completion finalizes
+    both into postgres (meeting.data JSONB), and GET /transcripts serves the full transcript AND the
+    processed view from the durable row alone — conformant to the sealed api.v1 shape."""
     from collector_contracts import assert_api_conforms
 
     client, store = await _terminal_app_and_stores(redis_c)
     await store.append_segment(1, {**_seg("s1", 1.0, "closing words"),
                                    "updated_at": datetime.now(timezone.utc).isoformat()})
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Closing words, cleaned.")),
+                                            "params": json.dumps({"model": "claude-x"})})
 
     for case in ("joining", "active", "completed-stopped"):
         assert client.post("/bots/internal/callback/lifecycle", json=goldens[case]).status_code == 200
@@ -410,5 +549,63 @@ async def test_rest_after_completion_with_redis_wiped_serves_the_transcript(redi
     assert r.status_code == 200
     body = r.json()
     assert [s["text"] for s in body["segments"]] == ["closing words"]
-    assert not (body.get("data") or {}).get("processed")
+    views = body["data"]["processed"]["views"]  # rides the existing free-form data field — no new surface
+    assert views[0]["id"] == PROC_VIEW_ID and views[0]["kind"] == "cleaned_transcript"
+    assert [n["text"] for n in views[0]["doc"]["notes"]] == ["Closing words, cleaned."]
+    assert views[0]["params"] == {"model": "claude-x"}
     assert_api_conforms("TranscriptionResponse", body)
+
+
+# ── A18: the drain's justification for being GONE was false, and this is the check ─────────────
+
+def test_the_processed_notes_producer_is_still_here():
+    """THE FINDING. The drain was deleted with the justification "PRD decision 34 removed the
+    producer: nothing writes that stream". On this candidate the producer is alive in all three of
+    its parts, so the claim was false and `data.processed.views[]` simply stopped being written —
+    the terminal's durable notes pane and the schedule digest's `notes` flag go permanently empty
+    the moment the bot stops, which is the exact bug the drain exists for.
+
+    Read from SOURCE, deliberately: this is a cross-domain claim about the AGENT domain (meetings ⊥
+    agent — no import, no call), and the only honest way to check "does anybody still write this
+    stream" is to look. If the producer is genuinely removed one day, this test fails and the drain
+    goes with it — in ONE change. A half-applied removal, in either direction, is the failure."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[5]
+    dispatch = (root / "core/agent/control_plane/dispatch.py").read_text()
+    engine = (root / "core/agent/worker/engine.py").read_text()
+    worker = (root / "core/agent/worker/meeting.py").read_text()
+
+    assert "VEXA_TRANSCRIPT_STREAM" in dispatch, (
+        "the meeting worker is no longer dispatched — if that is true, delete the drain too")
+    assert 'proc_stream=f"proc:meeting:{row_id}"' in engine, (
+        "the worker is no longer given a proc stream — if that is true, delete the drain too")
+    assert "stream.xadd(proc_stream, fields)" in worker, (
+        "nothing xadds cleaned notes any more — if that is true, delete the drain too")
+
+
+def test_the_drain_and_its_pending_re_drain_are_wired_into_the_tick_and_the_finalize():
+    """The two call sites the removal took out. Asserted from source rather than only through
+    behaviour, because the behavioural tests above pass a sink that implements the merge — and the
+    defect was that nothing ever CALLED it."""
+    import inspect
+
+    from meeting_api.collector import db_writer as dw
+
+    assert "flush_meeting_processed" in inspect.getsource(dw.db_writer_tick)
+    assert "PROC_PENDING_KEY" in inspect.getsource(dw.db_writer_tick)
+    assert "flush_meeting_processed" in inspect.getsource(dw.finalize_meeting)
+
+
+def test_the_grace_period_is_declared_config(monkeypatch):
+    """`PROC_PENDING_GRACE_SEC` is read from the environment, so gate:config-contract requires it in
+    meeting-api's declaration — an undeclared env read is a value an operator can set that reaches
+    nothing (or, here, one they cannot set at all)."""
+    import json
+    import pathlib
+
+    decl = json.loads((pathlib.Path(__file__).resolve().parents[1]
+                       / "src/meeting_api/config.v1.json").read_text())
+    entry = next((k for k in decl["keys"] if k["key"] == "PROC_PENDING_GRACE_SEC"), None)
+    assert entry is not None, "PROC_PENDING_GRACE_SEC is read by db_writer.py and declared nowhere"
+    assert entry["class"] == "defaulted" and entry["default"] == "120"

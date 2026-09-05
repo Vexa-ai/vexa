@@ -226,11 +226,6 @@ def build_production_app():
 
     app = create_app(
         transcript_store=transcript_store,
-        # The person's default bot name reaches the DIRECT spawn path too, resolved by the domain
-        # that owns the bot — same edge, same value, same precedence as the auto-join sweep.
-        fetch_bot_context=_bot_context_fetcher(
-            (os.getenv("ADMIN_API_URL") or "").rstrip("/"),
-            os.getenv("INTERNAL_API_SECRET") or ""),
         redis=segment_bus,
         meeting_repo=meeting_repo,
         runtime=runtime_client,
@@ -774,12 +769,19 @@ def __getattr__(name: str):
 
 
 def _bot_context_fetcher(admin_api_url: str, internal_secret: str):
-    """The per-user spawn context from identity, or None when no identity edge is configured.
+    """The per-user spawn context from identity for the AUTO-JOIN SWEEP, or None when no identity
+    edge is configured.
 
-    ONE builder for BOTH spawn paths. The auto-join sweep has taken this edge since it existed; the
-    direct `POST /bots` path did not, which is why the same person's bot showed up under one name
-    when a calendar armed it and another when they asked for it in chat. Two fetchers would be two
-    answers to one question, so there is one, here.
+    The sweep needs its own fetcher because it spawns bots OUTSIDE a request — it stands in for the
+    headers the gateway would have injected, and it caches one answer per user across a whole tick.
+
+    NOT USED BY `POST /bots` any more. The direct path used to be handed this same builder so the
+    person's default name reached it too, which made that one request fetch
+    `/internal/users/{id}/bot-context` TWICE: once here at 10s for the name, once inside
+    `bot_spawn/service.request_bot` at 5s for the transcription backend and the capture-signal
+    decision — up to +15s on a path a person is waiting on, for one string. `request_bot` reads the
+    name out of the context it already has. Both paths still resolve the same value from the same
+    door, which is what the founder ruling required; there is just one call per spawn.
     """
     if not admin_api_url or not internal_secret:
         return None
