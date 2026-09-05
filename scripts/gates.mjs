@@ -942,7 +942,11 @@ function gateDataflow() {
 const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // process-plumbing vars a surface may set without a declaration entry (kept TIGHT + documented):
 // interpreter/runtime wiring only, never product config.
-const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ", "HOME", "TMPDIR"]);
+// An entry here is a hole in the SSOT, so it earns its place by a surface that actually sets it and
+// a service that actually reads it. `HOME` and `TMPDIR` were added by 01-foundation with neither and
+// were removed again on the 0.12.27 candidate: no deploy surface sets them and no adopted service
+// reads them, so all they did was pre-authorise two undeclared reads of values an operator controls.
+const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ"]);
 // literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
 const CONFIG_READ_RES = [
   /os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
