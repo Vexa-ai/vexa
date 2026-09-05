@@ -45,16 +45,28 @@ not silently absorbed — see the filed issue.
 from __future__ import annotations
 
 import json
+import logging
 import os
-import urllib.request
 from typing import Optional
 
 EVENT_MEETING_STARTED = "meeting.started"
 EVENT_MEETING_COMPLETED = "meeting.completed"
 
+log = logging.getLogger("meeting_api.events")
+
 #: Bounded on purpose. Both publishes run inside the lifecycle callback a bot's own HTTP round
 #: trip is waiting on, so the ceiling on how slow flows can make that callback is this number, not
 #: flows' own timeout.
+#:
+#: AND THE BOUND IS ONLY REAL BECAUSE THE CALL IS ASYNC. This used to be
+#: ``urllib.request.urlopen(req, timeout=TIMEOUT_S)`` — a BLOCKING call on the event loop inside
+#: ``async def _apply_lifecycle_event``, which is the same loop that runs the segment consumer, the
+#: db-writer, the live transcript reads and ``/health``. Two things were wrong with it and only one
+#: of them was the 2 s: urllib's ``timeout`` is a SOCKET timeout, so name resolution is not covered
+#: at all — an unresolvable ``VEXA_FLOWS_API_URL`` stalled the whole process for as long as the
+#: resolver took, not for two seconds. ``httpx.AsyncClient(timeout=…)`` bounds connect (DNS
+#: included), write, read and pool acquisition, and awaits instead of blocking, so a slow or dead
+#: flows costs THIS callback its bound and costs every other coroutine nothing.
 TIMEOUT_S = 2.0
 
 
@@ -66,13 +78,15 @@ def _flows_key() -> str:
     return (os.getenv("VEXA_FLOWS_API_KEY") or "").strip()
 
 
-def publish(event_type: str, source_event_id: str, refs: dict,
-            *, timeout: Optional[float] = None) -> bool:
+async def publish(event_type: str, source_event_id: str, refs: dict,
+                  *, timeout: Optional[float] = None) -> bool:
     """Hand one fact to the flows intake. Returns whether it landed; NEVER raises.
 
     The return value is for a caller that wants to log or count, not one that wants to decide:
     there is no correct behaviour on a failed publish except to carry on, because the alternative
     is failing a bot's own lifecycle callback over a message it never asked us to send.
+
+    AWAITED, not blocking — see ``TIMEOUT_S``. The caller is ``async def _apply_lifecycle_event``.
     """
     base = _flows_base()
     if not base:
@@ -92,11 +106,19 @@ def publish(event_type: str, source_event_id: str, refs: dict,
         # service's own token. The header used to be spelled X-Flows-Admin-Key; flows accepts the
         # old name for one release and this producer sends only the current one.
         headers["X-Flows-Operator-Key"] = key
-    req = urllib.request.Request(f"{base}/events", data=body, headers=headers, method="POST")
+    import httpx
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:  # noqa: S310
-            return 200 <= r.status < 300
+        async with httpx.AsyncClient(timeout=timeout or TIMEOUT_S) as client:
+            r = await client.post(f"{base}/events", content=body, headers=headers)
+        return 200 <= r.status_code < 300
     except Exception:  # noqa: BLE001 — see the module docstring: a publish is not a dependency
+        # SWALLOWED, NOT SILENT. The old shape returned False from a bare `except` and left no
+        # trace anywhere, so a flows address that had been wrong since a deploy looked exactly like
+        # a deployment with no flows domain. DEBUG, not warning: this fires per meeting lifecycle
+        # transition, and a deployment that has flows down does not need one line per meeting at
+        # warning level to be told so twice.
+        log.debug("flows publish %s did not land (base=%s)", event_type, base, exc_info=True)
         return False
 
 
@@ -127,14 +149,15 @@ def meeting_completed_refs(meeting_id, native, platform, uid, completion_reason)
             "platform": str(platform or ""), "completion_reason": str(completion_reason or "")}
 
 
-def publish_meeting_started(meeting_id, native, platform, uid,
-                             *, timeout: Optional[float] = None) -> bool:
-    return publish(EVENT_MEETING_STARTED, meeting_started_source_id(meeting_id),
-                    meeting_started_refs(meeting_id, native, platform, uid), timeout=timeout)
+async def publish_meeting_started(meeting_id, native, platform, uid,
+                                  *, timeout: Optional[float] = None) -> bool:
+    return await publish(EVENT_MEETING_STARTED, meeting_started_source_id(meeting_id),
+                         meeting_started_refs(meeting_id, native, platform, uid), timeout=timeout)
 
 
-def publish_meeting_completed(meeting_id, native, platform, uid, completion_reason,
-                               *, timeout: Optional[float] = None) -> bool:
-    return publish(EVENT_MEETING_COMPLETED, meeting_completed_source_id(meeting_id),
-                    meeting_completed_refs(meeting_id, native, platform, uid, completion_reason),
-                    timeout=timeout)
+async def publish_meeting_completed(meeting_id, native, platform, uid, completion_reason,
+                                    *, timeout: Optional[float] = None) -> bool:
+    return await publish(
+        EVENT_MEETING_COMPLETED, meeting_completed_source_id(meeting_id),
+        meeting_completed_refs(meeting_id, native, platform, uid, completion_reason),
+        timeout=timeout)

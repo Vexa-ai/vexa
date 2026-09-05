@@ -235,6 +235,23 @@ def _capture_signal_from_context(ctx: dict) -> bool:
     return ctx.get("capture_signal") is not False
 
 
+def _bot_name_from_context(ctx: dict) -> Optional[str]:
+    """This person's default bot name out of a bot-context body, or None.
+
+    THE THIRD READER OF ONE FETCH. `POST /bots` used to resolve the name through a SECOND,
+    router-level `fetch_bot_context` — a separate call to the same `/internal/users/{id}/bot-context`
+    door, on the same request, with its own 10s timeout, while `request_bot` already fetched the
+    same body at 5s. Worst case that was +15s on the path a person is waiting on for one string,
+    and both fetchers' comments claimed to be the only one. The lookup is unchanged; there is one
+    of it, and the transcription backend, the capture-signal decision and the bot name are three
+    readers of one answer.
+
+    Best-effort like its siblings: an unreachable identity yields None and the caller falls back to
+    the deployment default. A name is a nicety; joining the call is the product."""
+    name = ctx.get("bot_name")
+    return name.strip() or None if isinstance(name, str) else None
+
+
 def construct_meeting_url(
     platform: str,
     native_meeting_id: str,
@@ -455,6 +472,12 @@ async def request_bot(
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
     # Default ON: only an explicit false from identity stops the tape.
     capture_signal_enabled = _capture_signal_from_context(bot_context)
+    # THE NAME THIS PERSON'S BOT SHOWS UP AS — third reader of the same one hop. Precedence is
+    # auto-join's, unchanged: an explicit name on THIS request, then this person's default from
+    # identity, then the deployment's (applied at `build_invocation` below). An explicit name wins
+    # without identity being consulted about it at all — the answer could not change anything.
+    if not bot_name:
+        bot_name = _bot_name_from_context(bot_context)
     transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
