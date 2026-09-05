@@ -71,13 +71,17 @@ domain has neither the events nor the reactions — there is no desk there to ha
 
 `desk_setup` and `desk_claim` react to `desk.unscaffolded` and `claim.proposed`, which flows
 CONSUMES and does not publish — they are the agent domain's to publish, and they are deliberately
-absent from this domain's `publishes_events` for that reason. Both have a producer now: agent-api
-publishes the first at `control_plane/routers/workspaces.py` `ws_init`, on the call that CREATED a
-desk carrying no `.scaffolded`, and the second at `POST /api/claims` — a claim-aware route that
-owns the claim book and publishes one event per claim it actually added, which is why that route
-exists at all. The edge is declared in agent-api's `config.v1.json` as two `publish-edge` keys
-(`VEXA_FLOWS_API_URL`, `VEXA_FLOWS_API_KEY`). Unset, the facts are dropped and the two flows never
-fire — which is the deployment that carries no agent domain, and not a gap in the queue.
+absent from this domain's `publishes_events` for that reason. The producer is agent-api: the first
+on the call that CREATED a desk carrying no `.scaffolded`, the second at `POST /api/claims`, a
+claim-aware route that owns the claim book and publishes one event per claim it actually added,
+which is why that route exists at all. **Neither route, nor the publish-edge declaration that
+carries them, is in this cut of the repository** — the agent-api control plane that serves them is
+not here — so both entries in `contracts/flows.v1/carriers.json` are marked
+`"published_by": "private"`, and `tests/test_carrier_census.py` checks that the mark is honest:
+a carrier claiming it must have no declaration in this tree, so the flag comes off by force the
+moment a producer lands here. The two consumer flows are likewise in the optional
+`flows_defs/production_agent.py`. Both halves absent together is the deployment that carries no
+agent domain, and not a gap in the queue.
 
 **The words are not in the code.** Every sentence a person hears is a file in `behavior/queue/`,
 resolved private-mount-first and read hot, and a pending reaction behavior says nothing about is
