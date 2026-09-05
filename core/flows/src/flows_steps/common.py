@@ -12,6 +12,11 @@ from typing import Optional
 from urllib.parse import quote as _q
 
 import flows_config
+# THE ONLY MODULE-SCOPE ENGINE IMPORT IN THIS FILE, and it is here because a class statement needs
+# its base at definition time (`SettingsUnavailable` below). Everything else keeps the existing
+# function-local `from flows import StepError` idiom, which is not stylistic: it keeps the engine
+# out of this module's import graph for every caller that only wants `http` or a door.
+from flows import StepError
 
 #: The agent domain's door, or "" when the agent domain is not deployed (PRD decision 40.7). Read
 #: through the contract, which declares it a CAPABILITY rather than a defaulted URL — see
@@ -318,6 +323,27 @@ def db_url() -> str:
     return flows_config.require("VEXA_FLOWS_DB_URL")
 
 
+def swallowed(source: str, kind: str, exc: BaseException | None = None, **facts) -> None:
+    """SAY THAT SOMETHING WAS SWALLOWED. One line, at warning, naming who swallowed it and why.
+
+    P18. This brick has fourteen `except: pass` sites and, before this, not one of them logged —
+    so a Postgres outage during a refresh surfaced to an operator as *"flow retired by deploy"*,
+    which is a different event with a different owner and a different fix. A degradation nobody can
+    see is indistinguishable from the healthy path it degrades to, which is the whole reason the
+    swallow was safe to write in the first place.
+
+    `source` is the function that decided to continue and `kind` is what it decided to continue
+    PAST — deliberately two fields rather than one sentence, so a reader grepping the logs can
+    count occurrences of a kind without parsing prose.
+
+    `print`, not `logging`, because that is this brick's convention end to end (`flows_worker`,
+    `mailbox`, `flows_api` all print to stdout and the deployment collects it); introducing a
+    second logging mechanism for one helper would be the drift this file's own rules are about."""
+    tail = "".join(f" {k}={v!r}" for k, v in facts.items())
+    detail = f": {type(exc).__name__}: {exc}" if exc is not None else ""
+    print(f"warning: swallowed source={source} kind={kind!r}{tail}{detail}"[:600], flush=True)
+
+
 def http(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 20):
     req = urllib.request.Request(url, method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
@@ -442,45 +468,85 @@ _SETTING_DEFAULTS = {
     "mail_prep": True,
 }
 
-#: uid -> settings, for the length of one step. A step reads two or three of these in a row and the
-#: values cannot change mid-step; a cache that outlived the process would be a stale preference,
-#: which is the failure this whole move is about.
+#: HOW LONG A CACHED ANSWER IS GOOD FOR. The entry below used to have no expiry at all: its own
+#: comment said *"for the length of one step"*, and nothing ever cleared it, so in a worker — which
+#: is a process that lives for days — the first answer for a uid was the last one that person ever
+#: got. Somebody turning their minutes mail off did not take effect until a deploy, and nobody
+#: could see why, because the cache is invisible and the identity row said the right thing.
+#:
+#: Thirty seconds keeps what the cache is FOR — a step reads two or three of these in a row and
+#: they cannot change between two lines of the same function — and gives up what it never should
+#: have taken, which is the rest of the process's life. It is deliberately not a config key: a
+#: value nobody would ever tune is a surface for no reader (P14 the other way round).
+SETTINGS_TTL_S = 30.0
+
+#: uid -> (expires_at, settings). Process memory, never a file: this is a cache of a preference,
+#: not state a step may depend on (this file's stateless law).
 _person_settings_cache: dict = {}
 
 
-def person_settings(uid: str) -> dict:
-    """Every setting for one person, from identity. Never raises.
+class SettingsUnavailable(StepError):
+    """Identity could not be asked what this person prefers — RETRYABLE, and never a default.
 
-    ON AN UNREACHABLE IDENTITY IT RETURNS THE DEFAULTS, and that direction is deliberate: a mail
-    preference that fails OPEN is a person who gets mail they turned off, one that fails CLOSED is a
-    person who silently stops receiving their minutes. The defaults are the documented answer and
-    they are exactly what somebody who has never touched a setting already gets."""
+    THE OLD SHAPE ANSWERED THE DEFAULTS ON ANY FAILURE, and its docstring defended the choice as
+    the lesser of two evils: *"a mail preference that fails OPEN is a person who gets mail they
+    turned off, one that fails CLOSED is a person who silently stops receiving their minutes"*.
+    Both of those are true, and both are answers to the wrong question — a transport error is not
+    a fact about what somebody prefers, and neither direction had to be picked. The third option is
+    to not answer yet: a reaction that retries in ten minutes mails nothing wrong now and mails the
+    right thing later, which is what `retryable` is for.
+
+    It mattered more than a single wrong mail, because the answer was then CACHED: one refused
+    connection during a rolling restart pinned that person to defaults for the life of the worker,
+    with the identity row saying something else the whole time.
+
+    What is NOT a failure and still answers defaults: identity replying 200 with a setting absent.
+    That is a person who has never touched it, and the default is the documented answer."""
+
+
+def person_settings(uid: str) -> dict:
+    """Every setting for one person, from identity. Raises `SettingsUnavailable` if it cannot ask.
+
+    The door is `_door(...)`, never the bare `ADMIN_API`: that name is served by module
+    `__getattr__` (PEP 562), which fires on ATTRIBUTE access from another module — `from common
+    import ADMIN_API` — but NOT on a LOAD_GLOBAL inside this module's own functions, where the name
+    is simply absent and raises NameError. Under the old broad `except` that NameError became the
+    defaults, so a lookup mistake produced the exact "mail everybody everything, in UTC" failure
+    this move exists to end. Nothing here swallows it now."""
     uid = str(uid)
     hit = _person_settings_cache.get(uid)
-    if hit is not None:
-        return hit
+    if hit is not None and hit[0] > time.time():
+        return hit[1]
+    # `http` raises StepError for a transport failure and RETURNS a code for an HTTP answer, so the
+    # two are handled separately and on purpose: the first propagates as-is (it already carries the
+    # method, the url and the cause), the second is named here with the code identity actually gave.
+    code, body = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/{uid}/settings",
+                      {"X-Internal-Secret": require_internal_secret()})
+    if code != 200 or not isinstance(body, dict):
+        raise SettingsUnavailable(
+            f"identity answered {code} for {uid}'s settings — this reaction does not know what "
+            f"they prefer yet, and a default is a guess about a person, not an answer: "
+            f"{str(body)[:160]}", retryable=True)
     out = dict(_SETTING_DEFAULTS)
-    try:
-        # `_door(...)`, never the bare `ADMIN_API`. The door is served by module `__getattr__`
-        # (PEP 562), which fires on ATTRIBUTE access from another module — `from common import
-        # ADMIN_API` — but NOT on a LOAD_GLOBAL inside this module's own functions, where the name
-        # is simply absent and raises NameError. The broad `except` below would then swallow that
-        # into the defaults, so every timezone would read UTC and every mail preference would read
-        # its default: the exact "mail everybody everything, in UTC" failure this move exists to
-        # end, reintroduced by the lookup rather than by the missing domain. The three call sites
-        # above already spell it this way.
-        code, body = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/{uid}/settings",
-                          {"X-Internal-Secret": require_internal_secret()})
-        if code == 200 and isinstance(body, dict):
-            out.update({k: v for k, v in body.items() if k in _SETTING_DEFAULTS})
-    except Exception:  # noqa: BLE001 — a preference read must never fail a reaction
-        pass
-    _person_settings_cache[uid] = out
+    out.update({k: v for k, v in body.items() if k in _SETTING_DEFAULTS})
+    _person_settings_cache[uid] = (time.time() + SETTINGS_TTL_S, out)
     return out
 
 
+def forget_person_settings(uid: Optional[str] = None) -> None:
+    """Drop a cached answer — one person's, or everybody's. For a caller that has just CHANGED a
+    setting and for the suite; the TTL is what everything else relies on."""
+    if uid is None:
+        _person_settings_cache.clear()
+    else:
+        _person_settings_cache.pop(str(uid), None)
+
+
 def setting(uid: str, key: str):
-    """One preference for one person, from identity. Never raises: unreachable means defaults.
+    """One preference for one person, from identity.
+
+    RAISES when identity cannot be asked (see `SettingsUnavailable`); answers the documented
+    default when identity answers and simply holds no value for that key.
 
     `bot_name` IS NOT HERE, and its absence is the point: a bot default is a fact about the bot, so
     meetings resolves it on the spawn path and no caller reads it from anywhere."""

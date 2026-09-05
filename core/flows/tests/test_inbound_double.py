@@ -161,9 +161,9 @@ def test_meet_invites_still_parse_and_now_carry_participants():
     meet = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:u-1\nDTSTART:20300302T140000Z\n"
             "ORGANIZER:mailto:anna@bank.com\nATTENDEE:mailto:ben@bank.com\n"
             "ATTENDEE:mailto:vexa@example.com\nSUMMARY:Pilot sync\n"
-            "LOCATION:https://meet.google.com/jrn-qwko-mqp\nEND:VEVENT\nEND:VCALENDAR\n")
+            "LOCATION:https://meet.google.com/abc-defg-hij\nEND:VEVENT\nEND:VCALENDAR\n")
     ev = parse_ics(meet, SELF)
-    assert ev["url"] == "https://meet.google.com/jrn-qwko-mqp"
+    assert ev["url"] == "https://meet.google.com/abc-defg-hij"
     assert ev["participants"] == ["ben@bank.com"]
     assert ev["group"] is None and ev["title"] == "Pilot sync"
 
