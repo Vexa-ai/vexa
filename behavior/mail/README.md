@@ -21,13 +21,25 @@ mails correctly before anyone has edited anything.
 Plain text. One link at most, and the step appends it — a template never writes a URL, because a
 link that a template could write is a link anyone who can edit a file can point anywhere.
 
-## The three templates
+## The template this cut ships
 
 | file | who reads it | when |
 |---|---|---|
-| `prepare.md` | the ORGANISER, and people who are already users | before the meeting |
 | `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the shared report |
-| `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
+
+**One file, and that is the whole directory.** Two others are named throughout this README and
+neither is here, because neither is a template in this cut — said plainly rather than left for the
+next reader to discover:
+
+| named | where its words actually are |
+|---|---|
+| `prepare.md` | nowhere in this repository. Its renderer is `prepare_meeting`, which lives in `flows_defs/production_agent.py` — the agent half, **not registered at all** when the agent domain is absent, and not part of the OSS cut. There is no baked default either: `mailtext.render("prepare", …)` would raise `KeyError`. |
+| `minutes-head.md` | not a template. `email_minutes` composes the minutes mail in code — [`flows_defs/production.py`](../../core/flows/src/flows_defs/production.py) — from the provenance line, the committed report verbatim and the ask. Editing a file here changes nothing about it. |
+
+So the substitution tables below describe `attendee-head.md` plus two renderers that are not in this
+cut; they are kept because the agent half reads them when it is present. **Adding `prepare.md` or
+`minutes-head.md` to this directory has no effect on a deployment without the agent domain** — the
+step that would read the first is not registered, and the second has no reader at all.
 
 **`prepare.md` never goes to a stranger and never claims a workspace was started.** Founder,
 2026-09-02, on a pre-meeting fan-out: *"I'm afraid this will not work for a 50 attendee meeting."*
