@@ -155,7 +155,11 @@ def test_engine_restart_with_durable_db_never_repeats_effects():
     from fixtures import INVITE_REFS, drain
     from flows import FakeClock
 
-    path = tempfile.mktemp(suffix=".db")
+    # mkstemp, not mktemp: mktemp returns a name and leaves the race between the check and the
+    # open to whoever gets there first. The fd is closed immediately — sqlite opens the path
+    # itself — but the file now EXISTS and is ours, which is the whole point.
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
     try:
         world = FakeWorld()
         reg = build_registry(world); register_flows(reg)
