@@ -94,7 +94,7 @@ VERBS: dict[str, Verb] = {
         "smtp", ("to_mail", "from_address", "body"), ("as",),
         what="SMTP a reply with In-Reply-To set, so the poller routes it by thread"),
     "cancel_bot_leg": Verb(
-        "flows-api", ("flow",), ("source_contains",),
+        "flows-api", ("flow",), ("source_contains", "subject"),
         what="cancel this recipe's parked invite reaction, so no bot is ever dispatched at a "
              "fixture URL after the run has finished"),
     "await_reaction": Verb(
