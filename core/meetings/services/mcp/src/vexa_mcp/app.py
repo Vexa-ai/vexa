@@ -211,13 +211,23 @@ def _caller_fingerprint(api_key: str) -> str:
     """A pseudonymous, stable handle for the caller — NEVER the API key itself.
 
     Deliberate choice: the ticket sink is an operator surface, not an auth boundary, so it
-    receives a salted SHA-256 prefix of the key instead of the credential. That is enough to
+    receives a salted keyed FINGERPRINT of the key instead of the credential. That is enough to
     join two tickets from the same account (and, with the same salt, to match an account
     server-side) while a leak of the sink or its logs leaks no usable Vexa credential.
-    The raw key is forwarded to the GATEWAY only, exactly as every other tool does.
+    The raw key is forwarded to the GATEWAY only, exactly as every other tool does. The raw key
+    is never stored, logged, or returned.
+
+    ``blake2b`` keyed with the deployment salt, not a bare SHA-256: this is a keyed fingerprint,
+    not password storage (there is nothing here to verify a secret AGAINST), and the keyed
+    construction is the right primitive for it — a plain digest of a low-entropy input is
+    guessable by whoever holds the salt-free hash.
     """
     salt = os.getenv("VEXA_TICKET_FINGERPRINT_SALT") or _DEFAULT_CALLER_SALT
-    return hashlib.sha256(f"{salt}|{api_key}".encode("utf-8")).hexdigest()[:16]
+    return hashlib.blake2b(
+        api_key.encode("utf-8"),
+        key=salt.encode("utf-8")[:64],   # blake2b keys are capped at 64 bytes
+        digest_size=8,                   # 8 bytes → the same 16 hex chars this has always emitted
+    ).hexdigest()
 
 # Standard bearer-token auth parsing. We treat the token value as the Vexa API key.
 bearer_scheme = HTTPBearer(auto_error=False)
