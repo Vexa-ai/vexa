@@ -265,8 +265,45 @@ def invite_source_id(ev: dict) -> str:
     return f"ics-{ev['ics_uid']}-{occ}" if occ else f"ics-{ev['ics_uid']}"
 
 
+#: WHAT THE ELISION LOOKS LIKE when a body is longer than the cap. It is part of the text a reader
+#: — a person, or an agent reading the untrusted block — actually sees, on purpose: a body that was
+#: silently cut ends mid-sentence and reads as a message that ends mid-sentence, which is a
+#: different fact about the sender. `{n}` is how many characters were dropped.
+BODY_ELISION = "\n\n[… {n} more characters of this message elided at VEXA_FLOWS_MAIL_BODY_MAX ({cap}) …]"
+
+
+def body_max() -> int:
+    """How much of an inbound body may travel on `mail.reply` — `VEXA_FLOWS_MAIL_BODY_MAX`.
+
+    THE KEY WAS DECLARED AND READ BY NOTHING (R-B12). `flows_config.DECLARED` carries it with a
+    default of 4000 and the sentence *"how much of an inbound body may enter an agent prompt,
+    inside the untrusted block"*; `core/flows/README.md` tells an operator that an allowed body
+    "arrives quoted, fenced, length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`)". Neither was true: the
+    only cap in the intake was a literal `[:2000]` on the line below, so an operator who set the
+    key got no error and no effect, and one who read the README believed a number that was not the
+    number. That is the failure mode `test_config_declaration`'s declared⊆read direction exists to
+    catch, and it caught this one.
+
+    Read PER CALL, never bound at import: the poller is a long-lived process and a door resolved at
+    import is the defect the rest of this brick spent a release removing.
+
+    Floored at 1: a cap of zero would admit a reply carrying no text at all, which is a fact
+    thrown away rather than a limit applied. `cfg.get_int` already answers the declared default for
+    a value that is not a number, so a typo is 4000 and never a crash mid-poll."""
+    return max(cfg.get_int("VEXA_FLOWS_MAIL_BODY_MAX"), 1)
+
+
 def strip_quotes(body: str) -> str:
-    return "\n".join(l for l in body.strip().splitlines() if not l.strip().startswith(">"))[:2000]
+    """The sender's own words: quoted lines dropped, then capped at `body_max()`.
+
+    The quote strip comes FIRST and the cap second, which is the order that matters — a reply whose
+    first screen is the thread it is answering would otherwise spend its whole budget on text we
+    already sent."""
+    text = "\n".join(l for l in body.strip().splitlines() if not l.strip().startswith(">"))
+    cap = body_max()
+    if len(text) <= cap:
+        return text
+    return text[:cap] + BODY_ELISION.format(n=len(text) - cap, cap=cap)
 
 
 def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:

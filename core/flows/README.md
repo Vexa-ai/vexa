@@ -46,9 +46,14 @@ Two ceilings bound what the inbox can cost even when every sender is legitimate:
 `VEXA_FLOWS_MAIL_RATE_WINDOW_S`, counted on ADMITTED turns in `mail_turn` — so a flood of
 strangers cannot exhaust the budget of the people who are allowed to use this.
 
-An inbound body that IS allowed through never reaches a prompt raw: it arrives quoted, fenced,
-length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`) and labelled untrusted, with the machinery note AFTER
-the block. The frame is the control; the text itself is never altered.
+An inbound body that IS allowed through is quote-stripped and length-capped at
+`VEXA_FLOWS_MAIL_BODY_MAX` (default 4000) before it travels as `mail.reply`'s `text` ref —
+`mailbox.strip_quotes`, quotes off first so a reply does not spend its budget on text we sent
+ourselves, and an explicit elision marker naming the control when it cuts. The text itself is
+never altered otherwise. The *framing* half — the fenced, untrusted-labelled block with the
+machinery note after it — belongs to the flow that puts the text in front of an agent
+(`email_chat`, in `flows_defs/production_agent.py`), so a deployment that carries no agent domain
+applies the cap and never builds a prompt at all.
 
 ## What is waiting is flows
 
