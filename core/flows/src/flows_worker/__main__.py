@@ -30,6 +30,14 @@ def main() -> int:
     # falls back to one is worse than a refusal — it works, against the wrong thing. The agent door
     # is exempt by construction: unset means the agent domain is not deployed (decision 40.7).
     flows_config.preflight()
+    # …and the CONTRACT's own check, which is a different question (E6/ADR-0026): every
+    # required-explicit key in `config.v1.json` is set, and no key still holds one of the
+    # placeholder literals the declaration forbids — literals that are published in this
+    # repository and are therefore not secrets. The vendored validator is the same file every
+    # adopted service runs; flows imported it nowhere until now, which is how a hand-copied list
+    # of four placeholders in `flows_api.py` came to stand in for the declaration's seven.
+    from config_preflight import preflight as contract_preflight
+    contract_preflight()
     db = postgres_db(db_url())
     clock = SystemClock()
     reg = Registry()
