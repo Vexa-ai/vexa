@@ -26,6 +26,29 @@ from typing import Any
 #: Envelopes are pathological long before this; the bound just stops a cyclic structure from spinning.
 _MAX_UNWRAP = 10
 
+#: HOW MUCH UPSTREAM BODY A TOOL RESULT MAY CARRY. Whatever the deciding service said goes to the
+#: agent — but an upstream that answers an error with a stack trace, an HTML error page or a megabyte
+#: of rows would put all of it in the agent's context window, on a call that FAILED, and it is the
+#: first line of this block that the agent has to act on. Four kilobytes is more than any authored
+#: refusal and less than any accident.
+_MAX_BODY_CHARS = 4096
+
+#: WHY A MARKER AND NOT A SILENT CUT. A truncated JSON document is invalid JSON, and a caller that
+#: parses the body has to be able to tell "the decider sent this" from "we shortened it" — otherwise
+#: a bounded body reads as a malformed upstream. The count is here so a reader knows what it costs
+#: to go and look at the source.
+_ELIDED = "… [{n} more characters elided by vexa-mcp]"
+
+
+def _bounded(text: str) -> str:
+    """`text`, or its first :data:`_MAX_BODY_CHARS` characters with what was dropped stated."""
+    extra = len(text) - _MAX_BODY_CHARS
+    if extra <= 0:
+        return text
+    # No newline in the marker: `notices.render_error` addresses this block by LINE, putting its
+    # field on the last one, so bounding must not change how many lines there are.
+    return text[:_MAX_BODY_CHARS] + _ELIDED.format(n=extra)
+
 
 def unwrap_detail(body: Any) -> Any:
     """Peel nested ``{"detail": …}`` envelopes down to the innermost value."""
@@ -59,7 +82,7 @@ def render_tool_error(status_code: int, body_text: str) -> str:
 
     if parsed is None:
         stripped = raw.strip()
-        return f"HTTP {status_code}" + (f"\n{stripped}" if stripped else "")
+        return f"HTTP {status_code}" + (f"\n{_bounded(stripped)}" if stripped else "")
 
     inner = unwrap_detail(parsed)
     fields = inner if isinstance(inner, dict) else {}
@@ -75,11 +98,41 @@ def render_tool_error(status_code: int, body_text: str) -> str:
         lines.append(" ".join(p for p in (f"HTTP {status_code}", code or reason) if p))
     if action_url:
         lines.append(f"action_url: {action_url}")
-    lines.append(
+    lines.append(_bounded(
         inner if isinstance(inner, str)
         else json.dumps(inner, separators=(",", ":"), ensure_ascii=False)
-    )
+    ))
     return "\n".join(lines)
+
+
+#: The pin this service's two library seams are true of. Spelled here as well as in `pyproject.toml`
+#: so the boot message can name it.
+FASTAPI_MCP_PIN = "fastapi-mcp==0.4.0"
+
+
+def require_library_seam(mcp: Any, attribute: str) -> None:
+    """Fail the boot, naming the attribute, when the pinned library stops carrying a seam we wrap.
+
+    THIS SERVICE WRAPS TWO PRIVATE ATTRIBUTES of `fastapi-mcp` — `_request` here and
+    `_execute_api_tool` in `notices` — because both are the only points where what an agent reads is
+    decided, and wrapping them leaves the success path, the headers, the mount and the argument
+    handling the library's. A private attribute carries no compatibility promise, so the dependency
+    is PINNED to an exact version (see :data:`FASTAPI_MCP_PIN`), not to a range: a rename inside what
+    a range would accept as a compatible release would otherwise
+    change behaviour with nothing to notice it.
+
+    A pin makes the rename impossible to arrive by accident; this makes it impossible to arrive
+    quietly. Without it the failure is an `AttributeError` from the middle of `create_app`, naming
+    a line rather than the contract — and if anyone ever softened that to a `getattr` default, the
+    service would boot and simply stop rendering refusals structurally, which is the silent version
+    of the same defect.
+    """
+    if not hasattr(mcp, attribute):
+        raise RuntimeError(
+            f"{type(mcp).__name__}.{attribute} is gone: this service wraps it to decide what an "
+            f"agent reads on a tool call. The dependency is pinned to {FASTAPI_MCP_PIN} precisely "
+            "because it is a private attribute — re-read the library's call path and re-point the "
+            "wrapper before moving the pin.")
 
 
 class UpstreamToolError(Exception):
@@ -106,6 +159,7 @@ def install_structured_tool_errors(mcp: Any) -> None:
     try-block and re-raises whatever comes out of it, so raising here replaces the sentence and nothing
     else — success paths, headers, path/query handling and the mount all stay the library's.
     """
+    require_library_seam(mcp, "_request")
     original = mcp._request
 
     async def _request(client, method, path, query, headers, body):  # noqa: ANN001 — library signature

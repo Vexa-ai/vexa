@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -48,7 +49,19 @@ CONTRACT = "mcp.tools.v1"
 # reintroduces one on purpose.
 CREDENTIAL_ARGUMENTS = {"token", "api_key", "apikey", "key", "access_token", "bearer",
                         "credential", "password", "secret"}
-DOMAINS = {"meetings", "identity", "flows", "agent", "gateway", "rehearse", "billing"}
+# A DOMAIN NAME IS CHECKED FOR SHAPE, NOT FOR MEMBERSHIP. A closed list here had to spell every
+# domain any deployment might ever mount, so this OSS module carried the names of surfaces this
+# repository does not ship and cannot describe — a reader learns a private product's shape from a
+# constant in the open assembler, and a private deployment cannot add a domain without a change
+# landing here first. Neither is the mount's design: `load_mounted` exists so a paid domain composes
+# onto this line without a line of it living here.
+#
+# What actually has to be true of a name is that it is a stable lowercase identifier, because the
+# name is a key in three places at once — `depends_on`, every tool's `requires`, and the
+# `<DOMAIN>_API_URL` env var discovery reads. Anything outside this pattern makes one of those
+# unspellable, and that is the whole of the rule. Everything a manifest may CLAIM is still checked
+# below; nothing here decides whether a domain is real, because `deployed` already does.
+DOMAIN_NAME = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 IDENTITIES = {"user", "admin", "operator", "none"}
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
@@ -115,8 +128,10 @@ def validate(doc: dict) -> dict:
     if not isinstance(doc, dict) or doc.get("contract") != CONTRACT:
         raise ManifestError(f"not a {CONTRACT} manifest")
     domain = doc.get("domain")
-    if domain not in DOMAINS:
-        raise ManifestError(f"unknown domain {domain!r}")
+    if not isinstance(domain, str) or not DOMAIN_NAME.match(domain):
+        raise ManifestError(
+            f"unknown domain {domain!r} — a domain name keys depends_on, requires and "
+            f"<DOMAIN>_API_URL, so it must match {DOMAIN_NAME.pattern}")
     if doc.get("source") not in ("oss", "mounted"):
         raise ManifestError(f"{domain}: source must be oss or mounted")
 
@@ -151,13 +166,20 @@ def validate(doc: dict) -> dict:
         requires = t.get("requires")
         if not isinstance(requires, list) or not requires:
             raise ManifestError(f"{domain}/{name}: requires must name at least one domain")
-        allowed = {domain, "identity"}
-        if domain == "rehearse":                 # the dev harness drives every door on purpose
-            allowed = DOMAINS
-        if not set(requires) <= allowed:
+        bad = sorted(r for r in requires if not (isinstance(r, str) and DOMAIN_NAME.match(r)))
+        if bad:
+            raise ManifestError(f"{domain}/{name}: requires names {bad} — not domain names")
+        # A HARNESS DECLARES ITSELF; IT IS NOT RECOGNISED BY NAME. This exemption used to be
+        # `if domain == "rehearse"`, which put a hosted-only domain's name in the OSS assembler and
+        # meant a private deployment could not ship a second harness without changing this file.
+        # `composes: true` says the same thing in the manifest that needs it — the door across
+        # domains is opened by whoever owns the manifest, on the record, once.
+        allowed = None if doc.get("composes") is True else {domain, "identity"}
+        if allowed is not None and not set(requires) <= allowed:
             raise ManifestError(
                 f"{domain}/{name}: requires may name {sorted(allowed)} (got {sorted(requires)}) — "
-                "a tool that needs another domain is a composition, and a composition has an owner")
+                "a tool that needs another domain is a composition, and a composition has an owner. "
+                'A manifest whose whole job IS composing across domains declares `"composes": true`')
         # PRD 40.8: one authentication path. A tool may not take a credential as an ARGUMENT.
         for arg in t.get("arguments") or []:
             if str(arg).strip().lower() in CREDENTIAL_ARGUMENTS:
