@@ -75,9 +75,6 @@ export function Rail(p: {
         {p.rows.length === 0 && <div style={{ ...ty.chip, padding: "2px 8px", color: "var(--t3)", lineHeight: 1.5 }}>Meetings arrive by invitation; “+” starts a chat.</div>}
       </div>
 
-      <div style={{ ...ty.meta, flex: "none", padding: "10px", lineHeight: 1.55, borderTop: "1px solid var(--line)" }}>
-        Every chat, newest first. A meeting is a chat too — opening it opens the meeting.
-      </div>
       {/* the person, under the list of rooms — identity, theme and the way out are properties of
           WHO is here, not of which chat is in front, so they sit at the foot of the column and
           fold away with it. */}
