@@ -363,7 +363,7 @@ test("v0.12.27 canonical packet binds the rc.3 train candidate (schema 2, eleven
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "b1dcb262b7d55048fddf2859758540035e9c70da57aa9af597a64fe8896ea0d6",
+    "dd4e9ad62cf327a0320262329a8eb55a58116415a0f3615e8c5d8ae84f4eb055",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.27");
   assert.equal(map.schema_version, 2);
