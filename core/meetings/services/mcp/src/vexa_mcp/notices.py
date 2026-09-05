@@ -9,21 +9,29 @@ That is the whole of this module, and none of it knows what a notice SAYS. The w
 (`GET /queue/notices`, resolved from `behavior/queue/` files that opened with `notice: true`); the
 decision about which situations are notices is an admin's file; this is the ride.
 
+A REFUSAL IS A RESULT TOO, and usually the one that matters most: it is the result the agent has to
+decide what to do about. So the notices ride the `isError: true` text `tool_errors` renders exactly
+as they ride a success — same fetch, same bound, same dedupe, same trailing line. A refusal that
+reached the agent without the standing fact was the measured defect (#1549): a 403 arrived with its
+reason, message and action_url and without the one sentence that said why.
+
 FOUR PROPERTIES, each of them a defect if it were absent:
 
   * **Never an error.** A notice is something extra. If flows is slow, unreachable, unconfigured,
     or answers something this module cannot read, the call the agent actually made answers exactly
-    as it would have. There is one `except` here and it catches everything, on purpose.
-  * **Bounded.** :data:`TIMEOUT_S` seconds, once per call. This rides on EVERY meeting tool call,
-    so its worst case is the worst case of the product.
+    as it would have — a success unchanged, and a refusal still that refusal, with its status_code
+    and body. There is one `except` for the hop here and it catches everything, on purpose.
+  * **Bounded.** :data:`TIMEOUT_S` seconds, once per call — a refused call included, and never a
+    second time. This rides on EVERY meeting tool call, so its worst case is the product's.
   * **Both channels.** The field for a caller that parses the body, and a trailing line for one
-    that reads the text. Neither is reliably the one an agent looks at.
+    that reads the text. Neither is reliably the one an agent looks at. On a refusal the field goes
+    on the machine-readable body the renderer already puts last — when there is one to put it on.
   * **Once.** A body that already carries the field is left alone, and duplicate sentences are
     dropped — one thing that is true twice reads as two things.
 
 The seam is `FastApiMCP._execute_api_tool`, wrapped exactly the way `tool_errors` wraps `_request`
 and for the same reason: the success path, the headers, the mount and the argument handling all
-stay the library's, and this adds one thing to what comes out.
+stay the library's, and this adds one thing to what comes out of it — returned or raised.
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ from typing import Any, Iterable, List, Optional
 import httpx
 
 from .discover import DOMAIN_URL_ENV
+from .tool_errors import UpstreamToolError
 
 #: The route that answers with a subject's standing notices. Its auth is the caller's own
 #: credential, so this hop forwards what the caller sent and holds nothing of its own.
@@ -152,27 +161,68 @@ def render(text: str, notices: List[str]) -> str:
     return "\n\n".join([body] + [f"{PREFIX}{n}" for n in notices])
 
 
+def render_error(text: str, notices: List[str]) -> str:
+    """A refusal's text, with the notices on it — the same two channels, or unchanged when there are
+    none.
+
+    `tool_errors.render_tool_error` puts the actionable words first and the machine-readable body
+    LAST, so the field goes on that last line: it is the only place in a refusal there is to put it,
+    and it is where a caller that parses a refusal already looks. A refusal whose last line is not a
+    JSON object — a non-JSON upstream, an empty body, a status rendered alone — keeps its shape
+    exactly, for the same reason `render` leaves a non-object success body alone. The trailing lines
+    then follow the whole block, in the position a reader already finds them on a success.
+    """
+    if not notices:
+        return text
+    lines = text.split("\n")
+    try:
+        parsed = json.loads(lines[-1])
+        if isinstance(parsed, dict) and FIELD not in parsed:
+            lines[-1] = json.dumps({**parsed, FIELD: notices},
+                                   separators=(",", ":"), ensure_ascii=False)
+    except Exception:  # noqa: BLE001 — a block this cannot parse still gets the trailing lines
+        pass
+    return "\n\n".join(["\n".join(lines)] + [f"{PREFIX}{n}" for n in notices])
+
+
 def install(mcp: Any, *, transport: Optional[httpx.AsyncBaseTransport] = None,
             env: Optional[dict] = None) -> None:
-    """Make the mounted MCP surface carry standing notices out on the meeting tools' results.
+    """Make the mounted MCP surface carry standing notices out on the meeting tools' results —
+    the ones that answered AND the ones that were refused.
 
-    Wraps `_execute_api_tool`, which is where a successful call becomes the content an agent reads.
-    A raised call — every refusal, including the ones `tool_errors` renders — passes through
-    untouched: a refusal is not the place to add something the caller did not ask for, and the
-    result an agent must act on should carry one thing.
+    Wraps `_execute_api_tool`, which is where a call becomes what an agent reads: content returned,
+    or the `UpstreamToolError` `tool_errors` raised, whose `str()` is the `isError: true` text. Both
+    exits take the same hop, so a standing fact reaches the agent whichever way the call went. The
+    refusal is re-raised with the same `status_code` and `body`: only the words an agent reads grow.
+    Anything else that was raised is not this module's to touch and passes through untouched.
     """
     original = mcp._execute_api_tool
 
+    async def _standing(tool_name, http_request_info) -> List[str]:
+        """The caller's notices for this call, or `[]` — one bounded hop, or none at all."""
+        if tool_name not in CARRIES_NOTICES:
+            return []
+        key = caller_key(getattr(http_request_info, "headers", None))
+        return await fetch(key, base=base_url(env), transport=transport)
+
     async def _execute_api_tool(*, client, tool_name, arguments, operation_map,
                                 http_request_info=None):  # noqa: ANN001 — library signature
-        content = await original(
-            client=client, tool_name=tool_name, arguments=arguments,
-            operation_map=operation_map, http_request_info=http_request_info,
-        )
-        if tool_name not in CARRIES_NOTICES or not content:
+        try:
+            content = await original(
+                client=client, tool_name=tool_name, arguments=arguments,
+                operation_map=operation_map, http_request_info=http_request_info,
+            )
+        except UpstreamToolError as refusal:
+            notices = await _standing(tool_name, http_request_info)
+            if not notices:
+                raise
+            raise UpstreamToolError(
+                render_error(str(refusal), notices),
+                status_code=refusal.status_code, body=refusal.body,
+            ) from refusal
+        if not content:
             return content
-        key = caller_key(getattr(http_request_info, "headers", None))
-        notices = await fetch(key, base=base_url(env), transport=transport)
+        notices = await _standing(tool_name, http_request_info)
         if not notices:
             return content
         for item in content:
