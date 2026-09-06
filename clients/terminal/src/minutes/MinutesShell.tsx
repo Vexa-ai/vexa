@@ -28,7 +28,7 @@ import {
   chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
-  forgetHistory, orderHistory, stripForRecord, touchHistory, withHome,
+  forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
@@ -312,8 +312,16 @@ export function MinutesShell() {
     // THE CHAT'S HOME LEADS THE STRIP (decision 28.5). Composed here rather than stored, so it
     // follows the chat's mounts if they change and can never be `×`-ed away — it is the product's
     // first entry, not something the reader put there.
+    //
+    // A ROOM'S OWN PAGES ARE DECLARED TABS, so they arrive PINNED (founder ruling 2026-09-06 —
+    // *"no need to create tabs, unless there is a pinned tab"*). Nobody navigated to them; the room
+    // laid them out, and with one preview slot an unpinned one would be evicted by the reader's
+    // first click. A STORED strip keeps its own pin state instead: last session's preview page was
+    // not a tab then and re-pinning it on load would put back the accumulation by the back door.
     const base: Page[] = withHome(
-      (c.artifacts.length ? c.artifacts.map((a) => ({ ...a })) : await roomPages()) as Artifact[],
+      (c.artifacts.length
+        ? c.artifacts.map((a) => ({ ...a }))
+        : (await roomPages()).map((pg) => ({ ...pg, pinned: true }))) as Artifact[],
       c.workspaces,
     ) as Page[];
     let list = base;
@@ -588,10 +596,11 @@ export function MinutesShell() {
       const stack = [...h.stack.slice(0, h.i + 1), e];
       return { stack, i: stack.length - 1 };
     });
-    // ONE VIEW SLOT, AND THE STRIP IS ITS HISTORY (PRD decision 28 + the founder's amendment).
-    // Navigating replaces what the panel shows AND records where you were: `touchHistory` dedups by
-    // identity, moves the page to the RIGHT end beside the current one, and caps at 12 by evicting
-    // the oldest UNPINNED entry. Pins sit at the left edge and never age out.
+    // ONE VIEW SLOT, AND ONE PREVIEW TAB SHOWING IT (PRD decision 28; founder ruling 2026-09-06:
+    // *"no need to create tabs, unless there is a pinned tab. Use obsidian rule for that"*).
+    // Navigating replaces what the panel shows AND what stands in the preview slot: `touchHistory`
+    // dedups by identity and evicts the page that was previewed, never a pin. A page worth keeping
+    // is pinned — from the tab itself — and only then is it a tab.
     setPages((prev) => touchHistory(prev, { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label }, Date.now()));
     // THE CHOKE POINT for a meeting id reaching the canvas: every route into the panel comes
     // through here, including a `meeting:<id>` artifact the agent wrote this turn. If the store has
@@ -608,20 +617,16 @@ export function MinutesShell() {
     setPages((prev) => prev.map((x) => artifactKey(x) === artifactKey(pg) ? { ...x, pinned: true } : x));
   }, [openPage]);
 
-  /** Pin what is in front, or unpin it. The pin is the whole of "specifically requested" for a
-   *  document the reader navigated to and then decided to keep. */
-  const pinned = useMemo(
-    () => pages.some((x) => artifactKey(x) === artifactKey({ kind: docKind, path: docPath, slug: docSlug })),
-    [pages, docKind, docPath, docSlug],
-  );
-  const togglePin = useCallback(() => {
-    const key = artifactKey({ kind: docKind, path: docPath, slug: docSlug });
-    setPages((prev) => {
-      const hit = prev.find((x) => artifactKey(x) === key);
-      if (hit) return prev.filter((x) => artifactKey(x) !== key);
-      const label = (docPath.split("/").pop() || docPath).replace(/\.md$/i, "");
-      return [...prev, { kind: docKind === "meeting" ? "meeting" as const : undefined, path: docPath, slug: docSlug, label, pinned: true }];
-    });
+  /** THE PIN IS ON THE TAB (founder ruling 2026-09-06: *"tab icon is on tab"*).
+   *
+   *  It used to be one control in the document header, about whatever was in front — so it could
+   *  say nothing about the other tabs, and because it tested MEMBERSHIP of a strip that every
+   *  navigation wrote to, it read "pinned" for every page the reader had merely walked past and its
+   *  press deleted the entry rather than unpinning it. The decision belongs on the thing it is
+   *  about: every tab carries its own, and `togglePinned` is the pure rule behind all of them. */
+  const togglePin = useCallback((pg: Page) => {
+    const front = artifactKey(pg) === artifactKey({ kind: docKind, path: docPath, slug: docSlug });
+    setPages((prev) => togglePinned(prev, artifactKey(pg), front, Date.now()));
   }, [docKind, docPath, docSlug]);
 
   /** THE VIEW SLOT (decision 28) — the navigator moves what is IN FRONT and mints no tab. Reading a
@@ -650,7 +655,10 @@ export function MinutesShell() {
     if (j < 0 || j >= hist.stack.length) return;
     const e = hist.stack[j];
     setHist({ ...hist, i: j });
-    setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(e)) ? prev : [...prev, { kind: e.kind, path: e.path, slug: e.slug, label: e.label }]);
+    // …through the SAME rule a navigation uses: going back to a page you dropped puts it in the
+    // preview slot. Appending it raw would stand a second unpinned tab beside the preview, which is
+    // the accumulation the Obsidian ruling removed.
+    setPages((prev) => touchHistory(prev, { kind: e.kind, path: e.path, slug: e.slug, label: e.label }, Date.now()));
     setDocPath(e.path); setDocSlug(e.slug); setDocKind(e.kind === "meeting" ? "meeting" : "doc");
     setListing(null); setDocNonce((n) => n + 1);
   };
@@ -873,6 +881,10 @@ export function MinutesShell() {
   // or navigator and hand it to a `syncSurface` that dropped it on the floor: the code read as
   // wired while the agent was told nothing (2026-09-02 review, R-C09). The prompt keeps its
   // "Active context" prefix off the same flag; one value flips both halves.
+  //
+  // `strip.history` is at most ONE entry since the Obsidian ruling — the preview slot. The shape is
+  // left alone because nothing consumes it yet and the field still means what it meant: what is in
+  // the strip that nobody asked to keep.
   useEffect(() => {
     if (!SURFACE_RECORD_LIVE) return;
     const ordered = orderHistory(pages as Artifact[]);
@@ -1088,7 +1100,7 @@ export function MinutesShell() {
       {pagesCollapsed
         ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
         : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
-            onTogglePin={togglePin} pinned={pinned} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
+            onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
             listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
             canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
             body={docBody} onSaved={() => setDocNonce((n) => n + 1)}

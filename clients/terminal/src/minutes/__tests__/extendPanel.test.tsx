@@ -7,6 +7,16 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
+
+// THE RENDERED DOCUMENT AS ONE TEXT NODE. The selection tests need exact offsets, and they used to
+// get them from the `</>` lens — which the founder removed on 2026-09-06. Mocking the renderer says
+// the same thing more directly: these are about the ACTION, not about how MDX splits a paragraph.
+vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
+  const orig = await importOriginal<Record<string, unknown>>();
+  const { createElement } = await import("react");
+  return { ...orig, MdxDoc: (p: { children?: unknown }) => createElement("div", { "data-mdx": "" }, p.children as never) };
+});
+
 import { PagesPanel } from "../PagesPanel";
 import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
 import { VIEW_NAVIGATE_EVENT } from "../roomView";
@@ -41,7 +51,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe("the header action — the open page, whole (decision 32.1)", () => {
+describe("the page action — the open page, whole (decision 32.1)", () => {
   it("posts the intent for the RESOLVED slot, not for what the tab is called (F63)", () => {
     const { container } = panel();
     fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
@@ -109,16 +119,12 @@ function highlight(host: HTMLElement, from: number, length: number) {
 }
 
 describe("the floating action on a selection (decision 32.1)", () => {
-  /** the `</>` lens — one text node, so the selection is exact and the test is about the ACTION,
-   *  not about how MDX happens to split a paragraph into elements */
-  const raw = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) => {
-    const r = panel(over);
-    fireEvent.click(r.container.querySelector('[data-doc-act="raw"]') as HTMLElement);
-    return r.container.querySelector("[data-doc-raw]") as HTMLElement;
-  };
+  /** the rendered document — one text node, thanks to the mock at the top of this file */
+  const rendered = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
+    panel(over).container.querySelector("[data-mdx]") as HTMLElement;
 
   it("appears only once there is a selection, and carries its text", () => {
-    const pre = raw();
+    const pre = rendered();
     expect(document.querySelector('[data-doc-act="extend-selection"]')).toBeNull();
 
     highlight(pre, 13, 24);            // "The pilot ships in March"
@@ -133,7 +139,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
   });
 
   it("locates the selection in the SOURCE when it occurs there exactly once", () => {
-    const pre = raw();
+    const pre = rendered();
     highlight(pre, 13, 24);
     fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
     const r = asks[0].intent?.selection_range;
@@ -143,7 +149,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
 
   it("says nothing about where a selection sits when the text repeats", () => {
     const body = "one two\n\none two\n";
-    const pre = raw({ body });
+    const pre = rendered({ body });
     highlight(pre, 0, 7);              // "one two", twice in the file
     fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
     expect(asks[0].intent?.selection).toBe("one two");
@@ -152,14 +158,14 @@ describe("the floating action on a selection (decision 32.1)", () => {
 
   it("caps a very long selection at 2000 characters", () => {
     const body = "y".repeat(4000);
-    const pre = raw({ body });
+    const pre = rendered({ body });
     highlight(pre, 0, 4000);
     fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
     expect(asks[0].intent?.selection).toHaveLength(2000);
   });
 
   it("a selection OUTSIDE the document is not this page's selection", () => {
-    raw();
+    rendered();
     const stray = document.createElement("p");
     stray.textContent = "text in some other pane";
     document.body.appendChild(stray);

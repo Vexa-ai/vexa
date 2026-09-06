@@ -309,15 +309,18 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
     mounts: s.workspaces,
   };
   // THE SCAFFOLD DELIVERS THE STRIP (decision 28.5), and the order at open is:
-  //   the chat's HOME · the scaffold's PINS · the scaffold's opening pages · (later) history.
-  // `withHome` puts the first tier in place; `artifactsFromTokens` preserves the preset's order
-  // for the rest, which is the author's reading order.
+  //   the chat's HOME · the scaffold's declared tabs, in the author's reading order.
+  // `withHome` puts the first tier in place; `artifactsFromTokens` preserves the preset's order.
   const declared: Artifact[] = [];
   s.tabs.forEach((t, i) => {
     const a = artifactsFromTokens([t.token], ctx)[0];
-    // `at` is the preset's own order: the author's reading order becomes the strip's history order,
-    // so the last declared page sits nearest the current one.
-    if (a) declared.push({ ...a, pinned: t.pinned ? true : undefined, at: i + 1 });
+    // A DECLARED TAB IS A PINNED TAB (founder ruling 2026-09-06: *"no need to create tabs, unless
+    // there is a pinned tab"*). Declaring one IS asking for it — that is the whole meaning of the
+    // field — and with a single preview slot an unpinned declared tab would be evicted by the
+    // reader's first click, i.e. the set the scaffold composed would disappear without anybody
+    // closing it. The wire still accepts `{token, pinned}`; it simply no longer distinguishes.
+    // `at` is the preset's own order, so the last declared page sits nearest the current one.
+    if (a) declared.push({ ...a, pinned: true, at: i + 1 });
   });
   const artifacts = withHome(declared, s.workspaces);
   const focusArt = s.focus ? artifactsFromTokens([s.focus], ctx)[0] : undefined;

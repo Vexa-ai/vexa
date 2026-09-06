@@ -1,10 +1,11 @@
 /** The pages panel's DOC HEADER — the row that says what is in front and what can be done to it.
  *
  *  Three claims worth guarding, because each has a wrong answer that looks plausible on screen:
- *  the header names the FILE (not the tab label, which is the name with the extension eaten); the
- *  `</>` lens shows the markdown the renderer was given rather than opening a second editor; and a
- *  meeting canvas — which has no file to read, copy or edit — gets no header row at all instead of
- *  an empty one advertising controls that would do nothing.
+ *  the header names the FILE (not the tab label, which is the name with the extension eaten); it
+ *  names it ONCE, the breadcrumb below having stopped at the folder (founder ruling 2026-09-06:
+ *  *"no need to duplicate doc name"*); and a meeting canvas — which has no file to read, copy or
+ *  edit — gets no header row at all instead of an empty one advertising controls that would do
+ *  nothing.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
@@ -42,36 +43,41 @@ describe("doc header — filename prominent, location subdued", () => {
 
   it("the utilities are grouped in the header, and no longer in the tab strip", () => {
     const { container } = doc();
-    for (const act of ["raw", "copy", "edit"]) {
+    for (const act of ["copy", "edit"]) {
       expect(container.querySelector(`[data-doc-act="${act}"]`)).toBeTruthy();
     }
     // the 46px band is the tab strip's alone now — the Edit button used to compete for it
     expect(screen.queryByRole("button", { name: "Edit" })?.closest("[data-doc-act]")).toBeTruthy();
   });
-});
 
-describe("the `</>` lens", () => {
-  it("swaps the rendered document for its source, and back", () => {
+  it("says the document's name ONCE — the crumb stops at the folder it lives in", () => {
+    // Founder ruling 2026-09-06, on a screenshot showing `academy-software-foundation.md` in the
+    // header and `_global › kg › entities › company › academy-software-foundation.md` under it:
+    // *"no need to duplicate doc name"*. The name belongs to the header; the path belongs to the
+    // crumb, and the crumb's last segment WAS the name.
     const { container } = doc();
-    expect(container.querySelector("[data-doc-raw]")).toBeNull();
-
-    fireEvent.click(container.querySelector('[data-doc-act="raw"]') as HTMLElement);
-    const raw = container.querySelector("[data-doc-raw]");
-    expect(raw?.textContent).toBe(BODY);                        // the markdown, not the rendering
-    expect(raw?.tagName).toBe("PRE");                           // a lens…
-    expect(container.querySelector(".cm-editor")).toBeNull();   // …never a second editor
-
-    fireEvent.click(container.querySelector('[data-doc-act="raw"]') as HTMLElement);
-    expect(container.querySelector("[data-doc-raw]")).toBeNull();
+    expect(container.textContent!.split("2026-09-01-vexa-prd.md")).toHaveLength(2);   // one occurrence
+    expect(container.querySelector("[data-doc-name]")?.textContent).toBe("2026-09-01-vexa-prd.md");
+    const crumbs = [...container.querySelectorAll("button")].map((b) => b.textContent);
+    expect(crumbs).toContain("drafts");                                              // still walkable
+    expect(crumbs).not.toContain("2026-09-01-vexa-prd.md");
   });
 
-  it("opening another document returns to the rendered view", () => {
-    const { container, rerender } = doc();
-    fireEvent.click(container.querySelector('[data-doc-act="raw"]') as HTMLElement);
-    expect(container.querySelector("[data-doc-raw]")).toBeTruthy();
+  it("a FOLDER keeps its last crumb — there is no header above a listing to say it twice", () => {
+    const { container } = doc({ listing: { prefix: "drafts", dirs: [], files: ["a.md"] } });
+    expect(container.querySelector("[data-doc-name]")).toBeNull();
+    expect(container.textContent).toContain("drafts");
+  });
+});
 
-    rerender(<PagesPanel pages={pages} docPath="README.md" onOpen={() => {}} body={BODY} />);
+describe("the `</>` raw-markdown toggle — removed (founder ruling 2026-09-06)", () => {
+  it("is not in the header, and there is no way left to reach the raw pre", () => {
+    // *"remove raw markdown button"*. It answered a question a reader of a document does not ask,
+    // and Edit already shows the source to anyone who does.
+    const { container } = doc();
+    expect(container.querySelector('[data-doc-act="raw"]')).toBeNull();
     expect(container.querySelector("[data-doc-raw]")).toBeNull();
+    expect(screen.queryByLabelText("Toggle markdown source")).toBeNull();
   });
 });
 

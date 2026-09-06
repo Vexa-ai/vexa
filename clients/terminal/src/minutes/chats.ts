@@ -498,27 +498,30 @@ function scaffoldRecord(raw: unknown): { kind: string; id: string } | undefined 
     : undefined;
 }
 
-/** THE STRIP IS A HISTORY BAR (PRD decision 28, founder amendment).
+/** THE STRIP IS TABS PLUS ONE PREVIEW SLOT — OBSIDIAN'S RULE (PRD decision 28; founder ruling
+ *  2026-09-06: *"no need to create tabs, unless there is a pinned tab. Use obsidian rule for that
+ *  and tab icon is on tab"*).
  *
- *  Left to right by last used: the page you are on sits at the RIGHT end, the one before it to its
- *  left, and so on back. Navigating to something already in the strip MOVES it right rather than
- *  adding a second chip — the strip is where you have been, and you have only been somewhere once
- *  most recently.
+ *  THIS REVERSES THE HISTORY-BAR AMENDMENT. The strip was history — every navigation left a chip
+ *  and twelve could stand at once — and the walk that produced this ruling opened four documents
+ *  and got four tabs nobody had asked for. Obsidian instead: the page you navigate to takes the ONE
+ *  preview slot, and the next page you open REPLACES it. A page becomes a tab only when somebody
+ *  asks for it — the reader pins it, or a scaffold declared it.
  *
- *  PINNED entries — a scaffold's declared `tabs:` and anything the reader pinned — sit at the LEFT
- *  edge and never age out. They are not history; they are the room's fixtures, and a fixture that
- *  scrolled away because you read four documents would defeat the point of pinning it.
- *
- *  The cap drops the OLDEST UNPINNED. A cap that could evict a pin would make pinning a suggestion.
+ *  So the cap on unpinned entries is one, and it is not a cap on history: there is no history tier
+ *  left to cap. PINNED entries — a scaffold's declared `tabs:` and anything the reader pinned — sit
+ *  at the left edge and are never evicted. A cap that could evict a pin would make pinning a
+ *  suggestion.
  */
-export const HISTORY_CAP = 12;
+export const PREVIEW_CAP = 1;
 
-/** THE STRIP'S ORDER, left to right: the desk · the chat's pins · history oldest → newest.
+/** THE STRIP'S ORDER, left to right: the desk · the chat's pins · the preview slot.
  *
  *  Three tiers, and the reason each sits where it does. The DESK is the product's own first entry
  *  and belongs to no chat, so it is furthest from the current page. PINS were asked for and must
- *  not scroll away, so they sit next. Everything else is history, and the page you are on is at the
- *  right edge because that is where your eye already is. */
+ *  not scroll away, so they sit next. The PREVIEW — the page you opened and have not kept — is at
+ *  the right edge because that is where your eye already is. It sorts on `at` like the history it
+ *  replaced, so a stored strip written before the ruling still orders correctly on the way in. */
 export function orderHistory(list: Artifact[]): Artifact[] {
   const desk = list.filter((a) => a.desk);
   const pinned = list.filter((a) => a.pinned && !a.desk);
@@ -557,9 +560,9 @@ export function withHome(list: Artifact[], workspaces: string[] = []): Artifact[
   return orderHistory([{ ...(has ?? h), ...h, at: has?.at }, ...rest]);
 }
 
-/** Record that `art` is now in front. Dedups by identity, moves it to the right end, and caps —
- *  evicting the oldest UNPINNED entry, never a pin. Pure: array in, array out. */
-export function touchHistory(list: Artifact[], art: Artifact, now: number, cap = HISTORY_CAP): Artifact[] {
+/** Record that `art` is now in front. Dedups by identity, moves it to the right end, and evicts
+ *  whatever was in the preview slot — never a pin. Pure: array in, array out. */
+export function touchHistory(list: Artifact[], art: Artifact, now: number, cap = PREVIEW_CAP): Artifact[] {
   const key = artifactKey(art);
   const prev = list.find((a) => artifactKey(a) === key);
   // a pin that is navigated to STAYS pinned and stays at the left edge — its `at` still moves, so
@@ -578,18 +581,37 @@ export function touchHistory(list: Artifact[], art: Artifact, now: number, cap =
   return out.filter((a) => a.pinned || a.desk || !evict.has(artifactKey(a)));
 }
 
-/** `×` on a chip: forget that entry. Not "close a tab" — the strip is history, and this is the
- *  reader saying they do not want it remembered. */
+/** `×` on a tab: drop that entry. */
 export function forgetHistory(list: Artifact[], key: string): Artifact[] {
   // the desk is a product default, not something the reader put there, so it is not theirs to
   // forget — and a strip that could lose its first entry would have no default view to fall back to
   return list.filter((a) => artifactKey(a) !== key || a.desk);
 }
 
-/** THE HISTORY, READABLE OFF THE RECORD — for the desk README's "Recently opened" (decision 26.4).
+/** THE PIN, AS THE TAB CARRIES IT (founder ruling 2026-09-06: *"tab icon is on tab"*).
+ *
+ *  Pinning is the whole of "this one stays": a preview becomes a tab. UNPINNING has two answers and
+ *  they differ by where the page is. The tab IN FRONT goes back to being the preview — it is still
+ *  what you are reading, and a page you are looking at cannot vanish from the strip. A pinned tab
+ *  BEHIND the one in front is simply dropped: with no history tier left there is nothing else for
+ *  it to be, and keeping it would put a second unpinned entry beside the preview, which is the very
+ *  accumulation the ruling removed.
+ *
+ *  The desk is a product default, not a pin, so it is not togglable — see `homeEntry`. */
+export function togglePinned(list: Artifact[], key: string, front: boolean, now: number): Artifact[] {
+  const hit = list.find((a) => artifactKey(a) === key);
+  if (!hit || hit.desk) return list;
+  if (!hit.pinned) return orderHistory(list.map((a) => (artifactKey(a) === key ? { ...a, pinned: true } : a)));
+  const without = list.filter((a) => artifactKey(a) !== key);
+  return front ? touchHistory(without, { ...hit, pinned: undefined }, now) : orderHistory(without);
+}
+
+/** THE STRIP, READABLE OFF THE RECORD — for the desk README's "Recently opened" (decision 26.4).
  *
  *  Newest first, because that is how a "recently opened" list reads; the strip renders the same
- *  data left-to-right oldest-first. `workspace` is "" for the reader's own desk, matching the
+ *  data left-to-right oldest-first. Since the Obsidian ruling this is the chat's tabs plus the one
+ *  page it was last on — what a chat KEEPS, not everywhere it went; the walked-past pages are
+ *  reported to the desk itself by `deskTouch`, which is where that ranking actually lives. `workspace` is "" for the reader's own desk, matching the
  *  `artifact` event's convention that an empty slug means "no slug" rather than "unknown". */
 export function chatHistory(c: Chat): { workspace: string; path: string; title: string; at: number }[] {
   return orderHistory(c.artifacts)
@@ -622,12 +644,12 @@ function viewOf(r: Partial<Chat>): Artifact | undefined {
   return { ...v, kind: v.kind === "meeting" ? "meeting" : undefined, label: typeof v.label === "string" ? v.label : v.path };
 }
 
-/** THE ONE-TIME COLLAPSE (PRD decision 28, as amended).
+/** THE ONE-TIME COLLAPSE (PRD decision 28, as amended, and as ruled on 2026-09-06).
  *
  *  Before 28 every navigation appended a tab and nothing ever aged out — the founder's screenshot
- *  was a strip scrolled off the edge. The amendment makes the strip a HISTORY bar, so those entries
- *  are not junk to be thrown away; they are history that was never ordered or capped. This puts
- *  them in order and applies the cap.
+ *  was a strip scrolled off the edge. This puts what a record already holds in order and applies
+ *  the cap; under the Obsidian rule that cap is one preview slot, so a pre-28 pile collapses to the
+ *  pins plus the page the reader was on rather than to a deletion of things they chose.
  *
  *    · a record with pinned entries is already post-28 — order it and move on.
  *    · a pre-28 record has no `at` at all. Stamping every entry the same instant would be a lie
@@ -652,7 +674,7 @@ export function collapseUnpinned(c: Chat): Chat {
   const view = c.view ?? c.artifacts.find((a) => artifactKey(a) === c.focus) ?? c.artifacts[c.artifacts.length - 1];
   const capped = orderHistory(stamped);
   const unpinned = capped.filter((a) => !a.pinned);
-  const evict = new Set(unpinned.slice(0, Math.max(0, unpinned.length - HISTORY_CAP)).map(artifactKey));
+  const evict = new Set(unpinned.slice(0, Math.max(0, unpinned.length - PREVIEW_CAP)).map(artifactKey));
   return { ...c, artifacts: capped.filter((a) => a.pinned || !evict.has(artifactKey(a))), view };
 }
 

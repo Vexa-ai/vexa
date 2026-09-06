@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { fetchScaffold, parseScaffold, refusalCopy, scaffoldToChat } from "../scaffold";
+import { touchHistory, type Artifact } from "../chats";
 
 const WIRE = {
   id: "OU5hWbkhdKt9tI2ulYxn4h1Zh8yy3HFm1S9Vd5NalCI",
@@ -280,6 +281,27 @@ describe("the scaffold DELIVERS the strip (decision 28.5)", () => {
     expect(rec.artifacts[0]).toMatchObject({ path: "README.md", slug: "grp-showb", desk: true });
     expect(rec.artifacts[1]).toMatchObject({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", pinned: true });
     expect(rec.artifacts[2]).toMatchObject({ kind: "meeting", path: "97" });
+  });
+
+  it("a DECLARED tab is a pinned tab, bare token or not (founder ruling 2026-09-06)", () => {
+    // *"no need to create tabs, unless there is a pinned tab"*: declaring one IS asking for it, so
+    // the wire's `pinned` flag no longer decides anything. Without this, a bare-token tab arrives
+    // unpinned and the reader's FIRST click evicts it from the single preview slot — the set the
+    // scaffold composed disappearing without anybody closing it.
+    const s = parseScaffold({ ...WIRE, tabs: ["meeting:note", "meeting:transcript"] })!;
+    expect(scaffoldToChat(s).artifacts.filter((a) => !a.desk).every((a) => a.pinned)).toBe(true);
+  });
+
+  it("and it survives the reader browsing past it", () => {
+    const s = parseScaffold({ ...WIRE, tabs: ["meeting:note", "meeting:transcript"] })!;
+    let strip = scaffoldToChat(s).artifacts as Artifact[];
+    for (const n of ["a", "b", "c"]) strip = touchHistory(strip, { path: `kg/${n}.md`, label: n }, 10);
+    expect(strip.map((a) => a.path)).toEqual([
+      "README.md",                                                   // the home
+      "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md",   // …then both declared tabs
+      "97",
+      "kg/c.md",                                                     // …then the one preview slot
+    ]);
   });
 
   it("a chat with no group is at home on the reader's own desk", () => {

@@ -1,7 +1,7 @@
 "use client";
 /** THE "EXTEND" CONTROLS — two triggers and a landing (PRD decision 32.1).
  *
- *  The header action asks about the whole open page; the floating action asks about what the reader
+ *  The page action asks about the whole open page; the floating action asks about what the reader
  *  just highlighted. Both post into the SAME chat and both go through `postIntent`, so there is one
  *  place that decides what a press means and one place that refuses a press it cannot honour.
  *
@@ -10,7 +10,7 @@
  *  have already been wrong on this screen (a folder listing renaming the document behind it), and
  *  an intent built from one sends the agent to work on a file nobody opened.
  */
-import type { CSSProperties, RefObject } from "react";
+import type { RefObject } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
 import { Icon } from "../ui-kit";
@@ -28,22 +28,31 @@ export function useIntentLanding(): void {
   }, []);
 }
 
-const iconBtn: CSSProperties = {
-  flex: "none", width: 26, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
-  background: "transparent", border: "none", borderRadius: 6, color: "var(--t3)", cursor: "pointer",
-  padding: 0, transition: "color .12s, background .12s",
-};
-const lit = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.color = "var(--t1)"; e.currentTarget.style.background = surface.raised; };
-const dim = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.color = "var(--t3)"; e.currentTarget.style.background = "transparent"; };
-
-/** THE HEADER ACTION — the open page, whole. Sits in the document header's utility group with the
- *  other things that act on what is in front. */
-export function ExtendButton(p: { workspace?: string; path: string }) {
+/** THE PAGE ACTION — the open page, whole, UNDER IT (founder ruling 2026-09-06: *"extend button
+ *  should be available in the doc body under content, noticeable as one click knowledge
+ *  expansion"*).
+ *
+ *  It was a 14px spark in a row of six glyphs, sized and shaped exactly like Copy — so the one
+ *  control on this screen that makes the knowledge GROW asked to be guessed at, and lost. Under the
+ *  content is where a reader arrives having finished reading, which is when the question it answers
+ *  occurs to them; and it is labelled with what it does, so nobody has to press it to find out.
+ *  Same act, same resolved slot (F63) — only its place, its size and its words have moved. */
+export function ExtendPageButton(p: { workspace?: string; path: string }) {
   return (
-    <button data-doc-act="extend" aria-label="Extend" title="Extend — ask this chat to go further on this page"
+    <button data-doc-act="extend" title="Ask this chat to go further on this page"
       onClick={() => postIntent({ kind: "extend", workspace: p.workspace, path: p.path })}
-      style={iconBtn} onMouseEnter={lit} onMouseLeave={dim}>
-      <Icon name="spark" size={14} />
+      style={{
+        display: "flex", alignItems: "center", gap: 10, width: "100%", marginTop: 28,
+        padding: "10px 13px", textAlign: "left", background: surface.raised,
+        border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer",
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; e.currentTarget.style.borderColor = "var(--accent)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; e.currentTarget.style.borderColor = "var(--line)"; }}>
+      <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name="spark" size={15} /></span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>Extend this page</span>
+        <span style={{ ...ty.meta, display: "block", marginTop: 2 }}>Research it, write what is found around it, link both ways.</span>
+      </span>
     </button>
   );
 }

@@ -1,8 +1,13 @@
 "use client";
 /** The room's pages — the context made visible.
  *
- *  TABS, not chips (founder ruling 2026-09-01). Anything opened here — a phase page, an entity
- *  link, a `?view=` deeplink, a file clicked out of a folder listing — ADDS a tab, and tabs close.
+ *  OBSIDIAN'S RULE (founder ruling 2026-09-06: *"no need to create tabs, unless there is a pinned
+ *  tab. Use obsidian rule for that and tab icon is on tab"*). Anything opened here — a phase page,
+ *  an entity link, a `?view=` deeplink, a file clicked out of a folder listing — REPLACES what is
+ *  in front and stands in the strip's ONE preview slot; the next page you open replaces it in turn.
+ *  A page becomes a TAB only when somebody asked for it: the reader pinned it, from the pin ON the
+ *  tab, or a scaffold declared it. Before this, opening four documents left four tabs, which is
+ *  what the founder walked into.
  *  The tab strip is not this component's state: it is the CHAT's `artifacts[]`, so the set survives
  *  leaving the chat and the agent's context bundle can name what the human is reading. The header
  *  row (the shell's shared 46px band) is theirs, with the View/Edit toggle at the right
@@ -31,7 +36,7 @@ import { CollapseButton } from "./Collapse";
 import { Navigator } from "./Navigator";
 import { isMachineryEntry } from "./machinery";
 import { loadNavOpen, saveNavOpen } from "./navigatorApi";
-import { CreatePageButton, ExtendButton, SelectionExtend, useIntentLanding } from "./ExtendAction";
+import { CreatePageButton, ExtendPageButton, SelectionExtend, useIntentLanding } from "./ExtendAction";
 import { registry } from "../contributions";
 import { ReportPageButton } from "../surfaces/ReportThis";
 import { header, surface, type as ty } from "./tokens";
@@ -45,6 +50,16 @@ const SEP = " › ";
  *  keeps a legible width and the STRIP scrolls, the way a browser's does; the full path stays on
  *  hover via `title`. Nav arrows and the edit control sit outside that scroller and never move. */
 const chipBase: CSSProperties = { flex: "0 0 auto", maxWidth: 150, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+/** A tab's BOX and the label inside it. The box grew when the pin moved onto the tab: a label
+ *  allotted the full 150px would push its own pin out of the box that clips it. */
+const tabBox: CSSProperties = { ...chipBase, maxWidth: 176 };
+const tabLabel: CSSProperties = { ...chipBase, maxWidth: 104 };
+/** The controls a tab carries — the pin, and `×`. Small, and lit only on the tab in front. */
+const tabBtn = (on: boolean): CSSProperties => ({
+  flex: "none", display: "flex", alignItems: "center", justifyContent: "center", width: 18, height: 20,
+  background: "transparent", border: "none", borderRadius: 4, padding: 0, cursor: "pointer",
+  color: on ? "var(--accent)" : "var(--t3)", fontFamily: "var(--sans)", fontSize: 12, lineHeight: 1,
+});
 const crumbBtn: CSSProperties = { background: "transparent", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer" };
 const navBtn = (on: boolean): CSSProperties => ({
   flex: "none", width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
@@ -83,9 +98,9 @@ export type Listing = { slug?: string; prefix: string; dirs: string[]; files: st
 export function PagesPanel(p: {
   pages: Page[]; docPath: string; docSlug?: string; onOpen: (pg: Page) => void;
   onClose?: (pg: Page) => void;
-  /** decision 28: keep the view as a tab, or drop it. Absent = no pin control rendered. */
-  onTogglePin?: () => void;
-  pinned?: boolean;
+  /** THE PIN, PER TAB (founder ruling 2026-09-06: *"tab icon is on tab"*). Keep that page as a tab,
+   *  or give it back to the preview slot. Absent = no pin control rendered. */
+  onTogglePin?: (pg: Page) => void;
   listing?: Listing | null; onNavigate?: (slug: string | undefined, prefix: string) => void;
   canBack?: boolean; canForward?: boolean; onBack?: () => void; onForward?: () => void;
   docKind?: "doc" | "meeting";
@@ -110,10 +125,6 @@ export function PagesPanel(p: {
   // One listener for the panel: when an Extend/Create turn commits, its page becomes the view.
   useIntentLanding();
   const [mode, setMode] = useState<"view" | "edit">("view");
-  // RAW is a lens on the view, not a third mode: `</>` shows the markdown the renderer was given,
-  // which is the question it answers ("what is actually in the file?"). Keeping it orthogonal to
-  // `mode` means Edit can be reached from either lens and returns to the one you were in.
-  const [raw, setRaw] = useState(false);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -121,8 +132,8 @@ export function PagesPanel(p: {
   // which blocks the main thread — so React could not repaint and the button sat frozen on
   // "Saving…" behind the dialog, reading as a hang on top of the failure.
   const [saveError, setSaveError] = useState<string | null>(null);
-  // a new doc (or fresh content) always lands in VIEW, rendered — the lens is a per-document choice
-  useEffect(() => { setMode("view"); setRaw(false); setSaveError(null); }, [p.docPath, p.docSlug]);
+  // a new doc (or fresh content) always lands in VIEW, rendered
+  useEffect(() => { setMode("view"); setSaveError(null); }, [p.docPath, p.docSlug]);
   useEffect(() => { if (!copied) return; const t = setTimeout(() => setCopied(false), 1400); return () => clearTimeout(t); }, [copied]);
 
   const listing = p.listing ?? null;
@@ -174,15 +185,29 @@ export function PagesPanel(p: {
         <div style={{ flex: "1 1 0%", minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflowX: "auto", overflowY: "hidden", paddingLeft: 2 }}>
         {p.pages.map((pg) => {
           const on = tabOn(pg);
+          // KEPT = a tab. Everything else in the strip is the one preview slot, and it renders in
+          // italic for the same reason Obsidian does: it is going to be replaced by whatever you
+          // open next, and that is worth knowing before you navigate away from it.
+          const kept = !!pg.pinned || !!pg.desk;
           return (
-            <span key={`${pg.slug ?? ""}|${pg.path}`} style={{ ...chipBase, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
-              <button data-tab onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
-                style={{ ...ty.chip, ...chipBase, color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: p.onClose && p.pages.length > 1 ? "3px 3px 3px 10px" : "3px 10px", cursor: "pointer" }}>
+            <span key={`${pg.slug ?? ""}|${pg.path}`} style={{ ...tabBox, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
+              <button data-tab data-kept={kept ? "" : undefined} onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
+                style={{ ...ty.chip, ...tabLabel, fontStyle: kept ? undefined : "italic", color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: "3px 3px 3px 10px", cursor: "pointer" }}>
                 {/^\d+$/.test(pg.label) ? "personal" : pg.label}
               </button>
+              {/* THE PIN, ON THE TAB. The chat's home carries none: it is a product default rather
+                  than something the reader asked for, so there is no decision here to offer. */}
+              {p.onTogglePin && !pg.desk && (
+                <button data-tab-pin aria-pressed={kept} aria-label={kept ? `Unpin ${pg.label}` : `Keep ${pg.label} as a tab`}
+                  title={kept ? "Unpin — this goes back to being the page you are reading" : "Keep this as a tab"}
+                  onClick={(e) => { e.stopPropagation(); p.onTogglePin?.(pg); }}
+                  style={{ ...tabBtn(on), opacity: kept ? 1 : 0.55 }}>
+                  <Icon name="pin" size={11} />
+                </button>
+              )}
               {p.onClose && p.pages.length > 1 && (
                 <button aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
-                  style={{ background: "transparent", border: "none", color: on ? "var(--accent)" : "var(--t3)", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "0 6px 0 2px", fontFamily: "var(--sans)" }}>×</button>
+                  style={{ ...tabBtn(on), width: 16, marginRight: 3 }}>×</button>
               )}
             </span>
           );
@@ -215,33 +240,22 @@ export function PagesPanel(p: {
               folder trail that the breadcrumb directly below already shows, and navigates. The name
               belongs here; the path belongs there. */}
           <span style={{ flex: "1 1 0%", minWidth: 8 }} />
+          {/* WHAT IS LEFT IN THIS GROUP, and why each of the three that went, went. The PIN moved
+              onto the tab (*"tab icon is on tab"*) — it is a fact about a tab, not about the header.
+              The `</>` RAW LENS is gone outright (*"remove raw markdown button"*): it answered a
+              question a reader of a document does not ask, and Edit already shows the source to
+              anyone who does. EXTEND moved under the content, where it is a labelled control rather
+              than the sixth spark-shaped glyph in a row. */}
           {p.body !== null && (mode === "view"
             ? <>
-                {p.onTogglePin && (
-                  <button data-doc-act="pin" aria-pressed={!!p.pinned} onClick={p.onTogglePin}
-                    title={p.pinned ? "Unpin this tab" : "Keep this as a tab"}
-                    aria-label={p.pinned ? "Unpin this tab" : "Keep this as a tab"}
-                    style={iconBtn(!!p.pinned)} onMouseEnter={litIcon} onMouseLeave={dimIcon(!!p.pinned)}>
-                    <Icon name={p.pinned ? "check" : "plus"} size={14} />
-                  </button>
-                )}
-                <button data-doc-act="raw" aria-pressed={raw} onClick={() => setRaw((v) => !v)}
-                  title={raw ? "Show the rendered document" : "Show the markdown source"} aria-label="Toggle markdown source"
-                  style={iconBtn(raw)} onMouseEnter={litIcon} onMouseLeave={dimIcon(raw)}>
-                  <Icon name="code" size={14} />
-                </button>
                 <button data-doc-act="copy" onClick={() => { void copyText(p.body ?? ""); setCopied(true); }}
                   title={copied ? "Copied" : "Copy contents"} aria-label="Copy contents"
                   style={iconBtn(copied)} onMouseEnter={litIcon} onMouseLeave={dimIcon(copied)}>
                   <Icon name={copied ? "check" : "copy"} size={14} />
                 </button>
-                {/* PRD decision 32.1 — the open page, whole. `docSlug`/`docPath` are the RESOLVED
-                    view slot, never the tab label or the crumb (F63). */}
-                <ExtendButton workspace={p.docSlug} path={p.docPath} />
-                {/* PRD decision 33 §2 — this page is wrong, or is not the page I asked for. Same
-                    resolved view slot as Extend, for the same reason (F63): a tab label and a
-                    breadcrumb are display strings, and a report built from one names a file
-                    nobody opened. */}
+                {/* PRD decision 33 §2 — this page is wrong, or is not the page I asked for. The
+                    RESOLVED view slot, never the tab label or the crumb (F63): those are display
+                    strings, and a report built from one names a file nobody opened. */}
                 <ReportPageButton workspace={p.docSlug} path={p.docPath} />
                 <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}
                   title="Edit" aria-label="Edit"
@@ -260,7 +274,12 @@ export function PagesPanel(p: {
         </div>}
         {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
             address: its `path` is a row id, and the canvas names the meeting in its own header. */}
-        {!canvas && <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
+        {/* ONE NAME (founder ruling 2026-09-06: *"no need to duplicate doc name"*). The header
+            directly above already says which file is in front; this row ended in the same string,
+            so the screen said it twice. What is left is the FOLDER TRAIL — the question this row
+            answers, and the only part of it you can click. A folder LISTING has no header above it,
+            so there the last segment is the folder you are standing in and it stays. */}
+        {!canvas && (!doc || trail.length > 0) && <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
           {trail.map(({ i, label: c }) => (
             <span key={i} style={{ flex: "none" }}>
               {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
@@ -270,10 +289,12 @@ export function PagesPanel(p: {
                 onMouseLeave={(e) => { e.currentTarget.style.color = "inherit"; }}>{c}</button>
             </span>
           ))}
-          {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
-          <span style={{ flex: "none", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
+          {!doc && <>
+            {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
+            <span style={{ flex: "none", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
+          </>}
         </div>}
-        <div ref={docBox} style={{ ...ty.body, position: "relative", flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
+        <div ref={docBox} data-doc-body style={{ ...ty.body, position: "relative", flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
           {canvas
             // the canvas owns its own scrolling, header and padding — it is a whole surface, not a body
             ? (MeetingCanvas
@@ -289,11 +310,13 @@ export function PagesPanel(p: {
                   </div>
                 : mode === "edit"
                   ? <MarkdownEditor value={draft} onChange={setDraft} />
-                  : raw
-                    // the bytes, not a second editor — selectable and copyable, never writable,
-                    // so `</>` stays a lens and Edit stays the one way to change a file
-                    ? <pre data-doc-raw style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--t1)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{p.body}</pre>
-                    : <MdxDoc>{p.body}</MdxDoc>}
+                  : <MdxDoc>{p.body}</MdxDoc>}
+          {/* EXTEND, UNDER THE CONTENT (decision 32.1, as ruled 2026-09-06). Only while READING a
+              document that exists: an empty page offers Create instead, and a canvas has no page to
+              extend at all. */}
+          {doc && p.body !== null && mode === "view" && (
+            <ExtendPageButton workspace={p.docSlug} path={p.docPath} />
+          )}
           {/* PRD decision 32.1's second trigger. Only while READING — an editor's selection is
               being edited, not asked about. */}
           {doc && p.body !== null && mode === "view" && (

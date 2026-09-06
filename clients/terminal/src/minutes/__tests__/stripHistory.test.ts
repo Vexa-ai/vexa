@@ -1,23 +1,26 @@
-/** PRD DECISION 28 (+ the founder's amendments) — the strip is a HISTORY BAR.
+/** PRD DECISION 28, AS RULED ON 2026-09-06 — the strip is TABS PLUS ONE PREVIEW SLOT.
  *
  *  Screenshot 1: seven tabs after a few chip clicks, the path shown twice. Screenshot 2: the strip
- *  scrolled off the edge. *"ensure these tabs are sorted left to right based on last used — as a
- *  history bar"*, and *"pin is per chat"*.
+ *  scrolled off the edge. The first answer was a history bar — *"ensure these tabs are sorted left
+ *  to right based on last used"* — and the walk of 2026-09-06 found it still minting tabs nobody
+ *  had asked for: *"no need to create tabs, unless there is a pinned tab. Use obsidian rule for
+ *  that and tab icon is on tab."*
  *
- *  So the strip has three tiers, left to right: the chat's HOME · its PINS · history oldest→newest,
- *  with the page you are on at the right edge. Everything below is that rule.
+ *  So the strip has three tiers, left to right: the chat's HOME · its PINS · the ONE preview slot,
+ *  which is the page you are on and which the next page you open replaces. Everything below is
+ *  that rule.
  */
 import { describe, expect, it } from "vitest";
 import {
-  artifactKey, chatHistory, collapseUnpinned, forgetHistory, homeEntry, HISTORY_CAP,
-  orderHistory, touchHistory, withHome, type Artifact, type Chat,
+  artifactKey, chatHistory, collapseUnpinned, forgetHistory, homeEntry, PREVIEW_CAP,
+  orderHistory, togglePinned, touchHistory, withHome, type Artifact, type Chat,
 } from "../chats";
 
 const A = (path: string, over: Partial<Artifact> = {}): Artifact =>
   ({ path, label: path.replace(/\.md$/, ""), ...over });
 const paths = (l: Artifact[]) => l.map((a) => (a.slug ? `${a.slug}/` : "") + a.path);
 
-describe("orderHistory — home, then pins, then oldest → newest", () => {
+describe("orderHistory — home, then pins, then the preview", () => {
   it("puts the current page at the RIGHT edge and the home at the left", () => {
     const out = orderHistory([
       A("b.md", { at: 2 }), A("home.md", { desk: true }), A("p.md", { pinned: true }), A("a.md", { at: 1 }),
@@ -26,21 +29,35 @@ describe("orderHistory — home, then pins, then oldest → newest", () => {
   });
 });
 
-describe("touchHistory", () => {
-  it("moves a page already in the strip to the right end — never a second chip", () => {
-    let l = [A("a.md", { at: 1 }), A("b.md", { at: 2 }), A("c.md", { at: 3 })];
-    l = touchHistory(l, A("a.md"), 4);
-    expect(paths(l)).toEqual(["b.md", "c.md", "a.md"]);
-    expect(l).toHaveLength(3);            // dedup, not append
+describe("touchHistory — navigating REPLACES the preview (founder: use obsidian rule)", () => {
+  it("a second page does not stand beside the first — it takes its place", () => {
+    let l = withHome([], []);
+    l = touchHistory(l, A("a.md"), 1);
+    expect(paths(l)).toEqual(["README.md", "a.md"]);
+    l = touchHistory(l, A("b.md"), 2);
+    expect(paths(l)).toEqual(["README.md", "b.md"]);      // …and a.md is not a tab, it never was
   });
 
-  it("caps at 12 by dropping the OLDEST, and never a pin", () => {
+  it("browsing four documents leaves ONE, which is the screenshot this ruling came from", () => {
+    let l = withHome([], []);
+    for (const n of ["objectives", "structure", "missing", "principles"]) l = touchHistory(l, A(`${n}.md`), 1);
+    expect(paths(l)).toEqual(["README.md", "principles.md"]);
+    expect(l.filter((a) => !a.pinned && !a.desk)).toHaveLength(PREVIEW_CAP);
+  });
+
+  it("the preview slot is the only thing that gives — a pin is never evicted", () => {
     let l: Artifact[] = [A("pinned.md", { pinned: true, at: 0 })];
-    for (let i = 1; i <= HISTORY_CAP + 3; i++) l = touchHistory(l, A(`f${i}.md`), i);
-    expect(l.filter((a) => !a.pinned)).toHaveLength(HISTORY_CAP);
+    for (let i = 1; i <= 5; i++) l = touchHistory(l, A(`f${i}.md`), i);
     expect(l.some((a) => a.path === "pinned.md")).toBe(true);   // a cap that could evict a pin
-    expect(l.some((a) => a.path === "f1.md")).toBe(false);      // would make pinning a suggestion
-    expect(paths(l)[paths(l).length - 1]).toBe(`f${HISTORY_CAP + 3}.md`);
+    expect(l.find((a) => a.path === "pinned.md")!.pinned).toBe(true);
+    expect(paths(l)).toEqual(["pinned.md", "f5.md"]);
+  });
+
+  it("dedups rather than appending: re-opening the page in front is not a second entry", () => {
+    let l = withHome([], []);
+    l = touchHistory(l, A("a.md"), 1);
+    l = touchHistory(l, A("a.md"), 2);
+    expect(paths(l)).toEqual(["README.md", "a.md"]);
   });
 
   it("navigating to a PIN keeps it pinned and keeps it at the left edge", () => {
@@ -52,13 +69,57 @@ describe("touchHistory", () => {
 
   it("the home is never evicted, however much is opened", () => {
     let l = withHome([], []);
-    for (let i = 1; i <= HISTORY_CAP + 5; i++) l = touchHistory(l, A(`f${i}.md`), i);
+    for (let i = 1; i <= 6; i++) l = touchHistory(l, A(`f${i}.md`), i);
     expect(l.some((a) => a.desk)).toBe(true);
     expect(l[0].desk).toBe(true);
   });
 });
 
-describe("forgetHistory — × forgets, except the home", () => {
+/** THE PIN PROMOTES A PREVIEW TO A TAB — and unpinning has two answers (founder: *"tab icon is on
+ *  tab"*). The control is per tab now, so the rule behind it has to say what happens to a pin that
+ *  is NOT the page in front, which the old header control could not even express. */
+describe("togglePinned", () => {
+  const KEY = artifactKey(A("a.md"));
+
+  it("a pin makes it a tab — and the next page previews beside it instead of replacing it", () => {
+    let l = withHome([], []);
+    l = touchHistory(l, A("a.md"), 1);
+    l = togglePinned(l, KEY, true, 2);
+    expect(l.find((x) => x.path === "a.md")!.pinned).toBe(true);
+
+    l = touchHistory(l, A("b.md"), 3);
+    l = touchHistory(l, A("c.md"), 4);
+    expect(paths(l)).toEqual(["README.md", "a.md", "c.md"]);    // the tab stayed; b.md was preview
+  });
+
+  it("unpinning the tab IN FRONT hands it back to the preview slot — you are still reading it", () => {
+    let l = withHome([], []);
+    l = touchHistory(l, A("a.md"), 1);
+    l = togglePinned(l, KEY, true, 2);
+    l = togglePinned(l, KEY, true, 3);
+    expect(paths(l)).toEqual(["README.md", "a.md"]);
+    expect(l.find((x) => x.path === "a.md")!.pinned).toBeFalsy();
+  });
+
+  it("unpinning a tab BEHIND the one in front drops it — there is nothing else for it to be", () => {
+    let l = withHome([A("a.md", { pinned: true, at: 1 })], []);
+    l = touchHistory(l, A("b.md"), 2);
+    l = togglePinned(l, KEY, false, 3);
+    expect(paths(l)).toEqual(["README.md", "b.md"]);            // never two unpinned entries
+  });
+
+  it("the home is not a pin, so it does not toggle", () => {
+    const l = withHome([], []);
+    expect(togglePinned(l, artifactKey(homeEntry([])), true, 2)).toEqual(l);
+  });
+
+  it("a page that is not in the strip is not invented", () => {
+    const l = withHome([], []);
+    expect(togglePinned(l, artifactKey(A("gone.md")), true, 2)).toEqual(l);
+  });
+});
+
+describe("forgetHistory — × drops a tab, except the home", () => {
   it("forgets an ordinary entry", () => {
     const l = [A("a.md", { at: 1 }), A("b.md", { at: 2 })];
     expect(paths(forgetHistory(l, artifactKey(A("a.md"))))).toEqual(["b.md"]);
@@ -111,24 +172,28 @@ describe("chatHistory — the GET-able shape for the desk README (decision 26.4)
   });
 });
 
-describe("collapseUnpinned — the one-time migration, as amended", () => {
-  it("a pre-28 pile becomes ORDERED history, not a deletion", () => {
-    // the amendment reframed these entries: they are history that was never ordered or capped,
-    // so they are kept and put in order rather than thrown away
+describe("collapseUnpinned — the one-time migration, as amended and as ruled", () => {
+  it("a pre-28 pile collapses to the page the reader was ON, which becomes the view", () => {
+    // The first ruling deleted these entries; the amendment kept them as history; the 2026-09-06
+    // ruling removes the history tier, so what survives is the ONE page in front. It is identified
+    // from `focus` and not from "the last one stored" — the difference is whether a reader comes
+    // back to the document they were reading or to whichever tab happened to be written last.
     const c = collapseUnpinned({
       id: "c1", label: "c", workspaces: [], createdAt: 1, lastActivityAt: 1,
       artifacts: [A("a.md"), A("b.md"), A("c.md")], focus: "|b.md",
     } as Chat);
-    expect(paths(c.artifacts)).toEqual(["a.md", "c.md", "b.md"]);   // the front page lands right
+    expect(paths(c.artifacts)).toEqual(["b.md"]);
+    expect(c.artifacts).toHaveLength(PREVIEW_CAP);
     expect(c.view?.path).toBe("b.md");
   });
 
-  it("caps a pre-28 pile that is over the limit", () => {
-    const many = Array.from({ length: HISTORY_CAP + 4 }, (_, i) => A(`f${i}.md`));
+  it("a pile with no focus at all keeps the last one stored — the best answer there is", () => {
+    const many = Array.from({ length: 5 }, (_, i) => A(`f${i}.md`));
     const c = collapseUnpinned({
       id: "c1", label: "c", workspaces: [], createdAt: 1, lastActivityAt: 1, artifacts: many,
     } as Chat);
-    expect(c.artifacts).toHaveLength(HISTORY_CAP);
+    expect(paths(c.artifacts)).toEqual(["f4.md"]);
+    expect(c.view?.path).toBe("f4.md");
   });
 
   it("a scaffold's tabs are PINNED — declared cannot be told from clicked, so keep", () => {

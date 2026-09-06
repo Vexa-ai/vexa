@@ -14,7 +14,7 @@ import type { MeetingMock } from "../meetingModel";
 import {
   CHATS_KEY, PROJECTS_KEY, ORG_CHAT_ID, PERSONAL_CHAT_ID,
   artifactKey, chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, pruneStale, railRows,
-  visibleRows, whenShort, forgetHistory, touchHistory, withHome, stripForRecord, HISTORY_CAP,
+  visibleRows, whenShort, forgetHistory, touchHistory, withHome, stripForRecord, PREVIEW_CAP,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
 import { T, maxPagesW } from "../../minutes/tokens";
@@ -295,17 +295,17 @@ describe("artifacts — the open tabs ARE the chat record", () => {
     expect(c.focus).toBe("_global|README.md");
   });
 
-  it("an UNPINNED tab set is ORDERED and capped on load, not deleted (decision 28 as amended)", () => {
-    // The first ruling dropped them; the amendment reframed the strip as a HISTORY bar, so these
-    // are history that was never ordered — kept, ordered, and capped. The page that was in FRONT
-    // lands at the right edge, where the reader left it.
+  it("an UNPINNED tab set collapses on load to the page in front (decision 28, ruled 2026-09-06)", () => {
+    // The first ruling dropped them; the amendment reframed the strip as a HISTORY bar; the
+    // Obsidian ruling removes the history tier. So a stored pile arrives as the ONE page the
+    // reader was on, which is where the panel puts them back.
     localStorage.clear();
     const tabs = [{ path: "a.md", label: "a" }, { path: "b.md", label: "b" }, { path: "c.md", label: "c" }];
     localStorage.setItem(CHATS_KEY, JSON.stringify([
       { id: "c1", label: "Acme", workspaces: ["personal", "_global"], artifacts: tabs, focus: "|b.md", touched: true, createdAt: T0, lastActivityAt: T0 },
     ]));
     const c = loadChats(T0).find((x) => x.id === "c1")!;
-    expect(c.artifacts.map((a) => a.path)).toEqual(["a.md", "c.md", "b.md"]);
+    expect(c.artifacts.map((a) => a.path)).toEqual(["b.md"]);
     expect(c.view?.path).toBe("b.md");
   });  it("tolerates the earlier build's bare-string artifacts instead of rendering junk tabs", () => {
     localStorage.clear();
@@ -472,7 +472,7 @@ describe("pruneStale — the 2026-09-02 migration", () => {
  *  These drive the real `touchHistory` → store → `loadChats` path rather than the writer's literal,
  *  so they fail if the round trip loses any of the three however it is spelled.
  */
-describe("a strip round-trips: plain pages age out, pins and the home stay", () => {
+describe("a strip round-trips: the preview is one page, pins and the home stay", () => {
   const store = (chat: Partial<Chat>) => {
     localStorage.clear();
     localStorage.setItem(CHATS_KEY, JSON.stringify([{
@@ -482,7 +482,7 @@ describe("a strip round-trips: plain pages age out, pins and the home stay", () 
     return loadChats(T0).find((c) => c.id === "c1")!;
   };
 
-  it("a PLAIN navigation lands unpinned — and therefore can age out", () => {
+  it("a PLAIN navigation lands unpinned — and is therefore a preview, not a tab", () => {
     let strip = withHome([], ["personal", "_global"]);
     strip = touchHistory(strip, { path: "a.md", label: "a" }, 10);
     const back = store({ artifacts: strip });
@@ -491,28 +491,29 @@ describe("a strip round-trips: plain pages age out, pins and the home stay", () 
     expect(a.at).toBe(10);                 // …and dropped this entirely
   });
 
-  it("the CAP evicts the oldest plain page and keeps the pin and the home", () => {
+  it("browsing leaves ONE preview, and keeps the pin and the home", () => {
     let strip = withHome([], ["personal", "_global"]);
     strip = touchHistory(strip, { path: "kept.md", label: "kept", pinned: true }, 1);
-    for (let i = 2; i <= HISTORY_CAP + 3; i++) strip = touchHistory(strip, { path: `f${i}.md`, label: `f${i}` }, i);
+    for (let i = 2; i <= 6; i++) strip = touchHistory(strip, { path: `f${i}.md`, label: `f${i}` }, i);
 
     const back = store({ artifacts: strip });
     const paths = back.artifacts.map((x) => x.path);
     expect(back.artifacts[0].desk).toBe(true);                       // the home leads, still the home
-    expect(paths).toContain("kept.md");                             // the pin survived the cap
+    expect(paths).toContain("kept.md");                             // a pin is never the one to give
     expect(back.artifacts.find((x) => x.path === "kept.md")!.pinned).toBe(true);
-    expect(paths).not.toContain("f2.md");                           // the oldest plain page went
-    expect(back.artifacts.filter((x) => !x.pinned && !x.desk)).toHaveLength(HISTORY_CAP);
+    expect(paths).not.toContain("f2.md");                           // every page walked past is gone
+    expect(back.artifacts.filter((x) => !x.pinned && !x.desk).map((x) => x.path)).toEqual(["f6.md"]);
+    expect(back.artifacts.filter((x) => !x.pinned && !x.desk)).toHaveLength(PREVIEW_CAP);
   });
 
-  it("the ORDER survives — oldest left, the page you were on at the right edge", () => {
+  it("the ORDER survives — the home, then the tabs, then the page you were on", () => {
     let strip = withHome([], ["personal", "_global"]);
-    strip = touchHistory(strip, { path: "first.md", label: "first" }, 1);
+    strip = touchHistory(strip, { path: "pin.md", label: "pin", pinned: true }, 1);
     strip = touchHistory(strip, { path: "second.md", label: "second" }, 2);
-    strip = touchHistory(strip, { path: "first.md", label: "first" }, 3);   // revisited → moves right
+    strip = touchHistory(strip, { path: "first.md", label: "first" }, 3);
 
     const back = store({ artifacts: strip });
-    expect(back.artifacts.map((x) => x.path)).toEqual(["README.md", "second.md", "first.md"]);
+    expect(back.artifacts.map((x) => x.path)).toEqual(["README.md", "pin.md", "first.md"]);
   });
 
   it("the home cannot be pinned away or forgotten by the round trip", () => {
