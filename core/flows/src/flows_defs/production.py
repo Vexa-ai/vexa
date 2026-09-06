@@ -1556,8 +1556,75 @@ def build(reg: Registry, db) -> None:
                         "minted_by": str(ctx.refs["uid"])})
         mid = notify(organizer, f"Minutes: {_mail_title(ctx)}", body, link=link)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
+        # AND EVERYONE ELSE IN THE WORKSPACE THIS MEETING BELONGS TO. A meeting bound to a workspace
+        # is the GROUP's, so its write-up is the group's too — mailing it to the requester alone is
+        # the founder's *"it was mailed to <the admin> not to <the member>"*: the subject line named
+        # the workspace and exactly one person received it.
+        #
+        # AFTER the organiser's mail and never in place of it. That one is this step's contract — its
+        # message id is the receipt — so the fan-out cannot fail it, and each member is mailed inside
+        # its own guard: one bad address must not cost the rest of the group their notes.
+        _mail_group_members(ctx, row, subject=f"Minutes: {_mail_title(ctx)}", body=body,
+                            already=organizer, row_id=row_id)
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
 
+
+    def _mail_group_members(ctx, row, *, subject: str, body: str, already: str, row_id) -> int:
+        """Send the write-up to the OTHER members of the workspace this meeting is bound to. Returns
+        how many were mailed; NEVER raises.
+
+        A bot requested inside a workspace makes the workspace's meeting, and a group's notes that
+        reach one person are not the group's notes. This is the mail half of that: the access half
+        (the list, the meeting page, the live transcript, the bot status) is enforced in meeting-api
+        against the same `data.workspace_id` this reads.
+
+        UNBOUND MEETINGS ARE UNTOUCHED — no bind, no roster, no extra mail — so every meeting that
+        exists today behaves exactly as it does today. The bind is the whole trigger.
+
+        EACH MEMBER GETS THEIR OWN SCAFFOLD. The link in this mail signs its reader in, so a shared
+        one would hand every member the organiser's session. `mint_scaffold` is per address, and that
+        is why this cannot be one `notify` with many recipients.
+
+        THREE THINGS ARE NOT DONE HERE, deliberately. The organiser is skipped — they were mailed by
+        the caller. A member whose `mail_minutes` is off is skipped, because that setting is a
+        person's answer about minutes mail and this is minutes mail. And nothing is registered as a
+        mail thread: a reply arriving on a member's copy would thread onto the ORGANISER's meeting
+        conversation, which is a different person's chat."""
+        ws = ((row or {}).get("data") or {}).get("workspace_id") if isinstance(row, dict) else None
+        if not ws:
+            return 0
+        uid = str(ctx.refs["uid"])
+        try:
+            raw = ws_file(uid, "policy/members.json", str(ws))
+            members = json.loads(raw) if raw else []
+            if not isinstance(members, list):
+                return 0
+        except Exception as e:  # noqa: BLE001 — an unreadable roster is not a reason to fail the step
+            logger.warning("group minutes: roster unreadable for workspace %s (uid %s): %s", ws, uid, e)
+            return 0
+        sent = 0
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            addr = str(member.get("email") or "").strip()
+            them = str(member.get("subject") or "").strip()
+            if not addr or addr.lower() == str(already or "").strip().lower() or them == uid:
+                continue
+            try:
+                if them and not setting(them, "mail_minutes"):
+                    continue
+                their_link = mint_scaffold(
+                    "post-meeting", addr, opening="minutes-review",
+                    meeting_id=row_id or ctx.refs["meeting_id"],
+                    refs=_scaffold_refs(ctx, uid),
+                    provenance={"flow": "post_meeting", "step": "email_minutes_group",
+                                "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
+                                "minted_by": uid, "workspace": str(ws)})
+                notify(addr, subject, body, link=their_link)
+                sent += 1
+            except Exception as e:  # noqa: BLE001 — one member's mail never costs the others theirs
+                logger.warning("group minutes: member mail failed in workspace %s (uid %s): %s", ws, uid, e)
+        return sent
 
 
     def _mail_the_recording(ctx: StepCtx):

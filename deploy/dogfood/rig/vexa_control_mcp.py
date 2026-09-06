@@ -812,6 +812,27 @@ _TARGET_DEFAULTING = frozenset({"workspace_write", "workspace_delete", "workspac
 _DESK_ALIASES = frozenset({"personal", "desk"})
 
 
+def _meeting_workspace(explicit: str = "") -> str:
+    """WHICH WORKSPACE A BOT THIS CONVERSATION SENDS BELONGS TO — a slug, or "" for the person's own
+    desk.
+
+    The same rule `_TARGET_DEFAULTING` applies to a write verb's `slug`, and for the same reason: a
+    bot sent with no workspace named is the model saying "wherever this conversation is working". A
+    meeting is not a file, but requesting one IS a write — it creates a row, a live transcript and a
+    write-up — and before this the row was always the requester's private one, so a member of the
+    workspace the chat was working in could not see the call they were in.
+
+    Applied HERE rather than in the shared decorator because these verbs have no `slug`: on
+    `bot_send` the parameter is `workspace`, and `slug` already means "the workspace to write a file
+    into" everywhere else. Two names for one idea in one signature is worse than this small
+    duplication. `personal`/`desk` keep the meeting private exactly as they keep a write on the
+    desk."""
+    asked = (explicit or "").strip()
+    if asked in _DESK_ALIASES:
+        return ""
+    return asked or CALL_TARGET.get()
+
+
 class _DelegationRefused(Exception):
     """A delegated token was offered and is not acceptable. ``reason`` is safe to hand a caller."""
 
@@ -3990,17 +4011,31 @@ def _bot_conflict_state(uid: str, platform: str, mid: str):
 
 @mcp.tool()
 @_anon_guard
-def bot_send(meeting_url: str, bot_name: str = "") -> str:
+def bot_send(meeting_url: str, bot_name: str = "", workspace: str = "") -> str:
     """Send a Vexa bot into a live meeting NOW. THE main verb — when your person hands you a
     meeting link, this is the call.
 
     The bot knocks within ~30 seconds; someone in the call admits it. From then on
     meeting_transcript(meeting_url) returns the words as they are spoken — read them into this
-    conversation and work with them directly. The workspace machinery is optional."""
+    conversation and work with them directly. The workspace machinery is optional.
+
+    A BOT SENT FROM A WORKSPACE MAKES THAT WORKSPACE'S MEETING, and this conversation's workspace is
+    used automatically — there is nothing to pass. Every member then sees it in their own terminal
+    while it runs: in their meeting list, on the meeting page, in the live transcript, and the bot's
+    status as it changes. Say so when you send it, in one line: it is the answer to *"can we issue a
+    bot that belongs to the group?"*, and the person cannot see the binding otherwise.
+
+    `workspace` overrides that for one call — a slug to bind elsewhere, or "personal" to keep the
+    meeting on their own desk, visible to them alone."""
     uid = me()
     platform, mid = _meeting_ref(meeting_url)
     if not platform:
         return json.dumps({"error": mid})
+    # WHICH WORKSPACE THIS MEETING BELONGS TO. Same rule as a write verb's slug (`_TARGET_DEFAULTING`):
+    # the conversation's target unless this call named one, and `personal` names the desk. Sending a
+    # bot IS a write — it creates a meeting row — so the founder's *"the thing knew the workspace of
+    # writing, if it's specified"* applies to it exactly as to a file.
+    ws = _meeting_workspace(workspace)
     # THE URL TRAVELS. Parsing gives a platform and a stable id to key on, but it is a
     # derivation and not a replacement: a Zoom link carries its passcode in ?pwd=, which no
     # downstream can reconstruct from the numeric id. Dropping it produced a refusal that asked
@@ -4020,7 +4055,8 @@ def bot_send(meeting_url: str, bot_name: str = "") -> str:
     said_name = bot_name or _bot_default_name(uid) or "Vexa"
     body = {"platform": platform, "native_meeting_id": mid,
             "meeting_url": meeting_url.strip(),
-            **({"bot_name": bot_name} if bot_name else {})}
+            **({"bot_name": bot_name} if bot_name else {}),
+            **({"workspace_id": ws} if ws else {})}
     st, r = _gw_http(uid, "POST", "/bots", body)
     if st == 409:
         # F193/F194. A 409 used to mean ONE thing to the caller — `already_there: true` — for a
@@ -4995,7 +5031,7 @@ def _scheduled_joins(mid: str):
 @_anon_guard
 def bot_schedule(meeting_url: str, in_minutes: int = 0, at_epoch: float = 0,
                  at_local: str = "", tz: str = "",
-                 title: str = "", cancel: bool = False) -> str:
+                 title: str = "", cancel: bool = False, workspace: str = "") -> str:
     """Book the bot to join a meeting LATER, or call that booking off with cancel=True.
 
     ALWAYS PASS tz — the person's IANA zone ("Europe/Lisbon"), which you know from their
@@ -5008,7 +5044,12 @@ def bot_schedule(meeting_url: str, in_minutes: int = 0, at_epoch: float = 0,
     alive. The person gets an acknowledgment email; after the call the write-up runs on its own.
 
     cancel=True with the same meeting_url calls off whatever was booked for that meeting —
-    no id to find, no queue to read."""
+    no id to find, no queue to read.
+
+    A BOOKING MADE FROM A WORKSPACE BELONGS TO THAT WORKSPACE, automatically — the meeting is the
+    group's when it runs, and its write-up lands on the group's desk rather than only the booker's.
+    Say so in the same line that confirms the time. `workspace` overrides it for one call;
+    "personal" keeps the booking private."""
     uid = me()
     platform, mid = _meeting_ref(meeting_url)
     if not platform:
@@ -5086,11 +5127,16 @@ def bot_schedule(meeting_url: str, in_minutes: int = 0, at_epoch: float = 0,
                   "not ask your person for their email; they are already signed in.",
         })
     sid_ev = f"sched-{mid}-{int(start)}"
+    # `group` IS THE WORKSPACE THIS BOOKING BELONGS TO — the ref the production flow already reads to
+    # decide whether a meeting's knowledge is a group's or one person's. It was hard-coded `None`
+    # here, so every bot booked from a chat was private no matter which workspace the chat was
+    # working in; `""` and `None` are both "no group" downstream, so a personal booking is unchanged.
+    ws = _meeting_workspace(workspace)
     res = json.loads(fact_emit(
         event_type="invite.received", source_event_id=sid_ev,
         subject_refs={"organizer": email, "url": meeting_url, "start": start,
                       "ics_uid": sid_ev, "title": title or f"Scheduled: {mid}",
-                      "group": None}))
+                      "group": ws or None}))
     if not res.get("admitted"):
         return json.dumps({"error": "the schedule could not be filed",
                            "detail": str(res)[:200], "do": "report_friction() with this"})

@@ -1111,8 +1111,22 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     # frame is needed: the identity is resolved at connect. This reuses the SAME verbatim `fan_in`
     # path as the per-meeting channels — the gateway is a thin raw forwarder for the user channel
     # exactly as it is for tc:/bm:/va:. Per-meeting subscriptions below are unchanged.
+    #
+    # AND to every workspace this identity is a member of — `w:{workspace_id}:meetings`, carrying the
+    # status frames of meetings BOUND to that workspace. A bot requested inside a workspace makes the
+    # workspace's meeting, so its transitions belong to every member's list, not only the requester's.
+    # The membership list comes from the SAME connect-time identity resolve as `user_id` above
+    # (`user_data["workspaces"]`, which identity builds from `users.data.memberships[]`), so a client
+    # cannot name a workspace it does not belong to — it sends no subscribe frame at all. Membership
+    # is therefore evaluated per CONNECTION: a member added mid-session picks the channel up on their
+    # next connect, which is the same freshness the rest of this socket's identity already has.
     user_channel = f"u:{user_id}:meetings"
-    user_sub_task = asyncio.create_task(fan_in([user_channel]))
+    member_channels = [
+        f"w:{str(w).strip()}:meetings"
+        for w in (user_data.get("workspaces") or [])
+        if str(w).strip()
+    ]
+    user_sub_task = asyncio.create_task(fan_in([user_channel, *member_channels]))
 
     try:
         while True:

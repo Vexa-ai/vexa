@@ -641,6 +641,45 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           )}
       </Section>
 
+      {/* THIS GROUP'S MEETINGS, LIVE ONES FIRST. A bot requested inside a workspace makes the
+          WORKSPACE's meeting, so this is the same list for every member — not "the ones I asked
+          for". It exists because a member watching their own group's call had nowhere that said it
+          was happening: the founder's *"[the member] can't see the call — in their terminal"*.
+
+          A LIVE ROW SAYS SO IN A WORD, not a colour: this panel is read in both themes and the one
+          fact that matters here is whether the call is on RIGHT NOW. Rows a member reaches through
+          the workspace rather than by owning them are marked, so nobody mistakes a colleague's
+          meeting for one of their own. */}
+      {facts.kind === "group" && (
+        <Section id="meetings" name="Meetings">
+          {facts.meetings.length === 0 ? (
+            <div data-ws-meetings="none" style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>
+              No meetings belong to this workspace yet. A bot sent from a chat here joins as this
+              group&apos;s, and everyone in it sees the call while it runs.
+            </div>
+          ) : (
+            <div data-ws-meetings="group">
+              {facts.meetings.map((m) => (
+                <div key={m.id} data-ws-meeting={m.id} style={{ ...rowS, gap: 6, flexWrap: "wrap" }}>
+                  <Icon name="cal" size={12} style={{ color: "var(--t3)" }} />
+                  <span style={{ ...valS, flex: "0 1 auto" }}>{m.title}</span>
+                  {m.live && (
+                    <span data-ws-meeting-live style={{ ...ty.meta, flex: "none", color: "var(--t1)" }}>
+                      live now
+                    </span>
+                  )}
+                  {m.shared && (
+                    <span data-ws-meeting-shared style={{ ...ty.meta, flex: "none" }}>
+                      from a colleague
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
       {/* THE REPO. THREE STATES, AND THEY ARE THREE (#1628 point 3): a repo is attached · none is ·
           the read broke. `_global` for the administrator was rendering the second as the third —
           `not readable`, with `Could not read the GitHub state.` in red at the foot — on a workspace

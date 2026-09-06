@@ -270,6 +270,9 @@ def build_router(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
         x_user_limits: Optional[str] = Header(default=None),
+        # The caller's workspace memberships, injected by the gateway from identity. Read ONLY to
+        # authorize an explicit `workspace_id` in the body against real membership.
+        x_user_workspaces: Optional[str] = Header(default=None),
         x_user_webhook_url: Optional[str] = Header(default=None),
         x_user_webhook_secret: Optional[str] = Header(default=None),
         x_user_webhook_events: Optional[str] = Header(default=None),
@@ -454,6 +457,27 @@ def build_router(
         # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
         bot_name = body.get("bot_name")
 
+        # WHICH WORKSPACE THIS MEETING BELONGS TO. Optional and additive: a caller that sends nothing
+        # gets exactly the meeting it got before — its own, visible to itself alone.
+        #
+        # The caller's OWN membership is what makes this safe to accept from a request body. The
+        # gateway resolves the api key to an identity and injects `x-user-workspaces` from that
+        # identity's memberships; the body cannot forge that header. So a `workspace_id` the caller
+        # does not belong to is REFUSED here rather than persisted — without the check, anyone with an
+        # api key could publish a meeting into a workspace they are not in, and every member of it
+        # would find a stranger's call in their list, on their meeting page and in its live
+        # transcript, since `data.workspace_id` is exactly what those surfaces trust.
+        workspace_id = body.get("workspace_id")
+        if workspace_id is not None:
+            if not isinstance(workspace_id, str) or not workspace_id.strip():
+                raise HTTPException(
+                    status_code=422, detail="'workspace_id' must be a non-empty string")
+            workspace_id = workspace_id.strip()
+            member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+            if workspace_id not in member_of:
+                raise HTTPException(
+                    status_code=403, detail=f"not a member of workspace '{workspace_id}'")
+
         try:
             meeting = await request_bot(
                 repo,
@@ -476,6 +500,7 @@ def build_router(
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
                 continue_meeting=bool(body.get("continue_meeting", False)),
+                workspace_id=workspace_id,
                 max_concurrent=max_concurrent,
                 webhook_url=x_user_webhook_url,
                 webhook_secret=x_user_webhook_secret,
