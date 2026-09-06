@@ -141,6 +141,41 @@ def test_cleanup_409_with_the_daemon_gone_says_so_instead_of_claiming_presence(m
         DockerBackend().cleanup(_H)
 
 
+def test_cleanup_409_always_ends_on_an_inspect_so_a_deadline_edge_vanish_still_confirms(monkeypatch):
+    # A removal that completes between the last poll and the deadline must not be misreported
+    # as a failed reclaim: the loop inspects FIRST and checks the deadline AFTER, so even a
+    # zero-width window gets one terminal inspect — here it finds the 404 and succeeds.
+    monkeypatch.setattr(docker_backend, "_reclaim_confirm_sec", lambda: 0.0)
+    be, calls = _scripted_backend(
+        monkeypatch,
+        [
+            _Resp(409, '{"message":"removal of container vexa-wl-1 is already in progress"}'),
+            _Resp(404),  # gone exactly at the deadline edge
+        ],
+    )
+    be.cleanup(_H)
+    assert calls == [
+        ("DELETE", "/containers/vexa-wl-1?force=true", None),
+        ("GET", "/containers/vexa-wl-1/json", 2),
+    ]
+
+
+def test_cleanup_409_with_only_inspect_errors_says_unconfirmed(monkeypatch):
+    # Inspect responses that carry no verdict (500s) are not observations of presence: a window
+    # of nothing but errors must end as "absence could not be confirmed", never "still present".
+    monkeypatch.setattr(docker_backend, "_reclaim_confirm_sec", lambda: 0.05)
+    be, calls = _scripted_backend(
+        monkeypatch,
+        [
+            _Resp(409, '{"message":"removal of container vexa-wl-1 is already in progress"}'),
+            _Resp(500, "inspect exploded"),  # repeated forever
+        ],
+    )
+    with pytest.raises(RuntimeError, match="could not be confirmed"):
+        be.cleanup(_H)
+    assert ("GET", "/containers/vexa-wl-1/json", 2) in calls
+
+
 def test_cleanup_other_errors_still_raise(monkeypatch):
     be, _calls = _scripted_backend(monkeypatch, [_Resp(500, "daemon exploded")])
     with pytest.raises(RuntimeError, match="daemon exploded"):

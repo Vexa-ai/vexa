@@ -417,7 +417,11 @@ class DockerBackend:
             started = time.monotonic()
             deadline = started + confirm_sec
             inspected = False
-            while time.monotonic() < deadline:
+            # inspect-first, deadline-checked AFTER: the loop can never raise without a terminal
+            # inspect, so a container that vanishes in the window's last moments is still
+            # confirmed rather than misreported as a failed reclaim.
+            while True:
+                status = None
                 try:
                     # short per-request timeout: the window is the deadline's business — one
                     # stalled inspect must not stretch the bound by _req's default 30s.
@@ -430,15 +434,20 @@ class DockerBackend:
                     logger.debug(
                         "docker delete %s: inspect failed mid-confirm", h._impl, exc_info=True
                     )
-                    _reclaim_sleep(_RECLAIM_POLL_SEC)
-                    continue
-                inspected = True
+                else:
+                    # only a verdict-bearing answer counts as having observed the container:
+                    # a stream of inspect-500s must end as "absence could not be confirmed",
+                    # never as a claim that the container is still present
+                    if status in (200, 404):
+                        inspected = True
                 if status == 404:
                     logger.info(
                         "docker delete %s: absence confirmed after %.1fs (another remover "
                         "finished the reclaim)", h._impl, time.monotonic() - started,
                     )
                     return
+                if time.monotonic() >= deadline:
+                    break
                 _reclaim_sleep(_RECLAIM_POLL_SEC)
             elapsed = time.monotonic() - started
             if inspected:
