@@ -1,5 +1,5 @@
-"""routers/meetings.py — The meeting seam: relay health, and the live transcript stream a chat renders beside
-the conversation.
+"""routers/meetings.py — The meeting seam: relay health, the annotation layer over a transcript, and the
+live transcript stream a chat renders beside the conversation.
 
 Extracted from `api.py`'s `create_app` VERBATIM: the handler bodies below are the same
 bytes, with `@app.` rewritten to `@router.` and nothing else. Everything they close over
@@ -9,9 +9,10 @@ single identifier changed.
 from __future__ import annotations
 
 from control_plane import meeting_note as meeting_note_mod
+from control_plane import meeting_terms as meeting_terms_mod
 from control_plane.api_shared import (
     MEETING_STREAM_TRANSCRIPT_REPLAY, _decode_sse_cursor, _encode_sse_cursor, _sse)
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import json
 
@@ -56,6 +57,59 @@ def build(**d) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return {"path": meeting_note_mod.resolve(wsr.root, subject, row)}
+    @router.get("/api/meeting/terms")
+    def meeting_terms(meeting_id: str, request: Request):
+        """THIS MEETING'S ANNOTATION LAYER — `{"meeting", "cursor", "terms"}` (Vexa-ai/vexa#1595).
+
+        Founder, mid-meeting with Highlight pressed: *"we want transcript being attributed with
+        extracted entities when we get highlight — it should attribute the transcript in an
+        efficient way (no rewrite)"*. The map is what the canvas draws chips FROM; the transcript
+        itself is never touched, and the client re-finds each surface form in the words it is
+        already rendering, so every segment after the Highlight is attributed with no model call.
+
+        THE CANVAS ASKS ON OPEN. The chips also arrive live as the chat's `terms` event, and that is
+        still the fast path — but an event is a moment, and before this route a reload left the
+        transcript plain again because the only copy was that tab's memory. This is the copy that
+        survives, and it is on the SERVER rather than in browser storage so it is the same map on
+        the phone, the laptop and the reader who was handed the meeting.
+
+        AN EMPTY MAP IS THE ORDINARY ANSWER — nobody has highlighted this meeting — and the caller
+        must be able to tell it from a failure: the transcript renders exactly the plain text it did
+        before, which is what makes an un-highlighted meeting cost nothing.
+
+        OWNER-SCOPED BEFORE ANYTHING IS READ, exactly as `/api/meeting/note` above and
+        `/api/meeting/stream` below, and for the same reason: row ids are sequential ints, and this
+        answers with what was said on somebody's DESK."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        row = _meeting_owner_lookup(subject, meeting_id)
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        return meeting_terms_mod.read(wsr.root, subject, meeting_id)
+    @router.post("/api/meeting/terms")
+    def publish_meeting_terms(request: Request, body: dict = Body(default={})):
+        """One Highlight's publish, ADDED to this meeting's map. Returns the whole map.
+
+        The writer is the ACT — `transcript_terms(..., keep=…)` in the control MCP, the same call
+        whose result the harness turns into the chat's `terms` event. One loop, one write surface:
+        nothing else composes this file, and the canvas only ever reads it.
+
+        APPEND-ONLY AND IDEMPOTENT (`meeting_terms.merge`): re-running Highlight extends the map,
+        the same publish twice changes nothing, and an empty publish is a non-event rather than an
+        empty map — an empty map would read as *"and now there are none"* and wipe the chips the
+        previous press put on the screen.
+
+        Owner-scoped like the read. `meeting_id` travels in the BODY here, with the terms it
+        annotates, so one publish is one object rather than a query string beside a payload."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
+        row = _meeting_owner_lookup(subject, meeting_id)
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        terms = (body or {}).get("terms")
+        if not isinstance(terms, list):
+            raise HTTPException(status_code=422, detail="terms must be a list")
+        return meeting_terms_mod.extend(wsr.root, subject, meeting_id, terms,
+                                        str((body or {}).get("cursor") or ""))
     @router.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
         """SSE feed for a LIVE meeting: the transcript Stream (`tc:meeting:{id}`), and only that.

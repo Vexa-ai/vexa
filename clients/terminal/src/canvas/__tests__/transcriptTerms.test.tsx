@@ -8,6 +8,10 @@
  *  adding (chips vanish on the second press), a cursor the client invents (the whole room is
  *  re-scanned every time), a chip that mints a tab (seven tabs after a few clicks), and a Highlight
  *  that reaches the person as a bubble.
+ *
+ *  And, since Vexa-ai/vexa#1595, the loudest silent failure of all: the chips were only ever in
+ *  this tab's memory, so a reload showed a plain transcript again. The last block covers the map
+ *  the canvas now READS — on open and after each Highlight — from the server that stored it.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { act } from "react";
@@ -16,7 +20,7 @@ import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT } from "../actions";
 import { LiveTranscriptEngine } from "../LiveTranscriptEngine";
 import { HighlightButton, TermText, useTermRenderer } from "../TranscriptTerms";
 import {
-  mergeTerms, notePageWritten, promoteWritten, recordTerms, resetTerms, TERMS_EVENT,
+  loadTerms, mergeTerms, notePageWritten, promoteWritten, recordTerms, resetTerms, TERMS_EVENT,
   termsCursor, termsFor, termSpans, type TranscriptTerm,
 } from "../transcriptTerms";
 
@@ -37,15 +41,36 @@ let opened: { path?: string }[] = [];
 const onAsk = (e: Event) => { asks.push((e as CustomEvent).detail); };
 const onOpen = (e: Event) => { opened.push((e as CustomEvent).detail); };
 
+// `useTranscriptTerms` reads the stored map on mount, so every test that mounts it makes a request.
+// The default answer is "no map" — the shape of a meeting nobody highlighted — and the blocks that
+// care about the read install their own. Left to the real `fetch`, a relative URL under jsdom would
+// make each test's behaviour depend on how undici fails that day.
+const NO_MAP = (() => Promise.resolve({ ok: false, status: 404 } as Response)) as typeof fetch;
+const serves = (body: unknown, asked?: string[]) => ((url: string) => {
+  asked?.push(String(url));
+  return Promise.resolve({ ok: true, json: async () => body } as Response);
+}) as unknown as typeof fetch;
+const realFetch = globalThis.fetch;
+
 beforeEach(() => {
   resetTerms(); asks = []; opened = [];
+  globalThis.fetch = NO_MAP;
   window.addEventListener(ASK_CHAT_EVENT, onAsk);
   window.addEventListener(OPEN_ENTITY_EVENT, onOpen);
 });
 afterEach(() => {
+  globalThis.fetch = realFetch;
   window.removeEventListener(ASK_CHAT_EVENT, onAsk);
   window.removeEventListener(OPEN_ENTITY_EVENT, onOpen);
 });
+
+async function renderAsync(ui: React.ReactElement) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => { root.render(ui); });
+  return { container, unmount: () => { act(() => root.unmount()); container.remove(); } };
+}
 
 // ── the record ───────────────────────────────────────────────────────────────────────────────────
 
@@ -256,5 +281,100 @@ describe("termSpans", () => {
 
   it("drops a one-character term — a span that short is a false match, not a name", () => {
     expect(termSpans([unknown("A")])).toHaveLength(0);
+  });
+});
+
+// ── the map that outlives the turn (Vexa-ai/vexa#1595) ───────────────────────────────────────────
+//
+// Founder, mid-meeting with Highlight pressed: *"we want transcript being attributed with extracted
+// entities when we get highlight — it should attribute the transcript in an efficient way (no
+// rewrite)"*. The event paints NOW; the stored map is what makes the chips still be there after a
+// reload, in a second tab, and on a meeting reopened tomorrow. Nothing here rewrites a segment: the
+// map is surface forms, and the renderer re-finds them in the words it is already drawing.
+
+describe("the annotation layer is read from the server, so a reload keeps the chips", () => {
+  const MAP = { meeting: "41", cursor: "c9", terms: [known("Kaar Tech")] };
+
+  it("reads the stored map into a store that knows nothing — the reload this route exists for", async () => {
+    const asked: string[] = [];
+    await loadTerms("41", serves(MAP, asked));
+    expect(asked).toEqual(["/api/meeting/terms?meeting_id=41"]);
+    expect(termsFor("41").map((t) => t.term)).toEqual(["Kaar Tech"]);
+    expect(termsCursor("41")).toBe("c9");
+  });
+
+  it("MERGES with what is already on screen — a read can never un-paint a live publish", async () => {
+    recordTerms({ meeting: "41", cursor: "c12", terms: [unknown("Blue Light Card")] });
+    await loadTerms("41", serves(MAP));
+    expect(termsFor("41").map((t) => t.term)).toEqual(["Blue Light Card", "Kaar Tech"]);
+  });
+
+  it("an empty stored map is a non-event, never a clear", async () => {
+    recordTerms({ meeting: "41", cursor: "c9", terms: [known("Kaar Tech")] });
+    await loadTerms("41", serves({ meeting: "41", cursor: "", terms: [] }));
+    expect(termsFor("41")).toHaveLength(1);
+    expect(termsCursor("41")).toBe("c9");
+  });
+
+  it("a read that failed costs the transcript its chips, never its text and never an error", async () => {
+    recordTerms({ meeting: "41", cursor: "c9", terms: [known("Kaar Tech")] });
+    await loadTerms("41", (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch);
+    await loadTerms("41", NO_MAP);
+    expect(termsFor("41")).toHaveLength(1);
+  });
+
+  it("asks once per meeting however many components subscribe to it", async () => {
+    const asked: string[] = [];
+    const fetcher = serves(MAP, asked);
+    await Promise.all([loadTerms("41", fetcher), loadTerms("41", fetcher)]);
+    expect(asked).toHaveLength(1);
+  });
+});
+
+describe("the transcript paints from the stored map, with no event at all", () => {
+  const segments = [{ id: "s0", speaker: "Jane", text: "Kaar Tech asked about pricing.", completed: true }];
+
+  function Live({ meeting }: { meeting: string }) {
+    return <LiveTranscriptEngine segments={segments} renderText={useTermRenderer(meeting)} />;
+  }
+
+  it("the canvas asks on OPEN, and the words are never altered", async () => {
+    const asked: string[] = [];
+    globalThis.fetch = serves({ meeting: "41", cursor: "c9", terms: [known("Kaar Tech")] }, asked);
+    const { container, unmount } = await renderAsync(<Live meeting="41" />);
+    expect(asked).toEqual(["/api/meeting/terms?meeting_id=41"]);
+    expect((container.querySelector("[data-term]") as HTMLElement).dataset.term).toBe("Kaar Tech");
+    expect(container.textContent).toContain("Kaar Tech asked about pricing.");
+    unmount();
+  });
+
+  it("a chip that came off the server opens the entity page, like any other", async () => {
+    globalThis.fetch = serves({ meeting: "41", cursor: "c9", terms: [known("Kaar Tech")] });
+    const { container, unmount } = await renderAsync(<Live meeting="41" />);
+    await act(async () => { (container.querySelector("[data-term]") as HTMLElement).click(); });
+    expect(opened).toEqual([{ path: "kg/entities/company/kaar-tech.md" }]);
+    unmount();
+  });
+
+  it("a Highlight completion re-reads the map — the event is this turn, the server is every turn", async () => {
+    const asked: string[] = [];
+    globalThis.fetch = serves({ meeting: "41", cursor: "c12", terms: [known("Kaar Tech"), unknown("Acme")] }, asked);
+    const { container, unmount } = await renderAsync(<Live meeting="41" />);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(TERMS_EVENT, {
+        detail: { meeting: "41", cursor: "c12", terms: [unknown("Acme")] },
+      }));
+    });
+    expect(asked).toHaveLength(2);
+    expect(termsFor("41").map((t) => t.term)).toEqual(["Kaar Tech", "Acme"]);
+    expect(container.textContent).toContain("Kaar Tech asked about pricing.");
+    unmount();
+  });
+
+  it("an un-highlighted meeting still costs nothing — no map, no chips, plain text", async () => {
+    const { container, unmount } = await renderAsync(<Live meeting="41" />);
+    expect(container.querySelector("[data-term]")).toBeNull();
+    expect(container.textContent).toContain("Kaar Tech asked about pricing.");
+    unmount();
   });
 });

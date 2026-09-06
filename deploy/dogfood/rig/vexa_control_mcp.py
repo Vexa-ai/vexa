@@ -4049,6 +4049,23 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
     unmatched = [] if publish_all else [w for w in wanted
                                         if not any(str(t.get("term", "")).lower() == w for t in found)]
     known = [t for t in found if t.get("known")]
+    # THE MAP OUTLIVES THE TURN (Vexa-ai/vexa#1595). Founder, mid-meeting with the canvas open:
+    # *"we want transcript being attributed with extracted entities when we get highlight — it
+    # should attribute the transcript in an efficient way (no rewrite)"*. The publish already
+    # reaches the screen as the chat's `terms` event and that stays the fast path — but an event is
+    # a MOMENT, and a reload left the transcript plain again because the only copy was that tab's
+    # memory. agent-api keeps the durable copy, append-only per meeting, and the canvas reads it on
+    # open. Nothing rewrites the transcript: what is stored is a map of surface forms, and the
+    # renderer re-finds them in the words it is already drawing.
+    #
+    # BEST-EFFORT, AND SAID SO. The chips still paint from the event, so a store that refused must
+    # not fail the publish — but a publish that will not survive a reload is a fact the agent gets
+    # to see rather than a silence it would report as "highlighted".
+    stored = None
+    if emit:
+        _store_st, _ = _http("POST", f"{AGENT_API}/api/meeting/terms", {"X-User-Id": uid},
+                             {"meeting_id": row, "cursor": cursor, "terms": emit})
+        stored = _store_st == 200
     return _capped({
         "meeting": row,
         "read_ok": True,
@@ -4062,6 +4079,9 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
         # and the transcript paints these, and only these.
         "emit": emit,
         "published": len(emit),
+        # None = nothing was published this call. False = the chips will paint now and be gone on
+        # reload; say the STORE failed, never that the highlight did.
+        "stored": stored,
         "keep_not_found": unmatched,
         "next": ("Nothing is on the person's screen yet. Call me again with keep=\"<the terms that "
                  "matter here, comma separated>\" to publish them as chips — or keep=\"*\" only if "

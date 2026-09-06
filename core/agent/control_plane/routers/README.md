@@ -18,7 +18,7 @@ before.
 | [`health.py`](health.py) | 2 | `/health` and `/api/version` — the two answers that must work when nothing else does. |
 | [`chats.py`](chats.py) | 10 | The conversation surface: `/invocations`, the `/api/chat` SSE turn, `/api/sessions*`, the `/events` artifact sink, and `/api/routines*` — the clock that wakes agents. |
 | [`admin.py`](admin.py) | 7 | The operator's surface: `/api/admin/*` (the hidden panel), `/api/global/*` (the organisation tier), and the two credential self-tests. Internal-tier gated; not a user surface. |
-| [`meetings.py`](meetings.py) | 2 | The meeting seam: relay health, and the live transcript stream a chat renders beside the conversation. |
+| [`meetings.py`](meetings.py) | 5 | The meeting seam: relay health, where a meeting's report lives, the annotation layer a Highlight writes and the transcript canvas reads, and the live transcript stream a chat renders beside the conversation. |
 | [`scaffolds.py`](scaffolds.py) | 7 | One record per arrival (PRD §5.5): mint, read, redeem the transcript share — plus the two reads a panel does around it, `/api/links/resolve` and `/api/desk/touch`. |
 | [`friction.py`](friction.py) | 3 | The rough-edges ledger (PRD decision 33). **Kept whole on purpose** — see below. |
 | [`workspaces.py`](workspaces.py) | 47 | Everything a workspace is: files, git state, identity, the mount set, attach and swap, sharing, membership, invites, and the credentials that make a remote reachable. |

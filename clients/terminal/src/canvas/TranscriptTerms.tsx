@@ -9,11 +9,13 @@
  *  inside it, so the transcript stays one renderer with or without terms and the in-product
  *  inference pipeline can be removed from underneath it (decision 34) without touching this.
  *
- *  IT NEVER ASKS FOR ANYTHING BY ITSELF. The terms come off the chat record (`transcriptTerms.ts`);
+ *  IT NEVER DECIDES ANYTHING BY ITSELF. The terms come off the chat record (`transcriptTerms.ts`);
  *  the only thing here that talks to anyone is the button, and it talks by posting an intent into
- *  the chat the person already has open. There is no timer, no poll, and no fetch — the founder's
- *  correction was explicit that this "does not require any 'processing on'", and a background loop
- *  that highlights unasked is that feature under a different name.
+ *  the chat the person already has open. The store does READ that record back from the server on
+ *  open and after each Highlight (Vexa-ai/vexa#1595) — the same terms, asked for rather than
+ *  remembered, which is what makes them survive a reload — but there is still no timer, no poll and
+ *  no inference: the founder's correction was explicit that this "does not require any 'processing
+ *  on'", and a background loop that highlights unasked is that feature under a different name.
  */
 import React, { useMemo } from "react";
 import { OPEN_ENTITY_EVENT } from "./actions";
