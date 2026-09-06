@@ -206,7 +206,26 @@ class _Sessions:
 
     Backed by redis when a client is wired (one hash per session under ``agent:sessions:<subject>`` +
     the per-subject id set), with an in-memory fallback so the unit tests need no redis. Multiple
-    conversation threads live in the ONE user workspace — this indexes the threads, not workspaces."""
+    conversation threads live in the ONE user workspace — this indexes the threads, not workspaces.
+
+    ⚠ THIS INDEX IS THE RAIL (Vexa-ai/vexa#1591). The terminal's chat list lived in ONE browser's
+    ``localStorage``, so the founder signed in from a new window after a morning of work and got an
+    empty rail — *"i logged in again and now see no chats and it's starting over again while it has
+    the context"*. The rail is now DERIVED from these rows, so what a session carries is what a rail
+    row can show, and three fields were missing:
+
+      · ``workspaces`` — the mount set the chat is over, so a row reopened on a second browser
+        mounts what it always mounted rather than the personal default;
+      · ``scaffold``   — ``{kind, id}``, the record the chat was composed from. The client's own
+        rule (F37) is that the kind and the record id travel TOGETHER or not at all, so this is one
+        object here too and a half-record is dropped rather than repaired;
+      · ``touched``    — did a PERSON write in this thread, or is every turn in it machinery? The
+        rail's default filter hides the untouched, and the client could only ever know about turns
+        typed in THIS browser. The server sees every turn, so it is the honest place to record it.
+
+    ``touched`` is a LATCH and its absence means ``True``: a row written before this field existed
+    is a real conversation somebody had, and the failure the rail is being fixed for is chats that
+    do not show. A row that has only ever carried machinery says so explicitly ("0")."""
 
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
@@ -226,10 +245,37 @@ class _Sessions:
 
         return time.time()
 
-    def upsert(self, subject: str, session: str, *, title: str | None = None) -> None:
+    @staticmethod
+    def _scaffold_pair(raw) -> "dict | None":
+        """``{kind, id}`` or nothing — the client's F37 rule, enforced on the way IN as well.
+
+        A kind with no record id is the shape that let a planted row render the pre-scaffold admin
+        card. A half-record is dropped here rather than stored and repaired later."""
+        if isinstance(raw, str) and raw:
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                return None
+        if not isinstance(raw, dict):
+            return None
+        kind, sid = str(raw.get("kind") or ""), str(raw.get("id") or "")
+        return {"kind": kind, "id": sid} if kind and sid else None
+
+    def upsert(self, subject: str, session: str, *, title: str | None = None,
+               workspaces: "list[str] | None" = None, scaffold: "dict | None" = None,
+               touched: bool | None = None) -> None:
         """Record the session on use: create it (stamping ``created`` + a default ``title``) or touch its
-        ``last_active``. An explicit ``title`` overrides; otherwise the first prompt seeds it once."""
+        ``last_active``. An explicit ``title`` overrides; otherwise the first prompt seeds it once.
+
+        ``workspaces`` and ``scaffold`` are RESTATED, not merged: they describe what this chat is
+        over right now, and a turn that knows them is the freshest answer there is. ``None`` means
+        "this turn did not know", which is not the same as "there is none" — it leaves what is
+        stored alone.
+
+        ``touched`` only ever goes UP. It answers "has a person written here", and a machinery turn
+        arriving after a human one does not un-write what they typed."""
         now = self._now()
+        pair = self._scaffold_pair(scaffold)
         if self._redis is not None:
             mkey = self._meta_key(subject, session)
             existing = self._redis.hgetall(mkey) or {}
@@ -237,36 +283,63 @@ class _Sessions:
             if not existing:
                 fields["created"] = str(now)
                 fields["title"] = title or session
+                # stamped on CREATE so "absent" keeps meaning "written before the field existed"
+                fields["touched"] = "1" if touched else "0"
             elif title is not None:
                 fields["title"] = title
+            if touched and existing.get("touched") != "1":
+                fields["touched"] = "1"
+            if workspaces is not None:
+                fields["workspaces"] = json.dumps([str(w) for w in workspaces if str(w).strip()])
+            if pair is not None:
+                fields["scaffold"] = json.dumps(pair)
             self._redis.hset(mkey, mapping=fields)
             self._redis.sadd(self._ids_key(subject), session)
             return
         rec = self._mem.setdefault(subject, {}).get(session)
         if rec is None:
-            self._mem[subject][session] = {"created": now, "last_active": now, "title": title or session}
+            rec = {"created": now, "last_active": now, "title": title or session,
+                   "touched": bool(touched)}
+            self._mem[subject][session] = rec
         else:
             rec["last_active"] = now
             if title is not None:
                 rec["title"] = title
+            if touched:
+                rec["touched"] = True
+        if workspaces is not None:
+            rec["workspaces"] = [str(w) for w in workspaces if str(w).strip()]
+        if pair is not None:
+            rec["scaffold"] = pair
 
     def list(self, subject: str) -> list[dict]:
-        """The subject's sessions, most-recently-active first."""
+        """The subject's sessions, most-recently-active first — the rail, as the server holds it."""
         rows: list[dict] = []
         if self._redis is not None:
             for session in self._redis.smembers(self._ids_key(subject)) or set():
                 meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+                try:
+                    mounts = json.loads(meta.get("workspaces") or "[]")
+                except ValueError:
+                    mounts = []
                 rows.append({
                     "session": session,
                     "title": meta.get("title") or session,
                     "created": float(meta.get("created", 0) or 0),
                     "last_active": float(meta.get("last_active", 0) or 0),
+                    "workspaces": [str(w) for w in mounts] if isinstance(mounts, list) else [],
+                    "scaffold": self._scaffold_pair(meta.get("scaffold")),
+                    # absent → True: a row older than the field is a conversation that happened
+                    "touched": meta.get("touched") != "0",
                 })
         else:
             for session, meta in self._mem.get(subject, {}).items():
                 rows.append({
                     "session": session, "title": meta.get("title") or session,
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
+                    "workspaces": list(meta.get("workspaces") or []),
+                    "scaffold": self._scaffold_pair(meta.get("scaffold")),
+                    "touched": meta.get("touched", True) is not False,
                 })
         rows.sort(key=lambda r: r["last_active"], reverse=True)
         return rows

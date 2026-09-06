@@ -137,6 +137,11 @@ export function writeRailOwner(identity: string): void {
  *  the server. */
 export function resetChats(): Chat[] {
   try { localStorage.removeItem(CHATS_KEY); } catch { /* ignore */ }
+  // …AND THE DELETES GO WITH IT. The tombstone list (`RAIL_HIDDEN_KEY`) is keyed to nobody, so a
+  // second identity inheriting it would have the previous person's deletions silently applied to
+  // THEIR server sessions — rows they never touched, missing from their rail, with no way to tell.
+  // Same reasoning as the owner key itself; it simply has to be remembered in both places.
+  try { localStorage.removeItem(RAIL_HIDDEN_KEY); } catch { /* ignore */ }
   saveChats([]);
   return [];
 }
@@ -274,6 +279,131 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
 export function visibleRows(rows: Row[], all: boolean, keep?: string | null): Row[] {
   if (all) return rows;
   return rows.filter((r) => r.touched || r.live || r.upcoming || (keep != null && r.key === keep));
+}
+
+// ── the server's sessions — WHERE THE RAIL ACTUALLY COMES FROM ───────────────────────
+//
+//  THE RAIL WAS BROWSER-LOCAL AND THAT WAS THE WHOLE DEFECT (Vexa-ai/vexa#1591, founder walk
+//  2026-09-06). He worked a morning on this instance — the global scaffold, a meeting chat, several
+//  Extend jobs — signed in again in a new window and got an empty rail and a "first visit":
+//  *"i logged in again and now see no chats and it's starting over again while it has the context"*.
+//  `CHATS_KEY` is one browser's storage; the server held every one of those conversations.
+//
+//  So the rail is DERIVED from `GET /api/sessions` and merged with the stored list. The direction
+//  is fixed and it is the whole design: **local caches, the server owns**. A session the server
+//  reports exists whether or not this browser has heard of it; a stored row the server does not
+//  report is kept, because a chat can be composed here before its first turn reaches the server.
+
+/** One row of `GET /api/sessions`, tolerantly typed — this is a wire shape, and a field a server
+ *  one release behind does not send must cost a fallback, never a broken rail. */
+export type ServerSession = {
+  session: string;
+  title?: string | null;
+  created?: number | string | null;
+  last_active?: number | string | null;
+  workspaces?: string[] | null;
+  scaffold?: { kind?: string | null; id?: string | null } | null;
+  touched?: boolean | null;
+};
+
+/** The meeting a session id names, or null. The inverse of `meetingChatId`, and the reason the
+ *  server does NOT send a `meeting` field: `meet-<row>` is this client's own naming of a meeting's
+ *  agent session, so reading it back here keeps one convention with one owner. */
+export function meetingIdFromChatId(id: string): string | null {
+  const m = /^meet-(.+)$/.exec(id ?? "");
+  return m && m[1] ? m[1] : null;
+}
+
+/** Epoch seconds (what the session index stores) or milliseconds (what a JS caller would send) →
+ *  milliseconds. Anything unreadable is 0, which sorts last rather than to 1970-in-the-future. */
+function whenMs(v: unknown): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) || Number(v) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n < 1e12 ? Math.round(n * 1000) : Math.round(n);
+}
+
+/** THE TWO IDS A SERVER SESSION MAY NOT BECOME (F34, and it is deliberate).
+ *
+ *  `main` is `units.DEFAULT_CHAT_SESSION` — anything that chats without naming a thread lands
+ *  there — and it is also the id the rail used to PLANT as "Personal"; `org-setup` was the other
+ *  planted row. The founder deleted both by ruling: *"where is it coming from? i did not create
+ *  this chat"*. `pruneStale` removes them on every load, so admitting them from the server would
+ *  make them flicker — back on every fetch, gone on every reload — which is worse than either
+ *  answer. They stay out. */
+const NOT_A_RAIL_ROW = new Set<string>([PERSONAL_CHAT_ID, ORG_CHAT_ID]);
+
+/** The server's sessions as chat records. Reading state (`artifacts`, `focus`, `view`) is empty
+ *  because the server holds none of it — that is precisely what the stored record is FOR, and
+ *  `mergeChats` below is where the two halves meet. */
+export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat[] {
+  const out: Chat[] = [];
+  for (const r of rows ?? []) {
+    const id = typeof r?.session === "string" ? r.session.trim() : "";
+    if (!id || NOT_A_RAIL_ROW.has(id)) continue;
+    const meeting = meetingIdFromChatId(id) ?? undefined;
+    // The index defaults an untitled session's title to the session id — a placeholder, not a name.
+    const title = typeof r.title === "string" ? r.title.trim() : "";
+    const named = title && title !== id ? title : "";
+    const mounts = Array.isArray(r.workspaces)
+      ? r.workspaces.filter((w): w is string => typeof w === "string" && !!w.trim())
+      : [];
+    const sc = r.scaffold && typeof r.scaffold === "object"
+      ? { kind: String(r.scaffold.kind ?? ""), id: String(r.scaffold.id ?? "") } : null;
+    const created = whenMs(r.created) || now;
+    out.push({
+      id,
+      // A meeting chat carries no label of its own — `railRows` names it from the meeting, so the
+      // row follows a rename instead of freezing whatever the first turn was called.
+      label: meeting ? "" : (named || "Chat"),
+      meeting,
+      workspaces: mounts.length ? mounts : ["personal", "_global"],
+      artifacts: [],
+      scaffold: sc && sc.kind && sc.id ? sc : undefined,
+      // absent → a conversation that happened, so it shows. See `_Sessions` for why that direction.
+      touched: r.touched !== false,
+      createdAt: created,
+      lastActivityAt: whenMs(r.last_active) || created,
+    });
+  }
+  return dedupe(out);
+}
+
+/** THE MERGE. Stored rows first, the server's folded in, and neither erases the other.
+ *
+ *  Field by field, and each rule is one of the two halves owning what it actually knows:
+ *   · **`lastActivityAt` is the LATER of the two.** The server saw the turn sent from the other
+ *     browser; this browser saw the one sent a second ago and not yet indexed.
+ *   · **reading state is local, always.** `artifacts`, `focus`, `view` exist nowhere else.
+ *   · **`workspaces` is local when there is one.** A stored row's mount set is the reader's — a
+ *     proposal chip can rebind a chat — and the server's is the fallback for a chat this browser
+ *     has never opened.
+ *   · **`touched` is either.** Both are evidence a person wrote; neither un-writes it.
+ *   · **a name beats a placeholder**, whichever side holds it. A meeting row keeps its empty label.
+ *
+ *  `hidden` is the rail's own delete. Removing a row here never removed the agent session (the
+ *  comment on `deleteChat` says so), and with the rail derived from those sessions a delete would
+ *  otherwise come back on the next sign-in. */
+export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = []): Chat[] {
+  const drop = new Set(hidden ?? []);
+  const by = new Map<string, Chat>();
+  for (const c of local) by.set(c.id, c);
+  for (const s of server) {
+    const l = by.get(s.id);
+    if (!l) { by.set(s.id, s); continue; }
+    by.set(s.id, {
+      ...l,
+      label: l.meeting || s.meeting
+        ? l.label
+        : (isPlaceholderLabel(l.label) && !isPlaceholderLabel(s.label) ? s.label : l.label),
+      meeting: l.meeting ?? s.meeting,
+      workspaces: l.workspaces?.length ? l.workspaces : s.workspaces,
+      scaffold: l.scaffold ?? s.scaffold,
+      touched: !!l.touched || !!s.touched,
+      createdAt: Math.min(l.createdAt || s.createdAt, s.createdAt || l.createdAt),
+      lastActivityAt: Math.max(l.lastActivityAt || 0, s.lastActivityAt || 0),
+    });
+  }
+  return [...by.values()].filter((c) => !drop.has(c.id));
 }
 
 // ── mutations (pure: array in, array out) ────────────────────────────────────────────
@@ -742,6 +872,26 @@ export function loadChats(now = Date.now()): Chat[] {
 
 export function saveChats(chats: Chat[]): void {
   try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch { /* ignore */ }
+}
+
+/** THE ROWS THIS READER DELETED. A tombstone list, and it exists because the rail now derives from
+ *  the server: `deleteChat` has always meant *"off my rail"* rather than *"destroy the thread"*
+ *  (its own comment: "its agent session stays on the server"), and without a record of the delete
+ *  the next sign-in would fetch the row straight back. Local, like the choice it remembers. */
+export const RAIL_HIDDEN_KEY = "vexa.minutes.chatsHidden";
+
+export function loadHidden(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RAIL_HIDDEN_KEY) || "[]") as unknown;
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string" && !!x) : [];
+  } catch { return []; }
+}
+
+/** Remember one delete. Returns the new list so a caller never has to re-read to know it landed. */
+export function hideChat(id: string): string[] {
+  const next = [...new Set([...loadHidden(), id])];
+  try { localStorage.setItem(RAIL_HIDDEN_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  return next;
 }
 
 export function loadRailAll(): boolean {

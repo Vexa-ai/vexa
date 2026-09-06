@@ -32,11 +32,43 @@ def build(**d) -> APIRouter:
     _ws_is_member = d['_ws_is_member']
     _ws_sync = d['_ws_sync']
     scaffolds = d['scaffolds']
+    sess = d['sess']
     settings = d['settings']
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
     workspace_touches = d['workspace_touches']
     wsr = d['wsr']
+
+    @router.get("/internal/has-history")
+    def has_history(who: str, request: Request):
+        """HAS THIS ADDRESS ANYTHING TO COME BACK TO? (Vexa-ai/vexa#1591)
+
+        The terminal mints a `first-visit` arrival for a sign-in that names no destination. It did
+        so on EVERY such sign-in, so the admin who had spent a morning on this instance signed in
+        again and was introduced to the product: *"i logged in again and now see no chats and it's
+        starting over again while it has the context"*. A first visit is for somebody with no first
+        visit behind them, and only the server can say which that is — the client had exactly the
+        browser-local list that had just been proven empty.
+
+        TWO EVIDENCES, and either is enough, because they fail in opposite directions: a chat
+        thread (they have talked to their agent) or a desk past `new` (something has been written
+        into their workspace — a meeting report landing counts, which is a person who has never
+        typed a word here and would still be wrong to greet as a stranger).
+
+        Internal tier, like the mint it guards: it answers a question about somebody else's account
+        from an address alone, which is not a thing a browser may ask. An address with no subject
+        behind it has no history by construction — nobody has ever signed in as them."""
+        if not _internal_caller(request):
+            raise HTTPException(status_code=403,
+                                detail="asking what an address has behind it is an internal-tier capability")
+        who = str(who or "").strip().lower()
+        if not who or "@" not in who:
+            raise HTTPException(status_code=400, detail="`who` must be an address")
+        subject = _email_subject_lookup(who) or ""
+        sessions = len(sess.list(str(subject))) if subject else 0
+        desk = scaffolds_mod.desk_state(wsr.root, str(subject)) if subject else "new"
+        return {"who": who, "subject": str(subject), "sessions": sessions, "desk": desk,
+                "has_history": bool(sessions) or desk != "new"}
 
     @router.post("/internal/scaffolds", status_code=201)
     def mint_scaffold(body: ScaffoldMintBody, request: Request):

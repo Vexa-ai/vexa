@@ -187,6 +187,14 @@
       "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's admin, auth and version routes are to move behind the gateway; the entry closes when the route is bound in routes.v1 and the client reads only GATEWAY_URL."
     },
     {
+      "path": "clients/terminal/src/app/api/auth/adminApi.ts",
+      "door": "AGENT_API_URL",
+      "line": 330,
+      "from": "terminal",
+      "to": "agent",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The SECOND door of this name in this file, and the same door as the mint below it: Vexa-ai/vexa#1591 made the first-visit arrival conditional on whether the person has anything to return to, and that question is internal-tier for the same reason minting is — it answers about somebody else's account from an address alone, over X-Internal-Secret, which a browser holds no equivalent of. Routing the guard through the gateway while the call it guards goes direct would be two answers to one question. The entry closes with its sibling, when the terminal's auth routes are bound in routes.v1 and the client reads only GATEWAY_URL."
+    },
+    {
       "path": "clients/terminal/src/app/api/version/route.ts",
       "door": "AGENT_API_URL",
       "line": 37,

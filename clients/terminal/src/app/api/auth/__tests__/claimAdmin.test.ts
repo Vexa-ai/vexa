@@ -39,12 +39,20 @@ function stubAdminApi(opts: {
   mint?: { status: number; body?: unknown };
   mintThrows?: boolean;
   globalSetup?: "completed" | "missing";
+  hasHistory?: boolean;
 }) {
   const calls: string[] = [];
   minted.length = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
     calls.push(`${init?.method || "GET"} ${u}`);
+    // #1591: a first-visit arrival is minted only for somebody with nothing to return to, so every
+    // door now asks agent-api before it mints. These tests are about WHICH record is asked for, so
+    // the claimer is a stranger unless a case says otherwise.
+    if (u.includes("/internal/has-history")) {
+      return new Response(JSON.stringify({ has_history: opts.hasHistory === true, sessions: 0, desk: "new" }),
+                          { status: 200 });
+    }
     if (u.includes("/internal/validate")) {
       const v = opts.validate ?? { status: 200, body: { user_id: 11, email: "dmitry@vexa.ai", is_admin: false } };
       return new Response(JSON.stringify(v.body ?? {}), { status: v.status });

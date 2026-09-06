@@ -317,8 +317,68 @@ export const mintAdminSetupScaffold = (email: string, userId: string | number) =
  *  had already changed by the time the mint ran, so a silent failure would have left a person who IS
  *  the administrator with no way into the conversation that says so — it had to be surfaced. Here
  *  nothing has changed except that they are signed in, which is what they asked for. */
-export const mintFirstVisitScaffold = (email: string, userId: string | number) =>
-  mintArrivalScaffold("first-visit", email, userId, { flow: "sign-in", step: "first-visit" });
+/** WHAT THIS ADDRESS HAS TO COME BACK TO — asked of agent-api, never guessed here.
+ *
+ *  `has` is true when they hold a chat thread OR a desk past `new`; `probed` says whether we got an
+ *  answer at all, so a caller can tell "they are new" from "we could not ask".
+ *
+ *  Two evidences rather than one because they fail in opposite directions. A person who has talked
+ *  to their agent has threads. A person a colleague put in a meeting has a desk with a report in it
+ *  and may never have typed a word — and greeting THEM as a stranger is the same defect wearing a
+ *  different hat. */
+export async function hasHistory(email: string): Promise<{ has: boolean; probed: boolean; why: string }> {
+  const url = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret) return { has: false, probed: false, why: "not configured" };
+  try {
+    const res = await fetch(`${url}/internal/has-history?who=${encodeURIComponent(email)}`, {
+      headers: { "X-Internal-Secret": secret },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return { has: false, probed: false, why: `agent-api returned ${res.status}` };
+    const body = (await res.json()) as { has_history?: unknown; sessions?: unknown; desk?: unknown };
+    return {
+      has: body?.has_history === true,
+      probed: true,
+      why: `sessions=${String(body?.sessions ?? "?")} desk=${String(body?.desk ?? "?")}`,
+    };
+  } catch (err) {
+    return { has: false, probed: false, why: (err as Error).message };
+  }
+}
+
+/** A FIRST VISIT IS FOR SOMEBODY WITH NO FIRST VISIT BEHIND THEM (Vexa-ai/vexa#1591).
+ *
+ *  This used to mint on every sign-in that named no destination, so the admin who had spent a
+ *  morning on this instance signed in again and was introduced to the product: *"i logged in again
+ *  and now see no chats and it's starting over again while it has the context"*. F42's rule was
+ *  right and its condition was wrong — "the link named nowhere" is not the same question as "there
+ *  is nowhere to go".
+ *
+ *  THE GUARD LIVES HERE, not at one door, because all four doors — magic link, direct login, OAuth,
+ *  the admin claim on an already-set-up instance — are the same moment and would otherwise drift.
+ *
+ *  IT FAILS TOWARDS NOT MINTING, and that costs almost nothing: a probe that cannot answer is
+ *  talking to the same agent-api the mint itself needs one line later, so an outage lands the person
+ *  on `/` either way. What it buys is that a blip can never re-commit the reported defect — a
+ *  returning person told, again, that we have never met. */
+export async function mintFirstVisitScaffold(
+  email: string,
+  userId: string | number,
+): Promise<AdminResult<MintedScaffold>> {
+  const history = await hasHistory(email);
+  if (history.has || !history.probed) {
+    return {
+      ok: false,
+      status: 409,
+      error: history.has
+        ? `no arrival minted — ${email} has history to return to (${history.why})`
+        : `no arrival minted — could not ask whether ${email} has history (${history.why})`,
+    };
+  }
+  return mintArrivalScaffold("first-visit", email, userId, { flow: "sign-in", step: "first-visit" });
+}
 
 /** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
  *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.

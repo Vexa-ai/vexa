@@ -223,7 +223,20 @@ def build(**d) -> APIRouter:
                 # instruction block is the same defect as painting it as the person's message.
                 _title = ((scaffold_view["header"]["title"] or scaffold_view["opening_label"])
                           if scaffold_view is not None else _truncate_title(body.prompt))
-                sess.upsert(subject, session, title=_title if is_new else None)
+                # WHAT THE RAIL NEEDS, RECORDED WHERE IT IS KNOWN (Vexa-ai/vexa#1591). The chat list
+                # is derived from this index now, so a row has to carry what a row shows: the mount
+                # set, the record the chat was composed from, and whether a PERSON has written here.
+                #
+                # `touched` is decided on the same rule the client uses — a user's own words, or an
+                # act they asked for — which here is "not a scaffold opening and not a silent
+                # intent". A job mark (Extend, Create) IS a touch: somebody pressed it. The client
+                # could only ever see the turns typed in one browser; this sees all of them.
+                sess.upsert(subject, session, title=_title if is_new else None,
+                            workspaces=((scaffold_view or {}).get("workspaces") or None),
+                            scaffold=({"kind": scaffold_view.get("kind"), "id": scaffold_view.get("id")}
+                                      if scaffold_view is not None else None),
+                            touched=(scaffold_view is None
+                                     and not chat_intents.is_silent(body.intent)))
                 # ``room`` applies AT SPAWN: the mount table is fixed when the container is created,
                 # so a WARM unit (this thread already has a live worker) keeps the stack it booted
                 # with and a room named on a later turn of the same thread does not retro-mount. The
@@ -269,6 +282,14 @@ def build(**d) -> APIRouter:
         return {"ok": True}
     @router.get("/api/sessions")
     def list_sessions(request: Request):
+        """THE RAIL, FOR THIS PERSON, WHEREVER THEY SIGN IN (Vexa-ai/vexa#1591).
+
+        Most-recently-active first. Each row is `session` · `title` · `created` · `last_active` and,
+        since the rail started deriving from here, `workspaces` · `scaffold` (`{kind, id}` or null) ·
+        `touched`. The four original names are unchanged, so every existing consumer reads what it
+        always read; the client's own `meeting` ref is NOT here on purpose — `meet-<row>` is the
+        terminal's own naming of a meeting's session, and one convention with one owner beats a
+        second copy of it on the wire."""
         return {"sessions": sess.list(subject_of(request))}
     @router.get("/api/sessions/{session}/history")
     def session_history(session: str, request: Request):

@@ -25,18 +25,20 @@ import { AttachRepo } from "./AttachRepo";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, nameChat, nameFromTurn,
+  chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
+  meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
   forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
+import { listSessions } from "../surfaces/sessionsApi";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
 import { Rail } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
-import { useScaffoldArrival } from "./arrival";
+import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
@@ -443,6 +445,52 @@ export function MinutesShell() {
     setDraft((d) => (d && d.id !== sel.chatId ? null : d));
   }, [sel.chatId]);
 
+  // ── THE RAIL IS THE SERVER'S SESSIONS (Vexa-ai/vexa#1591, founder walk 2026-09-06) ───────────
+  //
+  //  He signed in again in a new window after a morning of work on this instance and got an empty
+  //  rail: *"i logged in again and now see no chats and it's starting over again while it has the
+  //  context"*. `vexa.minutes.chats` is ONE browser's storage — a second window, a second machine or
+  //  cleared site data showed nothing, while every one of those conversations was on the server.
+  //
+  //  So the list is fetched and MERGED (`mergeChats` owns the field-by-field rules). Local caches;
+  //  the server owns. It runs after the owner check above — same `email` dependency, declared
+  //  second, so a rail being dropped for the wrong identity is never the thing we merge into.
+  //
+  //  A FAILED FETCH COSTS NOTHING. The stored rail is what the reader already had, and a rail that
+  //  emptied itself because one request failed would be the reported defect with a new cause.
+  const landed = useRef(false);
+  // `openChat` is rebuilt whenever the meetings list polls, and this must not become a fetch per
+  // poll — the rail is read ONCE, when the identity arrives, so the callback rides a ref instead of
+  // the dependency array.
+  const openChatRef = useRef(openChat);
+  useEffect(() => { openChatRef.current = openChat; }, [openChat]);
+  useEffect(() => {
+    if (!email) return;
+    let live = true;
+    void listSessions().then((rows) => {
+      if (!live) return;
+      const fromServer = chatsFromSessions(rows);
+      const hidden = loadHidden();
+      persist((prev) => mergeChats(prev, fromServer, hidden));
+      // The same pure merge over what is in hand, read-only, so the landing choice below is not an
+      // assignment smuggled out of a state updater React may run twice.
+      const newest = [...mergeChats(chatsRef.current, fromServer, hidden)]
+        .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0] ?? null;
+      // …AND A RETURNING PERSON LANDS ON THEIR CHATS, not on an empty composer beside them. Only
+      // from the UNTOUCHED DRAFT the shell opens on when it knew of no chats — a draft is always
+      // what is in front when it exists (the effect above clears it the moment the selection
+      // moves), so this can never take a conversation away from under somebody. A deeplink or a
+      // `?s=` arrival chose the room already and always wins; once, so a later re-render or a
+      // second fetch cannot yank the reader out of what they have since opened.
+      if (landed.current) return;
+      landed.current = true;
+      if (deeplinkPending || pendingArrival() || !draftRef.current || !newest) return;
+      setDraft(null);
+      void openChatRef.current(newest);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [email, persist, deeplinkPending]);
+
   /** Fire a proposal chip. The founder chose IMMEDIATE, for consistency with the emailed links:
    *  a click sends the turn, with nothing left in the composer to press Enter on. And it sends it
    *  HERE — **a chip acts in the chat it renders in and never mints a row** (founder, 2026-09-01:
@@ -510,6 +558,10 @@ export function MinutesShell() {
   // user's index, not the record). A meeting's row comes back as a derived row, because the meeting
   // itself did not go anywhere.
   const deleteChat = (chatId: string) => {
+    // …and it has to be REMEMBERED now that the rail derives from the server (Vexa-ai/vexa#1591).
+    // Dropping the stored row alone would put the chat straight back on the next fetch: the row is
+    // this reader's index, the session is the server's, and a delete is a statement about the index.
+    hideChat(chatId);
     persist((prev) => removeChat(prev, chatId));
     if (sel.chatId !== chatId) return;
     // There is no home row to fall back to any more (F34 deleted it), so the shell lands on the

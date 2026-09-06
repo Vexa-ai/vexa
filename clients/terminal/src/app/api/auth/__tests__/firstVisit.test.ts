@@ -32,11 +32,23 @@ function makeReq(query: Record<string, string>): import("next/server").NextReque
  *  not sending workspaces/tabs/prompt-text actually lives. */
 let minted: { url: string; body: Record<string, unknown> }[] = [];
 
-function stubs(opts: { mint?: "ok" | "fail" } = {}) {
-  const { mint = "ok" } = opts;
+/** Every has-history probe, so a test can assert the arrival ASKED before it minted. */
+let probed: string[] = [];
+
+function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down" } = {}) {
+  const { mint = "ok", history = "none" } = opts;
   minted = [];
+  probed = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
+    if (u.includes("/internal/has-history")) {
+      probed.push(u);
+      if (history === "down") return new Response("agent-api is down", { status: 503 });
+      return new Response(JSON.stringify(
+        history === "some"
+          ? { has_history: true, sessions: 3, desk: "warm" }
+          : { has_history: false, sessions: 0, desk: "new" }), { status: 200 });
+    }
     if (u.includes("/internal/scaffolds")) {
       minted.push({ url: u, body: JSON.parse(String(init?.body ?? "{}")) });
       return mint === "ok"
@@ -128,5 +140,52 @@ describe("the magic-link door", () => {
     const res = await redeem(makeReq({ t: link(), next: "/?s=SENT-TO-THEM" }));
     expect(res.headers.get("location")).toBe("/?s=SENT-TO-THEM");
     expect(minted).toHaveLength(0);
+  });
+});
+
+/** #1591 — A FIRST VISIT IS FOR SOMEBODY WITH NO FIRST VISIT BEHIND THEM.
+ *
+ *  F42 above minted on every sign-in that named no destination, which is a fact about the LINK.
+ *  Whether there is anywhere to go is a fact about the PERSON, and the two are not the same
+ *  question: the admin who had spent a morning on this instance signed in again in a new window and
+ *  was introduced to the product — *"i logged in again and now see no chats and it's starting over
+ *  again while it has the context"*.
+ *
+ *  The server holds both halves of the answer (their chat threads, their desk) and the client holds
+ *  neither, which is exactly why this had to become a probe rather than a smarter guess. */
+describe("the arrival asks first", () => {
+  it("a returning person is NOT introduced again — they land on `/`, where the rail is theirs", async () => {
+    stubs({ history: "some" });
+    const res = await redeem(makeReq({ t: link() }));
+    expect(res.headers.get("location")).toBe("/");
+    expect(minted).toHaveLength(0);
+    // …and they are signed in, which is the whole of what they came for
+    expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
+  });
+
+  it("a genuinely new person still gets the arrival — and the question was asked before it", async () => {
+    stubs({ history: "none" });
+    const res = await redeem(makeReq({ t: link() }));
+    expect(probed).toHaveLength(1);
+    expect(probed[0]).toContain("who=new%40example.com");
+    expect(res.headers.get("location")).toBe("https://terminal.test/?s=SC1");
+  });
+
+  it("a probe that cannot answer mints NOTHING", async () => {
+    // It fails towards no arrival, and that costs almost nothing: the probe talks to the same
+    // agent-api the mint needs one line later, so an outage lands them on `/` either way. What it
+    // buys is that a blip can never re-commit the reported defect — a returning person told, again,
+    // that we have never met.
+    stubs({ history: "down" });
+    const res = await redeem(makeReq({ t: link() }));
+    expect(res.headers.get("location")).toBe("/");
+    expect(minted).toHaveLength(0);
+    expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
+  });
+
+  it("a link that names a destination is not even probed", async () => {
+    stubs({ history: "none" });
+    await redeem(makeReq({ t: link(), next: "/?ask=catch-up" }));
+    expect(probed).toHaveLength(0);
   });
 });

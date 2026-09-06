@@ -60,7 +60,7 @@ function page(title: string, detail: string, status: number, cta = "Ask for a ne
   return new NextResponse(html, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
 }
 
-/** WHERE A SIGN-IN LANDS (F42, founder ruling 2026-09-02).
+/** WHERE A SIGN-IN LANDS (F42, founder ruling 2026-09-02; amended Vexa-ai/vexa#1591).
  *
  *  A link that named a destination keeps it — an invite, a meeting page, a scaffold someone already
  *  minted for this person (`?s=`). Everything else used to land on `/`, and `/` was the product
@@ -73,17 +73,30 @@ function page(title: string, detail: string, status: number, cta = "Ask for a ne
  *  shared with this address, which meetings it is invited to — is derived server-side; nothing about
  *  it is guessed here.
  *
- *  A FAILED MINT COSTS NOTHING BUT THE ARRIVAL: it is logged and the visitor lands on `/` exactly as
- *  before. The opposite trade from the admin claim, where the role had already changed and a silent
- *  failure would strand the new administrator — here the only thing that has happened is that they
- *  are signed in, which is what they came for. */
+ *  ⚠ AND ONLY WHEN THERE IS NOWHERE TO GO. "The link named no destination" is a fact about the
+ *  link; "this person has nothing to return to" is a fact about the person, and F42 used the first
+ *  as though it were the second. So the admin who had spent a morning here signed in again and was
+ *  introduced to the product — *"i logged in again and now see no chats and it's starting over
+ *  again while it has the context"*. The question is now asked of the server, which holds both
+ *  answers (their chat threads, their desk); `mintFirstVisitScaffold` owns it, so all four sign-in
+ *  doors ask it the same way. A returning person lands on `/`, where the rail — since #1591, derived
+ *  from those same sessions — is their own chats.
+ *
+ *  NO ARRIVAL COSTS NOTHING BUT THE ARRIVAL: the visitor lands on `/` exactly as before, signed in.
+ *  The opposite trade from the admin claim, where the role had already changed and a silent failure
+ *  would strand the new administrator — here the only thing that has happened is that they are
+ *  signed in, which is what they came for. */
 async function arrival(target: string, email: string, userId: string | number): Promise<string> {
   // `?s=` inside the destination means an arrival already exists for this click — minting a second
   // would open a conversation over the one they were sent.
   if (target !== "/" || /[?&]s=/.test(target)) return target;
   const minted = await mintFirstVisitScaffold(email, userId);
   if (minted.ok && minted.data?.url) return minted.data.url;
-  console.error(`[terminal-auth] first-visit scaffold mint failed for ${email}: ${minted.ok ? "no url" : minted.error}`);
+  // 409 is the DELIBERATE no-arrival — a returning person, or a probe that could not answer. It is
+  // the ordinary path for everybody who has been here before, so it is not an error and must not be
+  // logged as one: a line that cries wolf on the common case is a line nobody reads on the rare one.
+  if (minted.status === 409) console.info(`[terminal-auth] ${minted.error}`);
+  else console.error(`[terminal-auth] first-visit scaffold mint failed for ${email}: ${minted.ok ? "no url" : minted.error}`);
   return target;
 }
 
