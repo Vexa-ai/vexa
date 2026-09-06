@@ -224,7 +224,12 @@ def test_the_qwen_lane_dials_are_declared():
 # 94: +1 VEXA_TARGET_WORKSPACE (Vexa-ai/vexa#1611) — the chat's target workspace, the one mount its
 # writes go to. The worker reads it to MARK that mount in its own stack declaration, so a write with
 # no better instruction has a path rather than a guess.
-EXPECTED_DECLARED_KEYS = 94
+# 98: +4 VEXA_AGENT_MAX_TOOL_CALLS_{CHAT,JOB,ROOM,FLOW} (Vexa-ai/vexa#1622) — the per-kind budget
+# table. Declared BY HAND, and that is the finding: `_env_reads` cannot see them, because the
+# harness reads every budget through `_int_env(name, default)` and the scan looks for `os.environ`
+# with a literal beside it. The same blind spot already hides #1613's VEXA_AGENT_JOB_MAX_TOOL_CALLS
+# and VEXA_AGENT_JOB_MAX_TURN_SEC, which are read by the shipped worker and declared nowhere.
+EXPECTED_DECLARED_KEYS = 98
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():

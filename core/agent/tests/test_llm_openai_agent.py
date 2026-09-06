@@ -29,8 +29,8 @@ import httpx
 import pytest
 
 from llm import jobs as llm_jobs
-from llm.openai_agent import (OpenAIAgentHarness, _Sandbox, _job_calls, mount_roots, run_builtin,
-                              trim_messages)
+from llm.openai_agent import (OpenAIAgentHarness, _Sandbox, _calls_budget, _job_calls, mount_roots,
+                              run_builtin, trim_messages)
 
 
 # ── the scripted model ──────────────────────────────────────────────────────────────────────────
@@ -319,6 +319,133 @@ def test_a_plain_turn_is_untouched_by_any_of_this(tmp_path, monkeypatch, _not_a_
     evs = _events(h, tmp_path, "go", allowed_tools=["Glob"])
     assert [e for e in evs if e["type"] == "job-progress"] == []
     assert evs[-1]["ok"] is False and "tool-call budget" in evs[-1]["reason"]
+
+
+# ── a turn that spends its budget says so, and offers to carry on (Vexa-ai/vexa#1622) ───────────
+
+
+@pytest.fixture
+def _plain_turn(monkeypatch):
+    """A CHAT turn with the per-kind dials cleared — the shape the four friction reports came from.
+
+    `mark_turn_kind` is cleared on both sides for the same reason `_not_a_job` clears the job flag:
+    the mark is thread-local and this suite is one thread."""
+    llm_jobs.mark_turn_kind("")
+    for k in ("CHAT", "JOB", "ROOM", "FLOW"):
+        monkeypatch.delenv(f"VEXA_AGENT_MAX_TOOL_CALLS_{k}", raising=False)
+    yield
+    llm_jobs.mark_turn_kind("")
+
+
+def _never_stops(tool="Glob"):
+    """A MODEL THAT NEVER STOPS. `_server` clamps to the last scripted message, so one message
+    carrying a tool call is replayed for ever — the founder's OeNB turns in miniature."""
+    return _server([_msg("working on it", [("c1", tool, {"pattern": "*"})])])
+
+
+def test_a_turn_that_spends_its_budget_says_so_and_offers_to_continue(tmp_path, monkeypatch,
+                                                                     _plain_turn):
+    """THE DEFECT, in one test. Three turns died at the budget in one of the founder's chats on
+    2026-09-06 and the chat showed a finished turn each time, so he re-typed his instruction into
+    the same wall. The turn now ends with the line and with the act."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "3")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "build the workspace", allowed_tools=["Glob"])
+
+    done = evs[-1]
+    assert done["type"] == "done" and done["ok"] is False
+    # THE LINE: how far it got, and what the ceiling was. Both, because they decide whether the
+    # answer is "press Continue" or "raise the budget".
+    assert done["reason"] == "stopped at the tool-call budget after 3 of 3 steps"
+    # THE ACT: the words that go back onto the same target, through #1610's inbox.
+    assert done["act"] == {"label": "Continue", "instruction": "continue where you stopped"}
+    # …and the step count rides on the status regardless of who is counting in a browser
+    assert done["steps"] == 3 and done["budget"] == 3
+
+
+def test_a_turn_that_finishes_still_reports_its_steps(tmp_path, monkeypatch, _plain_turn):
+    """`steps` is on EVERY done, not only a truncated one — otherwise the only turns anything
+    server-side could count are the ones that went wrong. And a finished turn offers no act: there
+    is nothing to continue."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "40")
+    h = _harness(_server([_msg("", [("a", "Glob", {"pattern": "*"})]), _msg("done")]))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "go", allowed_tools=["Glob"])
+    assert evs[-1]["ok"] is True and evs[-1]["steps"] == 1 and evs[-1]["budget"] == 40
+    assert "act" not in evs[-1] and "reason" not in evs[-1]
+
+
+def test_the_refused_calls_carry_their_tool_name(tmp_path, monkeypatch, _plain_turn):
+    """WHY THE FOUR REPORTS NAMED NO TOOL. A refused call emits no `tool-call` event, so anything
+    joining results to calls by id found nothing — ` `` `. The name is on the result itself now."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
+    h = _harness(_server([_msg("", [("a", "Glob", {"pattern": "*"}),
+                                    ("b", "Read", {"path": "x.md"})]), _msg("late")]))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "go", allowed_tools=["Glob", "Read"])
+    refused = [e for e in evs if e["type"] == "tool-result" and e["callId"] == "b"]
+    assert refused and refused[0]["tool"] == "Read" and refused[0]["ok"] is False
+    trunc = [e for e in evs if e["type"] == "turn-truncated"][0]
+    assert trunc["budget"] == 1 and trunc["tool"] == "Glob" and trunc["kind"] == "chat"
+
+
+def test_a_job_that_ends_on_its_budget_offers_the_same_act(tmp_path, monkeypatch, _not_a_job,
+                                                           _plain_turn):
+    """A job that can no longer make progress ends for real (#1613's stop condition), and when it
+    does it is in exactly the position a turn is in: stopped, with work on disk. Same line, same
+    act — the difference between a job and a turn is the fresh WINDOW, not the ending."""
+    monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "0")
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "0")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    llm_jobs.mark_job_thread(True)
+    evs = _events(h, tmp_path, "expand", allowed_tools=["Glob"])
+    assert evs[-1]["reason"] == "stopped at the tool-call budget after 0 of 0 steps"
+    assert evs[-1]["act"]["instruction"] == "continue where you stopped"
+
+
+# ── the per-kind budget table (Vexa-ai/vexa#1622) ───────────────────────────────────────────────
+
+
+def test_the_single_dial_is_the_fallback_for_every_kind(monkeypatch, _plain_turn):
+    """The compatibility promise, and it is load-bearing: the dogfood stack has carried
+    `VEXA_AGENT_MAX_TOOL_CALLS=160` since 14:41Z on 2026-09-06 as the stopgap for this very
+    incident. A table that quietly ignored it would undo the operator's fix."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "160")
+    monkeypatch.delenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", raising=False)
+    assert [_calls_budget(k) for k in ("chat", "room", "flow", "job")] == [160, 160, 160, 160]
+
+
+def test_each_kind_has_its_own_dial_and_its_own_default(monkeypatch, _plain_turn):
+    monkeypatch.delenv("VEXA_AGENT_MAX_TOOL_CALLS", raising=False)
+    monkeypatch.delenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", raising=False)
+    # the table's own defaults: a room run is a pass over a whole meeting, a chat turn a sentence
+    assert _calls_budget("chat") == 40 and _calls_budget("room") == 80
+    assert _calls_budget("flow") == 40 and _calls_budget("job") == 160
+    # …and one row moves without the others
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS_ROOM", "500")
+    assert _calls_budget("room") == 500 and _calls_budget("chat") == 40
+    # the kind's own dial beats the single one
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "7")
+    assert _calls_budget("room") == 500 and _calls_budget("chat") == 7
+    # an unknown kind is a chat turn rather than a crash: the budget is a safety margin, and a
+    # deployment one release ahead must not lose its ceiling over a name this build never heard of
+    assert _calls_budget("something-new") == 7 and _calls_budget("") == 7
+
+
+def test_the_kind_is_read_off_the_thread_not_the_environment(tmp_path, monkeypatch, _not_a_job,
+                                                             _plain_turn):
+    """A chat turn, a room run and a flow step share one worker process, so the dial cannot be
+    resolved from the environment alone — the same reason #1613 made the job mark thread-local."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS_ROOM", "2")
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "40")
+    llm_jobs.mark_turn_kind("room")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "write the meeting up", allowed_tools=["Glob"])
+    assert evs[-1]["reason"] == "stopped at the tool-call budget after 2 of 2 steps"
+    assert len([e for e in evs if e["type"] == "tool-call"]) == 2
 
 
 def _calls(*ids):

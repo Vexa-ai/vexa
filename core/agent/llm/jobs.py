@@ -21,6 +21,13 @@ job. A job runs on its own thread (`worker/jobs.JobRunner._run`), so the mark is
 needs no signature change through `HarnessPort.run_turn`, which three adapters implement and only
 one of them cares. The harness reads it to pick a budget: a job is not a turn, and the founder's
 OeNB job died on the per-turn tool-call budget after 72 steps because it was billed as one.
+
+…AND #1622 GENERALISES THAT MARK FROM A BOOLEAN TO A KIND. "Is this a job?" turned out to be the
+first instance of a question with four answers — a chat turn, a job (Create/Extend), a post-meeting
+room run and a flow step are four different shapes of work behind one number, and the number was
+sized for the shortest of them. So the thread carries WHICH KIND it is running and the harness reads
+that; `in_job()` stays exactly as it was, because a job's own machinery asks a yes/no question and
+should not have to know about a vocabulary it does not use.
 """
 from __future__ import annotations
 
@@ -62,6 +69,37 @@ def mark_job_thread(on: bool = True) -> None:
 def in_job() -> bool:
     """Is the current thread running a background job's turn? Default false everywhere else."""
     return bool(getattr(_JOB_THREAD, "on", False))
+
+
+# ── which KIND of turn am I? (Vexa-ai/vexa#1622) ────────────────────────────────────────────────
+#
+# The same thread-local discipline, one question wider. `worker.engine.run_turn_over_workspace` is
+# the single funnel every governed turn passes through, so it is the one place that can name the
+# kind — it knows the job mark, the flow mark and the room stamp — and it sets this on the thread
+# that will iterate the harness, exactly as the job mark is set.
+
+#: The four kinds a budget is sized for. Closed, and NAMED HERE rather than in the harness, because
+#: the producer and the reader of this value must not disagree about the spelling of a dial.
+TURN_KINDS = ("chat", "job", "room", "flow")
+
+_TURN_KIND = threading.local()
+
+
+def mark_turn_kind(kind: str = "") -> None:
+    """Declare (or clear, with ``""``) which kind of turn THIS THREAD is running."""
+    _TURN_KIND.kind = str(kind or "").strip().lower()
+
+
+def turn_kind() -> str:
+    """The kind of turn on this thread — one of ``TURN_KINDS``.
+
+    A thread nobody marked answers ``job`` when the job flag is set and ``chat`` otherwise. Both
+    fallbacks are deliberate: a caller that never learned about kinds (an offline eval, a test
+    driving the harness directly) gets exactly the budget it got before this existed."""
+    kind = str(getattr(_TURN_KIND, "kind", "") or "")
+    if kind in TURN_KINDS:
+        return kind
+    return "job" if in_job() else "chat"
 
 
 def spawn(kind: str, target: str, brief: str) -> "tuple[bool, str]":

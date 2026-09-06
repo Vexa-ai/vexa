@@ -574,7 +574,7 @@ from shared.marks import WRITEBACK_MARK  # noqa: E402 — re-export; see shared/
 # THE THIRD MARK (Vexa-ai/vexa#1584): this act runs as a background JOB, not on this turn. Written
 # by `control_plane/chat_intents.job_prefix`, read here in `run_message`. Same module, same reason
 # — a decision that changes how a prompt is run has to be legible in the prompt.
-from shared.marks import act_label, read_job_mark  # noqa: E402 — see shared/marks.py
+from shared.marks import act_label, read_job_mark, turn_namespace  # noqa: E402 — see shared/marks.py
 
 # AND THE SALVAGE FOR A TURN NOBODY TYPED THAT CARRIES NO MARK (Vexa-ai/vexa#1605): a flow's
 # composed kick names its own kind in its first bracket. One implementation, so what this
@@ -1613,6 +1613,19 @@ def run_turn_over_workspace(
         _half = human_half(prompt)
         record_user_text(chat_root, session, turn_prompt,
                          act_label(prompt) or composed_label(_half) or _half)
+    # WHICH KIND OF TURN THIS IS (Vexa-ai/vexa#1622). This function is the single funnel every
+    # governed turn passes through, and the only place that can see all three signals at once — the
+    # job flag (`_job_turn` set it on this thread), the flow mark on the prompt, and the platform's
+    # room stamp. The harness reads the result to size its tool-call budget: a chat sentence, an
+    # Extend, a whole post-meeting run and a flow step are four different amounts of work and were
+    # all billed at 40 calls, which is how the founder's chats stopped dead three times in a row.
+    #
+    # Set here, not cleared here as a correctness measure: EVERY turn passes this line before it
+    # runs, so the mark cannot be stale for anything that reads it. The `finally` below clears it
+    # anyway, because a thread-local nobody clears is a thread-local somebody later misreads.
+    llm_jobs.mark_turn_kind("job" if llm_jobs.in_job()
+                            else "flow" if turn_namespace(prompt) == "flow"
+                            else "room" if room_run() else "chat")
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)
@@ -1631,12 +1644,15 @@ def run_turn_over_workspace(
                                commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
         first = next(gen, None)
     captured: str | None = None
-    # THE TURN'S OWN ROUGH EDGES (PRD decision 33 §1). Only the two event types the scan reads are
-    # kept — a turn's full stream is unbounded and this is a footnote, not a recorder.
+    # THE TURN'S OWN ROUGH EDGES (PRD decision 33 §1). Only the event types the scan reads are kept
+    # — a turn's full stream is unbounded and this is a footnote, not a recorder. `turn-truncated`
+    # joined them for Vexa-ai/vexa#1622: without it the scan sees only the refusal the budget caused
+    # and files a record naming no tool and saying "not run", which is what all four of the
+    # founder's auto-filed reports said.
     tool_events: list[dict] = []
     try:
         for ev in (gen if first is None else itertools.chain([first], gen)):
-            if ev.get("type") in ("tool-call", "tool-result"):
+            if ev.get("type") in ("tool-call", "tool-result", "turn-truncated"):
                 tool_events.append(ev)
             if ev.get("type") == "done" and ev.get("sessionId"):
                 captured = ev["sessionId"]
@@ -1656,6 +1672,7 @@ def run_turn_over_workspace(
         # The budget closes THIS generator when the write-back phase runs out; the CLI underneath it
         # must go with it. See `llm.ports.close_event_stream`.
         close_event_stream(gen)
+        llm_jobs.mark_turn_kind("")
     # AFTER the stream, never inside it: a report is a footnote to a turn, and a turn must not
     # stall on one. `report` never raises (see worker/friction.py) — this try is the belt.
     try:
@@ -2007,7 +2024,14 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 refresh_desk_readme()
             except Exception as e:  # noqa: BLE001
                 log.warning("desk README refresh failed on %s: %s: %s", turn_id, type(e).__name__, e)
-            stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
+            # HOW MANY STEPS THE TURN TOOK, on the turn's own status event (Vexa-ai/vexa#1622).
+            # This count already existed — it is what gates the write-back phase — and was thrown
+            # away, so the only step count anywhere was one each browser derived for itself by
+            # counting `tool-call` events off the stream. A server-side number is what lets a rail,
+            # a second device or a reader of the log say how much work a turn did, and it is the
+            # same number the budget was measured against.
+            stream.xadd(out_topic, {"event": json.dumps(
+                {"type": "turn-complete", "turn_id": turn_id, "steps": tool_calls})})
 
         if not run_writeback:
             # THE FAST PATH — no thread, no lock, no deferral: this is nearly every turn.

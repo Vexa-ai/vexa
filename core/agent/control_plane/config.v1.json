@@ -626,7 +626,43 @@
       "key": "VEXA_AGENT_MAX_TOOL_CALLS",
       "class": "defaulted",
       "default": "40",
-      "description": "openai-agent harness: hard per-turn ceiling on tool calls. A turn that reaches it stops and reports the truncation on its done event",
+      "description": "openai-agent harness: ceiling on tool calls, the FALLBACK FOR EVERY KIND of turn. A turn that reaches it stops, says so in the bubble and offers a Continue act. Per-kind overrides: VEXA_AGENT_MAX_TOOL_CALLS_CHAT / _JOB / _ROOM / _FLOW",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_CHAT",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: tool-call ceiling for a CHAT turn — a sentence and its follow-through. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_JOB",
+      "class": "defaulted",
+      "default": "160",
+      "description": "openai-agent harness: tool-call ceiling for a background JOB (Create/Extend), PER WINDOW — reaching it is a checkpoint, not a death. Falls back to VEXA_AGENT_JOB_MAX_TOOL_CALLS, then to VEXA_AGENT_MAX_TOOL_CALLS, and is never below a turn's",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_ROOM",
+      "class": "defaulted",
+      "default": "80",
+      "description": "openai-agent harness: tool-call ceiling for a post-meeting ROOM run — one pass over a finished meeting, which is measurably longer than a sentence. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_FLOW",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: tool-call ceiling for one FLOW step. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
       "targets": [
         "compose"
       ]

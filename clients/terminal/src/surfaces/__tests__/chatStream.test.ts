@@ -44,7 +44,9 @@ function ev(o: Record<string, unknown>, id?: string): string {
 
 /** Collect the callback effects into a simple record for assertions. */
 function recorder() {
-  const state = { text: "", tools: [] as string[], commit: undefined as string | undefined, rejected: false, error: "", modelFailure: 0, starting: 0, truncated: "" };
+  const state = { text: "", tools: [] as string[], commit: undefined as string | undefined, rejected: false, error: "", modelFailure: 0, starting: 0, truncated: "",
+    stop: undefined as { steps?: number; budget?: number; act?: { label: string; instruction: string } } | undefined,
+    steps: [] as number[] };
   const cb: ChatStreamCallbacks = {
     onStarting: () => { state.starting += 1; },
     onDelta: (t) => { state.text += t; },
@@ -53,7 +55,8 @@ function recorder() {
     onRejected: () => { state.rejected = true; },
     onModelFailure: () => { state.modelFailure += 1; },
     onError: (m) => { state.error += m; },
-    onTruncated: (reason) => { state.truncated = reason; },
+    onTruncated: (reason, _partial, stop) => { state.truncated = reason; state.stop = stop; },
+    onSteps: (n) => { state.steps.push(n); },
   };
   return { state, cb };
 }
@@ -453,6 +456,64 @@ describe("streamChatTurn — a turn that stopped early (F89)", () => {
     );
 
     expect(state.modelFailure).toBe(1);
+    expect(state.truncated).toBe("");
+  });
+
+  // ── a budget stop carries the count and the act (Vexa-ai/vexa#1622) ──────────────────────────
+
+  it("carries the step count, the budget and the Continue act off a budget-stopped done", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "message-delta", text: "I started the workspace" }),
+      ev({ type: "done", ok: false, reply: "I started the workspace", steps: 40, budget: 40,
+           reason: "stopped at the tool-call budget after 40 of 40 steps",
+           act: { label: "Continue", instruction: "continue where you stopped" } }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "build the OeNB workspace", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.truncated).toBe("stopped at the tool-call budget after 40 of 40 steps");
+    expect(state.stop).toEqual({ steps: 40, budget: 40,
+      act: { label: "Continue", instruction: "continue where you stopped" } });
+    expect(state.steps).toEqual([40]);
+    expect(state.modelFailure).toBe(0);
+  });
+
+  it("drops a half-record act rather than drawing a button that posts nothing", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "done", ok: false, reply: "", steps: 3, budget: 3,
+           reason: "stopped at the tool-call budget after 3 of 3 steps", act: { label: "Continue" } }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.truncated).toContain("tool-call budget");
+    expect(state.stop?.act).toBeUndefined();
+  });
+
+  it("reports the server's step count off turn-complete too, on a turn that finished", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "tool-call", tool: "Read" }),
+      ev({ type: "turn-complete", steps: 12 }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.steps).toEqual([12]);
     expect(state.truncated).toBe("");
   });
 });

@@ -328,6 +328,57 @@ def test_a_4xx_from_a_vexa_tool_files_even_when_the_turn_recovered():
     assert len(recs) == 1 and recs[0]["context"]["tool"] == "mcp__vexa__bot_say"
 
 
+def test_a_budget_stop_names_the_budget_the_count_and_the_last_tool():
+    """THE FOUR MALFORMED REPORTS (Vexa-ai/vexa#1622). Every one of them read::
+
+        tried:    the turn ended on a failed tool call: ``
+        happened: not run: the turn hit its tool-call budget
+
+    — an empty tool name, and a description of one skipped CALL standing in for what happened to
+    the TURN. Neither survives: the record says the budget, the count against it, and the tool the
+    turn was actually on."""
+    recs = wfr.scan_turn([
+        {"type": "tool-call", "tool": "mcp__vexa__entity_upsert", "args": {}, "callId": "1"},
+        {"type": "tool-result", "callId": "1", "ok": True, "summary": "ok"},
+        {"type": "turn-truncated", "reason": "tool-call budget", "calls": 40, "budget": 40,
+         "kind": "chat", "tool": "mcp__vexa__entity_upsert", "seconds": 91.2},
+        {"type": "tool-result", "callId": "2", "tool": "Write", "ok": False,
+         "summary": "not run: the turn hit its tool-call budget"},
+    ], session="pchat-mtpuq2r0", subject="126", workspace="oenb-b5e60c")
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["happened"].startswith(
+        "budget exhausted at 40 of 40 calls, last tool `mcp__vexa__entity_upsert`")
+    assert "not run" not in rec["happened"]
+    assert "``" not in rec["tried"] and "40 tool calls for a chat turn" in rec["tried"]
+    assert rec["kind"] == "unfulfilled" and rec["auto"] is True
+    assert rec["session"] == "pchat-mtpuq2r0" and rec["context"]["workspace"] == "oenb-b5e60c"
+    assert "VEXA_AGENT_MAX_TOOL_CALLS_CHAT" in rec["would_help"]
+
+
+def test_a_budget_stop_with_no_tool_at_all_still_names_something():
+    """A budget of 0, or a first reply with more calls in it than the budget allows, spends the
+    budget before anything runs. Saying that in words is honest; an empty pair of backticks is the
+    bug this closes."""
+    rec = wfr.scan_turn([
+        {"type": "turn-truncated", "reason": "tool-call budget", "calls": 0, "budget": 0,
+         "kind": "job", "tool": "", "seconds": 0.4},
+    ])[0]
+    assert "last tool none — the budget was spent before any tool ran" in rec["happened"]
+    assert "`" not in rec["happened"].split("last tool", 1)[1]
+
+
+def test_a_refused_call_is_named_by_the_result_when_no_call_event_exists():
+    """The general half of the same fix: a result whose call never ran carries its own tool name,
+    so the scan never has to render one it could not find."""
+    recs = wfr.scan_turn([
+        {"type": "tool-result", "callId": "9", "tool": "bot_send", "ok": False,
+         "summary": "does not exist"},
+    ])
+    assert len(recs) == 1 and recs[0]["context"]["tool"] == "bot_send"
+    assert recs[0]["tried"] == "the turn ended on a failed tool call: `bot_send`"
+
+
 def test_a_clean_turn_files_nothing():
     assert wfr.scan_turn([
         {"type": "tool-call", "tool": "Read", "args": {}, "callId": "1"},

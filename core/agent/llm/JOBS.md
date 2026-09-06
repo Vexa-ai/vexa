@@ -219,6 +219,56 @@ So a job gets its own budget, and reaching it is a **checkpoint rather than a de
 Both job dials are **floored at the turn's**, so raising `VEXA_AGENT_MAX_TOOL_CALLS` on the
 containers as a stopgap can never leave a job with less than a turn.
 
+## …and a turn is not a turn either (Vexa-ai/vexa#1622)
+
+The split above left **three different things sharing the turn's number**. A chat sentence, a
+post-meeting room run and a flow step are not the same amount of work, and all three were billed at
+40 calls — the amount sized for the shortest of them.
+
+**The budget is a table, keyed by the kind of turn** (`llm/openai_agent._KIND_MAX_TOOL_CALLS`):
+
+| kind | what it is | default | dial |
+|---|---|---|---|
+| `chat` | a sentence and its follow-through | 40 | `VEXA_AGENT_MAX_TOOL_CALLS_CHAT` |
+| `job` | Create/Extend, **per window** | 160 | `VEXA_AGENT_MAX_TOOL_CALLS_JOB` → `VEXA_AGENT_JOB_MAX_TOOL_CALLS` |
+| `room` | one pass over a finished meeting | 80 | `VEXA_AGENT_MAX_TOOL_CALLS_ROOM` |
+| `flow` | one step of a flow (#1605) | 40 | `VEXA_AGENT_MAX_TOOL_CALLS_FLOW` |
+
+**`VEXA_AGENT_MAX_TOOL_CALLS` is the fallback for all four**, and that is a promise, not a
+convenience: the dogfood stack has carried `VEXA_AGENT_MAX_TOOL_CALLS=160` since 14:41Z on
+2026-09-06 as the stopgap for this incident, and a table that ignored the single dial would undo the
+operator's own fix. The order is: the kind's dial, then the single dial, then the row's default.
+
+**Which kind is a thread-local** (`llm/jobs.turn_kind`), set by `worker.engine.run_turn_over_workspace`
+— the one funnel every governed turn passes through, and the only place that sees the job flag, the
+flow mark and the room stamp at once. Not an env var, for exactly the reason #1613's job mark is not
+one: a chat turn, a room run and a job share one worker process at the same time.
+
+## A turn that spends its budget says so
+
+**A job checkpoints and carries on. A turn asks** — because a turn is a person waiting, and the next
+move may not be "more of the same". What ends a budget-exhausted turn is therefore three things on
+`done`, none of them a new event type:
+
+| field | what it carries |
+|---|---|
+| `reason` | *stopped at the tool-call budget after 40 of 40 steps* — the line rendered under the partial reply |
+| `steps` / `budget` | the turn's own step count and the ceiling it met. `steps` rides on **every** `done`, and on `turn-complete`; a count that appears only when something went wrong is a count nobody can compare against |
+| `act` | `{label: "Continue", instruction: "continue where you stopped"}` — the press queues a **same-target** act through #1610's inbox |
+
+> **The defect, in the founder's own chats.** Four friction reports auto-filed on 2026-09-06
+> (13:40Z, 13:50Z, 13:58Z in `pchat-mtpuq2r0`; 14:10Z in `pchat-mtpvz23p`), three of them
+> consecutive: each turn spent its 40 calls building the OeNB workspace and **ended looking
+> finished**, so he re-typed the instruction into the same wall. One press replaces that.
+
+The auto-filed record was malformed in its own right and is fixed with it
+(`worker/friction.budget_stop`). Both defects had one cause: a refused call emits no `tool-call`
+event, so the generic scan — which joins a result to its call by id — found no name and printed
+` `` `, and the message it copied into *what happened* (`not run: the turn hit its tool-call budget`)
+describes one skipped **call**, not what happened to the **turn**. The record now reads *budget
+exhausted at N of M calls, last tool X*, and the refusal carries its own tool name so no future
+reader has to do that join at all.
+
 On reaching the call budget the loop emits `job-progress` — the job's row says how far it got and
 that it is continuing — and opens a **fresh window**: the original brief, plus one sentence saying
 that everything already written is on disk and to carry on from it rather than start over. Nothing
@@ -342,7 +392,18 @@ all executing in order, and a stream that cannot hold a key still serving every 
 
 `core/agent/tests/test_llm_openai_agent.py` — a job's own tool-call budget, the floor under it, a
 window that ends becoming a fresh one over the same brief (and not a failure), a window that made no
-progress ending the job, and a plain turn untouched by any of it.
+progress ending the job, and a plain turn untouched by any of it — plus, since `#1622`, a model that
+never stops ending with the line, the count and the Continue act; a finished turn reporting its steps
+and offering no act; a refused call carrying its own tool name; the single dial still answering for
+every kind; each kind's own dial and default; and the kind being read off the thread rather than the
+environment.
+
+`core/agent/tests/test_friction.py` — the auto-filed record for a budget stop: the budget, the count
+and the last tool, never an empty name and never *"not run"*.
+
+`clients/terminal/src/surfaces/__tests__/budgetStop.test.tsx` — the whole `Chat` mounted: the line
+renders under the partial answer, Continue re-submits the SAME intent with *continue where you
+stopped*, a typed turn continues as a plain message, and a stop with no act draws no button.
 
 `clients/terminal/src/surfaces/__tests__/jobs.test.ts` — the rendering half: the chip's line, the
 job lane in `streamChatTurn` (past `turn-complete`, the shared `commit`, a foreign job ignored), the

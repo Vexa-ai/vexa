@@ -51,11 +51,13 @@ def test_entrypoint_then_interactive_then_idle():
     assert evs[0] == {"type": "turn-accepted", "turn_id": "t0"}
     assert evs[1] == {"type": "message-delta", "text": "re:hello", "turn_id": "t0"}
     assert evs[2]["type"] == "commit" and evs[2]["turn_id"] == "t0"
-    assert evs[3] == {"type": "turn-complete", "turn_id": "t0"}
+    # …carrying the turn's own step count (Vexa-ai/vexa#1622): a turn that called no tool says 0
+    # rather than saying nothing, because "no steps" and "nobody counted" are different facts.
+    assert evs[3] == {"type": "turn-complete", "turn_id": "t0", "steps": 0}
     # t1 (interactive "again")
     assert evs[4] == {"type": "turn-accepted", "turn_id": "t1"}
     assert evs[5] == {"type": "message-delta", "text": "re:again", "turn_id": "t1"}
-    assert evs[7] == {"type": "turn-complete", "turn_id": "t1"}
+    assert evs[7] == {"type": "turn-complete", "turn_id": "t1", "steps": 0}
     assert all(t == "unit:u:out" for t, _ in s.out)
 
 

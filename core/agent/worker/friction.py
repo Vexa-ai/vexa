@@ -200,11 +200,60 @@ def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
     return None
 
 
+def budget_stop(trunc: dict, *, last_tool: str = "", session: str = "", subject: str = "",
+                workspace: str = "") -> dict:
+    """The record for a turn that ENDED ON ITS BUDGET (Vexa-ai/vexa#1622).
+
+    Four of these were auto-filed from the founder's own chats on 2026-09-06 and every one of them
+    was **malformed in the same two ways**::
+
+        tried:    the turn ended on a failed tool call: ``
+        happened: not run: the turn hit its tool-call budget
+
+    The empty name is not a rendering slip. A turn that runs out of budget refuses the calls it has
+    not made yet, and a refused call emits no ``tool-call`` event — so the generic scan below, which
+    joins a result to its call by id, found nothing and printed an empty pair of backticks. And
+    *"not run"* is the message the MODEL is given about ONE skipped call; as a description of what
+    happened to the turn it is simply false — the turn ran, it ran out.
+
+    So a budget stop gets its own record, saying the three things a fixing agent needs: the budget,
+    the count against it, and the last tool the turn was actually on.
+
+    Severity is `annoyance` rather than `blocker` DELIBERATELY, and only because of what shipped
+    beside it: the same issue makes the stop visible in the bubble and offers a Continue act, so
+    the work is one press from carrying on. Filed against a turn that still stopped silently this
+    would be a blocker, and it was."""
+    reason = str(trunc.get("reason") or "budget")
+    calls = int(trunc.get("calls") or 0)
+    budget = int(trunc.get("budget") or 0)
+    kind = str(trunc.get("kind") or "").strip()
+    tool = str(trunc.get("tool") or last_tool or "").strip()
+    # NEVER AN EMPTY NAME. A turn can genuinely spend its budget before running anything (a budget
+    # of 0, a first assistant message with more calls in it than the budget allows), and saying so
+    # in words is the honest answer — an empty pair of backticks is not.
+    named = f"`{tool}`" if tool else "none — the budget was spent before any tool ran"
+    return {
+        "reporter": "agent", "subject": subject, "session": session, "kind": "unfulfilled",
+        "tried": f"finish this turn inside its {reason}"
+                 + (f" ({budget} tool calls for a {kind} turn)" if budget and kind
+                    else f" ({budget} tool calls)" if budget else ""),
+        "happened": f"budget exhausted at {calls} of {budget} calls, last tool {named}. The turn "
+                    "stopped mid-work and answered with whatever it had.",
+        "would_help": "a budget that fits this kind of turn "
+                      f"(VEXA_AGENT_MAX_TOOL_CALLS_{(kind or 'chat').upper()}), or the work split "
+                      "so it does not need one turn this long",
+        "severity": "annoyance",
+        "context": {"tool": tool, "error": f"{reason}: {calls}/{budget} calls",
+                    "workspace": workspace},
+        "auto": True,
+    }
+
+
 def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
               workspace: str = "") -> list[dict]:
     """The records a finished turn's event stream earned, if any.
 
-    Two triggers, per decision 33 §2 and the ledger:
+    Three triggers, per decision 33 §2 and the ledger:
 
       * **the turn ENDED on a tool error** — the last `tool-result` in the stream came back
         `ok=False`. The turn stopping there is what makes it worth a record: whatever the model said
@@ -212,24 +261,37 @@ def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
       * **any vexa tool answered 4xx/5xx** — anywhere in the turn, recovered or not. This is OUR
         surface failing and it is filed on sight (F71's neighbour: an agent that works around our
         own 404 and tells nobody is the case this loop exists for).
+      * **the turn RAN OUT OF BUDGET** (Vexa-ai/vexa#1622) — a `turn-truncated` event. It REPLACES
+        the first trigger rather than joining it: the failed result at the end of such a turn is the
+        refusal the budget caused, so filing both would file one event twice, once accurately and
+        once as ``the turn ended on a failed tool call: ``.
 
     Pure: it reads events and returns records. Filing is the caller's, so a test can assert the
     decision without a network."""
     calls: dict[str, dict] = {}
     results: list[tuple[str, dict]] = []
+    trunc: dict = {}
+    last_tool = ""
     for ev in events or []:
         t = ev.get("type")
         if t == "tool-call":
             calls[str(ev.get("callId") or "")] = ev
+            last_tool = str(ev.get("tool") or "") or last_tool
         elif t == "tool-result":
             results.append((str(ev.get("callId") or ""), ev))
-    if not results:
+        elif t == "turn-truncated":
+            trunc = ev
+    if not results and not trunc:
         return []
     out: list[dict] = []
     seen: set[str] = set()
 
     def add(call: dict, res: dict, why: str) -> None:
-        tool = str(call.get("tool") or "")
+        # THE RESULT'S OWN NAME IS BELIEVED FIRST (Vexa-ai/vexa#1622). A result whose call never ran
+        # carries no `tool-call` event to join to, and `call` is then `{}` — which is how four
+        # reports came to name no tool at all. The harness stamps `tool` on such a result now, so
+        # this reads the record in front of it before falling back to the join.
+        tool = str(res.get("tool") or call.get("tool") or "")
         cid = str(res.get("callId") or f"{tool}:{len(out)}")
         if cid in seen:
             return
@@ -256,6 +318,11 @@ def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
         call = calls.get(cid, {})
         if VEXA_TOOL.search(str(call.get("tool") or "")) and _STATUS.search(str(res.get("summary") or "")):
             add(call, res, "a vexa tool answered an HTTP error")
+    # the turn ran out of budget — the accurate record, INSTEAD of the tail one below
+    if trunc:
+        out.append(budget_stop(trunc, last_tool=last_tool, session=session, subject=subject,
+                               workspace=workspace))
+        return out
     # the turn ended on a tool error
     last_cid, last = results[-1]
     if not last.get("ok"):

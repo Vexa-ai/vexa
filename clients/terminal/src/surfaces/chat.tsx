@@ -468,7 +468,11 @@ function JobRows({ jobs }: { jobs: JobRec[] }) {
   );
 }
 
-function ChatConversation({ turns, busy, empty, surface, jobs = [] }: { turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface; jobs?: JobRec[] }) {
+function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue }: {
+  turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface; jobs?: JobRec[];
+  /** A STOPPED TURN'S CONTINUE PRESS (Vexa-ai/vexa#1622) — forwarded to the bubble that draws it. */
+  onContinue?: (turn: Extract<Turn, { role: "agent" }>) => void;
+}) {
   if (turns.length === 0 && empty && jobs.length === 0) return <>{empty}</>;
   return (
     <>
@@ -479,7 +483,7 @@ function ChatConversation({ turns, busy, empty, surface, jobs = [] }: { turns: T
         // the chrome for half the meaning. The surface travels with the report — chat, kind, the open
         // page — so nobody is asked to describe where they were.
         : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
-            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} />
+            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} />
           </ReportTurn>)}
       <JobRows jobs={jobs} />
     </>
@@ -1029,6 +1033,15 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     return { active, context };
   };
 
+  // WHAT A STOPPED TURN WOULD RE-SUBMIT (Vexa-ai/vexa#1622) — per agent-turn id, the intent that
+  // turn was running under and the instruction the harness offered to continue with.
+  //
+  // A REF BESIDE THE TURN, not a field on it. The Continue act has to go back to the SAME TARGET,
+  // and the target lives on the intent — a chat concern that `workbench/agent-window`'s `Turn`
+  // (a rendering model, shared with the meeting copilot) has no business carrying. Nothing here is
+  // rendered, so nothing here may cause a render either.
+  const continuable = useRef(new Map<string, { instruction: string; intent?: ChatIntent }>());
+
   const send = async (text: string, prompt = text, referenceSource = text, opts: SendOpts = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
@@ -1218,10 +1231,30 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
           // the turn did produce and say plainly that it is partial, so the person knows to ask
           // again rather than reading half an answer as the whole one.
-          onTruncated: (reason, partial) => patchAgentTurn(key, agentId, (t) => {
-            const body = t.text ?? partial ?? "";
-            return { ...t, status: null, text: body + (body ? "\n\n" : "") + `_${reason}_` };
-          }),
+          //
+          // …AND SAY IT AS A FIELD, NOT AS PROSE (Vexa-ai/vexa#1622). Appending `_reason_` to the
+          // text was the F89 fix and it was not enough: the sentence read as part of the agent's
+          // answer, and prose cannot carry a button. The line now renders as its own row under the
+          // reply, with the Continue act beside it — which is the whole difference between "that
+          // turn stopped" and the founder re-typing the same instruction three times.
+          onTruncated: (reason, partial, stop) => {
+            if (stop?.act) {
+              continuable.current.set(agentId, { instruction: stop.act.instruction, intent: opts.intent });
+            }
+            patchAgentTurn(key, agentId, (t) => ({
+              // `||`, not `??`: an agent turn is CREATED with `text: ""`, so the old nullish
+              // fallback never once reached `partial` — on a backend that streams no deltas (or a
+              // view that attached after they went past) the reply the turn did manage was
+              // dropped, and the person got a stop line over an empty bubble.
+              ...t, status: null, text: t.text || partial || "",
+              ...(typeof stop?.steps === "number" ? { steps: stop.steps } : {}),
+              stopped: { line: reason, ...(stop?.act ? { act: stop.act } : {}) },
+            }));
+          },
+          // THE SERVER'S STEP COUNT (Vexa-ai/vexa#1622) — it replaces this browser's own tally in
+          // the settled op line. A view that attached to a turn already in flight counted only what
+          // it saw; the server counted the turn.
+          onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => stick.onContent(),
         },
@@ -1322,6 +1355,31 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // and stream the answer here. sendRef keeps the latest `send` closure so the listener stays stable.
   const sendRef = useRef(send);
   sendRef.current = send;
+
+  /** CONTINUE A TURN THAT RAN OUT OF BUDGET (Vexa-ai/vexa#1622).
+   *
+   *  It goes out through `ASK_CHAT_EVENT` — the one door every act already uses — so it inherits
+   *  #1610's inbox for free: pressed while something else is running it is SUBMITTED to the server
+   *  at once and drawn as a queued row; pressed on an idle chat it is a turn like any other. The
+   *  submission never lives in this browser, which is the property that made re-pressing safe.
+   *
+   *  A page act carries its INTENT back with the new instruction, so the act lands on the same
+   *  target and the worker queues it behind whatever is writing that page. A turn somebody typed
+   *  has no intent, and its target is the conversation — which is where the words go anyway. */
+  const continueTurn = (t: Extract<Turn, { role: "agent" }>) => {
+    const held = continuable.current.get(t.id);
+    const instruction = t.stopped?.act?.instruction || held?.instruction || "";
+    if (!instruction) return;
+    continuable.current.delete(t.id);
+    const intent = held?.intent;
+    window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+      detail: {
+        prompt: instruction,
+        display: instruction,
+        ...(intent ? { intent: { ...intent, instruction } } : {}),
+      },
+    }));
+  };
   // AN ACT PRESSED WHILE A TURN IS RUNNING IS NEVER DROPPED (Vexa-ai/vexa#1594).
   //
   //  Founder walk 2026-09-06: *"extend this page button does not work when chat is working"*. The
@@ -1684,7 +1742,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           it in a chat he never made — *"I explain this as stale code."*
           What is left renders the meeting greeting when there IS a meeting, and otherwise renders
           nothing but whatever the host put in `emptyExtra`. */}
-      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} empty={
+      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} onContinue={continueTurn} empty={
         <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
               ? minutesEmptyGreeting(session)

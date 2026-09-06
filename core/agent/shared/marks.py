@@ -164,6 +164,17 @@ def flow_mark(flow: str, step: str) -> str:
     return f"{FLOW_MARK}{f}:{s}] " if f and s else ""
 
 
+def turn_namespace(text: str) -> str:
+    """Which mark composed this turn — ``job`` · ``act`` · ``flow`` — or ``""`` for one somebody typed.
+
+    The narrowest possible question about a mark, and it exists so that no caller has to ask it by
+    testing for a bracket of its own (Vexa-ai/vexa#1622, where the budget a turn gets depends on
+    whether a flow dispatched it). A substring test outside this module is a second reader of a
+    shape this module owns, and the TS twin held by `gate:fact-parity` would not know about it."""
+    m = _TURN_RE.search(text or "")
+    return m.group(1) if m else ""
+
+
 #: WHAT A MACHINE-COMPOSED TURN IS CALLED — the small table the issue asks for, in one place because
 #: three surfaces (the bubble, the record the worker writes, the reader that serves old records)
 #: must answer the same way or the founder sees the label change when he reloads.

@@ -66,10 +66,26 @@ call would otherwise never end.
 Both job dials are floored at the turn's, so an operator who raises ``VEXA_AGENT_MAX_TOOL_CALLS`` on
 the containers as a stopgap never accidentally gives a job LESS than a turn.
 
+AND A TURN IS NOT A TURN EITHER (Vexa-ai/vexa#1622). #1613 split the job off the chat turn and left
+the other three sharing one number: a chat sentence, a post-meeting room run and a flow step are
+different amounts of work and were all billed at 40 calls. So the budget is a TABLE keyed by
+``llm.jobs.turn_kind()`` — see ``_KIND_MAX_TOOL_CALLS`` — read from ``VEXA_AGENT_MAX_TOOL_CALLS_<KIND>``
+with the single ``VEXA_AGENT_MAX_TOOL_CALLS`` as the fallback for all four, so a deployment that
+sets only the old name behaves exactly as it did.
+
+WHAT A TURN THAT SPENDS ITS BUDGET NOW DOES, which is the defect this issue is actually about: it
+SAYS SO. Four friction reports were auto-filed from the founder's own chats on 2026-09-06 while he
+built the OeNB workspace — three in a row in one conversation — because the chat showed a finished
+turn and he re-prompted into the same wall each time. The `done` event therefore carries the line
+(*stopped at the tool-call budget after N of M steps*), the step count, and the Continue act the
+person presses to queue "continue where you stopped" back onto the same target. A job checkpoints
+and carries on by itself; a turn asks, because a turn is a person waiting.
+
 Config: ``VEXA_LLM_BASE_URL`` · ``VEXA_LLM_API_KEY`` (optional — CCC has no auth) ·
 ``VEXA_LLM_MODEL`` / ``VEXA_AGENT_MODEL`` · ``VEXA_LLM_EXTRA_BODY`` (merged into EVERY request —
 Qwen needs `{"chat_template_kwargs":{"enable_thinking":false}}` or it reasons its whole budget away
-and returns nothing parseable) · ``VEXA_AGENT_MAX_TOOL_CALLS`` · ``VEXA_AGENT_MAX_TURN_SEC`` ·
+and returns nothing parseable) · ``VEXA_AGENT_MAX_TOOL_CALLS`` (+ the per-kind
+``VEXA_AGENT_MAX_TOOL_CALLS_CHAT`` / ``_JOB`` / ``_ROOM`` / ``_FLOW``) · ``VEXA_AGENT_MAX_TURN_SEC`` ·
 ``VEXA_AGENT_CONTEXT_TOKENS`` · ``VEXA_AGENT_STREAM`` · ``VEXA_SEARCH_URL`` ·
 ``VEXA_SEARCH_DIALECT`` · ``VEXA_SEARCH_API_KEY``.
 """
@@ -134,6 +150,22 @@ _DEFAULT_MAX_TURN_SEC = 900.0
 #: and low enough that one job cannot hold the box indefinitely between checkpoints.
 _DEFAULT_JOB_MAX_TOOL_CALLS = 160
 _DEFAULT_JOB_MAX_TURN_SEC = 3600.0
+#: THE BUDGET IS PER KIND OF TURN (Vexa-ai/vexa#1622). One number for four shapes of work is how a
+#: chat turn came to be billed the same as a whole post-meeting run, and the number was sized for
+#: the shortest of them. Each row is a DEFAULT, overridable per kind and overridable for all four —
+#: see ``_calls_budget``, which is where the precedence is written down.
+#:
+#:   chat  a sentence and its follow-through. The historical 40.
+#:   job   Create/Extend, per window (#1613). Reaching it is a checkpoint, not a death.
+#:   room  one pass over a finished meeting: read the transcript, write several pages, connect
+#:         entities. Not a person waiting on a reply, and measurably longer than a sentence.
+#:   flow  one step of a flow (#1605). Machinery, scoped by the step's own brief.
+_KIND_MAX_TOOL_CALLS: dict[str, int] = {
+    "chat": _DEFAULT_MAX_TOOL_CALLS,
+    "job": _DEFAULT_JOB_MAX_TOOL_CALLS,
+    "room": 80,
+    "flow": _DEFAULT_MAX_TOOL_CALLS,
+}
 # A tool result is the one part of a turn that is both large and, once acted on, mostly spent — so
 # it is what the trimmer eats first, and a stub is left in its place so the model can see that it
 # read something rather than believing it never did.
@@ -171,6 +203,30 @@ def _job_seconds() -> float:
                _float_env("VEXA_AGENT_MAX_TURN_SEC", _DEFAULT_MAX_TURN_SEC))
 
 
+def _calls_budget(kind: str) -> int:
+    """This KIND of turn's tool-call budget (Vexa-ai/vexa#1622) — three reads, in this order.
+
+      1. ``VEXA_AGENT_MAX_TOOL_CALLS_<KIND>`` — the dial for this row of the table.
+      2. ``VEXA_AGENT_MAX_TOOL_CALLS`` — the single dial, the fallback for ALL four. This is the
+         compatibility promise and it is not decorative: the dogfood stack has carried
+         ``VEXA_AGENT_MAX_TOOL_CALLS=160`` since 14:41Z on 2026-09-06 as the stopgap for the very
+         incident this table answers, and that stopgap must keep meaning what the operator meant.
+      3. the row's own default (``_KIND_MAX_TOOL_CALLS``).
+
+    A job keeps ``_job_calls()`` at step 2 rather than reading the single dial directly, so #1613's
+    own name and its floor survive untouched. Nothing is clamped: a deployment that sets 0 wants 0,
+    and the job runner already depends on that (a window that makes no call ends the job)."""
+    k = (kind or "").strip().lower()
+    if k not in _KIND_MAX_TOOL_CALLS:
+        k = "chat"
+    named = f"VEXA_AGENT_MAX_TOOL_CALLS_{k.upper()}"
+    if (os.environ.get(named) or "").strip():
+        return _int_env(named, _KIND_MAX_TOOL_CALLS[k])
+    if k == "job":
+        return _job_calls()
+    return _int_env("VEXA_AGENT_MAX_TOOL_CALLS", _KIND_MAX_TOOL_CALLS[k])
+
+
 def _job_progress_line(calls: int, window: int) -> str:
     """WHAT THE JOB ROW SAYS when a window ends and the next one opens. The person is watching one
     line at the foot of the chat; it has to say that work continues, not that something reset."""
@@ -185,6 +241,32 @@ _JOB_CONTINUE = (
     "wrote is saved on disk. Do not start over and do not repeat work: read what is there now, "
     "carry on from it, and finish. If it is already finished, say so in one line and stop."
 )
+
+
+#: WHAT THE PERSON PRESSES (Vexa-ai/vexa#1622), and the words that go back with it. A turn does NOT
+#: continue itself the way a job opens a fresh window: a job was dispatched to finish something and
+#: its pages are already committed, while a turn is somebody waiting on a reply who may well want a
+#: different next move. So the loop offers, and the press queues a same-target act through #1610's
+#: inbox — one click where the founder re-typed his instruction three times.
+_CONTINUE_LABEL = "Continue"
+_CONTINUE_INSTRUCTION = "continue where you stopped"
+
+
+def _stopped_line(reason: str, calls: int, budget: int, seconds: float) -> str:
+    """THE LINE IN THE BUBBLE for a turn that ended on a budget (Vexa-ai/vexa#1622).
+
+    It rides on `done.reason`, which the terminal already renders under the partial reply (F89) —
+    the defect was never that the field had no consumer, it was that the sentence in it said
+    *"the turn stopped early: tool-call budget"*, which names a mechanism and not a state. This
+    says how far it got and what the ceiling was, because those are the two facts that decide
+    whether the answer is Continue or a bigger budget.
+
+    The words *tool-call budget* / *time budget* are kept inside the sentence: they are what every
+    existing reader — the log line in `worker.engine`, the friction scan, the terminal test —
+    already keys on, and a rename would be a second change wearing this one's clothes."""
+    if reason == "tool-call budget":
+        return f"stopped at the tool-call budget after {calls} of {budget} steps"
+    return f"stopped at the time budget after {calls} steps ({seconds:.0f}s)"
 
 
 def _continue_window(messages: list[dict], prompt: str, calls: int, said: str) -> list[dict]:
@@ -1016,8 +1098,11 @@ class OpenAIAgentHarness:
             # thread-local set by the worker on the job's own thread, so the chat turn running
             # beside this one in the same process keeps the per-turn budget it always had.
             is_job = llm_jobs.in_job()
-            budget_calls = _job_calls() if is_job else _int_env("VEXA_AGENT_MAX_TOOL_CALLS",
-                                                                _DEFAULT_MAX_TOOL_CALLS)
+            # …AND WHICH KIND OF TURN IT IS (Vexa-ai/vexa#1622), read off the same thread-local for
+            # the same reason: a chat turn, a room run and a flow step can all be in this process at
+            # once, so the budget cannot come from the environment alone.
+            kind = llm_jobs.turn_kind()
+            budget_calls = _calls_budget(kind)
             budget_secs = _job_seconds() if is_job else _float_env("VEXA_AGENT_MAX_TURN_SEC",
                                                                    _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
@@ -1035,6 +1120,12 @@ class OpenAIAgentHarness:
             # rather than as a sixth type.
             truncation = ""
             trimmed_total = 0
+            # THE TOOL THE TURN WAS ON when the budget ran out (Vexa-ai/vexa#1622). The auto-filed
+            # friction reported an EMPTY tool name on all four of the founder's reports, because the
+            # only result left at the end of such a turn is a refusal for a call that never ran and
+            # therefore never emitted a `tool-call` event to carry a name. Two fixes, and this is
+            # the first: the loop remembers what it last actually ran.
+            last_tool = ""
 
             while True:
                 sent, trimmed = trim_messages(messages, ctx_budget)
@@ -1070,8 +1161,12 @@ class OpenAIAgentHarness:
                         # A JOB ABOUT TO OPEN A FRESH WINDOW HAS GIVEN NOTHING UP (Vexa-ai/vexa#1613),
                         # so it does not say it has — `job-progress` below is what it says instead.
                         if not (is_job and reason == "tool-call budget" and window_calls):
+                            # `budget` + `tool` ride here (Vexa-ai/vexa#1622) so that the friction
+                            # scan can name the ceiling and the last tool without re-deriving
+                            # either from a stream it only keeps four event types of.
                             yield {"type": "turn-truncated", "reason": reason,
-                                   "calls": calls_made,
+                                   "calls": calls_made, "budget": budget_calls,
+                                   "kind": kind, "tool": last_tool,
                                    "seconds": round(time.monotonic() - started, 1)}
                         # EVERY call the model made is answered, refusals included. An assistant
                         # message whose tool_calls have no matching tool message is a MALFORMED
@@ -1079,8 +1174,13 @@ class OpenAIAgentHarness:
                         # outlives the turn that made it.
                         for skipped in calls[i:]:
                             refusal = f"not run: the turn hit its {reason}"
+                            # THE NAME TRAVELS WITH THE REFUSAL (Vexa-ai/vexa#1622) — the second
+                            # half of the empty-tool-name fix. A refused call emits no `tool-call`
+                            # event (it never ran), so anything downstream that joins results to
+                            # calls by id finds nothing and renders ` `` `. It is on the result
+                            # itself now, for this case and for any future one.
                             yield {"type": "tool-result", "callId": skipped["id"], "ok": False,
-                                   "summary": refusal}
+                                   "tool": skipped["name"], "summary": refusal}
                             store.record_tool_result(skipped["id"], False, refusal)
                             messages.append({"role": "tool", "tool_call_id": skipped["id"],
                                              "content": refusal})
@@ -1088,6 +1188,7 @@ class OpenAIAgentHarness:
                     calls_made += 1
                     window_calls += 1
                     total_calls += 1
+                    last_tool = call["name"]
                     yield {"type": "tool-call", "tool": call["name"], "args": call["args"],
                            "callId": call["id"]}
                     ok, out = self._exec_tool(call, mcp_index, sandbox, allow)
@@ -1118,10 +1219,21 @@ class OpenAIAgentHarness:
             # reasoning — it hit a budget — because that reply is partial and acting on it as if it
             # were an answer is the failure. A context trim leaves a COMPLETE answer built on less,
             # so it stays ok=True and says so in `reason`; the consumer decides how loud that is.
+            #
+            # `steps` RIDES ON EVERY `done`, not only a truncated one (Vexa-ai/vexa#1622). The turn
+            # status had no server-side step count at all — the terminal counted `tool-call` events
+            # itself — so nothing outside one browser could say how much work a turn did, and the
+            # one moment that number matters most is the moment the turn stops for having done too
+            # much of it. It is the WHOLE turn's count: a job's windows are one piece of work.
             done: dict = {"type": "done", "reply": reply, "sessionId": sid,
-                          "ok": not truncation}
+                          "ok": not truncation, "steps": total_calls, "budget": budget_calls}
             if truncation:
-                done["reason"] = f"the turn stopped early: {truncation}"
+                done["reason"] = _stopped_line(truncation, calls_made, budget_calls,
+                                               time.monotonic() - started)
+                # THE ACT THE BUBBLE OFFERS. Named here rather than in the client because the
+                # harness is the only thing that knows the turn did not finish its own reasoning;
+                # the client's job is to render a control and post the instruction back.
+                done["act"] = {"label": _CONTINUE_LABEL, "instruction": _CONTINUE_INSTRUCTION}
             elif trimmed_total:
                 done["reason"] = (f"context-trimmed: {trimmed_total} message(s) dropped to stay "
                                   f"inside the turn's {ctx_budget}-token budget")

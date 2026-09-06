@@ -194,7 +194,11 @@ describe("the composer while a turn runs", () => {
 describe("the chat's own step rows are the one place status is told", () => {
   it("the turn's status line and step count still render in the transcript", () => {
     expect(AGENT_WINDOW_TSX).toMatch(/data-turn-status/);
-    expect(AGENT_WINDOW_TSX).toMatch(/t\.ops\.length\} step/);
+    expect(AGENT_WINDOW_TSX).toMatch(/\{n\} step/);
+    // …and that count is the SERVER's once it sends one (Vexa-ai/vexa#1622), with this browser's
+    // own tally as the fallback. What #1587 pins is WHERE a step count is told — here, in the
+    // transcript, never in the composer — not which of the two numbers fills it.
+    expect(AGENT_WINDOW_TSX).toMatch(/typeof t\.steps === "number" \? t\.steps : t\.ops\.length/);
   });
 
   it("a background job's line renders there too — it moved, it did not disappear", () => {

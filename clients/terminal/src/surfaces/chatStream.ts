@@ -69,6 +69,16 @@ export type ChatStreamEvent = {
   calls?: number;
   /** `job-queued` only (Vexa-ai/vexa#1610) — how many acts are in front of this one on its page. */
   ahead?: number;
+  /** HOW MANY STEPS THE TURN TOOK, from the server (Vexa-ai/vexa#1622) — on `done` (the harness's
+   *  own count, whole turn) and on `turn-complete` (the worker's). Until this existed the only step
+   *  count anywhere was one each browser derived by counting the `tool-call` events it happened to
+   *  see, which is short by however much of the turn it missed. `budget` is the ceiling that count
+   *  was measured against. */
+  steps?: number;
+  budget?: number;
+  /** `done` only, and only when the turn STOPPED at a budget (Vexa-ai/vexa#1622) — the act the
+   *  bubble offers, and the words it puts back on the same target. */
+  act?: { label?: string; instruction?: string };
 };
 
 /** IS THIS JOB THIS CHAT'S? (Vexa-ai/vexa#1613.)
@@ -136,8 +146,19 @@ export type ChatStreamCallbacks = {
    *  `context-trimmed` for this and NOTHING consumed them, so a half-finished turn was rendered as
    *  a finished one. `partial` is whatever reply the turn did produce; it is still worth showing.
    *  Optional so existing callers/tests need not implement it — when it is absent an `ok=false`
-   *  done still falls through to `onModelFailure`. */
-  onTruncated?: (reason: string, partial: string | undefined) => void;
+   *  done still falls through to `onModelFailure`.
+   *
+   *  `stop` (Vexa-ai/vexa#1622) carries what the harness knows and prose cannot: the step count,
+   *  the budget it ran into, and the CONTINUE ACT — so the bubble can offer one press instead of
+   *  leaving the person to re-type the instruction, which is what the founder did three times in
+   *  one conversation before this shipped. Optional field on an optional callback: a deployment one
+   *  release behind sends no `act` and the reason line renders alone, exactly as it did. */
+  onTruncated?: (reason: string, partial: string | undefined,
+                 stop?: { steps?: number; budget?: number;
+                          act?: { label: string; instruction: string } }) => void;
+  /** THE SERVER'S STEP COUNT for this turn (Vexa-ai/vexa#1622) — off `done` or `turn-complete`,
+   *  whichever arrives. Optional so existing callers/tests need not implement it. */
+  onSteps?: (steps: number) => void;
   /** a hard upstream error the proxy folded into the stream (terminal, surfaced) */
   onError: (message: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
@@ -538,6 +559,7 @@ export async function streamChatTurn(
             // everything it has left to say. `RedisStreamReader` makes the same exception, in the
             // same two lines, on the server side.
             turnDone = true;
+            if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
             if (myJobs.size === 0) terminal = true;
             break;
           case "done": {
@@ -547,8 +569,19 @@ export async function streamChatTurn(
             // "Model inference failed" when the model worked and the BUDGET ran out sends them
             // looking at the wrong thing.
             const reason = typeof ev.reason === "string" ? ev.reason : "";
-            if (reason && cb.onTruncated) { sawVisibleOutput = true; cb.onTruncated(reason, ev.reply); }
-            else if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
+            // THE SERVER'S OWN COUNT, on every done (Vexa-ai/vexa#1622) — including the ones that
+            // finished, because a step count that only appears when something went wrong is a
+            // count nobody can compare against.
+            if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
+            if (reason && cb.onTruncated) {
+              sawVisibleOutput = true;
+              // The act is passed on ONLY when it is whole. A half-record — a label with no
+              // instruction — would draw a button that posts nothing, which is worse than the
+              // silent stop it replaces.
+              const act = ev.act && ev.act.label && ev.act.instruction
+                ? { label: ev.act.label, instruction: ev.act.instruction } : undefined;
+              cb.onTruncated(reason, ev.reply, { steps: ev.steps, budget: ev.budget, act });
+            } else if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
             break;
           }
           // A hard upstream error the proxy folded into the stream: the turn genuinely failed — surface
