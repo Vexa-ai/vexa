@@ -27,7 +27,7 @@ import { isPageIntent, type ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
 import { actEnded, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
 import { actTarget, endJob, isJobIntent, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "./jobs";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -593,9 +593,21 @@ function meetingPlatformSlug(meeting: MeetingMock | undefined): string {
   return p === "Google Meet" || p === "google_meet" ? "google_meet" : (p ?? "google_meet");
 }
 
-function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
+/** The turn's prompt with the terminal's own narration of what the reader has open in front of it.
+ *  Exported for the test that pins the boundary marker — see . */
+export function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   const context = activeContextPrompt(ref, meeting);
-  return context ? `${context}\n\n---\n${prompt.trim()}` : prompt.trim();
+  // …AND THE SENTINEL GOES BETWEEN THEM (Vexa-ai/vexa#1603), for the same reason it does in
+  // `promptWithReferences` above and with a sharper symptom. The server marks the boundary between
+  // ITS grounding and `body.prompt` — but `body.prompt` is this whole composed string, so the
+  // narration this composer wrote landed on the HUMAN side of the only boundary marker there was.
+  // The worker records that side verbatim as `user_text` (`worker/engine.py::human_half`, which
+  // cuts at the LAST sentinel), so the founder's own bubble read *"Active context: the user is
+  // viewing the workspace file README.md. Read it with your Read tool if relevant. --- "* and then
+  // his sentence. One marker, in the right place, and the human half is exact rather than
+  // approximately right — the model still reads the narration first and the ask last, with an HTML
+  // comment between them, so nothing about the turn it runs changes.
+  return context ? `${context}\n\n---\n${CONTEXT_SENTINEL}${prompt.trim()}` : prompt.trim();
 }
 
 const ROUTINE_COMMAND = "/routine";
@@ -1060,6 +1072,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // one: an artifact defers to a reader who has opened something else, an open is that
           // reader. Same forwarding rule — this surface opens nothing itself.
           onOpen: (o) => window.dispatchEvent(new CustomEvent(OPEN_PAGE_EVENT, { detail: o })),
+          onFocusWorkspace: (f) => window.dispatchEvent(new CustomEvent(FOCUS_WORKSPACE_EVENT, { detail: f })),
           // TERMS THIS TURN PUBLISHED for a meeting's transcript (PRD decision 35). Same seam and
           // same reason as the artifact above: the chips are part of the chat's record and the
           // transcript renders that record — this surface forwards and stores nothing.

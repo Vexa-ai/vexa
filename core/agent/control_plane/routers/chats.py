@@ -18,7 +18,7 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    logger, meeting_binding)
+    logger, meeting_binding, workspace_focus)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -165,8 +165,9 @@ def build(**d) -> APIRouter:
                              meeting_id, subject)
 
     def _binding_watch(events, subject: str, session: str):
-        """Pass the turn's events through, and BIND the meeting any send in it created
-        (Vexa-ai/vexa#1597).
+        """Pass the turn's events through, and record what the turn made this chat BE — the meeting
+        any send in it created (Vexa-ai/vexa#1597), and any workspace it created
+        (Vexa-ai/vexa#1603).
 
         THE TURN'S OWN STREAM IS WHERE THIS IS KNOWN. `bot_send` is served by the vexa MCP, which is
         stateless by design and has never been told which chat is calling it; the worker knows the
@@ -188,6 +189,18 @@ def build(**d) -> APIRouter:
         The chat is the meeting's chat from this event, so the meeting's document exists from it as
         well: one send, one row, one page, and the room opens it pinned in the same turn.
 
+        AND THE SAME SEAM PUTS A CREATED WORKSPACE IN THE CHAT'S FOCUS (Vexa-ai/vexa#1603), for the
+        same reason and with the same discipline. `workspace_new` is served by the vexa MCP, which
+        knows nothing of chats; the worker knows the result but not that it is in one; agent-api
+        opened this response and holds the subject and the session. So this is again the one place
+        that holds both halves of *"this chat made that place"* — and making it a second writer
+        somewhere else is what would let the chip, the record and the mount disagree.
+
+        ONE WRITER, TWO READERS: the event still reaches the client byte-for-byte, which is what
+        updates the chip and mounts the panel NOW; this write is what makes the focus survive the
+        reload, the second window and — through the session's mount generation — the next turn's
+        container.
+
         NEVER FATAL. The binding is furniture; the turn is what the person is waiting for, so a
         failed index write is logged and the stream goes on."""
         for item in events:
@@ -200,6 +213,13 @@ def build(**d) -> APIRouter:
                     logger.exception("binding meeting %s to subject=%s session=%s failed",
                                      bound[0], subject, session)
                 _mint_meeting_page(subject, bound[0])
+            focused = workspace_focus(ev)
+            if focused is not None:
+                try:
+                    sess.add_workspace(subject, session, focused)
+                except Exception:  # noqa: BLE001 — the turn outranks its own bookkeeping
+                    logger.exception("focusing workspace %s on subject=%s session=%s failed",
+                                     focused, subject, session)
             yield item
 
     @router.post("/invocations", status_code=202)
@@ -329,6 +349,28 @@ def build(**d) -> APIRouter:
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
         )
+        # THE CHAT'S MOUNT GENERATION rides the dispatch (Vexa-ai/vexa#1603). An agent-api routing
+        # hint, exactly like `context.session` beside it: `dispatch_id` reads it off the in-memory
+        # dispatch and `_without_chat_session` strips it before the sealed unit.v1 check. It is what
+        # makes the turn AFTER a `workspace_create` address a fresh warm unit — and therefore be
+        # spawned with a mount table that has the new workspace in it, read-write, like every other
+        # workspace in the focus. Generation 0 changes no id, so nothing that never created a
+        # workspace is disturbed. Fail-soft: an index that cannot answer costs the cold start, never
+        # the turn.
+        #
+        # A RESUME READS, A FRESH TURN TAKES. Moving the id under a turn that is already streaming
+        # would strand its own reconnect on a unit nobody spawned, so a reconnect (`Last-Event-ID`)
+        # reads the generation as it stands and re-attaches to the unit it was watching; only a
+        # fresh turn lowers the stale-mounts flag and steps the generation.
+        try:
+            _gen = (sess.mount_gen(subject, session) if resume
+                    else sess.take_mount_generation(subject, session))
+        except Exception:  # noqa: BLE001
+            logger.warning("mount generation unreadable for subject=%s session=%s — this turn keeps "
+                           "the warm unit it would have used", subject, session)
+            _gen = 0
+        if _gen:
+            ctx = {**ctx, "mount_gen": _gen}
         # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
         # user's words are the exact suffix; the sentinel goes right before them.
         #

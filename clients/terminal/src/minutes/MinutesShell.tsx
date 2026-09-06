@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -833,6 +833,9 @@ export function MinutesShell() {
 
   /** The chat's focus set, edited from the header. The mount set follows immediately — the point of
    *  changing it is the next turn, not the next reload. */
+  // Held in a ref for the focus-event effect below: `setWorkspaces` closes over `sel` and is rebuilt
+  // every render, so subscribing to it directly would tear the listener down and up on each one.
+  const setWorkspacesRef = useRef<(fn: (ws: string[]) => string[]) => void>(() => undefined);
   const setWorkspaces = (fn: (ws: string[]) => string[]) => {
     const id = sel.chatId, next = fn(sel.workspaces);
     setSel((x) => ({ ...x, workspaces: next }));
@@ -842,6 +845,7 @@ export function MinutesShell() {
     setDraft((d) => (d && d.id === id ? { ...d, workspaces: next } : d));
     void mountSet(next);
   };
+  setWorkspacesRef.current = setWorkspaces;
 
   useEffect(() => {
     let dead = false;
@@ -1037,6 +1041,38 @@ export function MinutesShell() {
     };
     window.addEventListener(OPEN_PAGE_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_PAGE_EVENT, onOpen);
+  }, [openPage]);
+
+  // ── A WORKSPACE MADE FROM THIS CHAT IS IN THIS CHAT (Vexa-ai/vexa#1603) ──────────────────────
+  //
+  //  The founder asked for *"a new workspace where we will collect everything we know about ILM"*.
+  //  The agent made it — and then had to tell him *"the new workspace isn't in my native mount
+  //  stack (it's reached via the workspace_* tools)"*. *"not native workspace??"*.
+  //
+  //  Creating a place IS bringing it into the room, so the create does here what a send does for a
+  //  meeting: it widens THIS chat's focus. `setWorkspaces` is the one writer of that set — the same
+  //  function the header chip's + calls — so the chip, the record and the server's mount set move
+  //  together and by the same route, which is why nothing here touches `sel` or `persist` directly.
+  //
+  //  IT ALSO OPENS THE PLACE. A workspace is not a page, so there is nothing for `pageForArtifact`
+  //  to resolve — its README is the door, the same page `homeEntry` makes the home of a chat that
+  //  mounts a group. It goes through `openPage` like every other panel move, and only when the
+  //  reader has not chosen a focus of their own: this is the turn's suggestion, not their ask, and
+  //  their attention beats it exactly as it beats an artifact's.
+  useEffect(() => {
+    const onFocusWorkspace = (e: Event) => {
+      const d = (e as CustomEvent<{ workspace?: string; name?: string }>).detail || {};
+      const wid = d.workspace?.trim();
+      if (!wid) return;
+      setWorkspacesRef.current((ws) => (ws.includes(wid) ? ws : [...ws, wid]));
+      // The label is the workspace's HUMAN name when the create knew one — a tab reading
+      // `industrial-light-magic-4040f4` is the slug leaking into a place names belong (F49).
+      if (!readerChoseFocus.current) {
+        openPage({ path: "README.md", slug: wid, label: d.name?.trim() || wid } as Page);
+      }
+    };
+    window.addEventListener(FOCUS_WORKSPACE_EVENT, onFocusWorkspace);
+    return () => window.removeEventListener(FOCUS_WORKSPACE_EVENT, onFocusWorkspace);
   }, [openPage]);
 
   // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The list arrives

@@ -649,6 +649,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
 # ``meeting_id`` is the row id. Both are agent-api internal — the sealed MeetingRef forbids them.
 _INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id", "native_id"})
 
+# The same rule one level up: agent-api routing hints that ride on ``context`` and are NOT part of
+# the sealed Context (additionalProperties: false). ``session`` is the chat thread; ``mount_gen`` is
+# the chat's focus generation (Vexa-ai/vexa#1603) — both are read off the in-memory dispatch by
+# ``dispatch_id`` / ``build_unit_env`` and both are stripped before the contract check.
+_INTERNAL_CTX_HINTS = frozenset({"session", "mount_gen"})
+
 
 def _without_chat_session(invocation: dict) -> dict:
     """A shallow copy with internal routing hints removed for the unit.v1 contract check. Also strips
@@ -661,7 +667,8 @@ def _without_chat_session(invocation: dict) -> dict:
     ctx_dict = ctx if isinstance(ctx, dict) else None
     meeting = ctx_dict.get("meeting") if ctx_dict and ctx_dict.get("kind") == "meeting" else None
     needs_clean = has_principal or (ctx_dict is not None and (
-        "session" in ctx_dict or (isinstance(meeting, dict) and bool(_INTERNAL_MEETING_HINTS & meeting.keys()))
+        bool(_INTERNAL_CTX_HINTS & ctx_dict.keys())
+        or (isinstance(meeting, dict) and bool(_INTERNAL_MEETING_HINTS & meeting.keys()))
     ))
     if not needs_clean:
         return invocation
@@ -669,7 +676,7 @@ def _without_chat_session(invocation: dict) -> dict:
     if has_principal:
         clean["identity"] = {k: v for k, v in identity.items() if k != "principal"}
     if ctx_dict is not None:
-        clean_ctx = {k: v for k, v in ctx_dict.items() if k != "session"}
+        clean_ctx = {k: v for k, v in ctx_dict.items() if k not in _INTERNAL_CTX_HINTS}
         if isinstance(meeting, dict) and (_INTERNAL_MEETING_HINTS & meeting.keys()):
             clean_ctx["meeting"] = {k: v for k, v in meeting.items() if k not in _INTERNAL_MEETING_HINTS}
         clean["context"] = clean_ctx

@@ -341,6 +341,107 @@ class _Sessions:
             if native:
                 rec["meeting_native"] = native
 
+    def add_workspace(self, subject: str, session: str, workspace: str) -> bool:
+        """PUT a workspace into this chat's focus, and say whether that changed anything
+        (Vexa-ai/vexa#1603). THE RAISER of the stale-mounts semaphore.
+
+        ADDITIVE, unlike ``upsert(workspaces=…)``, and the difference is the whole point. That
+        parameter RESTATES the set because a scaffolded turn knows the whole set; a turn that
+        CREATED a workspace knows one new member and nothing about the rest, so restating from it
+        would silently drop every other mount the chat had.
+
+        WHY IT ALSO RAISES A FLAG. A chat's worker is spawned with its mount table and keeps it for
+        the whole warm window (15 minutes) — the runtime's create is an idempotent touch that
+        DISCARDS the spec env — so a workspace made mid-conversation stayed invisible to the agent
+        for the rest of it, which is exactly what the founder hit: *"not native workspace??"*. The
+        cure is a new container, and the way to get one without stopping anything is a new unit id;
+        ``mount_gen`` is what puts one in ``dispatch_id``.
+
+        The flag rather than the bump, because THIS RUNS MID-TURN. Moving the id under a turn that
+        is streaming would strand its own reconnect on a unit that does not exist. So the write here
+        only says *the mounts are stale*; ``take_mount_generation`` — called once, at the start of
+        the NEXT fresh turn — is the lowerer. One value, one raiser, one lowerer.
+
+        A REAL CHANGE ONLY: re-creating a workspace already in the focus, or a retried turn,
+        raises nothing and costs nobody a cold start."""
+        wid = str(workspace or "").strip()
+        if not wid:
+            return False
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            meta = self._redis.hgetall(mkey) or {}
+            try:
+                current = json.loads(meta.get("workspaces") or "[]")
+            except ValueError:
+                current = []
+            current = [str(w) for w in current if str(w).strip()] if isinstance(current, list) else []
+            if wid in current:
+                return False
+            self._redis.hset(mkey, mapping={"workspaces": json.dumps(current + [wid]),
+                                            "mounts_stale": "1",
+                                            "last_active": str(self._now())})
+            self._redis.sadd(self._ids_key(subject), session)
+            return True
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            rec = {"created": self._now(), "last_active": self._now(), "title": session,
+                   "touched": False}
+            self._mem[subject][session] = rec
+        current = [str(w) for w in (rec.get("workspaces") or [])]
+        if wid in current:
+            return False
+        rec["workspaces"] = current + [wid]
+        rec["mounts_stale"] = True
+        rec["last_active"] = self._now()
+        return True
+
+    @staticmethod
+    def _as_gen(raw) -> int:
+        try:
+            return max(0, int(float(raw or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def mount_gen(self, subject: str, session: str) -> int:
+        """This chat's CURRENT mount generation — read only, and what a RESUME must use.
+
+        ``0`` (every chat that has never created a workspace, and every row written before the field
+        existed) keeps the unit id byte-identical to the one it has always had."""
+        if self._redis is not None:
+            meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            return self._as_gen(meta.get("mount_gen"))
+        return self._as_gen((self._mem.get(subject, {}).get(session) or {}).get("mount_gen"))
+
+    def take_mount_generation(self, subject: str, session: str) -> int:
+        """The generation THIS turn runs under — THE LOWERER of the stale-mounts semaphore.
+
+        Called once per FRESH turn, never on a resume. If a previous turn created a workspace the
+        flag is standing: the generation goes up by one and the flag comes down, so this turn gets a
+        unit id nobody has spawned yet and therefore a container built with the current mount table.
+        Otherwise it is a plain read and the id does not move.
+
+        Idempotent by construction — the flag is gone after the first call, so a second turn on the
+        same focus reuses the warm unit the first one spawned."""
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            meta = self._redis.hgetall(mkey) or {}
+            gen = self._as_gen(meta.get("mount_gen"))
+            if str(meta.get("mounts_stale") or "") != "1":
+                return gen
+            gen += 1
+            self._redis.hset(mkey, mapping={"mount_gen": str(gen), "mounts_stale": "0"})
+            return gen
+        rec = self._mem.get(subject, {}).get(session)
+        if rec is None:
+            return 0
+        gen = self._as_gen(rec.get("mount_gen"))
+        if not rec.get("mounts_stale"):
+            return gen
+        gen += 1
+        rec["mount_gen"] = gen
+        rec["mounts_stale"] = False
+        return gen
+
     def list(self, subject: str) -> list[dict]:
         """The subject's sessions, most-recently-active first — the rail, as the server holds it."""
         rows: list[dict] = []
@@ -362,6 +463,7 @@ class _Sessions:
                     "touched": meta.get("touched") != "0",
                     "meeting": (meta.get("meeting") or "").strip() or None,
                     "meeting_native": (meta.get("meeting_native") or "").strip() or None,
+                    "mount_gen": self._as_gen(meta.get("mount_gen")),
                 })
         else:
             for session, meta in self._mem.get(subject, {}).items():
@@ -373,6 +475,7 @@ class _Sessions:
                     "touched": meta.get("touched", True) is not False,
                     "meeting": str(meta.get("meeting") or "").strip() or None,
                     "meeting_native": str(meta.get("meeting_native") or "").strip() or None,
+                    "mount_gen": self._as_gen(meta.get("mount_gen")),
                 })
         rows.sort(key=lambda r: r["last_active"], reverse=True)
         return rows
@@ -755,6 +858,30 @@ def meeting_binding(ev: object) -> "tuple[str, str] | None":
     if not row or "/" in row:
         return None
     return row, str(ev.get("native") or "").strip()
+
+
+def workspace_focus(ev: object) -> "str | None":
+    """The workspace this turn brought INTO the chat's focus, or None (Vexa-ai/vexa#1603).
+
+    ONE EVENT MEANS IT, and only one: the ``focus`` the harness emits for a successful
+    ``workspace_new`` and for nothing else (``llm/claude_code.py::_workspace_focus``). A workspace
+    made from a conversation is part of that conversation from that moment — the founder's rule,
+    and his words for the alternative: *"not native workspace??"*.
+
+    NOT the ``artifact`` a write into that workspace produces, and not ``open``: writing into a
+    place, or reading one, is not joining it. A chat that reads a shared workspace's file must not
+    thereby mount that workspace for every later turn.
+
+    Pure, and here rather than inline in the route for the same reason ``meeting_binding`` is: what
+    an event MEANS is a contract with the worker, and a contract is worth a test."""
+    if not isinstance(ev, dict) or ev.get("type") != "focus":
+        return None
+    wid = str(ev.get("workspace") or "").strip()
+    # A slug is ONE path segment and never a dot-namespaced reserved one. A focus aimed at a guess
+    # is worse than no focus: it is durable, and it survives into every later turn of the chat.
+    if not wid or "/" in wid or wid.startswith("."):
+        return None
+    return wid
 
 
 def _sse(events) -> Iterator[str]:

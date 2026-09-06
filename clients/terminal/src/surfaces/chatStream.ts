@@ -42,6 +42,9 @@ export type ChatStreamEvent = {
    *  scaffold-declared pinned tab does. Orthogonal to `focus`: pinning is about what stays,
    *  focusing is about what is in front, and a turn may ask for either, both, or neither. */
   pin?: boolean;
+  /** `focus` events only (Vexa-ai/vexa#1603) — the workspace a `workspace_new` just made, and its
+   *  human name when the create knew one. Never a path: this event names a place, not a page. */
+  name?: string;
   /** `terms` events only (PRD decision 35) — the meeting ROW the chips belong to, the cursor the
    *  next Highlight should send back, and the published terms themselves. */
   meeting?: string;
@@ -128,6 +131,10 @@ export type ChatStreamCallbacks = {
    *  must not interrupt a reader who has opened something else, while this IS what the reader
    *  asked for, so it always comes to the front. There is no `focus` flag for the same reason. */
   onOpen?: (o: { workspace: string; path: string; target: string }) => void;
+  /** A WORKSPACE THE TURN CREATED (Vexa-ai/vexa#1603) — it is part of this chat from now on.
+   *  Forwarded, never stored, exactly like `onArtifact`: the focus set belongs to the CHAT RECORD
+   *  and this reader owns no state. Optional so existing callers/tests need not implement it. */
+  onFocusWorkspace?: (f: { workspace: string; name: string }) => void;
   /** TERMS THE TURN PUBLISHED for a meeting's transcript (decision 35.2). Forwarded, never stored:
    *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
    *  `onArtifact`. Optional so existing callers/tests need not implement it. */
@@ -372,6 +379,10 @@ export async function streamChatTurn(
             // only thing the job lane changes about it is that this connection has to recognise
             // the job as its own before it acts on it.
             cb.onOpen?.({ workspace: ev.workspace ?? "", path: ev.path, target: ev.target ?? "" });
+          } else if (ev.type === "focus" && ev.workspace) {
+            // …and a job may make a workspace: Create runs as one. The chat it was asked in is
+            // still the chat that made the place.
+            cb.onFocusWorkspace?.({ workspace: ev.workspace, name: ev.name ?? "" });
           }
           continue;
         }
@@ -407,6 +418,13 @@ export async function streamChatTurn(
           // owns no state and the shell decides, because the strip belongs to the chat record.
           case "open":
             if (ev.path) cb.onOpen?.({ workspace: ev.workspace ?? "", path: ev.path, target: ev.target ?? "" });
+            break;
+          // A WORKSPACE THE TURN MADE (Vexa-ai/vexa#1603). Emitted by the harness off a successful
+          // `workspace_new` and nothing else, so a chat can never take the focus of a workspace it
+          // merely read. Forwarded like every other surface event: the focus set is the chat
+          // record's and this reader owns none of it.
+          case "focus":
+            if (ev.workspace) cb.onFocusWorkspace?.({ workspace: ev.workspace, name: ev.name ?? "" });
             break;
           // THE TRANSCRIPT'S CHIPS (decision 35). Emitted by the harness off a successful
           // `transcript_terms` PUBLISH — the agent's second call, the one carrying `keep`. A bare

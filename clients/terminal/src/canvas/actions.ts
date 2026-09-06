@@ -125,6 +125,19 @@ export const ARTIFACT_EVENT = "vexa:terminal:artifact";
  *  chat record (PRD decision 18) and the minutes shell is that record's one writer. */
 export const OPEN_PAGE_EVENT = "vexa:terminal:open-page";
 
+/** A WORKSPACE THE TURN CREATED, JOINING THE CHAT'S FOCUS (Vexa-ai/vexa#1603).
+ *
+ *  The founder asked for *"a new workspace where we will collect everything we know about ILM"*,
+ *  got one, and was told *"the new workspace isn't in my native mount stack (it's reached via the
+ *  workspace_* tools)"* — *"not native workspace??"*. Creating a place IS bringing it into the
+ *  room, so the create moves the chip and the panel, exactly as a send moves the transcript.
+ *
+ *  A THIRD event rather than an artifact or an open, because it names a WORKSPACE and those two
+ *  name a PAGE: the shell's answer here is to widen the chat's mount set, not to front a document.
+ *  Same seam as both otherwise — the chat surface hears it on the stream and re-emits it, and the
+ *  minutes shell, the one writer of the chat record (PRD decision 18), decides what happens. */
+export const FOCUS_WORKSPACE_EVENT = "vexa:terminal:focus-workspace";
+
 /** A chat turn COMMITTED to the workspace — the moment files it wrote became real.
  *
  *  A chat declares its tabs before its documents exist (PRD decision 18: the link sets the record,

@@ -77,8 +77,9 @@ import httpx
 from llm.errors import LLMAuthError, LLMConfigError, LLMError
 # The panel/chip/transcript vocabularies are the CLAUDE adapter's, imported rather than copied: the
 # terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
-from llm.claude_code import (_BOT_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
-                             _open_event, _published_terms, _short, _written_artifact)
+from llm.claude_code import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
+                             _open_event, _published_terms, _short, _workspace_focus,
+                             _written_artifact)
 from llm.ports import harness_subprocess_env
 from llm import jobs, web_tools
 
@@ -1202,6 +1203,10 @@ def _panel_events(call: dict, ok: bool, out: str) -> list[dict]:
             events.append(ev)
     elif name in _OPEN_TOOLS:
         ev = _open_event(out)
+        if ev:
+            events.append(ev)
+    elif name in _FOCUS_TOOLS:
+        ev = _workspace_focus(out)
         if ev:
             events.append(ev)
     return events

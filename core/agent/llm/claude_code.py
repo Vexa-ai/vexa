@@ -68,6 +68,23 @@ _OPEN_TOOLS = frozenset({
 })
 
 
+# A WORKSPACE MADE FROM THIS CONVERSATION JOINS IT (Vexa-ai/vexa#1603). The founder asked for *"a
+# new workspace where we will collect everything we know about ILM"*, got one, and was then told
+# *"the new workspace isn't in my native mount stack (it's reached via the workspace_* tools)"* —
+# *"not native workspace??"*. Creating a place IS the act of bringing it into the room; reaching it
+# through the tools afterwards is the defect. So the create emits its own event, exactly as a send
+# emits the transcript's: the chip shows it, the panel mounts it, and agent-api reads the same
+# event on the way past to put it in the session's focus for every later turn and every other
+# browser.
+#
+# A CLOSED VOCABULARY, for the reason `_WRITER_TOOLS` is one: a prefix match on "workspace" would
+# put every listing, read and purpose-edit into somebody's focus.
+_FOCUS_TOOLS = frozenset({
+    "mcp__vexa__workspace_new",
+    "workspace_new",
+})
+
+
 def _tool_result_text(content: object) -> str:
     """The tool result as one string, whichever shape the harness handed it in.
 
@@ -139,6 +156,40 @@ def _bot_artifact(content: object) -> "dict | None":
     native = str(obj.get("meeting") or "").strip()
     if native:
         ev["native"] = native
+    return ev
+
+
+def _workspace_focus(content: object) -> "dict | None":
+    """The `focus` event a successful `workspace_new` earns, or None (Vexa-ai/vexa#1603).
+
+    ONE FIELD DECIDES IT: `created`, the workspace id the create route minted, which the tool
+    returns for a create and for nothing else. No id, no event — a focus aimed at a guess would put
+    a chat permanently over a workspace that does not exist, the same failure `_bot_artifact` is
+    careful about one object along.
+
+    `name` rides along because this is the only moment the workspace's HUMAN name is in hand on
+    this path; the client shows names, never slugs. It is display only and an absent one costs the
+    event a field, never the focus.
+
+    THE EVENT CLAIMS NO ACCESS. Whether the next turn mounts this read-write is decided by
+    membership, server-side, in `shared_active_mounts` — not by a string a harness wrote. What this
+    event says is only "this workspace is now part of this conversation", which is the one thing
+    the harness is in a position to know."""
+    try:
+        obj = json.loads(_tool_result_text(content))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    wid = str(obj.get("created") or "").strip()
+    # A slug is one path segment and never a dot-namespaced reserved one. Same shape check the
+    # store itself applies; refusing here keeps a malformed answer out of a durable session record.
+    if not wid or "/" in wid or wid.startswith("."):
+        return None
+    ev = {"type": "focus", "workspace": wid}
+    name = str(obj.get("name") or "").strip()
+    if name:
+        ev["name"] = name
     return ev
 
 
@@ -227,6 +278,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     # transcript, then the note) and a set keyed on the call id is what keeps the second answer from
     # being matched to the first ask.
     pending_opens: set[str] = set()
+    # callIds of in-flight `workspace_new` calls — same discipline again (Vexa-ai/vexa#1603).
+    pending_focus: set[str] = set()
     try:
         for raw in lines:
             raw = raw.strip()
@@ -270,6 +323,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                             pending_bots.add(call_id)
                         elif tool_name in _OPEN_TOOLS:
                             pending_opens.add(call_id)
+                        elif tool_name in _FOCUS_TOOLS:
+                            pending_focus.add(call_id)
                         yield {
                             "type": "tool-call",
                             "tool": tool_name,
@@ -314,6 +369,15 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                         pending_opens.discard(call_id)
                         if was_open and ok:
                             ev = _open_event(block.get("content"))
+                            if ev:
+                                yield ev
+                        # A WORKSPACE CAME INTO THE ROOM. Success-only like the rest: a create
+                        # that failed made no place, and a chip for a workspace that does not
+                        # exist is the worst of the three failures on this seam.
+                        was_focus = call_id in pending_focus
+                        pending_focus.discard(call_id)
+                        if was_focus and ok:
+                            ev = _workspace_focus(block.get("content"))
                             if ev:
                                 yield ev
                         target = pending_writes.pop(call_id, None)

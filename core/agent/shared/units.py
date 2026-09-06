@@ -131,7 +131,21 @@ def dispatch_id(inv: dict) -> str:
     if inv["trigger"] == "message":
         # One warm chat unit per (person, conversation thread), TTL-reaped; continuity = the per-session
         # file. ``session`` defaults to ``"main"`` so a dispatch with no session keeps the legacy id.
-        return f"agent-{subject}-chat-{chat_session(inv)}"
+        #
+        # …AND PER MOUNT GENERATION (Vexa-ai/vexa#1603). A worker is spawned with its mount table and
+        # keeps it for the whole warm window — the runtime's create is an idempotent TOUCH that
+        # discards the spec env — so a workspace created mid-conversation was unreachable to the
+        # agent for the rest of it: *"the new workspace isn't in my native mount stack"*. The chat's
+        # focus generation rides the id, so the turn after a create addresses a DIFFERENT warm unit
+        # and is therefore spawned, with the new stack. Nothing is stopped: the old worker finishes
+        # its background jobs and idles out on its own clock.
+        #
+        # ABSENT MEANS THE ID IT ALWAYS HAD. Generation 0 — every chat that has never made a
+        # workspace, and every session record written before the field existed — is byte-identical
+        # to the previous id, so a deploy does not re-spawn a single live conversation.
+        gen = str((ctx.get("mount_gen") or "")).strip()
+        base = f"agent-{subject}-chat-{chat_session(inv)}"
+        return f"{base}-g{gen}" if gen and gen != "0" else base
     digest = hashlib.sha1(
         f"{subject}|{inv['trigger']}|{json.dumps(inv['start'], sort_keys=True)}".encode()
     ).hexdigest()[:10]
