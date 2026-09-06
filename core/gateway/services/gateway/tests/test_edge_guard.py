@@ -16,25 +16,63 @@ Two layers:
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from guard import SecurityConfig
+from guard import SecurityConfig, SecurityMiddleware, ip_ban_manager
 from httpx import ASGITransport
+from starlette.datastructures import Headers
+from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
-from gateway import edge_guard as _edge_guard
 from gateway.app import run_multiplex
+from gateway.config_preflight import ConfigError
 from gateway.edge_guard import (
     _GUARD_EXCLUDE_PATHS,
+    _on_http_block,
     apply_guard,
     build_guard_config,
-    reset_ws_guard,
 )
 from gateway.ratelimit import PerUserRateLimiter
+
+
+@pytest.fixture(autouse=True)
+async def _reset_guard_process_state() -> AsyncIterator[None]:
+    """Reset guard-core's process-global WS state between tests.
+
+    Phase 2 moved the WS rate limit / auto-ban onto guard-core library primitives, which
+    keep their own module-level stores (NOT the per-instance ``_WsGuard`` dict the old
+    hand-rolled code used, which ``reset_ws_guard`` rebuilt fresh each test). Three
+    singletons survive across tests otherwise:
+
+    * ``ip_ban_manager`` (``guard_core.handlers.ipban_handler``) - the ban store the WS
+      check and HTTP pipeline share. Its own ``reset()`` clears state in place, which
+      works no matter which import path a caller holds a reference through (unlike
+      swapping in a brand-new instance). Forcing ``redis_handler = None`` keeps every test
+      in-memory / hermetic (conftest.py sets ``GUARD_ENABLE_REDIS=false`` for the suite).
+    * ``_by_ip_request_timestamps`` and ``_by_ip_autoban_counts``
+      (``guard_core.handlers.ratelimit_handler``) - the ``check_rate_limit_by_ip``
+      primitive's in-memory sliding window and per-IP violation counter. Clearing them in
+      place is the same idiom ``ip_ban_manager.reset()`` uses; without it, a 127.0.0.1
+      bucket one test populated leaks into the next (the suite failed on
+      ``test_untrusted_peer_xff_does_not_rotate_ws_budget`` because an earlier test left
+      peer-IP hits there).
+    """
+    from guard_core.handlers import ratelimit_handler as _rl_handler
+
+    ip_ban_manager.redis_handler = None
+    await ip_ban_manager.reset()
+    _rl_handler._by_ip_request_timestamps.clear()
+    _rl_handler._by_ip_autoban_counts.clear()
+    yield
+    await ip_ban_manager.reset()
+    _rl_handler._by_ip_request_timestamps.clear()
+    _rl_handler._by_ip_autoban_counts.clear()
 
 
 def _guard_middleware(app: FastAPI) -> Any:
@@ -51,6 +89,14 @@ def _enforcing_config(**overrides: Any) -> SecurityConfig:
     Rate limiting is on and keyed in-process; penetration detection, CORS, security headers,
     and fail-secure are off so nothing but the behavior under test can produce a non-200.
     ``exclude_paths`` is empty so ``/`` is gated.
+
+    No ``enable_redis=True`` variant runs in this suite: ``fakeredis`` is not installed in
+    the gateway venv (nor declared as a dev dependency), so a Redis-backed WS test cannot run
+    offline. The Redis-backed WS rate window was instead verified live against a real Redis
+    on 2026-08-27: at ``rate_limit=2`` the third connect from one IP was refused with 1008,
+    and the zset it was counted against was ``<redis_prefix>rate_limit:rate:<ip>:ws`` - the
+    ``endpoint_path="ws"`` suffix keeping it apart from the HTTP layer's key for the same IP.
+    This suite covers the in-memory path only.
     """
     base: dict[str, Any] = {
         "enable_redis": False,
@@ -99,6 +145,9 @@ class TestGuardWiring:
         assert cfg.enable_penetration_detection is False
         # A guard check bug must fail open, not 500 the public ingress.
         assert cfg.fail_secure is False
+        # A Redis outage must degrade the rate limiter to its per-process window, not skip
+        # it (guard-core >= 3.15.0 raises GuardRedisError under the default False).
+        assert cfg.redis_fail_open is True
         # CORS + security-headers OFF (moot on 0.12, kept so a future layer can't double up).
         assert cfg.enable_cors is False
         assert cfg.security_headers is not None
@@ -107,6 +156,9 @@ class TestGuardWiring:
         assert cfg.redis_prefix.startswith("vexa:")
         # /health is excluded so health monitors never trip the guard.
         assert "/health" in cfg.exclude_paths
+        # Every HTTP block also emits an http_request_blocked logevent.v1 line, the
+        # HTTP-side sibling of the WS path's ws_connect_rejected.
+        assert cfg.on_block is _on_http_block
 
     @pytest.mark.asyncio
     async def test_smoke_health_with_guard_active(self) -> None:
@@ -142,6 +194,186 @@ class TestGuardWiring:
         monkeypatch.delenv("GUARD_ENABLED_TEST", raising=False)
         assert _env_bool("GUARD_ENABLED_TEST", True) is True
         assert _env_bool("GUARD_ENABLED_TEST", False) is False
+
+
+class TestWsGuardPreflight:
+    """``apply_guard`` refuses to boot a config where the WS guard would have no
+    SecurityMiddleware to resolve its SecurityConfig from."""
+
+    def test_ws_enabled_without_guard_enabled_refuses_boot(self, monkeypatch) -> None:
+        """GUARD_WS_ENABLED=true with GUARD_ENABLED=false names both vars."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        monkeypatch.setenv("GUARD_ENABLED", "false")
+        with pytest.raises(ConfigError, match="GUARD_WS_ENABLED") as exc_info:
+            apply_guard(FastAPI())
+        assert "GUARD_ENABLED" in str(exc_info.value)
+
+    def test_ws_enabled_with_guard_enabled_boots_fine(self, monkeypatch) -> None:
+        """The same toggle with GUARD_ENABLED left at its true default installs the
+        middleware normally - only the WS-without-HTTP combination is refused."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        monkeypatch.delenv("GUARD_ENABLED", raising=False)
+        app = FastAPI()
+        apply_guard(app, config=_enforcing_config())
+        assert _guard_middleware(app) is not None
+
+
+class TestGuardEnvValidation:
+    """The IP-list fields (``whitelist`` / ``blacklist`` / ``trusted_proxies``) and
+    ``block_cloud_providers`` all raise on guard-core >= 3.15.0: an invalid IP/CIDR
+    entry, or a provider name that is not an exact (or, under STRICT, case-insensitive) member
+    of the accepted set, surfaces as a bare pydantic ``ValidationError`` from deep inside
+    ``SecurityConfig(...)`` construction. Without a Vexa-side check, that boot fails the same
+    way either way - just with no indication of which var or entry was wrong.
+
+    ``build_guard_config`` pre-validates all four fields unconditionally, raising
+    :class:`ConfigError` naming the var and the bad entry before the library ever sees the
+    value. ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` (default false) does not decide WHETHER an
+    entry is validated - it always is - only whether the provider-name match is
+    case-normalized first. See ``TestBlockCloudProvidersDefaultOff`` for that default-vs-STRICT
+    split and ``edge_guard.py`` for the field-by-field evidence."""
+
+    def test_unrecognized_cloud_provider_raises_clear_error(self, monkeypatch) -> None:
+        """A name that is not a member of the accepted set raises, naming the var, the entry,
+        and the exact accepted spellings - the natural 'aws,hetzner' typo case. Set under
+        STRICT to show normalization does not invent providers: a genuinely unknown name is
+        rejected either way."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS,hetzner")
+        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+            build_guard_config()
+        message = str(exc_info.value)
+        assert "hetzner" in message
+        assert "AWS, Azure, DigitalOcean, GCP, Linode, Vultr" in message
+        # The unrecognized-provider message must not recommend the ':!region' carve-out - it is
+        # irrelevant to a provider name that was not even recognized.
+        assert ":!" not in message
+
+    def test_cloud_provider_mixed_case_and_region_carveout_construct(self, monkeypatch) -> None:
+        """Under STRICT, lowercase/mixed-case provider names normalize to guard-core's
+        canonical spelling (aws -> AWS); the ':!region' carve-out suffix survives untouched."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,GCP,Azure:!us-east-1")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS", "GCP", "Azure:!us-east-1"}
+
+    def test_uppercase_region_carveout_raises_clear_error(self, monkeypatch) -> None:
+        """guard-core's ``is_cloud_ip`` matches a carve-out region with a case-sensitive '==';
+        real region strings are lowercase, so an uppercase region would silently never match.
+        Under STRICT, Vexa rejects it at boot instead, naming the casing rule."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!US-EAST-1")
+        with pytest.raises(
+            ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS"
+        ) as exc_info:
+            build_guard_config()
+        message = str(exc_info.value)
+        assert "US-EAST-1" in message
+        assert "lowercase" in message
+
+    def test_lowercase_region_carveout_constructs(self, monkeypatch) -> None:
+        """Under STRICT, a properly lowercase carve-out region normalizes only the provider
+        half."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws:!us-east-1")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS:!us-east-1"}
+
+    def test_global_region_carveout_constructs(self, monkeypatch) -> None:
+        """'GLOBAL' is the one synthetic, uppercase region guard-core (AWS) actually uses, so
+        under STRICT it is accepted as-is rather than rejected by the lowercase rule."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!GLOBAL")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS:!GLOBAL"}
+
+    def test_empty_region_carveout_raises_clear_error(self, monkeypatch) -> None:
+        """Under STRICT, a ':!' suffix with nothing after it is not a valid carve-out."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!")
+        with pytest.raises(
+            ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS"
+        ) as exc_info:
+            build_guard_config()
+        assert "empty region" in str(exc_info.value)
+
+    def test_invalid_whitelist_entry_raises_clear_error(self, monkeypatch) -> None:
+        monkeypatch.setenv("GUARD_IP_WHITELIST", "10.0.0.1,not-an-ip")
+        with pytest.raises(ConfigError, match="GUARD_IP_WHITELIST") as exc_info:
+            build_guard_config()
+        assert "not-an-ip" in str(exc_info.value)
+
+    def test_invalid_blacklist_entry_raises_clear_error(self, monkeypatch) -> None:
+        """A CIDR prefix out of range (/99) is invalid and must not reach guard-core."""
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", "10.0.0.0/99")
+        with pytest.raises(ConfigError, match="GUARD_IP_BLACKLIST") as exc_info:
+            build_guard_config()
+        assert "10.0.0.0/99" in str(exc_info.value)
+
+    def test_invalid_trusted_proxies_entry_raises_clear_error(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "999.999.999.999")
+        with pytest.raises(ConfigError, match="GUARD_TRUSTED_PROXIES"):
+            build_guard_config()
+
+    def test_valid_ip_and_cidr_entries_construct(self, monkeypatch) -> None:
+        """Good IP + CIDR entries across all three IP-list vars still construct a working
+        config. Compared as ``list(...)`` since guard-core's own field type (list vs. tuple)
+        has varied across versions - not this fix's concern, only that construction succeeds
+        with the right values."""
+        monkeypatch.setenv("GUARD_IP_WHITELIST", "10.0.0.1, 10.1.0.0/16")
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", "192.168.1.1")
+        monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "127.0.0.1")
+        cfg = build_guard_config()
+        assert list(cfg.whitelist) == ["10.0.0.1", "10.1.0.0/16"]
+        assert list(cfg.blacklist) == ["192.168.1.1"]
+        assert list(cfg.trusted_proxies) == ["127.0.0.1"]
+
+    def test_unset_vars_still_default_to_empty(self, monkeypatch) -> None:
+        """No GUARD_* filter vars set at all → the pre-validation is a no-op and guard-core's
+        own defaults apply, same as before this change."""
+        for var in (
+            "GUARD_IP_WHITELIST",
+            "GUARD_IP_BLACKLIST",
+            "GUARD_TRUSTED_PROXIES",
+            "GUARD_BLOCK_CLOUD_PROVIDERS",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        cfg = build_guard_config()
+        assert cfg.whitelist is None
+        assert not cfg.blacklist
+        assert not cfg.trusted_proxies
+        assert not cfg.block_cloud_providers
+
+
+class TestBlockCloudProvidersDefaultOff:
+    """``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` defaults to false, which means exact-case
+    validation, not passthrough: on guard-core >= 3.15.0 an unrecognized or
+    wrong-case entry raises inside ``SecurityConfig`` regardless of what Vexa does, so the
+    default already validates - it just does not case-normalize. See
+    ``_resolve_block_cloud_providers`` in edge_guard.py for the rationale."""
+
+    def test_default_off_wrong_case_entry_raises_clear_error(self, monkeypatch) -> None:
+        """Without STRICT, 'aws' is not silently accepted or normalized - it raises exactly as
+        an unrecognized name would, because the pinned guard-core rejects it too and this check
+        only makes that failure legible, it does not invent new enforcement."""
+        monkeypatch.delenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", raising=False)
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws")
+        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+            build_guard_config()
+        message = str(exc_info.value)
+        assert "'aws'" in message
+        # Without STRICT the message must not claim case-insensitivity - it isn't one.
+        assert "case-insensitive" not in message
+
+    def test_default_off_canonical_entry_constructs(self, monkeypatch) -> None:
+        """An already-canonical 'AWS' entry constructs fine without STRICT - there is nothing
+        to normalize, so no ConfigError."""
+        monkeypatch.delenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", raising=False)
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS"}
 
 
 def create_app_with_guard() -> FastAPI:
@@ -247,37 +479,192 @@ class TestGuardBehavior:
             ).status_code == 429
 
 
+class TestHttpBlockEvent:
+    """``on_block`` (``_on_http_block``) turns a real guard HTTP block into an
+    ``http_request_blocked`` ``logevent.v1`` line - the sibling of the WS side's
+    ``ws_connect_rejected`` (see ``test_denial_emits_structured_rejection_event``)."""
+
+    @pytest.mark.asyncio
+    async def test_blacklisted_ip_emits_http_request_blocked_event(
+        self, capsys
+    ) -> None:
+        """A REAL 403 from guard's SecurityMiddleware (blacklisted IP, the same setup as
+        ``test_blacklisted_ip_returns_403``) emits ONE ``http_request_blocked`` line with
+        the expected fields - driven through the installed library, not a mocked hook."""
+        app = _make_app(
+            _enforcing_config(
+                rate_limit=1000,
+                trusted_proxies=["127.0.0.1"],
+                blacklist=["10.0.0.9"],
+                on_block=_on_http_block,
+            )
+        )
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            resp = await ac.get("/", headers={"X-Forwarded-For": "10.0.0.9"})
+        assert resp.status_code == 403
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert len(lines) == 1
+        envelope = json.loads(lines[0])
+        assert envelope["event"] == "http_request_blocked"
+        assert envelope["level"] == "warning"
+        assert envelope["span"] == "http"
+        fields = envelope["fields"]
+        assert fields["status_code"] == 403
+        assert fields["path"] == "/"
+        assert fields["client_ip"] == "10.0.0.9"
+        assert fields["check_name"]  # non-empty - which check fired
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_request_emits_http_request_blocked_event(
+        self, capsys
+    ) -> None:
+        """The 429 rate-limit path (a different guard-core call site than the blacklist
+        403 above) also fires the callback, with ``check_name == "rate_limit"``. A unique
+        XFF IP behind a trusted proxy (like ``test_real_exclude_paths_do_not_neuter_guard``)
+        avoids the process-wide RateLimitManager singleton bucket other tests share on the
+        bare ``127.0.0.1`` client identity."""
+        app = _make_app(
+            _enforcing_config(
+                rate_limit=1,
+                trusted_proxies=["127.0.0.1"],
+                on_block=_on_http_block,
+            )
+        )
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            headers = {"X-Forwarded-For": "10.0.0.201"}
+            assert (await ac.get("/", headers=headers)).status_code == 200
+            resp = await ac.get("/", headers=headers)
+        assert resp.status_code == 429
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert len(lines) == 1
+        fields = json.loads(lines[0])["fields"]
+        assert fields["status_code"] == 429
+        assert fields["check_name"] == "rate_limit"
+
+    def test_callback_tolerates_missing_payload_keys(self, capsys) -> None:
+        """A payload missing every key must not raise - ``.get()`` throughout, not ``[]``."""
+        _on_http_block(object(), {})
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert len(lines) == 1
+        fields = json.loads(lines[0])["fields"]
+        assert fields["check_name"] is None
+        assert fields["status_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_ws_rejection_does_not_fire_on_block(
+        self, monkeypatch, capsys
+    ) -> None:
+        """Regression guard for the docstring's evidentiary claim: ``guard_websocket``'s own
+        ``/ws`` connect check must never also fire ``on_block``, or this event and
+        ``ws_connect_rejected`` (``test_denial_emits_structured_rejection_event``) would double
+        up for the same connection. Wires ``on_block=_on_http_block`` onto the SAME config the
+        WS layer resolves (like ``test_blacklisted_ip_denied_at_connect``, plus the hook this
+        class exercises) and drives a blacklisted-IP WS connect through ``run_multiplex``. A
+        unique IP, not shared with any rate-limit-bucket test in this module. If a future
+        guard-core starts routing the WS path through ``fire_block_hook``, this fails loudly on
+        the ``http_request_blocked`` line count, not silently on a double-logged event."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            rate_limit=1000,
+            trusted_proxies=["127.0.0.1"],
+            blacklist=["10.0.0.222"],
+            on_block=_on_http_block,
+        )
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.222", api_key=VALID_KEY, config=cfg
+        )
+        await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
+        assert ws.close_code == 1008  # WS was rejected
+        assert ws.accepted is False
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "http_request_blocked" in line
+        ]
+        assert lines == []  # on_block never fired for the WS path
+
+
 # ── WS guard hook ──────────────────────────────────────────────────────────────
 
 
 class _FakeClient:
-    def __init__(self, host: str) -> None:
+    def __init__(self, host: Optional[str]) -> None:
         self.host = host
 
 
+def _ws_app_for(config: Optional[SecurityConfig]) -> Any:
+    """A minimal ``app`` double for ``websocket.scope["app"]``, shaped the way
+    ``guard_websocket``'s own ``_find_security_config`` expects it: ``user_middleware`` is a
+    list of entries with a ``cls`` and a ``kwargs`` dict, and it looks for the one whose
+    ``cls is SecurityMiddleware`` and reads ``kwargs["config"]`` off it. This replaces the old
+    ``reset_ws_guard(cfg)`` singleton - each ``FakeWS(config=...)`` now carries its own
+    resolvable config, exactly as a real app's ``apply_guard(app, config=...)`` would produce.
+    ``config=None`` yields no such entry, so ``guard_websocket`` raises its own RuntimeError
+    (no SecurityMiddleware registered) - the same as a real app that never called
+    ``apply_guard``."""
+    middleware = []
+    if config is not None:
+        middleware.append(
+            SimpleNamespace(cls=SecurityMiddleware, kwargs={"config": config})
+        )
+    return SimpleNamespace(user_middleware=middleware)
+
+
 class FakeWS:
-    """Minimal WebSocket for the WS-guard tests: has ``.client`` (for IP resolution)
-    and ``.headers`` (for X-Forwarded-For). No inbound frames — a denied connect never
-    reaches the frame loop, and a clean IP test asserts it passes the guard (then hits
-    the auth layer, which closes 4401 on a missing key)."""
+    """Minimal WebSocket for the WS-guard tests: has ``.client`` (for IP resolution),
+    ``.headers`` (for X-Forwarded-For), ``.state`` and ``.scope`` (``guard_websocket`` reads
+    all four - a real Starlette ``WebSocket`` always has them, sharing ``HTTPConnection``
+    with ``Request``). ``.headers`` is a real Starlette ``Headers`` (case-insensitive),
+    matching production and what ``extract_client_ip`` expects (it looks up
+    ``X-Forwarded-For`` by that exact casing). ``config`` (via :func:`_ws_app_for`) is what
+    ``guard_websocket`` resolves its ``SecurityConfig`` from, replacing the old
+    ``reset_ws_guard`` singleton. No inbound frames - a denied connect never reaches the
+    frame loop, and a clean IP test asserts it passes the guard (then hits the auth layer,
+    which closes 4401 on a missing key). ``scope["path"]`` matches the real ``/ws`` route
+    (``app.py``'s ``@app.websocket("/ws")``): fastapi-guard 8.0.0 scans the handshake through
+    guard-core's own ``SuspiciousActivityCheck``, and even with ``enable_penetration_detection``
+    off, it still resolves ``url_path`` via Starlette's ``get_route_path(scope)`` for
+    ``exclude_paths`` matching before that check ever runs - ``get_route_path`` reads
+    ``scope["path"]`` unconditionally (``root_path`` defaults to ``""`` via ``.get``), so a
+    scope without it raises ``KeyError`` on every connect, guard config or not."""
 
     def __init__(
         self,
         *,
-        client_host: str = "127.0.0.1",
+        client_host: Optional[str] = "127.0.0.1",
         xff: Optional[str] = None,
         api_key: Optional[str] = None,
+        config: Optional[SecurityConfig] = None,
     ) -> None:
         self.client = _FakeClient(client_host)
-        headers: dict[str, str] = {}
+        raw_headers: dict[str, str] = {}
         if xff:
-            headers["x-forwarded-for"] = xff
+            raw_headers["x-forwarded-for"] = xff
         if api_key:
-            headers["x-api-key"] = api_key
-        self.headers = headers
+            raw_headers["x-api-key"] = api_key
+        self.headers = Headers(headers=raw_headers)
+        self.state = SimpleNamespace()
+        self.scope: dict[str, Any] = {"app": _ws_app_for(config), "path": "/ws"}
         self.query_params: dict[str, str] = {}
         self.sent: list[dict] = []
         self.close_code: Optional[int] = None
+        self.close_reason: Optional[str] = None
         self.accepted: bool = (
             False  # True once accept() is called — proves pre-accept rejection
         )
@@ -296,8 +683,9 @@ class FakeWS:
         # before the loop (missing_api_key). Neither reaches receive_text.
         raise WebSocketDisconnect(code=1000)
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int = 1000, reason: Optional[str] = None) -> None:
         self.close_code = code
+        self.close_reason = reason
 
 
 class TestWsGuard:
@@ -305,122 +693,177 @@ class TestWsGuard:
 
     @pytest.mark.asyncio
     async def test_blacklisted_ip_denied_at_connect(self, monkeypatch) -> None:
-        """A WS connect from a blacklisted IP is denied BEFORE the upgrade — close 4401
-        pre-accept, so no WebSocket is opened (``accepted`` stays False) and no data frame
-        is sent (Starlette turns a pre-accept ``websocket.close`` into an HTTP 403)."""
+        """A WS connect from a blacklisted IP is denied BEFORE the upgrade - guard_websocket
+        raises WebSocketException(WS_1008_POLICY_VIOLATION, "IP not allowed"), closed pre-accept
+        so no WebSocket is opened (``accepted`` stays False) and no data frame is sent
+        (Starlette turns a pre-accept ``websocket.close`` into an HTTP 403)."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
-        reset_ws_guard(
-            _enforcing_config(
-                rate_limit=1000,
-                trusted_proxies=["127.0.0.1"],
-                blacklist=["10.0.0.9"],
-            )
+        cfg = _enforcing_config(
+            rate_limit=1000,
+            trusted_proxies=["127.0.0.1"],
+            blacklist=["10.0.0.9"],
         )
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.9", api_key=VALID_KEY)
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.9", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
-        assert ws.close_code == 4401
-        assert ws.accepted is False  # pre-accept rejection — no WebSocket upgrade
+        assert ws.close_code == 1008
+        assert ws.accepted is False  # pre-accept rejection - no WebSocket upgrade
         assert not ws.sent  # no data frame before accept
 
     @pytest.mark.asyncio
     async def test_clean_ip_passes_guard_to_auth(self, monkeypatch) -> None:
         """A WS connect from a clean IP passes the guard and reaches the auth layer
-        (no api_key → missing_api_key + 4401), proving the guard did not block it."""
+        (no api_key → missing_api_key + 4401), proving the guard did not block it. The 4401
+        here is the app's own auth close, unrelated to the guard's 1008."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
-        reset_ws_guard(_enforcing_config(rate_limit=1000))
-        ws = FakeWS(client_host="127.0.0.1", api_key=None)
+        cfg = _enforcing_config(rate_limit=1000)
+        ws = FakeWS(client_host="127.0.0.1", api_key=None, config=cfg)
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
         assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_client_fails_open_on_ws(self, monkeypatch) -> None:
+        """A WS connect with no peer address (``ws.client`` is None: Unix-socket or a
+        peer-less ASGI server) resolves to guard-core's ``"unknown"`` identity.
+        ``guard_websocket`` returns before the rate-limit check for that identity
+        (``fail_secure=False`` skips its own "could not determine address" raise, and the
+        rate-limit primitive is never reached for a non-IP), so the connect reaches the auth
+        layer (missing_api_key + 4401) on every attempt, since an unknown identity has no
+        budget to drain."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(rate_limit=1)
+        for _ in range(3):
+            ws = FakeWS(client_host=None, api_key=None, config=cfg)
+            await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
+            assert ws.close_code == 4401
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
 
     @pytest.mark.asyncio
     async def test_over_limit_ip_denied_at_connect(self, monkeypatch) -> None:
         """After exhausting its rate-limit bucket, a WS connect from the same IP is denied."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
         cfg = _enforcing_config(rate_limit=2, trusted_proxies=["127.0.0.1"])
-        reset_ws_guard(cfg)
         # Two connects pass the guard (reach the auth layer → missing_api_key + 4401)...
         for _ in range(2):
-            ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=None)
+            ws = FakeWS(
+                client_host="127.0.0.1", xff="10.0.0.5", api_key=None, config=cfg
+            )
             await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # ...the third is denied by the guard PRE-ACCEPT (4401, no upgrade, no data frame).
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=VALID_KEY)
+        # ...the third is denied by the guard PRE-ACCEPT (1008, no upgrade, no data frame).
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.5", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
-        assert ws.close_code == 4401
-        assert ws.accepted is False  # pre-accept rejection — no WebSocket upgrade
+        assert ws.close_code == 1008
+        assert ws.accepted is False  # pre-accept rejection - no WebSocket upgrade
         assert not ws.sent
 
     @pytest.mark.asyncio
-    async def test_auto_ban_persists_past_window_and_resets_on_set(
+    async def test_auto_ban_persists_past_window_rebans_without_reset(
         self, monkeypatch
     ) -> None:
-        """A2 + P1: an auto-ban PERSISTS past the rate-window reset, and the reset-on-set
-        rule means a fresh threshold (not a single over-limit) is required to re-ban
-        after the ban window expires.
+        """Phase 2 library semantics (guard-core 3.13.0 ``check_rate_limit_by_ip``).
 
-        Uses a fake clock so the in-memory limiter's monotonic time is controllable.
-        ``enable_ip_banning=True`` + ``auto_ban_threshold=2`` so two over-limit events
-        set the ban (the path the hard-coded ``_enforcing_config`` left untested).
+        An auto-ban PERSISTS past the rate-window reset (still within the ban duration):
+        the ban STORE (``ip_ban_manager``) is what gates the connect, not the rate window,
+        so a banned IP stays denied even when its rate bucket has drained.
+
+        The violation counter the library keeps does NOT reset when it sets a ban (unlike
+        the old hand-rolled ``_ban_counts`` dict, which zeroed on ban-set). It only stops
+        counting while the IP is banned (the WS check short-circuits at ``is_ip_banned``
+        before the primitive is ever called), then resumes from its old value. So after a
+        ban EXPIRES the offender gets a fresh rate WINDOW (no hits recorded during the
+        ban), but the first over-limit once that window exhausts RE-BANS immediately,
+        rather than needing a full threshold again. Stricter on recidivism; this is
+        guard-core's chosen semantics, not tuned here.
+
+        A fake clock drives both the rate window (the primitive reads ``time.time()``)
+        and the ban-expiry check (``ip_ban_manager.is_ip_banned`` reads ``time.time()``).
+        Both go through the shared stdlib ``time`` module, so patching ``time.time`` on it
+        redirects both. ``enable_rate_limit_auto_ban=True`` + ``enable_ip_banning=True`` +
+        ``auto_ban_threshold=2`` so two over-limit events set the ban (the knob pair the
+        library primitive requires; the old hand-roll auto-banned on ``enable_ip_banning``
+        alone, with no separate knob).
         """
+        import time as _time
+
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
         cfg = _enforcing_config(
             rate_limit=2,
             rate_limit_window=60,
             enable_ip_banning=True,
+            enable_rate_limit_auto_ban=True,
             auto_ban_threshold=2,
             auto_ban_duration=3600,
             trusted_proxies=["127.0.0.1"],
         )
-        reset_ws_guard(cfg)
         clock = {"t": 0.0}
-        monkeypatch.setattr(_edge_guard.time, "monotonic", lambda: clock["t"])
+        monkeypatch.setattr(_time, "time", lambda: clock["t"])
 
         auth = FakeAuthorizer(valid_key=VALID_KEY)
         redis = FakeRedis()
 
         # Two connects pass the guard (bucket for 10.0.0.7 has room).
         for _ in range(2):
-            ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+            ws = FakeWS(
+                client_host="127.0.0.1", xff="10.0.0.7", api_key=None, config=cfg
+            )
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # 3rd: over limit → ban_counts=1 (< threshold 2) → denied pre-accept (rate, no ban yet).
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        # 3rd: over limit -> violation count 1 (< threshold 2) -> denied pre-accept, no ban.
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.close_code == 4401
+        assert ws.close_code == 1008
         assert ws.accepted is False  # pre-accept rejection
-        # 4th: over limit again → ban_counts=2 (>= threshold) → ban SET + reset.
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        # 4th: over limit again -> count 2 (>= threshold) -> BAN set.
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.close_code == 4401
+        assert ws.close_code == 1008
         assert ws.accepted is False
 
-        # A2: advance PAST the rate window (61s) but within the ban (3600s) → still banned.
+        # Ban PERSISTS past the rate window (61s) but within the ban (3600s) -> still banned.
+        # The check short-circuits at is_ip_banned; the primitive (and its counter) is idle.
         clock["t"] = 61.0
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.close_code == 4401
-        assert ws.accepted is False  # ban persists — still denied pre-accept
+        assert ws.close_code == 1008
+        assert ws.accepted is False  # ban persists - still denied pre-accept
 
-        # P1: advance PAST the ban (3601s) → ban expired, fresh budget. A single over-limit
-        # must NOT re-ban (reset-on-set cleared ban_counts at ban-set).
+        # Past the ban (3601s) -> ban expired, fresh rate WINDOW (no hits recorded during
+        # the ban, so the deque is empty). Two connects pass.
         clock["t"] = 3601.0
         for _ in range(2):
-            ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+            ws = FakeWS(
+                client_host="127.0.0.1", xff="10.0.0.7", api_key=None, config=cfg
+            )
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # One over-limit → denied pre-accept (rate) but NOT banned (ban_counts=1 < 2).
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        # First over-limit after expiry -> count resumes at 3 (>= threshold 2) -> RE-BAN
+        # immediately. The old reset-on-set would have left the count at 0 and needed two
+        # over-limits; the library does not reset, so one suffices.
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.close_code == 4401
+        assert ws.close_code == 1008
         assert ws.accepted is False
-        # Advance past the rate window: the next connect PASSES → not re-banned. If
-        # reset-on-set had failed (ban_counts left at the threshold), this over-limit
-        # would have re-banned and this connect would be ip_blocked instead.
+        # Still inside the new ban window (3662s < 3601+3600) -> still banned, denied.
         clock["t"] = 3662.0
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+        assert ws.close_code == 1008
+        assert ws.accepted is False
 
     @pytest.mark.asyncio
     async def test_untrusted_peer_xff_does_not_rotate_ws_budget(
@@ -431,20 +874,24 @@ class TestWsGuard:
         Covers the D1 fix (untrusted peer's XFF is ignored)."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
         # 127.0.0.1 is NOT in trusted_proxies → XFF ignored, peer IP keys the bucket.
-        reset_ws_guard(_enforcing_config(rate_limit=2, trusted_proxies=[]))
+        cfg = _enforcing_config(rate_limit=2, trusted_proxies=[])
         auth = FakeAuthorizer(valid_key=VALID_KEY)
         redis = FakeRedis()
         # Two connects pass the guard (peer-IP bucket has room); each carries a DIFFERENT
         # XFF value to prove the header is not rotating the budget.
         for i in range(2):
-            ws = FakeWS(client_host="127.0.0.1", xff=f"10.0.0.{i}", api_key=None)
+            ws = FakeWS(
+                client_host="127.0.0.1", xff=f"10.0.0.{i}", api_key=None, config=cfg
+            )
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
         # 3rd connect with yet another XFF → still denied pre-accept (peer-IP bucket
         # exhausted; the XFF did not create a fresh bucket).
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.99", api_key=VALID_KEY)
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.99", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.close_code == 4401
+        assert ws.close_code == 1008
         assert ws.accepted is False  # pre-accept rejection
 
     @pytest.mark.asyncio
@@ -454,52 +901,226 @@ class TestWsGuard:
         trusted-proxy CIDR matches a contained peer; a ``/24`` blacklist CIDR matches a
         contained XFF IP and denies the connect; an out-of-range IP is NOT matched."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
-        reset_ws_guard(
-            _enforcing_config(
-                rate_limit=1000,
-                # 10.0.0.0/8 trusted-proxy CIDR — 127.0.0.1 is NOT in it, so a peer at
-                # 127.0.0.1 is untrusted and its XFF is ignored. Instead we put a
-                # 127.0.0.0/8 CIDR so 127.0.0.1 IS a trusted proxy and XFF is honored.
-                trusted_proxies=["127.0.0.0/8"],
-                # 10.0.0.0/24 blacklist CIDR — 10.0.0.50 is contained → denied; 10.0.1.5
-                # is out of range → not matched.
-                blacklist=["10.0.0.0/24"],
-            )
+        cfg = _enforcing_config(
+            rate_limit=1000,
+            # 10.0.0.0/8 trusted-proxy CIDR - 127.0.0.1 is NOT in it, so a peer at
+            # 127.0.0.1 is untrusted and its XFF is ignored. Instead we put a
+            # 127.0.0.0/8 CIDR so 127.0.0.1 IS a trusted proxy and XFF is honored.
+            trusted_proxies=["127.0.0.0/8"],
+            # 10.0.0.0/24 blacklist CIDR - 10.0.0.50 is contained → denied; 10.0.1.5
+            # is out of range → not matched.
+            blacklist=["10.0.0.0/24"],
         )
         auth = FakeAuthorizer(valid_key=VALID_KEY)
         redis = FakeRedis()
         # Contained in the /24 blacklist CIDR → denied pre-accept.
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.50", api_key=VALID_KEY)
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.50", api_key=VALID_KEY, config=cfg
+        )
         await run_multiplex(ws, auth, redis)
-        assert ws.close_code == 4401
+        assert ws.close_code == 1008
         assert ws.accepted is False
         # Out of the /24 range (10.0.1.5) → passes the guard, reaches auth (missing_api_key).
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.1.5", api_key=None)
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.1.5", api_key=None, config=cfg)
         await run_multiplex(ws, auth, redis)
         assert ws.accepted is True
         assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
 
     @pytest.mark.asyncio
     async def test_whitelist_cidr_bypasses_ws_guard(self, monkeypatch) -> None:
-        """#565: a CIDR in GUARD_IP_WHITELIST bypasses the WS guard even when the IP is
-        over the rate limit. ``10.0.0.0/16`` whitelist → 10.0.5.5 is contained and passes."""
+        """#565: a CIDR in GUARD_IP_WHITELIST should bypass the WS guard's rate limit even
+        when the IP is over it, mirroring guard-core's HTTP ``RateLimitCheck`` (which skips
+        a whitelisted ``request.state.is_whitelisted``). fastapi-guard 7.8.0's
+        ``guard_websocket`` does not carry that skip - it calls ``check_rate_limit_by_ip``
+        unconditionally once the IP is resolved and allowed - so a whitelisted IP is
+        rate-limited on ``/ws`` today. ``10.0.0.0/16`` whitelist → 10.0.5.5 is contained;
+        the loop below expects it to pass every time despite ``rate_limit=1``, which fails
+        on the second connect under 7.8.0."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
-        reset_ws_guard(
-            _enforcing_config(
-                rate_limit=1,
-                trusted_proxies=["127.0.0.0/8"],
-                whitelist=["10.0.0.0/16"],
-            )
+        cfg = _enforcing_config(
+            rate_limit=1,
+            trusted_proxies=["127.0.0.0/8"],
+            whitelist=["10.0.0.0/16"],
         )
         auth = FakeAuthorizer(valid_key=VALID_KEY)
         redis = FakeRedis()
         # 10.0.5.5 is whitelisted via the /16 CIDR — passes the guard every time (no
         # rate limit applied), reaches auth → missing_api_key.
         for _ in range(3):
-            ws = FakeWS(client_host="127.0.0.1", xff="10.0.5.5", api_key=None)
+            ws = FakeWS(
+                client_host="127.0.0.1", xff="10.0.5.5", api_key=None, config=cfg
+            )
             await run_multiplex(ws, auth, redis)
             assert ws.accepted is True
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_whitelist_exclusive_blocks_unlisted_ip(self, monkeypatch) -> None:
+        """SWAP A / audit 5.4 (deliberate behavior change): guard-core's
+        ``check_ip_access`` treats a non-empty whitelist as EXCLUSIVE - an IP that is
+        NOT on it is blocked outright, the blacklist is never consulted. The OLD
+        hand-rolled ``_ip_matches``-based check only used the whitelist as a bypass
+        fast path: a listed IP passed immediately, but an UNLISTED IP simply fell
+        through to the (here, empty) blacklist and rate limit and was ALLOWED. This
+        pins the NEW, stricter, HTTP-matching behavior: with only ``10.0.0.0/24``
+        whitelisted, an IP outside that range is denied even though it is not
+        blacklisted and the rate limit has room."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            rate_limit=1000,
+            trusted_proxies=["127.0.0.1"],
+            whitelist=["10.0.0.0/24"],
+        )
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        # 10.0.1.5 is outside the whitelisted /24 and not blacklisted -> denied
+        # pre-accept under the new EXCLUSIVE semantics (the old code would have
+        # allowed it through to the auth layer).
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.1.5", api_key=VALID_KEY, config=cfg
+        )
+        await run_multiplex(ws, auth, redis)
+        assert ws.close_code == 1008
+        assert ws.accepted is False  # pre-accept rejection - no WebSocket upgrade
+        assert not ws.sent
+        # A listed IP still passes, as before.
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=None, config=cfg)
+        await run_multiplex(ws, auth, redis)
+        assert ws.accepted is True
+        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_denial_emits_structured_rejection_event(
+        self, monkeypatch, capsys
+    ) -> None:
+        """A guard-denied connect emits ONE ``ws_connect_rejected`` ``logevent.v1`` line
+        naming the close code and reason, at ``level="warning"`` and ``span="ws"`` (not the
+        default ``info``/``http``), the same idiom ``test_auth_infra_failure_is_503`` uses
+        for the HTTP side (``capsys`` over the JSON stdout line ``log_event`` prints)."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            rate_limit=1000,
+            trusted_proxies=["127.0.0.1"],
+            blacklist=["10.0.0.9"],
+        )
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.9", api_key=VALID_KEY, config=cfg
+        )
+        await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
+        assert ws.close_code == 1008
+        lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "ws_connect_rejected" in line
+        ]
+        assert len(lines) == 1
+        envelope = json.loads(lines[0])
+        assert envelope["event"] == "ws_connect_rejected"
+        assert envelope["level"] == "warning"
+        assert envelope["span"] == "ws"
+        assert envelope["fields"]["code"] == 1008
+        assert envelope["fields"]["reason"]
+
+
+class TestHttpWsBudgetIsolation:
+    """``endpoint_path="ws"`` gives ``/ws`` its own rate-limit budget, isolated from the
+    HTTP pipeline's global bucket for the same IP - proven end to end here, not just
+    asserted in the ``edge_guard.py`` comment."""
+
+    @pytest.mark.asyncio
+    async def test_draining_http_budget_leaves_ws_budget_untouched(
+        self, monkeypatch
+    ) -> None:
+        """Drain the HTTP per-IP budget for one XFF IP through the guarded HTTP app
+        (the ``TestGuardBehavior`` flood pattern), then a WS connect from the SAME IP
+        still passes the guard and reaches auth - the HTTP flood did not touch the
+        WS bucket."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(rate_limit=2, trusted_proxies=["127.0.0.1"])
+        http_app = _make_app(cfg)
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=http_app), base_url="http://test"
+        ) as ac:
+            for _ in range(2):
+                assert (
+                    await ac.get("/", headers={"X-Forwarded-For": "10.0.9.10"})
+                ).status_code == 200
+            assert (
+                await ac.get("/", headers={"X-Forwarded-For": "10.0.9.10"})
+            ).status_code == 429
+        # Same IP, WS path: the HTTP flood above did not drain this bucket.
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.9.10", api_key=None, config=cfg)
+        await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
+        assert ws.accepted is True
+        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_draining_ws_budget_leaves_http_budget_untouched(
+        self, monkeypatch
+    ) -> None:
+        """The other direction: draining the WS budget for one IP does not touch that
+        IP's HTTP budget."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(rate_limit=2, trusted_proxies=["127.0.0.1"])
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        for _ in range(2):
+            ws = FakeWS(
+                client_host="127.0.0.1", xff="10.0.9.11", api_key=None, config=cfg
+            )
+            await run_multiplex(ws, auth, redis)
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.9.11", api_key=VALID_KEY, config=cfg
+        )
+        await run_multiplex(ws, auth, redis)
+        assert ws.close_code == 1008  # WS bucket for 10.0.9.11 is now exhausted
+
+        # Same IP, HTTP path: the WS flood above did not drain this bucket.
+        http_app = _make_app(cfg)
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=http_app), base_url="http://test"
+        ) as ac:
+            resp = await ac.get("/", headers={"X-Forwarded-For": "10.0.9.11"})
+        assert resp.status_code == 200
+
+
+class TestWsGuardAsgiLevel:
+    """A real ASGI-level WS connect through ``create_app()`` + ``apply_guard(app)`` -
+    not the ``FakeWS`` double the rest of this module drives ``run_multiplex`` with -
+    proving ``guard_websocket`` actually gates Starlette's real WebSocket upgrade
+    handshake end to end, not just the ``FakeWS`` approximation of it."""
+
+    def test_blacklisted_ip_refused_pre_accept_over_real_asgi(
+        self, monkeypatch
+    ) -> None:
+        """A blacklisted IP's upgrade is refused before ``TestClient.websocket_connect``
+        ever returns a socket - Starlette surfaces the pre-accept close as
+        ``WebSocketDisconnect(code=1008)``. A clean IP passes the guard and reaches the
+        app's own auth close (``missing_api_key`` + 4401), proving the guard did not
+        block it."""
+        blacklisted_ip = "10.0.9.20"
+        monkeypatch.setenv("GUARD_ENABLED", "true")
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        monkeypatch.setenv("GUARD_ENABLE_REDIS", "false")
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", blacklisted_ip)
+        monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "127.0.0.1")
+        app = create_app()
+        apply_guard(app)
+        client = TestClient(app, client=("127.0.0.1", 12345))
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(
+                "/ws", headers={"X-Forwarded-For": blacklisted_ip}
+            ):
+                pass  # pragma: no cover - never reached, the upgrade is refused
+        assert exc_info.value.code == 1008
+
+        # A clean IP on the same trusted proxy passes the guard, reaches auth.
+        with client.websocket_connect(
+            "/ws", headers={"X-Forwarded-For": "10.0.9.21"}
+        ) as ws:
+            assert ws.receive_json() == {"type": "error", "error": "missing_api_key"}
 
 
 # ── A5: both layers in one app ─────────────────────────────────────────────────
@@ -528,7 +1149,8 @@ class TestBothLayers:
         self,
     ) -> None:
         """A valid-key burst → per-user 429 (rate_limiter, ``Retry-After: 1``); a keyless
-        flood from one IP → per-IP 429 (guard, no ``Retry-After``). Neither shadows the other.
+        flood from one IP → per-IP 429 (guard, ``Retry-After`` = the rate window, 60s here,
+        set by guard-core >= 3.14.0). Neither shadows the other.
 
         Uses XFF IPs unique to this test (10.0.0.50/10.0.0.51): guard's
         ``RateLimitManager`` is a process-wide singleton, so the in-memory
@@ -553,10 +1175,11 @@ class TestBothLayers:
                 headers={"x-api-key": VALID_KEY, "X-Forwarded-For": "10.0.0.50"},
             )
             assert resp.status_code == 429
-            # Retry-After: 1 is the per-user limiter's signature (app.py:154); guard's 429 has none.
+            # Retry-After: 1 is the per-user limiter's signature (app.py:154); guard's 429
+            # carries the whole window instead, so the header value tells the layers apart.
             assert resp.headers.get("retry-after") == "1"
 
-            # Per-IP path: keyless flood from a distinct IP → guard 429 (no Retry-After).
+            # Per-IP path: keyless flood from a distinct IP → guard 429 (Retry-After = window).
             for _ in range(4):
                 resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
                 assert (
@@ -565,5 +1188,37 @@ class TestBothLayers:
             resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
             assert resp.status_code == 429  # guard per-IP 429
             assert (
-                resp.headers.get("retry-after") is None
-            )  # guard's 429, not the limiter's
+                resp.headers.get("retry-after") == "60"
+            )  # guard's 429 (window = 60s), not the limiter's (1s)
+
+
+class TestBannedButWhitelisted:
+    async def test_ban_check_precedes_whitelist_bypass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A banned IP that is ALSO whitelisted stays blocked on the WS path.
+
+        Pins the deliberate ordering change of the library consolidation: the ban check runs
+        unconditionally BEFORE the whitelist decision, mirroring guard-core's IpSecurityCheck
+        pipeline. The pre-consolidation hand-rolled guard did the opposite (whitelist bypassed
+        everything, including bans); reordering the two checks back would let a banned IP
+        re-enter through the whitelist, and this test fails if that regresses.
+        """
+        from guard import ip_ban_manager
+
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            enable_ip_banning=True,
+            whitelist=["10.0.0.7"],
+            trusted_proxies=["127.0.0.1"],
+        )
+        await ip_ban_manager.ban_ip("10.0.0.7", 3600)
+
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        ws = FakeWS(
+            client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY, config=cfg
+        )
+        await run_multiplex(ws, auth, redis)
+        assert ws.accepted is False
+        assert ws.close_code == 1008
