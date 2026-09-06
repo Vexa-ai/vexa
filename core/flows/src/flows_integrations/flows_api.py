@@ -86,6 +86,7 @@ import logging
 import os
 import secrets
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -98,7 +99,8 @@ from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, ret
 import flows_config  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
-from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
+from flows_steps.common import (db_url, internal_secret,  # noqa: E402
+                                require_internal_secret, setting)
 from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noqa: E402
                                               SubjectUnknown, resolve)
 # ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
@@ -177,7 +179,23 @@ def _require_api_key() -> str:
     return (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
 
 
-API_KEY = _require_api_key()
+def _configured(key: str, value: Optional[str] = None) -> str:
+    """A credential AS THE ENVIRONMENT CARRIES IT — never a refusal, and "" for a literal the
+    declaration forbids.
+
+    THE READ, not the refusal. `_require_api_key`, `_timeline_key` and `require_internal_secret`
+    are the refusals, they are unchanged, and they still run — in `boot()`, which is a different
+    moment (see the block below). What this gives the module is a value to hold between import and
+    boot, and it is FAIL-CLOSED on a placeholder because `_same_key` refuses an empty expected key:
+    a module that has been imported but not booted then authenticates nobody at all, rather than
+    authenticating anybody who can read a literal published in this repository.
+
+    The forbidden list is the declaration's, read through `_forbidden_values` — never a second copy
+    (F-D20 b: a second copy is how the first one drifted).
+    """
+    raw = os.environ.get(key) if value is None else value
+    raw = (raw or "").strip()
+    return "" if raw in _forbidden_values(key) else raw
 
 
 def _timeline_key() -> str:
@@ -205,15 +223,42 @@ def _timeline_key() -> str:
     return key
 
 
-TIMELINE_KEY = _timeline_key()
-# The internal-tier identity, refused the same way and for the same reason. Read at import so an
-# unconfigured deployment stops HERE rather than at the first post-meeting run.
-flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
-INTERNAL_SECRET = require_internal_secret()
+# ── IMPORT READS THE ENVIRONMENT. BOOT REFUSES ON IT. (Vexa-ai/vexa#1629) ─────────────────────
+# They used to be the same moment. `a90e442a3` routed `_require_api_key` through the shared
+# `config.v1` validator — right, and unchanged below — and MODULE SCOPE called it, so
+# `import flows_integrations.flows_api` raised `ConfigError` in any process with no
+# `VEXA_FLOWS_DB_URL`. The release's identity probe is such a process:
+#
+#   python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os;
+#              assert os.path.exists('/app/mcp.tools.v1.json')"
+#
+# and so is `make flow-pages`, and so is every tool that imports this module to READ it. None of
+# them is a deployment and none of them has a DSN. A module that refuses to be imported refuses to
+# be read — which is a different refusal from the one that was wanted, and it stood between a
+# built candidate and a validated one.
+#
+# `flows_steps.common.require_admin_key` had already written the rule down, four lines above the
+# secret this file was reading at import: *"A FUNCTION, not a constant, on purpose: a constant read
+# at import forces the refusal into module-import time … and the failure is attributed to whoever
+# imported first rather than to the call that needed the key."*
+#
+# So: the refusals are the same functions with the same messages in the same order, and they run in
+# `boot()` — the ASGI lifespan runs it before the first request is served, `main()` runs it before
+# the port is bound. Refusing to BOOT stays; refusing to IMPORT goes.
+API_KEY = _configured("VEXA_FLOWS_API_KEY")
+TIMELINE_KEY = _configured("VEXA_FLOWS_TIMELINE_KEY")
+# The internal-tier identity, read under whichever name set it (`common.internal_secret`) and
+# refused, like the two above, at boot.
+INTERNAL_SECRET = _configured("INTERNAL_API_SECRET", internal_secret())
 
 logger = logging.getLogger(__name__)
 
-db = db_from_url(db_url())
+#: The engine's database — composed here when the deployment named one, `None` when it did not.
+#: `postgres_db` is already lazy (no connection until the first query, deliberately, so this module
+#: could be imported against a Postgres that is not up yet), so composing at import costs nothing
+#: and keeps ONE adapter object: `production.build` below closes over this value, so `boot()` must
+#: not quietly swap it for a second one. `None` is never served from — `boot()` refuses first.
+db = db_from_url(db_url()) if flows_config.get("VEXA_FLOWS_DB_URL") else None
 clock = SystemClock()
 vocab = Registry()
 production.build(vocab, db)
@@ -221,8 +266,56 @@ production.build(vocab, db)
 import json as _json
 import pathlib as _pathlib
 
+
+def boot() -> dict:
+    """EVERY REFUSAL THIS PROCESS MAKES BEFORE IT SERVES — four questions, none of them the import's.
+
+    * `contract_preflight()` — the whole `config.v1` declaration against this environment: ONE
+      message naming every missing required-explicit key, plus a refusal for any key still holding
+      a placeholder literal that is published in this repository (E6/ADR-0026, F-D20 b).
+    * `_require_api_key()` and `_timeline_key()` — the two credentials this surface compares
+      against, re-read here so a booted module holds the validated value rather than the lenient
+      one `_configured` left it with.
+    * `flows_config.preflight()` — flows' own rule, which is NOT in the declaration: a deployment
+      that cannot NAME a door does not run, because there are no host-port defaults.
+    * `require_internal_secret()` and the DSN — the internal-tier identity, and the database.
+
+    IDEMPOTENT, and it has to be: `main()` runs it before binding the port and uvicorn runs the
+    lifespan after, so an ordinary boot calls it twice. The validator is pure, flows declares no
+    probes so it does no I/O, and the declaration is `lru_cache`d — the second call is a dict
+    comparison.
+    """
+    global API_KEY, TIMELINE_KEY, INTERNAL_SECRET, db
+    contract_preflight()
+    API_KEY = _require_api_key()
+    TIMELINE_KEY = _timeline_key()
+    flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
+    INTERNAL_SECRET = require_internal_secret()
+    if db is None:
+        # Only reachable when the DSN arrived between import and boot — `contract_preflight()`
+        # above refuses when it is still absent. Safe to compose here and nowhere else: the steps
+        # `production.build` closed over run in the WORKER's process, never in this one (this
+        # surface admits facts and steers reactions; it never ticks).
+        db = db_from_url(db_url())
+    return {"service": "flows-api", "steps": len(vocab.steps), "flows": len(vocab.flows)}
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """The refusal at the one moment EVERY way of running this app passes through.
+
+    `main()` is not that moment. Compose, helm and the rig all run `python -m
+    flows_integrations.flows_api`, but `uvicorn flows_integrations.flows_api:app` does not, and
+    neither does a test entering `TestClient(app)` as a context manager — and a surface that serves
+    without booting is precisely what moving the check off module scope could otherwise have cost.
+    """
+    boot()
+    yield
+
+
 app = FastAPI(title="flows-api", version="0.1.0",
-              description="Submit and manage Vexa workflows as data — no code over the wire.")
+              description="Submit and manage Vexa workflows as data — no code over the wire.",
+              lifespan=_lifespan)
 
 
 def _same_key(presented: str, expected: str) -> bool:
@@ -1225,7 +1318,10 @@ def contract_preflight() -> dict:
 
 def main() -> int:  # pragma: no cover — process entrypoint
     import uvicorn
-    contract_preflight()
+    # BEFORE THE PORT IS BOUND. `uvicorn.run` runs the lifespan, which runs this again, so a
+    # misconfigured deployment would refuse either way — but refusing here means it never listens
+    # at all, which is what "no door, no boot" has always meant on this service.
+    boot()
     port = int(os.environ.get("VEXA_FLOWS_API_PORT", "18200"))
     host = bind_host()
     print(f"flows-api up on {host}:{port} · vocabulary of {len(vocab.steps)} steps", flush=True)

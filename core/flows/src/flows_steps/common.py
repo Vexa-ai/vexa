@@ -194,6 +194,30 @@ def _admin_headers() -> dict:
     return {"X-Admin-API-Key": require_admin_key()}
 
 
+def internal_secret() -> str:
+    """The internal-tier secret AS THE ENVIRONMENT CARRIES IT, under whichever name set it — "" when
+    nothing did, and never a refusal.
+
+    THE REFUSAL IS `require_internal_secret`'s and stays there. This is the READ, for the one kind
+    of caller that has to resolve the name without refusing on it: a module that must be IMPORTABLE
+    outside a deployment (`flows_integrations.flows_api`, Vexa-ai/vexa#1629 — the release's identity
+    probe imports it inside the image with no environment at all). A second copy of the name
+    resolution in that module would drift the day the legacy spelling is removed, so there is one
+    and this is it.
+    """
+    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
+    if key:
+        return key
+    for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
+        key = (os.environ.get(legacy) or "").strip()
+        if key:
+            print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
+                  f"one name the whole internal tier uses. Honoured this release, removed next.",
+                  file=sys.stderr)
+            return key
+    return ""
+
+
 def require_internal_secret() -> str:
     """The INTERNAL-TIER secret, or the process refuses to start.
 
@@ -214,15 +238,7 @@ def require_internal_secret() -> str:
     that missed `vexa-internal-secret` was a refusal list written from imagination rather than from
     the compose file it was defending against.
     """
-    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
-    if not key:
-        for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
-            key = (os.environ.get(legacy) or "").strip()
-            if key:
-                print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
-                      f"one name the whole internal tier uses. Honoured this release, removed next.",
-                      file=sys.stderr)
-                break
+    key = internal_secret()
     if not key:
         raise RuntimeError(
             f"{INTERNAL_SECRET_ENV} is unset — flows refuses to start rather than run with no "
