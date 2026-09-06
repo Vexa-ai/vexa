@@ -35,7 +35,21 @@ global:
   podSecurityContext: {}
   # Hardened defaults: block privilege escalation, drop all caps. Images run non-root via their
   # Dockerfile USER. Override per-component only if a workload genuinely needs a cap back.
+  #
+  # `deliver` is the OpenShift switch, and it gates BOTH securityContext blocks (pod-level and
+  # container-level) on every workload this chart renders. It exists because the two platforms
+  # want opposite things and both are right:
+  #   deliver: true  (default) — PSA-restricted namespaces VALIDATE these fields, never inject
+  #     them, so a spec that omits them is refused. Every plain-Kubernetes install wants them.
+  #   deliver: false — OpenShift's `restricted-v2` SCC INJECTS them (measured on a real admitted
+  #     pod: runAsUser 1000920000, runAsNonRoot true, capabilities drop ALL, seccompProfile
+  #     RuntimeDefault, fsGroup set), and a spec that supplies its own securityContext is more
+  #     likely to be rejected than one that arrives bare. The vexa-delivery OpenShift provider
+  #     profile sets this false; nothing in this chart flips it for you.
+  # Substance is unchanged either way — what SCC injects is a superset of what is dropped here.
+  # See vexa-delivery kit/providers/openshift/README.md § "SCC restricted-v2".
   securityContext:
+    deliver: true
     allowPrivilegeEscalation: false
     capabilities:
       drop: ["ALL"]

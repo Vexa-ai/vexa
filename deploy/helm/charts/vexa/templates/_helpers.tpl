@@ -247,3 +247,38 @@ become non-blocking. Industry-standard Redis-as-stream-buffer config.
 {{- required "INVALID redis.durability config: stopWritesOnBgsaveError=yes requires appendonly=yes (paired AOF + BGSAVE durability invariant — see v0.10.5 Pack C.5). Without AOF, blocking writes on BGSAVE failure means writes that arrive while BGSAVE is failing have no durable record anywhere." "" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Pod-level and container-level securityContext, both gated by `global.securityContext.deliver`.
+
+Emitted as the WHOLE key (`securityContext:` included) so that `deliver: false` renders no key at
+all rather than an empty map — on OpenShift the absence is the point: `restricted-v2` injects the
+context and rejects a spec that supplies a conflicting one. `deliver` is stripped from the rendered
+container context (it is our switch, not a Kubernetes field).
+
+A values file that replaces `global.securityContext` wholesale without naming `deliver` keeps the
+old behaviour: missing key == true, so no existing install changes shape on upgrade.
+
+Call with the root context and the indent of the key itself:
+    {{- include "vexa.podSecurityContext" . | nindent 6 }}          # under spec.template.spec
+    {{- include "vexa.containerSecurityContext" . | nindent 10 }}   # under a container
+*/}}
+{{- define "vexa.securityContextDeliver" -}}
+{{- $sc := .Values.global.securityContext | default dict -}}
+{{- if hasKey $sc "deliver" }}{{ $sc.deliver }}{{ else }}true{{ end }}
+{{- end -}}
+
+{{- define "vexa.podSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+securityContext:
+  {{- toYaml (.Values.global.podSecurityContext | default dict) | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.containerSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+{{- $sc := omit (.Values.global.securityContext | default dict) "deliver" -}}
+securityContext:
+  {{- toYaml $sc | nindent 2 }}
+{{- end -}}
+{{- end -}}

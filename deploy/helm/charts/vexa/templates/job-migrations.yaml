@@ -32,16 +32,14 @@ spec:
         app.kubernetes.io/component: migrations
     spec:
       restartPolicy: Never
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: migrations
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: "{{ default .Values.meetingApi.image.repository .Values.migrations.image.repository }}:{{ .Values.global.imageTag | default (default .Values.meetingApi.image.tag .Values.migrations.image.tag) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command:
