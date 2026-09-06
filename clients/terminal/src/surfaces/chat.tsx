@@ -17,6 +17,7 @@ import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micD
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
 import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
+import { createStickToBottom, type StickToBottom } from "./stickToBottom";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
@@ -742,17 +743,26 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Follow the stream ONLY while the user is pinned to the bottom. Scrolling up to read
-  // detaches (streaming updates no longer yank the view); scrolling back down re-attaches.
-  // Sending a message always re-attaches — that's a human action asking for the reply.
-  const stickToBottomRef = useRef(true);
+  // Follow the stream ONLY while the reader is at the bottom — "chat should not fight with me when
+  // it's outputting text and i scroll up to scroll chat history" (founder, Vexa-ai/vexa#1599).
+  // The rule lives in surfaces/stickToBottom.ts, which decides from the container's POSITION: the
+  // flag this used to keep was written by the `scroll` event, which is dispatched a frame late and
+  // so still said at-the-bottom while the reader was already moving away from it.
+  const [following, setFollowing] = useState(true);
+  const stickRef = useRef<StickToBottom | null>(null);
+  if (!stickRef.current) stickRef.current = createStickToBottom(() => scrollRef.current, { onFollowingChange: setFollowing });
+  const stick = stickRef.current;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => { stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; };
+    const onScroll = () => stick.onScroll();
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [stick]);
+  // The transcript is measured AFTER the commit that grew it, which the stream callback below
+  // cannot do — a chunk's text is not in the DOM yet when it fires. Keyed on the content itself
+  // (every chunk rebuilds `turns`) so that typing in the composer costs no layout read.
+  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
@@ -1111,7 +1121,7 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
             return { ...t, status: null, text: body + (body ? "\n\n" : "") + `_${reason}_` };
           }),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
-          onProgress: () => { if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); },
+          onProgress: () => stick.onContent(),
         },
         { signal: ctrl.signal },
       );
@@ -1284,11 +1294,11 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
       const qid = `q-${Date.now().toString(36)}`;
       queuedRef.current.push({ id: qid, display: v, prompt: isRoutineCommand(v) ? routineCreationPrompt(v) : v });
       updateChatState(chatKey, (s) => ({ ...s, turns: [...s.turns, { id: qid, role: "user", text: v }] }));
+      stick.pin();   // queued or not, the person just wrote — show them their own turn
       setValue("");
       return;
     }
-    stickToBottomRef.current = true;  // sending re-attaches follow-the-stream
-    window.setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }), 0);
+    stick.pin();   // sending re-attaches follow-the-stream — the human asked for this reply
     if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
     if (!hasAttachments && v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
     let prompt = isRoutineCommand(v) ? routineCreationPrompt(v) : v;
@@ -1497,6 +1507,17 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
                 an arriving conversation is worse than one that arrives a beat late. */}
             {!loading && emptyExtra}
           </div>} />
+      {/* JUMP TO LATEST — the only way back to following that costs the reader nothing. Sticky to
+          the bottom of the scroller and zero-height, so it adds no scroll height of its own and the
+          window shell (owned by parallel work) is untouched. */}
+      {!following && (
+        <div style={{ position: "sticky", bottom: 0, height: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+          <button type="button" onClick={() => stick.pin()} aria-label="Jump to latest" title="Jump to latest"
+            style={{ pointerEvents: "auto", transform: "translateY(-10px)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", borderRadius: 999, padding: "5px 12px", fontSize: 12, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.18)" }}>
+            <Icon name="chevR" size={13} style={{ transform: "rotate(90deg)" }} />Jump to latest
+          </button>
+        </div>
+      )}
     </AgentWindow>
   );
 }
