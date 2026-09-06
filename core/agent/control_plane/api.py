@@ -644,7 +644,7 @@ def create_app(
             "today": time.strftime("%Y-%m-%d"),
         })
         prov = rec.get("provenance") or {}
-        return {
+        view = {
             "id": rec.get("id"),
             "kind": rec.get("kind"),
             "who": rec.get("who"),
@@ -658,8 +658,9 @@ def create_app(
             "opening_preset": rec.get("opening"),
             "opening_label": fm.get("label") or str(rec.get("opening") or "").replace("-", " "),
             # The text the agent is given, machinery-marked. The terminal renders none of it:
-            # "the human sees turns, the agent sees instructions".
-            "opening_text": prompt + scaffolds_mod.MACHINERY_NOTE,
+            # "the human sees turns, the agent sees instructions". Filled in below, once the rest of
+            # the view exists — the facts are composed FROM it.
+            "opening_text": "",
             "tabs": list(rec.get("tabs") or []),
             "focus": rec.get("focus") or "",
             # DERIVED, not stored (the record says so): the phase word comes off the row we just
@@ -681,6 +682,24 @@ def create_app(
             "has_share": bool(rec.get("share_token")),
             "share_handed_at": _iso(rec.get("share_handed_at")),
         }
+        # THE FACTS RIDE WITH THE OPENING, NOT WITH THE RECORD ID (2026-09-06, live).
+        #
+        # They used to be added in exactly one place — `scaffolds.turn_prompt`, which runs only when
+        # the client sends `scaffold_id` back on the turn — and `opening_text` was the ask alone. The
+        # terminal drops the id for `hand-link` records (`MinutesShell.tsx`), the admin's setup
+        # conversation is reached through precisely that kind (`/?setup=global` mints one via
+        # `POST /api/scaffolds/hand`), and so the turn that most needed the person's own address was
+        # the one turn composed without it: the agent opened by telling the founder that the only
+        # clue it had about his organisation was the address this deployment sends mail from.
+        #
+        # The rule now is the record's own rule one level down: what the agent must know travels
+        # with the text it travels in. A client may hand back the id or the composed opening; both
+        # produce the same turn, and no client can drop the facts by omitting a field.
+        # `turn_prompt` stays idempotent (it tests for the heading), so the dispatch path composes
+        # exactly one block, whichever way it arrives.
+        view["opening_text"] = (scaffolds_mod.OPENING_RULE + scaffolds_mod.facts_block(view)
+                                + "\n\n" + prompt + scaffolds_mod.MACHINERY_NOTE)
+        return view
 
     def _scaffold_is_for(rec: dict, request: Request, subject: str) -> bool:
         """May THIS caller read this scaffold? The recipient, the instance admin, or the service key.

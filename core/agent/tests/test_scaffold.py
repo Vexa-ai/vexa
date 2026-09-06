@@ -425,6 +425,120 @@ def test_every_composed_opening_says_read_silently():
     assert "never narrate your own tool use" in MACHINERY_NOTE
 
 
+# ── F28 AGAIN, 2026-09-06 · the facts ride WITH the opening, not with the record id ──────────────
+#
+# Everything above has been true since 2026-09-02, and the founder met the same defect four days
+# later on a blank instance: signed in as an administrator whose address named a real company, the
+# setup chat opened with "the only clue about the organisation is that this deployment mails from
+# vexa@storm.test" and then asked him for the company's name.
+#
+# The block was right; it simply never reached that turn. It was added in exactly ONE place —
+# `scaffolds.turn_prompt`, which runs only when the client sends `scaffold_id` back — and the
+# terminal drops that field for `hand-link` records (`MinutesShell.tsx`). The admin's setup
+# conversation is reached through precisely that kind (`/?setup=global` → `POST /api/scaffolds/hand`
+# → `/?s=<id>`), so the one turn whose whole job is to find out who this company is was the one turn
+# composed without the person's address.
+#
+# These pin the COMPOSITION rather than the client: whichever half a client hands back — the record
+# id or the composed opening — the agent is handed the same turn, exactly once.
+
+def _admin_setup(client, who, subject="u_ada"):
+    """An admin-setup record for one address, the shape the claim route mints."""
+    return _mint(client, who=who, kind="admin-setup", meeting=None, refs={},
+                 provenance={"flow": "admin-claim", "minted_by": subject})
+
+
+def _opening(client, who, subject="u_ada"):
+    sid = _admin_setup(client, who, subject).json()["id"]
+    return client.get(f"/api/scaffolds/{sid}",
+                      headers=_as(who, subject)).json()["opening_text"]
+
+
+def test_the_admin_setup_opening_ITSELF_says_who_it_is_talking_to(client):
+    """Asserted on `opening_text` and not on `turn_prompt`: `opening_text` is what the wire hands
+    the client, and on the path the founder walked it is what comes back as the prompt."""
+    text = _opening(client, "ada@northwind.io")
+    assert "you are talking to: ada@northwind.io" in text
+    assert "their email domain: northwind.io" in text
+    # and what to DO with it, because a bare fact did not stop the cold question
+    assert "propose a name from it rather than asking cold" in text
+
+
+def test_a_client_that_returns_the_TEXT_instead_of_the_id_gets_the_same_turn(client):
+    """THE 2026-09-06 TEST. A turn carrying the composed opening and no `scaffold_id` — the terminal's
+    hand-link path — must not be the path that loses the person's address."""
+    text = _opening(client, "ada@northwind.io")
+    r = client.post("/api/chat", headers=_as("ada@northwind.io", "u_ada"),
+                    json={"prompt": text, "session": "scaffold-hand"})
+    assert r.status_code == 200
+    prompt = client.app.state.dispatcher.dispatched[-1]["start"]["entrypoint"]["inline"]
+    assert "you are talking to: ada@northwind.io" in prompt
+    assert "their email domain: northwind.io" in prompt
+
+
+def test_the_block_is_composed_exactly_once_however_the_turn_arrives(client):
+    """The dispatch path adds the block only when the text does not already carry it — one
+    composition, no doubling, and no way for a client to drop it by omitting a field."""
+    sid = _admin_setup(client, "ada@northwind.io").json()["id"]
+    view = client.get(f"/api/scaffolds/{sid}", headers=_as("ada@northwind.io", "u_ada")).json()
+    assert view["opening_text"].count(scaffolds_mod.FACTS_HEADING) == 1
+    assert scaffolds_mod.turn_prompt(view) == view["opening_text"]
+    # the belt is not the braces: a view that arrives WITHOUT the block still gets one
+    bare = dict(view, opening_text="[setup-global] hello")
+    assert scaffolds_mod.turn_prompt(bare).count(scaffolds_mod.FACTS_HEADING) == 1
+    # and the id path composes one block too
+    client.post("/api/chat", headers=_as("ada@northwind.io", "u_ada"),
+                json={"prompt": "", "session": "scaffold-id", "scaffold_id": sid})
+    prompt = client.app.state.dispatcher.dispatched[-1]["start"]["entrypoint"]["inline"]
+    assert prompt.count(scaffolds_mod.FACTS_HEADING) == 1
+    assert "you are talking to: ada@northwind.io" in prompt
+
+
+def test_a_consumer_mailbox_is_a_real_domain_that_names_no_company(client):
+    """`gmail.com` is not a placeholder — it resolves, it receives mail — and it says exactly as
+    much about the administrator's company as `storm.test` did. Same answer, different reason:
+    no line, so the preset asks for the name instead of proposing one."""
+    from control_plane.scaffolds import company_domain
+    for addr in ("ada@gmail.com", "ada@outlook.com", "ada@icloud.com", "ada@proton.me",
+                 "ada@yahoo.co.uk", "ada@gmx.de", "ada@qq.com"):
+        assert company_domain(addr) == "", addr
+    text = _opening(client, "ada@gmail.com")
+    assert "you are talking to: ada@gmail.com" in text
+    assert "email domain" not in text
+
+
+def test_the_opening_leads_with_the_rule_and_not_with_the_ask(client):
+    """The small runner sends the whole turn as ONE user message with no system message
+    (`llm/openai_agent.py::_loop`), so position is the only lever. The note at the foot of a
+    nine-thousand-character prompt did not stop the narration on 2026-09-06; the head was the one
+    position nothing used."""
+    text = _opening(client, "ada@northwind.io")
+    assert text.startswith(scaffolds_mod.OPENING_RULE)
+    assert "SILENTLY" in scaffolds_mod.OPENING_RULE
+    assert "Never open with what you are about to do" in scaffolds_mod.OPENING_RULE
+
+
+def test_the_setup_preset_opens_by_CONFIRMING_the_company_it_read_off_the_address():
+    """The ask's own half of the fix, read from the file that ships in the image. A bank's admin
+    should not type their own company's name into a product that just read it off their sign-in."""
+    import pathlib
+    body = (pathlib.Path(__file__).resolve().parents[3]
+            / "behavior" / "asks" / "setup-global.md").read_text(encoding="utf-8")
+    assert "## Your first message" in body
+    assert "You signed in as" in body                    # the confirmation, in the founder's words
+    assert "you are talking to:" in body and "their email domain:" in body
+    # the cold branch, for an address that names no company
+    assert "What is this company called" in body
+    assert "WebSearch" in body and "WebFetch" in body    # search the domain before naming it
+    # it is the FIRST move, not a paragraph in the middle
+    assert body.index("## Your first message") < body.index("## What you are building")
+    # and the doctrine it was added to is untouched: thin _global, five files, the order
+    assert "`_global` is THIN" in body
+    assert "Five files, and the order matters" in body
+    for f in ("README.md", "PRINCIPLES.md", "OBJECTIVES.md", "STRUCTURE.md", "MISSING.md"):
+        assert f"`{f}`" in body
+
+
 # ── the HAND LINK (F97) ──────────────────────────────────────────────────────────────────────────
 #
 # `/?ask=<preset>&meeting=<row>` used to be composed in the BROWSER: the terminal read the preset and

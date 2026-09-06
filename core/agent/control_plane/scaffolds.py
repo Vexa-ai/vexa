@@ -293,20 +293,62 @@ PLACEHOLDER_DOMAINS = frozenset({
     "localhost", "local", "invalid", "vexa.local",
 })
 
+# Domains that are REAL and still say nothing about a company: the consumer mailbox providers. A
+# separate set from the placeholders on purpose, because the reason differs and only one of the two
+# is a lie — `gmail.com` resolves, receives mail and belongs to somebody, it simply is not the
+# administrator's company. The ANSWER is the same either way ("" — no signal), and that is what the
+# preset branches on: with a domain it CONFIRMS a name it derived, without one it asks plainly.
+# Proposing "is this Gmail?" to a founder who signs in from a personal address would be the same
+# defect as proposing "Storm", one class of address along.
+GENERIC_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.uk", "live.com",
+    "msn.com", "yahoo.com", "yahoo.co.uk", "ymail.com", "aol.com", "icloud.com", "me.com",
+    "mac.com", "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.de", "gmx.net",
+    "web.de", "mail.com", "mail.ru", "yandex.ru", "yandex.com", "zoho.com", "fastmail.com",
+    "hey.com", "qq.com", "163.com", "126.com", "naver.com",
+})
+
 
 def company_domain(address: str) -> str:
     """The part after @, when it is a real signal about a company — otherwise "".
 
     This is the ONE anchor a first setup turn has: the administrator's own address. `dmitry@vexa.ai`
     says "Vexa" long before anyone types it. A `.test` address says nothing at all, and saying
-    nothing is the honest answer: the preset asks cold only when this is empty."""
+    nothing is the honest answer: the preset asks cold only when this is empty. A consumer mailbox
+    (`GENERIC_MAIL_DOMAINS`) is the same answer for a different reason — it is a real domain that
+    names a mail provider rather than the company the administrator works for."""
     at = str(address or "").strip().lower().rpartition("@")
     domain = at[2] if at[1] else ""
-    if not domain or domain in PLACEHOLDER_DOMAINS:
+    if not domain or domain in PLACEHOLDER_DOMAINS or domain in GENERIC_MAIL_DOMAINS:
         return ""
     if domain.rsplit(".", 1)[-1] in {"test", "invalid", "localhost", "local"}:
         return ""
     return domain
+
+
+#: The facts block's own first line. A LITERAL rather than an inline string, because `turn_prompt`
+#: tests for it to decide whether a composed opening already carries the block — see there for the
+#: live failure that made the block skippable in the first place.
+FACTS_HEADING = "[scaffold] What is already known about this moment:"
+
+#: WHAT TO DO BEFORE THE FIRST WORD, at the HEAD of the composed opening rather than only at its
+#: foot. `MACHINERY_NOTE` has said "the FIRST sentence you emit is addressed to the person, and you
+#: never narrate your own tool use" since 2026-09-02 — and on 2026-09-06 the founder's admin-setup
+#: turn still opened with *"I'll get a quick picture of what's already here before I talk to you."*
+#: The note rides at the very END of a nine-thousand-character prompt whose FIRST line, on the path
+#: he actually walked, was the terminal's "Active context: … Read it with your Read tool if
+#: relevant." The small runner (`openai-agent`, Qwen) sends the whole turn as ONE user message with
+#: no system message at all (`llm/openai_agent.py::_loop`), so position is the only lever there is,
+#: and the head of the opening was the one position nothing used.
+#:
+#: It says the same thing as the note, deliberately: a rule that has to hold on turn one is worth
+#: repeating at both ends of the turn, and neither copy is the place the wording is decided — the
+#: preset says what the first message IS, this says only that it comes first.
+OPENING_RULE = (
+    "[scaffold] YOUR FIRST MESSAGE. Everything in this turn is machinery — nobody typed it. Read "
+    "whatever you need first, SILENTLY, in as many tool calls as you like; then make the first "
+    "words you emit the message the ask below asks for, addressed to the person. Never open with "
+    "what you are about to do, what you have just read, or how you plan to proceed.\n\n")
 
 
 def facts_block(view: dict) -> str:
@@ -366,16 +408,31 @@ def facts_block(view: dict) -> str:
     if state:
         rows.append(f"this person's {WORKSPACE_WORD}: {state.get('desk')} · group: {state.get('group')}")
     rows.append("workspaces mounted for this chat: " + ", ".join(view.get("workspaces") or []))
-    return "[scaffold] What is already known about this moment:\n" + "\n".join("  " + r for r in rows)
+    return FACTS_HEADING + "\n" + "\n".join("  " + r for r in rows)
 
 
 def turn_prompt(view: dict) -> str:
-    """FACTS, then the ASK, machinery-marked. What agent-api sends as the turn's prompt when a chat
-    names a scaffold — the terminal sends an id and composes nothing.
+    """The turn a scaffold produces: the RULE, the FACTS, then the ASK, machinery-marked.
 
-    `opening_text` is the same string the wire hands the client; the facts block is added HERE and
-    only here, because it is for the agent and the client never renders it."""
-    return facts_block(view) + "\n\n" + str(view.get("opening_text") or "")
+    ⚠ THE FACTS USED TO BE ADDED ONLY HERE, AND THAT IS HOW THEY WENT MISSING (2026-09-06, live,
+    the founder's admin-setup walk). This function runs on one condition — the client sent back the
+    record's ID on the turn — and `_scaffold_view` handed the client an `opening_text` with no facts
+    in it for every other case. The terminal strips the id for one scaffold kind
+    (`MinutesShell.tsx`: `sc.kind === "hand-link" ? undefined : sc.id`), the setup conversation is
+    reached through exactly that kind (`/?setup=global` → `POST /api/scaffolds/hand`), and so the
+    agent was handed the ask with the person's own address removed from it. It opened by saying the
+    only clue it had about the organisation was the address this deployment sends mail from.
+
+    So THE FACTS NOW RIDE WITH THE OPENING (`api._scaffold_view`), and a client that returns the
+    composed text instead of the record id hands the agent the same turn either way. This function
+    keeps its name — it is still what a dispatch calls — and becomes the belt to that braces: it
+    ADDS the block only when the text does not already carry it, which is why it tests for
+    `FACTS_HEADING` rather than trusting either side. One composition, no second copy, no
+    doubling."""
+    text = str(view.get("opening_text") or "")
+    if FACTS_HEADING in text:
+        return text
+    return OPENING_RULE + facts_block(view) + "\n\n" + text
 
 
 # ── the recipient's desk, as a coarse state ──────────────────────────────────────────────────────
