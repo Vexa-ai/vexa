@@ -116,18 +116,27 @@ def test_who_can_see_what_is_WRITTEN_as_the_default_first_and_the_choice_offered
     which asked an agent to invent the options, in the moment, for the one conversation that decides
     how every agent in the company behaves. `_global/POLICIES.md` is now seeded with every rule
     answered at its default and each one written out with its three lenses, so the offer is a WALK
-    of a file that exists rather than a menu composed on the spot."""
+    of a file that exists rather than a menu composed on the spot.
+
+    ⚠ AND THE WALK IS NOW A NAMED ASK (Vexa-ai/vexa#1627). It used to be four paragraphs HERE saying
+    how to walk the rules — which is a second wizard, in a second file, drifting from the first the
+    day either is edited. The conversation is written once, in `asks/policies-wizard.md`, and this
+    ask calls it by name. Two assertions below moved with it and the rest are untouched: the order
+    (stance first, choice after), the offer never blocking the five files, and disagreement being a
+    `MISSING.md` line are this ruling's own and are still exactly where it put them."""
     body = _ask("setup-global")
     assert ("Write the platform's own stance into `STRUCTURE.md` under who can see what FIRST, as "
             "the default,") in body
     assert "then WALK `POLICIES.md` with them" in body
     assert "do not invent a rule that is\nnot on it" in body
-    assert "edit that key in the front matter of" in body
+    # the walk itself is `policies-wizard.md` now — called by name, not restated here (#1627)
+    assert "`/workspaces/_global/asks/policies-wizard.md` and follow it" in body
     assert "`profile: bank`" in body and "`profile: studio`" in body
     assert "record whichever they pick in their words" in body
     assert "The offer never blocks the files" in body
     assert "the pages must not wait for it" in body
-    assert "Never put all thirteen rules in one message" in body
+    assert "Do not restate its questions here" in body
+    assert "do not add a sixth, and do\nnot walk the rules yourself" in body
     # the file is IN FRONT OF THEM, not merely mentioned: the preset's own tabs open it
     assert "_global/POLICIES.md" in body.split("---")[1]
     # the sentence that made the files wait on an answer is GONE

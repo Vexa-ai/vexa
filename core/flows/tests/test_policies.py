@@ -12,9 +12,14 @@ Four claims, in the order they would fail:
       founder wrote (decision 21) and `mailtext.VISIBILITY_SENTENCE` still carries — and it CHANGES
       when a rule that makes it untrue changes, which is the whole reason it is not a constant.
   P4  The rules reach the steps: who the follow-up is mailed to, and whether it is sent at all.
+  P5  Every block `asks/policies-wizard.md` recommends is one THIS module can read (Vexa-ai/vexa#1627),
+      and the clauses the wizard says the attendee sentence is composed from are this module's own.
+      The wizard writes front matter that nothing else validates until a mail goes out; a block it
+      recommends and this reader shrugs at would fail silently, at the defaults, weeks later.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -26,6 +31,7 @@ from flows_steps import mailtext, policies
 # <repo>/core/flows/src/flows_steps/policies.py -> parents[4] is the repo root, the same anchor
 # `test_attendee_mail_shape`'s drift gate uses for `behavior/mail`.
 SEEDED = Path(policies.__file__).resolve().parents[4] / "behavior" / "global" / "POLICIES.md"
+WIZARD = Path(policies.__file__).resolve().parents[4] / "behavior" / "asks" / "policies-wizard.md"
 
 
 # ── P1 · the file and the table are the same set ─────────────────────────────────────────────────
@@ -313,3 +319,109 @@ def test_the_per_meeting_opt_out_still_wins(monkeypatch):
     reg, ch = _rig(monkeypatch)
     out = reg.steps["email_attendees"](_ctx({**REFS, "share_opt_out": True}, PRIOR))
     assert ch.sent == [] and out.result["followup"] == "off"
+
+
+# ── P5 · the wizard's blocks, through this reader ────────────────────────────────────────────────
+#
+# `asks/policies-wizard.md` (Vexa-ai/vexa#1627) walks an administrator through five questions and
+# recommends a block of front matter. Nothing validates that block on the way to the file — the
+# wizard writes it, the admin approves it, and it is read here on the next send. So the four shapes
+# it works are resolved here: a row this module cannot read falls back to the default and says so in
+# `problems`, which is precisely the failure nobody would notice, because the mail still goes out.
+
+#: What the placeholder in a recommended block is replaced by before anybody's file carries it.
+_DOMAINS = "example.test, partner.test"
+
+
+def _wizard_shapes() -> dict:
+    """`{heading: the block's rows}` — the fenced snippets under each `####` of the worked shapes."""
+    body = WIZARD.read_text(encoding="utf-8")
+    out = {}
+    parts = re.split(r"^#### (.+)$", body, flags=re.M)
+    for i in range(1, len(parts) - 1, 2):
+        m = re.search(r"```yaml\n(.*?)```", parts[i + 1], flags=re.S)
+        if m:
+            out[parts[i].strip()] = m.group(1).strip()
+    return out
+
+
+def _resolved(rows: str) -> dict:
+    """The block as a file: fenced front matter, the placeholder answered, resolved."""
+    return policies.resolve(f"---\n{rows.replace('<the domains that count as inside>', _DOMAINS)}\n---\n")
+
+
+#: The rules each shape is FOR. Written out here rather than derived, so this is the spec and the
+#: file is the implementation. Keys not named are the profile's or the default's and are covered by
+#: `problems == []` plus P1's own assertions.
+SHAPE_RULES = {
+    "Only our own people": {
+        "profile": "default", "external_participants": False, "bot_joins_mixed_meetings": False,
+        "report_to_participants": True, "open_web": True, "organizer_confirms_join": False,
+    },
+    "Partners in the room, and the words stay here": {
+        "profile": "bank", "external_participants": False, "bot_joins_mixed_meetings": False,
+        "report_to_participants": False, "organizer_confirms_join": True, "open_web": False,
+        "recording_retention_days": 0, "attendee_domains": ("example.test", "partner.test"),
+        # the loop levers the bank preset keeps, minus the one this shape's answers switched off
+        "prep_and_invite_mail": True,
+    },
+    "Partners in the room, and the mail reaches them": {
+        "profile": "default", "external_participants": True, "report_to_participants": True,
+        "recording_retention_days": policies.FOREVER, "open_web": True,
+        "attendee_domains": ("example.test", "partner.test"),
+    },
+    "Sometimes the public": {
+        "profile": "default", "external_participants": False, "report_to_participants": True,
+        "organizer_confirms_join": True, "bot_joins_mixed_meetings": True,
+        "attendee_domains": ("example.test", "partner.test"),
+    },
+}
+
+
+def test_the_wizard_recommends_the_four_shapes_this_test_knows():
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    assert set(_wizard_shapes()) == set(SHAPE_RULES)
+
+
+@pytest.mark.parametrize("shape", list(SHAPE_RULES))
+def test_every_block_the_wizard_recommends_is_one_this_reader_understands(shape):
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    out = _resolved(_wizard_shapes()[shape])
+    assert out["problems"] == [], f"{shape}: this reader cannot read its own recommendation"
+    for key, want in SHAPE_RULES[shape].items():
+        assert out[key] == want, f"{shape}: {key} resolves to {out[key]!r}, not {want!r}"
+
+
+def test_the_domain_row_is_a_placeholder_and_not_a_domain():
+    """`attendee_domains` is the line between inside and outside. A wizard that shipped a worked
+    example with a real domain in it would be one copy-paste away from writing somebody else's
+    company into a bank's policy file, so the worked blocks carry a gap that has to be filled."""
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    for shape, rows in _wizard_shapes().items():
+        for line in rows.splitlines():
+            if line.startswith("attendee_domains:"):
+                assert line == "attendee_domains: <the domains that count as inside>", shape
+
+
+def test_the_wizards_attendee_sentence_is_composed_from_THIS_modules_clauses():
+    """The disclosure is DERIVED and there is no front-matter key for it (P3). The wizard therefore
+    has to compose it in the recommendation, and the words it composes from are these — pinned here
+    rather than in the ask, so a rewording of a clause fails at the module that owns it."""
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    said = " ".join(WIZARD.read_text(encoding="utf-8").split())
+    for clause in (policies.LOCALITY_CLAUSE, policies.DESK_VISIBLE_CLAUSE,
+                   policies.DESK_PRIVATE_CLAUSE, policies.RETENTION_STAYS_CLAUSE):
+        assert clause in said, f"the wizard would compose a sentence this module does not: {clause!r}"
+
+
+def test_the_join_confirmation_rule_defaults_to_what_the_engine_actually_does():
+    """Question 4 of the wizard offers it, so it is a key. It is `off` because an invite IS the whole
+    decision today — a default of `on` would tell a bank's administrator that a person stands between
+    an invite and a recording, which is the one direction this table must never lie in."""
+    assert policies.DEFAULTS["organizer_confirms_join"] is False
+    assert policies.resolve(None)["organizer_confirms_join"] is False
+    assert policies.resolve("---\norganizer_confirms_join: on\n---\n")["organizer_confirms_join"] is True

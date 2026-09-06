@@ -97,8 +97,11 @@ def read_job_mark(text: str) -> "tuple[str, str, str] | None":
 #: ``explore`` is here and not in JOB_KINDS on purpose: the chip runs INLINE (it is a lookup, not a
 #: 30-120s write), so it never carried a job mark — and therefore carried no mark at all, and the
 #: founder read his own chip back as a paragraph he had written (Vexa-ai/vexa#1605).
+#: ``policies_wizard`` (Vexa-ai/vexa#1627) is here for the same reason ``explore`` is: it runs
+#: INLINE — a wizard is a conversation, not a 30-120s write — so it carries an act mark rather
+#: than a job one, and without a verb here the label a reload rebuilds would be `Policies_wizard`.
 _ACT_VERBS = {"create": "Create", "extend": "Extend", "extend_transcript": "Extend",
-              "explore": "Explore"}
+              "explore": "Explore", "policies_wizard": "Set up policies"}
 
 
 # ── the fourth and fifth marks: NOBODY TYPED THIS TURN EITHER (Vexa-ai/vexa#1605) ────────────────

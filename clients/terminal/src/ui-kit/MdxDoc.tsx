@@ -11,7 +11,7 @@
  *  so the doc always displays — worst case it loses interactivity, never the page.
  */
 "use client";
-import { isValidElement, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { isValidElement, useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
@@ -27,7 +27,7 @@ import {
 import { OPEN_MEETING_EVENT } from "../canvas/actions";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
-import { ViewSource, docHeader, splitFrontmatter } from "./policyDoc";
+import { POLICY_ACT_KIND, ViewSource, docHeader, splitFrontmatter } from "./policyDoc";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
@@ -336,6 +336,27 @@ function TranscriptSlot({ meeting }: { meeting: string }): ReactNode {
   );
 }
 
+/** THE POLICY PAGE'S OWN ACT — **Set up policies** (Vexa-ai/vexa#1627).
+ *
+ *  Resolved through the registry for the same reason `TranscriptSlot` above is: surfaces REGISTER,
+ *  renderers render what is registered, and importing the shell that posts a chat intent would drag
+ *  the whole minutes layer into every module that renders a paragraph of markdown.
+ *
+ *  IT DIFFERS FROM THE TRANSCRIPT SLOT IN ONE WAY, deliberately: nothing registered renders NOTHING,
+ *  not a line of apology. A missing transcript is a hole in a page that promised one; a missing act
+ *  is a build with no chat to start a conversation in, and the rules underneath are the whole
+ *  content either way.
+ *
+ *  It addresses the page it is rendered in — `DocMetaContext` is what every link renderer already
+ *  resolves against, so the act names the same file the reader has open rather than a constant this
+ *  module would have to keep in step with the seed. */
+function PolicySetupAct(): ReactNode {
+  const Act = registry.tabComponent(POLICY_ACT_KIND);
+  const meta = useContext(DocMetaContext);
+  if (!Act) return null;
+  return <Act id={POLICY_ACT_KIND} params={{ workspace: meta.slug, path: meta.path }} active />;
+}
+
 /** The widget's own box inside the page: framed, so the reader can see where the document stops and
  *  the room starts, and NOT independently scrollable — it flows with the doc, because the founder's
  *  shape is one page, not a pane inside a pane. */
@@ -356,7 +377,10 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   // THE PAGES WHOSE FRONT MATTER IS THE POINT (Vexa-ai/vexa#1615, #1626). Recognised by what they
   // DECLARE, never by their path: a page is not the policy page because somebody named the file
   // right. The policy rules — and a flow's trigger, steps and rules — render above the prose.
-  const head = docHeader(attrs, body);
+  // The policy header carries one thing more (Vexa-ai/vexa#1627): the act that CHANGES the rules it
+  // is showing. `docHeader` takes it rather than reaching for it, so this module keeps the one
+  // branch #1626 left it with and the act stays a slot the shell fills.
+  const head = docHeader(attrs, body, <PolicySetupAct />);
   if (!head && segments.length === 1 && segments[0].kind === "text") {
     return <MdxBody style={style}>{segments[0].text}</MdxBody>;
   }

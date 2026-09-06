@@ -71,6 +71,12 @@ DEFAULTS: dict = {
     "external_participants": True,
     # the bot joins a meeting when the mailbox is invited
     "bot_joins_on_invite": True,
+    # the organizer confirms each join before the bot is admitted. DECLARED, NOT ENFORCED, and
+    # `False` because that is what the engine does today: an invite is the whole decision. A
+    # default that claimed the gate exists would be the one direction this table must never
+    # lie in — an admin reading `on` would believe a person stands between an invite and a
+    # recording. Wizard question 4 (Vexa-ai/vexa#1627) is what asks for it.
+    "organizer_confirms_join": False,
     # the bot joins a meeting with external participants
     "bot_joins_mixed_meetings": True,
     # an agent may write pages into a workspace from a meeting when every member was a participant

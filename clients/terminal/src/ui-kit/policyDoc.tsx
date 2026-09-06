@@ -27,6 +27,11 @@ import type { CSSProperties, ReactNode } from "react";
 
 export const POLICY_KIND = "policies";
 
+/** The kind the page's own act registers under (`contributions`), so ui-kit never imports a
+ *  shell — the same seam `TRANSCRIPT_WIDGET_KIND` uses one file away. A build with nothing
+ *  registered renders the rules and no act (Vexa-ai/vexa#1627). */
+export const POLICY_ACT_KIND = "policies-act";
+
 export type Attr = [string, string];
 
 /** `key: value` lines between the opening and closing fence, plus the body under it.
@@ -123,7 +128,7 @@ function Lens({ label, text }: { label: string; text?: string }): ReactNode {
 }
 
 /** Everything the front matter answers, each row carrying what that answer costs. */
-export function PolicyRules({ attrs, body }: { attrs: Attr[]; body: string }): ReactNode {
+export function PolicyRules({ attrs, body, act }: { attrs: Attr[]; body: string; act?: ReactNode }): ReactNode {
   const docs = policyRuleDocs(body);
   const profile = attrs.find(([k]) => k === "profile")?.[1];
   const rules = attrs.filter(([k]) => k !== "kind" && k !== "profile");
@@ -132,6 +137,12 @@ export function PolicyRules({ attrs, body }: { attrs: Attr[]; body: string }): R
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: "var(--t1)" }}>What this deployment answers</span>
         {profile ? <span style={chip("var(--blue)", "var(--bluebg)")}>{profile}</span> : null}
+        {/* THE WAY TO CHANGE THEM, BESIDE WHAT THEY ARE (Vexa-ai/vexa#1627). The profile chip says
+            where this deployment stands; the act is how somebody who does not like that answer
+            arrives at a different one — five questions about their own risks, then a recommendation
+            with the reasoning from the sections below. It is a slot, not an import: what fills it is
+            registered by a shell, and a build with nothing registered simply shows the rules. */}
+        {act ? <><span style={{ flex: "1 1 0%" }} />{act}</> : null}
       </div>
       <div style={{ color: "var(--t3)", fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
         Each rule is written out below with what it changes, what it buys, what it costs and what a
@@ -267,9 +278,11 @@ export function FlowHeader({ attrs, body }: { attrs: Attr[]; body: string }): Re
  *
  *  One function, so the renderer has one branch instead of one per kind, and so a new kind is a
  *  line here rather than an edit inside `MdxDoc`. */
-export function docHeader(attrs: Attr[], body: string): ReactNode {
+export function docHeader(attrs: Attr[], body: string, act?: ReactNode): ReactNode {
   const kind = declaredKind(attrs);
-  if (kind === POLICY_KIND) return <PolicyRules attrs={attrs} body={body} />;
+  // `act` is the POLICY page's own — the way to change the rules, beside what they are
+  // (Vexa-ai/vexa#1627). A flow page has nothing to decide, so it is offered nothing.
+  if (kind === POLICY_KIND) return <PolicyRules attrs={attrs} body={body} act={act} />;
   if (kind === FLOW_KIND) return <FlowHeader attrs={attrs} body={body} />;
   return null;
 }

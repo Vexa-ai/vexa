@@ -29,6 +29,11 @@ INTENT_PRESETS: dict[str, str] = {
     # and a time where the page one takes a workspace and a path, and one preset asked to serve both
     # would have to guess which half of its own tokens are real.
     "extend_transcript": "extend-transcript",
+    # Vexa-ai/vexa#1627 — the **Set up policies** act on the policy page, and the same wizard
+    # the setup ask calls by name. NOT in JOB_KINDS and NOT in SILENT_KINDS: it is a
+    # conversation with five questions in it, so there is no background job to run, and the
+    # person pressed a labelled control, so the turn reads as that label.
+    "policies_wizard": "policies-wizard",
 }
 
 # Kinds whose turn the person must NOT see as a bubble. `highlight` is machinery end to end: the

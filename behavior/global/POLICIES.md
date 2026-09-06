@@ -5,6 +5,7 @@ agent_reads_desk: on
 report_to_participants: on
 external_participants: on
 bot_joins_on_invite: on
+organizer_confirms_join: off
 bot_joins_mixed_meetings: on
 agent_writes_pages: on
 transcript_retention_days: forever
@@ -165,6 +166,27 @@ anybody present object before a word is transcribed.
 
 **The price of turning it off.** The product loses its front door.
 
+<a id="organizer_confirms_join"></a>
+### `organizer_confirms_join` — the organizer confirms each join before the bot is admitted
+
+**Default `off`.** **Declared, not yet enforced** — see the table at the foot of this page.
+
+**The effect.** Off, an invite is the whole decision: whoever put the mailbox on the invite has
+asked for the meeting to be attended. On, the meeting's organizer is asked to confirm before the bot
+is admitted, and an invite from anybody else is a request rather than an instruction.
+
+**Adoption.** Off is what makes [`bot_joins_on_invite`](#bot_joins_on_invite) cost one action and no
+account; a confirmation is a second step in front of every first try, and the first try is the one
+that decides whether there is a second. **Security.** It is the only rule that puts the meeting's
+own owner between an invite and a recording — the organizer knows who should be in the room, and the
+mailbox does not. **Adversarial.** Somebody who can get an address onto an invite can, with this
+off, have a call recorded that they were never meant to record; on, that attempt reaches the person
+best placed to refuse it. The bot announcing itself in the room is the fence that holds either way,
+and it is a fence that acts after the first words rather than before them.
+
+**The price of turning it on.** Every join waits on a person, and the joins that matter most are the
+ones nobody is watching the calendar for.
+
 <a id="bot_joins_mixed_meetings"></a>
 ### `bot_joins_mixed_meetings` — the bot joins a meeting with external participants
 
@@ -227,7 +249,9 @@ from the meetings before they joined. Off, they see the series from their first 
 
 **Adoption.** Context on arrival is the single most useful thing a new joiner can be handed.
 **Security.** It hands somebody the substance of meetings they were not in — the one place where
-*participant-of* stops being the boundary, which is why this is the only rule that ships `off`.
+*participant-of* stops being the boundary, which is why it ships `off` — one of the two rules
+that do. The other is [`organizer_confirms_join`](#organizer_confirms_join), which is off
+because it describes a gate this deployment does not have yet.
 **Adversarial.** Getting added to a standing invite is much easier than getting into a specific
 meeting; with this on, one addition opens the archive.
 
@@ -309,6 +333,21 @@ A studio running this on its own hardware may want to say so in its own words. W
 replaces the locality clause of the disclosure. Left empty, the disclosure is composed from the
 rules on this page, which is the shape that cannot drift away from what the software actually does.
 
+## How an answer here is decided, and recorded
+
+The block at the top of this file can be edited by hand — it is a file, and every edit to it is a
+commit in `_global` with an author. It can also be arrived at by **the policies wizard**
+(`asks/policies-wizard.md`), which is what the **Set up policies** act on this page runs and what
+the setup conversation calls: five questions about who is in this company's meetings and what it is
+afraid of, a recommendation derived from the answers with each rule's reasoning taken from the
+sections above, and — only on a yes — the block written and the choice recorded.
+
+**Every decision is APPENDED, under `## Decision`, at the foot of this file, and no decision is ever
+rewritten.** Each one carries its date, who took it, the five answers in their own words, the
+profile and the overrides. Running the wizard again adds a new section below the last; the old one
+stays as it was written, including where today disagrees with it. The record answers *why we started
+here*, and a record edited to agree with the present answers nothing.
+
 ## Where each rule is read today
 
 Written down rather than left to be discovered. A rule that nothing reads is a control that silently
@@ -326,6 +365,7 @@ product does not yet check.
 | `prep_and_invite_mail` | the prep note before a meeting (`emit_prep`) |
 | `transcript_retention_days`, `recording_retention_days` | the derived disclosure |
 | `bot_joins_on_invite`, `bot_joins_mixed_meetings` | **declared, not yet enforced** — admission would have to read this file before dispatching a bot |
+| `organizer_confirms_join` | **declared, not yet enforced** — and it is `off`, which is today's behaviour, so the line records the gate rather than claiming it |
 | `agent_writes_pages` | **declared, not yet enforced** — containment already bounds where a turn writes; this switch does not yet gate whether it writes |
 | `newcomer_reads_history` | **declared, not yet enforced** — and it is `off`, which is the safe direction to be unenforced in |
 | `global_admin_only` | **structural** — the `_global` mount is read-only except in the admin's own session; this line records it rather than deciding it |

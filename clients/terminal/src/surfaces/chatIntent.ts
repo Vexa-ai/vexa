@@ -35,7 +35,8 @@ export const TERM_MAX = 120;
  *  bound is stated on the wire rather than left to whatever the input happened to accept. */
 export const INSTRUCTION_MAX = 400;
 
-export type ChatIntentKind = "extend" | "create" | "explore" | "highlight" | "extend_transcript";
+export type ChatIntentKind = "extend" | "create" | "explore" | "highlight" | "extend_transcript"
+  | "policies_wizard";
 
 /** An act on a FILE (decision 32). Split into one interface per kind — rather than one carrying
  *  `kind: "extend" | "create"` — so the union is DISCRIMINATED all the way down and `IntentOf<K>`
@@ -127,7 +128,26 @@ export interface ExtendTranscriptIntent {
   instruction?: string;
 }
 
-export type ChatIntent = ExtendIntent | CreateIntent | ExploreIntent | HighlightIntent | ExtendTranscriptIntent;
+/** THE POLICIES WIZARD (Vexa-ai/vexa#1627) — pressed on the policy page's own header.
+ *
+ *  A THIRD FAMILY, and the smallest one there is: it names a FILE like a page intent, and it is not
+ *  one. `isPageIntent` stays false on purpose — a page intent LANDS (the panel navigates to the path
+ *  when the turn commits), and this act opens a five-question conversation whose first turn writes
+ *  nothing. Landing on its first commit would jump the reader away from the question they were
+ *  being asked.
+ *
+ *  It carries no selection, no range and no instruction line. The wizard's first question is the
+ *  field; a line typed on the button would be a sixth question asked before the five. */
+export interface PoliciesWizardIntent {
+  kind: "policies_wizard";
+  /** the workspace the policy file lives in — `_global` for every deployment that has one */
+  workspace?: string;
+  /** the policy file the wizard walks and writes, from that workspace's root */
+  path: string;
+}
+
+export type ChatIntent = ExtendIntent | CreateIntent | ExploreIntent | HighlightIntent | ExtendTranscriptIntent
+  | PoliciesWizardIntent;
 
 /** The intents the person must NOT see as a bubble in their conversation. Mirrors
  *  `chat_intents.SILENT_KINDS` server-side — the founder's correction on Highlight is that it is
@@ -212,6 +232,15 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
       ...(segment ? { segment } : {}), ...(speaker ? { speaker } : {}), ...(at ? { at } : {}),
       ...(instruction ? { instruction } : {}),
     };
+  }
+
+  if (kind === "policies_wizard") {
+    // THE SAME REFUSAL THE PAGE KINDS APPLY, and for the same reason: an act that names no file is
+    // an act on a guess. There is no "the policy page as a whole" to fall back to.
+    const path = String(raw.path ?? "").trim().replace(/^\/+/, "");
+    if (!path || path.split("/").includes("..")) return null;
+    const workspace = str(raw.workspace) || undefined;
+    return { kind, ...(workspace ? { workspace } : {}), path };
   }
 
   if (kind !== "extend" && kind !== "create") return null;

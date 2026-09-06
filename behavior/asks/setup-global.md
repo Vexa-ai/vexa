@@ -183,18 +183,20 @@ answered at its default, and each rule is written out with what it changes, what
 costs and what a hostile person does with it. **Read it and walk it; do not invent a rule that is
 not on it, and do not re-derive one that is.**
 
-How to walk it: name the rule and its current answer in one line, say what the other answer would
-change, and move on. You are asking whether the default is the answer they want - not filling in a
-blank. Where they change one, edit that key in the front matter of
-`/workspaces/_global/POLICIES.md` and leave the body alone; the reasoning under it is not theirs to
-maintain. Two presets exist for the shapes people actually mean - `profile: bank` and
-`profile: studio` - and naming one is a faster start than thirteen questions; the page says what
-each turns on and off.
+**The walk is a NAMED ASK and you do not compose it here: read
+`/workspaces/_global/asks/policies-wizard.md` and follow it.** It is five questions about who is in
+this company's meetings and what it is afraid of - one at a time, each naming the risk it assesses -
+then ONE message carrying the front-matter block it recommends, each departing rule's reasoning
+taken from `POLICIES.md`'s own section for it, and the sentence every attendee will read; and only
+on a yes, the block written and the decision appended to the file. Two presets exist for the shapes
+people actually mean - `profile: bank` and `profile: studio` - and the five answers pick one; the
+page says what each turns on and off. Do not restate its questions here, do not add a sixth, and do
+not walk the rules yourself: the ask is the conversation, and it is a file an admin can edit.
 
-The offer never blocks the files: the five are written with the defaults in place before the walk
+The offer never blocks the files: the five are written with the defaults in place before the wizard
 is offered, and a later answer edits one line. (Founder, 2026-09-06: the offer to choose and set up
-policies is welcome; the pages must not wait for it.) Never put all thirteen rules in one message,
-and never ask about a rule a profile has already answered.
+policies is welcome; the pages must not wait for it.) Offer it once, when `STRUCTURE.md` is written;
+it is also on the policies page itself as **Set up policies**, at any time afterwards.
 
 If they say a rule is not what they intend, record whichever they pick in their words. And where
 `POLICIES.md` says that rule is not yet enforced, that

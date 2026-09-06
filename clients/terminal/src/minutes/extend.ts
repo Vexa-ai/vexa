@@ -36,6 +36,9 @@ const VERB: Record<ChatIntentKind, string> = {
   // that this one names a room rather than a file. `shared/marks._ACT_VERBS` says the same thing on
   // the server side, for the label a reload rebuilds from the record.
   extend_transcript: "Extend",
+  // Vexa-ai/vexa#1627 — the page's own act. `shared/marks._ACT_VERBS` carries the same words
+  // for the label a reload rebuilds from the record.
+  policies_wizard: "Set up policies",
 };
 
 /** HOW THE PERSON'S OWN LINE IS INTRODUCED to the agent (Vexa-ai/vexa#1593). One sentence, and the
@@ -72,6 +75,9 @@ export function compactLabel(intent: ChatIntent): string {
   if (intent.kind === "extend_transcript") {
     return `${VERB[intent.kind]}: meeting ${intent.meeting} · “${preview(intent.selection)}”`;
   }
+  // The wizard names the file it walks and nothing else — it has no selection to quote and the
+  // same path every time it is pressed.
+  if (intent.kind === "policies_wizard") return `${VERB[intent.kind]}: ${intent.path}`;
   const head = `${VERB[intent.kind]}: ${intent.path}`;
   if (!intent.selection) return head;
   return `${head} — “${preview(intent.selection)}”`;
@@ -91,6 +97,25 @@ export function fallbackText(intent: ChatIntent): string {
     return `Call transcript_terms(meeting_id="${intent.meeting}", since="${intent.since ?? ""}"), ` +
       `pick the terms that matter to this person in this meeting, then call it again with ` +
       `keep="<those terms>" to publish them as chips. Say nothing back — this is machinery.`;
+  }
+  // WITHOUT THE ASK (Vexa-ai/vexa#1627). `_global/asks/` is admin-owned and top-up is additive, so
+  // an instance whose library predates `policies-wizard.md` runs this instead. What must survive the
+  // gap is the SHAPE, because its absence is invisible: five questions rather than thirteen rules,
+  // one at a time, the reasoning taken from the file rather than composed, and a decision APPENDED
+  // — a wizard that rewrote the last decision would destroy the only record of why a deployment
+  // started where it started, and nobody would ever see that it had.
+  if (intent.kind === "policies_wizard") {
+    return `Run the policies wizard on \`${intent.workspace ?? "_global"}/${intent.path}\`. Read that ` +
+      `file in full first; every reason you give for a rule comes out of its own section there, ` +
+      `never from memory. Then ask FIVE questions, ONE AT A TIME, each naming the risk it assesses: ` +
+      `who is in their meetings; where the words must stay; whether they need to re-listen or the ` +
+      `transcript is enough; who decides when the bot joins; whether agents may reach the open web. ` +
+      `Then ONE message: the front-matter block you would write, the three lenses from that file for ` +
+      `every rule that departs from the default, the sentence attendees will read, and which of ` +
+      `those rules are declared and not yet enforced. Only if they say yes: write the block, leave ` +
+      `the body alone, and APPEND a \`## Decision\` section at the foot of the file with the date, ` +
+      `who decided, the five answers in their words, the profile and the overrides. Never rewrite an ` +
+      `older decision.`;
   }
   // The two page kinds name a FILE and the transcript one names a ROOM (Vexa-ai/vexa#1596); past
   // that they are the same act, and the person's own line rides all three identically — so it is
