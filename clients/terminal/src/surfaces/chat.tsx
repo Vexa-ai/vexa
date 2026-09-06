@@ -976,7 +976,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // two minutes later. From that point the flag belongs to whatever the person sends next, so
     // this send stops touching it: clearing `busy` in its own `finally` would clear a later turn's.
     let ownsBusy = true;
-    let startedJob = "";
+    const startedJobs = new Set<string>();
     try {
       const result = await streamChatTurn(
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
@@ -1026,7 +1026,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // everything from here belongs to the job chip below.
           onJobStarted: (j) => {
             ownsBusy = false;
-            startedJob = j.jobId;
+            startedJobs.add(j.jobId);
             patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
             updateChatState(key, (s) => ({ ...s, busy: false, jobs: startJob(s.jobs, { id: j.jobId, kind: j.kind, target: j.target }) }));
           },
@@ -1035,11 +1035,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           })),
           // ONE LINE, ALWAYS — landed or died. A job that finishes in silence is indistinguishable
           // from one that is still running, and the chip has just gone.
-          onJobEnd: ({ jobId, line }) => updateChatState(key, (s) => ({
-            ...s,
-            jobs: endJob(s.jobs, jobId),
-            turns: line ? [...s.turns, { id: `j-${jobId}`, role: "agent" as const, text: line, ops: [] }] : s.turns,
-          })),
+          onJobEnd: ({ jobId, line }) => {
+            startedJobs.delete(jobId);
+            updateChatState(key, (s) => ({
+              ...s,
+              jobs: endJob(s.jobs, jobId),
+              turns: line ? [...s.turns, { id: `j-${jobId}`, role: "agent" as const, text: line, ops: [] }] : s.turns,
+            }));
+          },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
           // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
@@ -1054,7 +1057,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         },
         { signal: ctrl.signal },
       );
-      if (!result.aborted && !result.terminal && !startedJob) {
+      if (!result.aborted && !result.terminal && startedJobs.size === 0) {
         // The turn never reached a clean end even after resuming past the hard cap — the connection is
         // genuinely lost. Say so (fail-loud, P18): append a note if there was partial output, else the
         // timeout copy. The worker may still finish server-side, so point the user at a reopen.
@@ -1077,12 +1080,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
       if (ownsBusy) updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
       // A JOB CHIP MUST NOT OUTLIVE ITS CONNECTION, for the same reason a spinner must not outlive
-      // its turn. `onJobEnd` removes it on the normal path, so reaching here with the chip still
-      // there means the stream died with the job unaccounted for — say that, and stop spinning.
-      else if (startedJob) updateChatState(key, (s) => (s.jobs.some((j) => j.id === startedJob)
-        ? { ...s, jobs: endJob(s.jobs, startedJob),
-            turns: [...s.turns, { id: `j-${startedJob}`, role: "agent" as const, text: "_Lost the connection to that background job — it may still have finished; reopen the page to see._", ops: [] }] }
-        : s));
+      // its turn. `onJobEnd` removes each one as it lands, so anything still in this set means the
+      // stream died with that job unaccounted for — say so, and stop spinning.
+      for (const lost of startedJobs) {
+        updateChatState(key, (s) => ({
+          ...s, jobs: endJob(s.jobs, lost),
+          turns: [...s.turns, { id: `j-${lost}`, role: "agent" as const, text: "_Lost the connection to that background job — it may still have finished; reopen the page to see._", ops: [] }],
+        }));
+      }
     }
   };
 

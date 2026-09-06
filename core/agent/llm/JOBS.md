@@ -75,10 +75,12 @@ elif t == "turn-complete":        turn_done = True
 if turn_done and not open_jobs:   return
 ```
 
-With no job in play this is byte-for-byte today's behaviour. The client half matches: `chatStream`
-stops on `turn-complete` unless it started a job, ignores every `job_id` that is not its own (a
-second connection reading the same stream must not fold another job's steps into its turn), and does
-not let a job's `commit` end the read.
+With no job in play this is byte-for-byte today's behaviour. The client half matches, in the same
+two lines: `chatStream` keeps a SET of the jobs it started (a marked act spawns one, a turn calling
+`spawn_job` twice spawns two), calls the turn finished only when `turn-complete` has arrived and
+that set is empty, ignores every `job_id` it did not start (a second connection reading the same
+stream must not fold another job's steps into its turn), and does not let a job's `commit` end the
+turn.
 
 A connection that attaches mid-job (a reconnect) never saw `job-started`, so it holds until the next
 `turn-complete` or the reader's 10-minute idle give-up — it keeps receiving the job's events either

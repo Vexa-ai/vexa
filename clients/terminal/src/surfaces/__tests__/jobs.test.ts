@@ -155,6 +155,28 @@ describe("streamChatTurn — a turn that spawns a job", () => {
     expect(result.terminal).toBe(true);
   });
 
+  it("watches BOTH jobs when one turn spawns two, and ends only when both have landed", async () => {
+    // A marked act spawns exactly one; a turn that calls `spawn_job` twice spawns two, and a second
+    // job nobody was watching would land its page with no line saying where it came from.
+    const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+      ev({ type: "job-started", job_id: "j-1", kind: "research", target: "Acme" }, "1-0"),
+      ev({ type: "job-started", job_id: "j-2", kind: "research", target: "Globex" }, "2-0"),
+      ev({ type: "turn-complete", turn_id: "t1" }, "3-0"),
+      ev({ type: "tool-call", tool: "WebSearch", job_id: "j-2" }, "4-0"),
+      ev({ type: "job-done", job_id: "j-1", ok: true, line: "Acme — done." }, "5-0"),
+      ev({ type: "job-done", job_id: "j-2", ok: true, line: "Globex — done." }, "6-0"),
+    ]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn({ prompt: "look at both", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    expect(state.jobStarted.map((j) => j.target)).toEqual(["Acme", "Globex"]);
+    expect(state.jobSteps).toEqual(["WebSearch"]);
+    expect(state.jobEnded.map((j) => j.line)).toEqual(["Acme — done.", "Globex — done."]);
+    expect(result.terminal).toBe(true);
+  });
+
   it("a turn that spawned nothing still ends on turn-complete", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
       ev({ type: "message-delta", text: "hello", turn_id: "t1" }, "1-0"),

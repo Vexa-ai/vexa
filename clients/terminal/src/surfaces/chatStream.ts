@@ -228,13 +228,16 @@ export async function streamChatTurn(
   let lastEventId: string | null = null;
   const turnId = mintTurnId();
   const startedAt = now();
-  // THE JOB THIS CONNECTION STARTED, if any (Vexa-ai/vexa#1584). It changes three things and only
-  // for the connection that owns it: `turn-complete` no longer ends the read (the job outlives its
-  // turn — the server-side reader makes the same exception), the hard cap does not apply (a job is
-  // allowed to take minutes; that is the point), and every event carrying a job id that is NOT this
-  // one is skipped, because another turn's connection reads the same Stream and must never fold a
-  // foreign job's steps into its own.
-  let myJob = "";
+  // THE JOBS THIS CONNECTION STARTED (Vexa-ai/vexa#1584). A SET, not one id: a marked act spawns
+  // exactly one, but a turn may call `spawn_job` twice, and a second job nobody was watching would
+  // land its page with no line saying where it came from. It changes three things, and only for the
+  // connection that owns them: `turn-complete` no longer ends the turn while one is open (the job
+  // outlives its turn — `RedisStreamReader` makes the same exception with the same two lines), the
+  // hard cap does not apply (a job is allowed to take minutes; that is the point), and every event
+  // carrying a job id this connection did not start is skipped, because another turn's connection
+  // reads the same Stream and must never fold a foreign job's steps into its own.
+  const myJobs = new Set<string>();
+  let turnDone = false;
 
   cb.onStarting();
   cb.onStatus?.("connecting");
@@ -333,18 +336,18 @@ export async function streamChatTurn(
         // its `commit` would end this read while the job was still writing.
         const jid = typeof ev.job_id === "string" ? ev.job_id : "";
         if (ev.type === "job-started") {
-          if (!myJob && jid) {
-            myJob = jid;
+          if (jid && !myJobs.has(jid)) {
+            myJobs.add(jid);
             sawVisibleOutput = true;
             cb.onJobStarted?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "", line: ev.line ?? "" });
           }
           continue;
         }
         if (jid) {
-          if (jid !== myJob) continue;              // somebody else's job on the shared Stream
+          if (!myJobs.has(jid)) continue;           // somebody else's job on the shared Stream
           if (ev.type === "job-done" || ev.type === "job-failed") {
-            terminal = true;
-            myJob = "";
+            myJobs.delete(jid);
+            if (turnDone && myJobs.size === 0) terminal = true;
             cb.onJobEnd?.({ jobId: jid, ok: ev.type === "job-done", line: ev.line ?? "" });
           } else if (ev.type === "tool-call") {
             cb.onJobStep?.(jid, ev.tool ?? "tool");
@@ -400,9 +403,11 @@ export async function streamChatTurn(
             break;
           case "turn-complete":
             // …unless this turn spawned a job. The turn IS over — that is why the job exists — but
-            // the connection is now the job's, and closing here would drop everything it has left
-            // to say. `RedisStreamReader` makes the same exception on the server side.
-            if (!myJob) terminal = true;
+            // the connection is now the job's, and calling it finished here would give up on
+            // everything it has left to say. `RedisStreamReader` makes the same exception, in the
+            // same two lines, on the server side.
+            turnDone = true;
+            if (myJobs.size === 0) terminal = true;
             break;
           case "done": {
             terminal = true;
@@ -447,7 +452,7 @@ export async function streamChatTurn(
     // The hard cap answers "did the worker ever come back". A job is ALLOWED to take minutes — that
     // is what it is for — so while one is running the cap is not the question and giving up on it
     // would abandon work that is still happening.
-    if (!myJob && now() - startedAt > hardTimeoutMs) break;
+    if (myJobs.size === 0 && now() - startedAt > hardTimeoutMs) break;
     cb.onStarting();  // still waiting on the worker — keep the pane honest between attempts
     cb.onStatus?.("reconnecting");
     await sleep(backoffMs);
