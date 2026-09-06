@@ -45,7 +45,19 @@ export function validateReceipt(r, version) {
   const errs = [];
 
   if (r.version !== version) errs.push(`version "${r.version}" ≠ release ${version}`);
-  if (r.candidate !== version) errs.push(`candidate "${r.candidate}" ≠ ${version} — must witness the PUBLISHED :${version} images`);
+  // The receipt names the CANDIDATE whose bytes were walked. That is either the release itself
+  // (witnessed after publish) or one of its candidates, `<version>-rc.N` — and a candidate is not
+  // a different artifact: `release-images`' stable publish COPIES the witnessed candidate's
+  // descriptors ("publish exact witnessed candidate as stable"), it never rebuilds. Demanding
+  // candidate === version made the gate unsatisfiable before promote, since :<version> does not
+  // exist until promote publishes it; v0.12.23 shipped `v0.12.23-rc.18` here and would fail this
+  // check today. What must never pass is a candidate of a DIFFERENT release.
+  if (r.candidate !== version && !String(r.candidate || "").startsWith(`${version}-`)) {
+    errs.push(
+      `candidate "${r.candidate}" is not ${version} nor a ${version}-rc — the receipt must witness ` +
+      `the bytes published as :${version} (the stable publish copies the witnessed candidate)`,
+    );
+  }
   if (!nonEmpty(r.witnessed_by)) errs.push("witnessed_by is empty — name the human who ran the pass");
   if (!nonEmpty(r.witnessed_at)) errs.push("witnessed_at is empty — ISO date of the pass");
   if (!nonEmpty(r.deployment)) errs.push("deployment is empty — which install shape was witnessed (compose|lite|helm)");
