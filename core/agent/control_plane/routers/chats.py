@@ -146,8 +146,12 @@ def build(**d) -> APIRouter:
         # client's plain fallback sentence — exactly as it arrived. A preset library that is one
         # release behind the terminal costs the turn its phrasing, not its meaning.
         elif body.intent:
-            _preset = chat_intents.preset_for(body.intent)
-            if _preset:
+            # MOST SPECIFIC FIRST (Vexa-ai/vexa#1598). `presets_for` returns a CHAIN — the meeting-doc
+            # variant of Extend, then plain Extend — and the first that reads wins. A library that
+            # predates the variant therefore degrades to the ordinary ask rather than all the way to
+            # the client's fallback sentence: `_global/asks/` is admin-owned and top-up is additive,
+            # so "the file is there" is not something this route may assume of any preset.
+            for _preset in chat_intents.presets_for(body.intent):
                 try:
                     _fm, _ask = scaffolds_mod.read_preset(_global_root(), _preset)
                     _text = scaffolds_mod.substitute(_ask, chat_intents.tokens_for(body.intent))
@@ -166,9 +170,11 @@ def build(**d) -> APIRouter:
                     if chat_intents.is_silent(body.intent):
                         _text = chat_intents.SILENT_PREFIX + _text
                     body = body.model_copy(update={"prompt": _text})
+                    break
                 except scaffolds_mod.ScaffoldError as e:
-                    logger.warning("intent %s has no preset here (%s) — the turn runs on the "
-                                   "client's fallback sentence", _preset, e)
+                    logger.warning("intent preset %s is not in this library (%s) — trying the next "
+                                   "in the chain, and the client's fallback sentence after that",
+                                   _preset, e)
         # AND A LONG ACT DOES NOT HOLD THE CHAT (Vexa-ai/vexa#1584). Create and Extend are marked
         # here, on the same carrier and for the same reason as SILENT_PREFIX above: the worker reads
         # the mark and runs the act as a background job, so the turn returns one line at once and

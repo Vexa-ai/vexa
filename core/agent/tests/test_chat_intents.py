@@ -187,3 +187,62 @@ def test_the_line_survives_the_job_mark():
     kind, target, brief = read_job_mark(prompt)
     assert (kind, target) == ("extend", "desk/kg/plan.md")
     assert "find the youtube link" in brief
+
+
+# ── the meeting-doc variant of Extend (Vexa-ai/vexa#1598) ────────────────────────────────────────
+#
+# Founder, live, 2026-09-06: the meeting is ONE page with the transcript in it, and Expand on that
+# page reads the transcript SINCE A CURSOR the page carries. That is a different ask, and the chain
+# below is how the route reaches it without making instances that lack the file worse off than they
+# were before it was written.
+
+
+def test_extend_on_a_meeting_page_prefers_the_meeting_ask_and_falls_back_to_the_plain_one():
+    from control_plane import chat_intents
+    page = {"kind": "extend", "workspace": "desk", "path": "kg/plan.md"}
+    room = {"kind": "extend", "workspace": "desk",
+            "path": "kg/entities/meeting/2026-03-02-0000-dna-tsc.md", "meeting": "147"}
+    assert chat_intents.presets_for(page) == ["extend"]
+    assert chat_intents.presets_for(room) == ["extend-meeting", "extend"]
+    # THE CHAIN'S TAIL IS THE FALLBACK, and `preset_for` keeps meaning what it always meant — the
+    # name a deployment can be relied on to have.
+    assert chat_intents.preset_for(room) == "extend"
+    assert chat_intents.preset_for(page) == "extend"
+
+
+def test_only_extend_has_a_meeting_variant_and_only_when_a_meeting_is_named():
+    from control_plane import chat_intents
+    # a meeting named on a kind with no variant changes nothing
+    assert chat_intents.presets_for({"kind": "create", "path": "p.md", "meeting": "147"}) == ["create"]
+    assert chat_intents.presets_for({"kind": "highlight", "meeting": "147"}) == ["highlight"]
+    # an empty or whitespace meeting is not a meeting — the client sends the field only when the
+    # PAGE declared one, and a blank would route an ordinary page into the meeting ask
+    for blank in ("", "   ", None):
+        assert chat_intents.presets_for({"kind": "extend", "path": "p.md", "meeting": blank}) == ["extend"]
+    # and an unknown kind still produces nothing to run
+    assert chat_intents.presets_for({"kind": "nonsense", "meeting": "147"}) == []
+    assert chat_intents.presets_for(None) == []
+
+
+def test_the_meeting_id_reaches_the_ask_as_a_token():
+    """`{{meeting}}` is what `extend-meeting.md` substitutes into its transcript reads. It was
+    already in `tokens_for`; this pins that the meeting-doc act actually carries one."""
+    from control_plane import chat_intents
+    tokens = chat_intents.tokens_for({"kind": "extend", "path": "m.md", "meeting": "147"})
+    assert tokens["meeting"] == "147"
+    assert tokens["path"] == "m.md"
+
+
+def test_the_meeting_ask_ships_in_the_image_library():
+    """A chain whose first name is in no library is a chain that never runs. `preset_library.top_up`
+    copies every ask the image carries into `_global/asks/`, so shipping the file IS the wiring —
+    and this is the test that fails if it is deleted or renamed."""
+    import pathlib
+    from control_plane import chat_intents
+    asks = pathlib.Path(__file__).resolve().parents[3] / "behavior" / "asks"
+    for name in chat_intents.INTENT_VARIANTS.values():
+        body = (asks / f"{name}.md").read_text(encoding="utf-8")
+        assert "{{meeting}}" in body and "{{path}}" in body
+        # the two rules whose absence is invisible: read since the cursor, never touch the widget
+        assert "transcript_cursor" in body
+        assert "vexa:transcript" in body

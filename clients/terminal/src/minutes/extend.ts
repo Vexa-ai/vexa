@@ -95,11 +95,29 @@ export function fallbackText(intent: ChatIntent): string {
   // appended once, below, rather than in each branch.
   const where = intent.kind === "extend_transcript" ? transcriptFallback(intent)
     : `${VERB[intent.kind]}: ${intent.path}` + (intent.selection ? ` — '${intent.selection}'` : "");
+  // A MEETING'S PAGE, WITHOUT THE PRESET (Vexa-ai/vexa#1598). The `extend-meeting` ask says all of
+  // this properly; this is the floor for an instance whose library predates it — and the two rules
+  // that must survive that gap are the two whose absence is INVISIBLE: re-reading the whole room
+  // costs a second write-up of the same ten minutes in a different voice, and a lost widget slot
+  // takes the live transcript off the person's screen while they are still in the meeting.
+  //
+  // PAGE KINDS ONLY. `extend_transcript` (#1596) already names the room and carries its own
+  // sentence; this one is about a FILE that has a transcript embedded in it.
+  const room = (intent.kind === "extend" || intent.kind === "create") && intent.meeting
+    ? `\n\nThis is meeting ${intent.meeting}'s own page and the transcript is embedded in it. ` +
+      "Read the page first: its frontmatter carries `transcript_cursor`. Read the transcript with " +
+      `meeting_transcript(meeting_id="${intent.meeting}", since="<that cursor>") — only what is new — ` +
+      "then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
+      "(about · decisions · commitments · people · questions), leave every word outside them alone, " +
+      "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the cursor " +
+      "that read returned."
+    : "";
   // THE LINE RIDES THE FALLBACK TOO. This sentence is what runs when the preset library is behind
   // the client (the header says why both travel), and a fallback that dropped the one thing the
   // person typed would be the worst of the two failures: the act still runs, on the wrong subject,
   // with nothing to say it ignored them.
-  return intent.instruction ? `${where}\n\n${INSTRUCTION_LEAD}\n\n${intent.instruction}` : where;
+  const said = where + room;
+  return intent.instruction ? `${said}\n\n${INSTRUCTION_LEAD}\n\n${intent.instruction}` : said;
 }
 
 /** The plain sentence for an act on a transcript passage — what runs when this deployment's preset

@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
+import { transcriptSlotMeeting } from "../ui-kit/transcriptSlot";
 import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
@@ -154,6 +155,12 @@ export function PagesPanel(p: {
   const docName = p.docPath.split("/").pop() || p.docPath;
 
   const doc = !canvas && !listing;   // a document is in front — the only state the header describes
+  // WHICH MEETING THIS PAGE IS, according to the page (Vexa-ai/vexa#1598). A meeting doc declares its
+  // transcript widget in its own source, and that declaration is what makes Extend here the
+  // meeting-doc act — read since the page's cursor, write into its regions. Read off the BODY rather
+  // than off the shell's open chat, for the same reason the acts read the resolved slot rather than
+  // the tab label (F63): a fact about the document beats a display string about the session.
+  const docMeeting = transcriptSlotMeeting(p.body ?? "") || undefined;
   const save = async () => {
     setSaving(true); setSaveError(null);
     try {
@@ -315,12 +322,12 @@ export function PagesPanel(p: {
               document that exists: an empty page offers Create instead, and a canvas has no page to
               extend at all. */}
           {doc && p.body !== null && mode === "view" && (
-            <ExtendPageButton workspace={p.docSlug} path={p.docPath} />
+            <ExtendPageButton workspace={p.docSlug} path={p.docPath} meeting={docMeeting} />
           )}
           {/* PRD decision 32.1's second trigger. Only while READING — an editor's selection is
               being edited, not asked about. */}
           {doc && p.body !== null && mode === "view" && (
-            <SelectionExtend containerRef={docBox} workspace={p.docSlug} path={p.docPath} body={p.body} />
+            <SelectionExtend containerRef={docBox} workspace={p.docSlug} path={p.docPath} body={p.body} meeting={docMeeting} />
           )}
         </div>
         </div>

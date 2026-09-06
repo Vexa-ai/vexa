@@ -23,6 +23,8 @@ import {
   primeKnownWorkspaces, type DocNavigate,
 } from "./docLinks";
 import { OPEN_MEETING_EVENT } from "../canvas/actions";
+import { registry } from "../contributions";
+import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
@@ -268,8 +270,6 @@ type CompileState =
   | { status: "ok"; Content: import("mdx/types").MDXContent }
   | { status: "fallback"; error: string };
 
-/** Renders workspace markdown as MDX with the registry above; falls back to the
- *  legacy <Markdown> renderer (with a subtle notice) when the source doesn't compile. */
 /** Strip leading YAML frontmatter — it is metadata for the agent, never body copy. */
 function stripFrontmatter(md: string): string {
   if (!md.startsWith("---")) return md;
@@ -279,11 +279,69 @@ function stripFrontmatter(md: string): string {
   return after === -1 ? "" : md.slice(after + 1).replace(/^\s+/, "");
 }
 
+/** THE WIDGET A DOC DECLARES, resolved through the tab REGISTRY rather than imported.
+ *
+ *  Same seam, and the same reason, as `PagesPanel`'s meeting branch: surfaces REGISTER, renderers
+ *  render what is registered. Importing `../canvas/TranscriptWidget` here would drag the whole
+ *  meeting source layer — providers, subscriptions, the platform container — into every module that
+ *  renders a paragraph of markdown, including the ui-kit's own tests.
+ *
+ *  A build with nothing registered says so in one line. It does NOT fall back to the raw marker:
+ *  the reader would then meet `<!-- vexa:transcript meeting=147 -->` as prose, which is exactly the
+ *  defect #1590 removed one file away. */
+function TranscriptSlot({ meeting }: { meeting: string }): ReactNode {
+  const Widget = registry.tabComponent(TRANSCRIPT_WIDGET_KIND);
+  if (!Widget) {
+    return (
+      <div data-transcript-slot={meeting} style={{ ...SLOT_BOX, color: "var(--t3)", fontSize: 12 }}>
+        The live transcript is not available in this build.
+      </div>
+    );
+  }
+  return (
+    <div data-transcript-slot={meeting} style={SLOT_BOX}>
+      <Widget id={`${TRANSCRIPT_WIDGET_KIND}:${meeting}`} params={{ meetingId: meeting }} active />
+    </div>
+  );
+}
+
+/** The widget's own box inside the page: framed, so the reader can see where the document stops and
+ *  the room starts, and NOT independently scrollable — it flows with the doc, because the founder's
+ *  shape is one page, not a pane inside a pane. */
+const SLOT_BOX: CSSProperties = {
+  border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)",
+  padding: "10px 12px", margin: "10px 0 14px",
+};
+
+/** Workspace markdown → the page. A document that declares a transcript slot renders as its parts
+ *  with the live transcript in place; every other document takes the single-segment path, which is
+ *  the identical render it had before the slot existed. */
 export function MdxDoc({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
+  // FRONTMATTER FIRST, THEN THE SPLIT, THEN COMMENTS. The slot marker IS an HTML comment, so
+  // stripping comments before splitting would drop the widget as machinery — `stripHtmlComments`
+  // therefore moved down into `MdxBody`, which sees only text segments.
+  const segments = splitTranscriptSlots(stripFrontmatter(children ?? ""));
+  if (segments.length === 1 && segments[0].kind === "text") {
+    return <MdxBody style={style}>{segments[0].text}</MdxBody>;
+  }
+  return (
+    <div style={{ color: "var(--t1)", ...style }}>
+      {segments.map((seg, i) => (seg.kind === "transcript"
+        ? <TranscriptSlot key={`w${i}`} meeting={seg.meeting} />
+        : <MdxBody key={`t${i}`}>{seg.text}</MdxBody>))}
+    </div>
+  );
+}
+
+/** One stretch of prose, rendered as MDX with the registry above; falls back to the legacy
+ *  <Markdown> renderer (with a subtle notice) when the source doesn't compile. A doc with a
+ *  transcript slot has several of these, and each compiles alone — so a malformed paragraph
+ *  downgrades ITSELF and the live transcript beside it is untouched. */
+function MdxBody({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
   // Comments out BEFORE anything else looks at the source: MDX has no HTML comment, so
   // escapeUnknownTags below would turn `<!-- desk:pinned:start -->` into visible prose, and the
   // plain-Markdown fallback reads this same string (#1590).
-  const src = stripHtmlComments(stripFrontmatter(children ?? ""));
+  const src = stripHtmlComments(children ?? "");
   const [state, setState] = useState<CompileState>({ status: "loading" });
   // Recognizing a workspace NAME needs the known set, and the transform cannot await. Prime the
   // snapshot once and recompile when it lands; a warm snapshot costs no second compile.

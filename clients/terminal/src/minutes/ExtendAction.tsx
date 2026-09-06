@@ -155,15 +155,23 @@ function PageAct(p: {
  *  content is where a reader arrives having finished reading, which is when the question it answers
  *  occurs to them; and it is labelled with what it does, so nobody has to press it to find out.
  *  Same act, same resolved slot (F63) — only its place, its size and its words have moved. */
-export function ExtendPageButton(p: { workspace?: string; path: string }) {
+export function ExtendPageButton(p: { workspace?: string; path: string; meeting?: string }) {
+  // A MEETING'S PAGE EXTENDS DIFFERENTLY (Vexa-ai/vexa#1598) — it reads the transcript since the
+  // page's own cursor, and it says so on the control so nobody has to press it to find out. The
+  // binding comes from the page itself (its widget slot), never from the shell.
+  const room = !!p.meeting;
   return (
-    <PageAct act="extend" icon="spark" hint="Ask this chat to go further on this page"
-      title="Extend this page"
-      line="Research it, write what is found around it, link both ways."
+    <PageAct act="extend" icon="spark"
+      hint={room ? "Ask this chat to take in what has been said since last time"
+                 : "Ask this chat to go further on this page"}
+      title={room ? "Extend this meeting page" : "Extend this page"}
+      line={room ? "Take in what has been said since last time, page what it names, link both ways."
+                 : "Research it, write what is found around it, link both ways."}
       fieldLabel="What to do with this page (optional)"
       slot={`${p.workspace ?? ""}|${p.path}`}
       onFire={(instruction) => postIntent({
         kind: "extend", workspace: p.workspace, path: p.path, ...(instruction ? { instruction } : {}),
+        ...(p.meeting ? { meeting: p.meeting } : {}),
       })} />
   );
 }
@@ -299,6 +307,12 @@ export function SelectionExtend(p: {
   path: string;
   /** the file source, for locating the selection exactly — see `sourceRange` */
   body: string | null;
+  /** the meeting this PAGE declares, when it declares one (Vexa-ai/vexa#1598). A meeting doc has the
+   *  live transcript embedded in it, so a selection here may be a passage of the room — and the act
+   *  becomes the meeting-doc variant either way: read since the page cursor, write into its regions.
+   *  Distinct from `canvas/TranscriptExtend` (#1596), which is the same control on the transcript
+   *  CANVAS and names no file. */
+  meeting?: string;
 }) {
   return (
     <SelectionAct containerRef={p.containerRef} act="extend-selection"
@@ -309,6 +323,7 @@ export function SelectionExtend(p: {
         kind: "extend", workspace: p.workspace, path: p.path,
         selection, selection_range: sourceRange(p.body, selection),
         ...(instruction ? { instruction } : {}),
+        ...(p.meeting ? { meeting: p.meeting } : {}),
       })} />
   );
 }

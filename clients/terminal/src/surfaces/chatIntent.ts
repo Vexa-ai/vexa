@@ -61,6 +61,15 @@ export interface PageIntentFields {
    *  same capability the composer two panels away already gives them. Everything else on this
    *  record stays a NAME or a resolved slot, for the reason the header states. */
   instruction?: string;
+  /** THE MEETING THIS PAGE IS (Vexa-ai/vexa#1598). Present only when the open page DECLARES a
+   *  transcript widget — `<!-- vexa:transcript meeting=147 -->` in its own source — so it is a fact
+   *  read off the document, not the shell's idea of which chat is open. That distinction is the
+   *  whole reason it is safe: a page is a meeting's page or it is not, and it says which in itself.
+   *
+   *  The server runs the meeting-doc variant of the act when it is here (`chat_intents.presets_for`):
+   *  read the transcript since the page's own cursor, write into the page's regions, leave the
+   *  widget slot alone. */
+  meeting?: string;
 }
 
 export interface ExtendIntent extends PageIntentFields { kind: "extend" }
@@ -229,5 +238,9 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
   // ONE LINE, ALWAYS — see `instructionOf`, which both families share.
   const instruction = instructionOf(raw);
 
-  return { kind, ...(workspace ? { workspace } : {}), path, ...(selection ? { selection } : {}), ...(selection_range ? { selection_range } : {}), ...(instruction ? { instruction } : {}) };
+  // The page's own binding (#1598), carried only when the page declared one. Absent is the answer
+  // for every page that is not a meeting's, which is nearly all of them.
+  const meeting = str(raw.meeting) || undefined;
+
+  return { kind, ...(workspace ? { workspace } : {}), path, ...(selection ? { selection } : {}), ...(selection_range ? { selection_range } : {}), ...(instruction ? { instruction } : {}), ...(meeting ? { meeting } : {}) };
 }

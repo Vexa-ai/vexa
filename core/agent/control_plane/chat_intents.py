@@ -129,11 +129,42 @@ def is_silent(intent) -> bool:
     return str(intent.get("kind") or "").strip().lower() in SILENT_KINDS
 
 
+# THE MEETING-DOC VARIANT (Vexa-ai/vexa#1598). Extend on a page that has a live transcript embedded
+# in it is a different act from Extend on any other page: it reads the transcript SINCE A CURSOR the
+# page itself carries, it writes into regions rather than wherever it likes, and it must not touch
+# the widget slot. That is a different ask, not a different paragraph of the same one.
+#
+# It is keyed on the intent naming a MEETING, and the client only puts one there when the open page
+# DECLARES the widget — so the variant follows the page's own binding rather than the shell's idea
+# of what chat is open. A page is either a meeting's page or it is not, and it says which in itself.
+INTENT_VARIANTS: dict[str, str] = {
+    "extend": "extend-meeting",
+}
+
+
 def preset_for(intent) -> str | None:
     """The preset name this intent runs, or None when there is nothing safe to run."""
+    names = presets_for(intent)
+    return names[-1] if names else None
+
+
+def presets_for(intent) -> list[str]:
+    """The presets this intent may run, MOST SPECIFIC FIRST — the caller takes the first that reads.
+
+    A chain rather than a name because `_global/asks/` is admin-owned and `preset_library.top_up` is
+    additive: a deployment that predates the meeting variant simply does not have the file, and the
+    right degradation there is the ordinary `extend` ask, not the client's plain fallback sentence.
+    Returning a name that may not exist and letting the route fall to `body.prompt` would make the
+    act WORSE on an older library than it was before the variant was written, which is a strange
+    thing for a new feature to do to instances that have not taken it."""
     if not isinstance(intent, dict):
-        return None
-    return INTENT_PRESETS.get(str(intent.get("kind") or "").strip().lower())
+        return []
+    kind = str(intent.get("kind") or "").strip().lower()
+    base = INTENT_PRESETS.get(kind)
+    if not base:
+        return []
+    variant = INTENT_VARIANTS.get(kind) if str(intent.get("meeting") or "").strip() else None
+    return [variant, base] if variant else [base]
 
 
 def tokens_for(intent) -> dict:
