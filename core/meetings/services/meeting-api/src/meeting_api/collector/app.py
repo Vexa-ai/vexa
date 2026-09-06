@@ -82,10 +82,24 @@ async def _publish_user_meeting_status(
     status: str,
     when: Optional[str],
     log_event: Callable[..., dict],
+    workspace_id: Optional[str] = None,
 ) -> None:
     """Best-effort publish of a FLAT ``meeting.status`` frame to the user-scoped channel
     ``u:{user_id}:meetings`` so the terminal's list surface gets every status change over WS
-    (the gateway forwards the redis payload verbatim). No-op if redis is down / args missing."""
+    (the gateway forwards the redis payload verbatim). No-op if redis is down / args missing.
+
+    A meeting BOUND TO A WORKSPACE is additionally published to ``w:{workspace_id}:meetings``. That
+    is the second channel every member's socket is subscribed to at connect, and it is why a member
+    watching their group's call sees the bot go joining → active in their own terminal instead of a
+    row frozen at whatever it said when the page loaded.
+
+    The alternative — resolving the workspace's roster here and publishing once per member — was
+    rejected: this service does not hold the roster (it lives in the agent's `policy/members.json`),
+    it would add a membership read to a hot best-effort path, and a member added mid-meeting would
+    receive nothing until the next publish. One channel per workspace has none of that: the socket
+    subscribes from the member's OWN identity at connect, so the fan-out follows membership for free.
+    The owner publish is unconditional and unchanged — an owner who is also a member gets the frame
+    on both channels, and the terminal keys the list by meeting id, so a duplicate is idempotent."""
     if redis is None or user_id is None or meeting_id is None:
         return
     import json as _json
@@ -97,11 +111,15 @@ async def _publish_user_meeting_status(
         "status": status,
         "when": when,
     }
-    try:
-        await redis.publish(f"u:{user_id}:meetings", _json.dumps(frame))
-    except Exception as e:  # noqa: BLE001 — publish is best-effort
-        log_event("user_meeting_status_publish_failed", audience="system", level="warning",
-                  span="meetings.intent.publish", fields={"error": str(e)})
+    channels = [f"u:{user_id}:meetings"]
+    if workspace_id:
+        channels.append(f"w:{workspace_id}:meetings")
+    for channel in channels:
+        try:
+            await redis.publish(channel, _json.dumps(frame))
+        except Exception as e:  # noqa: BLE001 — publish is best-effort
+            log_event("user_meeting_status_publish_failed", audience="system", level="warning",
+                      span="meetings.intent.publish", fields={"error": str(e), "channel": channel})
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -347,17 +365,27 @@ def build_router(
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's
     # meeting — but one row is read instead of the caller's entire history (#803). Full `data` is
-    # retained: this IS the detail view. ---
+    # retained: this IS the detail view.
+    #
+    # `x-user-workspaces` is read here for the SAME reason `GET /meetings` reads it: without it this
+    # route ran the access union with its third branch missing, so a member of the meeting's bound
+    # workspace got a 404 on a meeting their own LIST had just shown them — the row is in the list
+    # (that route passes membership) and absent from its own detail page. Every consumer of the
+    # owner-lookup seam inherited that hole: the meeting page, the live SSE, `/api/meeting/note` and
+    # `/api/meeting/terms` all decide access by calling this route. ---
     @router.get("/meetings/{meeting_id}")
     async def get_meeting(
         request: Request,
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
     ):
         from .projection import project_response_data
 
         user_id = _resolve_user_id(x_user_id)
-        meetings = await store.list_meetings(user_id, meeting_id=meeting_id)
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        meetings = await store.list_meetings(
+            user_id, meeting_id=meeting_id, member_workspaces=member_workspaces)
         meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})

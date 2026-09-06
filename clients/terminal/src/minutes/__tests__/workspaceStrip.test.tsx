@@ -146,15 +146,21 @@ describe("the strip takes the header and no more", () => {
       .toBe("Jane Smith changed the governing board page 2 hours ago");
   });
 
-  it("opens the three sections at once — the reader asked for the history, not for a menu", async () => {
+  it("opens every section at once — the reader asked for the history, not for a menu", async () => {
     const { container } = panel();
     await openDetails(container);
 
-    // ALL THREE, in reading order, and no fourth: the kind, the page count and the last change are
-    // said once each in the header above, and saying them again here is the strip returning.
-    expect(openIds(container)).toEqual(["people", "repo", "history"]);
+    // IN READING ORDER, AND NOTHING THAT REPEATS THE HEADER. That is the rule, and the rule was
+    // never a count: the kind, the page count and the last change are said once each in the header
+    // above, and saying them again here is the strip returning.
+    //
+    // Meetings is the fourth, on a GROUP only (Vexa-ai/vexa#1648). It says nothing the header says,
+    // and it carries the one fact a member could not get anywhere in this client before it: that
+    // their group's call is happening RIGHT NOW. The founder, watching a member's terminal during a
+    // meeting they were in: *"can't see the call — in their terminal"*.
+    expect(openIds(container)).toEqual(["people", "meetings", "repo", "history"]);
     expect([...container.querySelectorAll("[data-ws-section-name]")].map((h) => h.textContent))
-      .toEqual(["People", "Repo", "History"]);
+      .toEqual(["People", "Meetings", "Repo", "History"]);
     await waitFor(() => expect(container.querySelector('[data-ws-fact="remote"]')).toBeTruthy());
     expect(container.querySelector("[data-ws-member]")).toBeTruthy();
     expect(container.querySelector("[data-ws-history]")).toBeTruthy();

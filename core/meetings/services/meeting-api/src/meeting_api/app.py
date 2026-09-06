@@ -856,6 +856,12 @@ def _mount_lifecycle(
                 # terminal's list surface gets every bot-FSM transition over WS (superset of bm:; it
                 # also carries the pre-FSM idle/scheduled states). KEEP bm: above for the open-meeting
                 # tab. Best-effort: never fail the lifecycle callback.
+                #
+                # A meeting BOUND TO A WORKSPACE also goes to `w:{workspace_id}:meetings`, the channel
+                # every member's socket joins at connect. This is the transition members actually need
+                # — requested → joining → active is the bot arriving in THEIR call — and publishing it
+                # only to the owner is why a member's terminal showed nothing happening while the
+                # meeting ran.
                 user_id = meeting_row.get("user_id")
                 if user_id is not None:
                     user_frame = {
@@ -865,14 +871,17 @@ def _mount_lifecycle(
                         "status": rec.status.value,
                         "when": frame["ts"],
                     }
-                    try:
-                        await redis.publish(
-                            f"u:{user_id}:meetings", _json.dumps(user_frame)
-                        )
-                    except Exception as e:  # noqa: BLE001 — publish is best-effort
-                        log_event("user_meeting_status_publish_failed", audience="system",
-                                  level="warning", span="lifecycle.callback",
-                                  fields={"error": str(e)})
+                    workspace_id = (meeting_row.get("data") or {}).get("workspace_id")
+                    channels = [f"u:{user_id}:meetings"]
+                    if workspace_id:
+                        channels.append(f"w:{workspace_id}:meetings")
+                    for channel in channels:
+                        try:
+                            await redis.publish(channel, _json.dumps(user_frame))
+                        except Exception as e:  # noqa: BLE001 — publish is best-effort
+                            log_event("user_meeting_status_publish_failed", audience="system",
+                                      level="warning", span="lifecycle.callback",
+                                      fields={"error": str(e), "channel": channel})
         # COPILOT REAP (Bug 3): the moment a meeting lands TERMINAL, emit the `session_end` marker onto
         # the meeting copilot transcript feed — the EXACT stream the meeting copilot worker
         # (agent worker/meeting.py, via VEXA_TRANSCRIPT_STREAM) blocks on. The worker reaps immediately

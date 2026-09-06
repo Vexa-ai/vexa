@@ -98,12 +98,64 @@ export interface MeetingRow {
   id?: number | string;
   status?: string;
   start_time?: string | null;
+  /** set by meeting-api when the row reaches this caller through a share or a workspace membership
+   *  rather than by owning it — i.e. it is a colleague's meeting in this group */
+  shared?: boolean;
   data?: {
     workspace_id?: string | null;
     calendar_uid?: string | null;
     title?: string | null;
     scheduled_at?: string | null;
   } | null;
+}
+
+/** One of this workspace's meetings, as the front page lists it. */
+export interface WorkspaceMeeting {
+  id: string;
+  title: string;
+  /** live NOW — the bot is on its way in, in the room, or leaving */
+  live: boolean;
+  /** when it ran, else when it is due, else "" */
+  when: string;
+  /** owned by another member and reaching this reader through the workspace */
+  shared: boolean;
+}
+
+/** Statuses that mean the meeting is happening RIGHT NOW, from the bot being asked for to the bot
+ *  leaving. Mirrors `LIVE_PHASE_STATUSES` in `../surfaces/meetingModel`, kept as its own literal
+ *  because this module is deliberately dependency-free (it is unit-tested with no store). */
+const LIVE_NOW = new Set([
+  "requested", "joining", "awaiting_admission", "active", "needs_human_help", "needs_help",
+  "stopping",
+]);
+
+/** THIS WORKSPACE'S MEETINGS, LIVE ONES FIRST — the answer to "what is my group doing right now".
+ *
+ *  A bot requested inside a workspace makes the WORKSPACE's meeting, so `GET /api/meetings` already
+ *  serves it to every member (owner ∪ transcript-share ∪ bound-workspace member, evaluated in SQL);
+ *  a row a member reaches through the workspace rather than by owning it arrives flagged `shared`.
+ *  Before this the front page ran those same rows through `boundSeries` alone, which collapses runs
+ *  into series and sorts purely by time — so a member had nowhere that said their group's call was
+ *  happening right now, which is what "can't see the call" meant.
+ *
+ *  LIVE FIRST IS NOT THE SAME AS SORTING BY TIME: an upcoming meeting's `start_time` is in the
+ *  future and outranks a live one on any pure time sort, so the live lift has to be its own key.
+ *  Same two-key shape the chat rail already uses, for the same reason. */
+export function workspaceMeetings(rows: readonly MeetingRow[], slug: string): WorkspaceMeeting[] {
+  const out: WorkspaceMeeting[] = [];
+  for (const r of rows) {
+    const d = r?.data ?? {};
+    if (!slug || String(d.workspace_id ?? "") !== slug) continue;
+    out.push({
+      id: String(r.id ?? ""),
+      title: String(d.title ?? "").trim() || "Untitled meeting",
+      live: LIVE_NOW.has(String(r.status ?? "")),
+      when: String(r.start_time ?? d.scheduled_at ?? ""),
+      shared: r.shared === true,
+    });
+  }
+  return out.sort((a, b) =>
+    (b.live ? 1 : 0) - (a.live ? 1 : 0) || b.when.localeCompare(a.when));
 }
 
 /** One thing this workspace is bound to: a recurring invite (every run of it shares a
@@ -180,6 +232,9 @@ export interface WorkspaceFacts {
    *  guess; the clause is then dropped rather than filled with the word "the admin". */
   admin: InstanceAdmin | null;
   bound: BoundSeries[];
+  /** THIS WORKSPACE'S MEETINGS, live ones first — every member sees the group's calls here, not
+   *  only the ones they themselves asked for. Empty outside a group. */
+  meetings: WorkspaceMeeting[];
   /** this reader's own role in a shared workspace (`null` for a desk / the company layer) */
   myRole: Role | null;
   /** the roster — `null` when this reader may not read it (a reader of a group may not) */
@@ -302,6 +357,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
   let myRole: Role | null = null;
   let members: WorkspaceMember[] | null = null;
   let bound: BoundSeries[] = [];
+  let wsMeetings: WorkspaceMeeting[] = [];
   if (kind === "group") {
     const [mine, roster, meetings] = await Promise.allSettled([
       listSharedMemberships(), listWorkspaceMembers(slug), meetingRows(),
@@ -313,7 +369,10 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     // A READER MAY NOT READ THE ROSTER, and that is the design rather than a failure — the members
     // route is contributor+. So a rejection here is silent, and the section says what it does know.
     if (roster.status === "fulfilled") members = roster.value;
-    if (meetings.status === "fulfilled") bound = boundSeries(meetings.value, slug);
+    if (meetings.status === "fulfilled") {
+      bound = boundSeries(meetings.value, slug);
+      wsMeetings = workspaceMeetings(meetings.value, slug);
+    }
     else note("Could not read what this workspace is bound to.");
   }
 
@@ -332,7 +391,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     company: companyName(company.status === "fulfilled" ? company.value : null),
     me: me.status === "fulfilled" ? me.value : null,
     admin: admin.status === "fulfilled" ? admin.value : null,
-    bound, myRole, members,
+    bound, meetings: wsMeetings, myRole, members,
     remote: remote.status === "fulfilled" ? remote.value : null,
     remoteFailure,
     owner, notes,

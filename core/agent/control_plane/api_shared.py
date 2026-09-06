@@ -1536,20 +1536,35 @@ def _http_email_subject_lookup(admin_api_url: str, internal_secret: str, admin_t
 
 
 def _http_meeting_owner_lookup(meeting_api_url: str):
-    """Build the default owner-lookup: GET {meeting_api_url}/meetings/{id} with the caller's X-User-Id.
-    Returns a callable ``(user_id: str, meeting_id: str) -> dict | None`` (the owned meeting record, or
-    None when the row is absent / owned by someone else / meeting-api is unreachable — fail-closed)."""
+    """Build the default meeting ACCESS lookup: GET {meeting_api_url}/meetings/{id} as the caller.
+    Returns a callable ``(user_id, meeting_id, workspaces=None) -> dict | None`` — the meeting record
+    the caller may read, or None when the row is absent / not theirs / meeting-api is unreachable
+    (fail-closed).
+
+    ``workspaces`` is the caller's OWN memberships, forwarded as ``X-User-Workspaces`` so meeting-api
+    can run the third branch of its access union (member of the meeting's bound workspace) instead of
+    owner + transcript-share only. This is the grant the SSE route's own comment named as "the clean
+    seam" and deliberately left unhonoured: a bot requested inside a workspace makes the WORKSPACE's
+    meeting, so a member asking to watch it is not a stranger.
+
+    Omitting the argument keeps the previous, strictly narrower answer — the header is simply absent
+    and every existing caller behaves exactly as before. It stays a LOOKUP rather than a local check
+    because this function knows neither the row's binding nor the caller's role; meeting-api knows
+    both, and one decision made in one place cannot disagree with itself."""
     import urllib.error
     import urllib.request
 
     base = (meeting_api_url or "").rstrip("/")
 
-    def _lookup(user_id: str, meeting_id: str) -> "dict | None":
+    def _lookup(user_id: str, meeting_id: str, workspaces=None) -> "dict | None":
         if not base or not user_id or not str(meeting_id).isdigit():
             return None  # non-numeric row id can't be an owned meeting row → fail closed
+        headers = {"X-User-Id": str(user_id)}
+        ws = ",".join(str(w).strip() for w in (workspaces or []) if str(w).strip())
+        if ws:
+            headers["X-User-Workspaces"] = ws
         try:
-            req = urllib.request.Request(
-                f"{base}/meetings/{int(meeting_id)}", headers={"X-User-Id": str(user_id)})
+            req = urllib.request.Request(f"{base}/meetings/{int(meeting_id)}", headers=headers)
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status != 200:
                     return None

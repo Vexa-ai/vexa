@@ -431,6 +431,18 @@ async def request_bot(
     webhook_url: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
+    # THE MEETING'S WORKSPACE, decided at spawn. A bot requested from inside a workspace makes the
+    # WORKSPACE's meeting, not the requester's private one: `data.workspace_id` is the single fact
+    # every member-facing surface reads (`list_meetings`' third access branch, `GET /meetings/{id}`,
+    # the live SSE, the status fan-out, the write-up's recipients). Before this, an ad-hoc spawn had
+    # no way to say which workspace it belonged to — `POST /bots` took no such field and nothing
+    # called `POST /meetings/{platform}/{native}/workspace` — so every ad-hoc meeting was owner-only
+    # by construction and a member "could not see the call" in their own terminal.
+    #
+    # Written on the FRESH-INSERT path only. `continue_meeting` reopens a row that already carries
+    # whatever bind it was created with, and re-binding it here would let a later spawn move
+    # somebody else's meeting between workspaces on a path that never asked about membership.
+    workspace_id: Optional[str] = None,
     # Fresh-meeting stream hygiene: purge tc:meeting:{new_row_id} on a FRESH insert so a new meeting
     # never inherits a prior generation's transcript (a reused row id after a DB reset would otherwise
     # carry a stale session_end → "Meeting ended" before the first word). Injected (redis-backed in
@@ -699,6 +711,11 @@ async def request_bot(
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
         meeting_data["service_authority"] = authority_record
+        # The workspace bind (see the parameter's note). Same key, same shape and same readers as the
+        # one `bind_workspace` writes after the fact — this only writes it EARLY, so the meeting is
+        # the workspace's from its first row rather than from whenever someone remembered to bind it.
+        if workspace_id:
+            meeting_data["workspace_id"] = workspace_id
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path

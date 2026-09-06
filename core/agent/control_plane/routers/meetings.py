@@ -28,6 +28,44 @@ def build(**d) -> APIRouter:
     subject_of = d['subject_of']
     wsr = d['wsr']
 
+    def _caller_workspaces(subject: str) -> list[str]:
+        """The workspaces this caller is a member of — the grant that lets the routes below answer for
+        a meeting the caller does not own but their workspace does.
+
+        READ FROM `policy/members.json`, not from a request header. The header the gateway injects
+        would be the cheaper source, but agent-api is reachable directly in the dev/self-host topology
+        (see `subject_of`'s TOPOLOGY BOUNDARY note), where identity headers are spoofable — and this
+        value decides who may read a live transcript. The on-disk roster is the same authoritative
+        store `assert_may_manage` and the mount builder already trust, and it is local.
+
+        NEVER RAISES. A membership scan that fails must narrow access to owner-only, never open it and
+        never 500 a meeting the owner is entitled to watch."""
+        try:
+            from control_plane.workspace_membership import list_memberships
+            return [str(m["workspace_id"]) for m in list_memberships(wsr.root, str(subject))
+                    if m.get("workspace_id")]
+        except Exception:  # noqa: BLE001 — fail CLOSED to the previous owner-only answer
+            return []
+
+    # `_meeting_owner_lookup` is an INJECTED seam: the shipped one takes the caller's workspaces as a
+    # third argument, and the fakes five test modules hand in take two. Ask the callable which it is,
+    # once, rather than calling three-arg and rescuing `TypeError` — that rescue would also swallow a
+    # genuine TypeError raised INSIDE the lookup and silently downgrade it to "not authorized".
+    try:
+        import inspect as _inspect
+        _lookup_takes_workspaces = len(
+            _inspect.signature(_meeting_owner_lookup).parameters) >= 3
+    except (TypeError, ValueError):  # C-implemented or otherwise unintrospectable → narrower call
+        _lookup_takes_workspaces = False
+
+    def _meeting_access(subject: str, meeting_id) -> "dict | None":
+        """THE ONE ACCESS DECISION every route in this file makes: the meeting record this caller may
+        read, or None. Owner, transcript-share recipient, or member of the workspace the meeting is
+        bound to — meeting-api evaluates all three, this only says who is asking."""
+        if _lookup_takes_workspaces:
+            return _meeting_owner_lookup(subject, meeting_id, _caller_workspaces(subject))
+        return _meeting_owner_lookup(subject, meeting_id)
+
     @router.get("/api/meeting/relay-health")
     def meeting_relay_health(request: Request):
         """P18 (ADR 0010) — the transcript relay's observable health: is the numeric→native resolve OK,
@@ -61,7 +99,7 @@ def build(**d) -> APIRouter:
         Both are `""` for every report written before the widget existed, and that absence is what
         keeps those meetings on the two-page room they have today instead of losing the transcript."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
-        row = _meeting_owner_lookup(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id)
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_note_mod.describe(wsr.root, subject, row)
@@ -85,7 +123,7 @@ def build(**d) -> APIRouter:
         ints and this creates a file on a DESK."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
         meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
-        row = _meeting_owner_lookup(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id)
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_mint_mod.mint(wsr.root, subject, row,
@@ -115,7 +153,7 @@ def build(**d) -> APIRouter:
         `/api/meeting/stream` below, and for the same reason: row ids are sequential ints, and this
         answers with what was said on somebody's DESK."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
-        row = _meeting_owner_lookup(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id)
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_terms_mod.read(wsr.root, subject, meeting_id)
@@ -136,7 +174,7 @@ def build(**d) -> APIRouter:
         annotates, so one publish is one object rather than a query string beside a payload."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
         meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
-        row = _meeting_owner_lookup(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id)
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         terms = (body or {}).get("terms")
@@ -169,12 +207,19 @@ def build(**d) -> APIRouter:
         # caller identity (`subject_of` → 401 on no gateway-injected X-User-Id) and verify the caller OWNS
         # the requested row (meeting-api `GET /meetings/{id}` owner-scopes in SQL: `Meeting.user_id ==
         # user_id` → 404 for a foreign/absent row). Fail CLOSED (403) BEFORE the stream opens.
-        # OWNER-ONLY for now (matches the WS path today); a shared-workspace membership grant would extend
-        # `_meeting_owner_lookup` — the clean seam — but is intentionally NOT honored here yet.
+        #
+        # THE SHARED-WORKSPACE GRANT IS NOW HONOURED HERE — this comment used to end "intentionally NOT
+        # honored here yet", and that gap is the bug: a bot requested inside a workspace makes the
+        # WORKSPACE's meeting, so every member is entitled to watch it, and owner-only scoping meant a
+        # member watching their own group's call saw an empty page while it was happening. The grant
+        # arrives through the seam the old comment named — `_meeting_access` → `_meeting_owner_lookup`
+        # with the caller's memberships — so the widening is meeting-api's ONE access union, not a
+        # second rule invented at this route. A caller who is neither owner, share recipient nor member
+        # is refused exactly as before.
         subject = subject_of(request)  # 401 if no (gateway-injected) identity — fail closed
-        owned = _meeting_owner_lookup(subject, meeting_id)
+        owned = _meeting_access(subject, meeting_id)
         if owned is None:
-            # Absent row, or a row owned by a DIFFERENT tenant → refuse (404-equivalent, no stream opened).
+            # Absent row, or a row this caller has no claim on → refuse (404-equivalent, no stream opened).
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         # `session_uid` is ALSO caller-supplied. The terminal passes the ROW id as `session_uid` for
         # live rows (liveMeetings.ts `session_uid = live ? id : undefined`); the meeting's own native

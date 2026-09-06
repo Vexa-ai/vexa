@@ -1251,3 +1251,59 @@ async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, e
                       token_secret=SECRET)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["captureSignalEnabled"] is expected
+
+
+# ── the workspace a bot belongs to (Vexa-ai/vexa#1648) ───────────────────────────────────────────
+# A bot requested from inside a workspace makes the WORKSPACE's meeting: `data.workspace_id` is
+# written AT SPAWN, and it is the single fact every member-facing surface reads afterwards. Before
+# this, `POST /bots` took no such field and nothing called the after-the-fact bind endpoint, so an
+# ad-hoc meeting was owner-only by construction.
+
+def _spawn(client, body, workspaces=None):
+    headers = dict(HEADERS)
+    if workspaces is not None:
+        headers["x-user-workspaces"] = ",".join(workspaces)
+    return client.post("/bots", headers=headers, json=body)
+
+
+def test_spawn_binds_the_meeting_to_the_callers_workspace(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo = InMemoryMeetingRepo()
+    r = _spawn(_client(repo), {"platform": "google_meet", "native_meeting_id": "grp-aaaa-bbb",
+                               "workspace_id": "team-notes"}, ["team-notes", "other-ws"])
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["workspace_id"] == "team-notes"
+
+
+def test_spawn_without_a_workspace_is_the_meeting_it_has_always_been(monkeypatch):
+    """The bind is additive. A caller that names no workspace gets its own private meeting, exactly
+    as before — which is what keeps every existing integration behaving as it does today."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "solo-aaaa-bbb"},
+               ["team-notes"])
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})
+
+
+def test_spawn_refuses_a_workspace_the_caller_is_not_in(monkeypatch):
+    """THE BODY CANNOT FORGE MEMBERSHIP. `x-user-workspaces` is injected by the gateway from the
+    resolved identity; without this check anyone with an api key could publish a meeting into a
+    workspace they do not belong to, and every member of it would find a stranger's call in their
+    list, on their meeting page and in its live transcript."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "sneak-aaaa-bbb",
+                           "workspace_id": "someone-elses"}, ["team-notes"])
+    assert r.status_code == 403
+    assert "someone-elses" in r.json()["detail"]
+
+    # and with no membership header at all — the direct/unresolved caller — it is still refused
+    assert _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "sneak2-aaaa-bbb",
+                              "workspace_id": "team-notes"}).status_code == 403
+
+
+@pytest.mark.parametrize("bad", ["", "   ", 7, [], {}])
+def test_spawn_refuses_a_workspace_id_that_is_not_a_slug(monkeypatch, bad):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "bad-aaaa-bbb",
+                           "workspace_id": bad}, ["team-notes"])
+    assert r.status_code == 422, r.text

@@ -46,7 +46,9 @@ Two or three gaps, one line each — the ones that would change what you could d
 
 Then a single question about the work. **Never *"paste a meeting link"*** — this person did not come
 to install a tool, they came because something in this company already involves them. If they truly
-have nothing here yet, the question is what they want Vexa in: their own meetings, or a colleague's.
+have nothing here yet, the question is what they want Vexa in: their own meetings, a colleague's, or
+a group's — a meeting a bot joins from a shared workspace belongs to that workspace, and everyone in
+it sees the call as it happens, so "a team's meetings" is a real answer and not a later upgrade.
 
 Then stop. No tour, no feature list, no second offer in the same turn.
 
