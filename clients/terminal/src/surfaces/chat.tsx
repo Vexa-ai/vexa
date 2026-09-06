@@ -24,6 +24,7 @@ import { presentError } from "./apiClient";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import type { ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
+import { endJob, jobLine, startJob, stepJob, type JobRec } from "./jobs";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
@@ -81,9 +82,13 @@ type ChatSessionState = {
   loaded: boolean;
   nextId: number;
   abort: AbortController | null;
+  /** BACKGROUND JOBS still running for this thread (Vexa-ai/vexa#1584). Deliberately NOT `busy`:
+   *  the whole point of a job is that the chat is answerable while it runs. Several at once is the
+   *  normal case, so it is a list. */
+  jobs: JobRec[];
 };
 
-const EMPTY_CHAT_STATE: ChatSessionState = { turns: [], busy: false, loading: false, loaded: false, nextId: 0, abort: null };
+const EMPTY_CHAT_STATE: ChatSessionState = { turns: [], busy: false, loading: false, loaded: false, nextId: 0, abort: null, jobs: [] };
 const chatSessions = new Map<string, ChatSessionState>();
 const chatSubscribers = new Map<string, Set<() => void>>();
 
@@ -966,6 +971,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // The rule itself is `joinInterim` in chatStream.ts, where it is documented and tested; this is
     // only the flag it reads. See there for why the boundary is a tool call and not a delta count.
     let breakBeforeNextDelta = false;
+    // THE HANDOVER (Vexa-ai/vexa#1584). A turn that spawns a background job is over the moment the
+    // job starts, and the composer must be free THEN — not when this connection eventually closes,
+    // two minutes later. From that point the flag belongs to whatever the person sends next, so
+    // this send stops touching it: clearing `busy` in its own `finally` would clear a later turn's.
+    let ownsBusy = true;
+    let startedJob = "";
     try {
       const result = await streamChatTurn(
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
@@ -1010,6 +1021,25 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT));
             patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha }));
           },
+          // THE TURN HANDED ITS WORK OFF AND IS DONE. Settle its steps, drop the live indicator and
+          // give the composer back — the acknowledgement line has already arrived as a delta, and
+          // everything from here belongs to the job chip below.
+          onJobStarted: (j) => {
+            ownsBusy = false;
+            startedJob = j.jobId;
+            patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
+            updateChatState(key, (s) => ({ ...s, busy: false, jobs: startJob(s.jobs, { id: j.jobId, kind: j.kind, target: j.target }) }));
+          },
+          onJobStep: (jobId, tool) => updateChatState(key, (s) => ({
+            ...s, jobs: stepJob(s.jobs, jobId, toolOp(tool).label.split(" · ").pop() ?? ""),
+          })),
+          // ONE LINE, ALWAYS — landed or died. A job that finishes in silence is indistinguishable
+          // from one that is still running, and the chip has just gone.
+          onJobEnd: ({ jobId, line }) => updateChatState(key, (s) => ({
+            ...s,
+            jobs: endJob(s.jobs, jobId),
+            turns: line ? [...s.turns, { id: `j-${jobId}`, role: "agent" as const, text: line, ops: [] }] : s.turns,
+          })),
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
           // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
@@ -1024,7 +1054,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         },
         { signal: ctrl.signal },
       );
-      if (!result.aborted && !result.terminal) {
+      if (!result.aborted && !result.terminal && !startedJob) {
         // The turn never reached a clean end even after resuming past the hard cap — the connection is
         // genuinely lost. Say so (fail-loud, P18): append a note if there was partial output, else the
         // timeout copy. The worker may still finish server-side, so point the user at a reopen.
@@ -1045,7 +1075,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       // whatever happened — abort, error, timeout — no step is left spinning. A spinner that
       // outlives its turn is the same lie as a tick that precedes it.
       patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
-      updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
+      if (ownsBusy) updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
+      // A JOB CHIP MUST NOT OUTLIVE ITS CONNECTION, for the same reason a spinner must not outlive
+      // its turn. `onJobEnd` removes it on the normal path, so reaching here with the chip still
+      // there means the stream died with the job unaccounted for — say that, and stop spinning.
+      else if (startedJob) updateChatState(key, (s) => (s.jobs.some((j) => j.id === startedJob)
+        ? { ...s, jobs: endJob(s.jobs, startedJob),
+            turns: [...s.turns, { id: `j-${startedJob}`, role: "agent" as const, text: "_Lost the connection to that background job — it may still have finished; reopen the page to see._", ops: [] }] }
+        : s));
     }
   };
 
@@ -1206,10 +1243,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const liveOps = busy ? (turns[turns.length - 1] as AgentTurn | undefined)?.ops ?? [] : [];
   const liveStep = liveOps.length ? liveOps[liveOps.length - 1] : null;
   const liveLabel = liveStep ? (liveStep.label.split(" · ").pop() ?? liveStep.label) : "";
-  const liveState = busy
+  const turnState = busy
     ? ["working", liveOps.length ? `${liveOps.length} step${liveOps.length === 1 ? "" : "s"}` : "", liveLabel]
         .filter(Boolean).join(" · ")
     : "";
+  // …AND WHATEVER IS RUNNING IN THE BACKGROUND (Vexa-ai/vexa#1584). A job is not `busy` — the
+  // composer is free while it runs, which is the whole point — so it needs its own half of this
+  // line, or a person who pressed Extend and carried on typing has no way to tell it is still
+  // happening. Rendered in the same place and the same shape as the turn's own state; the job's
+  // TARGET is what tells two of them apart.
+  const liveState = [turnState, jobLine(chatState.jobs)].filter(Boolean).join("   ");
 
   const composer = (
     <>
@@ -1328,15 +1371,18 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
               : <Icon name="mic" size={15} />}
           </button>
+          {/* The live line sits OUTSIDE the busy branch it used to live in: a background job runs
+              with the composer free, so the one place that says what the agent is doing has to be
+              able to say it beside a Send button as well as beside a Stop one. */}
+          {liveState && (
+            <span data-live-state title={liveState}
+              style={{ flex: "0 1 auto", minWidth: 0, marginRight: 8, fontFamily: "var(--mono)", fontSize: 11,
+                color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {liveState}
+            </span>
+          )}
           {busy
-            ? <>
-              <span data-live-state title={liveState}
-                style={{ flex: "0 1 auto", minWidth: 0, marginRight: 8, fontFamily: "var(--mono)", fontSize: 11,
-                  color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {liveState}
-              </span>
-              <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
-            </>
+            ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
             : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
         </div>
       </div>

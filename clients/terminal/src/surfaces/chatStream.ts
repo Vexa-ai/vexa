@@ -47,6 +47,12 @@ export type ChatStreamEvent = {
   meeting?: string;
   cursor?: string;
   terms?: unknown[];
+  // A BACKGROUND JOB (Vexa-ai/vexa#1584). `job_id` is on every event a job produced, and on the
+  // `job-started` the spawning turn emits; `kind`/`target`/`line` are the job's own three facts.
+  job_id?: string;
+  kind?: string;
+  target?: string;
+  line?: string;
 };
 
 /** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
@@ -116,6 +122,14 @@ export type ChatStreamCallbacks = {
    *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
    *  `onArtifact`. Optional so existing callers/tests need not implement it. */
   onTerms?: (t: { meeting: string; cursor: string; terms: unknown[] }) => void;
+  /** THIS TURN HANDED ITS WORK TO A BACKGROUND JOB and is already over (Vexa-ai/vexa#1584) — the
+   *  chat is free NOW, not when this connection closes. Everything carrying this job id from here
+   *  on belongs to the job, not to the turn, so none of it touches the turn's own steps. */
+  onJobStarted?: (j: { jobId: string; kind: string; target: string; line: string }) => void;
+  /** one tool call the JOB made — the job's own step count, kept apart from the turn's */
+  onJobStep?: (jobId: string, tool: string) => void;
+  /** the job landed, or died. `line` is the one sentence it posts into the chat — never silence. */
+  onJobEnd?: (j: { jobId: string; ok: boolean; line: string }) => void;
 };
 
 export type ChatStreamRequest = {
@@ -214,6 +228,13 @@ export async function streamChatTurn(
   let lastEventId: string | null = null;
   const turnId = mintTurnId();
   const startedAt = now();
+  // THE JOB THIS CONNECTION STARTED, if any (Vexa-ai/vexa#1584). It changes three things and only
+  // for the connection that owns it: `turn-complete` no longer ends the read (the job outlives its
+  // turn — the server-side reader makes the same exception), the hard cap does not apply (a job is
+  // allowed to take minutes; that is the point), and every event carrying a job id that is NOT this
+  // one is skipped, because another turn's connection reads the same Stream and must never fold a
+  // foreign job's steps into its own.
+  let myJob = "";
 
   cb.onStarting();
   cb.onStatus?.("connecting");
@@ -306,6 +327,36 @@ export async function streamChatTurn(
         if (!line.startsWith("data: ")) continue;
         let ev: ChatStreamEvent;
         try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        // ── the job lane, ahead of the turn's switch ──────────────────────────────────────────
+        // A job's events never reach the turn's handlers. They would otherwise land on an agent
+        // bubble the person finished reading a minute ago: its step count would climb by itself and
+        // its `commit` would end this read while the job was still writing.
+        const jid = typeof ev.job_id === "string" ? ev.job_id : "";
+        if (ev.type === "job-started") {
+          if (!myJob && jid) {
+            myJob = jid;
+            sawVisibleOutput = true;
+            cb.onJobStarted?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "", line: ev.line ?? "" });
+          }
+          continue;
+        }
+        if (jid) {
+          if (jid !== myJob) continue;              // somebody else's job on the shared Stream
+          if (ev.type === "job-done" || ev.type === "job-failed") {
+            terminal = true;
+            myJob = "";
+            cb.onJobEnd?.({ jobId: jid, ok: ev.type === "job-done", line: ev.line ?? "" });
+          } else if (ev.type === "tool-call") {
+            cb.onJobStep?.(jid, ev.tool ?? "tool");
+          } else if (ev.type === "commit") {
+            // The one event the job shares with a turn verbatim: the panel re-reads the open
+            // document on a commit, which is what makes the page the job wrote appear by itself.
+            cb.onCommit(ev.sha);
+          } else if (ev.type === "artifact" && ev.path) {
+            cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+          }
+          continue;
+        }
         switch (ev.type) {
           // The worker's liveness ack — emitted the moment a turn is picked up (warm or cold), long
           // before the first model token. Flips the heartbeat "Starting agent" → "Working"
@@ -348,7 +399,10 @@ export async function streamChatTurn(
             terminal = true; cb.onRejected();
             break;
           case "turn-complete":
-            terminal = true;
+            // …unless this turn spawned a job. The turn IS over — that is why the job exists — but
+            // the connection is now the job's, and closing here would drop everything it has left
+            // to say. `RedisStreamReader` makes the same exception on the server side.
+            if (!myJob) terminal = true;
             break;
           case "done": {
             terminal = true;
@@ -390,7 +444,10 @@ export async function streamChatTurn(
   while (!signal.aborted) {
     const outcome = await drainOnce();
     if (outcome === "terminal" || terminal) break;
-    if (now() - startedAt > hardTimeoutMs) break;
+    // The hard cap answers "did the worker ever come back". A job is ALLOWED to take minutes — that
+    // is what it is for — so while one is running the cap is not the question and giving up on it
+    // would abandon work that is still happening.
+    if (!myJob && now() - startedAt > hardTimeoutMs) break;
     cb.onStarting();  // still waiting on the worker — keep the pane honest between attempts
     cb.onStatus?.("reconnecting");
     await sleep(backoffMs);
