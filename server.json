@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.vexa-ai/vexa",
+  "name": "ai.vexa/vexa",
   "title": "Vexa",
   "description": "Meeting bot and transcripts for Google Meet, Teams and Zoom. Live or after, speakers labelled.",
   "version": "0.12.27",
