@@ -295,8 +295,10 @@ describe("boundMeetingView — the minted page is what the send opens", () => {
 
   it("fronts the meeting's own page when that page carries the transcript", () => {
     const room = meetingPages("live", "118", NOTE, null, { noteHasTranscript: true });
-    expect(room).toEqual([{ path: NOTE, label: "Brief" }]);
-    expect(boundMeetingView(room, withWidget)).toEqual({ path: NOTE, label: "Brief" });
+    // ONE page — and it is the meeting's, so it wears `permanent` (#1600) like every page this
+    // composer marks as the room's own
+    expect(room).toEqual([{ path: NOTE, label: "Brief", permanent: true }]);
+    expect(boundMeetingView(room, withWidget)).toBe(room[0]);
   });
 
   it("fronts NOTHING for a report written before the widget existed", () => {

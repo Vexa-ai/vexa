@@ -344,6 +344,11 @@ export function boundMeetingView(
  *  alongside transcript as a single thing in the right side"* (#1598). So the tab the send pinned
  *  gives way to the page, and `meetingPages`' own `noteHasTranscript` rule is what decides.
  *
+ *  IT IS NOT A CLOSE PATH, which is why it may take a `permanent` tab (Vexa-ai/vexa#1600) that a
+ *  reader may not. `permanent` says the transcript is the MEETING's furniture rather than a tab
+ *  somebody chose; this is the meeting's own answer changing — the room moved into one page — and
+ *  `meetingPages` is still the only thing that decides it.
+ *
  *  It removes ONE identity and nothing else — never the desk, never a page the reader opened. */
 export function withoutSeparateTranscript(strip: Artifact[], meetingId: string): Artifact[] {
   const id = String(meetingId ?? "").trim();
