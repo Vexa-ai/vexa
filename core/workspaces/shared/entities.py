@@ -192,19 +192,134 @@ def wikilinks(texts) -> list[str]:
     return out
 
 
-def resolve_links(root, names) -> tuple[list[str], list[str]]:
-    """``(resolved, unresolved)`` — which ``[[Name]]`` already have a page anywhere under
-    ``kg/entities/``. Unresolved names are RETURNED, never auto-created: a page minted from a name
-    with no facts behind it is the invention decision 24.5 forbids, and the kg-links rule already
-    says a wikilink with no page renders as an inert "not found" chip. The caller upserts them with
-    their own source; the tool result says so in words."""
-    base = Path(root) / ENTITIES_DIR
-    resolved, unresolved = [], []
+# ── a wikilink can be a REFERENCE, not a name (Vexa-ai/vexa#1620) ────────────────────────────────
+#
+# ⚠ MEASURED 2026-09-06, fr_e96aa977edd14de8. A research job wrote the OeNB org chart to
+# `structure.md` and linked it from every person page it produced as `[[structure]]`. The write-back
+# read the link as a person nobody had paged and asked for a page called "Structure": every wikilink
+# was a person/company chip, and a link to a DOCUMENT is not that.
+#
+# Two tests, either of which makes a link a reference. It already names a page in a workspace this
+# turn has mounted — a page the reader can open is not missing wherever it lives. Or it is SPELLED
+# like a file: a path, a filename, or a bare lowercase/kebab stem, which is how a document is named
+# and never how a person, a company or a meeting is written. The spelling test is shape-only, the
+# same trade `links._form_of` makes for the `ws:` form: the writer of a link and the reader of it
+# are in different processes and the writer's directory listing is not available to the reader.
+#
+# THE TRADE, STATED: `[[vexa]]`, written lowercase for a company that has a page, is read as a
+# document reference and is not offered as a missing name. That costs one page, offered again the
+# next time the name is written the way a name is written — against a phase that asks for a page
+# called "Structure" on every turn that links a document.
+_DOC_STEM = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
+_FILE_EXT = re.compile(r"\.[a-z0-9]{1,5}$", re.I)
+_DOC_SKIP_DIRS = {"node_modules", "__pycache__", "venv"}
+_DOC_LIMIT = 4000
+
+
+def is_document_ref(target: str) -> bool:
+    """Is this ``[[target]]`` a link to a document rather than a name? Shape only, no lookup."""
+    t = str(target or "").strip()
+    if t.lower().startswith("ws:"):
+        t = t.split("/", 1)[-1].strip()      # ws:<workspace-id>/<target> — the target half is the name
+    if not t:
+        return False
+    if "/" in t or _FILE_EXT.search(t):
+        return True
+    return bool(_DOC_STEM.match(t))
+
+
+def workspace_docs(root) -> set:
+    """The slug of every DOCUMENT page in a workspace — its ``.md`` files outside ``kg/entities/``.
+
+    A document is a page, so "does this name already have a page here" has to be asked of the whole
+    workspace and not only of the entity tree. Bounded on purpose — hidden and vendored directories
+    are pruned and the walk stops at ``_DOC_LIMIT`` files — because this runs on every entity write,
+    and a workspace with a repository checked into it must not turn one upsert into a tree scan."""
+    base = Path(root)
+    out: set = set()
+    if not base.is_dir():
+        return out
+    entities = str(base / ENTITIES_DIR)
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _DOC_SKIP_DIRS]
+        if dirpath == entities or dirpath.startswith(entities + os.sep):
+            continue
+        for f in filenames:
+            if not f.endswith(".md"):
+                continue
+            seen += 1
+            if seen > _DOC_LIMIT:
+                return out
+            out.add(slugify(f[:-3]))
+    out.discard("")
+    return out
+
+
+def _mount_roots(root, mounts) -> list:
+    """The OTHER mounted workspace roots, resolved and de-duplicated."""
+    here = Path(root)
+    try:
+        here = here.resolve()
+    except OSError:
+        pass
+    out: list = []
+    for m in mounts or []:
+        if not isinstance(m, dict):
+            continue
+        raw = str(m.get("path") or "")
+        if not raw:
+            continue
+        p = Path(raw)
+        try:
+            p = p.resolve()
+        except OSError:
+            continue
+        if p == here or p in out or not p.is_dir():
+            continue
+        out.append(p)
+    return out
+
+
+def classify_links(root, names, *, mounts=None) -> tuple[list[str], list[str], list[str]]:
+    """``(resolved, missing, documents)`` for the ``[[wikilinks]]`` a page carries.
+
+    ``missing`` is the only one that asks anybody for anything: names with no page in any mounted
+    workspace, RETURNED and never auto-created — a page minted from a name with no facts behind it
+    is the invention decision 24.5 forbids, and the kg-links rule already says a wikilink with no
+    page renders as an inert "not found" chip. The caller upserts them with their own source; the
+    tool result says so in words.
+
+    ``documents`` never reaches it. A document link is a reference the turn made on purpose, not a
+    name it forgot to page, and it is reported separately rather than dropped silently so that a
+    broken one stays findable.
+
+    EVERY MOUNTED WORKSPACE ANSWERS, not only this one — proposing a page for a name the reader can
+    already open elsewhere is how one subject ends up with two pages on two desks."""
+    roots = [Path(root)] + _mount_roots(root, mounts)
+    pages: set = set()
+    for r in roots:
+        try:
+            pages |= known_slugs(r) | workspace_docs(r)
+        except OSError:
+            continue
+    resolved, missing, documents = [], [], []
     for n in names:
         slug = slugify(n)
-        hit = any((base / k / f"{slug}.md").exists() for k in KINDS) if slug else False
-        (resolved if hit else unresolved).append(n)
-    return resolved, unresolved
+        if is_document_ref(n):
+            documents.append(n)
+            if slug and slug in pages:
+                resolved.append(n)
+            continue
+        (resolved if slug and slug in pages else missing).append(n)
+    return resolved, missing, documents
+
+
+def resolve_links(root, names, *, mounts=None) -> tuple[list[str], list[str]]:
+    """``(resolved, unresolved)`` — the two halves ``classify_links`` was split out of, for a caller
+    that asks only whether a link points at a page yet."""
+    resolved, missing, _documents = classify_links(root, names, mounts=mounts)
+    return resolved, missing
 
 
 def _today(today: str | None) -> str:
@@ -932,7 +1047,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         cursor += n
     open_questions = rewritten_flat[cursor:cursor + len(open_questions)]
 
-    resolved, unresolved = resolve_links(root, linked)
+    resolved, unresolved, documents = classify_links(root, linked, mounts=mounts)
     if rewritten_all:
         crossed = {title for title, _ref in rewritten_all}
         resolved += [n for n in unresolved if n in crossed]
@@ -1031,7 +1146,8 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     if existed and not written and not new_stamps and not migrated and not back_plans:
         return {"path": rel, "created": False, "changed": False, "facts_written": 0,
                 "already_recorded": len(facts), "links_resolved": resolved,
-                "links_missing": unresolved, "links_rewritten": rewritten_all,
+                "links_missing": unresolved, "links_docs": documents,
+                "links_rewritten": rewritten_all,
                 "kind": kind, "name": name, "dates": {}, "back_links": [],
                 "migrated": False, "filed": {}}
 
@@ -1043,6 +1159,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     return {"path": rel, "created": not existed, "changed": True, "facts_written": written,
             "already_recorded": max(0, len(facts) - sum(filed.values())),
             "links_resolved": resolved, "links_missing": unresolved,
+            "links_docs": documents,
             "links_rewritten": rewritten_all, "kind": kind, "name": name, "date": day,
             "dates": new_stamps, "back_links": back_links, "migrated": bool(migrated),
             "filed": filed, "sections": list(CARD_SECTIONS.get(kind, ()))}
@@ -1115,6 +1232,22 @@ _LEADING_VERB = {
     "which", "who", "why", "will", "work", "would", "write", "your",
 }
 
+# ⚠ MEASURED 2026-09-06, fr_e37676879d4c1ec7 (Vexa-ai/vexa#1620). The write-back phase after a turn
+# that wrote `policy/visibility.md` — three multiple-choice options — asked for a page called
+# "Any Vexa": the head of the option line *"Any Vexa meeting on the org"*. An option is a PHRASE,
+# and "Any" is capitalised because the line starts there, not because it names anything. The part
+# that IS a name, "Vexa", already had pages.
+#
+# Determiners and quantifiers only, and only ones that never open a name: "New" (New York Times),
+# "First" and "Last" (First Republic Bank) and "One" (One Medical) all do, so none of them is here.
+_LEADING_DETERMINER = {
+    "all", "another", "any", "both", "each", "either", "every", "few", "many", "most", "much",
+    "neither", "none", "several", "some", "such",
+}
+
+# The one set the extractor tests — a first word that cannot start a name, whichever way it fails.
+_LEADING_NOT_A_NAME = _LEADING_VERB | _LEADING_DETERMINER
+
 
 def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
     """Proper names in a piece of prose, in order of appearance, de-duplicated.
@@ -1126,7 +1259,8 @@ def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
     ``mask_linked`` drops names that are already a ``[[wikilink]]`` or a markdown link. TRUE for the
     measure (a linked name is not a failure). FALSE for the phase's pre-pass, because a ``[[Name]]``
     whose page does not exist renders as an inert "not found" chip — the index, not the brackets,
-    decides whether a page is there."""
+    decides whether a page is there. A link to a DOCUMENT is masked in either mode: it is a
+    reference, not a name (``is_document_ref``)."""
     if not text:
         return []
     fm = _FRONTMATTER.match(text)
@@ -1141,13 +1275,17 @@ def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
         body = _WIKILINK.sub(" ", body)
         body = _MD_LINK.sub(" ", body)
     else:
-        body = _WIKILINK.sub(r" \1 ", body)
+        # A DOCUMENT LINK IS MASKED HERE TOO (Vexa-ai/vexa#1620). Unwrapping `[[structure]]` drops a
+        # FILENAME into the text as though somebody had said a name; only a target spelled the way a
+        # name is spelled is unwrapped for the pre-pass to read.
+        body = _WIKILINK.sub(lambda m: " " if is_document_ref(m.group(1)) else " " + m.group(1) + " ",
+                             body)
     out: list[str] = []
     for m in _BARE_NAME.finditer(body):
         n = _POSSESSIVE.sub("", " ".join(m.group(0).split())).strip()
         if not n or n in _NOT_A_NAME or n in out:
             continue
-        if n.split()[0].lower() in _LEADING_VERB:
+        if n.split()[0].lower() in _LEADING_NOT_A_NAME:
             continue
         out.append(n)
     return out
@@ -1166,6 +1304,90 @@ def known_slugs(root) -> set:
     return out
 
 
+def known_names(root) -> set:
+    """Every key a page in this workspace already answers to: the entity slugs ``known_slugs`` reads
+    off the filenames, plus the slug of each page's ``title`` and of each of its ``aliases``, plus
+    the document pages.
+
+    A FILENAME IS ONE SPELLING OF A PAGE, NOT THE ONLY ONE. A page whose title was changed, or one
+    carrying an alias, is a page this desk holds under a name its filename does not say — and the
+    question being asked is whether the desk already answers to a name, not whether one file is
+    called it. Reading the pages costs one small read each, on the same tree ``index_rows`` already
+    walks; the alternative costs a duplicate page nobody merges."""
+    out = set(known_slugs(root))
+    base = Path(root) / ENTITIES_DIR
+    for kind in KINDS:
+        d = base / kind
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.md")):
+            if f.name == "index.md":
+                continue
+            try:
+                fm, _body = split_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            for value in [_fm_get(fm, "title")] + _list_field(_fm_get(fm, "aliases")):
+                if value:
+                    out.add(slugify(value))
+    out |= workspace_docs(root)
+    out.discard("")
+    return out
+
+
+def _tokens(slug: str) -> list:
+    return [t for t in str(slug or "").split("-") if t]
+
+
+def _contains_aligned(big: str, small: str) -> bool:
+    """Is ``small`` inside ``big``, meeting one of its edges at a token boundary?
+
+    "nb-governing-board" sits inside "oenb-governing-board": the dropped "Oe" cuts the first token
+    mid-word, so a token test cannot see it and a prefix test cannot either — but the two slugs END
+    together. Requiring ONE aligned edge is what separates that from "ana-lee" inside "diana-leeds",
+    where the overlap meets no boundary at either end and the two names are simply different
+    people."""
+    i = big.find(small)
+    while i != -1:
+        if i == 0 or big[i - 1] == "-" or i + len(small) == len(big) or big[i + len(small)] == "-":
+            return True
+        i = big.find(small, i + 1)
+    return False
+
+
+def _shadows(slug: str, known: str) -> bool:
+    """Does a page keyed ``known`` already cover the name whose slug is ``slug``?
+
+    ⚠ MEASURED 2026-09-06, fr_e805ab2ab6675bff (Vexa-ai/vexa#1620): the phase offered
+    "NB Governing Board" while `kg/entities/project/oenb-governing-board.md` sat on the desk. The
+    "Oe" was dropped somewhere upstream, and every test this function had — exact slug, then a
+    prefix — compares from the LEFT, which is precisely the end that was damaged.
+
+    Three ways, in the order they cost anything: the same slug; one slug contained in the other with
+    an aligned edge — a truncation ("zenith-si" in "zenith-sig", F204) or a dropped prefix
+    ("nb-governing-board" in "oenb-governing-board"); and one slug's TOKENS a subset of the other's,
+    which catches the same near-duplicate when the words are reordered.
+
+    BOTH CONTAINMENT TESTS NEED TWO TOKENS ON THE CONTAINED SIDE. Without that floor a one-word page
+    — "Board" — would shadow every name ending in it. The trade this makes is the one
+    ``_drop_prefixes`` already states: a page not written this turn, written the next time the name
+    appears on its own, against a permanent near-duplicate that nothing merges and nobody links."""
+    if not slug or not known:
+        return False
+    if slug == known:
+        return True
+    a, b = _tokens(slug), _tokens(known)
+    if len(a) >= 2 and _contains_aligned(known, slug):
+        return True
+    if len(b) >= 2 and _contains_aligned(slug, known):
+        return True
+    if len(a) >= 2 and set(a) <= set(b):
+        return True
+    if len(b) >= 2 and set(b) <= set(a):
+        return True
+    return False
+
+
 def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
     """The names these texts touched that no mounted desk has a page for, in order, capped.
 
@@ -1173,27 +1395,25 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
     The cap is here rather than in the prompt because the list IS the budget — a phase handed forty
     names either ignores the cap or runs for four minutes. Eight matches the phase's tool-call cap:
     a list longer than the budget can finish is a plan that gets cut off every single time, and the
-    names at the end of it are never the ones anybody chose to drop."""
+    names at the end of it are never the ones anybody chose to drop.
+
+    NEVER A NAME THE DESK ALREADY ANSWERS TO. The subtraction is ``_shadows`` against
+    ``known_names`` — slugs, titles, aliases and document pages, near-duplicates included — because
+    a proposal is a page about to be written, and the page it duplicates is the one nobody finds
+    afterwards."""
     known: set = set()
     for r in roots:
         try:
-            known |= known_slugs(r)
+            known |= known_names(r)
         except OSError:
             continue
     seen: list[str] = []
     for t in texts:
         for n in candidate_names(t, mask_linked=False):
             slug = slugify(n)
-            if not slug or slug in known or n in seen:
+            if not slug or n in seen:
                 continue
-            # F204: "Zenith SI" is not a name nobody wrote a page for — it is a fragment of
-            # "Zenith SIG", which already has one (kg/entities/project/zenith-sig.md, slug
-            # "zenith-sig"). An exact-slug miss above does not catch this: the fragment's slug
-            # differs from the real one by construction. A plain prefix test does — same trade as
-            # `_drop_prefixes` below (truncation cuts mid-word, so a word-boundary test would miss
-            # it too), extended from "against the rest of this batch" to "against every page this
-            # desk already has".
-            if any(k.startswith(slug) for k in known):
+            if any(_shadows(slug, k) for k in known):
                 continue
             seen.append(n)
     return _drop_prefixes(seen)[:limit]
