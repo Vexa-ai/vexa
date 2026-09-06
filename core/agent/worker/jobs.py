@@ -35,6 +35,10 @@ log = logging.getLogger("agent_api.worker")
 _VERBS: dict[str, tuple[str, str]] = {
     "create": ("Writing", "written"),
     "extend": ("Extending", "extended"),
+    # The same press, on a passage of a transcript (Vexa-ai/vexa#1596). Its target reads
+    # `meeting 41 · “…”`, so the lines come out "Extending meeting 41 · “…” — I'll say when it's
+    # there." and "meeting 41 · “…” — extended."
+    "extend_transcript": ("Extending", "extended"),
 }
 _DEFAULT_VERBS = ("Working on", "done")
 

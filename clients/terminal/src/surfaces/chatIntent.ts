@@ -17,9 +17,9 @@
  *  confidently working on a thing that was never in front of anybody.
  *
  *  TWO FAMILIES, ONE DOOR. Page intents (`extend` · `create`) name a FILE; meeting intents
- *  (`explore` · `highlight`) name a MEETING. They are a union rather than one wide optional-
- *  everything record so that "an explore with no term" cannot type-check — the shape is the
- *  validation, and the runtime check below only has to enforce what a type cannot.
+ *  (`explore` · `highlight` · `extend_transcript`) name a MEETING. They are a union rather than one
+ *  wide optional-everything record so that "an explore with no term" cannot type-check — the shape
+ *  is the validation, and the runtime check below only has to enforce what a type cannot.
  */
 
 /** The most selected text an intent carries. Past this the selection is no longer a quotation, and
@@ -35,7 +35,7 @@ export const TERM_MAX = 120;
  *  bound is stated on the wire rather than left to whatever the input happened to accept. */
 export const INSTRUCTION_MAX = 400;
 
-export type ChatIntentKind = "extend" | "create" | "explore" | "highlight";
+export type ChatIntentKind = "extend" | "create" | "explore" | "highlight" | "extend_transcript";
 
 /** An act on a FILE (decision 32). Split into one interface per kind — rather than one carrying
  *  `kind: "extend" | "create"` — so the union is DISCRIMINATED all the way down and `IntentOf<K>`
@@ -89,7 +89,36 @@ export interface HighlightIntent {
   since?: string;
 }
 
-export type ChatIntent = ExtendIntent | CreateIntent | ExploreIntent | HighlightIntent;
+/** EXTEND ON A PASSAGE OF A TRANSCRIPT (Vexa-ai/vexa#1596). Founder, 2026-09-06, in a live meeting
+ *  with the canvas open: *"we also want extend on transcript when i can select some text and push
+ *  the button"*.
+ *
+ *  A MEETING INTENT, AND THAT IS THE WHOLE DIFFERENCE. Extend on a page names the file it will edit;
+ *  a passage of a transcript has no file behind it, so this names WHERE IN THE ROOM the words were
+ *  said instead — and what the act writes are pages elsewhere, never the transcript, which stays a
+ *  record of what was heard (the annotation layer of #1595 exists for the same reason).
+ *
+ *  Modelled on `ExploreIntent` and not on `PageIntentFields`: same family, same id vocabulary, and
+ *  `isPageIntent` stays false — so no landing navigates the panel to a path nobody can predict. */
+export interface ExtendTranscriptIntent {
+  kind: "extend_transcript";
+  /** the meeting ROW id the transcript belongs to — the id Highlight and a chip already send */
+  meeting: string;
+  /** the highlighted passage, trimmed and capped. Never absent: with nothing selected there is
+   *  nothing to extend, and "the whole transcript" is not a selection. */
+  selection: string;
+  /** the segment the passage STARTS in, when it could be established exactly
+   *  (`canvas/segmentSelection.ts` — the transcript's `sourceRange`). Provenance, never a join key. */
+  segment?: string;
+  /** who was speaking there, and when they said it (ISO 8601, UTC). Both are omitted rather than
+   *  approximated when the passage cannot be located in exactly one segment. */
+  speaker?: string;
+  at?: string;
+  /** the person's own line (#1593) — the same field, the same words, on the same control */
+  instruction?: string;
+}
+
+export type ChatIntent = ExtendIntent | CreateIntent | ExploreIntent | HighlightIntent | ExtendTranscriptIntent;
 
 /** The intents the person must NOT see as a bubble in their conversation. Mirrors
  *  `chat_intents.SILENT_KINDS` server-side — the founder's correction on Highlight is that it is
@@ -111,10 +140,23 @@ export type RawIntent = {
   meeting?: string | null;
   segment?: string | null;
   since?: string | null;
+  speaker?: string | null;
+  at?: string | null;
 };
 
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
 const str = (v: unknown): string => String(v ?? "").trim();
+
+/** ONE LINE, ALWAYS. A field one line high can still be PASTED into, and a newline reaching the act
+ *  text would break the attributed block open — the person's words have to stay recognisably theirs
+ *  and finite. Flattened, trimmed, capped; empty is ABSENT, never `""`.
+ *
+ *  One definition because BOTH families carry the line: a page act (#1593) and an act on a
+ *  transcript passage (#1596) attribute the same words in the same way. */
+const instructionOf = (raw: RawIntent): string | undefined => {
+  const line = str(raw.instruction).replace(/\s+/g, " ").trim();
+  return line ? line.slice(0, INSTRUCTION_MAX) : undefined;
+};
 
 /** The intent a given kind produces — so a caller that writes `kind: "extend"` gets a `PageIntent`
  *  back and can read `.path` off it without a cast. The union is the validation (see the header);
@@ -144,6 +186,25 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
     return { kind, meeting, ...(since ? { since } : {}) };
   }
 
+  if (kind === "extend_transcript") {
+    // NO MEETING, OR NOTHING HIGHLIGHTED, IS NOT AN ACT. The page form of Extend can fall back to
+    // "the page as a whole"; this one cannot — a transcript's whole is the room, and an act on the
+    // room with no words in it is exactly the guess this module exists to refuse.
+    const meeting = str(raw.meeting);
+    const selRaw = str(raw.selection);
+    if (!meeting || !selRaw) return null;
+    const selection = selRaw.slice(0, SELECTION_MAX);
+    const segment = str(raw.segment);
+    const speaker = str(raw.speaker);
+    const at = str(raw.at);
+    const instruction = instructionOf(raw);
+    return {
+      kind, meeting, selection,
+      ...(segment ? { segment } : {}), ...(speaker ? { speaker } : {}), ...(at ? { at } : {}),
+      ...(instruction ? { instruction } : {}),
+    };
+  }
+
   if (kind !== "extend" && kind !== "create") return null;
 
   const path = String(raw.path ?? "").trim().replace(/^\/+/, "");
@@ -165,11 +226,8 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
       ? { start: r.start, end: r.end }
       : undefined;
 
-  // ONE LINE, ALWAYS. A field one line high can still be PASTED into, and a newline reaching the
-  // act text would break the attributed block open — the person's words have to stay recognisably
-  // theirs and finite. Flattened, trimmed, capped; empty is ABSENT, never "".
-  const insRaw = str(raw.instruction).replace(/\s+/g, " ").trim();
-  const instruction = insRaw ? insRaw.slice(0, INSTRUCTION_MAX) : undefined;
+  // ONE LINE, ALWAYS — see `instructionOf`, which both families share.
+  const instruction = instructionOf(raw);
 
   return { kind, ...(workspace ? { workspace } : {}), path, ...(selection ? { selection } : {}), ...(selection_range ? { selection_range } : {}), ...(instruction ? { instruction } : {}) };
 }

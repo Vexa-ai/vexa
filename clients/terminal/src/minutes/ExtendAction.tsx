@@ -1,9 +1,11 @@
 "use client";
-/** THE "EXTEND" CONTROLS — two triggers, one optional line, and a landing (PRD decision 32.1).
+/** THE "EXTEND" CONTROLS — the triggers, one optional line, and a landing (PRD decision 32.1).
  *
  *  The page action asks about the whole open page; the floating action asks about what the reader
- *  just highlighted. Both post into the SAME chat and both go through `postIntent`, so there is one
- *  place that decides what a press means and one place that refuses a press it cannot honour.
+ *  just highlighted — on a page here, and on a meeting transcript through `canvas/TranscriptExtend`
+ *  (Vexa-ai/vexa#1596), which wears the same `SelectionAct`. All of them post into the SAME chat and
+ *  all go through `postIntent`, so there is one place that decides what a press means and one place
+ *  that refuses a press it cannot honour.
  *
  *  THE LINE (Vexa-ai/vexa#1593). Founder, 2026-09-06, with "recorded YouTube video" selected on a
  *  page: *"extend might have an extra prompt that opens on click like 'find link on youtube i would
@@ -185,25 +187,37 @@ export function CreatePageButton(p: { workspace?: string; path: string }) {
 
 interface Hit { text: string; top: number; left: number }
 
-/** THE FLOATING ACTION — appears over a live text selection inside the rendered document, and only
- *  there.
+/** THE FLOATING ACTION — appears over a live text selection inside one container, and only there.
  *
  *  Scoped to the container on purpose: a selection in the conversation, in the rail, or in another
- *  panel is not a selection in this file, and an action that offered to extend it would name this
- *  page while quoting something else. The check is containment in the DOM, not a guess from
+ *  panel is not a selection in this document, and an action that offered to extend it would name
+ *  this page while quoting something else. The check is containment in the DOM, not a guess from
  *  coordinates.
  *
  *  ⚠ THE FIELD DESTROYS THE SELECTION IT IS ABOUT (#1593). Focusing an input collapses the
  *  document's highlight, `selectionchange` fires, and the naive component unmounts its own field
  *  mid-type. So a press CAPTURES the hit into `asking`, and while a field is open the listener
  *  stands down: the collapse it caused is not news about what the reader wanted. Same reason the
- *  button below reads `onMouseDown` rather than `onClick`, one step further along. */
-export function SelectionExtend(p: {
+ *  button below reads `onMouseDown` rather than `onClick`, one step further along.
+ *
+ *  ONE CONTROL, TWO SURFACES (Vexa-ai/vexa#1596). The founder asked for the SAME Extend on a
+ *  meeting transcript — *"we also want extend on transcript when i can select some text and push the
+ *  button"* — so the transcript wears this component (`canvas/TranscriptExtend.tsx`) rather than a
+ *  look-alike beside it. Everything above is the same problem in both places, and the half that
+ *  differs is only what the press MEANS, which is why that half is the callback: `onFire` gets the
+ *  selected text and the person's optional line, and the caller decides what act they name. */
+export function SelectionAct(p: {
   containerRef: RefObject<HTMLElement | null>;
-  workspace?: string;
-  path: string;
-  /** the file source, for locating the selection exactly — see `sourceRange` */
-  body: string | null;
+  /** the `data-doc-act` handle for the button; the field it opens carries `<act>-line` */
+  act: string;
+  /** what the button says it will do, on hover */
+  hint: string;
+  /** what the field is FOR, for a reader who cannot see the box it opened in */
+  fieldLabel: string;
+  /** whatever makes a captured selection stale — a new page, a new meeting. A line typed about one
+   *  must never fire against the thing that replaced it. */
+  slot: string;
+  onFire: (selection: string, instruction?: string) => void;
 }) {
   const [hit, setHit] = useState<Hit | null>(null);
   /** the hit a press captured — the field is open on THIS text, whatever the document's live
@@ -218,7 +232,7 @@ export function SelectionExtend(p: {
     const text = sel.toString().trim();
     if (!text) { setHit(null); return; }
     const range = sel.getRangeAt(0);
-    // BOTH ends inside this document, or it is not this document's selection.
+    // BOTH ends inside this container, or it is not this container's selection.
     if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) { setHit(null); return; }
     // jsdom has no layout, so every rect is zeroes there. That is not an error state — the action
     // still belongs on screen, it simply pins to the top-left of the document until a real browser
@@ -237,19 +251,15 @@ export function SelectionExtend(p: {
     return () => document.removeEventListener("selectionchange", read);
   }, [read]);
 
-  // A new document is a new selection context — never carry the last page's highlight, or a field
-  // opened over it, onto it.
-  useEffect(() => { setHit(null); setAsking(null); }, [p.path, p.workspace]);
+  // A new document — or a new meeting — is a new selection context: never carry the last one's
+  // highlight, or a field opened over it, onto it.
+  useEffect(() => { setHit(null); setAsking(null); }, [p.slot]);
 
   const fire = (instruction?: string) => {
     const h = asking;
     setAsking(null); setHit(null);
     if (!h) return;
-    postIntent({
-      kind: "extend", workspace: p.workspace, path: p.path,
-      selection: h.text, selection_range: sourceRange(p.body, h.text),
-      ...(instruction ? { instruction } : {}),
-    });
+    p.onFire(h.text, instruction);
   };
 
   /** the floating box, worn by the button and by the field it opens */
@@ -261,16 +271,16 @@ export function SelectionExtend(p: {
 
   if (asking) {
     return (
-      <span data-doc-act="extend-selection-line" title={LINE_HINT}
+      <span data-doc-act={`${p.act}-line`} title={LINE_HINT}
         style={{ ...floating, top: asking.top, left: asking.left, width: 260, cursor: "text" }}>
         <Icon name="spark" size={12} />
-        <ActLine onFire={fire} label="What to do with the highlighted text (optional)" />
+        <ActLine onFire={fire} label={p.fieldLabel} />
       </span>
     );
   }
   if (!hit) return null;
   return (
-    <button data-doc-act="extend-selection" title="Extend — ask this chat to go further on the highlighted text"
+    <button data-doc-act={p.act} title={p.hint}
       // mousedown, not click: a click on this button would first collapse the selection it is
       // about, and the text would be gone by the time the handler read it.
       onMouseDown={(e) => { e.preventDefault(); setAsking(hit); }}
@@ -278,5 +288,27 @@ export function SelectionExtend(p: {
       <Icon name="spark" size={12} />
       Extend
     </button>
+  );
+}
+
+/** EXTEND ON A PAGE'S SELECTION. What it adds to the control above is the one thing a page knows
+ *  and a room does not: which FILE the words are in, and where in its source they sit. */
+export function SelectionExtend(p: {
+  containerRef: RefObject<HTMLElement | null>;
+  workspace?: string;
+  path: string;
+  /** the file source, for locating the selection exactly — see `sourceRange` */
+  body: string | null;
+}) {
+  return (
+    <SelectionAct containerRef={p.containerRef} act="extend-selection"
+      hint="Extend — ask this chat to go further on the highlighted text"
+      fieldLabel="What to do with the highlighted text (optional)"
+      slot={`${p.workspace ?? ""}|${p.path}`}
+      onFire={(selection, instruction) => postIntent({
+        kind: "extend", workspace: p.workspace, path: p.path,
+        selection, selection_range: sourceRange(p.body, selection),
+        ...(instruction ? { instruction } : {}),
+      })} />
   );
 }

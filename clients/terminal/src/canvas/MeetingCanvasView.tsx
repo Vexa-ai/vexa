@@ -1,10 +1,11 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { CanvasActionsProvider } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
+import { TranscriptExtend } from "./TranscriptExtend";
 import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
 import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
@@ -24,7 +25,17 @@ function RawTranscript({ meetingId }: { meetingId?: string }) {
   // and it is the same component for a live meeting and a finished one, so chips work on both
   // without a second wiring.
   const renderText = useTermRenderer(meetingId ?? "");
-  return <LiveTranscriptEngine segments={transcript.segments} renderText={renderText} />;
+  // THE SELECTION'S OWN BOX (Vexa-ai/vexa#1596). Two jobs, both of them this element's: it is what
+  // "inside the transcript" MEANS for a selection — the rail, the chat and the banner are outside it
+  // — and it is the positioning context the floating control sits in. `position: relative` and
+  // nothing else; the engine below it renders exactly what it rendered before.
+  const box = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={box} style={{ position: "relative" }}>
+      <LiveTranscriptEngine segments={transcript.segments} renderText={renderText} />
+      {meetingId && <TranscriptExtend containerRef={box} meeting={meetingId} segments={transcript.segments} />}
+    </div>
+  );
 }
 
 function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {

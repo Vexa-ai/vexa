@@ -84,8 +84,10 @@ def read_job_mark(text: str) -> "tuple[str, str, str] | None":
 
 
 #: How each act reads to the person who pressed it. The verb is the BUTTON's, not the preset's — a
-#: label is what the reader recognises as the thing they just did.
-_ACT_VERBS = {"create": "Create", "extend": "Extend"}
+#: label is what the reader recognises as the thing they just did. `extend_transcript` is a separate
+#: KIND only because its target is a room and not a file (Vexa-ai/vexa#1596); the person pressed the
+#: same Extend and must read the same word back.
+_ACT_VERBS = {"create": "Create", "extend": "Extend", "extend_transcript": "Extend"}
 
 
 def act_label(text: str) -> "str | None":

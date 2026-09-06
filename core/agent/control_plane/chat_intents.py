@@ -24,6 +24,11 @@ INTENT_PRESETS: dict[str, str] = {
     "create": "create",        # decision 32.4 — write the page that is not there yet
     "explore": "explore",      # decision 35.3 — a chip in a transcript: find out what this is
     "highlight": "highlight",  # decision 35.2 — publish the terms worth chipping, silently
+    # Vexa-ai/vexa#1596 — the same press, on a passage of a MEETING rather than of a file. A
+    # separate kind because a transcript has no path: the preset it runs takes a meeting, a speaker
+    # and a time where the page one takes a workspace and a path, and one preset asked to serve both
+    # would have to guess which half of its own tokens are real.
+    "extend_transcript": "extend-transcript",
 }
 
 # Kinds whose turn the person must NOT see as a bubble. `highlight` is machinery end to end: the
@@ -59,7 +64,12 @@ SILENT_PREFIX = MACHINERY_MARK + " " + PHASE_MARK + " "
 # A CLOSED SET, like SILENT_KINDS above and for the same reason: whether an act may spawn a job is
 # not a flag the wire gets to set. `explore` and `highlight` stay inline — one is a chip lookup, the
 # other is machinery that publishes terms and says nothing.
-JOB_KINDS = frozenset({"create", "extend"})
+JOB_KINDS = frozenset({"create", "extend", "extend_transcript"})
+
+#: How much of a selected passage NAMES the job it started. A job's target is read by a person in
+#: one line ("Extending meeting 41 · “…” — I'll say when it's there"), so it is a label; the whole
+#: passage would be a paragraph inside a chat line, and inside the mark's 512-character room.
+TARGET_SELECTION_MAX = 60
 
 
 def is_job(intent) -> bool:
@@ -69,11 +79,32 @@ def is_job(intent) -> bool:
     return str(intent.get("kind") or "").strip().lower() in JOB_KINDS
 
 
+def _passage(selection: str) -> str:
+    """A selected passage as a job target can carry it.
+
+    ``]`` CLOSES THE MARK (`shared/marks._JOB_RE` reads `[^\\]]{0,512}`), so a passage carrying one
+    would end the mark early and spill the rest of itself into the prompt as instructions. It is
+    removed here, at the only place a person's words ever enter a mark. Whitespace is flattened for
+    the same reason a label is one line, and the result is capped."""
+    flat = " ".join(str(selection or "").replace("]", "").split())
+    return flat[:TARGET_SELECTION_MAX].strip() + ("…" if len(flat) > TARGET_SELECTION_MAX else "")
+
+
 def job_target(intent) -> str:
     """The ONE thing the job acts on — the workspace-qualified page path. The duplicate refusal keys
     on this string, so it has to name the page the same way twice: a bare path in one workspace and
     the same path in another must not collide, and the same page reached twice must."""
     d = intent if isinstance(intent, dict) else {}
+    # A TRANSCRIPT PASSAGE HAS NO PATH (Vexa-ai/vexa#1596). What the person acted on is the meeting
+    # and the words they highlighted, so those are what the job is named after — which also keeps
+    # the refusal honest: two passages of one meeting are two targets and may run at once, while
+    # pressing Extend twice on the SAME passage is the double-press the refusal exists for.
+    if str(d.get("kind") or "").strip().lower() == "extend_transcript":
+        meeting = str(d.get("meeting") or "").strip()
+        quote = _passage(d.get("selection"))
+        if meeting and quote:
+            return f"meeting {meeting} · “{quote}”"
+        return f"meeting {meeting}" if meeting else quote
     ws = str(d.get("workspace") or "").strip()
     path = str(d.get("path") or "").strip()
     return f"{ws}/{path}" if ws and path else (path or ws)
@@ -131,6 +162,12 @@ def tokens_for(intent) -> dict:
         "meeting": s("meeting"),
         "segment": s("segment"),
         "since": s("since"),
+        # WHERE IN THE ROOM a passage was said (Vexa-ai/vexa#1596) — the transcript's answer to
+        # `path`. Both are empty when the client could not establish them exactly, and an empty one
+        # renders as nothing: a preset that says "said by {{speaker}}" over an unknown speaker
+        # would be the placeholder-spoken-with-confidence failure the docstring above names.
+        "speaker": s("speaker"),
+        "at": s("at"),
     }
 
 

@@ -20,14 +20,21 @@
  *  sentence — the two say the same thing.
  */
 import { ASK_CHAT_EVENT } from "../canvas/actions";
-import { isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
+import { isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
 import { navigateView } from "./roomView";
 
 /** How much of a selection the BUBBLE shows. The intent carries up to 2000 characters; a bubble is
  *  a label, and a paragraph rendered as one is the composed-text failure wearing a quotation mark. */
 export const PREVIEW_MAX = 80;
 
-const VERB: Record<ChatIntentKind, string> = { extend: "Extend", create: "Create", explore: "Explore", highlight: "Highlight" };
+const VERB: Record<ChatIntentKind, string> = {
+  extend: "Extend", create: "Create", explore: "Explore", highlight: "Highlight",
+  // Extend on a transcript passage is EXTEND to the person who pressed it — the same word on the
+  // same control (Vexa-ai/vexa#1596). Only the kind differs, because only the server needs to know
+  // that this one names a room rather than a file. `shared/marks._ACT_VERBS` says the same thing on
+  // the server side, for the label a reload rebuilds from the record.
+  extend_transcript: "Extend",
+};
 
 /** HOW THE PERSON'S OWN LINE IS INTRODUCED to the agent (Vexa-ai/vexa#1593). One sentence, and the
  *  same one the server writes when a preset carries no `{{instruction}}` token
@@ -40,6 +47,12 @@ export const INSTRUCTION_LEAD = "They typed this on the button, in their own wor
  *  break arrives with newlines in it, and they belong in the intent, never in a one-line label. */
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 
+/** The quotation a label carries: one line, and short enough to stay a label. */
+function preview(selection: string): string {
+  const flat = oneLine(selection);
+  return flat.length > PREVIEW_MAX ? `${flat.slice(0, PREVIEW_MAX).trimEnd()}…` : flat;
+}
+
 /** THE BUBBLE. Compact by construction: a verb, the page, and — when there is one — a short
  *  quotation of what was highlighted. */
 export function compactLabel(intent: ChatIntent): string {
@@ -50,11 +63,16 @@ export function compactLabel(intent: ChatIntent): string {
   // Highlight is silent (decision 35.2) and never reaches a bubble; the label exists only so a
   // caller that logs one has something honest to log.
   if (intent.kind === "highlight") return "Highlight";
+  // A TRANSCRIPT PASSAGE HAS NO PAGE TO NAME (Vexa-ai/vexa#1596), so the label names the room and
+  // quotes the words — the same two facts, in the same order and with the same separator, that the
+  // server writes into the job mark (`chat_intents.job_target`). The bubble the person watches and
+  // the label a reload rebuilds from the record therefore read alike.
+  if (intent.kind === "extend_transcript") {
+    return `${VERB[intent.kind]}: meeting ${intent.meeting} · “${preview(intent.selection)}”`;
+  }
   const head = `${VERB[intent.kind]}: ${intent.path}`;
   if (!intent.selection) return head;
-  const flat = oneLine(intent.selection);
-  const shown = flat.length > PREVIEW_MAX ? `${flat.slice(0, PREVIEW_MAX).trimEnd()}…` : flat;
-  return `${head} — “${shown}”`;
+  return `${head} — “${preview(intent.selection)}”`;
 }
 
 /** THE PROMPT, until the server turns the intent into the `extend` preset. The whole selection,
@@ -72,13 +90,30 @@ export function fallbackText(intent: ChatIntent): string {
       `pick the terms that matter to this person in this meeting, then call it again with ` +
       `keep="<those terms>" to publish them as chips. Say nothing back — this is machinery.`;
   }
-  const head = `${VERB[intent.kind]}: ${intent.path}`;
-  const where = intent.selection ? `${head} — '${intent.selection}'` : head;
+  // The two page kinds name a FILE and the transcript one names a ROOM (Vexa-ai/vexa#1596); past
+  // that they are the same act, and the person's own line rides all three identically — so it is
+  // appended once, below, rather than in each branch.
+  const where = intent.kind === "extend_transcript" ? transcriptFallback(intent)
+    : `${VERB[intent.kind]}: ${intent.path}` + (intent.selection ? ` — '${intent.selection}'` : "");
   // THE LINE RIDES THE FALLBACK TOO. This sentence is what runs when the preset library is behind
   // the client (the header says why both travel), and a fallback that dropped the one thing the
   // person typed would be the worst of the two failures: the act still runs, on the wrong subject,
   // with nothing to say it ignored them.
   return intent.instruction ? `${where}\n\n${INSTRUCTION_LEAD}\n\n${intent.instruction}` : where;
+}
+
+/** The plain sentence for an act on a transcript passage — what runs when this deployment's preset
+ *  library has no `extend-transcript.md` yet. It says the same things that ask says: where the words
+ *  were said, that the pages are the deliverable, that the terms go back onto the transcript, and
+ *  that the transcript itself is never rewritten. */
+function transcriptFallback(intent: ExtendTranscriptIntent): string {
+  const said = [intent.speaker ? `said by ${intent.speaker}` : "", intent.at ? `at ${intent.at}` : "",
+    intent.segment ? `segment ${intent.segment}` : ""].filter(Boolean).join(", ");
+  return `Extend on what was said in meeting ${intent.meeting}${said ? ` (${said})` : ""}: ` +
+    `'${intent.selection}' — research it in the logic of this chat and this meeting, write what ` +
+    `you find as pages with their sources and link both ways, then publish the terms it named ` +
+    `onto the transcript with transcript_terms(meeting_id="${intent.meeting}", keep="<those terms>"). ` +
+    `Never rewrite the transcript. Then say ONE line about what you wrote.`;
 }
 
 /** WHERE A SELECTION SITS IN THE FILE SOURCE — or nothing.
@@ -120,7 +155,8 @@ export function postIntent(raw: RawIntent): ChatIntent | null {
   // ONLY A PAGE INTENT HAS A LANDING. `explore` writes a page whose path nobody can predict — the
   // agent picks the kind and the slug — so navigating on its commit would land the panel on a
   // guess. Its visible result is the chip going solid, which the terms layer does on the same
-  // commit event. `highlight` writes nothing at all.
+  // commit event. `highlight` writes nothing at all, and `extend_transcript` may write SEVERAL
+  // pages (Vexa-ai/vexa#1596): landing on one of them would pick a winner nobody chose.
   pending = isPageIntent(intent) ? { workspace: intent.workspace, path: intent.path } : null;
   window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
     detail: {
