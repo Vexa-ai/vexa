@@ -189,17 +189,28 @@ def build(**d) -> APIRouter:
             raw_facts = [raw_facts]
         facts = [str(f) for f in (raw_facts or []) if str(f).strip()]
 
+        global_target: Path | None = None
         if slug == system_mounts.GLOBAL_SLUG:
-            # `_global` is the company layer, admin-written and read-only to every worker. An entity
-            # write is exactly the kind of thing that would drift into it by accident.
-            raise HTTPException(status_code=403, detail="_global is the organisation tier — entities "
-                                                        "belong on a desk, not in it")
-        if slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
+            # `_global` is the company layer. It used to refuse every entity write ("entities belong
+            # on a desk, not in it"), and the walk of 2026-09-06 showed what that costs: the setup
+            # agent, told to give the company a connected graph, wrote the company's own page onto
+            # the administrator's desk, where nobody else will ever read it. The five files stay
+            # thin; the graph they link to lives HERE, written by the one identity that may write
+            # here at all — the same test the file route runs two screens up.
+            if not global_layer.is_admin(settings, str(subject)):
+                raise HTTPException(status_code=403,
+                                    detail="only an org admin may write company-tier pages into _global")
+            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
+                          Path(settings.global_system_workspace_path or "/nonexistent")]
+            global_target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            if global_target is None:
+                raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
+        elif slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
             try:
                 membership_mod.require_role(wsr.root, slug, subject, "contributor")
             except MembershipError:
                 pass  # not shared — _read_target 403s anything outside the active set
-        target = _read_target(request, slug, write=True)
+        target = global_target or _read_target(request, slug, write=True)
         try:
             # THE MOUNT SET IS HANDED IN so a `[[Name]]` whose page lives in another mounted
             # workspace is stored as `[[ws:<id>/<entity-id>]]` (PRD decision 26.3). Without it the
