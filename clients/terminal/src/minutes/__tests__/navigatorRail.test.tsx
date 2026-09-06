@@ -20,10 +20,9 @@ vi.mock("../navigatorApi", async (importOriginal) => ({
 }));
 
 const WORKSPACES: nav.NavWorkspace[] = [
-  { key: "desk", slug: undefined, name: "Dmitry's desk", kind: "desk", readable: true },
-  { key: "_global", slug: "_global", name: "Helm Bank", kind: "global", readable: true },
-  { key: "acme-kg", slug: "acme-kg", name: "Acme", kind: "group", readable: true },
-  { key: "legal-room", slug: "legal-room", name: "Legal", kind: "group", readable: false },
+  { key: "desk", slug: undefined, name: "Dmitry's desk", kind: "desk" },
+  { key: "_global", slug: "_global", name: "Helm Bank", kind: "global" },
+  { key: "acme-kg", slug: "acme-kg", name: "Acme", kind: "group" },
 ];
 const TREES: Record<string, string[]> = {
   desk: ["README.md", "drafts/brief.md", "CLAUDE.md", "flows/personal.md", ".scaffolded"],
@@ -95,21 +94,19 @@ describe("the workspaces (decisions 26–27.1)", () => {
   it("lists them in registry order, desk first", async () => {
     const container = await openRail();
     const rows = [...container.querySelectorAll("[data-nav-ws]")].map((b) => b.getAttribute("data-nav-ws"));
-    expect(rows).toEqual(["desk", "_global", "acme-kg", "legal-room"]);
+    expect(rows).toEqual(["desk", "_global", "acme-kg"]);
     expect(screen.getByText("Helm Bank")).toBeTruthy();      // `_global` under the company's name
   });
 
-  it("a workspace the reader cannot open says so and DOES NOT expand", async () => {
+  it("every row on the rail opens — no greyed row, no `not available to you` (founder, 2026-09-06)", async () => {
     const container = await openRail();
-    const row = container.querySelector('[data-nav-ws="legal-room"]') as HTMLButtonElement;
-    expect(row.getAttribute("data-nav-readable")).toBe("0");
-    expect(screen.getByText("not available to you")).toBeTruthy();
-
-    fireEvent.click(row);
-    await Promise.resolve();
-    expect(container.querySelectorAll("[data-nav-file]").length).toBe(0);
-    expect(nav.loadNavTree).not.toHaveBeenCalled();
-    expect(row.getAttribute("aria-expanded")).toBeNull();
+    expect(screen.queryByText("not available to you")).toBeNull();
+    const rows = [...container.querySelectorAll("[data-nav-ws]")] as HTMLButtonElement[];
+    expect(rows.length).toBe(WORKSPACES.length);
+    for (const row of rows) {
+      expect(row.disabled, row.textContent ?? "").toBe(false);
+      expect(row.getAttribute("aria-expanded"), row.textContent ?? "").toBe("false");
+    }
   });
 
   it("expands lazily — a tree is read when it is asked for, and once", async () => {
@@ -197,7 +194,7 @@ describe("the filter (decision 27.3)", () => {
 
     await waitFor(() => expect(container.querySelectorAll("[data-nav-group]").length).toBe(2));
     const groups = [...container.querySelectorAll("[data-nav-group]")].map((g) => g.getAttribute("data-nav-group"));
-    expect(groups).toEqual(["desk", "acme-kg"]);    // list order, and never `legal-room`
+    expect(groups).toEqual(["desk", "acme-kg"]);    // list order; `_global` has no hit
     expect(screen.getByText("drafts/brief.md")).toBeTruthy();
     expect(screen.getByText("kg/brief-2026.md")).toBeTruthy();
   });

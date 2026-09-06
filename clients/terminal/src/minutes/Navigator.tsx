@@ -15,9 +15,10 @@
  *  into state this component keeps: what is in front belongs to the chat record.
  *
  *  WHAT IS NOT LISTED: machinery and dotfiles, from the one list in `./machinery` that the panel's
- *  folder listing reads too. WHAT IS LISTED GREY: a workspace this reader cannot open — named, not
- *  hidden, and it does not expand (decision 26.3, "if a workspace is not available, it's okay — by
- *  design"). */
+ *  folder listing reads too — and any workspace this reader cannot open. Founder ruling 2026-09-06
+ *  (Vexa-ai/vexa#1585): *"no point of showing workspaces not available to you"*. There is no greyed
+ *  row here any more, so every row expands and every row wears a name; which workspaces qualify is
+ *  decided once, in `./navigatorApi`. */
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
@@ -33,12 +34,12 @@ import { surface, type as ty } from "./tokens";
  *  the one width the reader sets here; a rail with its own handle would put two grips on one edge. */
 export const NAV_W = 236;
 
-const wsRow = (readable: boolean): CSSProperties => ({
+const wsRow: CSSProperties = {
   ...ty.body, display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left",
   padding: "4px 6px", borderRadius: 6, border: "none", background: "transparent",
-  color: readable ? "var(--t1)" : "var(--t3)", cursor: readable ? "pointer" : "default",
+  color: "var(--t1)", cursor: "pointer",
   fontWeight: 600, fontSize: 12, minWidth: 0,
-});
+};
 const entry: CSSProperties = {
   display: "flex", alignItems: "center", width: "100%", textAlign: "left", background: "transparent",
   border: "none", padding: "3px 6px", borderRadius: 6, cursor: "pointer",
@@ -88,7 +89,7 @@ export function Navigator(p: {
     // "have we read this one?" is asked OUTSIDE React state on purpose: a state updater is not a
     // place to read from — it may run later, or twice — and a wrong answer here is either a
     // duplicated walk of a whole workspace or a tree that never arrives.
-    if (!ws.readable || fetched.current.has(ws.key)) return;
+    if (fetched.current.has(ws.key)) return;
     fetched.current.add(ws.key);
     const files = await loadNavTree(ws);
     setTrees((prev) => ({ ...prev, [ws.key]: files }));
@@ -101,7 +102,7 @@ export function Navigator(p: {
   // the ones nobody expanded. Typing is what pays for that walk, and it is paid once.
   useEffect(() => {
     if (!filtering || !workspaces) return;
-    for (const ws of workspaces) if (ws.readable) void ensureTree(ws);
+    for (const ws of workspaces) void ensureTree(ws);
   }, [filtering, workspaces, ensureTree]);
 
   // The close handler as a REF: the key listener is registered once, and a parent that re-renders
@@ -126,7 +127,6 @@ export function Navigator(p: {
   }, []);
 
   const toggleWs = (ws: NavWorkspace) => {
-    if (!ws.readable) return;   // greyed rows do not expand — there is nothing behind them to show
     const next = new Set(openWs);
     if (next.has(ws.key)) next.delete(ws.key); else { next.add(ws.key); void ensureTree(ws); }
     setOpenWs(next);
@@ -230,21 +230,13 @@ export function Navigator(p: {
                 const open = openWs.has(ws.key);
                 return (
                   <div key={ws.key}>
-                    <button data-nav-ws={ws.key} data-nav-readable={ws.readable ? "1" : "0"}
-                      aria-expanded={ws.readable ? open : undefined}
-                      disabled={!ws.readable}
-                      title={ws.readable ? ws.name : `${ws.name} — not available to you`}
-                      onClick={() => toggleWs(ws)} style={wsRow(ws.readable)}
-                      onMouseEnter={(e) => { if (ws.readable) hoverOn(e); }} onMouseLeave={hoverOff}>
-                      <span style={caret(open && ws.readable)} aria-hidden>{ws.readable ? "▶" : "·"}</span>
+                    <button data-nav-ws={ws.key} aria-expanded={open} title={ws.name}
+                      onClick={() => toggleWs(ws)} style={wsRow}
+                      onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+                      <span style={caret(open)} aria-hidden>▶</span>
                       <span style={{ ...nameS, paddingLeft: 2 }}>{ws.name}</span>
-                      {!ws.readable && (
-                        <span data-nav-unavailable={ws.key} style={{ ...ty.meta, flex: "none", fontSize: 10 }}>
-                          not available to you
-                        </span>
-                      )}
                     </button>
-                    {ws.readable && open && (
+                    {open && (
                       trees[ws.key]
                         ? nodes(ws, treeFrom(trees[ws.key]), 1)
                         : <div style={{ ...ty.meta, padding: "3px 6px 3px 17px" }}>…</div>

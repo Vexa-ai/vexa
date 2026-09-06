@@ -10,12 +10,22 @@ import {
   frontmatterSaysTemplate, humanPaths, isMachinery, isMachineryEntry,
 } from "../machinery";
 import {
-  MAX_HITS, NAV_OPEN_KEY, buildWorkspaces, filterByName, loadNavOpen, parseQuery,
-  referencedWorkspaceIds, saveNavOpen, treeFrom, type NavWorkspace,
+  MAX_HITS, NAV_OPEN_KEY, buildWorkspaces, filterByName, loadNavOpen, loadNavWorkspaces, parseQuery,
+  saveNavOpen, treeFrom, type NavWorkspace,
 } from "../navigatorApi";
 import { VIEW_NAVIGATE_EVENT, navigateView, pageForDocRef, viewSlotFor } from "../roomView";
 import { artifactKey, touchHistory } from "../chats";
+import * as api from "../../surfaces/workspaceApi";
 import type { ActiveMount } from "../../surfaces/workspaceApi";
+
+// The loaders are the only impure thing in this module; everything else here is a pure decision.
+vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../surfaces/workspaceApi")>()),
+  readActiveSet: vi.fn(),
+  listSharedMemberships: vi.fn(),
+  readWorkspaceById: vi.fn(),
+  readWorkspaceFile: vi.fn(),
+}));
 
 const mount = (over: Partial<ActiveMount> & { slug: string }): ActiveMount => ({
   repo: null, ref: null, role: "shared", path: `/workspaces/${over.slug}`, write: true, primary: false,
@@ -86,7 +96,7 @@ describe("which workspaces are listed, and in what order (decisions 26–27)", (
 
   it("the desk is the NO-SLUG read — every other row carries its slug", () => {
     const ws = buildWorkspaces({ active, subject: "u-7" });
-    expect(ws[0]).toMatchObject({ key: "desk", slug: undefined, readable: true });
+    expect(ws[0]).toMatchObject({ key: "desk", slug: undefined });
     expect(ws[1].slug).toBe("_global");
   });
 
@@ -101,31 +111,67 @@ describe("which workspaces are listed, and in what order (decisions 26–27)", (
   });
 
   it("a membership that is not mounted is still the reader's to open", () => {
-    const ws = buildWorkspaces({ active, subject: "u-7", memberships: [{ workspace_id: "parked-team", role: "viewer" }] });
-    expect(ws.find((w) => w.key === "parked-team")).toMatchObject({ readable: true, kind: "group" });
+    const ws = buildWorkspaces({ active, subject: "u-7", memberships: [{ workspace_id: "parked-team" }] });
+    expect(ws.find((w) => w.key === "parked-team")).toMatchObject({ kind: "group" });
   });
 
-  it("a workspace the reader is not in is LISTED, greyed — never hidden, never an error", () => {
-    const ws = buildWorkspaces({
-      active, subject: "u-7",
-      registry: [{ id: "legal-room", name: "Legal" }, { id: "acme-kg", name: "Acme" }],
-    });
-    const legal = ws.find((w) => w.key === "legal-room");
-    expect(legal).toMatchObject({ readable: false, name: "Legal" });
-    // a registry row the reader DOES have stays readable — the registry never demotes a membership
-    expect(ws.find((w) => w.key === "acme-kg")?.readable).toBe(true);
-    // and the greyed rows sit after the readable ones
-    expect(ws[ws.length - 1].key).toBe("legal-room");
+  it("a membership wears its NAME — the id is a fallback, never the label (founder, 2026-09-06)", () => {
+    const ws = buildWorkspaces({ active, subject: "u-7", memberships: [{ workspace_id: "vps5feymad", name: "Legal room" }] });
+    expect(ws.find((w) => w.key === "vps5feymad")?.name).toBe("Legal room");
+  });
+
+  it("there is no channel left that lists a workspace the reader cannot open", () => {
+    // `btdl3lds34 — not available to you` reached the rail as an id the DESK links to. The desk is
+    // not a listing, `buildWorkspaces` takes no such rows any more, and a row that is here opens.
+    const ws = buildWorkspaces({ active, subject: "u-7" });
+    expect(ws.map((w) => w.key)).toEqual(["desk", "_global", "acme-kg", "zebra-team"]);
   });
 
   it("with nothing at all there is still a desk — it is the workspace that always exists", () => {
-    expect(buildWorkspaces({})).toEqual([{ key: "desk", slug: undefined, kind: "desk", readable: true, name: "Desk" }]);
+    expect(buildWorkspaces({})).toEqual([{ key: "desk", slug: undefined, kind: "desk", name: "Desk" }]);
+  });
+});
+
+describe("the list as it is FETCHED — what never reaches the rail (founder, 2026-09-06)", () => {
+  const set = { subject: "u-7", active: [mount({ slug: "seed", role: "primary", primary: true, name: "Dmitry's desk", path: "/workspaces/u-7" })] };
+  const identity = (over: Partial<api.WorkspaceIdentity> & { id: string }): api.WorkspaceIdentity =>
+    ({ name: null, kind: "group", access: "readable", ...over });
+
+  beforeEach(() => {
+    vi.mocked(api.readActiveSet).mockReset().mockResolvedValue(set);
+    vi.mocked(api.listSharedMemberships).mockReset().mockResolvedValue([]);
+    vi.mocked(api.readWorkspaceById).mockReset();
+    vi.mocked(api.readWorkspaceFile).mockReset().mockResolvedValue("");
   });
 
-  it("reads decision 26.2's two cross-workspace link forms out of the desk", () => {
-    const desk = "See [[ws:legal-room/e-12]] and [the plan](/w/deal-room/kg/plan.md) and [[Local]].";
-    expect(referencedWorkspaceIds(desk)).toEqual(["legal-room", "deal-room"]);
-    expect(referencedWorkspaceIds(null)).toEqual([]);
+  it("a workspace that is GONE is absent — not a greyed row, not a row at all", async () => {
+    vi.mocked(api.listSharedMemberships).mockResolvedValue([
+      { workspace_id: "btdl3lds34", role: "viewer" },
+      { workspace_id: "grp-legal", role: "viewer" },
+    ]);
+    vi.mocked(api.readWorkspaceById).mockImplementation(async (id: string) =>
+      id === "grp-legal" ? identity({ id, name: "Legal room" }) : identity({ id, access: "gone" }));
+
+    const ws = await loadNavWorkspaces();
+    expect(ws.map((w) => w.name)).toEqual(["Dmitry's desk", "Legal room"]);
+    expect(ws.some((w) => w.key === "btdl3lds34")).toBe(false);
+  });
+
+  it("`not-yours` goes the same way — the rail is what you can open, not what exists", async () => {
+    vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "vps5feymad", role: "viewer" }]);
+    vi.mocked(api.readWorkspaceById).mockResolvedValue(identity({ id: "vps5feymad", name: "Someone else's", access: "not-yours" }));
+    expect((await loadNavWorkspaces()).map((w) => w.key)).toEqual(["desk"]);
+  });
+
+  it("a lookup that THROWS is unknown, not refused — the membership keeps its row", async () => {
+    vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "parked-team", role: "viewer" }]);
+    vi.mocked(api.readWorkspaceById).mockRejectedValue(new Error("network"));
+    expect((await loadNavWorkspaces()).map((w) => w.key)).toEqual(["desk", "parked-team"]);
+  });
+
+  it("the DESK is never read to find workspaces to list — that read is what put the ids on screen", async () => {
+    await loadNavWorkspaces();
+    expect(api.readWorkspaceFile).not.toHaveBeenCalled();
   });
 });
 
@@ -151,14 +197,12 @@ describe("the tree", () => {
 
 describe("the filter (decision 27.3)", () => {
   const ws: NavWorkspace[] = [
-    { key: "desk", slug: undefined, name: "Desk", kind: "desk", readable: true },
-    { key: "acme-kg", slug: "acme-kg", name: "Acme", kind: "group", readable: true },
-    { key: "legal-room", slug: "legal-room", name: "Legal", kind: "group", readable: false },
+    { key: "desk", slug: undefined, name: "Desk", kind: "desk" },
+    { key: "acme-kg", slug: "acme-kg", name: "Acme", kind: "group" },
   ];
   const trees = {
     desk: ["README.md", "kg/entities/person/brief-writer.md", "drafts/BRIEF.md", "flows/brief.md"],
     "acme-kg": ["kg/brief-2026.md", "kg/other.md"],
-    "legal-room": ["kg/secret-brief.md"],
   };
 
   it("matches names case-insensitively and groups the hits by workspace", () => {
@@ -166,10 +210,6 @@ describe("the filter (decision 27.3)", () => {
     expect(r.groups.map((g) => g.key)).toEqual(["desk", "acme-kg"]);
     expect(r.groups[0].paths).toEqual(["drafts/BRIEF.md", "kg/entities/person/brief-writer.md"]);
     expect(r.groups[1].paths).toEqual(["kg/brief-2026.md"]);
-  });
-
-  it("never reaches into a workspace the reader cannot open", () => {
-    expect(filterByName("brief", ws, trees).groups.some((g) => g.key === "legal-room")).toBe(false);
   });
 
   it("machinery stays hidden under the filter too", () => {
