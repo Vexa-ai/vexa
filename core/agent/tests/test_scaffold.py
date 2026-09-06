@@ -532,6 +532,17 @@ def test_the_setup_preset_opens_by_CONFIRMING_the_company_it_read_off_the_addres
     assert "WebSearch" in body and "WebFetch" in body    # search the domain before naming it
     # it is the FIRST move, not a paragraph in the middle
     assert body.index("## Your first message") < body.index("## What you are building")
+    # …AND IT DOES NOT STOP THERE (founder 2026-09-06, #1583: "it just stopped"). The confirmation
+    # is a sentence inside a turn that keeps going — research, draft, write — and the only thing
+    # that stops it is a fact nobody could have looked up.
+    first = body[body.index("## Your first message"):body.index("## What you are building")]
+    assert "KEEP GOING in the same turn" in first
+    assert "take it as true unless corrected" in first
+    assert "Stop only for a fact that is not public" in first
+    assert "it just stopped" in first
+    # the sentence that told it to end on a question and wait for the answer is gone
+    assert "One message, one question" not in first
+    assert "unless you correct me" in first
     # and the doctrine it was added to is untouched: thin _global, five files, the order
     assert "`_global` is THIN" in body
     assert "Five files, and the order matters" in body
