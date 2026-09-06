@@ -138,7 +138,7 @@ deployment relies on.
 ---
 
 **Images (eleven — `vexaai/v012-flows` joins the release set with this version):** `vexaai/v012-admin-api@sha256:4c702354384eafe3a933cd537a106b7c15067cfd368a5f6da1a6e675e7e03e04`, `vexaai/v012-runtime@sha256:a1f6448fbb380b9433364e8b572ec25a12aa4f274bf403f1d83a89cbf5812f2d`, `vexaai/v012-agent-worker@sha256:a1120b24765ff6b1c86c5f9ddee35b5e71fdbb9543a23b918b278373ad705022`, `vexaai/v012-agent-api@sha256:6eb37574b33aab233aabbe5907e06e106bae44a403e5df781a436da8201a928d`, `vexaai/v012-meeting-api@sha256:4e9c201f656788755458fd6f2b9fbf3bfe0722d5b17d4cebd82b874b5aee98e1`, `vexaai/v012-gateway@sha256:2e76319812f28adbb6bc328ac0a7484d3826924a9d38a9dd9599dd190fbb0f19`, `vexaai/v012-mcp@sha256:4b2dbc08023ff424f40453d61a8f4d38a72de7eba1e5aaad1e428c309f63d338`, `vexaai/v012-terminal@sha256:8293350ff70008674032de67c682091eb8b87110412d2a4a1f3c4ed10cb1b09f`, `vexaai/vexa-bot@sha256:423c487aadb81514c71c9786758a3a730acbf5495e9593930da50c7442f158c1`, `vexaai/vexa-lite@sha256:945628e54d843cf6286a823ca8e226f2b3c48eb948ad2f895e64eb867b7a0d55`, `vexaai/v012-flows@sha256:e040c0de48924e78440e9cc4e71ed986471f101f99fbe5a5bd091af7e59996fa`, published from the reviewed candidate packet
-`releases/v0.12.27/candidate-images.json` and validated by <validation run>.
+`releases/v0.12.27/candidate-images.json` and validated by [run 34059966981](https://github.com/Vexa-ai/vexa/actions/runs/34059966981).
 
 **In production:** this release is what vexa.ai runs, pinned as channel entry <channel entry> and
 re-verified against the cluster after the pin.
