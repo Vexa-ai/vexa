@@ -49,6 +49,11 @@ export type ChatStreamEvent = {
   terms?: unknown[];
   // A BACKGROUND JOB (Vexa-ai/vexa#1584). `job_id` is on every event a job produced, and on the
   // `job-started` the spawning turn emits; `kind`/`target`/`line` are the job's own three facts.
+  //
+  // `target` is shared with the `open` event below, where it is the TOKEN the agent named
+  // (`meeting:transcript`, `meeting:note`, a path). Carried for the record only: an `open` also
+  // carries `workspace`/`path`, already resolved by the tool, and those are the two fields the
+  // panel reads. The client never re-derives what the server has answered.
   job_id?: string;
   kind?: string;
   target?: string;
@@ -118,6 +123,11 @@ export type ChatStreamCallbacks = {
    *  success — a failed write says nothing. Optional so existing callers/tests need not implement
    *  it. */
   onArtifact?: (a: { workspace: string; path: string; focus: boolean; pin: boolean }) => void;
+  /** SOMEBODY ASKED TO SEE THIS (Vexa-ai/vexa#1586) — a successful `open_page`. Different from
+   *  `onArtifact` in the one way that matters: an artifact is the turn saying "I wrote this" and
+   *  must not interrupt a reader who has opened something else, while this IS what the reader
+   *  asked for, so it always comes to the front. There is no `focus` flag for the same reason. */
+  onOpen?: (o: { workspace: string; path: string; target: string }) => void;
   /** TERMS THE TURN PUBLISHED for a meeting's transcript (decision 35.2). Forwarded, never stored:
    *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
    *  `onArtifact`. Optional so existing callers/tests need not implement it. */
@@ -357,6 +367,11 @@ export async function streamChatTurn(
             cb.onCommit(ev.sha);
           } else if (ev.type === "artifact" && ev.path) {
             cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+          } else if (ev.type === "open" && ev.path) {
+            // A job may open a page too — it is the same ask, made by the same person, and the
+            // only thing the job lane changes about it is that this connection has to recognise
+            // the job as its own before it acts on it.
+            cb.onOpen?.({ workspace: ev.workspace ?? "", path: ev.path, target: ev.target ?? "" });
           }
           continue;
         }
@@ -381,6 +396,17 @@ export async function streamChatTurn(
           // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
           case "artifact":
             if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+            break;
+          // SOMEBODY ASKED TO SEE SOMETHING (Vexa-ai/vexa#1586). The founder typed "open meeting
+          // transcript"; the agent read the transcript and described it, because describing was
+          // the only move it had. `open_page` is the move, and this is the half that honours it.
+          //
+          // Emitted only on a tool that ANSWERED yes — "no transcript for this meeting" comes back
+          // to the model as a refusal and paints nothing here, so a turn can never say it opened
+          // something the panel did not show. Forwarded like every other panel event: this reader
+          // owns no state and the shell decides, because the strip belongs to the chat record.
+          case "open":
+            if (ev.path) cb.onOpen?.({ workspace: ev.workspace ?? "", path: ev.path, target: ev.target ?? "" });
             break;
           // THE TRANSCRIPT'S CHIPS (decision 35). Emitted by the harness off a successful
           // `transcript_terms` PUBLISH — the agent's second call, the one carrying `keep`. A bare

@@ -25,7 +25,7 @@ import { promptCarriesActiveContext } from "./surfaceSync";
 import type { ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
 import { endJob, jobLine, startJob, stepJob, type JobRec } from "./jobs";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -649,7 +649,16 @@ function routineCreationPrompt(commandText: string): string {
 /** `emptyExtra` — whatever the host wants in the void an empty conversation leaves between its
  *  greeting and the composer. The chat owns that layout and nothing else: it never decides what
  *  goes there (the minutes shell derives its proposal chips), so the two stay independent. */
-type ChatProps = Partial<TabProps> & { emptyExtra?: ReactNode };
+type ChatProps = Partial<TabProps> & {
+  emptyExtra?: ReactNode;
+  /** `standing` — whatever the host wants ABOVE the composer, in every state of the conversation
+   *  (Vexa-ai/vexa#1586). `emptyExtra` renders in the void an empty chat leaves and is gone the
+   *  moment there is a first turn; the founder's complaint was about a chat with 677 segments
+   *  behind it — *"did not give a button that should open it"* — so the affordance that offers
+   *  this room's transcript and note cannot be an empty-state one. Same contract as `emptyExtra`
+   *  otherwise: the chat owns the layout and nothing else. */
+  standing?: ReactNode;
+};
 
 
 /** WHICH greeting is TRUE in this room — and in every room but one, the answer is NONE.
@@ -676,7 +685,7 @@ function minutesEmptyGreeting(session: string): string {
   return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "").replace(/\*\*/g, "");
 }
 
-export function Chat({ params = {}, emptyExtra }: ChatProps) {
+export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
@@ -1015,6 +1024,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // A FILE THIS TURN WROTE. Re-emitted for the shell, which owns the chat record's tabs —
           // this surface never opens a document itself (F41).
           onArtifact: (a) => window.dispatchEvent(new CustomEvent(ARTIFACT_EVENT, { detail: a })),
+          // …AND A PAGE THE PERSON ASKED FOR (Vexa-ai/vexa#1586). Its own event, not the artifact
+          // one: an artifact defers to a reader who has opened something else, an open is that
+          // reader. Same forwarding rule — this surface opens nothing itself.
+          onOpen: (o) => window.dispatchEvent(new CustomEvent(OPEN_PAGE_EVENT, { detail: o })),
           // TERMS THIS TURN PUBLISHED for a meeting's transcript (PRD decision 35). Same seam and
           // same reason as the artifact above: the chips are part of the chat's record and the
           // transcript renders that record — this surface forwards and stores nothing.
@@ -1273,6 +1286,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
 
   const composer = (
     <>
+      {/* THE STANDING ROW. Above the composer and above the skills menu, so it is the last thing
+          between the conversation and the box you type in — and it is there whether the chat is
+          empty or a hundred turns long. */}
+      {standing}
       {slash && skills.length > 0 && (
         <div style={{ border: "1px solid var(--line2)", borderRadius: 11, background: "var(--panel)", overflow: "hidden" }}>
           {skills.map((c) => <div key={c.id} onMouseDown={() => setValue(c.skill! + " ")} style={{ display: "flex", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13 }}><code style={{ fontFamily: "var(--mono)", color: "var(--accent)", minWidth: 88 }}>{c.skill}</code><span style={{ color: "var(--t3)", fontSize: 12 }}>{c.title}</span></div>)}

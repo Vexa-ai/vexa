@@ -4170,6 +4170,152 @@ def meeting_info(meeting_url: str = "", meeting_id: str = "") -> str:
     return json.dumps(keep)
 
 
+# ── OPEN IT (Vexa-ai/vexa#1586) ──────────────────────────────────────────────────────────────────
+#
+#  The founder typed "open meeting transcript" in a meeting chat. The agent called
+#  meeting_transcript, summarised 677 segments in prose, and offered to re-verify facts. He wrote
+#  back: *"it did not open the transcript"* — *"and did not give a button that should open it."*
+#
+#  There was no verb for it. Everything that moves the person's panel today is a SIDE EFFECT of
+#  doing something else — a write opens its own file, `bot_send` opens the room's transcript — so an
+#  agent asked to SHOW something could only describe it. This is that verb, and it is the whole of
+#  what it does: nothing is written, nothing is sent, no state changes anywhere. It reports whether
+#  the thing is there, and the harness turns a yes into the panel move.
+#
+#  IT LIVES HERE, not as a harness builtin, because a builtin is unreachable from `claude-code`
+#  (its tool list is the CLI's own — `core/agent/llm/JOBS.md` says so for `spawn_job`). An MCP verb
+#  is reachable by every runner that attaches this server, so both runners get one implementation
+#  instead of two that drift.
+
+
+def _open_note_for(uid: str, row: str) -> "tuple[str, str] | None":
+    """`(slug, path)` of the meeting's own note, or None — found by LOOKING, never by spelling.
+    `slug` is "" for the person's own desk.
+
+    Two writers spell this file two ways: `transcription_watcher` writes
+    `kg/entities/meeting/<native>.md` and the flows production recipe writes
+    `kg/entities/meeting/<day>-<HHMM>-<title-slug>.md`. Re-deriving either here would make a THIRD
+    spelling, and a third spelling is exactly how the Minutes tab came to point at a file nothing
+    writes. So this asks the workspace what is actually on disk and matches the meeting against it:
+    the native id first (an exact name), then the meeting's own date, then its title's slug as the
+    tiebreak when a day holds more than one.
+
+    Nothing found is an ANSWER, not a failure — "no note for this meeting yet" is what the person
+    needs to hear, and it is true."""
+    st, m = _gw(uid, "GET", f"/meetings/{row}")
+    if st != 200 or not isinstance(m, dict):
+        return None
+    native = str(m.get("native_meeting_id") or "").strip()
+    started = str(m.get("start_time") or "")
+    day = started[:10] if len(started) >= 10 else ""
+    title = str(((m.get("data") or {}) if isinstance(m.get("data"), dict) else {}).get("title")
+                or m.get("title") or "").strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    st, tree = _http("GET", f"{AGENT_API}/api/workspace/tree", {"X-User-Id": uid})
+    files = [f for f in ((tree or {}).get("files") or []) if isinstance(f, str)] if st == 200 else []
+    notes = [f for f in files
+             if f.startswith("kg/entities/meeting/") and f.endswith(".md")
+             and not f.endswith("/index.md") and not f.endswith(".transcript.md")]
+    if native and f"kg/entities/meeting/{native}.md" in notes:
+        return ("", f"kg/entities/meeting/{native}.md")
+    same_day = [f for f in notes if day and f.rsplit("/", 1)[-1].startswith(day)]
+    if len(same_day) == 1:
+        return ("", same_day[0])
+    if slug:
+        hit = [f for f in same_day or notes if slug in f.rsplit("/", 1)[-1]]
+        if len(hit) == 1:
+            return ("", hit[0])
+    return None
+
+
+@mcp.tool()
+@_anon_guard
+def open_page(target: str, meeting: str = "") -> str:
+    """OPEN something in the person's pages panel — actually put it in front of them.
+
+    Call this whenever they ask to open, show, see, pull up or bring up a page, a note or the
+    transcript. "Open the transcript" is a CALL, not a request for a description: reading a file and
+    summarising it is not opening it, and they can tell.
+
+    `target` is one of:
+      · `meeting:transcript` — the live transcript canvas for `meeting` (never a file)
+      · `meeting:note`       — that meeting's own note, whatever it is called on disk
+      · `<path>`             — a file in their own workspace, e.g. `kg/entities/person/ada.md`
+      · `<slug>/<path>`      — a file in a shared workspace they belong to
+
+    `meeting` is required for the two `meeting:` targets — the row id or the meeting link. You
+    already have it: it is in this conversation's grounding, and meetings_list gives it.
+
+    The answer says what HAPPENED — `opened`, or why not ("no transcript for this meeting", "no such
+    page"). Say that, in one line. Do not claim you opened something this refused."""
+    uid = me()
+    t = (target or "").strip()
+    if not t:
+        return json.dumps({"opened": False, "reason": "say what to open"})
+    # The token, folded ONCE and read from a name. `gate:fact-parity` anchors this file's
+    # live-meeting-set site on a bare lowercase-membership expression, so a second one anywhere in
+    # these five thousand lines reads to that gate as a second declaration of which statuses mean
+    # live. A fragile anchor — but the fact behind it is a pending product decision, and not this
+    # change's to re-record.
+    kind = t.lower()
+
+    if kind in ("meeting:transcript", "meeting:note"):
+        ref = (meeting or "").strip()
+        if not ref:
+            return json.dumps({"opened": False, "target": t, "reason":
+                               "say which meeting: pass meeting=<row id or link>"})
+        row, err = _resolve_meeting(uid, "" if ref.isdigit() else ref, ref if ref.isdigit() else "")
+        if not row:
+            return json.dumps({"opened": False, "target": t,
+                               "reason": err or "no such meeting"})
+        if kind == "meeting:transcript":
+            st, r = _gw_http(uid, "GET", f"/transcripts/by-id/{row}")
+            if st != 200:
+                return json.dumps({"opened": False, "target": t, "reason":
+                                   "could not read this meeting — say the READ failed, never that "
+                                   "the room is quiet", "status": st})
+            if not ((r or {}).get("segments") or []):
+                # A row with no words is not a broken panel: the canvas would open on nothing and
+                # the person would read that as us losing their meeting.
+                return json.dumps({"opened": False, "target": t,
+                                   "reason": "no transcript for this meeting"})
+            # THE ROW, NEVER THE NATIVE ID — the same rule `bot_send`'s panel move follows: a
+            # personal room's native id spans every meeting ever held in it, so it names a series.
+            return json.dumps({"opened": True, "target": t, "workspace": "",
+                               "path": f"meeting:{row}", "opened_what": "the live transcript"})
+        found = _open_note_for(uid, row)
+        if not found:
+            return json.dumps({"opened": False, "target": t,
+                               "reason": "no note for this meeting yet"})
+        return json.dumps({"opened": True, "target": t, "workspace": found[0],
+                           "path": found[1], "opened_what": found[1].rsplit("/", 1)[-1]})
+
+    # A WORKSPACE PATH. The head segment is a workspace only when this person actually belongs to
+    # one by that name — otherwise `kg/entities/…` would resolve to a workspace called `kg`, which
+    # is the same rule the terminal's own token resolver states (`minutes/roomView.ts`).
+    slug, path = "", t
+    head, sep, rest = t.partition("/")
+    if sep and rest:
+        st, r = _http("GET", f"{AGENT_API}/api/workspace/shared", {"X-User-Id": uid})
+        mine = {str(w.get("workspace_id")) for w in ((r or {}).get("memberships") or [])} if st == 200 else set()
+        if head in mine or head == "_global":
+            slug, path = head, rest
+        elif head == "personal":
+            slug, path = "", rest
+    try:
+        path = _safe_ws_path(path)
+    except _BadPath as e:
+        return json.dumps({"opened": False, "target": t, "reason": str(e)})
+    q = f"?path={urllib.parse.quote(path)}" + (f"&slug={slug}" if slug else "")
+    st, _body = _http("GET", f"{AGENT_API}/api/workspace/file{q}", {"X-User-Id": uid})
+    if st != 200:
+        # Opening a page that is not there would leave them looking at "No page here yet" and
+        # believing they had been shown something.
+        return json.dumps({"opened": False, "target": t, "reason": "no such page", "status": st})
+    return json.dumps({"opened": True, "target": t, "workspace": slug, "path": path,
+                       "opened_what": path.rsplit("/", 1)[-1]})
+
+
 @mcp.tool()
 @_anon_guard
 def meeting_update(meeting_url: str = "", meeting_id: str = "", title: str = "",

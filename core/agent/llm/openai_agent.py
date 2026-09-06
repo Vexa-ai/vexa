@@ -77,8 +77,8 @@ import httpx
 from llm.errors import LLMAuthError, LLMConfigError, LLMError
 # The panel/chip/transcript vocabularies are the CLAUDE adapter's, imported rather than copied: the
 # terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
-from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
-                             _published_terms, _short, _written_artifact)
+from llm.claude_code import (_BOT_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
+                             _open_event, _published_terms, _short, _written_artifact)
 from llm.ports import harness_subprocess_env
 from llm import jobs, web_tools
 
@@ -1176,8 +1176,13 @@ def _tool_calls_of(msg: dict) -> list[dict]:
 
 
 def _panel_events(call: dict, ok: bool, out: str) -> list[dict]:
-    """The panel moves a successful call earns — the SAME three conventions ``claude_code`` applies,
-    through its own helpers: the writer's tab, decision 35's chips, decision 30.4's transcript."""
+    """The panel moves a successful call earns — the SAME four conventions ``claude_code`` applies,
+    through its own helpers: the writer's tab, decision 35's chips, decision 30.4's transcript, and
+    the one a person actually ASKED for (`open_page`, Vexa-ai/vexa#1586).
+
+    Both runners read the same result through the same function on purpose. A panel convention
+    written twice is a panel convention that is right in one runner — which is the reason these
+    helpers live in `claude_code` and are imported here rather than re-derived."""
     if not ok:
         return []                                  # success only: a failed call must move nothing
     name = call["name"]
@@ -1193,6 +1198,10 @@ def _panel_events(call: dict, ok: bool, out: str) -> list[dict]:
             events.append(ev)
     elif name in _BOT_TOOLS:
         ev = _bot_artifact(out)
+        if ev:
+            events.append(ev)
+    elif name in _OPEN_TOOLS:
+        ev = _open_event(out)
         if ev:
             events.append(ev)
     return events

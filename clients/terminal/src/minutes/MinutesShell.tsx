@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -37,11 +37,13 @@ import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { useScaffoldArrival } from "./arrival";
-import { artifactsFromTokens, artifactViewEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
+import { openChips } from "./openChips";
+import { OpenChips } from "./OpenChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface, type as ty } from "./tokens";
@@ -457,6 +459,21 @@ export function MinutesShell() {
   /** Up to three chips, recomputed from the two lists already in hand plus one marker. Pure, so
    *  the row is decided in the render that draws it — no fetch, no model call, no effect. */
   const chips = useMemo(() => proposals(meetings, allChats, scaffolded, Date.now(), email), [meetings, allChats, scaffolded, email]);
+  /** THE STANDING ROW (Vexa-ai/vexa#1586) — "Open transcript" · "Open note", in every meeting chat.
+   *
+   *  Same discipline as the proposals above and for the same reasons: pure, over the record the
+   *  panel already renders, decided in the render that draws it. It differs in exactly two ways,
+   *  and both are the founder's complaint: it does NOT go away when the conversation starts (the
+   *  chat he was in had 677 segments behind it), and it is NOT spent by a click — opening the
+   *  transcript is not an offer you take once.
+   *
+   *  IT READS `pages`, WHICH IS THE CHAT RECORD, and that is safe under the Obsidian rule (#1585)
+   *  because a room's own pages arrive PINNED — `openChat` pins them exactly so the reader's first
+   *  navigation cannot evict them from the single preview slot, and the pin persists into
+   *  `artifacts[]`. So "the room has a transcript" and "the transcript is in the strip" stay the
+   *  same statement. A page the reader has deliberately unpinned and forgotten leaves the row with
+   *  it, which is the correct reading of `×`: they said they did not want it kept. */
+  const opens = useMemo(() => openChips(sel.meetingId, pages), [sel.meetingId, pages]);
   /** Which chat has already spent its offer — see `runProposal`. Per chat, because a different
    *  conversation has not been offered anything yet. */
   const [spent, setSpent] = useState<string | null>(null);
@@ -827,6 +844,37 @@ export function MinutesShell() {
     return () => window.removeEventListener(ARTIFACT_EVENT, onArtifact);
   }, [openPage]);
 
+  // ── THE AGENT OPENS SOMETHING BECAUSE IT WAS ASKED TO (Vexa-ai/vexa#1586) ────────────────────
+  //
+  //  The founder typed "open meeting transcript". The agent read the 677 segments, summarised them
+  //  in prose and offered to re-verify facts; he answered *"it did not open the transcript"*. It
+  //  could not: every panel move it had was a side effect of writing or sending something, so asked
+  //  to SHOW a thing the only move available was to describe it.
+  //
+  //  This is the other end of `open_page`. Two lines of difference from the artifact effect above,
+  //  and both follow from who asked:
+  //    · it ALWAYS fronts. There is no `focus` flag to weigh — the event exists because a person
+  //      asked for this page, and a suggestion's manners are the wrong manners for an instruction.
+  //    · it beats `readerChoseFocus`, and then SETS it. The rule that guards a reader's attention
+  //      from the agent's writes would here guard them from the thing they just asked for; and
+  //      once this page is in front, it is what they chose, so the next quiet write still defers.
+  //
+  //  Resolution is the server's — the tool answered with a workspace and a path, including the
+  //  `meeting:<row>` form for the canvas — so this reads `pageForArtifact` and re-derives nothing.
+  //  A page the tool could not find never reaches here at all: it came back to the model as
+  //  "no transcript for this meeting" and the panel was never told to move.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ workspace?: string; path?: string }>).detail || {};
+      const pg = pageForArtifact(d);
+      if (!pg) return;
+      readerChoseFocus.current = true;
+      openPage(pg);
+    };
+    window.addEventListener(OPEN_PAGE_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_PAGE_EVENT, onOpen);
+  }, [openPage]);
+
   // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The list arrives
   // asynchronously, so this waits for it rather than firing once on mount — and is spent on the
   // first non-empty list either way, so a ref for a meeting this account cannot see never hijacks a
@@ -1081,7 +1129,8 @@ export function MinutesShell() {
             onDismiss={() => setScaffoldRefusal(null)} />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
+          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />}
+            standing={<OpenChips items={opens} onPick={(c) => { readerChoseFocus.current = true; openPage(c.page); }} />} />
         </div>
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that

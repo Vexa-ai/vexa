@@ -1,7 +1,7 @@
 {
   "contract": "mcp_tools.v1",
   "service": "agent-worker",
-  "provenance": "The MEASURED union of the MCP tools real delegated workers called or reached for by name across 45 sessions. It is deliberately not the server's whole surface: the rest is the person-agent's own (registration, identity, deeplinks, operator bot control) and a worker has no business being offered them. `workspace_write` is here despite measuring zero calls, because workers write the workspace through the volume mount ~63 times a turn \u2014 the write side looks unused only because it is reached another way, and a worker without the mount needs it on day one. `entity_upsert` and the transcript-chip tools are named rather than left to the prefix because the write-back phase is only as reliable as the tool being present without a search step.",
+  "provenance": "The MEASURED union of the MCP tools real delegated workers called or reached for by name across 45 sessions. It is deliberately not the server's whole surface: the rest is the person-agent's own (registration, identity, deeplinks, operator bot control) and a worker has no business being offered them. `workspace_write` is here despite measuring zero calls, because workers write the workspace through the volume mount ~63 times a turn \u2014 the write side looks unused only because it is reached another way, and a worker without the mount needs it on day one. `entity_upsert` and the transcript-chip tools are named rather than left to the prefix because the write-back phase is only as reliable as the tool being present without a search step. `open_page` is here on the same grounds and never measured: it is the one verb that acts on the person's SCREEN rather than on their data, and it is the move the agent did not have when the founder typed \"open meeting transcript\" (Vexa-ai/vexa#1586).",
   "why_declared_here": "This is the worker's least-privilege boundary, and until now its provenance was a measurement document in the dogfood LANE (`deploy/dogfood/rig/TOOL-USAGE.md`) \u2014 so the boundary could not be reviewed, or shipped, without a directory that merges on a different schedule. A domain's allow-list is the domain's.",
   "degrades_in_both_directions": "A tool the server does not serve is inert in an allow-set, so this list ageing behind the server costs nothing; a tool the server gains and this list lacks is still permitted by the server prefix on the first line of the allow-set.",
   "tools": [
@@ -28,6 +28,7 @@
     "mark_scaffolded",
     "workspace_write",
     "entity_upsert",
-    "transcript_terms"
+    "transcript_terms",
+    "open_page"
   ]
 }

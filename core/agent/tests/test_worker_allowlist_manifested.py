@@ -10,7 +10,7 @@ BOTH SIDES READ FROM SOURCE, never restated here: the allow-list is the shipped
 `core/agent/worker/mcp_tools.v1.json`; the served surface is the union of every domain's own
 `core/*/mcp.tools.v1.json` (the same glob `test_manifest_files.py` in the mcp package's own suite
 uses to find them) plus MCP's fourteen built-in tools, which this test does not need to name because
-none of them collide with the allow-list's own 24.
+none of them collide with the allow-list's own 25.
 
 TODAY THE UNION IS SMALLER THAN THE ALLOW-LIST, on purpose and by name — GAP below is that
 migration backlog, exactly as `scripts/domain-doors.allow.json` tracks the doors still open. `bind.py`
@@ -32,7 +32,13 @@ remain, and the note beside each says which:
     `core/agent/mcp.tools.v1.json`'s own top-level `note`);
   * genuinely no server home yet — `validate`, `mark_scaffolded`, `company_context` are explicitly
     scoped OUT of `control_plane/claims.py` ("remain the rig's for now"); `vexa_overview` reads a
-    public docs URL directly; `start_onboarding` is the rig's own onboarding/mail flow.
+    public docs URL directly; `start_onboarding` is the rig's own onboarding/mail flow; and
+    `open_page` (Vexa-ai/vexa#1586) is the rig's too, deliberately — it is the one verb that acts
+    on the person's SCREEN rather than on their data, it answers out of routes that already exist
+    (`/api/workspace/file`, the gateway's transcripts), and it is served there rather than as a
+    harness builtin because a builtin is unreachable from `claude-code`, whose tool list is the
+    CLI's own (`llm/JOBS.md` states this for `spawn_job`). One MCP verb is what makes it work on
+    both runners from one implementation.
 
 CHECKED IN BOTH DIRECTIONS, same reason domain-doors.allow.json is: GAP shrinking without this test
 changing is a name this test forgot to stop tracking, and GAP growing without this test changing is
@@ -56,6 +62,7 @@ GAP = {
     "workspace_write", "entity_upsert", "propose",                                  # agent: untyped dict body
     "validate", "mark_scaffolded", "company_context",                               # agent: no server home
     "vexa_overview", "start_onboarding",                                            # agent: no server home
+    "open_page",                                                                    # rig: the panel verb
 }
 
 

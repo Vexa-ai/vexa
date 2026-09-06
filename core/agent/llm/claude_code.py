@@ -51,6 +51,22 @@ _BOT_TOOLS = frozenset({
     "bot_send",
 })
 
+# THE ASK TO OPEN SOMETHING (Vexa-ai/vexa#1586). Every other panel move on this page is a SIDE
+# EFFECT of doing something else — a write opens its file, a send opens its transcript. This one is
+# the act itself: the founder typed "open meeting transcript", the agent read the 677 segments and
+# described them, and he answered *"it did not open the transcript"*. Asked to open something, the
+# only move it had was to describe it.
+#
+# The tool is served by the vexa MCP rather than being a harness builtin, and that is what makes it
+# work on BOTH runners from one implementation: `claude-code` drives a CLI whose tool list is the
+# CLI's own and cannot reach a Python builtin (`llm/JOBS.md` states this for `spawn_job`), while an
+# MCP verb is reachable by every runner that attaches the server. The event derivation below is
+# shared the same way `_bot_artifact` is.
+_OPEN_TOOLS = frozenset({
+    "mcp__vexa__open_page",
+    "open_page",
+})
+
 
 def _tool_result_text(content: object) -> str:
     """The tool result as one string, whichever shape the harness handed it in.
@@ -114,6 +130,36 @@ def _bot_artifact(content: object) -> "dict | None":
     return {"type": "artifact", "path": f"meeting:{row}", "pin": True, "focus": True}
 
 
+def _open_event(content: object) -> "dict | None":
+    """The `open` event a successful `open_page` result asks for, or None (Vexa-ai/vexa#1586).
+
+    The TOOL decides whether anything is there — it resolves the target against the person's own
+    workspaces and meetings and answers `opened: false` with a reason when it is not — so this reads
+    the answer rather than re-deriving it. A refusal paints nothing: the agent was told, in words,
+    and its one-line reply is that reason.
+
+    `path` carries the SAME two dialects an `artifact` event does, so the client resolves both
+    through the one function it already has (`pageForArtifact`): a workspace-relative path for a
+    document, and the literal `meeting:<row id>` for the live transcript canvas. A transcript is not
+    a file (founder ruling 2026-09-01) and this is where that stays true.
+
+    There is no `focus` flag and that is deliberate. An `artifact` is the turn saying "I wrote
+    this"; an `open` is a person having asked to see it, so it always comes to the front — including
+    over a page the reader opened moments ago, which for `artifact` is the case that must NOT
+    interrupt them."""
+    try:
+        obj = json.loads(_tool_result_text(content))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(obj, dict) or not obj.get("opened"):
+        return None
+    path = str(obj.get("path") or "").strip()
+    if not path:
+        return None
+    return {"type": "open", "target": str(obj.get("target") or ""),
+            "workspace": str(obj.get("workspace") or ""), "path": path}
+
+
 def _written_artifact(tool: str, args: dict) -> "tuple[str, str] | None":
     """`(workspace, path)` the call is about to write, or None. Read off the ARGUMENTS, at tool-use
     time, because the result carries only a summary string.
@@ -165,6 +211,10 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     pending_terms: set[str] = set()
     # callIds of in-flight `bot_send` calls — same per-stream, popped-on-result discipline.
     pending_bots: set[str] = set()
+    # callIds of in-flight `open_page` calls — same discipline again. A turn may open twice (the
+    # transcript, then the note) and a set keyed on the call id is what keeps the second answer from
+    # being matched to the first ask.
+    pending_opens: set[str] = set()
     try:
         for raw in lines:
             raw = raw.strip()
@@ -206,6 +256,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                             pending_terms.add(call_id)
                         elif tool_name in _BOT_TOOLS:
                             pending_bots.add(call_id)
+                        elif tool_name in _OPEN_TOOLS:
+                            pending_opens.add(call_id)
                         yield {
                             "type": "tool-call",
                             "tool": tool_name,
@@ -241,6 +293,15 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                         pending_bots.discard(call_id)
                         if was_bot and ok:
                             ev = _bot_artifact(block.get("content"))
+                            if ev:
+                                yield ev
+                        # SOMEBODY ASKED TO SEE SOMETHING. Success-only like the three above, and
+                        # the tool's own `opened: false` is a second refusal inside `_open_event`:
+                        # "no transcript for this meeting" is a successful CALL whose answer is no.
+                        was_open = call_id in pending_opens
+                        pending_opens.discard(call_id)
+                        if was_open and ok:
+                            ev = _open_event(block.get("content"))
                             if ev:
                                 yield ev
                         target = pending_writes.pop(call_id, None)

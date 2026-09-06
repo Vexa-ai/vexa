@@ -113,6 +113,18 @@ export const MACHINERY_NOTE = "\n\n" + MACHINERY_MARK + " This opening was compo
  *  seam, and for the same reason, as OPEN_ENTITY_EVENT. */
 export const ARTIFACT_EVENT = "vexa:terminal:artifact";
 
+/** SOMEBODY ASKED TO SEE SOMETHING — a successful `open_page` (Vexa-ai/vexa#1586).
+ *
+ *  Deliberately NOT the same event as ARTIFACT_EVENT, though both end in the same view slot. An
+ *  artifact is the TURN saying "I wrote this", which must stand down in front of a reader who has
+ *  opened something else; this is the READER'S OWN ASK coming back, so it always wins. Folding the
+ *  two would mean one flag deciding both, and the flag would be wrong for one of them.
+ *
+ *  Same seam and same reason as ARTIFACT_EVENT otherwise: the chat surface hears it on the stream
+ *  and re-emits it rather than opening anything itself, because the panel's state is part of the
+ *  chat record (PRD decision 18) and the minutes shell is that record's one writer. */
+export const OPEN_PAGE_EVENT = "vexa:terminal:open-page";
+
 /** A chat turn COMMITTED to the workspace — the moment files it wrote became real.
  *
  *  A chat declares its tabs before its documents exist (PRD decision 18: the link sets the record,
