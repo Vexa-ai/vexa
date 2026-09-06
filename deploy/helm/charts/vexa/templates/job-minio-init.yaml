@@ -62,6 +62,14 @@ spec:
               echo "Bucket {{ .Values.minio.bucket }} ensured"
               exit 0
           env:
+            # `mc` keeps its client config in $MC_CONFIG_DIR, defaulting to $HOME/.mc — and with
+            # no HOME in minio/mc that is `/.mc`. Under OpenShift's restricted-v2 SCC the pod
+            # runs as a random UID that cannot write `/`, so the very first `mc alias set` below
+            # dies with `mkdir /.mc: permission denied`. The Job then exhausts backoffLimit, the
+            # post-install hook never succeeds, and the Argo Application never converges — which
+            # blocks every later release, not just this one. /tmp is mode 1777: writable by any UID.
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
             - name: MINIO_ROOT_USER
               value: {{ .Values.minio.accessKey | quote }}
             - name: MINIO_ROOT_PASSWORD
