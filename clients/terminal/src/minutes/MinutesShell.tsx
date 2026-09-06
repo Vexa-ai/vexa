@@ -921,7 +921,12 @@ export function MinutesShell() {
       // was computed here and dropped on the floor, which is why the header could only fall back to
       // mount arithmetic and why a planted row could wear the admin flavour without a record.
       scaffold: rec.scaffold,
-      scaffoldId: sc.kind === "hand-link" ? undefined : sc.id,
+      // EVERY kind rides its id onto the first turn. The hand-link exception here was the whole
+      // defect of 2026-09-06: the claim route mints the admin-setup scaffold AS a hand-link, the id
+      // was dropped, and agent-api never prepended the facts block — so the setup agent opened
+      // with no idea whom it was talking to and reached for the mailbox address. The record has
+      // `who` and `domain` on it; the only thing that ever withheld them was this line.
+      scaffoldId: sc.id,
     });
     // AND THE OFFER IS SPENT, for the same reason a chip click spends it (`runProposal`): the first
     // move has been made. The chips render in the void an empty conversation leaves, and an
