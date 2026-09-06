@@ -221,8 +221,13 @@ export function PagesPanel(p: {
                   did not have to allow; a tab with no `×` is the mistake not being available. So in
                   a meeting chat the transcript, and the meeting's page when it has one, carry no
                   close control at all — and an ordinary pinned tab keeps its own, because a pin is
-                  the reader saying "keep this" and what the reader kept the reader may drop. */}
-              {p.onClose && !pg.permanent && p.pages.length > 1 && (
+                  the reader saying "keep this" and what the reader kept the reader may drop.
+                  NOR ON THE CHAT'S HOME. `forgetHistory` has always refused the desk entry — it is
+                  a product default, not something the reader put there — so a `×` on it was a dead
+                  control advertising a close the product does not have: the defect #1600 removed
+                  for the meeting's tabs, one tab to the left. It stands down on `!desk` exactly as
+                  the pin above does. */}
+              {p.onClose && !pg.permanent && !pg.desk && p.pages.length > 1 && (
                 <button data-tab-close aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
                   style={{ ...tabBtn(on), width: 16, marginRight: 3 }}>×</button>
               )}

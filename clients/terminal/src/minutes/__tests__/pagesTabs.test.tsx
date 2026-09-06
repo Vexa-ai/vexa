@@ -3,8 +3,9 @@
  *  The strip's arithmetic (a navigation replaces the preview, a pin promotes, a scaffold's tabs
  *  survive) is pinned where it lives, in `stripHistory.test.ts` and `scaffold.test.ts`. This file
  *  is the other half: that the panel RENDERS the model — the pin control on the tab rather than in
- *  the document header, the preview legible as a preview, no `</>`, and Extend under the content as
- *  a labelled control that still fires the same act.
+ *  the document header, the preview legible as a preview, no `</>`, Extend under the content as
+ *  a labelled control that still fires the same act — and no `×` on the home, the one tab the
+ *  model refuses to drop.
  *
  *  Each has a wrong answer that photographs well. A pin in the header looks like a pin; it just
  *  cannot say which tab it is about. Extend as the sixth 14px glyph looks like a full icon row.
@@ -80,6 +81,29 @@ describe('the pin is ON the tab (founder: "tab icon is on tab")', () => {
   it("renders no pin control at all when the shell offers no handler", () => {
     const { container } = panel({ onTogglePin: undefined });
     expect(container.querySelector("[data-tab-pin]")).toBeNull();
+  });
+});
+
+describe("the `×` is the reader's too — and the chat's home is not the reader's", () => {
+  // `forgetHistory` has always refused the desk entry (`stripHistory.test.ts`: "× drops a tab,
+  // except the home"), so a `×` on it was a control that did nothing when pressed — the defect
+  // Vexa-ai/vexa#1600 removed for the meeting's own tabs, one tab to the left of them.
+  const closes = (container: HTMLElement) =>
+    [...container.querySelectorAll("[data-tab-close]")].map((b) => b.getAttribute("aria-label"));
+
+  it("renders no close control on the desk tab, and one on every tab the reader put there", () => {
+    const { container } = panel();
+    expect(closes(container)).not.toContain("Close Desk");
+    // "nothing closes" is the over-shoot: what the reader kept the reader may drop
+    expect(closes(container)).toEqual(["Close PRINCIPLES", "Close academy-software-foundation"]);
+  });
+
+  it("an ordinary tab's `×` still closes THAT tab", () => {
+    const onClose = vi.fn();
+    const { container } = panel({ onClose });
+    fireEvent.click([...container.querySelectorAll("[data-tab-close]")]
+      .find((b) => b.getAttribute("aria-label") === "Close PRINCIPLES")!);
+    expect(onClose).toHaveBeenCalledWith(STRIP[1]);
   });
 });
 
