@@ -4,9 +4,9 @@
  "stable_tag": "v0.13.0",
  "candidate_tag": "v0.13.0-alpha.3",
  "build_source": "a549fef5e9664299e385e585f3b3cbf907888e6f",
- "validation_source": "a549fef5e9664299e385e585f3b3cbf907888e6f",
+ "validation_source": "bee6d563bf5e01d8860771a17b943ca93396e5af",
  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/34053444728",
- "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/34053444728",
+ "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/34056694611",
  "images": {
   "vexaai/v012-admin-api": {
    "class": "prod_deployed",
