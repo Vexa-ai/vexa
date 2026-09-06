@@ -61,6 +61,7 @@ from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
 from flows_steps import meeting as mt
 from flows_steps import mailtext
+from flows_steps import policies
 # NOT `from … import UI_URL`. That name is a REQUIRED-EXPLICIT door served by `common`'s PEP-562
 # `__getattr__`, so importing it resolves the door AT IMPORT — the exact thing `_door` resolves at
 # access time to avoid ("a constant binds whatever the environment said at import"). One
@@ -1633,7 +1634,16 @@ def build(reg: Registry, db) -> None:
                     float(start), datetime.timezone.utc).strftime("%-d %B")
             except Exception:  # noqa: BLE001
                 when = ""
+        # THE POLICY FILE SITS BETWEEN THE FLOW PARAM AND THE ENV (Vexa-ai/vexa#1615). `_global`
+        # is where the person this choice belongs to can read what it changes and commit an answer
+        # with their name on it; env stays under it because a deployment that set it still means it,
+        # and the baked literal stays under that because a `_global` we cannot reach must not stop a
+        # mail. Note the two answers differ: this literal drops the clause about a colleague's desk
+        # being visible to the company's agents, which is why `scripts/parity.json` carries the
+        # `visibility-sentence` fact unenforced with a founder decision still owed on it — untouched
+        # here on purpose.
         who = (ctx.flow.param("data_statement") if ctx.flow else None) or \
+            (policies.read(uid).get("data_statement") or "") or \
             os.environ.get("VEXA_FLOWS_DATA_STATEMENT") or \
             "Vexa runs on this organisation's own servers; the recording and transcript stay there."
         if to_attendee:
@@ -1715,7 +1725,13 @@ def build(reg: Registry, db) -> None:
             return False
         v = (ctx.flow.param("attendee_followup") if ctx.flow else None)
         if v is None:
-            return True                 # UNSET IS ON. Spelled out because `str(None)` is the
+            # THE ADMIN'S ANSWER, when the flow does not carry one (Vexa-ai/vexa#1615).
+            # `report_to_participants` is the same switch spelled as a rule, on the page where its
+            # price is written down: *the report is delivered to every participant*, default on,
+            # and the founder's measured adoption lever. Unreadable `_global` resolves to the
+            # default, which is the ON this branch already answered.
+            return bool(policies.read(str(ctx.refs.get("uid") or ""))
+                        .get("report_to_participants", True))
         return str(v).strip().lower() not in ("off", "none", "false", "0")   # string "none".
 
     def _room_read_max(ctx) -> int:
@@ -1740,22 +1756,55 @@ def build(reg: Registry, db) -> None:
         return n if n > 0 else 12
 
     def _attendees(ctx) -> list:
-        """Inside-domain attendees, minus the organizer. PRD §16.2: outside the domain, NEVER —
-        so an unset allow-list means the organizer's own domain, not everyone."""
+        """WHO THE FOLLOW-UP MAIL GOES TO: the attendees, minus the organizer, filtered by two
+        rules that compose (Vexa-ai/vexa#1615).
+
+        `attendee_domains` draws the line between inside and outside, and PRD §16.2 still holds:
+        outside the domain, NEVER. UNSET IS NOT "EVERYONE" — it means the organizer's own domain,
+        exactly as the inbound allow-list unset means the mailbox's own. The list now has a third
+        place to come from, ABOVE the env it used to be: `_global/POLICIES.md`, where the person
+        this choice belongs to can read what it changes.
+
+        `external_participants` is the OTHER axis, and the issue's own primitives are what say
+        which: *participant — someone who was in a meeting's room; a user or an EXTERNAL.* An
+        external is a participant with no desk here, not an address in another domain. With the
+        rule ON — the default, and what this step has always done — they are mailed like anyone
+        else, and that mail is the first thing they ever get from us, written for exactly them. With
+        it OFF, only people who already have an account are mailed: a bank can run the loop
+        internally without ever writing to somebody who has not signed in.
+
+        THE LOOKUP ONLY HAPPENS WHEN THE RULE IS OFF. `platform_user_id` asks and never creates, but
+        it is one call per address, and the default path must not pay for a question whose answer it
+        would ignore.
+
+        Only the MAIL is decided here. Whose desk the meeting reaches is `drop_to_attendees`, which
+        takes the room from the invite and not from this list — a preference about mail was once
+        silently a preference about that, and it is not again."""
         import os
         org = (ctx.refs.get("organizer") or "").lower()
+        rules = policies.read(str(ctx.refs.get("uid") or ""))
         raw = ctx.refs.get("participants") or []
         allow = (ctx.flow.param("attendee_domains") if ctx.flow else None) or \
+            list(rules.get("attendee_domains") or ()) or \
             [d for d in os.environ.get("VEXA_FLOWS_ATTENDEE_DOMAINS", "").split(",") if d] or \
             ([org.split("@")[-1]] if "@" in org else [])
         allow = {d.strip().lower().lstrip("@") for d in allow if d}
+        externals = bool(rules.get("external_participants",
+                                   policies.DEFAULTS["external_participants"]))
         out = []
         for a in raw:
             a = str(a).strip().lower()
             if "@" not in a or a == org or a in out:
                 continue
-            if a.split("@")[-1] in allow:
-                out.append(a)
+            if a.split("@")[-1] not in allow:
+                continue
+            if not externals:
+                try:
+                    if not platform_user_id(a):
+                        continue
+                except Exception:  # noqa: BLE001 — identity down is not a licence to mail wider
+                    continue
+            out.append(a)
         return out
 
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:

@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from . import policies
 from .common import ws_file
 
 # The fixed half. Not admin-editable, deliberately. The same sentence is in the MCP instructions
@@ -55,6 +56,15 @@ WORKSPACE_WORD = "desk"
 # WHO CAN SEE WHAT, in the founder's own words. It goes into the mails a person reads before they
 # have decided whether to keep anything here, because that is the only moment at which telling them
 # is a choice they still have. Not a disclaimer and not a legal line: three facts.
+#
+# ⚠ THIS CONSTANT IS NOW THE DEFAULT COMPOSITION, NOT THE SENTENCE ITSELF. What `render` fills
+# `{{visibility}}` with is DERIVED from `_global/POLICIES.md` — the three clauses come from
+# `agent_reads_desk`, the two retention rules and `data_statement`, and at the defaults they compose
+# to exactly these words. `test_policies.py` pins that equality, which is a stronger check than the
+# one it replaces: a rule change that would make this sentence untrue now changes the sentence
+# instead of leaving it standing. The literal stays here, spelled as it is, because
+# `scripts/parity.json`'s `visibility-sentence` fact anchors one of its four sites on this
+# assignment — the ledger is untouched by the derivation.
 VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you and your colleagues "
                        "keep in your workspaces is visible to the company's agents; recordings and "
                        "transcripts stay here.")
@@ -180,8 +190,13 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     if raw is None:
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
     subject, body = _split(raw)
+    # `{{visibility}}` is DERIVED from this deployment's rules, not a constant — see
+    # `policies.visibility_sentence`. Read per send for the same reason the template is: an admin
+    # who changes a rule expects the next mail to say the new thing. A `_global` that cannot be
+    # read resolves to the defaults, which compose to `VISIBILITY_SENTENCE` above.
     fill = {"company": company_name(uid), "service": SERVICE_SENTENCE,
-            "visibility": VISIBILITY_SENTENCE, "workspace": WORKSPACE_WORD,
+            "visibility": policies.visibility_sentence(policies.read(uid)),
+            "workspace": WORKSPACE_WORD,
             "mailbox": mailbox_address(), **(values or {})}
     for key, val in fill.items():
         token = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")

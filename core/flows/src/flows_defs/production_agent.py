@@ -103,6 +103,13 @@ def build(reg: Registry, db, home=None) -> None:
         else:
             uid = str(ctx.refs.get("uid") or (ctx.prior.get("ensure_user") or {}).get("uid")
                       or p.ensure_platform_user(to))
+        # THE DEPLOYMENT'S RULE BEFORE THE PERSON'S PREFERENCE (Vexa-ai/vexa#1615).
+        # `prep_and_invite_mail` in `_global/POLICIES.md` is the admin's answer for everybody; the
+        # `mail_prep` setting under it is one person's answer for themselves. Deny wins either way,
+        # and an unreadable `_global` resolves to the default, which is on.
+        if not p.policies.read(uid).get("prep_and_invite_mail",
+                                        p.policies.DEFAULTS["prep_and_invite_mail"]):
+            return Done({"skipped": "prep_and_invite_mail is off for this deployment"})
         if not p.setting(uid, "mail_prep"):
             return Done({"skipped": "mail_prep is off for this person"})
         title = ctx.refs.get("title") or "your meeting"
