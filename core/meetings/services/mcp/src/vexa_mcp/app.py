@@ -281,7 +281,8 @@ class RequestMeetingBot(BaseModel):
             "The meeting identifier.\n"
             "- Google Meet: meeting code like 'abc-defg-hij'\n"
             "- Microsoft Teams: numeric meeting ID only (10-15 digits) from teams.live.com/meet/<id>\n"
-            "- Zoom: numeric meeting ID only (10-11 digits)\n"
+            "- Zoom: ALWAYS pass meeting_url (the full join link, host included) — meeting-api needs the\n"
+            "  host to build the join; a bare numeric id is rejected (422)\n"
             "- Jitsi: ALWAYS pass meeting_url (the full room URL) — a jitsi room is deployment-scoped,\n"
             "  so a bare room name is rejected (422); the id is derived from the URL"
         ),
@@ -294,7 +295,7 @@ class RequestMeetingBot(BaseModel):
         description=(
             "Meeting passcode.\n"
             "- Teams: passcode is the value of the `?p=` parameter in your Teams meeting link.\n"
-            "- Zoom: passcode is the value of the `?pwd=` parameter (optional).\n"
+            "- Zoom: taken from the `?pwd=` parameter of meeting_url; pass meeting_url, not the id.\n"
             "- Jitsi: the room password, when the room is protected (optional)."
         ),
     )
@@ -777,6 +778,13 @@ def create_app(
             # Forward raw URL for long Teams legacy links.
             if parsed.meeting_url:
                 payload["meeting_url"] = parsed.meeting_url
+            elif parsed.platform == "zoom":
+                # A Zoom join URL carries its host (us05web.zoom.us, a hosted front door such as
+                # zoom-lfx…), so meeting-api cannot construct one from the id and REFUSES a zoom
+                # request without meeting_url (bot_spawn/router.py → 422). The parser keeps
+                # meeting_url only for long Teams links and Jitsi; for Zoom, forward the caller's
+                # URL verbatim (#1630 — prod 2026-09-06: every Zoom request from an agent 422'd).
+                payload["meeting_url"] = meeting_url
             # Forward enterprise hostname for short Teams links.
             if parsed.teams_base_host:
                 payload["teams_base_host"] = parsed.teams_base_host
