@@ -80,7 +80,7 @@ def test_a_rule_is_found_through_a_closure_not_only_in_the_step_body():
 
 def test_the_view_source_block_carries_the_real_python(generated):
     body = generated["post_meeting.md"]
-    assert "<summary>view source — <code>email_attendees</code></summary>" in body
+    assert '<ViewSource step="email_attendees">' in body
     assert "```python" in body
     assert "def email_attendees(ctx: StepCtx):" in body
 

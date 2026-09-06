@@ -35,8 +35,7 @@ The front door of the loop whose back door is email_minutes: one short note aski
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>prepare_meeting</code></summary>
+<ViewSource step="prepare_meeting">
 
 ```python
 @reg.step(needs=("agent", "meetings"))
@@ -122,4 +121,4 @@ def prepare_meeting(ctx: StepCtx):
     return Done({"message_id": mid, "meeting_ref": ref}, provider_ref=mid)
 ```
 
-</details>
+</ViewSource>

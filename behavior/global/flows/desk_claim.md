@@ -30,8 +30,7 @@ The QUESTION card: one proposed claim, waiting for a person to confirm or correc
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>await_claim</code></summary>
+<ViewSource step="await_claim">
 
 ```python
 @reg.step(needs=("agent",))
@@ -57,4 +56,4 @@ def await_claim(ctx: StepCtx):
     return Block(str(claim.get("claim") or "")[:200] or "claim proposed")
 ```
 
-</details>
+</ViewSource>

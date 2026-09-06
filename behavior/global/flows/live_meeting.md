@@ -30,8 +30,7 @@ PENDING WHILE THE CALL RUNS — the reaction that makes "a meeting is happening 
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>attend_live</code></summary>
+<ViewSource step="attend_live">
 
 ```python
 @reg.step
@@ -60,4 +59,4 @@ def attend_live(ctx: StepCtx):
     return Wait(seconds=LIVE_POLL_S)
 ```
 
-</details>
+</ViewSource>

@@ -31,8 +31,7 @@ The SETUP card: a desk exists and has never been filled in.
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>await_scaffold</code></summary>
+<ViewSource step="await_scaffold">
 
 ```python
 @reg.step(needs=("agent",))
@@ -52,4 +51,4 @@ def await_scaffold(ctx: StepCtx):
     return Block("desk not scaffolded")
 ```
 
-</details>
+</ViewSource>

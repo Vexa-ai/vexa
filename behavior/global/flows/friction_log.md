@@ -30,8 +30,7 @@ THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>record_friction</code></summary>
+<ViewSource step="record_friction">
 
 ```python
 @reg.step
@@ -50,4 +49,4 @@ def record_friction(ctx: StepCtx):
     return Done({"recorded": True})
 ```
 
-</details>
+</ViewSource>

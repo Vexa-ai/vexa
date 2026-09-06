@@ -41,8 +41,7 @@ Mail the agent's reply on the same thread; register Message-ID; record the conte
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>feedback_turn</code></summary>
+<ViewSource step="feedback_turn">
 
 ```python
 @reg.step(needs=("agent",))
@@ -87,10 +86,9 @@ def feedback_turn(ctx: StepCtx):
     return Done({"reply": reply[:6000]})
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>email_reply</code></summary>
+<ViewSource step="email_reply">
 
 ```python
 @reg.step
@@ -111,4 +109,4 @@ def email_reply(ctx: StepCtx):
     return Done({"message_id": mid}, provider_ref=mid)
 ```
 
-</details>
+</ViewSource>

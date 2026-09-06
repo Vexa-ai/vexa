@@ -91,8 +91,7 @@ EMIT meeting.completed carrying IDENTITY ONLY — the fact the post-meeting flow
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>ensure_user</code></summary>
+<ViewSource step="ensure_user">
 
 ```python
 @reg.step
@@ -126,10 +125,9 @@ def ensure_user(ctx: StepCtx):
     return Done({"uid": uid}, provider_ref=uid)
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>rsvp_accept</code></summary>
+<ViewSource step="rsvp_accept">
 
 ```python
 @reg.step
@@ -145,10 +143,9 @@ def rsvp_accept(ctx: StepCtx):
     return Done({"message_id": mid}, provider_ref=mid)
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>ack_by_email</code></summary>
+<ViewSource step="ack_by_email">
 
 ```python
 @reg.step(needs=("agent",), absent="skip")
@@ -172,10 +169,9 @@ def ack_by_email(ctx: StepCtx):
     return Done({"message_id": mid, "workspace_ready": ready}, provider_ref=mid)
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>emit_prep</code></summary>
+<ViewSource step="emit_prep">
 
 ```python
 @reg.step
@@ -193,10 +189,9 @@ def emit_prep(ctx: StepCtx):
     return Done({})
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>await_start</code></summary>
+<ViewSource step="await_start">
 
 ```python
 def await_start(ctx: StepCtx):
@@ -207,10 +202,9 @@ def await_start(ctx: StepCtx):
     return Done({})
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>dispatch_bot</code></summary>
+<ViewSource step="dispatch_bot">
 
 ```python
 def dispatch_bot(ctx: StepCtx):
@@ -248,10 +242,9 @@ def dispatch_bot(ctx: StepCtx):
                 provider_ref=str(body["id"]))
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>emit_started</code></summary>
+<ViewSource step="emit_started">
 
 ```python
 @reg.step
@@ -277,10 +270,9 @@ def emit_started(ctx: StepCtx):
     return Done({})
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>run_meeting</code></summary>
+<ViewSource step="run_meeting">
 
 ```python
 def run_meeting(ctx: StepCtx):
@@ -342,10 +334,9 @@ def run_meeting(ctx: StepCtx):
     return Wait(seconds=6)
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>emit_completed</code></summary>
+<ViewSource step="emit_completed">
 
 ```python
 @reg.step
@@ -369,4 +360,4 @@ def emit_completed(ctx: StepCtx):
     return Done({})
 ```
 
-</details>
+</ViewSource>

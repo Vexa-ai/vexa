@@ -30,8 +30,7 @@ Runs when **`friction.fixed`** happens, in 1 step. This page is written from the
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>record_friction_fixed</code></summary>
+<ViewSource step="record_friction_fixed">
 
 ```python
 @reg.step
@@ -43,4 +42,4 @@ def record_friction_fixed(ctx: StepCtx):
     return Done({"recorded": True})
 ```
 
-</details>
+</ViewSource>

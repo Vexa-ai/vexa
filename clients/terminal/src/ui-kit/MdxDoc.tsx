@@ -26,6 +26,7 @@ import {
 import { OPEN_MEETING_EVENT } from "../canvas/actions";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
+import { POLICY_KIND, PolicyRules, ViewSource, declaredKind, splitFrontmatter } from "./policyDoc";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
@@ -151,7 +152,7 @@ const htmlComponents = {
   ),
 };
 
-export const MDX_COMPONENTS = { ...htmlComponents, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef };
+export const MDX_COMPONENTS = { ...htmlComponents, ViewSource, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef };
 
 // ── security: forbid executable MDX ──────────────────────────────────────────
 // kg/ markdown is agent-written from meeting transcripts and external content, so it
@@ -186,7 +187,7 @@ function remarkForbidExecutable() {
 // 2. rewrite [[Title]] → <Wikilink title="Title" /> (after escaping, so the injected tag
 //    survives);
 // 3. rewrite a doc PATH → <DocPath path="…" /> so the file the agent names is clickable.
-const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|Tab|Wikilink|DocPath|WorkspaceRef" +
+const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|Tab|Wikilink|DocPath|WorkspaceRef|ViewSource" +
   // no single-letter html tags (b, i): `a<b then` in prose is far likelier than a raw
   // <b> tag, and an unclosed <b would abort the compile this pass exists to save
   "|a\\b|br|blockquote|code|details|div|em|h[1-6]|hr|img|kbd|li|ol|p\\b|pre|span|strong|sub|summary|sup|table|tbody|td|th|thead|tr|ul";
@@ -276,14 +277,12 @@ type CompileState =
   | { status: "ok"; Content: import("mdx/types").MDXContent }
   | { status: "fallback"; error: string };
 
-/** Strip leading YAML frontmatter — it is metadata for the agent, never body copy. */
-function stripFrontmatter(md: string): string {
-  if (!md.startsWith("---")) return md;
-  const end = md.indexOf("\n---", 3);
-  if (end === -1) return md;
-  const after = md.indexOf("\n", end + 1);
-  return after === -1 ? "" : md.slice(after + 1).replace(/^\s+/, "");
-}
+// FRONTMATTER IS STILL STRIPPED FROM THE BODY — it is metadata for the agent, never body copy —
+// but it is no longer DISCARDED: `splitFrontmatter` (./policyDoc) hands back both halves. One file
+// needs the block itself. `_global/POLICIES.md` declares `kind: policies`, and there the front
+// matter IS the content — it is what this deployment answers, and the prose under it is the
+// argument for each answer. Throwing it away would render the reasoning for a set of choices
+// without ever showing the choices.
 
 /** THE WIDGET A DOC DECLARES, resolved through the tab REGISTRY rather than imported.
  *
@@ -326,12 +325,20 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   // FRONTMATTER FIRST, THEN THE SPLIT, THEN COMMENTS. The slot marker IS an HTML comment, so
   // stripping comments before splitting would drop the widget as machinery — `stripHtmlComments`
   // therefore moved down into `MdxBody`, which sees only text segments.
-  const segments = splitTranscriptSlots(stripFrontmatter(children ?? ""));
-  if (segments.length === 1 && segments[0].kind === "text") {
+  const { attrs, body } = splitFrontmatter(children ?? "");
+  const segments = splitTranscriptSlots(body);
+  // THE ONE PAGE WHOSE FRONT MATTER IS THE POINT (Vexa-ai/vexa#1615). Recognised by what it
+  // DECLARES, never by its path: a page is not the policy page because somebody named the file
+  // right. The rules render above the prose that argues for them.
+  const rules = declaredKind(attrs) === POLICY_KIND
+    ? <PolicyRules attrs={attrs} body={body} />
+    : null;
+  if (!rules && segments.length === 1 && segments[0].kind === "text") {
     return <MdxBody style={style}>{segments[0].text}</MdxBody>;
   }
   return (
     <div style={{ color: "var(--t1)", ...style }}>
+      {rules}
       {segments.map((seg, i) => (seg.kind === "transcript"
         ? <TranscriptSlot key={`w${i}`} meeting={seg.meeting} />
         : <MdxBody key={`t${i}`}>{seg.text}</MdxBody>))}

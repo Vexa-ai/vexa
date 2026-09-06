@@ -55,6 +55,12 @@ def _collapse(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _longest_backtick_run(text: str) -> int:
+    """A docstring in the source may itself contain a fence. A three-backtick fence around it would
+    close on the wrong line and spill Python into the page as prose."""
+    return max((len(m) for m in re.findall(r"`+", text or "")), default=0)
+
+
 def _summary(doc: str) -> str:
     """The step's first paragraph, collapsed — what it is, before what it reads and writes."""
     body = (doc or "").strip()
@@ -224,14 +230,18 @@ def render(facts: dict) -> str:
     for step in facts["steps"]:
         if not step["source"]:
             continue
-        L.append("<details>")
-        L.append(f"<summary>view source — <code>{step['name']}</code></summary>")
+        # `<ViewSource>`, not a raw `<details>`: both compile, but a lowercase tag written
+        # literally in the source does not resolve through the renderer's component map, so the
+        # fold came out unstyled while the code block inside it did not. The registry is the only
+        # surface where this page's own vocabulary can be given a shape.
+        L.append(f'<ViewSource step="{step["name"]}">')
         L.append("")
-        L.append("```python")
+        fence = "`" * max(3, _longest_backtick_run(step["source"]) + 1)
+        L.append(f"{fence}python")
         L.append(step["source"])
-        L.append("```")
+        L.append(fence)
         L.append("")
-        L.append("</details>")
+        L.append("</ViewSource>")
         L.append("")
     return "\n".join(L).rstrip() + "\n"
 

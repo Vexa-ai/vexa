@@ -109,15 +109,27 @@ def test_who_can_see_what_is_WRITTEN_as_the_default_first_and_the_choice_offered
     """Founder, 2026-09-06, watching it happen: *"it offered to choose and setup policies, which is
     kind of cool … that's exactly what we need at this stage"* — so the offer stays. What the ruling
     fixes is the ORDER: the platform's stance is written into `STRUCTURE.md` as the default first,
-    the choice is offered after in a few lines, and the five files never wait for the answer."""
+    the choice is offered after, and the five files never wait for the answer.
+
+    ⚠ THE OFFER IS NOW A FILE, NOT AN IMPROVISATION (Vexa-ai/vexa#1615). It used to be *"keep the
+    default, or a stricter policy by convention (say what the options are in two lines each)"* —
+    which asked an agent to invent the options, in the moment, for the one conversation that decides
+    how every agent in the company behaves. `_global/POLICIES.md` is now seeded with every rule
+    answered at its default and each one written out with its three lenses, so the offer is a WALK
+    of a file that exists rather than a menu composed on the spot."""
     body = _ask("setup-global")
     assert ("Write the platform's own stance into `STRUCTURE.md` under who can see what FIRST, as "
             "the default,") in body
-    assert "then offer the administrator the choice in one short message" in body
-    assert "(say what the options are in two lines each, not a lecture)" in body
-    assert "record\nwhichever they pick in their words" in body
+    assert "then WALK `POLICIES.md` with them" in body
+    assert "do not invent a rule that is\nnot on it" in body
+    assert "edit that key in the front matter of" in body
+    assert "`profile: bank`" in body and "`profile: studio`" in body
+    assert "record whichever they pick in their words" in body
     assert "The offer never blocks the files" in body
     assert "the pages must not wait for it" in body
+    assert "Never put all thirteen rules in one message" in body
+    # the file is IN FRONT OF THEM, not merely mentioned: the preset's own tabs open it
+    assert "_global/POLICIES.md" in body.split("---")[1]
     # the sentence that made the files wait on an answer is GONE
     assert "Ask the administrator whether that is what they intend" not in body
     # decision 21's own words, which this ruling refines rather than replaces, are untouched

@@ -62,8 +62,7 @@ The meeting's ARTEFACT into every desk in the room — the organiser's included.
 
 Read-only, and the same bytes the image runs. It is here because the founder asked whether we can show it: the page is the explanation, this is the appendix.
 
-<details>
-<summary>view source — <code>process_meeting</code></summary>
+<ViewSource step="process_meeting">
 
 ```python
 @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
@@ -269,10 +268,9 @@ def process_meeting(ctx: StepCtx):
     return Wait(seconds=10)
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>email_minutes</code></summary>
+<ViewSource step="email_minutes">
 
 ```python
 @reg.step(needs=("agent", "meetings"), absent={"agent": "degrade"})
@@ -365,10 +363,9 @@ def email_minutes(ctx: StepCtx):
     return Done({"message_id": mid, "link": link}, provider_ref=mid)
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>email_attendees</code></summary>
+<ViewSource step="email_attendees">
 
 ```python
 @reg.step(needs=("agent", "meetings"), absent={"agent": "degrade"})
@@ -580,10 +577,9 @@ def email_attendees(ctx: StepCtx):
                  "failed": failed})
 ```
 
-</details>
+</ViewSource>
 
-<details>
-<summary>view source — <code>drop_to_attendees</code></summary>
+<ViewSource step="drop_to_attendees">
 
 ```python
 @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
@@ -753,4 +749,4 @@ def drop_to_attendees(ctx: StepCtx):
         + " · ".join(failed), retryable=True)
 ```
 
-</details>
+</ViewSource>
