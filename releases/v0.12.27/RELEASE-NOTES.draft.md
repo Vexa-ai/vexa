@@ -137,7 +137,7 @@ deployment relies on.
 
 ---
 
-**Images:** <images>, published from the reviewed candidate packet
+**Images (eleven — `vexaai/v012-flows` joins the release set with this version):** <images>, published from the reviewed candidate packet
 `releases/v0.12.27/candidate-images.json` and validated by <validation run>.
 
 **In production:** this release is what vexa.ai runs, pinned as channel entry <channel entry> and

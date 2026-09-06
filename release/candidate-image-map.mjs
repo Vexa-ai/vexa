@@ -13,10 +13,24 @@ export const REQUIRED_IMAGES = [
   "vexaai/v012-gateway",
   "vexaai/v012-mcp",
   "vexaai/v012-terminal",
-  "vexaai/v012-flows",
   "vexaai/vexa-bot",
   "vexaai/vexa-lite",
 ];
+
+// schema_version 2 (v0.12.27+): the flows domain ships as its own image — one image, three
+// entrypoints (worker · mailbox · api) — because deploy/compose and the chart run it as three
+// services. Frozen schema-1 packets keep validating against the ten; a v0.12.27+ map must name
+// eleven. Production runs its own derivative (vexaai/vexa-flows-platform), so the OSS image is
+// oss_only.
+export const FLOWS_IMAGE = "vexaai/v012-flows";
+export const REQUIRED_IMAGES_V2 = [...REQUIRED_IMAGES, FLOWS_IMAGE];
+export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V2;
+
+export function requiredImagesFor(doc) {
+  if (!doc) return CURRENT_REQUIRED_IMAGES;
+  return doc.schema_version === 2 ? REQUIRED_IMAGES_V2 : REQUIRED_IMAGES;
+}
 
 export const PROD_DEPLOYED_IMAGES = new Set([
   "vexaai/v012-admin-api",
@@ -25,33 +39,6 @@ export const PROD_DEPLOYED_IMAGES = new Set([
   "vexaai/v012-gateway",
   "vexaai/vexa-bot",
 ]);
-
-// vexaai/v012-flows is the Minutes product's image, and it entered the release set on 2026-09-03.
-// The required set is therefore RELEASE-SCOPED rather than one global list. It has to be: the
-// packets for v0.12.23, v0.12.25 and v0.12.26 are frozen bytes whose sha256 is pinned as evidence
-// (release-validate's identity table, and this file's own tests), they carry exactly ten images,
-// and validateCandidateMap demands the set match EXACTLY. A single global list can satisfy the old
-// packets or the new chart, never both — which is why the flows tier could not be pinned into a
-// customer channel entry at all: adding flows failed "image set mismatch" and omitting it left the
-// six flows containers unpinned, so the station gate refused the chart (S8).
-export const FLOWS_IMAGE = "vexaai/v012-flows";
-export const FLOWS_REQUIRED_FROM = "v0.12.27";
-
-const versionParts = (version) => String(version).replace(/^v/, "").split(".").map(Number);
-
-export function requiredImagesFor(release) {
-  if (!release) return REQUIRED_IMAGES;
-  const actual = versionParts(release);
-  const floor = versionParts(FLOWS_REQUIRED_FROM);
-  for (let i = 0; i < 3; i += 1) {
-    if (actual[i] !== floor[i]) {
-      return actual[i] > floor[i]
-        ? REQUIRED_IMAGES
-        : REQUIRED_IMAGES.filter((image) => image !== FLOWS_IMAGE);
-    }
-  }
-  return REQUIRED_IMAGES;
-}
 
 // Every path that can enter each release image. Root-context builds include the
 // root .dockerignore because changing it changes which bytes Docker receives.
@@ -86,8 +73,6 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
   "vexaai/v012-gateway": [
     ".dockerignore",
     "core/gateway/services/gateway",
-    // the routes.v1 manifests the edge assembles its table from: a domain changing its own
-    // route list must rebuild the gateway image, or the image ships a table the code disagrees with.
     "core/meetings/routes.v1.json",
     "core/meetings/services/mcp/routes.v1.json",
     "core/identity/routes.v1.json",
@@ -99,13 +84,6 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
   "vexaai/v012-terminal": [
     "clients/terminal",
   ],
-  // Root context (the Dockerfile COPYs core/flows/* AND the top-level behavior/ tree), so the root
-  // .dockerignore shapes the bytes Docker receives and belongs in the input set like the others.
-  "vexaai/v012-flows": [
-    ".dockerignore",
-    "core/flows",
-    "behavior",
-  ],
   "vexaai/vexa-bot": [
     ".dockerignore",
     "core",
@@ -115,6 +93,11 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     "tsconfig.base.json",
     "turbo.json",
     "licenses",
+  ],
+  "vexaai/v012-flows": [
+    ".dockerignore",
+    "core/flows",
+    "behavior",
   ],
   "vexaai/vexa-lite": [
     "deploy/lite",
@@ -179,18 +162,18 @@ export const BUILD_MATRIX_BY_IMAGE = {
     context: "clients/terminal",
     dockerfile: "clients/terminal/Dockerfile",
   },
-  "vexaai/v012-flows": {
-    name: "flows",
-    repository: "v012-flows",
-    context: ".",
-    dockerfile: "core/flows/Dockerfile",
-  },
   "vexaai/vexa-lite": {
     name: "lite",
     repository: "vexa-lite",
     context: ".",
     dockerfile: "deploy/lite/Dockerfile.lite",
     free_disk: true,
+  },
+  "vexaai/v012-flows": {
+    name: "flows",
+    repository: "v012-flows",
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
   },
 };
 
@@ -208,7 +191,7 @@ const fail = (message) => {
 
 export function validateCandidateMap(doc, expectedVersion) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) fail("map must be an object");
-  if (doc.schema_version !== 1) fail("schema_version must be 1");
+  if (doc.schema_version !== 1 && doc.schema_version !== 2) fail("schema_version must be 1 or 2");
   if (!VERSION.test(doc.release)) fail(`invalid stable release: ${doc.release}`);
   if (expectedVersion && doc.release !== expectedVersion) {
     fail(`map release ${doc.release} does not match requested ${expectedVersion}`);
@@ -228,14 +211,14 @@ export function validateCandidateMap(doc, expectedVersion) {
     fail("images must be an object keyed by repository");
   }
 
-  const releaseImages = requiredImagesFor(doc.release);
+  const requiredImages = requiredImagesFor(doc);
   const actual = Object.keys(doc.images).sort();
-  const required = [...releaseImages].sort();
+  const required = [...requiredImages].sort();
   if (actual.join("\n") !== required.join("\n")) {
     fail(`image set mismatch\nactual=${actual.join(",")}\nrequired=${required.join(",")}`);
   }
 
-  for (const image of releaseImages) {
+  for (const image of requiredImages) {
     const row = doc.images[image];
     if (!row || typeof row !== "object") fail(`${image}: row missing`);
     const expectedClass = PROD_DEPLOYED_IMAGES.has(image) ? "prod_deployed" : "oss_only";
@@ -341,7 +324,7 @@ export function runtimeInputDriftForPaths(
 }
 
 export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
-  return requiredImagesFor(doc?.release).flatMap((image) => {
+  return requiredImagesFor(doc).flatMap((image) => {
     const row = doc.images[image];
     const buildSource = row.build_source || doc.build_source;
     return runtimeInputDriftForPaths(
@@ -354,7 +337,7 @@ export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
 }
 
 export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) {
-  return requiredImagesFor(doc?.release).filter((image) => {
+  return requiredImagesFor(doc).filter((image) => {
     const row = doc.images[image];
     const buildSource = row.build_source || doc.build_source;
     return runtimeInputDriftForPaths(
@@ -367,9 +350,9 @@ export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) 
 }
 
 export function candidateBuildPlanFromChangedImages(doc, changedImages) {
-  const required = requiredImagesFor(doc?.release);
+  const requiredImages = requiredImagesFor(doc);
   const changed = [...new Set(changedImages)];
-  const unknown = changed.filter((image) => !required.includes(image));
+  const unknown = changed.filter((image) => !requiredImages.includes(image));
   if (unknown.length > 0) fail(`build plan contains unknown image(s): ${unknown.join(", ")}`);
 
   const botLite = ["vexaai/vexa-bot", "vexaai/vexa-lite"];
@@ -377,8 +360,8 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     changed.length === botLite.length &&
     botLite.every((image) => changed.includes(image));
   const exactFull =
-    changed.length === required.length &&
-    required.every((image) => changed.includes(image));
+    changed.length === requiredImages.length &&
+    requiredImages.every((image) => changed.includes(image));
 
   if (!exactBotLite && !exactFull) {
     fail(
@@ -387,7 +370,7 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     );
   }
 
-  const selected = exactFull ? required : botLite;
+  const selected = exactFull ? requiredImages : botLite;
   return {
     mode: exactFull ? "full" : "bot-lite-delta",
     changed_images: selected,
@@ -406,7 +389,7 @@ export function candidateBuildPlan(doc, head = "HEAD", cwd = process.cwd()) {
   if (!doc) {
     return candidateBuildPlanFromChangedImages(
       null,
-      REQUIRED_IMAGES,
+      CURRENT_REQUIRED_IMAGES,
     );
   }
   return candidateBuildPlanFromChangedImages(
@@ -437,15 +420,12 @@ function main(argv) {
 
   if (command === "check") {
     if (!doc) usage();
-    console.log(
-      `✓ ${doc.release}: exact ${requiredImagesFor(doc.release).length}-image candidate map ` +
-      "is well formed",
-    );
+    console.log(`✓ ${doc.release}: exact ${requiredImagesFor(doc).length}-image candidate map (schema ${doc.schema_version}) is well formed`);
     return;
   }
   if (command === "emit-tsv") {
     if (!doc) usage();
-    for (const image of requiredImagesFor(doc.release)) {
+    for (const image of requiredImagesFor(doc)) {
       const row = doc.images[image];
       console.log(`${image}\t${row.digest}\t${row.candidate_tag || doc.candidate_tag}`);
     }
@@ -453,7 +433,7 @@ function main(argv) {
   }
   if (command === "emit-platform-tsv") {
     if (!doc) usage();
-    for (const image of requiredImagesFor(doc.release)) {
+    for (const image of requiredImagesFor(doc)) {
       const row = doc.images[image];
       for (const platform of row.platforms) {
         const identity = row.platform_manifests[platform];
