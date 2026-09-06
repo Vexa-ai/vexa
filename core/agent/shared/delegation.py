@@ -125,6 +125,7 @@ def mint_delegation(
     subject: str,
     regime: str = "human",
     workspaces: "str | Iterable[str]" = "*",
+    target: str = "",
     ttl_sec: int = DEFAULT_TTL_SEC,
     now: Optional[int] = None,
     jti: Optional[str] = None,
@@ -133,7 +134,13 @@ def mint_delegation(
     the human regime) or an explicit list of slugs (the isolation set). Raises ``ValueError`` on a
     missing secret/subject, an unknown regime, or the contradiction ``autonomous`` + ``"*"`` — an
     unwatched dispatch must never carry an unbounded grant, and silently narrowing it would hide a
-    dispatcher bug instead of surfacing it."""
+    dispatcher bug instead of surfacing it.
+
+    ``target`` is the chat's TARGET WORKSPACE (Vexa-ai/vexa#1611) — the slug a workspace verb with
+    no ``slug`` of its own defaults to. It is DELIBERATELY NOT PART OF ``scope``: a scope is a
+    ceiling and this is a default, and putting a default where a permission lives is how a default
+    becomes a grant. The claim is omitted entirely when there is none, so a token for a chat that
+    writes to its person's own desk is byte-identical to the one it has always been."""
     if not secret:
         raise ValueError("delegation secret is required (VEXA_MCP_DELEGATION_SECRET)")
     if not subject:
@@ -153,6 +160,8 @@ def mint_delegation(
         "exp": iat + int(ttl_sec),
         "jti": jti or secrets.token_urlsafe(12),
     }
+    if str(target or "").strip():
+        payload["target"] = str(target).strip()
     header = {"alg": "HS256", "typ": "vxdlg"}
     body = _b64u(_canon(header)) + "." + _b64u(_canon(payload))
     sig = hmac.new(_key(secret), body.encode("ascii"), hashlib.sha256).digest()

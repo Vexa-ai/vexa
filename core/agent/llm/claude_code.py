@@ -79,9 +79,17 @@ _OPEN_TOOLS = frozenset({
 #
 # A CLOSED VOCABULARY, for the reason `_WRITER_TOOLS` is one: a prefix match on "workspace" would
 # put every listing, read and purpose-edit into somebody's focus.
+#
+# …AND SO DOES THE VERB THAT MOVES THE TARGET (Vexa-ai/vexa#1611). `workspace_target` is what an
+# agent calls when the person says *"work in the OeNB workspace"*; it emits the SAME event, because
+# a `focus` says "this workspace is where this conversation is working" and that has always meant
+# both halves — it is in the chat's mount set, and it is the one writes go to. Two event kinds for
+# one sentence is how a chip and a record come to disagree.
 _FOCUS_TOOLS = frozenset({
     "mcp__vexa__workspace_new",
     "workspace_new",
+    "mcp__vexa__workspace_target",
+    "workspace_target",
 })
 
 
@@ -160,12 +168,18 @@ def _bot_artifact(content: object) -> "dict | None":
 
 
 def _workspace_focus(content: object) -> "dict | None":
-    """The `focus` event a successful `workspace_new` earns, or None (Vexa-ai/vexa#1603).
+    """The `focus` event a successful `workspace_new` or `workspace_target` earns, or None
+    (Vexa-ai/vexa#1603, Vexa-ai/vexa#1611).
 
     ONE FIELD DECIDES IT: `created`, the workspace id the create route minted, which the tool
-    returns for a create and for nothing else. No id, no event — a focus aimed at a guess would put
-    a chat permanently over a workspace that does not exist, the same failure `_bot_artifact` is
-    careful about one object along.
+    returns for a create and for nothing else — or `targeted`, the id `workspace_target` returns
+    for a workspace it confirmed this person can write. No id, no event — a focus aimed at a guess
+    would put a chat permanently over a workspace that does not exist, the same failure
+    `_bot_artifact` is careful about one object along.
+
+    TWO NAMES, ONE FIELD, deliberately: the tools answer different questions ("I made this" versus
+    "we are working here") and a result that said `created` for a target would be a lie in the
+    transcript. What they MEAN to the chat is identical, which is why one event carries both.
 
     `name` rides along because this is the only moment the workspace's HUMAN name is in hand on
     this path; the client shows names, never slugs. It is display only and an absent one costs the
@@ -181,7 +195,7 @@ def _workspace_focus(content: object) -> "dict | None":
         return None
     if not isinstance(obj, dict):
         return None
-    wid = str(obj.get("created") or "").strip()
+    wid = str(obj.get("created") or obj.get("targeted") or "").strip()
     # A slug is one path segment and never a dot-namespaced reserved one. Same shape check the
     # store itself applies; refusing here keeps a malformed answer out of a durable session record.
     if not wid or "/" in wid or wid.startswith("."):

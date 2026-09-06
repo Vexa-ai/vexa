@@ -63,6 +63,24 @@ export type Chat = {
   label: string;
   meeting?: string;           // the meeting row id this chat is about (string form of MeetingMock.id)
   workspaces: string[];       // the mount set — what a PROJECT used to own
+  /** THE ONE OF THEM WRITES GO TO (Vexa-ai/vexa#1611).
+   *
+   *  Founder, 2026-09-06, in a chat whose header chip read `personal` while the whole conversation
+   *  was about a customer's workspace, and whose files landed on his desk: *"it creates files in
+   *  the wrong workspace, we need so that the thing knew the workspace of writing, if it's
+   *  specified. We have this "personal" and we probably should be able to set a workspace that we
+   *  are targeting (other workspaces still available to read and even to write, if explicit ask
+   *  and purpose)"*.
+   *
+   *  `workspaces` is REACH; this is WHERE THE WORK LANDS, and they are different questions — a
+   *  chat reads four places and writes one. Absent means the person's own desk, which is the
+   *  default rather than a second name for it: a chat that has never chosen still writes somewhere,
+   *  and every stored record predates the field.
+   *
+   *  A workspace CREATED OR JOINED from the chat becomes it (Vexa-ai/vexa#1603, and the server's
+   *  `focus` event carries both halves); the person sets it by clicking a chip; the agent sets it
+   *  when they say so and says it did. Every route writes through `setTarget` below. */
+  target?: string;
   artifacts: Artifact[];      // the PINNED tabs — only what was asked for (decision 28)
   focus?: string;             // artifactKey() of the tab in front, when the view IS a tab
   /** THE ONE VIEW SLOT (PRD decision 28, founder: *"tab is only when tab is specifically
@@ -215,6 +233,10 @@ export type Row = {
   status: "live" | "held" | null;
   touched: boolean;
   workspaces: string[];
+  /** WHERE THIS ROW'S CHAT WRITES (Vexa-ai/vexa#1611) — a slug, or absent for the person's desk.
+   *  On the ROW because the rail shows it: a reader scanning their conversations should be able to
+   *  see which one is working in a customer's workspace without opening it. */
+  target?: string;
 };
 
 /** The row's status word from the meeting's phase. `prep` deliberately has none — see `Row.status`. */
@@ -268,6 +290,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       status: statusOf(phase),
       touched: !!c.touched,
       workspaces: c.workspaces,
+      target: c.target,
     });
   }
 
@@ -334,6 +357,10 @@ export type ServerSession = {
   created?: number | string | null;
   last_active?: number | string | null;
   workspaces?: string[] | null;
+  /** WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611) — one of `workspaces`, or null for the person's
+   *  own desk. Null is also what a server one release behind sends, and the two mean the same
+   *  thing today: the desk is the default either way. */
+  target?: string | null;
   scaffold?: { kind?: string | null; id?: string | null } | null;
   touched?: boolean | null;
   /** THE MEETING THIS CHAT MADE (Vexa-ai/vexa#1597) — the row id, or null. Written server-side when
@@ -412,6 +439,7 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
       label: bornAsMeeting ? "" : (given || named || "Chat"),
       meeting,
       workspaces: mounts.length ? mounts : ["personal", "_global"],
+      target: typeof r.target === "string" && r.target.trim() ? r.target.trim() : undefined,
       artifacts: [],
       scaffold: sc && sc.kind && sc.id ? sc : undefined,
       // absent → a conversation that happened, so it shows. See `_Sessions` for why that direction.
@@ -432,6 +460,10 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
  *   · **`workspaces` is local when there is one.** A stored row's mount set is the reader's — a
  *     proposal chip can rebind a chat — and the server's is the fallback for a chat this browser
  *     has never opened.
+ *   · **`target` follows `workspaces`**, and for the same reason (Vexa-ai/vexa#1611): a chip this
+ *     reader clicked a moment ago is not in the index it will be read from next time, and the
+ *     server's is what this browser has never seen. Neither erases the other — the local write and
+ *     the server write are the same act, one of them having reached the other side already.
  *   · **`touched` is either.** Both are evidence a person wrote; neither un-writes it.
  *   · **`meeting` is local-first.** A binding this browser made moments ago is not yet in the index
  *     it will be read from next time; the server's is what a second window has never seen. Neither
@@ -459,6 +491,7 @@ export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = [])
       label: isPlaceholderLabel(l.label) && !isPlaceholderLabel(s.label) ? s.label : l.label,
       meeting: l.meeting ?? s.meeting,
       workspaces: l.workspaces?.length ? l.workspaces : s.workspaces,
+      target: l.target ?? s.target,
       scaffold: l.scaffold ?? s.scaffold,
       touched: !!l.touched || !!s.touched,
       createdAt: Math.min(l.createdAt || s.createdAt, s.createdAt || l.createdAt),
@@ -505,6 +538,27 @@ export function bindMeeting(chats: Chat[], chatId: string, meetingId: string): C
   const next = [...chats];
   next[i] = { ...next[i], meeting: id };
   return next;
+}
+
+/** POINT A CHAT'S WRITES AT ONE OF ITS WORKSPACES (Vexa-ai/vexa#1611) — the client's ONE writer of
+ *  `target`, whichever route asked: a chip click, a `focus` event, a restored record.
+ *
+ *  `""` is the person's own desk and clears the field rather than storing a second name for it —
+ *  the desk is the default, so "no target" and "the desk" have to be one state or the merge above
+ *  would have to decide which of two spellings wins.
+ *
+ *  IT ONLY EVER NAMES A WORKSPACE THE CHAT IS OVER. Targeting something not in `workspaces[]` would
+ *  put a chip on a mount the panel does not have and the next turn will not carry — so the mount
+ *  comes first (the caller adds it), and this is the second half. The server refuses the same shape
+ *  for the same reason, so the two halves cannot answer differently. */
+export function setTarget(chats: Chat[], chatId: string, target: string): Chat[] {
+  const wid = (target ?? "").trim();
+  return chats.map((c) => {
+    if (c.id !== chatId) return c;
+    if (wid && !c.workspaces.includes(wid)) return c;
+    if ((c.target ?? "") === wid) return c;
+    return { ...c, target: wid || undefined };
+  });
 }
 
 export function upsertChat(chats: Chat[], chat: Chat): Chat[] {
@@ -610,13 +664,16 @@ export function nameFromTurn(chats: Chat[], chatId: string, text: string): Chat[
   return chats.map((c) => (c.id === chatId ? nameChat(c, text) : c));
 }
 
-export function newChat(label: string, workspaces: string[], opts: { id?: string; touched?: boolean; meeting?: string; scaffold?: { kind: string; id: string }; now?: number } = {}): Chat {
+export function newChat(label: string, workspaces: string[], opts: { id?: string; touched?: boolean; meeting?: string; target?: string; scaffold?: { kind: string; id: string }; now?: number } = {}): Chat {
   const now = opts.now ?? Date.now();
   return {
     id: opts.id ?? `pchat-${now.toString(36)}`,
     label,
     meeting: opts.meeting,
     workspaces,
+    // NO TARGET IS THE PERSONAL DESK (Vexa-ai/vexa#1611) — the default the founder's rule names,
+    // and it is an ABSENCE rather than the string "personal" so there is one spelling of it.
+    target: opts.target?.trim() || undefined,
     artifacts: [],
     scaffold: opts.scaffold,
     // `touched: false` is the DRAFT (F35): a chat the `+` button opened and nobody has written in.
@@ -944,6 +1001,9 @@ function normalise(raw: unknown, now: number): Chat[] {
       label: typeof r.label === "string" && r.label ? r.label : (typeof r.meeting === "string" && r.meeting ? "" : "Chat"),
       meeting: typeof r.meeting === "string" && r.meeting ? r.meeting : undefined,
       workspaces: Array.isArray(r.workspaces) && r.workspaces.length ? r.workspaces.filter((w) => typeof w === "string") : ["personal", "_global"],
+      // A record written before the field simply has none, which IS the personal desk — the
+      // default, not a migration. Nothing to repair and nothing to stamp.
+      target: typeof r.target === "string" && r.target.trim() ? r.target.trim() : undefined,
       // tolerant on purpose: an early build stored artifacts as bare path strings, and a stored tab
       // whose shape we no longer understand is dropped rather than allowed to render as nothing.
       artifacts: Array.isArray(r.artifacts)

@@ -221,7 +221,10 @@ def test_the_qwen_lane_dials_are_declared():
 # +3: VEXA_SEARCH_URL / VEXA_SEARCH_DIALECT / VEXA_SEARCH_API_KEY — the openai-agent harness's
 # WebSearch adapter. The endpoint is the OPERATOR'S (no search engine ships with Vexa), so all
 # three are deployment configuration this service stamps into every worker.
-EXPECTED_DECLARED_KEYS = 93
+# 94: +1 VEXA_TARGET_WORKSPACE (Vexa-ai/vexa#1611) — the chat's target workspace, the one mount its
+# writes go to. The worker reads it to MARK that mount in its own stack declaration, so a write with
+# no better instruction has a path rather than a guess.
+EXPECTED_DECLARED_KEYS = 94
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():

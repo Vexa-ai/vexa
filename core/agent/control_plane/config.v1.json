@@ -738,6 +738,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_TARGET_WORKSPACE",
+      "class": "defaulted",
+      "default": "(unset — present only when the chat has chosen one; unset means the person's own desk)",
+      "description": "the chat's TARGET WORKSPACE (Vexa-ai/vexa#1611) — the one slug this conversation's writes go to, while every other mount in the stack is there to read. Runtime-injected per dispatch, never a deploy surface. The worker reads it to MARK that mount in its own `## Your mounted workspaces` block, so a file operation with no better instruction has a path rather than a guess; agent-api says the same fact in the person's vocabulary (`target workspace: <name> — writes go here unless asked otherwise`) and points the turn's cwd and the delegation token's default `slug` at the same place. A POSITIVE signal rather than an inference from which mount is `primary`, because `primary` also answers for a room run's group desk and for an ordinary subject's own baseline. Founder, 2026-09-06: “it creates files in the wrong workspace, we need so that the thing knew the workspace of writing, if it's specified”",
+      "targets": []
+    },
+    {
       "key": "VEXA_START",
       "class": "defaulted",
       "default": "{}",

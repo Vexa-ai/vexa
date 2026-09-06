@@ -7,6 +7,12 @@ export type Sel = {
   meetingId?: string;     // set iff kind === "meeting"
   label: string;
   workspaces: string[];   // the mount set, which now lives on the chat
+  /** WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611). One of `workspaces`, or absent for the person's
+   *  own desk — the default. `workspaces` is what the chat can REACH; this is where it works, and
+   *  the two were one field until the founder watched files land on his desk from a chat about a
+   *  customer: *"it creates files in the wrong workspace, we need so that the thing knew the
+   *  workspace of writing, if it's specified"*. */
+  target?: string;
 };
 /** A tab. `kind` absent = a document, which is what every tab was before the transcript stopped
  *  being a file — so a chat persisted by an older build migrates by meaning nothing. A `meeting`

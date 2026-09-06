@@ -148,4 +148,8 @@ def as_user(monkeypatch, uid="7", admin=False, routes=None) -> HTTP:
     rig.CURRENT.set(str(uid))
     rig.CALL_SCOPE.set(None)
     rig.CALL_TOKEN.set(None)
+    # No chat target unless a test sets one (Vexa-ai/vexa#1611). A contextvar outlives a test in the
+    # same process, so leaving this would let one test's target decide another test's writes — the
+    # exact silent-wrong-workspace failure the field exists to end.
+    rig.CALL_TARGET.set("")
     return http

@@ -15,6 +15,7 @@ import type { Row } from "./chats";
 import { AccountBadge } from "./AccountBadge";
 import { CollapseButton } from "./Collapse";
 import { T, row, surface, type as ty } from "./tokens";
+import { WorkspaceName } from "../ui-kit/WsLink";
 
 const chipS = (on: boolean): CSSProperties => ({
   ...ty.control, fontSize: 11.5, color: on ? "var(--t1)" : "var(--t3)",
@@ -39,6 +40,14 @@ const statusTag: CSSProperties = {
   ...ty.meta, flex: "none", color: "var(--t3)", background: surface.raised,
   border: "1px solid var(--line)", borderRadius: 4, padding: "0 4px", lineHeight: 1.5,
 };
+/** THE TARGET WORKSPACE'S NAME on a row that has one (Vexa-ai/vexa#1611). The accent the header's
+ *  target chip wears, so the two surfaces say the same thing in the same colour; capped in width
+ *  because the rail is 248px and a long workspace name must not push the row's own name out. */
+const targetTag: CSSProperties = {
+  ...ty.meta, flex: "none", color: "var(--accent)", background: "var(--accentbg)",
+  border: "1px solid var(--accent)", borderRadius: 4, padding: "0 4px", lineHeight: 1.5,
+  maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+};
 
 export function Rail(p: {
   rows: Row[]; hidden: number;
@@ -58,6 +67,13 @@ export function Rail(p: {
             ? <span style={liveDot} aria-hidden />
             : <span style={{ ...row.dot(on), alignSelf: "center", background: r.meetingId ? "var(--line2)" : "transparent", border: r.meetingId ? "none" : "1px solid var(--line2)" }} aria-hidden />}
           <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", ...(on ? ty.bodyStrong : ty.body) }}>{r.label}</span>
+          {/* WHERE THIS CHAT WRITES, WHEN IT IS NOT THE DESK (Vexa-ai/vexa#1611). By NAME, from the
+              registry (#1585/#1602), never the slug. Rendered only for a chat working somewhere
+              else, on the same argument `IMPLICIT_MOUNTS` makes about `_global` and the ContextBar
+              makes about a constant: the desk is where nearly every chat writes, so a tag saying so
+              on nearly every row is chrome. A row that is NOT the ordinary case is the information
+              — and it is the case the founder lost a morning's files to. */}
+          {r.target && <span data-row-target={r.target} style={targetTag}><WorkspaceName slug={r.target} /></span>}
           {r.status === "held" && <span data-row-status="held" style={statusTag}>held</span>}
           <span style={{ ...ty.meta, flex: "none", fontVariantNumeric: "tabular-nums", color: r.live ? "var(--accent)" : "var(--t3)" }}>{r.whenLabel}</span>
         </button>

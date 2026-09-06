@@ -132,7 +132,8 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
 
 def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None,
                     room: Optional[dict] = None,
-                    scaffold_workspaces: Optional[list[str]] = None) -> list[dict]:
+                    scaffold_workspaces: Optional[list[str]] = None,
+                    target: str = "") -> list[dict]:
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
@@ -207,7 +208,20 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     It does NOT REMOVE anything. For a human chat ``workspaces[]`` is ATTENTION, not permission
     (PRD 7: "soft for a human, hard for a run") — a person's other desks stay mounted, because a
     chat restores what was in focus and never a sandbox. The hard isolation axis is ``room``,
-    above, and it is a different argument on purpose so the two can never be confused."""
+    above, and it is a different argument on purpose so the two can never be confused.
+
+    ── THE TARGET (Vexa-ai/vexa#1611) ──────────────────────────────────────────────────────────────
+    ``target`` is the chat's target workspace — the one its writes go to. Here it does exactly ONE
+    thing: it makes that mount ``primary``, which is how ``_worker_cwd`` picks it, which is how a
+    bare ``Write`` lands in the place the person is working rather than on their desk. Founder,
+    2026-09-06: *"it creates files in the wrong workspace, we need so that the thing knew the
+    workspace of writing"*.
+
+    It grants NOTHING and removes nothing. A target that is not mounted, or is mounted read-only,
+    moves no cwd — naming a slug is not a grant here for the same reason it is not in the scaffold
+    clause above. And it is IGNORED IN ROOM MODE: decision 22 already decides that run's cwd (the
+    group desk, or the writable ``_system`` tier), and a chat's target must never be able to talk a
+    room run into writing a desk."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
@@ -304,6 +318,20 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
         active = sorted(active, key=_rank)
         logger.info("dispatch SCAFFOLD MOUNTS subject=%s wanted=%s mounted=%s",
                     subject, wanted, [m.get("slug") for m in active])
+    # THE TARGET TAKES THE CWD (Vexa-ai/vexa#1611) — see the docstring. After the scaffold's
+    # ordering, because a scaffold says what to MOUNT and the target says where to WRITE, and the
+    # second is the later, more specific answer. Never in room mode, and never onto a mount this
+    # turn may not write: a read-only cwd is F59, and a cwd nobody asked for is decision 22.
+    _want = str(target or "").strip()
+    if _want and not room:
+        _tm = next((m for m in active
+                    if m.get("slug") == _want and m.get("write") and m.get("path")), None)
+        if _tm is not None:
+            for m in active:
+                m["primary"] = m is _tm
+        else:
+            logger.info("dispatch TARGET %s is not a writable mount for subject=%s — the cwd stays "
+                        "where it was", _want, subject)
     stack.extend(active)
 
     # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
@@ -498,6 +526,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                    model_config: Optional[dict] = None,
                    room: Optional[dict] = None,
                    scaffold_workspaces: Optional[list[str]] = None,
+                   target: str = "",
                    entry_nonce: str = "", friction=None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
@@ -510,7 +539,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
     # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
     mounts = build_mount_set(settings, subject, memberships, room=room,
-                             scaffold_workspaces=scaffold_workspaces)
+                             scaffold_workspaces=scaffold_workspaces, target=target)
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -548,6 +577,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     #     stop a bot, and it filed four `bot_stop` calls trying — F104).
     if room and room.get("meeting_id"):
         env["VEXA_ROOM_MEETING"] = str(room["meeting_id"])
+    # THE TARGET WORKSPACE, STATED TO THE WORKER (Vexa-ai/vexa#1611). Present exactly when this
+    # chat has one and absent when it writes to the person's own desk — a positive signal, never an
+    # inference from which mount happens to be primary, because "primary" also answers for a room
+    # run's group desk and for a subject whose baseline is simply first.
+    if str(target or "").strip():
+        env["VEXA_TARGET_WORKSPACE"] = str(target).strip()
     # Attribution (D4 / WP-A1.2): the per-mount turn commit is authored by the dispatch PRINCIPAL (the
     # authenticated human whose input drives the turn), committer stays the platform. Until membership/
     # sharing lands (later WPs) the principal IS the subject; a caller that already resolved a distinct
@@ -591,9 +626,16 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         # same `workspaces` — asserted by tests/test_meeting_room.py.
         try:
             env["VEXA_MCP_URL"] = settings.mcp_url
+            # THE TARGET RIDES THE TOKEN (Vexa-ai/vexa#1611) — which is how `entity_upsert` and
+            # `workspace_write` with no `slug` land in the workspace this chat is working in rather
+            # than on the person's desk. It is a DEFAULT, not a grant: the token's `scope` is still
+            # the ceiling, and the rig applies its per-uid ownership checks underneath exactly as
+            # before. On the token rather than in a tool argument because the model must not have
+            # to remember it — the founder's answer to *"how to softly reinforce that?"* was
+            # context, not a rule somebody repeats.
             env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
                 mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
-                ttl_sec=settings.mcp_delegation_ttl_sec,
+                ttl_sec=settings.mcp_delegation_ttl_sec, target=str(target or "").strip(),
             )
         except ValueError:
             env.pop("VEXA_MCP_URL", None)
@@ -764,7 +806,8 @@ class Dispatcher:
             return None
 
     def dispatch(self, invocation: dict, *, room: Optional[dict] = None,
-                 scaffold_workspaces: Optional[list[str]] = None) -> str:
+                 scaffold_workspaces: Optional[list[str]] = None,
+                 target: str = "") -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
 
         ``room`` is the post-meeting MEETING ROOM — ``{meeting_id, subjects[], source}`` — already
@@ -773,6 +816,12 @@ class Dispatcher:
         (``additionalProperties: false``), and more importantly the room must never be able to
         arrive from anywhere a request body can reach. ``None`` (every other trigger and every
         chat that names no meeting) leaves the dispatch byte-identical to before.
+
+        ``target`` is the chat's TARGET WORKSPACE (Vexa-ai/vexa#1611) — where this conversation's
+        writes go. A dispatcher argument for the same two reasons ``room`` is: unit.v1 is sealed,
+        and where an agent writes must never be assertable from a request body. ``""`` (every chat
+        that writes to the person's own desk, and every non-chat trigger) leaves the dispatch
+        byte-identical to before.
 
         ``context.session`` (the chat conversation thread) is an agent-api routing hint, not part of the
         published unit.v1 wire contract — it is stripped before the schema check so the envelope stays
@@ -808,7 +857,7 @@ class Dispatcher:
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
                              entry_nonce=entry_nonce,
                              model_config=model_config, room=room,
-                             scaffold_workspaces=scaffold_workspaces,
+                             scaffold_workspaces=scaffold_workspaces, target=target,
                              friction=self._friction)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and

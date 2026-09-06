@@ -16,9 +16,9 @@ from control_plane import scaffolds as scaffolds_mod
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
-    _chat_turn_head, _context_grounding, _has_custom_model_endpoint,
+    _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    logger, meeting_binding, workspace_focus)
+    logger, meeting_binding, target_preamble, workspace_focus)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -42,6 +42,7 @@ def build(**d) -> APIRouter:
     _global_root = d['_global_root']
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
+    _read_target = d['_read_target']
     _resolve_room = d['_resolve_room']
     _scaffold_is_for = d['_scaffold_is_for']
     _scaffold_view = d['_scaffold_view']
@@ -55,7 +56,50 @@ def build(**d) -> APIRouter:
     sess = d['sess']
     stream_reader = d['stream_reader']
     subject_of = d['subject_of']
+    workspace_registry = d['workspace_registry']
     wsr = d['wsr']
+
+    # ── THE TARGET WORKSPACE, BY NAME (Vexa-ai/vexa#1611) ────────────────────────────────────
+    #
+    # #1585/#1602's rule, applied to the one thing this issue puts in every prompt: a workspace is
+    # named, never slugged. The registry is the one place a slug becomes a name, and it is asked
+    # here rather than in `api_shared.target_preamble` so the composer stays pure and testable.
+
+    def _ws_name(slug: str, *, fallback: str) -> str:
+        """A workspace's human name, or ``fallback``. Never raises and never invents: a registry
+        that cannot answer costs the line a name, not the turn."""
+        try:
+            rec = workspace_registry.by_slug(str(slug or ""))
+        except Exception:  # noqa: BLE001 — a naming lookup is furniture
+            rec = None
+        return str((rec or {}).get("name") or "").strip() or fallback
+
+    def _target_line(subject: str, session: str, target: str) -> str:
+        """This turn's target line — the target's name, and the names of what it may only read.
+
+        THE DEFAULT IS THE PERSON'S OWN DESK, and it is stated rather than left implicit: a chat
+        with no target still writes somewhere, and the founder's failure was exactly a chat that
+        did not say where. The desk's own registry row names it; without one it is "your own desk",
+        which is what a person calls it anyway.
+
+        `others` comes from the session's mount set, minus the system tiers nobody chooses. An
+        empty set is honest — most chats have one — and `target_preamble` drops the clause."""
+        try:
+            row = next((r for r in sess.list(subject) if r["session"] == session), None)
+        except Exception:  # noqa: BLE001 — the index is furniture; the turn is not
+            row = None
+        mounts = [str(w) for w in ((row or {}).get("workspaces") or [])
+                  if str(w) not in ("_global", "_system")]
+        desk = _ws_name(str(subject), fallback="your own desk")
+        target_name = _ws_name(target, fallback=target) if target else desk
+        others = [_ws_name(w, fallback=w) for w in mounts if w != target]
+        # THE DESK IS ALWAYS READABLE, and saying so is the other half of the founder's rule — the
+        # one that stops the fix from becoming a new failure. "Note this on my desk" must still
+        # work from a chat targeting a customer's workspace; a line that named only the target
+        # would teach the agent it has nowhere else to write.
+        if target and desk not in others:
+            others.append(desk)
+        return target_preamble(target_name, others)
 
     # ── THE RAIL'S NAME FOR A ROW (Vexa-ai/vexa#1602) ────────────────────────────────────────
     #
@@ -197,6 +241,14 @@ def build(**d) -> APIRouter:
         that holds both halves of *"this chat made that place"* — and making it a second writer
         somewhere else is what would let the chip, the record and the mount disagree.
 
+        …AND IT BECOMES THE ONE THIS CHAT WRITES TO (Vexa-ai/vexa#1611). A `focus` event says *"this
+        workspace is where this conversation is working"*, which is two consequences of one fact: it
+        joins the mount set (`add_workspace`) and it becomes the target (`set_target`). That is why
+        `workspace_target` — the verb an agent calls when the person says *"work in the OeNB
+        workspace"* — emits the SAME event rather than a second kind: a workspace already in the set
+        adds nothing and moves the target, a brand-new one does both, and there is one vocabulary
+        for "where are we working" instead of two that can drift apart.
+
         ONE WRITER, TWO READERS: the event still reaches the client byte-for-byte, which is what
         updates the chip and mounts the panel NOW; this write is what makes the focus survive the
         reload, the second window and — through the session's mount generation — the next turn's
@@ -218,6 +270,7 @@ def build(**d) -> APIRouter:
             if focused is not None:
                 try:
                     sess.add_workspace(subject, session, focused)
+                    sess.set_target(subject, session, focused)
                 except Exception:  # noqa: BLE001 — the turn outranks its own bookkeeping
                     logger.exception("focusing workspace %s on subject=%s session=%s failed",
                                      focused, subject, session)
@@ -387,6 +440,21 @@ def build(**d) -> APIRouter:
             _gen = 0
         if _gen:
             ctx = {**ctx, "mount_gen": _gen}
+        # Read ONCE, fail-soft, and used twice: it names the target in the prompt below and it is
+        # what `build_unit_env` points the cwd and the delegation token at. An index that cannot
+        # answer costs the turn its target line, never the turn.
+        try:
+            _target = sess.target(subject, session)
+        except Exception:  # noqa: BLE001
+            logger.warning("target workspace unreadable for subject=%s session=%s — this turn "
+                           "writes where it always did", subject, session)
+            _target = ""
+        # THE TARGET WORKSPACE, IN FRONT OF THE ASK (Vexa-ai/vexa#1611). Every turn, including the
+        # ones nobody typed — a flow's kick and a routine's wake write somewhere too, and the
+        # founder's failure was a turn that did not know where. It goes in FRONT of the grounding
+        # and therefore in front of the sentinel below, so the person's half stays exactly their
+        # words (F47): this is machinery, and machinery never renders as somebody's speech.
+        prompt = _target_line(subject, session, _target) + prompt
         # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
         # user's words are the exact suffix; the sentinel goes right before them.
         #
@@ -504,7 +572,12 @@ def build(**d) -> APIRouter:
                 try:
                     unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
                         inv, room=room,
-                        scaffold_workspaces=(scaffold_view or {}).get("workspaces") or None)
+                        scaffold_workspaces=(scaffold_view or {}).get("workspaces") or None,
+                        # WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611) — a dispatcher argument like
+                        # `room` and `scaffold_workspaces`, never a field of the sealed unit.v1
+                        # envelope, and never anything a request body asserted. It decides the
+                        # turn's cwd and rides the delegation token as the tools' default `slug`.
+                        target=_target)
                 except dispatch_mod.WarmDeliveryFailed as exc:
                     # THE TURN IS REFUSED, NOT DROPPED. For a warm unit the pre-delivery is the only
                     # delivery, so a failure here means the person's words reached nobody. Answering
@@ -527,6 +600,38 @@ def build(**d) -> APIRouter:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
         )
+    @router.post("/api/chat/target")
+    def chat_target(request: Request, body: dict = Body(...)):
+        """SET this chat's target workspace — the person clicking a chip in the header
+        (Vexa-ai/vexa#1611).
+
+        The AGENT does not come through here. When the person says *"work in the OeNB workspace"*
+        the agent calls `workspace_target`, whose result the harness turns into a `focus` event, and
+        `_binding_watch` writes it on the way past — the same one writer that records a created
+        workspace. Two routes to one field would be two writers, and the chip and the record would
+        disagree the first time one of them lost a race.
+
+        `workspace: ""` means the person's own desk, which is the default rather than a second name
+        for it. A slug this subject cannot reach is REFUSED here rather than stored and discovered
+        at the first write: the whole point of the field is that the agent may trust it."""
+        subject = subject_of(request)
+        session = str(body.get("session") or "").strip() or units.DEFAULT_CHAT_SESSION
+        wid = str(body.get("workspace") or "").strip()
+        if wid and not _is_slug(wid):
+            raise HTTPException(status_code=400, detail="not a workspace slug")
+        if wid:
+            # WRITABLE, ASKED OF THE THING THAT KNOWS. `write=True` is the point: a target is where
+            # writes go, so a workspace this subject may only READ is not one — the same seam, and
+            # the same answer, the write route itself would give. A forwarded or stale id therefore
+            # cannot point somebody's chat at a workspace they do not have.
+            try:
+                _read_target(request, wid, write=True)
+            except HTTPException:
+                raise
+            except Exception:  # noqa: BLE001
+                raise HTTPException(status_code=403, detail="not a workspace you can write")
+        changed = sess.set_target(subject, session, wid)
+        return {"ok": True, "session": session, "target": wid or None, "changed": changed}
     @router.post("/api/chat/reset")
     def chat_reset(body: ResetBody, request: Request):
         """Drop a conversation thread: remove it from the index AND delete its continuity file so a
@@ -547,6 +652,11 @@ def build(**d) -> APIRouter:
         since the rail started deriving from here, `workspaces` · `scaffold` (`{kind, id}` or null) ·
         `touched`. The four original names are unchanged, so every existing consumer reads what it
         always read.
+
+        `target` (Vexa-ai/vexa#1611) is the ONE of those workspaces this chat WRITES to; the rest
+        are mounted to read. Null means the person's own desk — the default — and a server that
+        predates the field sends null for the same reason, which is the only case where "absent"
+        and "the desk" are worth being able to tell apart later.
 
         `meeting` (+ `meeting_native`) IS here now, and was deliberately not before
         (Vexa-ai/vexa#1597). The old rule — *"`meet-<row>` is the terminal's own naming of a

@@ -432,20 +432,37 @@ def global_context_preamble(mounts: list[dict]) -> str:
     )
 
 
-def mounts_preamble(mounts: list[dict]) -> str:
+def active_target() -> str:
+    """This chat's TARGET WORKSPACE slug, or ``""`` for the person's own desk (Vexa-ai/vexa#1611).
+
+    ``VEXA_TARGET_WORKSPACE`` is stamped by ``dispatch.build_unit_env`` exactly when the chat has a
+    target — a POSITIVE signal, never inferred from which mount is ``primary``, because primary also
+    answers for a room run's group desk and for an ordinary subject's own baseline."""
+    return (os.environ.get("VEXA_TARGET_WORKSPACE") or "").strip()
+
+
+def mounts_preamble(mounts: list[dict], target: str = "") -> str:
     """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
     paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
     never guess where it may read/write. Enforcement is minimal in this WP (per-mount commit with the
     principal as author); the routing rule is STATED. A single private mount ⇒ no preamble (nothing to
-    disambiguate — the legacy one-workspace turn is unchanged)."""
+    disambiguate — the legacy one-workspace turn is unchanged).
+
+    ``target`` MARKS ONE OF THEM (Vexa-ai/vexa#1611). agent-api says the same fact in the person's
+    vocabulary — *"target workspace: <name> — writes go here unless asked otherwise"* — and this says
+    it in the model's: which PATH a file operation with no better instruction belongs under. Two
+    sentences, one fact, and neither derives it independently: both are handed the same slug."""
     if len(mounts) <= 1:
         return ""
+    want = str(target or "").strip()
     lines = ["## Your mounted workspaces", "",
              "This turn mounts a STACK of workspaces (the three-tier mount stack). Each is a separate git"
              " repo; every writable one is committed independently after the turn:",
              ""]
     for m in mounts:
-        lines.append(f"- `{m['path']}` — **{m.get('slug')}** ({_tier_label(m)})")
+        mark = " — **this chat's target: writes go here unless asked otherwise**" if (
+            want and m.get("slug") == want) else ""
+        lines.append(f"- `{m['path']}` — **{m.get('slug')}** ({_tier_label(m)}){mark}")
         # A per-workspace PURPOSE (stored in the workspace, travels when shared) tells the agent what THIS
         # workspace is for — so a composition (Personal + a deal ws + a dept ws) self-explains where to write.
         purpose = (m.get("purpose") or "").strip()
@@ -465,6 +482,9 @@ def mounts_preamble(mounts: list[dict]) -> str:
         "- When a workspace states a Purpose (above), let it decide where content belongs — write material"
         " that matches a workspace's purpose into THAT workspace.",
         "- Never write to a READ-ONLY mount.",
+        *(["- THE TARGET MARKED ABOVE WINS over the two rules before it: it is where this conversation"
+           " is working, and a write elsewhere needs the person to have asked for it in this turn,"
+           " with its purpose. Say where you wrote."] if want else []),
         # SCOPED to file operations (2026-09-01). Unqualified, this line reads as a rule about
         # WRITING, and the model applied it to its reply prose too: asked to reference a workspace,
         # it pasted `/workspaces/<slug>/README.md` — the founder's "no reference, and when reference
@@ -1449,7 +1469,7 @@ def run_turn_over_workspace(
     # worth of onboarding/propose framing).
     turn_prompt = (imperative_preamble(prompt)
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
-                   + mounts_preamble(mounts)
+                   + mounts_preamble(mounts, active_target())
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
                    + prompt)

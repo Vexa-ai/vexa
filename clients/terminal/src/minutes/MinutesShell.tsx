@@ -18,7 +18,7 @@ import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVE
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
-  readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile, readDeskFacts, type DeskFacts,
+  readActiveSet, setSharedActive, setChatTarget, deactivateWorkspace, readWorkspaceFile, readDeskFacts, type DeskFacts,
   listSharedMemberships, listWorkspaceTree, type Membership,
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
@@ -27,7 +27,7 @@ import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
   meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
-  newChat, railRows, readRailOwner, resetChats, writeRailOwner,
+  newChat, railRows, readRailOwner, resetChats, setTarget, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
   forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
@@ -61,6 +61,7 @@ const selOf = (c: ChatRec): Sel => ({
   meetingId: c.meeting,
   label: c.label,
   workspaces: c.workspaces,
+  target: c.target,
 });
 
 /** Say the chip's line into ONE chat. The settle delay is not cosmetic — the target session must be
@@ -403,6 +404,7 @@ export function MinutesShell() {
       meetingId: c.meeting,
       label: c.label || (m ? meetingTitle(m) : "Chat"),
       workspaces: c.workspaces,
+      target: c.target,
     });
     setPages(list);
     setListing(null);
@@ -849,6 +851,34 @@ export function MinutesShell() {
   };
   setWorkspacesRef.current = setWorkspaces;
 
+  /** WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611) — the header chip's click, and the `focus` event's.
+   *
+   *  The ONE writer on this side, exactly as `setWorkspaces` is for the mount set, and it moves the
+   *  same four things together: the selection (so the chip repaints now), the stored record, the
+   *  draft that is not stored yet, and the SERVER — which is what makes it survive a reload and be
+   *  true for the next turn's container, its cwd and its tool defaults.
+   *
+   *  `""` is the person's own desk. Best-effort on the wire, like `mountSet`: a chat whose target
+   *  did not reach the index keeps writing where it was, which is the state it was already in. */
+  const setChatTargetRef = useRef<(id: string, opts?: { justMounted?: boolean }) => void>(() => undefined);
+  const chooseTarget = (wid: string, opts: { justMounted?: boolean } = {}) => {
+    const id = sel.chatId, next = (wid || "").trim();
+    // A target must be a workspace this chat is over — the same refusal `setTarget` makes on the
+    // record and the server makes on the write. Refused HERE too so the chip cannot paint a state
+    // the record will not keep.
+    //
+    // `justMounted` is the ONE caller that legitimately knows better: the `focus` handler adds the
+    // mount and takes the target in one beat, and React has not committed the first half by the
+    // time it asks for the second. Checking `sel` there would refuse the workspace we are looking
+    // at — a guard failing on the case it was written to allow.
+    if (next && !opts.justMounted && !sel.workspaces.includes(next)) return;
+    setSel((x) => ({ ...x, target: next || undefined }));
+    persist((prev) => setTarget(prev, id, next));
+    setDraft((d) => (d && d.id === id ? { ...setTarget([d], id, next)[0] } : d));
+    void setChatTarget(id, next).catch(() => undefined);
+  };
+  setChatTargetRef.current = chooseTarget;
+
   useEffect(() => {
     let dead = false;
     // a meeting tab has no body to fetch: the canvas fetches its own transcript by row id.
@@ -1067,6 +1097,13 @@ export function MinutesShell() {
       const wid = d.workspace?.trim();
       if (!wid) return;
       setWorkspacesRef.current((ws) => (ws.includes(wid) ? ws : [...ws, wid]));
+      // …AND IT BECOMES WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611). A `focus` says "this workspace
+      // is where this conversation is working", which has always meant both halves — it joins the
+      // set, and it takes the target. `workspace_target` emits the same event for the same reason,
+      // so *"work in the OeNB workspace"* and *"make me a workspace for OeNB"* land identically.
+      // The mount goes in first, above, because `chooseTarget` refuses a target the chat is not
+      // over — the record and the server both make that refusal, so the order is load-bearing.
+      setChatTargetRef.current(wid, { justMounted: true });
       // The label is the workspace's HUMAN name when the create knew one — a tab reading
       // `industrial-light-magic-4040f4` is the slug leaking into a place names belong (F49).
       if (!readerChoseFocus.current) {
@@ -1315,7 +1352,14 @@ export function MinutesShell() {
             onCollapse={() => collapseRail(true)} />}
       <ContextBar sel={sel} flavor={flavor} memberships={memberships}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
-        onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))}
+        onRemoveWorkspace={(id) => {
+          setWorkspaces((ws) => ws.filter((w) => w !== id));
+          // A REMOVED WORKSPACE CANNOT STAY THE TARGET (Vexa-ai/vexa#1611). The chat is no longer
+          // over it, so the writes fall back to the desk — the default — rather than pointing at a
+          // mount the next turn will not carry.
+          if (sel.target === id) chooseTarget("");
+        }}
+        onSetTarget={(id) => chooseTarget(id)}
         onAttachRepo={(id) => setAttachTo({ id })} />
       {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
           nullable id alone cannot tell "no dialog" from "dialog, aimed at the desk". */}

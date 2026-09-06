@@ -38,7 +38,13 @@ remain, and the note beside each says which:
     (`/api/workspace/file`, the gateway's transcripts), and it is served there rather than as a
     harness builtin because a builtin is unreachable from `claude-code`, whose tool list is the
     CLI's own (`llm/JOBS.md` states this for `spawn_job`). One MCP verb is what makes it work on
-    both runners from one implementation.
+    both runners from one implementation. `workspace_target` (Vexa-ai/vexa#1611) is the rig's for
+    the same shape of reason and a sharper one: it changes where a CHAT writes, and the chat is not
+    something agent-api's workspace routes address at all. The record is written by the ONE writer
+    that already holds a session and a subject — the `focus` event `_binding_watch` reads on the way
+    past — so an agent-api route for it would be a second writer of one field, which is the failure
+    the seam exists to prevent. What the tool itself does is check the person may write there and
+    answer with the slug; the harness turns that answer into the event.
 
 CHECKED IN BOTH DIRECTIONS, same reason domain-doors.allow.json is: GAP shrinking without this test
 changing is a name this test forgot to stop tracking, and GAP growing without this test changing is
@@ -63,6 +69,7 @@ GAP = {
     "validate", "mark_scaffolded", "company_context",                               # agent: no server home
     "vexa_overview", "start_onboarding",                                            # agent: no server home
     "open_page",                                                                    # rig: the panel verb
+    "workspace_target",                                                             # rig: the target verb
 }
 
 

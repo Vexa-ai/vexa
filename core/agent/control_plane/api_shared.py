@@ -240,7 +240,19 @@ class _Sessions:
     A LATCH, like ``touched``, and for a sharper reason: the chat's identity is what the reader is
     looking at. A second send in the same conversation must not silently move the room, the pinned
     transcript and the note out from under them — it is a second meeting, and a second meeting is a
-    second chat."""
+    second chat.
+
+    ⚠ AND ONE OF THOSE MOUNTS IS THE ONE WRITES GO TO (Vexa-ai/vexa#1611). ``target`` — a slug, or
+    absent for the person's own desk — is a DIFFERENT question from ``workspaces``: that list is
+    what this chat can reach, this field is where it works. The founder was in a chat whose header
+    chip read ``personal`` while the whole conversation was about a customer's workspace, and the
+    files landed on his desk: *"it creates files in the wrong workspace, we need so that the thing
+    knew the workspace of writing, if it's specified. We have this "personal" and we probably
+    should be able to set a workspace that we are targeting (other workspaces still available to
+    read and even to write, if explicit ask and purpose)"*.
+
+    NOT a latch, unlike ``meeting``: a target is a thing a person changes by clicking a chip, and
+    changing it is the whole feature. ``set_target`` is its ONE writer."""
 
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
@@ -395,6 +407,56 @@ class _Sessions:
         rec["last_active"] = self._now()
         return True
 
+    def set_target(self, subject: str, session: str, workspace: str) -> bool:
+        """POINT this chat's writes at a workspace, and say whether that changed anything
+        (Vexa-ai/vexa#1611). THE ONE WRITER of ``target``.
+
+        ``workspace`` is a slug, or ``""`` — the person's own desk, which is the default and the
+        thing a chat falls back to rather than a second name for it. A malformed slug is REFUSED,
+        never repaired, for the reason ``workspace_focus`` refuses one: this is durable and it
+        decides where every later turn writes.
+
+        IT RAISES THE SAME STALE-MOUNTS SEMAPHORE ``add_workspace`` does, and the reason is the same
+        shape rather than the same fact. The mount SET does not change when a target moves — every
+        workspace in the focus was already mounted — but two things baked into the container do: the
+        turn's cwd (``dispatch._worker_cwd`` makes the target primary) and the delegation token the
+        tools default their ``slug`` from. A warm worker keeps both for its whole 15-minute window,
+        so without this the chip would move and the writes would keep landing where they were —
+        which is the defect, not a smaller version of it.
+
+        A REAL CHANGE ONLY: re-selecting the target already in force raises nothing and costs
+        nobody a cold start."""
+        wid = str(workspace or "").strip()
+        if wid and not _is_slug(wid):
+            return False
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            meta = self._redis.hgetall(mkey) or {}
+            if (meta.get("target") or "").strip() == wid:
+                return False
+            self._redis.hset(mkey, mapping={"target": wid, "mounts_stale": "1",
+                                            "last_active": str(self._now())})
+            self._redis.sadd(self._ids_key(subject), session)
+            return True
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            rec = {"created": self._now(), "last_active": self._now(), "title": session,
+                   "touched": False}
+            self._mem[subject][session] = rec
+        if str(rec.get("target") or "").strip() == wid:
+            return False
+        rec["target"] = wid
+        rec["mounts_stale"] = True
+        rec["last_active"] = self._now()
+        return True
+
+    def target(self, subject: str, session: str) -> str:
+        """This chat's target workspace slug, or ``""`` for the person's own desk."""
+        if self._redis is not None:
+            meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            return (meta.get("target") or "").strip()
+        return str((self._mem.get(subject, {}).get(session) or {}).get("target") or "").strip()
+
     @staticmethod
     def _as_gen(raw) -> int:
         try:
@@ -458,6 +520,10 @@ class _Sessions:
                     "created": float(meta.get("created", 0) or 0),
                     "last_active": float(meta.get("last_active", 0) or 0),
                     "workspaces": [str(w) for w in mounts] if isinstance(mounts, list) else [],
+                    # absent → the person's own desk. `null`, not `""`, so a client can tell "this
+                    # server predates the field" from "this chat targets the desk" — they mean the
+                    # same thing today and a client that guessed would be wrong the day they do not.
+                    "target": (meta.get("target") or "").strip() or None,
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     # absent → True: a row older than the field is a conversation that happened
                     "touched": meta.get("touched") != "0",
@@ -471,6 +537,7 @@ class _Sessions:
                     "session": session, "title": meta.get("title") or session,
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
                     "workspaces": list(meta.get("workspaces") or []),
+                    "target": str(meta.get("target") or "").strip() or None,
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     "touched": meta.get("touched", True) is not False,
                     "meeting": str(meta.get("meeting") or "").strip() or None,
@@ -860,6 +927,15 @@ def meeting_binding(ev: object) -> "tuple[str, str] | None":
     return row, str(ev.get("native") or "").strip()
 
 
+def _is_slug(wid: str) -> bool:
+    """A workspace slug is ONE path segment and never a dot-namespaced reserved one.
+
+    ONE spelling, shared by everything that takes a slug off a stream or a request and stores it
+    durably (``workspace_focus`` below, ``_Sessions.set_target``). A focus or a target aimed at a
+    guess is worse than none: it survives into every later turn of the chat."""
+    return bool(wid) and "/" not in wid and not wid.startswith(".")
+
+
 def workspace_focus(ev: object) -> "str | None":
     """The workspace this turn brought INTO the chat's focus, or None (Vexa-ai/vexa#1603).
 
@@ -877,11 +953,40 @@ def workspace_focus(ev: object) -> "str | None":
     if not isinstance(ev, dict) or ev.get("type") != "focus":
         return None
     wid = str(ev.get("workspace") or "").strip()
-    # A slug is ONE path segment and never a dot-namespaced reserved one. A focus aimed at a guess
-    # is worse than no focus: it is durable, and it survives into every later turn of the chat.
-    if not wid or "/" in wid or wid.startswith("."):
-        return None
-    return wid
+    return wid if _is_slug(wid) else None
+
+
+# ── THE TARGET WORKSPACE, SAID IN THE PROMPT (Vexa-ai/vexa#1611) ─────────────────────────────────
+#
+# The founder's own sentence for what the chat carries, and the answer to *"how to softly reinforce
+# that?"* (#1603): it is CONTEXT, not a rule the person repeats. The turn is told which workspace it
+# writes to and which it may only read — by NAME, never by slug (#1585/#1602) — and the tools'
+# defaults (`entity_upsert`, `workspace_write`, and the cwd `Write` lands in) are pointed at the
+# same place, so the sentence and the machinery cannot disagree.
+#
+# It is composed SERVER-SIDE, per turn, for the reason `chat_label` is: agent-api is the one thing
+# every turn passes through — a person's message, a flow's kick, a routine's wake — and it is the
+# only place that holds both the session record and the workspace registry. Composed here rather
+# than stamped into the container, because a warm worker outlives a chip click.
+TARGET_LINE = ("target workspace: {target} — writes go here unless asked otherwise; "
+               "{others} are mounted to read; write there only on an explicit ask with its purpose.")
+TARGET_LINE_ALONE = "target workspace: {target} — writes go here unless asked otherwise."
+
+
+def target_preamble(target: str, others: "list[str] | None" = None) -> str:
+    """The turn's target line, or ``""`` when there is no target to name.
+
+    ``target`` and ``others`` are NAMES the caller already resolved — this function does no lookup,
+    so what it renders is exactly what a test can state. An empty ``others`` drops the whole
+    read-only clause rather than rendering an empty list: "nothing is mounted to read" is not a
+    thing worth a sentence, and a sentence about an empty set reads as a defect."""
+    name = str(target or "").strip()
+    if not name:
+        return ""
+    rest = [str(o).strip() for o in (others or []) if str(o).strip() and str(o).strip() != name]
+    line = (TARGET_LINE.format(target=name, others=", ".join(rest)) if rest
+            else TARGET_LINE_ALONE.format(target=name))
+    return f"## Where this turn writes\n\n{line}\n\n"
 
 
 def _sse(events) -> Iterator[str]:

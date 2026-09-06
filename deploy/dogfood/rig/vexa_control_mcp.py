@@ -788,6 +788,28 @@ REVOKED_FILE = HOME / ".storm/mcp-delegation-revoked.json"
 # verb needs it, never threaded through signatures.
 CALL_SCOPE = contextvars.ContextVar("vexa_call_scope", default=None)
 
+# THE CHAT'S TARGET WORKSPACE for THIS request (Vexa-ai/vexa#1611) — the slug a write verb with no
+# `slug` of its own defaults to. Rides the delegation token as its own claim, beside `scope` and
+# deliberately not inside it: a scope is a CEILING and this is a DEFAULT, and a default stored where
+# a permission lives becomes a grant the first time somebody reads it as one. Same contextvar
+# discipline as CALL_SCOPE: set once where identity is decided, read where a verb needs it.
+CALL_TARGET = contextvars.ContextVar("vexa_call_target", default="")
+
+# THE VERBS THAT DEFAULT THEIR TARGET. A closed vocabulary, for the reason `_FOCUS_TOOLS` is one:
+# these WRITE, and an omitted `slug` on a write is the model saying "wherever this conversation is
+# working" — the founder's *"it creates files in the wrong workspace"*. READS are not here and that
+# is the point: `slug=""` on a read has always meant the person's own desk, nobody has ever been
+# surprised by it, and widening a read default would change what "" means in two directions at once.
+_TARGET_DEFAULTING = frozenset({"workspace_write", "entity_upsert"})
+
+# HOW THE MODEL NAMES THE DESK once the default is no longer the desk. `workspaces()` has always
+# answered `{"slug": "", "name": "personal"}` for it, so "personal" is the word it already knows —
+# and without a word there would be NO way to say *"note this on my desk"* from a chat working
+# somewhere else, which is the other half of the founder's rule and the way this fix could have
+# become a new failure. Confined to the two verbs above, where an empty slug means "the desk"; on
+# `workspace_members` or `workspace_invite` it would mean nothing.
+_DESK_ALIASES = frozenset({"personal", "desk"})
+
 
 class _DelegationRefused(Exception):
     """A delegated token was offered and is not acceptable. ``reason`` is safe to hand a caller."""
@@ -951,6 +973,7 @@ def _subject_raw():
             except _DelegationRefused:
                 return None
             CALL_SCOPE.set(claims.get("scope"))
+            CALL_TARGET.set(str(claims.get("target") or "").strip())
             return str(claims["sub"])
     return None
 
@@ -1140,6 +1163,26 @@ def _anon_guard(fn):
         # company_context() came back anonymous and the emptiness was reported to a person as
         # "no validated claims").
         kw.pop("token", None)
+        # THE CHAT'S TARGET IS THE DEFAULT SLUG FOR A WRITE (Vexa-ai/vexa#1611), applied in the one
+        # place every workspace verb passes rather than in each of them — the same argument that put
+        # the scope check here. Founder, 2026-09-06, in a chat about a customer's workspace whose
+        # files landed on his desk: *"we need so that the thing knew the workspace of writing, if
+        # it's specified"*.
+        #
+        # ONLY WHEN THE CALLER NAMED NONE. A `slug` the model passed is an explicit ask and wins —
+        # including `slug="personal"`, the word `workspaces()` has always used for the desk, which
+        # is how *"note this on my desk"* still works from a chat working somewhere else. It is a
+        # DEFAULT, so it is filled in BEFORE the scope check below and is subject to it like any
+        # other value: a target outside a scoped dispatch's isolation set is refused, not smuggled
+        # past by the fact that we chose it.
+        if fn.__name__ in _TARGET_DEFAULTING:
+            _asked = (kw.get("slug") or "").strip()
+            if _asked in _DESK_ALIASES:
+                kw["slug"] = ""                      # they named the desk; the target does not move
+            elif not _asked:
+                _default = CALL_TARGET.get()
+                if _default:
+                    kw["slug"] = _default
         # SCOPE, enforced once for every workspace-touching verb rather than in each of the twelve.
         # An EMPTY slug means "their own workspace" and is always in scope — the uid decides it, not
         # the caller. A NAMED slug on a scoped (autonomous) delegation must be in the isolation set.
@@ -1228,6 +1271,10 @@ THE MAIN VERBS
 - transcript_search(q) — any phrase across every meeting ever.
 - Workspace: workspace_tree/read/write (groups via slug=...). Company facts go through
   propose() -> the person answers -> validate(); never promote your own guess.
+- WHERE WRITES LAND: the chat has a target workspace and your turn is told which one. A write
+  with no slug goes THERE, not to their desk. When they say to work somewhere else from now on,
+  workspace_target(slug=...) moves it and you say so; for one write elsewhere pass slug= on that
+  call instead.
 - ALREADY HAVE ONE ON GITHUB? workspace_attach(workspace, repo) makes that repo the
   workspace; workspace_pull/workspace_push keep it in step. NEVER take a token in chat:
   if it is private you are handed a public key -> they add it to the repo as a deploy
@@ -1732,7 +1779,8 @@ working.</p>""", "Connected")
             try:
                 _claims = _verify_delegation(tok)
                 sub = {"uid": str(_claims["sub"]), "email": None,
-                       "delegated": True, "scope": _claims.get("scope")}
+                       "delegated": True, "scope": _claims.get("scope"),
+                       "target": str(_claims.get("target") or "").strip()}
                 _sc = _claims.get("scope") or {}
                 print(f"[delegated] AUTH ok uid={_claims['sub']} regime={_sc.get('regime')} "
                       f"workspaces={_sc.get('workspaces')} jti={_claims.get('jti')} "
@@ -1804,6 +1852,10 @@ working.</p>""", "Connected")
         # Only a delegated session carries a scope; every other auth path leaves it None, which the
         # guard reads as "unscoped" and lets through exactly as before.
         CALL_SCOPE.set((sub or {}).get("scope"))
+        # …and only a delegated session carries a TARGET (Vexa-ai/vexa#1611). Empty everywhere else,
+        # which the guard reads as "no default" — a direct caller's `slug=""` still means their own
+        # desk, exactly as it always has.
+        CALL_TARGET.set(str((sub or {}).get("target") or ""))
         return await self.app(scope, receive, send)
 
 
@@ -2290,6 +2342,12 @@ def workspace_read(path: str, slug: str = "") -> str:
 def workspace_write(path: str, content: str, slug: str = "") -> str:
     """Write a file into a workspace.
 
+    WHERE IT LANDS: omit `slug` and it goes where this conversation is WORKING — its target
+    workspace, which your turn was told by name. Pass `slug="personal"` to write on the person's own
+    desk instead, or `slug=<workspace>` for a single write anywhere else they can write; either is
+    an explicit ask and neither moves where the conversation is working (`workspace_target` does
+    that, and only when they say so).
+
     Goes through agent-api's own write route (`PUT /api/workspace/file`) on the CALLER'S identity,
     so a write is authorized by the same rules a read is: a shared workspace needs contributor+,
     `_global` needs the org-admin allowlist, the path is confined under the workspace root, and the
@@ -2396,7 +2454,11 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
       carrying its own suffix simply loses it. When the facts came from different places, split the
       call. A fact with no source is refused, not written — if you do not have one, the gap belongs
       in `kg/MISSING.md`, never on the page.
-    - `slug` — a shared workspace, omitted means this person's own desk.
+    - `slug` — omitted means where this conversation is WORKING: its target workspace, which your
+      turn was told by name. `slug="personal"` records it on the person's own desk instead, and
+      `slug=<workspace>` on any other they can write. Either is an explicit ask for ONE call and
+      neither moves where the conversation is working — `workspace_target` does that, when they say
+      so.
     - `dates` — WHEN, for a meeting: `{"scheduled_at": ..., "held_at": ..., "report_delivered_at":
       ...}`, ISO-8601 or epoch, any subset. Record `held_at` the moment you know a meeting ran and
       `report_delivered_at` the moment its write-up reached them. These are the fields the desk
@@ -2745,6 +2807,60 @@ def workspaces() -> str:
                     "since": w.get("added_at")})
     return json.dumps({"workspaces": out, "count": len(out),
                        "note": "slug='' is their own; the rest are shared with a team"})
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_target(slug: str = "") -> str:
+    """Point this conversation's writes at a workspace — call it when the person SAYS SO.
+
+    *"work in the OeNB workspace"*, *"let's collect this into ILM from now on"*, *"back to my
+    desk"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
+    without anybody naming it again, the header chip shows it, and it survives a reload and a
+    second window. `slug=""` puts it back on their own desk.
+
+    NOT for a single write somewhere else. Pass `slug` to that one call instead — an explicit slug
+    always wins and moves nothing. This verb is for *"from now on"*, and moving it silently would
+    be worse than the defect it fixes.
+
+    SAY THAT YOU DID IT, in your reply, in one short sentence naming the workspace. The person
+    asked for a change of where their work lands; they get to know it happened."""
+    uid = me()
+    wid = (slug or "").strip()
+    if not wid:
+        return json.dumps({
+            "targeted": "", "workspace": "their own desk",
+            "say": "Writes go back to your own desk from now on.",
+        })
+    # WRITABLE, OR IT IS NOT A TARGET. agent-api's own write door answers this — the same seam the
+    # write itself would hit — so a workspace they can only READ is refused HERE rather than
+    # discovered later as a 403 on work they thought had landed.
+    st, r = _http("GET", f"{AGENT_API}/api/workspace/shared", {"X-User-Id": uid})
+    rows = (r or {}).get("memberships") or [] if st == 200 else []
+    writer_roles = frozenset({"owner", "contributor"})
+    mine = {str(w.get("workspace_id")): str(w.get("role") or "") for w in rows}
+    role = mine.get(wid, "")
+    if not role:
+        return json.dumps({
+            "refused": "not_yours", "workspace": wid,
+            "why": "that is not a workspace this person is a member of",
+            "tell_your_person": "plainly, and name the workspaces they do have — workspaces() "
+                                "lists them. Do not retry it.",
+        })
+    if role not in writer_roles:
+        return json.dumps({
+            "refused": "read_only", "workspace": wid, "role": role,
+            "why": "they can read that workspace but not write it, so it cannot be where their "
+                   "work lands",
+            "tell_your_person": "plainly. Reading it still works from here.",
+        })
+    return json.dumps({
+        "targeted": wid, "role": role,
+        "say": "Say, in one line, that this conversation now writes into that workspace.",
+        "from_now_on": "entity_upsert, workspace_write and file writes with no workspace named go "
+                       "here. Their own desk and everything else mounted stays readable, and a "
+                       "single write elsewhere still works — pass slug= on that one call.",
+    })
 
 
 @mcp.tool()
