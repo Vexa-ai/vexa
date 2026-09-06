@@ -30,6 +30,11 @@ export const SELECTION_MAX = 2000;
  *  paragraph, and sending it would ask the agent to research a sentence. */
 export const TERM_MAX = 120;
 
+/** The most a person's own INSTRUCTION line carries (Vexa-ai/vexa#1593). It is one line typed into
+ *  a one-line field — the cap is here so a paste cannot turn the WHAT into a document, and so the
+ *  bound is stated on the wire rather than left to whatever the input happened to accept. */
+export const INSTRUCTION_MAX = 400;
+
 export type ChatIntentKind = "extend" | "create" | "explore" | "highlight";
 
 /** An act on a FILE (decision 32). Split into one interface per kind — rather than one carrying
@@ -47,6 +52,15 @@ export interface PageIntentFields {
   /** where that selection sits IN THE FILE SOURCE. Only ever present when it could be established
    *  exactly (see `sourceRange`); a range whose basis is ambiguous is omitted, not approximated. */
   selection_range?: { start: number; end: number };
+  /** THE PERSON'S OWN LINE (Vexa-ai/vexa#1593) — what to do with it, typed on the button, VERBATIM.
+   *  The selection is the WHERE; this is the WHAT. Absent = they pressed the button and typed
+   *  nothing, which is the act exactly as it behaved before this field existed.
+   *
+   *  It is the only field on an intent that is a person's own text rather than a fact about the
+   *  screen, and that is why it is safe: the words are theirs, addressed to their own agent, the
+   *  same capability the composer two panels away already gives them. Everything else on this
+   *  record stays a NAME or a resolved slot, for the reason the header states. */
+  instruction?: string;
 }
 
 export interface ExtendIntent extends PageIntentFields { kind: "extend" }
@@ -92,6 +106,7 @@ export type RawIntent = {
   path?: string | null;
   selection?: string | null;
   selection_range?: { start: number; end: number } | null;
+  instruction?: string | null;
   term?: string | null;
   meeting?: string | null;
   segment?: string | null;
@@ -150,5 +165,11 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
       ? { start: r.start, end: r.end }
       : undefined;
 
-  return { kind, ...(workspace ? { workspace } : {}), path, ...(selection ? { selection } : {}), ...(selection_range ? { selection_range } : {}) };
+  // ONE LINE, ALWAYS. A field one line high can still be PASTED into, and a newline reaching the
+  // act text would break the attributed block open — the person's words have to stay recognisably
+  // theirs and finite. Flattened, trimmed, capped; empty is ABSENT, never "".
+  const insRaw = str(raw.instruction).replace(/\s+/g, " ").trim();
+  const instruction = insRaw ? insRaw.slice(0, INSTRUCTION_MAX) : undefined;
+
+  return { kind, ...(workspace ? { workspace } : {}), path, ...(selection ? { selection } : {}), ...(selection_range ? { selection_range } : {}), ...(instruction ? { instruction } : {}) };
 }

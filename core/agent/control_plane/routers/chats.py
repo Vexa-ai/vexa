@@ -118,6 +118,13 @@ def build(**d) -> APIRouter:
                 try:
                     _fm, _ask = scaffolds_mod.read_preset(_global_root(), _preset)
                     _text = scaffolds_mod.substitute(_ask, chat_intents.tokens_for(body.intent))
+                    # THE PERSON'S OWN LINE, GUARANTEED (Vexa-ai/vexa#1593). A preset that carries
+                    # `{{instruction}}` places it; one that does not gets it appended, attributed.
+                    # `_global/asks/` is admin-owned and a deploy never overwrites it
+                    # (`preset_library.top_up` is additive), so "the preset knows the token" is not
+                    # something this route may assume — and a dropped instruction is invisible to
+                    # everyone including the person who typed it.
+                    _text = chat_intents.with_instruction(_text, _ask, body.intent)
                     # A SILENT KIND IS MACHINERY END TO END (decision 35). The marks ride the prompt
                     # itself — the same carrier the write-back phase uses — so `workspace_reader.
                     # history` drops this turn and every agent turn after it until the person speaks

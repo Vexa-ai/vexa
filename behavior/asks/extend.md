@@ -9,6 +9,14 @@ The selection they had, which is empty when they pressed it with nothing selecte
 
 {{selection}}
 
+They typed this on the button, in their own words — what to do with it. Empty when they pressed it
+and typed nothing, which is the act as it has always behaved:
+
+{{instruction}}
+
+Those are THEIR words, not a paraphrase and not a suggestion: when there is a line there, it is the
+WHAT and it wins over your own reading of the page. When it is empty, decide for yourself as below.
+
 Work on THAT file. Read it first, in full: extending a page you have only skimmed produces a second
 page glued to the first, and the seam is visible to the person who wrote it. A selection names WHERE
 — go further on that part, in its own terms. With no selection the page as a whole is the subject,

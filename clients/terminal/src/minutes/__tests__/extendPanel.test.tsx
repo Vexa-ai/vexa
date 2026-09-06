@@ -37,6 +37,12 @@ const onAsk = (e: Event) => asks.push((e as CustomEvent).detail);
 const onView = (e: Event) => views.push((e as CustomEvent).detail);
 const onOpen = vi.fn();
 
+/** THE PRESS IS NO LONGER THE ACT (Vexa-ai/vexa#1593). A press opens the optional one-line field;
+ *  Escape fires the act WITHOUT a line, which is exactly the payload every assertion below already
+ *  makes. The field itself — both fire paths, the wire, the bubble — is pinned next door in
+ *  `extendLine.test.tsx`. */
+const fireLine = () => fireEvent.keyDown(document.querySelector("[data-act-field]") as HTMLElement, { key: "Escape" });
+
 const panel = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
   render(<PagesPanel pages={pages} docPath={PATH} docSlug="acme-kg" onOpen={onOpen} body={BODY} {...over} />);
 
@@ -55,6 +61,7 @@ describe("the page action — the open page, whole (decision 32.1)", () => {
   it("posts the intent for the RESOLVED slot, not for what the tab is called (F63)", () => {
     const { container } = panel();
     fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
+    fireLine();
 
     expect(asks).toHaveLength(1);
     expect(asks[0].intent).toEqual({ kind: "extend", workspace: "acme-kg", path: PATH });
@@ -64,6 +71,7 @@ describe("the page action — the open page, whole (decision 32.1)", () => {
   it("the bubble is the compact form — the prompt is never what the reader is shown as their words", () => {
     const { container } = panel();
     fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
+    fireLine();
     expect(asks[0].display).toBe(`Extend: ${PATH}`);
     expect(asks[0].display).not.toMatch(/follow the links|research|write back/i);
   });
@@ -71,12 +79,14 @@ describe("the page action — the open page, whole (decision 32.1)", () => {
   it("the desk's own page carries NO workspace — an absent slug is an answer", () => {
     const { container } = panel({ docSlug: undefined, docPath: "README.md", pages: [{ path: "README.md", label: "README" }] });
     fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
+    fireLine();
     expect(asks[0].intent).toEqual({ kind: "extend", path: "README.md" });
   });
 
   it("mints no tab (decision 28)", () => {
     const { container } = panel();
     fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
+    fireLine();
     expect(onOpen).not.toHaveBeenCalled();
   });
 
@@ -93,6 +103,7 @@ describe("the empty state's action (decision 32.4)", () => {
     const { container } = panel({ body: null });
     expect(screen.getByText(/No page here yet/)).toBeTruthy();
     fireEvent.click(container.querySelector('[data-doc-act="create"]') as HTMLElement);
+    fireLine();
 
     expect(asks[0].intent).toEqual({ kind: "create", workspace: "acme-kg", path: PATH });
     expect(asks[0].display).toBe(`Create: ${PATH}`);
@@ -141,6 +152,7 @@ describe("one control shape for the two acts", () => {
   it("wearing Extend's shape did not turn it into Extend — the act is still [create]", () => {
     const { container } = panel({ body: null });
     fireEvent.click(container.querySelector('[data-doc-act="create"]') as HTMLElement);
+    fireLine();
     expect(asks).toHaveLength(1);
     expect(asks[0].intent?.kind).toBe("create");
     expect(asks[0].intent).toEqual({ kind: "create", workspace: "acme-kg", path: PATH });
@@ -173,6 +185,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
     expect(btn).toBeTruthy();
 
     fireEvent.mouseDown(btn);
+    fireLine();
     expect(asks[0].intent).toMatchObject({ kind: "extend", workspace: "acme-kg", path: PATH, selection: "The pilot ships in March" });
     expect(asks[0].display).toBe(`Extend: ${PATH} — “The pilot ships in March”`);
     expect(asks[0].prompt).toBe(`Extend: ${PATH} — 'The pilot ships in March'`);
@@ -183,6 +196,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
     const pre = rendered();
     highlight(pre, 13, 24);
     fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
+    fireLine();
     const r = asks[0].intent?.selection_range;
     expect(r).toBeTruthy();
     expect(BODY.slice(r!.start, r!.end)).toBe("The pilot ships in March");
@@ -193,6 +207,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
     const pre = rendered({ body });
     highlight(pre, 0, 7);              // "one two", twice in the file
     fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
+    fireLine();
     expect(asks[0].intent?.selection).toBe("one two");
     expect(asks[0].intent?.selection_range).toBeUndefined();
   });
@@ -202,6 +217,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
     const pre = rendered({ body });
     highlight(pre, 0, 4000);
     fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
+    fireLine();
     expect(asks[0].intent?.selection).toHaveLength(2000);
   });
 
@@ -226,6 +242,7 @@ describe("the landing (decision 32.3)", () => {
   it("the page becomes the view when the turn commits — and no tab is minted", () => {
     const { container } = panel({ body: null });
     fireEvent.click(container.querySelector('[data-doc-act="create"]') as HTMLElement);
+    fireLine();
     expect(views).toEqual([]);                       // not before the reply
 
     act(() => { window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT)); });

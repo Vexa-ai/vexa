@@ -96,3 +96,94 @@ def test_every_intent_kind_has_a_preset_file():
     asks = pathlib.Path(__file__).resolve().parents[3] / "behavior/asks"
     for kind, preset in chat_intents.INTENT_PRESETS.items():
         assert (asks / f"{preset}.md").is_file(), f"{kind} -> {preset}.md is missing"
+
+
+# ── the person's own line (Vexa-ai/vexa#1593) ────────────────────────────────────────────────────
+
+def test_the_instruction_is_a_token_like_any_other():
+    """The founder's field: the selection is the WHERE, this is the WHAT. It reaches the preset the
+    same way every other argument does — as a `{{token}}`, so the WORDS around it stay admin-owned."""
+    t = tokens_for({"kind": "extend", "path": "kg/plan.md", "instruction": "find the youtube link"})
+    assert t["instruction"] == "find the youtube link"
+    assert tokens_for({"kind": "extend", "path": "a.md"})["instruction"] == ""
+
+
+def test_both_asks_carry_the_token():
+    """`extend.md` and `create.md` place the line themselves. A preset that does not is handled by
+    `with_instruction` below — but the two we ship should not need it."""
+    import pathlib
+    asks = pathlib.Path(__file__).resolve().parents[3] / "behavior/asks"
+    from control_plane import chat_intents
+    for name in ("extend", "create"):
+        assert chat_intents.INSTRUCTION_TOKEN in (asks / f"{name}.md").read_text()
+
+
+def test_a_preset_that_places_the_line_is_left_alone():
+    from control_plane import chat_intents
+    ask = "[extend] ... {{instruction}} ..."
+    text = "[extend] ... find the youtube link ..."
+    assert chat_intents.with_instruction(text, ask, {"kind": "extend", "instruction": "find the youtube link"}) == text
+
+
+def test_a_preset_that_does_NOT_know_the_token_still_gets_the_line():
+    """⚠ THE REASON THIS EXISTS. `preset_library.top_up` is ADDITIVE — a preset already in
+    `_global/asks/` is never overwritten, because its content belongs to the admin. So every
+    instance that has run Extend before today has an `extend.md` with no `{{instruction}}` in it,
+    and a token-only implementation would drop the one thing the person typed, silently, between
+    their keystroke and the agent."""
+    from control_plane import chat_intents
+    out = chat_intents.with_instruction("[extend] old preset", "[extend] old preset",
+                                        {"kind": "extend", "instruction": "find the youtube link"})
+    assert out.startswith("[extend] old preset")
+    assert out.endswith("find the youtube link")
+    assert chat_intents.INSTRUCTION_LEAD in out
+
+
+def test_the_token_is_looked_for_in_the_PRESET_never_in_the_output():
+    """Searching the substituted text for the line would false-positive the moment somebody types a
+    word the preset already uses — and the failure would be the silent one, their sentence dropped
+    because the preset happened to contain it."""
+    from control_plane import chat_intents
+    ask = "[extend] Read it first, in full."
+    out = chat_intents.with_instruction(ask, ask, {"kind": "extend", "instruction": "in full"})
+    assert out.count("in full") == 2
+
+
+def test_nothing_typed_changes_nothing():
+    from control_plane import chat_intents
+    ask = "[extend] old preset"
+    for junk in (None, {}, {"kind": "extend"}, {"kind": "extend", "instruction": ""},
+                 {"kind": "extend", "instruction": "   "}, {"kind": "extend", "instruction": None}):
+        assert chat_intents.with_instruction(ask, ask, junk) == ask
+
+
+def test_the_line_stays_one_line():
+    """The client flattens it too; the server does not trust that. A newline reaching the act text
+    would break the attributed block open, and the person's words have to stay recognisably theirs."""
+    from control_plane import chat_intents
+    out = chat_intents.with_instruction("body", "body", {"kind": "extend", "instruction": "find the\n\nlink"})
+    assert out.split(chat_intents.INSTRUCTION_LEAD)[1].strip() == "find the link"
+
+
+def test_the_lead_says_whose_words_follow():
+    """The whole point of the attribution: the preset is ours, this line is theirs. The client's
+    fallback sentence spells the same lead (`minutes/extend.ts`), which `test_terminal_parity`-style
+    drift is not guarded here — but the words are pinned so a rewrite is a deliberate act."""
+    from control_plane import chat_intents
+    assert chat_intents.INSTRUCTION_LEAD == (
+        "They typed this on the button, in their own words — what to do with it:")
+
+
+def test_the_line_survives_the_job_mark():
+    """A Create/Extend act runs as a background job (Vexa-ai/vexa#1584): the mark is PREFIXED to the
+    prompt and `read_job_mark` strips exactly itself, handing the rest to the job as its brief. The
+    person's line is in that rest, which is the acceptance criterion of #1593 stated mechanically."""
+    from control_plane import chat_intents
+    from shared.marks import read_job_mark
+    intent = {"kind": "extend", "workspace": "desk", "path": "kg/plan.md",
+              "instruction": "find the youtube link"}
+    ask = "[extend] old preset"
+    prompt = chat_intents.job_prefix(intent) + chat_intents.with_instruction(ask, ask, intent)
+    kind, target, brief = read_job_mark(prompt)
+    assert (kind, target) == ("extend", "desk/kg/plan.md")
+    assert "find the youtube link" in brief

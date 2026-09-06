@@ -1,9 +1,16 @@
 "use client";
-/** THE "EXTEND" CONTROLS — two triggers and a landing (PRD decision 32.1).
+/** THE "EXTEND" CONTROLS — two triggers, one optional line, and a landing (PRD decision 32.1).
  *
  *  The page action asks about the whole open page; the floating action asks about what the reader
  *  just highlighted. Both post into the SAME chat and both go through `postIntent`, so there is one
  *  place that decides what a press means and one place that refuses a press it cannot honour.
+ *
+ *  THE LINE (Vexa-ai/vexa#1593). Founder, 2026-09-06, with "recorded YouTube video" selected on a
+ *  page: *"extend might have an extra prompt that opens on click like 'find link on youtube i would
+ *  add then'"*. So a press opens a one-line field before it fires. The selection is the WHERE, the
+ *  line is the WHAT, and it is optional in the strongest sense he asked for: **Escape fires the act
+ *  too**. The click already said "extend" — the field is a refinement offered after the decision,
+ *  never a second confirmation of it, and an empty line is today's behaviour to the byte.
  *
  *  The panel supplies `workspace` and `path` from THE RESOLVED VIEW SLOT — never from a tab label,
  *  a crumb, or the document header's rendered name (F63). Those are display strings; two of them
@@ -11,7 +18,7 @@
  *  an intent built from one sends the agent to work on a file nobody opened.
  */
 import type { CSSProperties, RefObject } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
 import { Icon } from "../ui-kit";
 import { landPending, postIntent, sourceRange } from "./extend";
@@ -28,6 +35,43 @@ export function useIntentLanding(): void {
   }, []);
 }
 
+/** What the field says when it is empty — the founder's own framing of it: what to do with the
+ *  thing, and optional. */
+export const LINE_PLACEHOLDER = "what to do with it (optional)";
+
+/** The two keys, in one sentence, wherever a field is open. Escape firing ANYWAY is the unusual
+ *  half, so it is the half that gets said out loud rather than discovered. */
+export const LINE_HINT = "Enter to send · Esc to go ahead without a line";
+
+/** THE ONE-LINE FIELD (#1593), shared by every control that fires an act, so a press means the same
+ *  thing wherever it happens.
+ *
+ *  It owns nothing but the text: `onFire` both fires the act and closes the field, because the two
+ *  are one event. Two keys, and they BOTH fire — Enter with what was typed, Escape with nothing.
+ *  There is deliberately no third path: blur leaves the field standing rather than firing an act
+ *  nobody pressed a key for, and there is no Cancel, because the act was already chosen by the
+ *  click that opened this. */
+export function ActLine(p: { onFire: (instruction?: string) => void; label: string; style?: CSSProperties }) {
+  const [text, setText] = useState("");
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <input
+      ref={ref} data-act-field type="text" value={text} aria-label={p.label} title={LINE_HINT}
+      placeholder={LINE_PLACEHOLDER} autoComplete="off" spellCheck={false}
+      onChange={(e) => setText(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); p.onFire(text.trim() || undefined); }
+        else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); p.onFire(undefined); }
+      }}
+      style={{
+        ...ty.chip, width: "100%", minWidth: 0, color: "var(--t1)", background: "transparent",
+        border: "none", outline: "none", padding: 0, ...p.style,
+      }}
+    />
+  );
+}
+
 /** ONE CONTROL SHAPE FOR THE TWO ACTS (founder ruling 2026-09-06: *"create this page should also
  *  work in the background and should probably look like extend — same thing, but also creates
  *  file"*).
@@ -42,7 +86,12 @@ export function useIntentLanding(): void {
  *  So the shape lives HERE, once, and both acts wear it: an icon, what the act is called, and one
  *  line of what it does — under the content, where the reader arrives with the question. The only
  *  difference left is the one the founder named. Create makes the file, which is what its icon
- *  says; everything else about the two controls is the same object. */
+ *  says; everything else about the two controls is the same object.
+ *
+ *  …AND SO DOES THE LINE (#1593). The optional field opens INSIDE this box rather than beside it,
+ *  keeping the frame the eye is already on so the page does not move under the cursor at the moment
+ *  somebody is about to type. One shape, one gesture, both acts — *"the same line belongs on
+ *  Create"*. */
 const actBox: CSSProperties = {
   display: "flex", alignItems: "center", gap: 10, width: "100%", marginTop: 28,
   padding: "10px 13px", textAlign: "left", background: surface.raised,
@@ -57,13 +106,36 @@ function PageAct(p: {
   /** ONE line of what pressing it does. Not two — this is a label, not documentation. */
   line: string;
   hint: string;
-  onPress: () => void;
+  /** what the field is FOR, for a reader who cannot see the box it opened in */
+  fieldLabel: string;
+  /** fires the act, with the person's line or without it */
+  onFire: (instruction?: string) => void;
+  /** the resolved slot this control belongs to — a page that changes under an open field closes
+   *  it, because a line typed about the page you were reading must never fire against the page
+   *  that replaced it. */
+  slot: string;
 }) {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => { setAsking(false); }, [p.slot]);
+  const fire = (instruction?: string) => { setAsking(false); p.onFire(instruction); };
+  const icon = <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name={p.icon} size={15} /></span>;
+
+  if (asking) {
+    return (
+      <div data-doc-act={`${p.act}-line`} style={{ ...actBox, cursor: "text" }}>
+        {icon}
+        <span style={{ minWidth: 0, flex: "1 1 0%" }}>
+          <ActLine onFire={fire} label={p.fieldLabel} style={{ ...ty.chip, fontWeight: 600 }} />
+          <span style={{ ...ty.meta, display: "block", marginTop: 2 }}>{LINE_HINT}</span>
+        </span>
+      </div>
+    );
+  }
   return (
-    <button data-doc-act={p.act} title={p.hint} onClick={p.onPress} style={actBox}
+    <button data-doc-act={p.act} title={p.hint} onClick={() => setAsking(true)} style={actBox}
       onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; e.currentTarget.style.borderColor = "var(--accent)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; e.currentTarget.style.borderColor = "var(--line)"; }}>
-      <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name={p.icon} size={15} /></span>
+      {icon}
       <span style={{ minWidth: 0 }}>
         <span data-act-title style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>{p.title}</span>
         <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2 }}>{p.line}</span>
@@ -86,7 +158,11 @@ export function ExtendPageButton(p: { workspace?: string; path: string }) {
     <PageAct act="extend" icon="spark" hint="Ask this chat to go further on this page"
       title="Extend this page"
       line="Research it, write what is found around it, link both ways."
-      onPress={() => postIntent({ kind: "extend", workspace: p.workspace, path: p.path })} />
+      fieldLabel="What to do with this page (optional)"
+      slot={`${p.workspace ?? ""}|${p.path}`}
+      onFire={(instruction) => postIntent({
+        kind: "extend", workspace: p.workspace, path: p.path, ...(instruction ? { instruction } : {}),
+      })} />
   );
 }
 
@@ -99,7 +175,11 @@ export function CreatePageButton(p: { workspace?: string; path: string }) {
     <PageAct act="create" icon="plus" hint={`Ask this chat to write ${p.path}`}
       title="Create this page"
       line="Research it, write it, link what is found around it both ways."
-      onPress={() => postIntent({ kind: "create", workspace: p.workspace, path: p.path })} />
+      fieldLabel="What to put on this page (optional)"
+      slot={`${p.workspace ?? ""}|${p.path}`}
+      onFire={(instruction) => postIntent({
+        kind: "create", workspace: p.workspace, path: p.path, ...(instruction ? { instruction } : {}),
+      })} />
   );
 }
 
@@ -111,7 +191,13 @@ interface Hit { text: string; top: number; left: number }
  *  Scoped to the container on purpose: a selection in the conversation, in the rail, or in another
  *  panel is not a selection in this file, and an action that offered to extend it would name this
  *  page while quoting something else. The check is containment in the DOM, not a guess from
- *  coordinates. */
+ *  coordinates.
+ *
+ *  ⚠ THE FIELD DESTROYS THE SELECTION IT IS ABOUT (#1593). Focusing an input collapses the
+ *  document's highlight, `selectionchange` fires, and the naive component unmounts its own field
+ *  mid-type. So a press CAPTURES the hit into `asking`, and while a field is open the listener
+ *  stands down: the collapse it caused is not news about what the reader wanted. Same reason the
+ *  button below reads `onMouseDown` rather than `onClick`, one step further along. */
 export function SelectionExtend(p: {
   containerRef: RefObject<HTMLElement | null>;
   workspace?: string;
@@ -120,8 +206,12 @@ export function SelectionExtend(p: {
   body: string | null;
 }) {
   const [hit, setHit] = useState<Hit | null>(null);
+  /** the hit a press captured — the field is open on THIS text, whatever the document's live
+   *  selection has become since */
+  const [asking, setAsking] = useState<Hit | null>(null);
 
   const read = useCallback(() => {
+    if (asking) return;         // a field is open on a captured hit; the DOM's selection is stale news
     const host = p.containerRef.current;
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
     if (!host || !sel || sel.isCollapsed || sel.rangeCount === 0) { setHit(null); return; }
@@ -138,7 +228,7 @@ export function SelectionExtend(p: {
     const top = r && hostRect ? r.top - hostRect.top + host.scrollTop - 34 : 0;
     const left = r && hostRect ? r.left - hostRect.left : 0;
     setHit({ text, top: Math.max(0, top), left: Math.max(0, left) });
-  }, [p.containerRef]);
+  }, [p.containerRef, asking]);
 
   useEffect(() => {
     // `selectionchange` is the only event that fires for a keyboard selection and for a
@@ -147,28 +237,44 @@ export function SelectionExtend(p: {
     return () => document.removeEventListener("selectionchange", read);
   }, [read]);
 
-  // A new document is a new selection context — never carry the last page's highlight onto it.
-  useEffect(() => { setHit(null); }, [p.path, p.workspace]);
+  // A new document is a new selection context — never carry the last page's highlight, or a field
+  // opened over it, onto it.
+  useEffect(() => { setHit(null); setAsking(null); }, [p.path, p.workspace]);
 
+  const fire = (instruction?: string) => {
+    const h = asking;
+    setAsking(null); setHit(null);
+    if (!h) return;
+    postIntent({
+      kind: "extend", workspace: p.workspace, path: p.path,
+      selection: h.text, selection_range: sourceRange(p.body, h.text),
+      ...(instruction ? { instruction } : {}),
+    });
+  };
+
+  /** the floating box, worn by the button and by the field it opens */
+  const floating: CSSProperties = {
+    ...ty.chip, position: "absolute", zIndex: 4, display: "inline-flex", alignItems: "center",
+    gap: 5, color: "var(--t1)", background: surface.raisedHi, border: "1px solid var(--line)",
+    borderRadius: 6, padding: "3px 8px", boxShadow: "0 2px 8px rgba(0,0,0,.18)",
+  };
+
+  if (asking) {
+    return (
+      <span data-doc-act="extend-selection-line" title={LINE_HINT}
+        style={{ ...floating, top: asking.top, left: asking.left, width: 260, cursor: "text" }}>
+        <Icon name="spark" size={12} />
+        <ActLine onFire={fire} label="What to do with the highlighted text (optional)" />
+      </span>
+    );
+  }
   if (!hit) return null;
   return (
     <button data-doc-act="extend-selection" title="Extend — ask this chat to go further on the highlighted text"
       // mousedown, not click: a click on this button would first collapse the selection it is
       // about, and the text would be gone by the time the handler read it.
-      onMouseDown={(e) => {
-        e.preventDefault();
-        postIntent({
-          kind: "extend", workspace: p.workspace, path: p.path,
-          selection: hit.text, selection_range: sourceRange(p.body, hit.text),
-        });
-        setHit(null);
-      }}
-      style={{
-        ...ty.chip, position: "absolute", top: hit.top, left: hit.left, zIndex: 4,
-        display: "inline-flex", alignItems: "center", gap: 5, color: "var(--t1)",
-        background: surface.raisedHi, border: "1px solid var(--line)", borderRadius: 6,
-        padding: "3px 8px", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,.18)",
-      }}>
+      onMouseDown={(e) => { e.preventDefault(); setAsking(hit); }}
+      style={{ ...floating, top: hit.top, left: hit.left, cursor: "pointer" }}>
       <Icon name="spark" size={12} />
       Extend
     </button>

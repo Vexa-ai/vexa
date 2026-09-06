@@ -123,8 +123,61 @@ def tokens_for(intent) -> dict:
         "path": s("path"),
         "workspace": s("workspace"),
         "selection": s("selection"),
+        # THE PERSON'S OWN LINE (Vexa-ai/vexa#1593). The one token whose value is text a human typed
+        # rather than a fact about their screen — see `with_instruction` below for why that is
+        # allowed here and nowhere else on this record.
+        "instruction": s("instruction"),
         "term": s("term"),
         "meeting": s("meeting"),
         "segment": s("segment"),
         "since": s("since"),
     }
+
+
+# ── the person's own line (Vexa-ai/vexa#1593) ────────────────────────────────────────────────────
+#
+# Founder, 2026-09-06, with "recorded YouTube video" selected on a page: *"extend might have an
+# extra prompt that opens on click like 'find link on youtube i would add then'"*. The selection is
+# the WHERE; this is the WHAT. It rides the intent as `instruction` and reaches the preset as
+# `{{instruction}}`.
+#
+# ⚠ WHY THIS MODULE COMPOSES A SENTENCE, HAVING SAID IT NEVER WOULD. The header's rule is that the
+# WORDS are admin-owned, because anyone able to make a client send an intent could otherwise drive
+# the recipient's agent. That rule is about OUR words. This is the PERSON'S OWN TEXT, typed into
+# their own chat, addressed to their own agent — exactly what the composer one panel away already
+# sends, and no new capability at all. What is composed here is the one line of attribution around
+# it, which is the opposite of a leak: it says whose words these are.
+#
+# ⚠ AND WHY IT CANNOT SIMPLY BE A TOKEN. `preset_library.top_up` is ADDITIVE — a preset already in
+# `_global/asks/` is never overwritten, because its content belongs to the admin. So an instance
+# whose `extend.md` predates `{{instruction}}` would substitute nothing, and the one thing the
+# person typed would vanish between their keystroke and the agent, silently. Every deployment that
+# has ever run this feature is in exactly that state. So the token is the good path and this is the
+# floor: when the preset does not ask for the line, the line is appended, attributed, at the end.
+
+#: How the line is introduced to the agent. ONE spelling, shared with the client's fallback sentence
+#: (`minutes/extend.ts` — `INSTRUCTION_LEAD`) and with the two asks that carry the token, so the
+#: agent reads the same sentence whichever path the words took.
+INSTRUCTION_LEAD = "They typed this on the button, in their own words — what to do with it:"
+
+#: The token an ask uses to place the line itself.
+INSTRUCTION_TOKEN = "{{instruction}}"
+
+
+def instruction_of(intent) -> str:
+    """The person's line, flattened to one and stripped, or ``""``. Never None, never the word."""
+    d = intent if isinstance(intent, dict) else {}
+    return " ".join(str(d.get("instruction") or "").split())
+
+
+def with_instruction(text: str, ask: str, intent) -> str:
+    """`text` (the substituted preset) with the person's line guaranteed to be in it.
+
+    The check is on the RAW `ask`, never on the substituted output: searching the output for the
+    line itself would false-positive the moment somebody types a word the preset already uses
+    ("links", "page"), and the failure would be the silent one — their sentence dropped because the
+    preset happened to contain it."""
+    line = instruction_of(intent)
+    if not line or INSTRUCTION_TOKEN in (ask or ""):
+        return text
+    return f"{text}\n\n{INSTRUCTION_LEAD}\n\n{line}"

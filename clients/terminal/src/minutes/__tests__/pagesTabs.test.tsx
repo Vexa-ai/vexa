@@ -107,7 +107,10 @@ describe('Extend, under the content (founder: "noticeable as one click knowledge
 
   it("fires the SAME act, for the resolved view slot", () => {
     const { container } = panel();
+    // A press opens the optional one-line field first (Vexa-ai/vexa#1593); Escape fires the act
+    // with no line, which is the payload this test has always asserted.
     fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
+    fireEvent.keyDown(container.querySelector("[data-act-field]") as HTMLElement, { key: "Escape" });
     expect(asks).toHaveLength(1);
     expect(asks[0].intent).toEqual({ kind: "extend", workspace: "_global", path: PATH });
     expect(onOpen).not.toHaveBeenCalled();               // it navigates on commit, it mints no tab

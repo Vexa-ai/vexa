@@ -29,6 +29,13 @@ export const PREVIEW_MAX = 80;
 
 const VERB: Record<ChatIntentKind, string> = { extend: "Extend", create: "Create", explore: "Explore", highlight: "Highlight" };
 
+/** HOW THE PERSON'S OWN LINE IS INTRODUCED to the agent (Vexa-ai/vexa#1593). One sentence, and the
+ *  same one the server writes when a preset carries no `{{instruction}}` token
+ *  (`chat_intents.INSTRUCTION_LEAD`) and the same one the two asks put above it — three spellings
+ *  of one thing would be three ways for the agent to read it differently. It says WHOSE words
+ *  follow, because that is the whole point: the preset is ours, this line is theirs. */
+export const INSTRUCTION_LEAD = "They typed this on the button, in their own words — what to do with it:";
+
 /** Collapse the whitespace a rendered selection carries — a highlight dragged across a paragraph
  *  break arrives with newlines in it, and they belong in the intent, never in a one-line label. */
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -66,7 +73,12 @@ export function fallbackText(intent: ChatIntent): string {
       `keep="<those terms>" to publish them as chips. Say nothing back — this is machinery.`;
   }
   const head = `${VERB[intent.kind]}: ${intent.path}`;
-  return intent.selection ? `${head} — '${intent.selection}'` : head;
+  const where = intent.selection ? `${head} — '${intent.selection}'` : head;
+  // THE LINE RIDES THE FALLBACK TOO. This sentence is what runs when the preset library is behind
+  // the client (the header says why both travel), and a fallback that dropped the one thing the
+  // person typed would be the worst of the two failures: the act still runs, on the wrong subject,
+  // with nothing to say it ignored them.
+  return intent.instruction ? `${where}\n\n${INSTRUCTION_LEAD}\n\n${intent.instruction}` : where;
 }
 
 /** WHERE A SELECTION SITS IN THE FILE SOURCE — or nothing.
