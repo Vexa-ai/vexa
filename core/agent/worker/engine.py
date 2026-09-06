@@ -1712,7 +1712,12 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # turns that were never the problem.
         run_writeback = False
         candidates: list[str] = []
-        if writeback is not None:
+        # DECISION 22 — a post-meeting run in the room writes NOTHING to the organiser's desk: the
+        # report is the reply, and `drop_to_attendees` is the one writer of desks. The write-back
+        # phase used to run here regardless, upserting every name the transcript mentioned onto
+        # the desk (four pages on 2026-09-06), and the flow's own guard then failed the step for
+        # exactly that. `room_run()` is the platform's positive signal for such a run.
+        if writeback is not None and not room_run():
             try:
                 if should_write_back(prompt, tool_calls, upserts=upserts):
                     candidates = writeback_candidates(said)
