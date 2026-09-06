@@ -163,24 +163,34 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     home is the meeting row; flows distributes it into every attendee's desk afterwards, organizer
     included, nobody special.
 
-    THE ROOM IS THE OTHER ATTENDEES' DESKS, AND ONLY THOSE (ruling 2026-09-02, correcting this
-    docstring). This code used to read "not the organizer's either" as a mount-mode instruction and
-    demote the SUBJECT'S OWN desk to ``write: False`` as well. That is not a narrowing, it is a
-    broken turn: the worker writes its delegation credential to ``<cwd>/.claude``, the cwd IS the
-    subject's own desk when the meeting has no group, and the spawn therefore died on
-    ``OSError: [Errno 30] Read-only file system: '/workspaces/129/.claude'`` before reaching the
-    model — every post-meeting turn for every non-admin subject, invisible because the instance's
-    only admin is the founder. Whether the turn WRITES a desk is enforced where it belongs, by
-    ``process_meeting``'s HEAD-before/HEAD-after check, not by taking away a mount mode the runtime
-    needs to start at all.
+    ⚠ ENFORCED BY THE MOUNT, NOT BY A GUARD THAT FAILS THE REPORT (Vexa-ai/vexa#1606, founder ruling
+    2026-09-06). The organiser's own desk is mounted ``write: False`` on EVERY room run — group or no
+    group. It used to keep the write bit, with ``process_meeting``'s HEAD-before/HEAD-after check as
+    the only thing standing between decision 22 and a desk write, and that check is a DETECTOR: when
+    it fires the meeting loses its minutes mail and a human has to reset a repository by hand. It
+    fired twice on 2026-09-06 (meetings 147 and 150) — first the entity write-back phase, then the
+    desk README refresh — and each time the report existed, was grounded, and went nowhere. A
+    contract enforced by a check that costs the product its output when it holds is enforced in the
+    wrong place. A read-only bind cannot be talked out of.
 
-    So in room mode: the ROOM entries are ``write: False`` (they always were, where they are
-    appended below), the subject's own desk KEEPS its write bit, and the subject's OTHER activated
-    workspaces are still demoted — they are neither the room nor the subject's own desk, and a run
-    scoped to one meeting has no business writing them. The GROUP DESK, when the meeting is bound to
-    a shared workspace and the subject is a contributor/owner, keeps its write bit AND becomes the
-    turn's cwd (``primary``), because that desk is the room's shared state and the run maintains it.
-    ``_system`` is NOT a desk and stays read-write — chat continuity anchors there
+    THE ROOM IS THE OTHER ATTENDEES' DESKS; the organiser's desk is not one of the room mounts, it is
+    simply read-only too. What is NOT reverted here is the lesson of F59, and it is a different
+    statement than the one this code used to make: **the cwd the runtime is handed must be
+    WRITABLE**. It used to buy that by leaving the desk writable, and the spawn died without it
+    (``OSError: [Errno 30] Read-only file system: '/workspaces/129/.claude'`` — every post-meeting
+    turn for every non-admin subject, invisible because the instance's only admin is the founder).
+    The cwd now comes from the group desk when the subject may write it, and otherwise from the
+    ``_system`` tier, which is writable by contract and is not a desk (``_worker_cwd``'s last
+    fallback). F59's property is asserted as itself — the cwd is writable — instead of through a
+    proxy that also grants a content desk nobody wanted written.
+
+    So in room mode: the ROOM entries are ``write: False`` (they always were, where they are appended
+    below), the subject's OWN desk is ``write: False`` as well, and the subject's OTHER activated
+    workspaces are demoted with it — none of them is the room, and a run scoped to one meeting has no
+    business writing any of them. The GROUP DESK, when the meeting is bound to a shared workspace and
+    the subject is a contributor/owner, keeps its write bit AND becomes the turn's cwd (``primary``),
+    because that desk is the room's shared state and decision 22's group half says the run maintains
+    it. ``_system`` is NOT a desk and stays read-write — chat continuity anchors there
     (``worker/engine._continuity_root``), and taking it away would break the turn, not narrow it.
 
     ── THE SCAFFOLD (PRD 5.5) ─────────────────────────────────────────────────────────────────────
@@ -213,26 +223,22 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
         g = {**g, "write": True}
     stack.append(g)
 
-    # Tier 2 — the NORMAL active set (private baseline + activated extras). In ROOM mode the
-    # subject's OTHER activated workspaces are demoted to read-only; the subject's OWN desk and the
-    # meeting's group desk are not (see DECISION 22 in the docstring — the room is the other
-    # attendees' desks, and those are appended below already read-only).
+    # Tier 2 — the NORMAL active set (private baseline + activated extras). In ROOM mode EVERY desk
+    # the subject owns is demoted to read-only — their own included; the meeting's group desk is the
+    # one exception (see DECISION 22 in the docstring — the room's own entries are appended below
+    # already read-only).
     if room:
         group = str(room.get("group_workspace_id") or "")
-        # THE SUBJECT'S OWN DESK keeps its write bit — the runtime needs a writable cwd to start at
-        # all (F59). Their OTHER activated workspaces are still demoted: those are neither the room
-        # nor the subject's own desk, and a run scoped to one meeting has no business writing them.
-        #
-        # ...UNLESS THE MEETING HAS A GROUP DESK THIS SUBJECT MAY WRITE, and then the reason for
-        # the write bit is gone: that desk becomes `primary` twenty lines down, so IT is the cwd
-        # the runtime needs, and decision 22's group half says in as many words that it is "the one
-        # desk you write to in this turn". Leaving the organiser's own desk writable beside it left
-        # a second writable content desk in a run whose whole contract is that it writes no desk —
-        # and something did write it: the entity write-back phase (decision 24) authors pages into
-        # every writable mount after every turn, which moved HEAD and tripped this step's own
-        # decision-22 detector on every `#group:` meeting (F103). The narrowing is applied AFTER
-        # the group mount is resolved below, because until then we do not know whether the subject
-        # can actually write it — a viewer's group desk must not cost them their cwd.
+        # DECISION 22, IN THE MOUNT TABLE. A room run writes ONE artefact and its home is the meeting
+        # row; `drop_to_attendees` is the one writer of desks. So no desk this subject owns is
+        # writable on this run — not the one they are activated on, not the one they happen to be
+        # cwd'd into. This used to keep the organiser's own desk writable "because F59 needs a
+        # writable cwd", and two different end-of-turn writers took that as permission: the entity
+        # write-back phase (decision 24) on meeting 147, and the desk README refresh (decision 26.4)
+        # on meeting 150 — three commits reading `175: README.md — updated`. Both moved HEAD, both
+        # tripped `process_meeting`'s detector, and both times a grounded report was thrown away.
+        # The cwd is bought elsewhere now (`_worker_cwd`'s `_system` fallback), so the write bit here
+        # buys nothing and costs exactly that.
         if group and not any(m.get("slug") == group for m in active):
             # The meeting names a group the subject has not activated — resolve it directly through
             # the authoritative Lane-A seam so the run can maintain the group's memory. Membership
@@ -240,24 +246,19 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
             g_mount = group_desk_mount(settings.workspaces_dir, subject, group)
             if g_mount is not None:
                 active.append(dict(g_mount))
-        # Now the demotion, with the group's write bit known. `writable_group` is the predicate the
-        # comment above turns on: with one, the subject's own desk joins the read-only room; with
-        # none, it keeps write and primary exactly as F59 requires.
-        writable_group = bool(group) and any(
-            m.get("slug") == group and m.get("write") for m in active)
         active = [
-            dict(m) if ((m.get("primary") and not writable_group)
-                        or (group and m.get("slug") == group))
+            dict(m) if (group and m.get("slug") == group)
             else {**m, "write": False, "primary": False}
             for m in active]
     # THE CWD, STATED rather than reached by elimination. The group desk takes it when the meeting
-    # has one AND this subject may actually write it; otherwise the subject's own desk keeps it.
+    # has one AND this subject may actually write it; otherwise nothing here is primary and
+    # `_worker_cwd` lands on the writable `_system` tier.
     #
     # `_worker_cwd` picks the first `primary`, else the first writable non-system mount, else the
-    # baseline home. Under the old blanket demotion NOTHING was primary and nothing was writable, so
-    # the cwd arrived through that last fallback — the baseline home, mounted read-only — and the
-    # worker died on `mkdir`. Deciding it here means a viewer's group desk (readable, not writable)
-    # can never become the cwd either, which is the same bug through a quieter door.
+    # writable `_system` tier, else the baseline home. The baseline home is the fallback that killed
+    # every non-admin post-meeting spawn (F59) — it is a PATH, not a mount, so it was handed over
+    # read-only and the worker died on `mkdir`. `_system` sits ahead of it now precisely so a run
+    # with no writable desk still has a writable cwd, which is F59's actual property.
     if room:
         _g = str(room.get("group_workspace_id") or "")
         _gm = next((m for m in active if _g and m.get("slug") == _g and m.get("write")), None)
@@ -462,14 +463,26 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
     Normally the private baseline (the primary mount). But the baseline can be switched OFF, in which case
     it is absent from the mount set — the cwd must then FOLLOW the active set (the first NORMAL writable
     workspace, never a system tier), not stay pinned to the disconnected baseline home (which would make the
-    agent describe/read a workspace the user turned off). Falls back to the baseline home only when nothing
-    normal is active (a degenerate turn with only the system tiers)."""
+    agent describe/read a workspace the user turned off).
+
+    ⚠ THE LAST TWO STEPS ARE ORDERED THE WAY THEY ARE BECAUSE OF F59. The final fallback used to be
+    the baseline HOME — a composed path, not a mount — so a dispatch in which no desk is writable was
+    handed a cwd it could not write, and the worker died on ``<cwd>/.claude`` before the model ran.
+    A room run is exactly that dispatch now (Vexa-ai/vexa#1606: every desk the subject owns is
+    read-only), so ``_system`` — always mounted, read-write by contract, and NOT a desk — is tried
+    first. F59's property is "the cwd the runtime is handed is writable"; this is where that is
+    bought. The baseline home stays as the degenerate last resort (a dispatch with no mounts at all),
+    where it is the only answer there is."""
     primary = next((m for m in mounts if m.get("primary") and m.get("path")), None)
     if primary:
         return primary["path"]
     normal = next((m for m in mounts
                    if m.get("write") and m.get("role") not in ("global", "system") and m.get("path")), None)
-    return normal["path"] if normal else f"{root}/{subject}"
+    if normal:
+        return normal["path"]
+    system = next((m for m in mounts
+                   if m.get("role") == "system" and m.get("write") and m.get("path")), None)
+    return system["path"] if system else f"{root}/{subject}"
 
 
 def _start_with_nonce(start: dict, nonce: str) -> dict:
@@ -527,8 +540,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     #
     # It is read for two things the room run must not do, both of them decision 22 ("the run reads
     # desks and writes ONE shared artefact whose home is the meeting row"):
-    #   * the entity write-back phase does not run (it authored pages into the organiser's desk
-    #     after every post-meeting turn, moved HEAD, and tripped the detector — F103);
+    #   * no end-of-turn bookkeeping runs on the organiser's desk — not the entity write-back phase
+    #     (F103) and not the README refresh (Vexa-ai/vexa#1606). The MOUNT is what makes that true
+    #     (`build_mount_set` demotes every desk the subject owns); this stamp is what lets the worker
+    #     say so in its own words instead of inferring it from a mount shape that cannot answer;
     #   * the bot verbs leave the toolbelt (a turn about a meeting that is over cannot usefully
     #     stop a bot, and it filed four `bot_stop` calls trying — F104).
     if room and room.get("meeting_id"):

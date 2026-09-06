@@ -718,10 +718,20 @@ def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
     # do: this runs on EVERY turn and commits `README.md` whenever a section changed. On a
     # post-meeting room run against a group-less meeting the writable primary IS the organiser's
     # own desk, so decision 26.4's refresh moved HEAD and decision 22's detector failed the
-    # meeting (F103). Same rule as the write-back's roots above, and it has to be stated twice
-    # because these are two different writers on one surface — the group's README is still
-    # maintained here, which is decision 22's group half in as many words.
+    # meeting (F103, then again on meeting 150 — three commits reading `175: README.md — updated`).
+    # Same rule as the write-back's roots above, and it has to be stated twice because these are two
+    # different writers on one surface — the group's README is still maintained here, which is
+    # decision 22's group half in as many words.
     if room_run() and str(desk.get("role") or "private") == "private":
+        return None
+    # AND NEVER A MOUNT THIS TURN MAY NOT WRITE. `build_mount_set` now demotes every desk the subject
+    # owns on a room run (Vexa-ai/vexa#1606), so on a group-less room run `desk_mounts` hands back
+    # nothing at all and this function has already returned. This line is what makes that TRUE rather
+    # than incidental: regeneration reads the write bit, so a desk that arrives read-only through any
+    # route — a room, a viewer's group, a future producer — is not regenerated and not committed.
+    # Stated explicitly because `desk_mounts` defaults an ABSENT write key to True, and the rule that
+    # matters here is the R-A15 one: a write bit that has to be present to be true cannot be lost.
+    if not desk.get("write", False):
         return None
     root = Path(str(desk["path"]))
     if not root.is_dir():

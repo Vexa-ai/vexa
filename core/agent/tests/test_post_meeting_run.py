@@ -20,9 +20,14 @@ No network, no docker: the mount stack and the worker env are pure functions of 
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from control_plane.dispatch import build_mount_set, build_unit_env
 from shared.config import load_settings
@@ -100,10 +105,14 @@ def test_a_group_meetings_run_has_exactly_one_writable_desk_and_it_is_the_groups
     assert own["write"] is False and own["primary"] is False
 
 
-def test_without_a_group_the_organisers_desk_still_keeps_the_write_bit_it_needs(tmp_path):
-    """The other half of F59, and the reason the narrowing above is conditional: with no group
-    desk the subject's own desk IS the cwd, and a read-only cwd killed the worker before the model
-    ran (`OSError: [Errno 30] Read-only file system: .../.claude`)."""
+def test_without_a_group_the_organisers_desk_is_read_only_and_the_cwd_is_still_writable(tmp_path):
+    """Vexa-ai/vexa#1606 — this test used to assert the opposite, and the assertion was the bug.
+
+    The desk kept its write bit "because F59 needs a writable cwd", and two different end-of-turn
+    writers read that as permission (the entity write-back phase, then the README refresh). F59's
+    property is NOT "the desk is writable", it is "the cwd the runtime is handed is writable" — so
+    that is what this asserts, and the cwd is now the `_system` tier, which is writable by contract
+    and is not a desk."""
     root = tmp_path / "ws"
     for s in ("58", "u_bob"):
         _seed(root, s)
@@ -111,22 +120,31 @@ def test_without_a_group_the_organisers_desk_still_keeps_the_write_bit_it_needs(
                             room=_room(desks=[("b@x.test", "u_bob")]))
 
     own = next(m for m in stack if m["role"] == "private")
-    assert own["write"] is True and own["primary"] is True
+    assert own["write"] is False and own["primary"] is False
+    assert [m["slug"] for m in stack if m["write"] and m["role"] not in ("global", "system")] == []
+    from control_plane.dispatch import _worker_cwd
+    cwd = _worker_cwd(str(root), "58", stack)
+    at_cwd = next(m for m in stack if m["path"] == cwd)
+    assert at_cwd["write"] is True, "the subject cannot start a turn on a read-only cwd (F59)"
+    assert at_cwd["role"] == "system"
 
 
 def test_a_group_the_subject_may_only_read_never_costs_them_their_cwd(tmp_path):
-    """The narrowing turns on a WRITABLE group desk, not on the meeting merely naming one. A
-    viewer's group desk is read-only, so demoting the organiser's own desk beside it would leave
-    the run with no writable mount at all — F59 through a quieter door."""
+    """A viewer's group desk is read-only, so it must not become the cwd — F59 through a quieter
+    door. With the organiser's own desk read-only too (#1606) there is no writable desk at all on
+    this run, which is exactly the case the `_system` fallback exists for."""
     root = tmp_path / "ws"
     _seed(root, "58")
     _shared_ws(root, "g_acme", [("u_somebody_else", "owner"), ("58", "viewer")])
     stack = build_mount_set(_settings(tmp_path, root), "58", room=_room(group="g_acme"))
 
     own = next(m for m in stack if m["role"] == "private")
-    assert own["write"] is True and own["primary"] is True
+    assert own["write"] is False and own["primary"] is False
     group = next((m for m in stack if m["slug"] == "g_acme"), None)
-    assert group is None or group["write"] is False
+    assert group is None or (group["write"] is False and group["primary"] is False)
+    from control_plane.dispatch import _worker_cwd
+    cwd = _worker_cwd(str(root), "58", stack)
+    assert next(m for m in stack if m["path"] == cwd)["write"] is True
 
 
 # ══ F103/F104 · the worker is TOLD, positively, that this is a room run ══════════════════════
@@ -262,3 +280,77 @@ def test_the_groups_readme_is_still_refreshed_on_a_group_meeting(monkeypatch, tm
 
     assert engine.refresh_desk_readme([group]) == {"changed": False}
     assert seen["root"] == str(tmp_path)
+
+
+# ══ #1606 · a DISPATCHED room run that tries to write lands nothing on the desk ═══════════════
+# The two tests above are unit-shaped: they hand the worker a mount dict and watch what it does
+# with it. This one starts at the dispatch — the same `build_unit_env` the Dispatcher calls — takes
+# the mount set the worker would actually receive, and drives BOTH end-of-turn writers plus a raw
+# file write against the real desk directory with the mode the runtime would bind it in.
+#
+# That combination is the point. Either half alone passes on a broken build: a read-only bind with
+# a regeneration pass still standing produces an exception nobody catches, and a stood-down
+# regeneration on a writable mount is one instruction away from writing again.
+
+@contextlib.contextmanager
+def _readonly(path: Path):
+    """The desk's root as the runtime binds it on a room run (`write: False` → a `:ro` bind).
+
+    Mode bits, not a real bind — and root ignores mode bits, which is why the write-refusal
+    assertion below is euid-conditional. The mount modes themselves are asserted directly."""
+    mode = path.stat().st_mode
+    os.chmod(path, stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        yield
+    finally:
+        os.chmod(path, mode)
+
+
+def test_a_dispatched_room_run_lands_nothing_on_the_organisers_desk(tmp_path, monkeypatch):
+    """The acceptance of Vexa-ai/vexa#1606, end to end at the seam: mounts RO, no regeneration.
+
+    On 2026-09-06 this run committed to the organiser's desk twice — `175: README.md — updated`,
+    three times, on meeting 150 — the flow's guard failed the step, and the meeting had no page and
+    no mail. Nothing here is allowed to move that repository."""
+    from worker import engine
+
+    root = tmp_path / "ws"
+    desk_dir = _seed(root, "58")
+    _seed(root, "u_bob")
+    settings = _settings(tmp_path, root)
+    env = build_unit_env(settings, dict(INV), unit_id="u1", token="t",
+                         room=_room(meeting_id="150", desks=[("b@x.test", "u_bob")]))
+
+    mounts = json.loads(env["VEXA_MOUNTS"])
+    own = next(m for m in mounts if m["role"] == "private")
+    assert own["path"] == str(desk_dir)
+    assert own["write"] is False, "the desk is bound :ro on a room run — that is the enforcement"
+    # ...and the turn still has somewhere to live, which is all F59 ever asked for.
+    assert next(m for m in mounts if m["path"] == env["VEXA_WORKSPACE_PATH"])["write"] is True
+
+    monkeypatch.setenv("VEXA_ROOM_MEETING", env["VEXA_ROOM_MEETING"])
+    monkeypatch.setenv("VEXA_MOUNTS", env["VEXA_MOUNTS"])
+    monkeypatch.setenv("VEXA_WORKSPACE_PATH", env["VEXA_WORKSPACE_PATH"])
+    head = lambda: subprocess.run(["git", "-C", str(desk_dir), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+    before = head()
+    assert before
+
+    regenerated = []
+    monkeypatch.setattr("shared.desk_readme.update_readme",
+                        lambda r, **kw: regenerated.append(str(r)) or {"changed": True})
+    with _readonly(desk_dir):
+        # 1. NO REGENERATION. `refresh_desk_readme` runs at the end of every turn; with no writable
+        #    desk in the set there is nothing for it to maintain, and it does not even read one.
+        assert engine.refresh_desk_readme() is None
+        # 2. NO WRITE-BACK TARGET. Decision 24's phase authors pages into writable content mounts.
+        assert engine.writeback_candidates(["Priya Raman joined from Acme"]) == []
+        # 3. AND THE MOUNT WOULD HAVE REFUSED ANYWAY — this is the half a prompt cannot talk its
+        #    way past, and the reason the fix is here rather than in a guard after the fact.
+        if os.geteuid() != 0:          # root writes through any mode bit; a `:ro` bind it does not
+            with pytest.raises(OSError):
+                (desk_dir / "stray.md").write_text("the transcript dump of 2026-09-02")
+
+    assert regenerated == []
+    assert head() == before
+    assert not (desk_dir / "stray.md").exists()
