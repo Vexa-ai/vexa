@@ -106,6 +106,11 @@ export async function readActiveSet(): Promise<ActiveSet> {
 export interface WorkspaceIdentity {
   id: string; name: string | null; kind: string | null; slug?: string | null;
   access: "readable" | "not-yours" | "gone";
+  /** may this reader WRITE here — the other half of the desk's shape ("readable by everyone,
+   *  writable by one", `workspace_ids.writable_for`). Reported beside `access` rather than folded
+   *  into it because they are two answers, and a client that cannot tell them apart either hides an
+   *  editor a person may use or offers one that will 403. Optional so a pre-upgrade agent-api parses. */
+  writable?: boolean;
 }
 
 /** Resolve a workspace id → what it is now, for this reader. */
@@ -473,6 +478,41 @@ export async function listWorkspaceInvites(workspaceId: string): Promise<Workspa
 /** Revoke an invite (owner/contributor). */
 export async function revokeWorkspaceInvite(workspaceId: string, inviteId: string): Promise<{ ok: boolean }> {
   return getJson(`/api/workspace/invites/${encodeURIComponent(inviteId)}?workspace_id=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
+}
+
+export interface WorkspaceHistory { slug: string; branch: string; path: string | null; limit: number; commits: GitCommit[] }
+/** A WORKSPACE'S RECENT COMMITS, optionally filtered to one page — what the workspace README's
+ *  history section reads (Vexa-ai/vexa#1623).
+ *
+ *  `readWorkspaceGit` above answers a different question (what is going on here right now: branch,
+ *  uncommitted changes, last eight commits) and this one answers *how did this page get here*, which
+ *  needs a pathspec and a caller-set limit. Both are scoped by the server's `_read_target`, the same
+ *  call the file read uses — so there is no page whose history is readable and whose text is not.
+ *
+ *  `slug` is a PATH segment here, not a query parameter, so the desk needs a word: `personal`, which
+ *  is what `workspace_attach.PERSONAL_ALIAS` and the panel's own breadcrumb already call it. */
+export async function readWorkspaceHistory(slug: string, opts?: { path?: string; limit?: number }): Promise<WorkspaceHistory> {
+  const qs = new URLSearchParams();
+  if (opts?.path) qs.set("path", opts.path);
+  if (opts?.limit) qs.set("limit", String(opts.limit));
+  const q = qs.toString();
+  const url = `/api/workspaces/${encodeURIComponent(slug)}/git/history`;
+  const h = await getJson<WorkspaceHistory>(`${url}${q ? `?${q}` : ""}`);
+  // A 200 with the wrong shape is still a failure — the panel shows the error rather than rendering
+  // an empty history that reads as "nothing ever happened here" (the GitSection lesson, one route on).
+  if (!h || !Array.isArray(h.commits)) throw new ApiError(200, "malformed history (missing commits)", url);
+  return h;
+}
+
+export interface DetachResult { detached: boolean; remote: string | null; url: string | null; detail?: string }
+/** DETACH a workspace from its GitHub home — the inverse of *Attach existing repo…*. It removes the
+ *  remote and nothing else: no file changes, no commit, no deletion, so the tree the person is
+ *  reading is exactly where they left it. Refused for a shared workspace this caller only reads. */
+export async function detachWorkspaceRemote(opts?: { slug?: string }): Promise<DetachResult> {
+  return getJson(`/api/workspace/git-remote-detach`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: opts?.slug ?? null }),
+  });
 }
 
 export interface GitDiff { sha: string; path?: string; diff: string; truncated?: boolean }

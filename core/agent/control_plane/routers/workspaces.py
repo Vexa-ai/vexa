@@ -33,7 +33,7 @@ from control_plane.workspace_attach import (
     ensure_workspace_shareable, rename_workspace, set_archived, set_shared_active,
     shared_active_mounts, shared_attached_state, swap_workspace, workspace_slot_dir)
 from control_plane.workspace_git_sync import (
-    RemoteSyncError, pull_origin, push_origin, remote_status)
+    RemoteSyncError, detach_home, pull_origin, push_origin, remote_status)
 from control_plane.workspace_membership import MembershipError
 from control_plane.workspace_publish import (
     PublishError, RepoExistsError, publish_workspace, published_remote_url)
@@ -634,6 +634,54 @@ def build(**d) -> APIRouter:
             return wsr.git_diff_at(target, sha, path)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid path or subject")
+    @router.get("/api/workspaces/{slug}/git/history")
+    def ws_history(slug: str, request: Request, path: Optional[str] = None, limit: int = 20):
+        """A WORKSPACE'S RECENT COMMITS, optionally filtered to one page — the history the workspace
+        README's front page shows (Vexa-ai/vexa#1623: *"if it's a workspace readme we want to have
+        data — shared with whom, controls like github sync, git history lookup"*).
+
+        WHY `git/history` AND NOT `{slug}/history`, which is what #1623 asked for. The shorter path
+        OVERLAPS `/api/workspaces/by-slug/{slug}`: one concrete URL — `/api/workspaces/by-slug/history`
+        — matches both patterns, so which handler answers would be decided by the order the routers
+        happen to be included in. `test_route_table.py` exists to refuse exactly that, and it is
+        right to: *"the failure would be a request answered by the wrong handler rather than an error
+        anybody sees"*. One more literal segment removes the ambiguity and keeps the slug where the
+        issue put it. The alternative — an allowlist entry in the gate that caught this — would have
+        traded a real invariant for a URL nobody outside this build consumes yet.
+
+        SCOPED EXACTLY LIKE THE FILE READ, and by the same call rather than by a similar rule:
+        ``_read_target`` is what decides, so there is no page whose history a subject can read and
+        whose text they cannot. A slug outside the caller's mount set 403s there; a colleague's desk
+        falls through to the read-only path there; `_global` answers every subject there. Nothing
+        about who may read what is decided in this handler — which is the point, because a second
+        spelling of an authorization rule is a second answer waiting to be given.
+
+        TWO NARROWINGS, both deliberate and both refusals rather than widenings:
+
+        ``_system`` IS REFUSED. ``_read_target`` resolves it happily — it is the caller's OWN private
+        tier, and reading one's own chats and settings is not a leak. But `_global/POLICIES.md` says
+        of it, in as many words, *"`_system` is read by no agent for anybody else — chats, sessions
+        and settings are the one genuinely private tier"*, and this route exists to put a workspace's
+        history on a page. Sessions are not a workspace's history; there is no `_system` README and
+        no panel that would show this. Refusing it here costs nothing anybody asked for.
+
+        ``personal`` IS THE DESK. The terminal's desk tab carries no slug at all (its file reads pass
+        none, and ``_read_target`` answers the caller's primary for an absent one) — but a path
+        segment cannot be absent, so the desk needs a name here. ``personal`` is the one the rest of
+        the system already uses for exactly this (``workspace_attach.PERSONAL_ALIAS``, the MCP, the
+        panel's own breadcrumb), and it resolves through the same absent-slug branch rather than
+        through a second lookup."""
+        if slug == system_mounts.SYSTEM_SLUG:
+            raise HTTPException(status_code=403, detail=(
+                "_system is sessions and settings, not a workspace with a history"))
+        target_slug = None if slug in ("", "personal") else slug
+        try:
+            target = _read_target(request, target_slug)  # authorizes exactly as the file read does
+            return {"slug": slug,
+                    **wsr.git_history_at(target, path=path, limit=limit,
+                                         viewer=subject_of(request))}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "invalid path or subject")
     @router.post("/api/workspace/git/reset")
     def ws_git_reset(request: Request, body: dict = Body(...)):
         """UNDO commits a run is known to have made on THIS subject's own desk, back to a witnessed
@@ -1072,6 +1120,37 @@ def build(**d) -> APIRouter:
             raise _credential_refusal(redact_secrets(exc), subject, body.slug, home.url or "")  # P15
         return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha,
                 "updated": r.updated, "behind_before": r.behind_before}
+    @router.post("/api/workspace/git-remote-detach")
+    def ws_git_remote_detach(request: Request, body: WorkspacePullBody = Body(default=WorkspacePullBody())):
+        """DETACH a workspace from its GitHub home — the inverse of *Attach existing repo…*, and the
+        fourth of the four sync controls the workspace README shows (Vexa-ai/vexa#1623).
+
+        It removes the remote and NOTHING else: no file changes, no commit, no deletion. That is what
+        makes it safe to offer beside push and pull — a person who says *stop syncing this to GitHub*
+        has not said *give me back the tree that was here before it*, and the two acts are only
+        confusable if you implement the first as the second.
+
+        The gate is the PULL gate, deliberately, and not a laxer one: a pull rewrites the tree and a
+        detach changes where the tree can go, so both are writes to the same workspace plumbing and
+        both refuse a viewer. ``_manage_dir`` resolves only the caller's own slots and workspaces
+        they belong to; ``_require_shared_write`` then refuses a shared workspace they merely read.
+
+        The RECEIPT is the returned pair plus the log line — the two facts a person needs afterwards
+        are *which remote went* and *what its URL was*, and neither survives in git once it is gone."""
+        subject = subject_of(request)
+        ws = _manage_dir(subject, body.slug)
+        _require_shared_write(subject, body.slug)
+        try:
+            gone = detach_home(ws)
+        except RemoteSyncError as exc:
+            raise HTTPException(status_code=502, detail=redact_secrets(exc))   # P15
+        if gone is None:
+            return {"detached": False, "remote": None, "url": None,
+                    "detail": "this workspace has no GitHub home"}
+        remote, url = gone
+        logger.warning("workspace detached from its home: subject=%s slug=%s remote=%s",
+                       subject, body.slug or "(primary)", remote)
+        return {"detached": True, "remote": remote, "url": url}
     @router.get("/api/workspace/purpose")
     def ws_purpose_get(request: Request, slug: Optional[str] = None):
         """Read a workspace's PURPOSE one-liner (default = the caller's primary; ``slug`` = one of their

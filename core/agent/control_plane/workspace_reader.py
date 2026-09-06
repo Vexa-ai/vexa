@@ -188,6 +188,48 @@ def _is_template_doc(p: Path) -> bool:
 _SYSTEM_AUTHOR_EMAILS = {"platform@vexa.ai", "agent@vexa"}
 _SYSTEM_AUTHOR_NAMES = {"vexa-platform", "vexa-agent"}
 
+# The one `git log` format both readers below use, and the one parser for it.
+#
+# %an·%ae carry the D4 attribution: a member's agent commit is authored as its principal
+# (name=<subject>, email=<subject>@vexa.local); platform/seed commits are the plumbing authors.
+# --name-only appends each commit's changed files (so the terminal can make them clickable);
+# \x1e prefixes each commit record so we can split records and separate meta from the file list.
+# %ct = committer unix timestamp — a sortable key so a cross-workspace activity feed can merge
+# commits from several mounts by recency (the %cr relative string can't be sorted).
+_LOG_FORMAT = "--pretty=format:%x1e%h\x1f%s\x1f%cr\x1f%an\x1f%ae\x1f%ct"
+
+
+def _commit_records(raw: str, viewer_email: Optional[str]) -> list[dict]:
+    """Parse ``_LOG_FORMAT`` output into the wire shape the terminal renders.
+
+    Extracted from ``git_state_at`` when the page-scoped history route arrived (Vexa-ai/vexa#1623),
+    because the alternative was a SECOND copy of the ``you``/``member``/``system`` classification —
+    and an attribution rule that exists twice is one that will eventually disagree with itself about
+    the same commit in two panels of the same screen."""
+    out: list[dict] = []
+    for rec in (raw or "").split("\x1e"):
+        rec = rec.strip("\n")
+        if not rec:
+            continue
+        lines = rec.split("\n")
+        parts = lines[0].split("\x1f")
+        if len(parts) != 6:
+            continue
+        sha, msg, when, an, ae, ct = parts
+        if ae in _SYSTEM_AUTHOR_EMAILS or an in _SYSTEM_AUTHOR_NAMES:
+            kind = "system"          # policy/seed plumbing — never a member's agent push
+        elif viewer_email and ae == viewer_email:
+            kind = "you"             # the caller's own agent write
+        else:
+            kind = "member"          # ANOTHER member's agent pushed this
+        files = [
+            f.strip() for f in lines[1:]
+            if f.strip() and f.split("/", 1)[0].lstrip(".") not in ("git", "claude")
+        ][:20]                       # cap: a root/seed commit can touch hundreds
+        out.append({"sha": sha, "msg": msg, "when": when, "author": an, "kind": kind,
+                    "files": files, "ts": int(ct) if ct.isdigit() else 0})
+    return out
+
 
 class WorkspaceReader:
     def __init__(self, workspaces_dir: str) -> None:
@@ -533,36 +575,53 @@ class WorkspaceReader:
                 flag = line[:2].strip()[:1] or "M"
                 changes.append({"path": path, "kind": "A" if flag in ("A", "?") else flag})
         viewer_email = f"{viewer}@vexa.local" if viewer else None
-        commits = []
-        # %an·%ae carry the D4 attribution: a member's agent commit is authored as its principal
-        # (name=<subject>, email=<subject>@vexa.local); platform/seed commits are the plumbing authors.
-        # --name-only appends each commit's changed files (so the terminal can make them clickable);
-        # \x1e prefixes each commit record so we can split records and separate meta from the file list.
-        # %ct = committer unix timestamp — a sortable key so a cross-workspace activity feed can merge
-        # commits from several mounts by recency (the %cr relative string can't be sorted).
-        raw = git("log", "-8", "--name-only", "--pretty=format:%x1e%h\x1f%s\x1f%cr\x1f%an\x1f%ae\x1f%ct")
-        for rec in raw.split("\x1e"):
-            rec = rec.strip("\n")
-            if not rec:
-                continue
-            lines = rec.split("\n")
-            parts = lines[0].split("\x1f")
-            if len(parts) != 6:
-                continue
-            sha, msg, when, an, ae, ct = parts
-            if ae in _SYSTEM_AUTHOR_EMAILS or an in _SYSTEM_AUTHOR_NAMES:
-                kind = "system"          # policy/seed plumbing — never a member's agent push
-            elif viewer_email and ae == viewer_email:
-                kind = "you"             # the caller's own agent write
-            else:
-                kind = "member"          # ANOTHER member's agent pushed this
-            files = [
-                f.strip() for f in lines[1:]
-                if f.strip() and f.split("/", 1)[0].lstrip(".") not in ("git", "claude")
-            ][:20]                       # cap: a root/seed commit can touch hundreds
-            commits.append({"sha": sha, "msg": msg, "when": when, "author": an, "kind": kind,
-                            "files": files, "ts": int(ct) if ct.isdigit() else 0})
+        commits = _commit_records(git("log", "-8", "--name-only", _LOG_FORMAT), viewer_email)
         return {"branch": git("rev-parse", "--abbrev-ref", "HEAD") or "main", "changes": changes, "commits": commits}
+
+    def git_history_at(self, base: Path, *, path: Optional[str] = None, limit: int = 20,
+                       viewer: Optional[str] = None) -> dict:
+        """The workspace's recent commits, OPTIONALLY FILTERED TO ONE PAGE — what the workspace
+        README's history section reads (Vexa-ai/vexa#1623).
+
+        ``git_state_at`` above answers a different question and answers it well: *what is going on in
+        this workspace right now* — the branch, the uncommitted changes, the last eight commits. This
+        one answers *how did this page get here*, which needs two things that one does not have: a
+        PATHSPEC, and a limit the caller sets. Same records, same attribution (``_commit_records``),
+        so a commit shown in both places is the same commit with the same author in both.
+
+        ``path`` is a caller-supplied string and goes through ``wpaths.resolve_inside`` before it
+        reaches git, exactly as ``git_diff_at``'s does: ``git log -- ../../etc`` reads history from
+        outside the workspace. ``--follow`` is deliberately NOT used — it is single-path-only and
+        guesses at renames, and a guess in an audit list is worse than a short one.
+
+        Empty shape (never an exception) for a directory that is not a repository yet: a workspace
+        seeded but never committed to is an ordinary state, not a failure."""
+        import subprocess
+
+        from shared.gitenv import scrubbed_git_env
+
+        base = self._guard_under_root(base)
+        rel = (path or "").strip() or None
+        if rel is not None:
+            try:
+                wpaths.resolve_inside(base, rel)
+            except wpaths.PathRefused as exc:
+                raise ValueError(str(exc)) from None
+        n = max(1, min(int(limit or 20), 200))     # a bound the caller cannot lift: this reads git
+        if not (base / ".git").exists():
+            return {"branch": "", "path": rel, "limit": n, "commits": []}
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(base), *args], capture_output=True, text=True, env=scrubbed_git_env()
+            ).stdout.strip()
+
+        args = ["log", f"-{n}", "--name-only", _LOG_FORMAT]
+        if rel is not None:
+            args += ["--", rel]
+        viewer_email = f"{viewer}@vexa.local" if viewer else None
+        return {"branch": git("rev-parse", "--abbrev-ref", "HEAD") or "main", "path": rel, "limit": n,
+                "commits": _commit_records(git(*args), viewer_email)}
 
     def git_diff_at(self, base: Path, sha: str, path: Optional[str] = None) -> dict:
         """Unified diff of ONE commit (optionally scoped to a single file) in the workspace at ``base`` —

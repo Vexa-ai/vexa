@@ -119,6 +119,27 @@ def home_remote(ws: str | Path) -> Optional[tuple[str, str]]:
     return None
 
 
+def detach_home(ws: str | Path) -> Optional[tuple[str, str]]:
+    """DROP the workspace's home remote — the exact inverse of attach, and nothing more.
+
+    What it does: ``git remote remove <home>``. What it deliberately does NOT do: touch one file in
+    the working tree, rewrite one commit, or delete anything. Detaching means *stop syncing this
+    workspace to GitHub*; a person who detaches has not asked to lose the tree they are reading, and
+    the tree is the whole of what they would have lost had this been implemented as "swap back to
+    the parked copy" (``swap_workspace``), which is a different act with a different name.
+
+    Returns the ``(remote, url)`` that was removed, or ``None`` when there was no home to remove —
+    an already-detached workspace is a no-op, not an error, because the answer the caller wants is
+    "this workspace has no GitHub home", and it is true either way."""
+    wsp = Path(ws)
+    home = home_remote(wsp)
+    if home is None:
+        return None
+    remote, url = home
+    _git(wsp, "remote", "remove", remote)
+    return remote, _display_url(url)
+
+
 def _current_branch(ws: Path) -> Optional[str]:
     proc = _git(ws, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     branch = proc.stdout.strip()

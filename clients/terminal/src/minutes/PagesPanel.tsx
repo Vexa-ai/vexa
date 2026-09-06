@@ -42,6 +42,8 @@ import { CreatePageButton, ExtendPageButton, SelectionExtend, useIntentLanding }
 import { registry } from "../contributions";
 import { ReportPageButton } from "../surfaces/ReportThis";
 import { header, surface, type as ty } from "./tokens";
+import { WorkspaceReadmePanel } from "./WorkspaceReadmePanel";
+import { isWorkspaceReadme } from "./workspaceReadme";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
  *  `min-width: 0` instead of holding a permanent sliver open once the crumb has been starved. */
@@ -333,6 +335,14 @@ export function PagesPanel(p: {
                   </div>
                 : mode === "edit"
                   ? <MarkdownEditor value={draft} onChange={setDraft} slug={p.docSlug} />
+                  /* A WORKSPACE README IS ITS FRONT PAGE (Vexa-ai/vexa#1623). Founder, 2026-09-06,
+                     looking at a customer workspace's README in this very slot: *"if it's a
+                     workspace readme we want to have data — shared with whom, controls like github
+                     sync, git history lookup"*. It stands between the slug line above and the prose
+                     below, and INSIDE this scroller rather than above it, so a long panel scrolls
+                     with the document instead of squeezing it out of the panel.
+                     Only on the root README, only while reading it: `drafts/README.md` is a page
+                     about drafts and an editor is editing a file, not consulting a workspace. */
                   /* WHERE THIS DOCUMENT LIVES. `DocMetaContext` is how every link renderer learns
                      the base a relative reference resolves against and the workspace to read it
                      from — the workspace surface has provided it since it existed, and this panel
@@ -341,6 +351,7 @@ export function PagesPanel(p: {
                      links (which mostly still land, via the search order); an IMAGE has no search
                      order — the picture is either in this workspace or it is missing (#1612). */
                   : <DocMetaContext.Provider value={{ path: p.docPath, slug: p.docSlug }}>
+                      {isWorkspaceReadme(p.docPath) && <WorkspaceReadmePanel slug={p.docSlug} path={p.docPath} />}
                       <MdxDoc>{p.body}</MdxDoc>
                     </DocMetaContext.Provider>}
           {/* EXTEND, UNDER THE CONTENT (decision 32.1, as ruled 2026-09-06). Only while READING a
