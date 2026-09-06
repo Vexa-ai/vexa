@@ -171,6 +171,16 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY core/meetings/services/bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# A WRITABLE HOME, because the UID is not ours to choose. Under OpenShift's `restricted-v2`
+# SCC (and any PSA-restricted namespace) admission assigns a random per-namespace UID that
+# exists in no /etc/passwd — measured on a real admitted bot pod: runAsUser 1000920000. With
+# no HOME in the image the runtime falls back to `/`, which that UID cannot write, and the
+# entrypoint's whole bringup dies on it: pulseaudio wants $HOME/.config/pulse, fluxbox wants
+# $HOME/.fluxbox, Chromium wants $HOME/.config + $HOME/.cache, and the aws CLI wants
+# $HOME/.aws. /tmp is mode 1777, so it is writable by every UID without knowing which one.
+# See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
+ENV HOME=/tmp
+
 # noVNC (browser view) — present in the env base; harmless if unused.
 EXPOSE 6080
 

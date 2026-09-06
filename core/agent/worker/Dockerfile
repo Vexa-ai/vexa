@@ -60,5 +60,15 @@ COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contr
 COPY core/agent/contracts/event.v1/event.schema.json               ./agent/contracts/event.v1/event.schema.json
 COPY core/agent/contracts/tool.v1/tool.schema.json                 ./agent/contracts/tool.v1/tool.schema.json
 
+# A WRITABLE HOME, because the UID is not ours to choose. Under OpenShift's `restricted-v2`
+# SCC (and any PSA-restricted namespace) admission assigns a random per-namespace UID that
+# exists in no /etc/passwd. With no HOME in the image the runtime falls back to `/` (and the
+# harness code to "/root"), neither of which that UID can write — so harness prepare dies at
+# the very first step: llm/claude_code.py:616 mkdirs $HOME/.claude and llm/codex.py:174 mkdirs
+# $HOME/.codex, both OUTSIDE their try/except, and `git config --global` cannot lock
+# $HOME/.gitconfig. /tmp is mode 1777, so it is writable by every UID without knowing which one.
+# See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
+ENV HOME=/tmp
+
 # The runtime kernel spawns this image with this command (profiles.py "agent" profile).
 CMD ["python", "-m", "worker"]
