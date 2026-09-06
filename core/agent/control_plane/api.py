@@ -1110,7 +1110,7 @@ def _build_production_app() -> FastAPI:
     # Best-effort for the same reason `ensure_repo` below is — a read-only `_global` is a real
     # deployment shape, and `read_preset`'s fallback to the image is what holds when the write
     # cannot happen.
-    from control_plane import preset_library
+    from control_plane import global_seed, preset_library
     try:
         # PRINTED, not logged — see `preset_library.summary`: this service configures no root
         # logger, so every `agent_api.*` INFO record is dropped, and this one runs before uvicorn
@@ -1121,6 +1121,18 @@ def _build_production_app() -> FastAPI:
             flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"preset library: could not be topped up here: {exc}", flush=True)
+    # THE REST OF THE ORGANISATION TIER, on the same terms and for the same reason: the layer files
+    # with their unwritten regions, `POLICIES.md`, the generated flow pages, and the mail templates.
+    # Additive — a file already on the store is the admin's and is never touched — and best-effort,
+    # because a read-only `_global` is a legitimate deployment shape. It runs BEFORE `ensure_repo`
+    # below so a fresh instance's very first commit carries the scaffold rather than acquiring it as
+    # an untracked afterthought.
+    try:
+        print(global_seed.summary(
+            global_seed.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)),
+            flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"organisation tier: could not be seeded here: {exc}", flush=True)
 
     # `_global` gets its history BEFORE its first writer, never after. It shipped as a bare
     # directory that was mounted into every worker and read on every turn, with nothing recording

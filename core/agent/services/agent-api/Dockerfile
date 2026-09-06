@@ -65,6 +65,16 @@ COPY behavior/workspaces ./workspace-seeds
 # falls back to here when the store's copy is merely behind. The destination is pinned to
 # `preset_library.DEFAULT_IMAGE_ASKS_DIR` by test_preset_library.py.
 COPY behavior/asks ./behavior/asks
+# THE ORGANISATION TIER'S SEED (`_global` itself). Same rule as the library above, one directory up:
+# `control_plane/global_seed.py` copies these in ADDITIVELY at start and at global-ready, so a fresh
+# instance's `_global` arrives scaffolded — the five layer files with their unwritten regions,
+# `POLICIES.md`, and the flow pages generated from the flows' own code — and the setup conversation
+# fills blanks instead of composing structure. `behavior/mail` lands at `_global/mail/` by the same
+# copy: that directory's README already calls the repo copy the SOURCE and
+# `/workspaces/_global/mail/<name>.md` the live copy, and until now the only thing that carried one
+# to the other was somebody remembering to. Both destinations are pinned by test_global_seed.py.
+COPY behavior/global ./behavior/global
+COPY behavior/mail ./behavior/mail
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves

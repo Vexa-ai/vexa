@@ -153,8 +153,13 @@ def build(**d) -> APIRouter:
         # writable later — and it runs BEFORE the commit below, so anything added rides into the
         # admin's own acceptance commit instead of sitting untracked. Additive, never overwriting,
         # and never raising (it logs what it could not write) — so it cannot fail an acceptance.
-        from control_plane import preset_library
+        from control_plane import global_seed, preset_library
         preset_library.top_up(root)
+        # The rest of the tier on the same terms — the layer files, `POLICIES.md`, the flow pages
+        # and the mail templates. It cannot lift the gate on its own: every seeded layer file
+        # carries `global_layer.UNWRITTEN_MARKER`, and `state()` below counts a file that still
+        # carries it as not yet written.
+        global_seed.top_up(root)
         st = global_layer.state(root)
         if not st["ready"]:
             return JSONResponse(status_code=409, content={

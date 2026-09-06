@@ -48,6 +48,23 @@ LAYER_FILES = ("README.md", "PRINCIPLES.md", "OBJECTIVES.md", "STRUCTURE.md", "M
 COMPLETED = "completed"
 MISSING = "missing"
 
+# ── WHAT "NOT YET WRITTEN" MEANS ONCE THE LAYER ARRIVES SCAFFOLDED ───────────────────────────────
+# Before `behavior/global/` existed, `_global` was an empty directory and EMPTINESS was the whole
+# test: a file with nothing in it had not been written. A seeded placeholder is not empty, so on its
+# own that test would have let an instance accept five files nobody had filled in.
+#
+# The replacement is a POSITIVE SIGNATURE, not a comparison against remembered bytes: every seed
+# file carries this marker inside an HTML comment, and a file that still carries it is still the
+# seed's. A hash of the shipped file would go stale the moment the seed's wording changed and would
+# then silently call an untouched placeholder "written"; a marker the admin's editor cannot remove
+# by accident cannot. Writing the file means deleting the comment, which the comment itself says.
+UNWRITTEN_MARKER = "vexa:unwritten"
+
+
+def is_unwritten(text: str) -> bool:
+    """Is this layer file still the seed's placeholder? (The marker is present.)"""
+    return UNWRITTEN_MARKER in (text or "")
+
 # The one sentence a refused visitor sees. Quoted, never paraphrased — see admin-api's GATE_SENTENCE.
 GATE_SENTENCE = "This Vexa is being set up by its administrator."
 
@@ -107,13 +124,16 @@ def state(root: str | Path) -> dict:
     is not yet true, because a wizard that says "not ready" without saying why is a dead end for
     the one person who can fix it."""
     path = Path(root)
-    present, missing = [], []
+    present, missing, unwritten = [], [], []
     for name in LAYER_FILES:
         f = path / name
-        if f.is_file() and f.read_text(encoding="utf-8", errors="replace").strip():
-            present.append(name)
-        else:
+        body = f.read_text(encoding="utf-8", errors="replace") if f.is_file() else ""
+        if not body.strip():
             missing.append(name)
+        elif is_unwritten(body):
+            unwritten.append(name)
+        else:
+            present.append(name)
     readme = ""
     if (path / "README.md").is_file():
         readme = (path / "README.md").read_text(encoding="utf-8", errors="replace")
@@ -122,6 +142,9 @@ def state(root: str | Path) -> dict:
     reasons = []
     if missing:
         reasons.append("these files are missing or empty: " + ", ".join(missing))
+    if unwritten:
+        reasons.append("these files are still the seed's placeholder — the setup conversation has "
+                       "not written them yet: " + ", ".join(unwritten))
     if not company:
         reasons.append("README.md does not open with the company's name as its first heading")
     if not service:
@@ -129,7 +152,13 @@ def state(root: str | Path) -> dict:
     return {
         "ready": not reasons,
         "present": present,
-        "missing_files": missing,
+        # `missing_files` keeps its name and now carries BOTH shapes of "this file is not written":
+        # absent-or-empty, and still-the-seed's. Every caller of this key — the wizard, the setup
+        # ask, `routers/admin.py`'s 409 — is answering the question "what does the admin still have
+        # to write", and for that question a placeholder is missing. `unwritten` names the second
+        # shape separately for a caller that wants to say WHICH kind.
+        "missing_files": missing + unwritten,
+        "unwritten": unwritten,
         "company": company,
         "service": service,
         "reasons": reasons,
