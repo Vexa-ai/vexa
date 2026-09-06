@@ -209,7 +209,7 @@ export function repoInThreeWords(remote: GitRemoteStatus | null, failure: string
 /** THE LAST CHANGE, in the strip's one line: what was done, by whom, when. */
 export function lastChangeLine(c: GitCommit | null): string {
   if (!c) return "nothing committed yet";
-  const msg = c.msg.length > 44 ? `${c.msg.slice(0, 43)}…` : c.msg;
+  const msg = c.msg.length > 34 ? `${c.msg.slice(0, 33)}…` : c.msg;
   return `${msg} · ${c.author ?? "unknown"} · ${c.when}`;
 }
 

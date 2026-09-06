@@ -79,7 +79,7 @@ describe("the strip takes the header and no more", () => {
 
     const s = strip(container)!;
     expect(s.style.maxHeight).toBe(`${STRIP_MAX_VH}vh`);      // the cap is in the style, not in luck
-    expect(s.style.overflow).toBe("hidden");                  // …and nothing leaks past it
+    expect(s.style.overflowY).toBe("auto");                   // …and nothing is clipped out of reach
     // …and the cap the style names is inside "1/8 screen at max" on the viewport above
     expect((STRIP_MAX_VH / 100) * window.innerHeight).toBeLessThanOrEqual(window.innerHeight / 8);
   });
@@ -162,6 +162,9 @@ describe("the strip is one tab stop with buttons inside it", () => {
     expect(strip(container)!.getAttribute("role")).toBe("toolbar");
     expect(disclosures(container).map((b) => b.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
     expect(disclosures(container).every((b) => b.tagName === "BUTTON")).toBe(true);
+    // the category each summary answers is in its accessible name, not printed beside it
+    expect(disclosures(container).map((b) => b.getAttribute("aria-label")?.split(":")[0]))
+      .toEqual(["Kind", "Pages", "Last change", "Shared with", "GitHub", "History"]);
 
     fireEvent.keyDown(strip(container)!, { key: "ArrowRight" });
     expect(disclosures(container).map((b) => b.tabIndex)).toEqual([-1, 0, -1, -1, -1, -1]);

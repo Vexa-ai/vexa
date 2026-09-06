@@ -66,8 +66,12 @@ const box: CSSProperties = {
  *  the founder's "1/8 screen at max" with the rounding in the reader's favour. */
 export const STRIP_MAX_VH = 12;
 const stripS: CSSProperties = {
-  display: "flex", flexWrap: "wrap", alignItems: "center", gap: "3px 8px",
-  maxHeight: `${STRIP_MAX_VH}vh`, overflow: "hidden",
+  display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 2px",
+  // The cap is the founder's; `auto` rather than `hidden` is this file's own rule 1 applied to the
+  // cap itself. A 384px panel can wrap six summaries past 12vh, and clipping them would leave a
+  // disclosure a person can see the top of and cannot click — a control that is present and does
+  // not work, which is the thing this panel refuses to render.
+  maxHeight: `${STRIP_MAX_VH}vh`, overflowY: "auto", overflowX: "hidden",
 };
 const sectionS: CSSProperties = { borderTop: "1px solid var(--line)", marginTop: 8, paddingTop: 8 };
 const rowS: CSSProperties = { display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, lineHeight: 1.5 };
@@ -297,15 +301,22 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
       {/* THE STRIP — six answers, six buttons, one tab stop, 12vh at the very most. */}
       <div ref={strip} data-ws-strip role="toolbar" aria-label="This workspace" aria-orientation="horizontal"
         onKeyDown={onStripKey} style={stripS}>
+        {/* THE SUMMARY IS THE WHOLE BUTTON. Its category name ("Kind", "GitHub") is carried by the
+            accessible name and the tooltip and NOT printed beside it: on the 384px panel this lives
+            in, six printed labels doubled the strip's width and cost it the "one or two lines" the
+            founder asked for — and `Shared workspace`, `12 pages`, `main, 2 ahead` say what they are
+            without being told. */}
         {items.map((it, i) => (
-          <button key={it.id} data-ws-disclosure={it.id} tabIndex={i === focus ? 0 : -1}
-            aria-expanded={open === it.id} aria-controls={`ws-section-${it.id}`}
-            title={`${it.name} — ${it.summary}`}
-            onClick={() => { setFocus(i); toggle(it.id); }}
-            style={summaryS(open === it.id)}>
-            <span style={{ ...ty.lens, flex: "none" }}>{it.name}</span>
-            <span style={{ color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis" }}>{it.summary}</span>
-          </button>
+          <span key={it.id} style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
+            {i > 0 && <span aria-hidden style={{ ...ty.meta, flex: "none", opacity: 0.5 }}>·</span>}
+            <button data-ws-disclosure={it.id} tabIndex={i === focus ? 0 : -1}
+              aria-expanded={open === it.id} aria-controls={`ws-section-${it.id}`}
+              aria-label={`${it.name}: ${it.summary}`} title={`${it.name} — ${it.summary}`}
+              onClick={() => { setFocus(i); toggle(it.id); }}
+              style={summaryS(open === it.id)}>
+              {it.summary}
+            </button>
+          </span>
         ))}
       </div>
 
