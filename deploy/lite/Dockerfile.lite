@@ -175,8 +175,26 @@ RUN npm install -g @anthropic-ai/claude-code
 COPY core/identity/services/admin-api/src /app/admin-api/src
 # runtime    (PYTHONPATH=/app/runtime/src)
 COPY core/runtime/src /app/runtime/src
-# gateway    (PYTHONPATH=/app/gateway/src)
+# gateway    (PYTHONPATH=/app/gateway/src; repo_root walk-up == /app/gateway)
 COPY core/gateway/services/gateway/src /app/gateway/src
+# THE ROUTE MANIFESTS, at their repo-relative paths under /app/gateway (A1). The edge no longer
+# owns a route table: `routes_manifest.py` assembles it at IMPORT from each domain's
+# `routes.v1.json`, found by walking up from the module for a directory holding BOTH `core/gateway`
+# and `core/meetings`. With only `src/` copied there is no such directory anywhere above it — /app
+# has a `core/` from the bot workspace, which has no `core/gateway` — so `import gateway.app`
+# raised `ManifestError: cannot find the repository root` and the lite gateway could not start at
+# all. Rooting them at /app/gateway makes the walk stop one level above `src/`, exactly as the
+# gateway's own image does from /app. All five: lite serves the full profile, and `create_app`
+# names `mcp` whether or not MCP_URL is set, so a missing manifest there is a refusal too.
+COPY core/gateway/services/gateway/routes.v1.json /app/gateway/core/gateway/services/gateway/routes.v1.json
+COPY core/meetings/routes.v1.json                 /app/gateway/core/meetings/routes.v1.json
+COPY core/meetings/services/mcp/routes.v1.json    /app/gateway/core/meetings/services/mcp/routes.v1.json
+COPY core/identity/routes.v1.json                 /app/gateway/core/identity/routes.v1.json
+COPY core/agent/routes.v1.json                    /app/gateway/core/agent/routes.v1.json
+# Build-time guard, the same shape as the /app/agent import check below: the gateway must IMPORT
+# in the layout this image ships. `import gateway.app` is where the manifest walk happens, so an
+# omitted or misplaced manifest fails the build rather than the container's first boot.
+RUN cd /app/gateway && PYTHONPATH=/app/gateway/src /opt/venvs/gateway/bin/python -c "import gateway.app"
 # meeting-api (PYTHONPATH=/app/meeting-api/src; repo_root walk-up == /app/meeting-api)
 COPY core/meetings/services/meeting-api/src /app/meeting-api/src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json /app/meeting-api/meetings/contracts/invocation.v1/invocation.schema.json
@@ -240,7 +258,7 @@ ENV LOG_LEVEL=info \
     AGENT_WORKER_COMMAND=/usr/local/bin/vexa-agent-worker \
     DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres DB_PASSWORD=postgres \
     REDIS_HOST=localhost REDIS_PORT=6379 \
-    ADMIN_API_TOKEN=changeme INTERNAL_API_SECRET=lite-internal-secret \
+    ADMIN_API_TOKEN= INTERNAL_API_SECRET= \
     TRANSCRIPTION_SERVICE_URL= TRANSCRIPTION_SERVICE_TOKEN= \
     MINIO_ENDPOINT= MINIO_ACCESS_KEY= MINIO_SECRET_KEY= MINIO_BUCKET=vexa MINIO_SECURE=false \
     VEXA_AGENT_DEFAULT_SUBJECT=u_live VEXA_DISPATCH_SIGNING_KEY=dev-dispatch-signing-key \

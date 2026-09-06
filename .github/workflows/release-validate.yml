@@ -93,6 +93,7 @@ on:
           - vexaai/v012-gateway
           - vexaai/v012-mcp
           - vexaai/v012-terminal
+          - vexaai/v012-flows
           - vexaai/vexa-bot
           - vexaai/vexa-lite
       validation_leg:
@@ -118,6 +119,7 @@ env:
     vexaai/v012-gateway
     vexaai/v012-mcp
     vexaai/v012-terminal
+    vexaai/v012-flows
     vexaai/vexa-bot
     vexaai/vexa-lite
 
@@ -246,6 +248,13 @@ jobs:
               EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
               EXPECTED_TOP_DESCRIPTORS=10
               EXPECTED_PLATFORM_IDENTITIES=19
+              ;;
+            v0.12.27-rc.3|v0.12.27)
+              CANDIDATE_MAP=releases/v0.12.27/candidate-images.json
+              EXPECTED_MAP_STABLE_TAG=v0.12.27
+              EXPECTED_MAP_SHA256=dd4e9ad62cf327a0320262329a8eb55a58116415a0f3615e8c5d8ae84f4eb055
+              EXPECTED_TOP_DESCRIPTORS=11
+              EXPECTED_PLATFORM_IDENTITIES=21
               ;;
             v0.12.26-rc.1|v0.12.26)
               CANDIDATE_MAP=releases/v0.12.26/candidate-images.json
@@ -404,6 +413,7 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
+              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, importlib.util as u; assert u.find_spec('flows_integrations.flows_api')" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
@@ -486,7 +496,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       # Runtime uses the Docker Engine create API with pull disabled. Prove the daemon contract
       # red→green here, then leave the exact published bot bytes resident for stack-test.
       - name: Prove and preload the published bot image for runtime spawn
@@ -554,7 +564,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
       # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
@@ -593,7 +603,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
       # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
@@ -630,7 +640,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       # The runtime spawns bots through the docker socket API, which does NOT implicit-pull —
       # the published bot image must already be on the daemon.
       - name: Pre-pull the published bot image
@@ -761,6 +771,7 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
+              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, importlib.util as u; assert u.find_spec('flows_integrations.flows_api')" ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
                 echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"

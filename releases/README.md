@@ -44,7 +44,7 @@ review. Until it is done, the candidate has no reviewed identity — which is ex
 promote and stable-tag gates refuse to move on.
 
 1. **Bind the packet.** Write `releases/v<BASE>/candidate-images.json` from the *exact published*
-   registry identities of the ten images (10 top descriptors, 19 platform identities — the bot is
+   registry identities of the eleven images (11 top descriptors, 21 platform identities — the bot is
    amd64-only), then pin its hash in **both** places that assert it:
    - the reviewed-identity table in the `resolve` job of
      [`.github/workflows/release-validate.yml`](../.github/workflows/release-validate.yml)

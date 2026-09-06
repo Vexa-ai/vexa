@@ -35,6 +35,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from . import bot_spawn as _bot_spawn
+from . import events as _flows_events
 from . import recordings as _recordings
 from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
@@ -253,13 +254,14 @@ def create_app(
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
-    app.include_router(
-        _bot_spawn.build_router(
-            meeting_repo,
-            runtime,
-            service_authority,
-        )
-    )
+    # No `fetch_bot_context` here: `request_bot` resolves this person's default bot name out of the
+    # spawn context it already fetches for the transcription backend and the capture-signal
+    # decision. Injecting a second fetcher made POST /bots ask identity for the same body twice.
+    app.include_router(_bot_spawn.build_router(
+        meeting_repo,
+        runtime,
+        service_authority,
+    ))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
     from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
@@ -646,6 +648,54 @@ def _mount_lifecycle(
             )
             if typed_envelope is not None:
                 app.state.typed_webhooks.append(typed_envelope)
+        # THE MEETINGS→FLOWS PUBLISH EDGE (F168/F181, ADR-0037 / PRD 46 decision 42.2). An ad hoc
+        # bot — started via the MCP `request_meeting_bot`, never through a calendar invite — has no
+        # `invite_intake` reaction running for it, and that flow is the only thing that has ever
+        # told flows a meeting started or finished (`emit_started` / `emit_completed`, PRD decision
+        # 42.2). meeting-api's only outbound door used to be the operator webhook just above, which
+        # flows does not read. So this fires on exactly the two typed transitions that door already
+        # watches — one new domain telling flows a fact only meeting-api can know, alongside (never
+        # instead of) the webhook.
+        #
+        # THE SOURCE_EVENT_ID DELIBERATELY MATCHES flows' OWN SCHEME (`live-<id>` / `done-<id>`,
+        # `lifecycle/webhook.py` / `flows_defs/production.py`), not a meeting-api-flavoured one.
+        # Admission dedups on `(source_event_id, flow)` (flows/admission.py), so for a
+        # calendar-intake meeting — where `invite_intake` ALSO emits the same two facts from
+        # inside itself — whichever producer's HTTP call lands first admits and the other is a
+        # free no-op, rather than a second reaction (a second `post_meeting` run is a duplicate
+        # email, not a no-op). A different id here would double-fire every calendar meeting.
+        # See `events.py` for the ref-richness trade this same choice carries: meeting-api holds
+        # no invite (no `participants`/`group`), so on `meeting.completed` for a calendar meeting
+        # meeting-api's own publish typically WINS the race (it fires the instant the DB row goes
+        # `completed`; flows' own `emit_completed` only fires after its next poll tick), and
+        # `process_meeting`'s room-read degrades to empty rather than to invite order — see the
+        # filed issue for this deployment's disposition of that trade-off.
+        if typed_envelope is not None and isinstance(meeting_row, dict):
+            _meeting_block = (typed_envelope.get("data") or {}).get("meeting")
+            if isinstance(_meeting_block, dict):
+                _et = typed_envelope.get("event_type")
+                _uid = _meeting_block.get("user_id")
+                if _uid is not None and _et == "meeting.started":
+                    try:
+                        await _flows_events.publish_meeting_started(
+                            _meeting_block.get("id"),
+                            _meeting_block.get("native_meeting_id"),
+                            _meeting_block.get("platform"),
+                            _uid,
+                        )
+                    except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+                        pass
+                elif _uid is not None and _et == "meeting.completed":
+                    try:
+                        await _flows_events.publish_meeting_completed(
+                            _meeting_block.get("id"),
+                            _meeting_block.get("native_meeting_id"),
+                            _meeting_block.get("platform"),
+                            _uid,
+                            _meeting_block.get("completion_reason"),
+                        )
+                    except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+                        pass
         # The operator callback is a separate trust boundary from a customer's
         # webhook. It receives terminal service facts only, through a destination
         # frozen by deployment config. A transient failure is retained by the

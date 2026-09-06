@@ -235,6 +235,23 @@ def _capture_signal_from_context(ctx: dict) -> bool:
     return ctx.get("capture_signal") is not False
 
 
+def _bot_name_from_context(ctx: dict) -> Optional[str]:
+    """This person's default bot name out of a bot-context body, or None.
+
+    THE THIRD READER OF ONE FETCH. `POST /bots` used to resolve the name through a SECOND,
+    router-level `fetch_bot_context` — a separate call to the same `/internal/users/{id}/bot-context`
+    door, on the same request, with its own 10s timeout, while `request_bot` already fetched the
+    same body at 5s. Worst case that was +15s on the path a person is waiting on for one string,
+    and both fetchers' comments claimed to be the only one. The lookup is unchanged; there is one
+    of it, and the transcription backend, the capture-signal decision and the bot name are three
+    readers of one answer.
+
+    Best-effort like its siblings: an unreachable identity yields None and the caller falls back to
+    the deployment default. A name is a nicety; joining the call is the product."""
+    name = ctx.get("bot_name")
+    return name.strip() or None if isinstance(name, str) else None
+
+
 def construct_meeting_url(
     platform: str,
     native_meeting_id: str,
@@ -292,8 +309,24 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     (the N bots that ran against this meeting row). This rides in ``data.sessions`` (the api.v1
     ``data`` field is an open object — see the contract note in the bot_spawn README) so the
     SEALED ``MeetingResponse`` schema is honoured without an edit; a public typed ``sessions``
-    field would need a ``vN+1`` (flagged)."""
-    data = dict(row.get("data")) if isinstance(row.get("data"), dict) else {}
+    field would need a ``vN+1`` (flagged).
+
+    ``data`` goes through ``collector.projection.project_response_data`` — the ONE response-edge
+    projection every other meeting-serving route already uses (``GET /meetings``,
+    ``GET /meetings/{id}``, the transcript reads, the PATCH echo). This route was the one that did
+    not, and the spawn it answers is the very request that WRITES the webhook signing secret onto
+    the row three hundred lines below: ``POST /bots`` handed the caller's own
+    ``data.webhook_secret`` straight back in clear (found in production through the MCP's
+    ``request_meeting_bot`` result, 2026-09-05, fr_2261a6306224c6f8).
+
+    ``viewer_is_owner=True`` because a spawn response is only ever served to the spawner — the row
+    was created or reused under their ``user_id`` — so the v0.10 contract's ``webhook_url`` /
+    ``webhook_events`` still ride back, exactly as they do on ``GET /meetings``. What goes is tier
+    1: the signing secret, the share grants, the session userdata path, and anything else
+    credential-SHAPED, which is dropped on name shape before anyone has thought to name it."""
+    from ..collector.projection import project_response_data
+
+    data = project_response_data(row.get("data"), viewer_is_owner=True)
     if sessions is not None:
         data["sessions"] = list(sessions)
     return {
@@ -439,6 +472,12 @@ async def request_bot(
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
     # Default ON: only an explicit false from identity stops the tape.
     capture_signal_enabled = _capture_signal_from_context(bot_context)
+    # THE NAME THIS PERSON'S BOT SHOWS UP AS — third reader of the same one hop. Precedence is
+    # auto-join's, unchanged: an explicit name on THIS request, then this person's default from
+    # identity, then the deployment's (applied at `build_invocation` below). An explicit name wins
+    # without identity being consulted about it at all — the answer could not change anything.
+    if not bot_name:
+        bot_name = _bot_name_from_context(bot_context)
     transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
@@ -603,6 +642,8 @@ async def request_bot(
         raise ServiceAuthorityDenied(
             authority_decision.reason,
             authority_decision.decision_id,
+            message=authority_decision.message,
+            action_url=authority_decision.action_url,
         )
     authority_record = {
         **authority_decision.to_record(),
