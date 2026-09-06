@@ -573,3 +573,59 @@ class WorkspaceReader:
         out = subprocess.run(args, capture_output=True, text=True, env=scrubbed_git_env()).stdout
         lines = out.splitlines()
         return {"sha": sha, "path": path, "diff": "\n".join(lines[:600]), "truncated": len(lines) > 600}
+
+    def git_reset_to(self, base: Path, sha: str) -> dict:
+        """UNDO commits made after ``sha`` in the workspace at ``base``, and nothing else.
+
+        THE ONE THING A HUMAN HAD TO DO BY HAND (Vexa-ai/vexa#1606). `process_meeting`'s decision-22
+        detector records the organiser's desk HEAD before the post-meeting turn and refuses the step
+        when it moved. Twice on 2026-09-06 the recovery was a person opening a shell, resetting that
+        repository to the sha in the error, and re-firing the reaction — so the check was loud,
+        correct, and un-actionable by the system that raised it. This is that shell command, with
+        the two properties a shell command does not have.
+
+        BACKWARD ONLY, AND ONLY ALONG THIS HISTORY. ``sha`` must be a real commit AND an ancestor of
+        the current HEAD; anything else is refused. So this can only ever remove commits that landed
+        after the witness was taken — it can never fast-forward a desk onto work it has not done, and
+        it cannot be aimed at an unrelated history. A caller who could do either would be able to
+        rewrite a person's desk by naming a sha, which is a much larger capability than undoing a
+        write this same turn is known to have made.
+
+        HARD, and that is deliberate: the stray commit is the whole problem, and a soft reset would
+        leave its contents staged for the next writer to commit under a different message. Returns
+        ``{"before", "after", "reset", "detail"}``; ``reset`` False with a ``detail`` is the refusal,
+        never an exception — the caller is a flow step whose next move is to say why it could not."""
+        import re
+        import subprocess
+
+        from shared.gitenv import scrubbed_git_env
+
+        base = self._guard_under_root(base)
+        if not (base / ".git").exists():
+            return {"before": "", "after": "", "reset": False, "detail": "not a git workspace"}
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha or ""):
+            return {"before": "", "after": "", "reset": False,
+                    "detail": f"{sha!r} is not a commit id"}
+
+        def git(*args: str):
+            return subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
+                                  env=scrubbed_git_env())
+
+        before = git("rev-parse", "HEAD").stdout.strip()
+        if not before:
+            return {"before": "", "after": "", "reset": False, "detail": "the workspace has no HEAD"}
+        if before.startswith(sha.lower()):
+            return {"before": before, "after": before, "reset": False, "detail": "HEAD is already there"}
+        if git("cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+            return {"before": before, "after": before, "reset": False,
+                    "detail": f"{sha} is not a commit in this workspace"}
+        if git("merge-base", "--is-ancestor", sha, "HEAD").returncode != 0:
+            return {"before": before, "after": before, "reset": False,
+                    "detail": f"{sha[:9]} is not an ancestor of HEAD — this only ever undoes "
+                              f"commits made after the sha it is given"}
+        r = git("reset", "--hard", sha)
+        after = git("rev-parse", "HEAD").stdout.strip()
+        if r.returncode != 0 or not after.startswith(sha.lower()):
+            return {"before": before, "after": after, "reset": False,
+                    "detail": (r.stderr or r.stdout or "reset failed").strip()[:300]}
+        return {"before": before, "after": after, "reset": True, "detail": ""}

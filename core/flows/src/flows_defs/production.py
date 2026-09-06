@@ -1026,6 +1026,13 @@ def build(reg: Registry, db) -> None:
         from `drop_to_attendees`. One meeting, one artefact, and the desks are where it lands, not
         where it lives.
 
+        AND THAT IS ENFORCED BY THE MOUNTS (Vexa-ai/vexa#1606, 2026-09-06). agent-api mounts every
+        desk this subject owns READ-ONLY for a room run, so the turn cannot write one however it is
+        instructed. The HEAD-before/HEAD-after check below stays as the last line — it measures the
+        repository rather than trusting the mount table — but it is no longer the thing standing
+        between decision 22 and a desk write, which is why it could fail a meeting's minutes twice
+        in one day while being entirely correct.
+
         COMPLETION IS THE REPLY, GROUNDED IN THE TRANSCRIPT. It used to be a new commit touching
         `kg/entities/meeting/` in the organiser's repo (`ag.latest_meeting_note`, now deleted with
         its baseline). With no desk write that commit never happens, so that detector would wait
@@ -1150,21 +1157,50 @@ def build(reg: Registry, db) -> None:
             # ONLY the organiser's desk. Room desks are mounted read-only by agent-api; the GROUP
             # desk is the one place this turn is meant to write. Neither belongs in this check.
             #
-            # LOUD, and NOT retryable: a retry re-runs the turn and the stray commit is still
-            # there. Failing costs one meeting its mail and names the commit to remove. Passing
-            # silently costs every meeting the desk it was supposed to land on — which is what
-            # happened, four times over, before anyone noticed.
+            # ⚠ IT IS THE LAST LINE NOW, NOT THE ONLY ONE (Vexa-ai/vexa#1606). Decision 22 is
+            # enforced by the MOUNTS: `build_mount_set` gives a room run no writable desk of the
+            # subject's own, so on a group-less meeting there is nothing for an end-of-turn writer
+            # to commit to. This check stays because a mount table is a claim about a deployment and
+            # this is a measurement of the actual repository — but it should never fire again.
+            #
+            # AND WHEN IT DOES, IT REPAIRS ITSELF ONCE. It used to be flatly `retryable=False`, with
+            # the true reason that "a retry re-runs the turn and the stray commit is still there" —
+            # which made the recovery a HUMAN: reset the desk to the sha in this message, then
+            # `POST /reactions/<id>/retry`. That happened twice on 2026-09-06 and both meetings lost
+            # their minutes in the meantime. So the step now performs exactly those two acts itself,
+            # once: `ag.reset_desk` puts HEAD back on the witness (backward-only, the caller's own
+            # desk, internal tier), and the turn is re-dispatched with the stray commits named to it.
+            # A second failure, or a reset that refuses, IS terminal — and it says the commits and
+            # the one command, so the human recovery is a copy-paste rather than a reconstruction.
             before = ctx.scratch.get("head_before") or ""
             after = ag.head_sha(uid)
             if before and after and before != after:
+                landed = "; ".join(ag.head_subjects(uid)) or "(unreadable)"
+                if not ctx.scratch.get("desk_reset"):
+                    ctx.scratch["desk_reset"] = True
+                    undo = ag.reset_desk(uid, before, reason=f"decision 22 · meeting {ctx.refs['meeting_id']}")
+                    if undo.get("reset"):
+                        ctx.scratch["baseline"] = ag.dispatch_turn(
+                            uid, session,
+                            "STOP. That turn WROTE TO A DESK, and this run writes to none. It "
+                            f"committed: {landed}. Those commits have been removed. Write the "
+                            "report again as your REPLY and nothing else — create no file, update "
+                            "no index, update no README. The reply is mailed verbatim, so no "
+                            "preamble and no meta-commentary.")
+                        return Wait(seconds=12)
+                    landed += f" · reset refused: {undo.get('detail') or 'no detail'}"
                 raise StepError(
                     "this turn committed to the organiser's desk, and it must not (decision 22): "
-                    f"HEAD moved {before[:9]} -> {after[:9]}. Landed: "
-                    f"{'; '.join(ag.head_subjects(uid)) or '(unreadable)'}. The report IS the "
-                    "reply; desks are written by drop_to_attendees. Remove the stray commit, then "
-                    "check the LIVE kick (`_global/prompts/process-meeting.md` if an admin wrote "
-                    "one, else the baked `behavior/prompts/process-meeting.md`) for a "
-                    "file-writing instruction that came back.",
+                    f"HEAD moved {before[:9]} -> {after[:9]}. Landed: {landed}. The report IS the "
+                    "reply; desks are written by drop_to_attendees. This step already tried to undo "
+                    "it once and re-ran the turn. To recover by hand, put the desk back:\n"
+                    f"  curl -fsS -X POST \"$AGENT_API_URL/api/workspace/git/reset\" "
+                    f"-H 'X-User-Id: {uid}' -H \"X-Internal-Secret: $INTERNAL_API_SECRET\" "
+                    f"-H 'Content-Type: application/json' -d '{{\"sha\":\"{before}\"}}'\n"
+                    "then retry the reaction. If it keeps happening, the writer is in the LIVE kick "
+                    "(`_global/prompts/process-meeting.md` if an admin wrote one, else the baked "
+                    "`behavior/prompts/process-meeting.md`) or a mount that should not be writable "
+                    "on a room run (`control_plane.dispatch.build_mount_set`).",
                     retryable=False)
             return Done({"report": reply[:6000], "group": group,
                          "room_read": ctx.scratch.get("room_read", [])})

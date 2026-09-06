@@ -54,6 +54,7 @@ def build(**d) -> APIRouter:
     _clone_fn = d['_clone_fn']
     _credential_refusal = d['_credential_refusal']
     _entity_mounts = d['_entity_mounts']
+    _internal_caller = d['_internal_caller']
     _manage_dir = d['_manage_dir']
     _member_error = d['_member_error']
     _pc = d['_pc']
@@ -273,6 +274,47 @@ def build(**d) -> APIRouter:
             return wsr.git_diff_at(target, sha, path)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid path or subject")
+    @router.post("/api/workspace/git/reset")
+    def ws_git_reset(request: Request, body: dict = Body(...)):
+        """UNDO commits a run is known to have made on THIS subject's own desk, back to a witnessed
+        sha — the internal tier only (Vexa-ai/vexa#1606).
+
+        WHAT IT IS FOR, precisely. `process_meeting` records the organiser's desk HEAD before the
+        post-meeting turn and refuses the step if it moved, because decision 22 says that run writes
+        no desk. When it fired, the recovery was a HUMAN: reset that repository to the sha in the
+        error message, then re-fire the reaction. This is the first half of that recovery, so the
+        step can perform it and retry itself instead of stopping a meeting's minutes on a repair
+        nobody is awake to make.
+
+        NO ``slug``, EVER — the caller's own primary desk and nothing else. A reset that could name a
+        workspace would be a way to rewrite a shared desk, or somebody else's, from the internal
+        tier; the one caller this exists for is holding a witness it took itself, of the one desk its
+        own dispatch could have moved.
+
+        THE INTERNAL-TIER GATE IS THE WHOLE TRUST BOUNDARY, exactly as it is for the meeting room: a
+        browser client through the gateway holds no such secret, so no signed-in person can discard
+        their own history by calling this, and no session cookie can be replayed into it.
+
+        BACKWARD ONLY (`wsr.git_reset_to`): the sha must be an ancestor of the current HEAD, so this
+        can only remove commits made after the witness — never move a desk onto history it has not
+        done. A refusal comes back as `{"reset": false, "detail": …}` with 200, because the caller's
+        next move on a refusal is to SAY why, not to retry."""
+        if not _internal_caller(request):
+            raise HTTPException(status_code=403,
+                                detail="resetting a desk to a witnessed sha is an internal-tier capability")
+        sha = str((body or {}).get("sha") or "").strip()
+        if not sha:
+            raise HTTPException(status_code=400, detail="`sha` is required — the witness to reset to")
+        try:
+            target = wsr.workspace_dir(subject_of(request))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        out = wsr.git_reset_to(target, sha)
+        if out.get("reset"):
+            logger.warning("workspace reset: subject=%s %s -> %s (reason=%s)", subject_of(request),
+                           str(out.get("before"))[:9], str(out.get("after"))[:9],
+                           str((body or {}).get("reason") or "")[:120])
+        return out
     @router.post("/api/workspace/init", status_code=201)
     def ws_init(request: Request):
         """EAGERLY provision this subject's workspace tiers — the "on account creation" seam (so the

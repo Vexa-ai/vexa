@@ -222,6 +222,35 @@ def head_subjects(uid: str, limit: int = 3) -> list:
     return out
 
 
+def reset_desk(uid: str, sha: str, reason: str = "") -> dict:
+    """PUT ONE SUBJECT'S DESK BACK to a sha this flow witnessed itself, and say whether it landed.
+
+    The other half of `head_sha`. That one takes the BEFORE witness; this one undoes whatever moved
+    HEAD past it. It exists because the decision-22 detector in `process_meeting` was loud, correct
+    and un-actionable: on 2026-09-06 it fired twice, and both times the recovery was a person
+    resetting a repository by hand and re-firing the reaction, while a grounded report sat unsent.
+
+    ONLY BACKWARD, and only the caller's own desk — agent-api refuses a sha that is not an ancestor
+    of HEAD and takes no workspace name at all, so the worst this can do is remove commits made after
+    the witness. It is gated on `X-Internal-Secret`, the same edge the meeting room opens on.
+
+    DEGRADES, NEVER RAISES, and the shape says which happened: `{"reset": bool, "detail": str, ...}`.
+    A caller that cannot reset must say so in its refusal rather than die with a second failure on
+    top of the first — the person reading it needs the ORIGINAL reason and the command to run."""
+    body = {"sha": str(sha or "")}
+    if reason:
+        body["reason"] = str(reason)[:200]
+    try:
+        code, out = http("POST", f"{agent_door()}/api/workspace/git/reset",
+                         {"X-User-Id": str(uid), "X-Internal-Secret": require_internal_secret()}, body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.reset_desk", "the desk could not be reset", e, uid=uid, sha=sha)
+        return {"reset": False, "detail": f"agent-api unreachable: {e}"}
+    if not _ok(code) or not isinstance(out, dict):
+        return {"reset": False, "detail": f"agent-api answered {code} — {str(out)[:200]}"}
+    return out
+
+
 def workspace_write(uid: str, path: str, content: str) -> None:
     """WRITE one file into ONE subject's workspace, as that subject, COMMITTED.
 
