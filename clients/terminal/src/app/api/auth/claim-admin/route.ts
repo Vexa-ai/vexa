@@ -28,7 +28,7 @@
  */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, claimAdminRole, instanceState, mintAdminSetupScaffold, mintFirstVisitScaffold, validateAuthToken } from "../adminApi";
+import { AUTH_COOKIE, claimAdminRole, instanceState, mintAdminSetupScaffold, mintFirstVisitScaffold, recordSetupHandoff, validateAuthToken } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -110,6 +110,25 @@ export async function POST() {
       },
       { headers: NO_STORE },
     );
+  }
+
+  // ONE CLAIM, ONE SETUP CHAT (#1609). This claim has just put an administrator INTO a conversation.
+  // Record that, or `SetupGate` mounts in the document they land in, finds no marker, and opens a
+  // second one over the top of it. Same field, same store the gate writes when IT is the opener —
+  // whoever opens the conversation records it, and this route is now an opener.
+  //
+  // AFTER THE MINT, NEVER BEFORE: the marker says a conversation exists, so writing it ahead of the
+  // record that makes one true would leave a failed mint looking like a finished hand-off — the
+  // admin lands on `/`, the gate resumes as the corner card, and there is no conversation under it.
+  // For the same reason the failed-mint branch above returns without ever reaching this line.
+  //
+  // NOT SURFACED, and this is the one failure in this route that is only logged. The role is
+  // claimed and the conversation exists; a marker that did not stick costs exactly the extra chat
+  // this fixes and nothing else, and the gate carries its own guard for a marker that will not
+  // persist. Withholding the url over it would cost the admin the conversation itself.
+  const recorded = await recordSetupHandoff();
+  if (!recorded.ok) {
+    console.error(`[terminal-auth] setup hand-off not recorded for ${who.email}: ${recorded.error}`);
   }
 
   // The url is absolute (agent-api composes it from VEXA_UI_URL). The client follows it as given —

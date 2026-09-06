@@ -40,6 +40,7 @@ function stubAdminApi(opts: {
   mintThrows?: boolean;
   globalSetup?: "completed" | "missing";
   hasHistory?: boolean;
+  recordFails?: boolean;
 }) {
   const calls: string[] = [];
   minted.length = 0;
@@ -64,6 +65,12 @@ function stubAdminApi(opts: {
     if (u.includes("/internal/bootstrap-admin")) {
       const b = opts.bootstrap ?? { status: 200, body: { claimed: true } };
       return new Response(JSON.stringify(b.body ?? {}), { status: b.status });
+    }
+    // The platform-settings store SetupGate reads its resume state out of (#1609). `400` is the
+    // shape admin-api answers a write it understood nothing of.
+    if (u.includes("/internal/settings/")) {
+      if (opts.recordFails) return new Response(JSON.stringify({ detail: "nothing recognised" }), { status: 400 });
+      return new Response(JSON.stringify({ key: "setup", value: { global: "handoff" } }), { status: 200 });
     }
     if (u.includes("/internal/scaffolds")) {
       minted.push(JSON.parse(String(init?.body ?? "{}")));
@@ -276,5 +283,79 @@ describe("F42 — the arrival depends on whether the instance is already set up"
         expect(minted[0]).not.toHaveProperty(forbidden);
       }
     }
+  });
+});
+
+/** #1609 — ONE CLAIM, ONE SETUP CHAT.
+ *
+ *  The claim minted the setup conversation and the client followed `/?s=<id>` — and nothing wrote
+ *  the hand-off marker, because only `SetupGate` had ever written it. So the gate mounted in the
+ *  document the arrival had just landed in, read the marker as absent, concluded that nobody had
+ *  opened the setup conversation, and opened one on top of it. The founder's own blank-instance
+ *  sign-in never hit this (the claim happens inside the sign-in, so the card is never shown); an
+ *  instance whose admin claims through the card always did.
+ *
+ *  The rule: whoever OPENS the conversation records that they did, in the store the gate reads.
+ *  This route is now an opener. The gate's half — a recorded hand-off resumes as the corner card
+ *  and opens nothing — is in `app/__tests__/setupGate.test.tsx`, which owns that harness. */
+describe("the hand-off is recorded where SetupGate reads it", () => {
+  it("writes `setup.global = handoff` to the platform-settings store, on the internal tier", async () => {
+    stubAdminApi({});
+    const spy = vi.mocked(globalThis.fetch);
+    await claimAdmin();
+
+    const put = spy.mock.calls.find(([u, i]) =>
+      String(u).includes("/internal/settings/setup") && (i as RequestInit)?.method === "PUT");
+    expect(put).toBeDefined();
+    // Exactly one field, and one admin-api's `_SETUP_FIELDS` knows. A field it does not know is
+    // dropped in silence — which is how this very marker vanished on 2026-09-02 while answering 200.
+    expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ global: "handoff" });
+    // Internal tier, like the mint beside it: a browser can never reach this edge.
+    expect(((put![1] as RequestInit).headers as Record<string, string>)["X-Internal-Secret"]).toBe("internal-secret");
+  });
+
+  it("records it AFTER the conversation exists, never before", async () => {
+    // The marker asserts that a conversation is open. Written first, a mint that then failed would
+    // leave the gate resuming as the corner card with nothing underneath it — a worse dead end than
+    // the one this route exists to open.
+    const calls = stubAdminApi({});
+    await claimAdmin();
+    const mint = calls.findIndex((c) => c.includes("/internal/scaffolds"));
+    const record = calls.findIndex((c) => c.includes("/internal/settings/setup"));
+    expect(mint).toBeGreaterThanOrEqual(0);
+    expect(record).toBeGreaterThan(mint);
+  });
+
+  it("records NOTHING when the mint failed — the gate must still open the conversation itself", async () => {
+    const calls = stubAdminApi({ mint: { status: 503 } });
+    const res = await claimAdmin();
+    expect((await res.json()).scaffold_error).toBeTruthy();
+    expect(calls.some((c) => c.includes("/internal/settings/setup"))).toBe(false);
+  });
+
+  it("records nothing when the claim itself was refused", async () => {
+    const calls = stubAdminApi({ adminExists: true });
+    expect((await claimAdmin()).status).toBe(409);
+    expect(calls.some((c) => c.includes("/internal/settings/setup"))).toBe(false);
+  });
+
+  it("a record that FAILS does not cost the admin the conversation", async () => {
+    // The role is claimed and the chat exists. A marker that did not stick costs exactly the extra
+    // chat this fixes; withholding the url over it would cost them the conversation itself.
+    stubAdminApi({ recordFails: true });
+    const res = await claimAdmin();
+    expect(res.status).toBe(200);
+    expect((await res.json()).url).toBe("https://app.test/?s=SCAF1");
+  });
+
+  it("records the F42 first visit too — no setup chat may open over that arrival either", async () => {
+    // An instance that is already set up gets an ordinary first visit rather than the setup
+    // conversation. It is still an arrival this claim delivered them into, so the gate must not open
+    // a setup conversation on top of it — and on that instance it would be a setup conversation
+    // offered to somebody who needs none at all, which is the exact thing F42 settled.
+    const calls = stubAdminApi({ globalSetup: "completed" });
+    await claimAdmin();
+    expect(minted.map((m) => m.kind)).toEqual(["first-visit"]);
+    expect(calls.some((c) => c === "PUT http://admin.test/internal/settings/setup")).toBe(true);
   });
 });

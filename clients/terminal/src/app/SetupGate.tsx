@@ -44,6 +44,7 @@ import {
   COMPANY_LAYER_FILES, getGlobalSetting, getGlobalState, setGlobalSetting, testModels, testTranscription,
   type GlobalSetting, type GlobalState,
 } from "../surfaces/settingsApi";
+import { SETUP_HANDOFF, SETUP_SETTING, setupHandoffUpdate } from "./setupHandoff";
 
 /** Show the setup surface at all? null = not an admin (probe 404s); completed set = already ran.
  *  Note what does NOT appear here: the company layer's own state. `setup.completed` is written by
@@ -57,15 +58,25 @@ export function shouldShowSetup(setup: GlobalSetting | null): boolean {
 
 type Phase = "checking" | "hidden" | "opening" | "card";
 
-/** The value `setup.global` carries once the admin has been sent to the setup chat. */
-const HANDOFF = "handoff";
-
 /** Where a RELOAD should resume. The admin who reloads mid-conversation is not starting over: they
  *  have already been handed off, the workbench is already the place the work is happening, and the
- *  only honest thing to show them is the same corner card they left. */
+ *  only honest thing to show them is the same corner card they left.
+ *
+ *  THE MARKER IS THE ONLY EVIDENCE THIS READS, and it is POSITIVE evidence: it exists because
+ *  something opened the setup conversation and said so — the claim route when it minted the arrival
+ *  scaffold (#1609), or this gate's own hand-off below. Before that, a claim through the corner card
+ *  left no trace here at all, so this function answered "opening" for an admin who was already
+ *  arriving in their setup chat, and the hand-off opened a second one.
+ *
+ *  WHAT IT MUST NEVER READ IS THE URL. The claim navigates to `/?s=<id>`, and treating that
+ *  parameter as the evidence is the obvious-looking fix: it is in front of us, it names the very
+ *  conversation. It is also gone — `InviteGate` strips it with `history.replaceState` on this same
+ *  mount (#1580) — and whether we see it depends on which effect ran first, which is exactly the
+ *  ordering the #1580 defect was made of. A record on the server is evidence; a parameter being
+ *  erased beside you is not. */
 export function setupResumePhase(setup: GlobalSetting | null): Exclude<Phase, "checking"> {
   if (!shouldShowSetup(setup)) return "hidden";
-  return setup?.global === HANDOFF ? "card" : "opening";
+  return setup?.global === SETUP_HANDOFF ? "card" : "opening";
 }
 
 /** One attempt at the hand-off per browser session.
@@ -372,7 +383,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let on = true;
-    getGlobalSetting("setup")
+    getGlobalSetting(SETUP_SETTING)
       .then((v) => {
         if (!on) return;
         setPhase(setupResumePhase(v));
@@ -382,7 +393,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   const finish = () => {
-    void setGlobalSetting("setup", { completed: "true" }).catch(() => undefined);
+    void setGlobalSetting(SETUP_SETTING, { completed: "true" }).catch(() => undefined);
     // The admin→user seam: opening the instance must actually LAND on Meetings. The workbench's
     // layout store initializes its rail from this persisted key (layout.ts LS_LIST) and it is
     // created only when the workbench mounts, so a plain localStorage write is the whole hand-off.
@@ -418,7 +429,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
     handingOff.current = true;
     setHandOffError(null);
     try {
-      await setGlobalSetting("setup", { global: HANDOFF });
+      await setGlobalSetting(SETUP_SETTING, setupHandoffUpdate());
     } catch (e: unknown) {
       handingOff.current = false;
       setHandOffError(e instanceof Error ? e.message : String(e));

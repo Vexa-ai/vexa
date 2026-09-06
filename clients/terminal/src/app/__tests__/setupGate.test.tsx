@@ -359,3 +359,44 @@ describe("the corner card", () => {
     expect(screen.getByText(/Settings → Models, whenever you like/)).toBeTruthy();
   });
 });
+
+/** #1609 — THE CARD PATH. Claiming through the corner card mints the setup conversation server-side
+ *  and lands the admin inside it, so this gate has to recognise that one is already open. It could
+ *  not: the only thing that had ever written the marker was this gate, so it wrote one and
+ *  navigated — a second setup chat over the first, in the document the first had just landed in. */
+describe("a claim that already opened the conversation", () => {
+  const setUrl = (search: string) => window.history.replaceState({}, "", `/${search}`);
+  afterEach(() => setUrl(""));
+
+  it("resumes as the corner card and opens NO second conversation", async () => {
+    const calls = stubProbes({ setup: { status: 200, value: { global: "handoff" } } });
+    render(<SetupGate><div data-testid="workbench" /></SetupGate>);
+
+    // The chat the claim minted is live underneath; this is a readout over it, not another lap.
+    await waitFor(() => expect(screen.getByTestId("global-gate-card")).toBeTruthy());
+    expect(screen.getByTestId("workbench")).toBeTruthy();
+    // Neither half of a hand-off happened: no marker written, and nothing reached the navigation.
+    expect(calls.some((c) => c.method === "PUT" && (c.body || "").includes("handoff"))).toBe(false);
+    expect(reachedNavigate()).toBe(false);
+  });
+
+  it("reads the RECORD, never the `?s=` the claim navigated with", async () => {
+    // InviteGate strips `?s=` with history.replaceState on this same mount (#1580), so whether the
+    // parameter is still there depends on which effect ran first. It decides nothing here: with no
+    // record, this gate hands off exactly as if it had never been navigated with one.
+    setUrl("?s=SCAF1");
+    const calls = stubProbes({ setup: { status: 200, value: {} } });
+    render(<SetupGate><div data-testid="workbench" /></SetupGate>);
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "PUT" && (c.body || "").includes("handoff"))).toBe(true));
+  });
+
+  it("the #1607 sign-in path still yields exactly one", async () => {
+    // On a blank instance the claim happens inside the sign-in and mints nothing, so there is no
+    // record and this gate IS the opener. One hand-off, one conversation — unchanged by #1609.
+    const calls = stubProbes({ setup: { status: 200, value: {} } });
+    render(<SetupGate><div data-testid="workbench" /></SetupGate>);
+    await waitFor(() => expect(reachedNavigate()).toBe(true));
+    expect(calls.filter((c) => c.method === "PUT" && (c.body || "").includes("handoff"))).toHaveLength(1);
+  });
+});

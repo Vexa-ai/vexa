@@ -6,6 +6,8 @@
  *  (a cached 404 would make find-or-create fabricate duplicate users).
  */
 
+import { SETUP_SETTING, setupHandoffUpdate } from "../../setupHandoff";
+
 export const AUTH_COOKIE = process.env.VEXA_AUTH_COOKIE_NAME || "vexa-token";
 export const USER_INFO_COOKIE = process.env.VEXA_USER_INFO_COOKIE_NAME || "vexa-user-info";
 
@@ -299,6 +301,37 @@ async function mintArrivalScaffold(
 /** The admin claim's arrival — the setup conversation. */
 export const mintAdminSetupScaffold = (email: string, userId: string | number) =>
   mintArrivalScaffold("admin-setup", email, userId, { flow: "admin-claim", step: "claim-admin" });
+
+/** RECORD THAT THE SETUP CONVERSATION IS ALREADY OPEN — where SetupGate reads it (#1609).
+ *
+ *  ⚠ THE SECOND CHAT THIS EXISTS TO PREVENT. A claim taken through the corner card minted the
+ *  `admin-setup` scaffold and the client followed `/?s=<id>` — and nothing wrote the hand-off
+ *  marker, because only `SetupGate` had ever written it. So the gate mounted in the very document
+ *  the arrival had just landed in, read `setup.global` as absent, concluded that nobody had opened
+ *  the setup conversation, and opened one: `/?setup=global`, a second chat on top of the first. The
+ *  blank-instance sign-in never hit it (the claim happens inside the sign-in, so the card is never
+ *  shown); an instance whose admin claims through the card always did.
+ *
+ *  ONE CLAIM, ONE SETUP CHAT — and the rule that gets there is that WHOEVER OPENS THE CONVERSATION
+ *  RECORDS THAT THEY DID. Two things open it and both now record: this route, by minting the
+ *  arrival, and `SetupGate`, by navigating. Neither opens twice, because each reads the marker
+ *  first.
+ *
+ *  IT IS THE SAME STORE, NOT A SECOND ONE. `SetupGate` writes this field through
+ *  `/api/admin/settings/setup`, which is a straight proxy onto this endpoint, and the value comes
+ *  from `app/setupHandoff.ts` so the two spellings cannot drift apart.
+ *
+ *  WHY NOT READ `?s=` INSTEAD. The tempting client-side fix is for `SetupGate` to notice the
+ *  arrival parameter it was navigated with. It cannot: `InviteGate` strips `?s=` with
+ *  `history.replaceState` on the same mount (#1580), so whether it is still there depends on which
+ *  effect ran first — which is precisely what the #1580 defect was made of. A durable record is
+ *  positive evidence; a parameter being erased beside you is not evidence at all. */
+export function recordSetupHandoff(): Promise<AdminResult<unknown>> {
+  return internalRequest(`/internal/settings/${SETUP_SETTING}`, {
+    method: "PUT",
+    body: JSON.stringify(setupHandoffUpdate()),
+  });
+}
 
 /** AN ORDINARY SIGN-IN'S ARRIVAL (F42, founder ruling 2026-09-02).
  *
