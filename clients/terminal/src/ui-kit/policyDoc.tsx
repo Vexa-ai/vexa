@@ -270,6 +270,52 @@ export function FlowHeader({ attrs, body }: { attrs: Attr[]; body: string }): Re
   );
 }
 
+// ── a step that does not exist yet ────────────────────────────────────────────────────────────
+// Founder, 2026-09-06: *"we want to be able to write flows for the global chat as we like."*
+// (Vexa-ai/vexa#1639.) A flow is composed from step names the image already carries — so a sentence
+// that needs something no step does has, until now, had nowhere to go: the agent could only refuse.
+//
+// It writes the step out instead, as a page under `_global/flows/proposals/`: the Python in this
+// repo's own step shape, its docstring, the flow that would use it and the tests it needs. NOTHING
+// EXECUTES IT and nothing can — `flows_submit` validates every step name against the deployed
+// vocabulary at submission, and this name is not in it. The page exists to be READ, and then sent.
+//
+// SO THE ACT IS THE POINT OF THE HEADER, unlike a flow page's, which has nothing to decide. It is
+// the same slot the policy page uses, for the same reason: ui-kit must not import a shell, so what
+// fills it is registered under a kind, and a build with nothing registered renders the page and no
+// act — which is honest, because the act starts a conversation and such a build has no chat.
+
+export const PROPOSAL_KIND = "proposal";
+
+/** The kind the proposal page's own act registers under (`contributions`) — `POLICY_ACT_KIND` one
+ *  page along, and separate from it because they are two different acts on two different pages. */
+export const PROPOSAL_ACT_KIND = "proposal-act";
+
+/** What it is, what it would be used by, and whether it has been sent — from the page's own front
+ *  matter, like every other header here. Nothing in this file knows what a step is. */
+export function ProposalHeader({ attrs, act }: { attrs: Attr[]; act?: ReactNode }): ReactNode {
+  const at = (k: string) => attrs.find(([key]) => key === k)?.[1]?.trim() ?? "";
+  const step = at("step");
+  const forFlow = at("for-flow");
+  const trigger = at("trigger");
+  const status = at("status");
+  return (
+    <div data-proposal-header={step} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "10px 14px", margin: "0 0 16px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", rowGap: 4 }}>
+        <span style={chip("var(--t3)", "transparent")}>proposal</span>
+        {step ? <span style={{ ...mono, fontSize: 13, fontWeight: 600 }}>{step}</span> : null}
+        {forFlow ? flowBit("for", <code style={mono}>{forFlow}</code>) : null}
+        {trigger ? flowBit("trigger", <code style={mono}>{trigger}</code>) : null}
+        {act ? <><span style={{ flex: "1 1 0%" }} />{act}</> : null}
+      </div>
+      <div style={{ color: "var(--t3)", fontSize: 11.5, lineHeight: 1.5, marginTop: 6 }}>
+        {status || "needs code — never executed"}. This deployment does not carry this step; nothing
+        here runs, and nothing will until somebody writes it.
+      </div>
+    </div>
+  );
+}
+
 // ── which header a page gets ──────────────────────────────────────────────────────────────────
 
 /** THE HEADER A PAGE DECLARES, or nothing. Recognised by `kind:` and never by path — a page is not
@@ -280,9 +326,12 @@ export function FlowHeader({ attrs, body }: { attrs: Attr[]; body: string }): Re
  *  line here rather than an edit inside `MdxDoc`. */
 export function docHeader(attrs: Attr[], body: string, act?: ReactNode): ReactNode {
   const kind = declaredKind(attrs);
-  // `act` is the POLICY page's own — the way to change the rules, beside what they are
-  // (Vexa-ai/vexa#1627). A flow page has nothing to decide, so it is offered nothing.
+  // `act` is the page's own — the way to change the rules beside what they are on the policy page
+  // (Vexa-ai/vexa#1627), the way to send a step to the developers on a proposal (#1639). A flow
+  // page has nothing to decide, so it is offered nothing. `MdxDoc` chooses WHICH act by the same
+  // kind, so a page can never be handed the other page's control.
   if (kind === POLICY_KIND) return <PolicyRules attrs={attrs} body={body} act={act} />;
+  if (kind === PROPOSAL_KIND) return <ProposalHeader attrs={attrs} act={act} />;
   if (kind === FLOW_KIND) return <FlowHeader attrs={attrs} body={body} />;
   return null;
 }

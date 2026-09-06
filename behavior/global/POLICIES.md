@@ -348,6 +348,24 @@ profile and the overrides. Running the wizard again adds a new section below the
 stays as it was written, including where today disagrees with it. The record answers *why we started
 here*, and a record edited to agree with the present answers nothing.
 
+## What the administrator is authorized to do, and where that is written
+
+A rule above says what this deployment does. A **standing authorization** says what its
+administrator may change without being asked again — and it is recorded here, at the foot of this
+file, in `## Authorization` sections, on exactly the terms `## Decision` sections are kept: appended
+in the administrator's own words, dated, and never rewritten.
+
+The first of them is **writing flows** (`asks/flow-author.md`). Founder, 2026-09-06: *"we want to be
+able to write flows for the global chat as we like."* The administrator says what this deployment
+should do; the agent maps that sentence onto a trigger and an ordered list of steps from the
+vocabulary the image carries, shows it as the page it will become, and submits it. A grant recorded
+here is not asked for a second time.
+
+**A standing authorization is not a confirmation, and it does not replace one.** The grant answers
+*may you write flows at all*; every activation is still confirmed once, on the flow shown as its own
+page. One is about the person's authority and is asked once; the other is about this particular
+change and is asked every time.
+
 ## Where each rule is read today
 
 Written down rather than left to be discovered. A rule that nothing reads is a control that silently

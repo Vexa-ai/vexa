@@ -42,6 +42,10 @@ const VERB: Record<ChatIntentKind, string> = {
   // Vexa-ai/vexa#1632 — the workspace front page's three membership acts. `shared/marks._ACT_VERBS`
   // carries the same three words for the label a reload rebuilds from the record.
   member_add: "Add a member", member_role: "Change role", member_remove: "Remove a member",
+  // Vexa-ai/vexa#1639 — writing a flow, and sending the step proposal writing one produced. ONE
+  // verb for both halves: the label says what the conversation is, and the page it was pressed on
+  // says which half. `shared/marks._ACT_VERBS` carries the same word.
+  flow_author: "Write a flow",
 };
 
 /** WHAT EACH ROLE MEANS, IN THE WORDS THE PERSON IS ASKED TO AGREE TO (Vexa-ai/vexa#1632). Derived
@@ -89,6 +93,9 @@ export function compactLabel(intent: ChatIntent): string {
   // The wizard names the file it walks and nothing else — it has no selection to quote and the
   // same path every time it is pressed.
   if (intent.kind === "policies_wizard") return `${VERB[intent.kind]}: ${intent.path}`;
+  // The flow act names the page it was pressed on and nothing else — the index, or the proposal it
+  // is about to send. There is no selection to quote (Vexa-ai/vexa#1639).
+  if (intent.kind === "flow_author") return `${VERB[intent.kind]}: ${intent.path}`;
   // A MEMBERSHIP ACT NAMES THE WORKSPACE, and the person when the row it was pressed on had one
   // (Vexa-ai/vexa#1632). `Add a member` has nobody yet — that is the act, not a missing field — so
   // its label stops at the workspace rather than padding itself with an empty slot.
@@ -134,6 +141,35 @@ export function fallbackText(intent: ChatIntent): string {
       `the body alone, and APPEND a \`## Decision\` section at the foot of the file with the date, ` +
       `who decided, the five answers in their words, the profile and the overrides. Never rewrite an ` +
       `older decision.`;
+  }
+  // WITHOUT THE ASK (Vexa-ai/vexa#1639). Same gap as the wizard's, one issue on.
+  //
+  // WHAT MUST SURVIVE THE GAP IS THE REFUSAL TO GUESS AND THE ONE CONFIRMATION. The failure this act
+  // exists to end was an agent that answered a granted authorization with *"I still don't have the
+  // instruction"* and then asked to be told which flow to write — so the fallback names the tool
+  // that lists the vocabulary, forbids composing a step name, and puts exactly one question between
+  // the sentence and the submit.
+  if (intent.kind === "flow_author") {
+    const ws = intent.workspace ?? "_global";
+    if (/(^|\/)flows\/proposals\//.test(intent.path)) {
+      return `Read \`${ws}/${intent.path}\` — a step this deployment does not carry, written out as ` +
+        `a proposal. Confirm in ONE sentence that it goes to the people who maintain Vexa. Only if ` +
+        `they say yes, file it with report_issue (report_friction if that is not configured here): ` +
+        `the step's code fence verbatim, the flow that would use it, the tests it needs, and NO ` +
+        `names — not the administrator's, not a colleague's, not a customer's, no address, no ` +
+        `domain, no meeting title. Then say where it landed and edit the page's Send section to say ` +
+        `it was sent. Never send the same proposal twice.`;
+    }
+    return `The administrator wants to write a flow. Call flows_list first and read it: a flow is a ` +
+      `TRIGGER and an ordered list of STEP NAMES from that vocabulary, and a name that is not in it ` +
+      `does not exist here. Map what they said onto one trigger and one step list — never a ` +
+      `questionnaire; if one fact is genuinely missing ask for that one fact. Then show it as the ` +
+      `page it will become: trigger, the steps in order with each step's own description, what it ` +
+      `mails, the rules it honours. Then ask ONE question — activate it? — and stop. Only if they ` +
+      `say yes, call flows_submit and link \`${ws}/flows/<name>@<version>.md\`, which appears within ` +
+      `about ten seconds. Editing is a NEW version: show the step diff, one confirmation, submit, ` +
+      `then retire the old one. If their sentence needs something no step does, say so plainly and ` +
+      `write it as a proposal page under \`${ws}/flows/proposals/\` — never executed.`;
   }
   // WITHOUT THE ASK (Vexa-ai/vexa#1632), for the three membership acts. Same gap as the wizard's —
   // `_global/asks/` is admin-owned and top-up is additive, so an instance whose library predates

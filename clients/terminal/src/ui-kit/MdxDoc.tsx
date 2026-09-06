@@ -27,7 +27,7 @@ import {
 import { OPEN_MEETING_EVENT } from "../canvas/actions";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
-import { POLICY_ACT_KIND, ViewSource, docHeader, splitFrontmatter } from "./policyDoc";
+import { POLICY_ACT_KIND, PROPOSAL_ACT_KIND, PROPOSAL_KIND, ViewSource, declaredKind, docHeader, splitFrontmatter } from "./policyDoc";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
@@ -351,10 +351,17 @@ function TranscriptSlot({ meeting }: { meeting: string }): ReactNode {
  *  resolves against, so the act names the same file the reader has open rather than a constant this
  *  module would have to keep in step with the seed. */
 function PolicySetupAct(): ReactNode {
-  const Act = registry.tabComponent(POLICY_ACT_KIND);
+  return <RegisteredDocAct kind={POLICY_ACT_KIND} />;
+}
+
+/** The same slot for the page's own act, whichever page it is. One component because the two acts
+ *  differ only in the kind they resolve — everything the header hands them (the workspace and the
+ *  path the reader has open) is the same fact read the same way (Vexa-ai/vexa#1639). */
+function RegisteredDocAct({ kind }: { kind: string }): ReactNode {
+  const Act = registry.tabComponent(kind);
   const meta = useContext(DocMetaContext);
   if (!Act) return null;
-  return <Act id={POLICY_ACT_KIND} params={{ workspace: meta.slug, path: meta.path }} active />;
+  return <Act id={kind} params={{ workspace: meta.slug, path: meta.path }} active />;
 }
 
 /** The widget's own box inside the page: framed, so the reader can see where the document stops and
@@ -380,7 +387,15 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   // The policy header carries one thing more (Vexa-ai/vexa#1627): the act that CHANGES the rules it
   // is showing. `docHeader` takes it rather than reaching for it, so this module keeps the one
   // branch #1626 left it with and the act stays a slot the shell fills.
-  const head = docHeader(attrs, body, <PolicySetupAct />);
+  //
+  // A PROPOSAL PAGE CARRIES ITS OWN, AND IT IS A DIFFERENT ONE (Vexa-ai/vexa#1639): the step this
+  // deployment does not have, sent to the people who could write it. Chosen HERE, by the same kind
+  // `docHeader` branches on, so a page can never be handed the other page's control — passing both
+  // and letting the header pick would put a *Set up policies* button on a proposal in any build
+  // where the proposal act was not registered.
+  const kind = declaredKind(attrs);
+  const head = docHeader(attrs, body,
+    kind === PROPOSAL_KIND ? <RegisteredDocAct kind={PROPOSAL_ACT_KIND} /> : <PolicySetupAct />);
   if (!head && segments.length === 1 && segments[0].kind === "text") {
     return <MdxBody style={style}>{segments[0].text}</MdxBody>;
   }

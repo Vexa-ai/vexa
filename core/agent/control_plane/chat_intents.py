@@ -50,6 +50,20 @@ INTENT_PRESETS: dict[str, str] = {
     "member_add": "member-add",
     "member_role": "member-role",
     "member_remove": "member-remove",
+    # Vexa-ai/vexa#1639 — writing a flow from the governance chat, and sending a step proposal that
+    # came out of one. Founder, 2026-09-06: *"we want to be able to write flows for the global chat
+    # as we like."*
+    #
+    # ONE KIND FOR BOTH, unlike the three membership acts above, and the difference is what a person
+    # reads back: *Add a member* and *Remove a member* are the two ends of a decision and must not
+    # share a label, while writing a flow and sending the proposal a flow produced are one
+    # conversation with the same administrator about the same thing. The ask branches on `path` —
+    # a page under `flows/proposals/` is the send, anything else is the authoring.
+    #
+    # NOT in JOB_KINDS: it opens a question — the one confirmation before a flow goes live — and a
+    # question that runs on a background thread is a question nobody is there to answer. NOT in
+    # SILENT_KINDS: the person pressed a labelled control and must read that label back.
+    "flow_author": "flow-author",
 }
 
 # Kinds whose turn the person must NOT see as a bubble. `highlight` is machinery end to end: the

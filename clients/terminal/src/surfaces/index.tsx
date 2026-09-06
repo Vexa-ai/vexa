@@ -19,6 +19,7 @@ import "./meetingPrep"; // tab-kind "meetingPrep" — a planned meeting's prep/s
 import "./today";      // tab-kind "today" — the Meetings click target (the user's day)
 import "./canvas";     // tab-kind "canvas" + command "Open Meeting Canvas"
 import "./policies";   // the policy page's own act — "Set up policies" (Vexa-ai/vexa#1627)
+import "./proposal";   // a step proposal's own act — "Send to the developers" (Vexa-ai/vexa#1639)
 import "./workspace";  // list "files" (+ git) + tab-kind "doc"       (gated in meetings mode)
 import "./workspaceManage"; // tab-kind "workspace" — the manage hub  (gated in meetings mode)
 import "./routines";   // list "routines" + tab-kind "routines"       (gated in meetings mode)

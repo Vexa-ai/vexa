@@ -2,6 +2,11 @@
 (the same shape as meeting-api/agent-api/admin-api), OpenAPI docs at /docs.
 
   GET  /flows                       every version (image + DB) + the step vocabulary
+  GET  /flows/pages                 ONE PAGE PER RUNTIME-AUTHORED VERSION, as markdown — what the
+                                    admin reads back after writing a flow from the governance chat
+                                    (`bodies=0` for the poll shape, `only=a@1,b@2` to narrow).
+                                    It renders; agent-api's `flow_pages_watch` is what writes them
+                                    into `_global/flows/`, because this service has no `_global`
   POST /flows                       submit {name, on_event, steps:[names], params?, activate?}
                                     — validated against the deployed vocabulary AT SUBMISSION;
                                     auto-versioned; live in the worker within ~10 s
@@ -97,6 +102,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
 import flows_config  # noqa: E402
+import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
 from flows_steps.common import (db_url, internal_secret,  # noqa: E402
@@ -553,6 +559,21 @@ class FlowSubmission(BaseModel):
     activate: bool = True
 
 
+def _db_flows() -> list:
+    """Every runtime-authored version, oldest first — the `flow_version` table as dicts.
+
+    ONE READER, because `GET /flows` and `GET /flows/pages` answer two questions about the same
+    rows and a second SELECT is a second column list to keep in step. `created_at` is here for the
+    page: a flow somebody wrote from the governance chat says on its own page who activated it and
+    when, and neither fact is anywhere else."""
+    rows = db.execute("SELECT name, version, on_event, steps, params, status, created_by, "
+                      "created_at FROM flow_version ORDER BY name, version")
+    return [{"name": n, "version": v, "on": e, "steps": json.loads(st),
+             "params": json.loads(p or "{}"), "status": status,
+             "created_by": by, "created_at": str(at or ""), "source": "api"}
+            for n, v, e, st, p, status, by, at in rows]
+
+
 @app.get("/flows")
 def list_flows(caller: Caller = Depends(subject_or_operator)):
     """Every flow this engine knows, and the step vocabulary flows are built out of.
@@ -570,15 +591,10 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
     Takes the operator key or a person's own credential; it describes the machine, not a person, so
     the answer is the same either way.
     """
+    db_flows = _db_flows()
     code_flows = [{"name": f.name, "version": f.version, "on": f.on.name,
                    "steps": list(f.steps), "source": "image", "status": "active"}
                   for f in vocab.flows.values()]
-    rows = db.execute("SELECT name, version, on_event, steps, params, status, created_by "
-                      "FROM flow_version ORDER BY name, version")
-    db_flows = [{"name": n, "version": v, "on": e, "steps": json.loads(st),
-                 "params": json.loads(p or "{}"), "status": status,
-                 "created_by": by, "source": "api"}
-                for n, v, e, st, p, status, by in rows]
     # RUNTIME VERSIONS THAT SHADOW THE IMAGE'S with fewer steps — the F57 class. Surfaced on the
     # listing rather than only in a startup log, because the log is read when somebody already
     # suspects something and this is the defect where nobody does.
@@ -620,6 +636,43 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
                 "p": json.dumps(sub.params), "st": status, "by": x_actor, "t": clock.now()})
     return {"name": sub.name, "version": version, "status": status,
             "live_within_s": 10 if status == "active" else None}
+
+
+@app.get("/flows/pages")
+def flow_pages(bodies: int = 1, only: str = "",
+               caller: Caller = Depends(subject_or_operator)):
+    """THE PAGE OF EVERY FLOW SOMEBODY WROTE — one per runtime-authored VERSION, as markdown.
+
+    Founder, 2026-09-06: *"we want to be able to write flows for the global chat as we like."*
+    `flows_submit` files a flow as data and the worker runs it about ten seconds later; this is
+    where the admin reads what they just made. Same page shape as the image's flows carry in
+    `_global/flows/` (#1615/#1626) — trigger, the steps in order with what each reads, does and
+    leaves behind, what it mails, the rules it honours and the Python at the foot — plus the three
+    facts only a runtime version has: who activated it, whether it is still the version new facts
+    react on, and which version replaced it when it is not.
+
+    THIS ROUTE RENDERS; IT DOES NOT WRITE. The page has to land in `_global/flows/`, and this
+    service has no `_global`: compose gives flows-api no volumes at all, while agent-api holds the
+    writable organisation tier (`control_plane/api._global_store`) and already seeds files into it.
+    So the writer is agent-api's `flow_pages_watch`, which polls this and reconciles the directory
+    — and the reason it is a poll rather than a call from here is that a page is a promise the
+    product keeps continuously: a hook fires once, and when its one write cannot land (a read-only
+    mirror, agent-api restarting) the flow is live with no page and nothing retries.
+
+    `bodies=0` answers the same list without the markdown — the poll shape, so the hot loop carries
+    an etag per page instead of every step's source. `only=a@1,b@2` narrows to named pages, which is
+    what the writer asks for once it knows which ones changed.
+
+    Takes the operator key or a person's own credential, exactly like `GET /flows`: it describes the
+    machine, not a person."""
+    wanted = {s.strip() for s in (only or "").split(",") if s.strip()}
+    pages = flows_pages.runtime_pages(vocab, _db_flows())
+    if wanted:
+        pages = [p for p in pages
+                 if p["file"] in wanted or f"{p['flow']}@{p['version']}" in wanted]
+    if not bodies:
+        pages = [{k: v for k, v in p.items() if k != "body"} for p in pages]
+    return {"dir": flows_pages.PAGES_DIR[-1], "pages": pages}
 
 
 class EventSubmission(BaseModel):

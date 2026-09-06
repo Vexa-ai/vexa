@@ -41,7 +41,7 @@ export const INSTRUCTION_MAX = 400;
 export const MEMBER_MAX = 320;
 
 export type ChatIntentKind = "extend" | "create" | "explore" | "highlight" | "extend_transcript"
-  | "policies_wizard" | "member_add" | "member_role" | "member_remove";
+  | "policies_wizard" | "member_add" | "member_role" | "member_remove" | "flow_author";
 
 /** An act on a FILE (decision 32). Split into one interface per kind — rather than one carrying
  *  `kind: "extend" | "create"` — so the union is DISCRIMINATED all the way down and `IntentOf<K>`
@@ -195,8 +195,32 @@ export interface MemberRoleIntent extends MemberActFields { kind: "member_role" 
 export interface MemberRemoveIntent extends MemberActFields { kind: "member_remove" }
 export type MemberActIntent = MemberAddIntent | MemberRoleIntent | MemberRemoveIntent;
 
+/** WRITING A FLOW, AND SENDING WHAT WRITING ONE PRODUCED (Vexa-ai/vexa#1639).
+ *
+ *  Founder, 2026-09-06, in the governance chat of `_global`: *"we want to be able to write flows for
+ *  the global chat as we like."*
+ *
+ *  It names a FILE, like the wizard one family up, and for the same reasons it is not a page intent:
+ *  the act opens a conversation whose first turn writes nothing, and landing on the path when that
+ *  turn commits would jump the reader away from the question they are being asked.
+ *
+ *  ONE KIND, TWO PAGES, and that is deliberate. Pressed on `flows/README.md` it means *write me a
+ *  flow*; pressed on `flows/proposals/<slug>.md` — a step this image does not carry, written out for
+ *  a developer — it means *send that to them*. The server's ask branches on the path, because the
+ *  two are one conversation with one administrator about one thing, unlike the three membership acts
+ *  whose labels a person must be able to tell apart.
+ *
+ *  It carries no selection and no instruction line: the agent's own question is the field. */
+export interface FlowAuthorIntent {
+  kind: "flow_author";
+  /** the workspace the flows directory lives in — `_global` for every deployment that has one */
+  workspace?: string;
+  /** the page it was pressed on, from that workspace's root */
+  path: string;
+}
+
 export type ChatIntent = ExtendIntent | CreateIntent | ExploreIntent | HighlightIntent | ExtendTranscriptIntent
-  | PoliciesWizardIntent | MemberActIntent;
+  | PoliciesWizardIntent | MemberActIntent | FlowAuthorIntent;
 
 /** The intents the person must NOT see as a bubble in their conversation. Mirrors
  *  `chat_intents.SILENT_KINDS` server-side — the founder's correction on Highlight is that it is
@@ -292,9 +316,11 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
     };
   }
 
-  if (kind === "policies_wizard") {
+  if (kind === "policies_wizard" || kind === "flow_author") {
     // THE SAME REFUSAL THE PAGE KINDS APPLY, and for the same reason: an act that names no file is
-    // an act on a guess. There is no "the policy page as a whole" to fall back to.
+    // an act on a guess. There is no "the policy page as a whole" to fall back to, and the flow act
+    // has to know WHICH page it was pressed on — the index and a proposal are two different halves
+    // of the same conversation (Vexa-ai/vexa#1639).
     const path = String(raw.path ?? "").trim().replace(/^\/+/, "");
     if (!path || path.split("/").includes("..")) return null;
     const workspace = str(raw.workspace) || undefined;

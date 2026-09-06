@@ -108,7 +108,11 @@ def read_job_mark(text: str) -> "tuple[str, str, str] | None":
 _ACT_VERBS = {"create": "Create", "extend": "Extend", "extend_transcript": "Extend",
               "explore": "Explore", "policies_wizard": "Set up policies",
               "member_add": "Add a member", "member_role": "Change role",
-              "member_remove": "Remove a member"}
+              "member_remove": "Remove a member",
+              # Vexa-ai/vexa#1639 — writing a flow from the governance chat, and sending the step
+              # proposal writing one produced. One verb for both halves; the page it was pressed on
+              # says which. `clients/terminal/src/minutes/extend.ts` carries the same word.
+              "flow_author": "Write a flow"}
 
 
 # ── the fourth and fifth marks: NOBODY TYPED THIS TURN EITHER (Vexa-ai/vexa#1605) ────────────────

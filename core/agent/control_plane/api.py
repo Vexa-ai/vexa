@@ -1143,6 +1143,26 @@ def _build_production_app() -> FastAPI:
         global_layer.ensure_repo(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
     except Exception as exc:  # noqa: BLE001
         logger.info("the organisation tier is not a git repo here and could not be made one: %s", exc)
+
+    # A FLOW THE ADMIN WROTE FROM THE CHAT GETS ITS PAGE (Vexa-ai/vexa#1639). flows-api renders one
+    # per runtime-authored version and has no `_global` to put it in; this service has the writable
+    # organisation tier and is already its writer, three lines up. AFTER `ensure_repo` so the first
+    # page lands in a repository rather than beside one, and best-effort like everything else that
+    # touches `_global` here.
+    from control_plane import flow_pages_watch
+    try:
+        app.state.flow_pages_watch = flow_pages_watch.start(
+            Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+    except Exception as exc:  # noqa: BLE001
+        app.state.flow_pages_watch = None
+        logger.info("flow pages are not being watched here: %s", exc)
+
+    @app.on_event("shutdown")
+    def _stop_flow_pages_watch() -> None:
+        handle = getattr(app.state, "flow_pages_watch", None)
+        if handle is not None:
+            handle.stop()
+
     return app
 
 
