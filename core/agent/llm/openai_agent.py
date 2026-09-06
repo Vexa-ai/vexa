@@ -52,6 +52,20 @@ SIZING (CCC-Inference-Deployment): the KV cache holds ~29 requests at 24k contex
 carries a HARD per-turn budget — max tool calls, max wall seconds — and trims context (oldest tool
 results first) to stay under ``VEXA_AGENT_CONTEXT_TOKENS``. A shared box is a shared box.
 
+A JOB IS NOT A TURN (Vexa-ai/vexa#1613). The sizing above is about how much of the box ONE request
+may hold at once — context and concurrency — and says nothing about how many times a piece of work
+may come back for another one. An expand-in-every-direction job routinely needs more round trips
+than a chat turn does: the founder's OeNB job ran 72 steps and then died on the 40-call per-turn
+budget, with everything it had already written on disk. So a job gets its own, larger budget
+(``VEXA_AGENT_JOB_MAX_TOOL_CALLS``, per window) and, on reaching it, does not fail: the pages it
+wrote are already committed, it says how far it got, and it CONTINUES IN A FRESH WINDOW over the
+same brief. It fails only when a window makes no progress at all, or when the job's own wall clock
+(``VEXA_AGENT_JOB_MAX_TURN_SEC``) runs out — the outer bound, because a window that keeps making one
+call would otherwise never end.
+
+Both job dials are floored at the turn's, so an operator who raises ``VEXA_AGENT_MAX_TOOL_CALLS`` on
+the containers as a stopgap never accidentally gives a job LESS than a turn.
+
 Config: ``VEXA_LLM_BASE_URL`` · ``VEXA_LLM_API_KEY`` (optional — CCC has no auth) ·
 ``VEXA_LLM_MODEL`` / ``VEXA_AGENT_MODEL`` · ``VEXA_LLM_EXTRA_BODY`` (merged into EVERY request —
 Qwen needs `{"chat_template_kwargs":{"enable_thinking":false}}` or it reasons its whole budget away
@@ -74,6 +88,7 @@ from typing import Callable, Iterable, Iterator, Optional
 
 import httpx
 
+from llm import jobs as llm_jobs
 from llm.errors import LLMAuthError, LLMConfigError, LLMError
 # The panel/chip/transcript vocabularies are the CLAUDE adapter's, imported rather than copied: the
 # terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
@@ -114,6 +129,11 @@ log = logging.getLogger(__name__)
 _DEFAULT_CONTEXT_TOKENS = 24_000
 _DEFAULT_MAX_TOOL_CALLS = 40
 _DEFAULT_MAX_TURN_SEC = 900.0
+#: A BACKGROUND JOB's budgets (Vexa-ai/vexa#1613) — per WINDOW for the calls, whole-job for the
+#: clock. 160 is four turns' worth: above the 72 steps the OeNB job reached before it was killed,
+#: and low enough that one job cannot hold the box indefinitely between checkpoints.
+_DEFAULT_JOB_MAX_TOOL_CALLS = 160
+_DEFAULT_JOB_MAX_TURN_SEC = 3600.0
 # A tool result is the one part of a turn that is both large and, once acted on, mostly spent — so
 # it is what the trimmer eats first, and a stub is left in its place so the model can see that it
 # read something rather than believing it never did.
@@ -133,6 +153,53 @@ def _float_env(key: str, default: float) -> float:
         return float(os.environ.get(key, "") or default)
     except ValueError:
         return default
+
+
+def _job_calls() -> int:
+    """A background job's per-window tool-call budget — never below a turn's (Vexa-ai/vexa#1613).
+
+    The floor matters operationally: raising ``VEXA_AGENT_MAX_TOOL_CALLS`` on the containers is the
+    stopgap this issue's orchestrator applies at the next swap, and a job that then got LESS than a
+    turn would be this bug with the numbers swapped."""
+    return max(_int_env("VEXA_AGENT_JOB_MAX_TOOL_CALLS", _DEFAULT_JOB_MAX_TOOL_CALLS),
+               _int_env("VEXA_AGENT_MAX_TOOL_CALLS", _DEFAULT_MAX_TOOL_CALLS))
+
+
+def _job_seconds() -> float:
+    """A background job's WHOLE-JOB wall clock — the outer bound windows do not reset."""
+    return max(_float_env("VEXA_AGENT_JOB_MAX_TURN_SEC", _DEFAULT_JOB_MAX_TURN_SEC),
+               _float_env("VEXA_AGENT_MAX_TURN_SEC", _DEFAULT_MAX_TURN_SEC))
+
+
+def _job_progress_line(calls: int, window: int) -> str:
+    """WHAT THE JOB ROW SAYS when a window ends and the next one opens. The person is watching one
+    line at the foot of the chat; it has to say that work continues, not that something reset."""
+    return f"{calls} steps so far — continuing (window {window})"
+
+
+#: What a fresh window is told. Not a summary the model wrote (that is another round trip, and a
+#: paraphrase of work is not the work): the brief, and the one fact the new window cannot see for
+#: itself — that its own earlier output is already on disk. Re-reading it is cheap and true.
+_JOB_CONTINUE = (
+    "You have already made {calls} tool calls on this job and the window ended. Everything you "
+    "wrote is saved on disk. Do not start over and do not repeat work: read what is there now, "
+    "carry on from it, and finish. If it is already finished, say so in one line and stop."
+)
+
+
+def _continue_window(messages: list[dict], prompt: str, calls: int, said: str) -> list[dict]:
+    """The message list a continuation window starts from: the original brief, then the checkpoint.
+
+    Everything between them is dropped deliberately — it is the transcript of work whose RESULT is
+    on disk, and carrying it would spend the new window's context re-reading what the new window is
+    about to re-read properly."""
+    first = next((m for m in messages if m.get("role") == "user"), None)
+    seed: list[dict] = [dict(first)] if first else [{"role": "user", "content": prompt}]
+    tail = _JOB_CONTINUE.format(calls=calls)
+    if (said or "").strip():
+        tail += "\n\nThe last thing you said was:\n" + said.strip()[:1000]
+    seed.append({"role": "user", "content": tail})
+    return seed
 
 
 def _est_tokens(obj: object) -> int:
@@ -945,10 +1012,19 @@ class OpenAIAgentHarness:
                      for n in BUILTIN_SPECS if _allowed(n, allow) and _attached(n)]
             specs += [s for s in _mcp_specs(mcp_index) if _allowed(s["function"]["name"], allow)]
 
-            budget_calls = _int_env("VEXA_AGENT_MAX_TOOL_CALLS", _DEFAULT_MAX_TOOL_CALLS)
-            budget_secs = _float_env("VEXA_AGENT_MAX_TURN_SEC", _DEFAULT_MAX_TURN_SEC)
+            # A JOB IS NOT A TURN (Vexa-ai/vexa#1613) — see the module docstring. `in_job()` is a
+            # thread-local set by the worker on the job's own thread, so the chat turn running
+            # beside this one in the same process keeps the per-turn budget it always had.
+            is_job = llm_jobs.in_job()
+            budget_calls = _job_calls() if is_job else _int_env("VEXA_AGENT_MAX_TOOL_CALLS",
+                                                                _DEFAULT_MAX_TOOL_CALLS)
+            budget_secs = _job_seconds() if is_job else _float_env("VEXA_AGENT_MAX_TURN_SEC",
+                                                                   _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
             started, calls_made, reply = time.monotonic(), 0, ""
+            # The CALL budget is per window; the CLOCK is not. `window_calls` is what decides
+            # whether a window made progress, and `total_calls` is what the job row is told.
+            window, window_calls, total_calls = 1, 0, 0
             sandbox = _Sandbox(mount_roots(work), mount_roots(work, writable_only=True))
             # F89: WHAT THE TURN GAVE UP, carried to the `done` event. `turn-truncated` and
             # `context-trimmed` are emitted for the log and the panel, but neither had a consumer —
@@ -991,8 +1067,12 @@ class OpenAIAgentHarness:
                         over_budget = True
                         reason = "tool-call budget" if calls_made >= budget_calls else "time budget"
                         truncation = reason
-                        yield {"type": "turn-truncated", "reason": reason,
-                               "calls": calls_made, "seconds": round(time.monotonic() - started, 1)}
+                        # A JOB ABOUT TO OPEN A FRESH WINDOW HAS GIVEN NOTHING UP (Vexa-ai/vexa#1613),
+                        # so it does not say it has — `job-progress` below is what it says instead.
+                        if not (is_job and reason == "tool-call budget" and window_calls):
+                            yield {"type": "turn-truncated", "reason": reason,
+                                   "calls": calls_made,
+                                   "seconds": round(time.monotonic() - started, 1)}
                         # EVERY call the model made is answered, refusals included. An assistant
                         # message whose tool_calls have no matching tool message is a MALFORMED
                         # request to the next round trip, and on a resumed session that malformation
@@ -1006,6 +1086,8 @@ class OpenAIAgentHarness:
                                              "content": refusal})
                         break
                     calls_made += 1
+                    window_calls += 1
+                    total_calls += 1
                     yield {"type": "tool-call", "tool": call["name"], "args": call["args"],
                            "callId": call["id"]}
                     ok, out = self._exec_tool(call, mcp_index, sandbox, allow)
@@ -1017,6 +1099,19 @@ class OpenAIAgentHarness:
                     store.record_tool_result(call["id"], ok, out)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": out})
                 if over_budget:
+                    # A JOB CHECKPOINTS AND CARRIES ON (Vexa-ai/vexa#1613). Its pages are already
+                    # committed as they land, so there is nothing to save here — what a fresh
+                    # window needs is the brief and the fact that work has already happened. It
+                    # only ever applies to the CALL budget: the clock is the job's outer bound and
+                    # running past it is what "a job may take minutes, not hours" forbids.
+                    if is_job and truncation == "tool-call budget" and window_calls:
+                        window += 1
+                        yield {"type": "job-progress", "window": window, "calls": total_calls,
+                               "line": _job_progress_line(total_calls, window)}
+                        messages = _continue_window(messages, prompt, total_calls, text)
+                        store.record_user(messages[-1]["content"])
+                        calls_made, window_calls, truncation, over_budget = 0, 0, "", False
+                        continue
                     reply = text
                     break
             # THE TURN'S OWN VERDICT. `ok` is False only when the turn did not finish its own

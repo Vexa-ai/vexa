@@ -1545,7 +1545,7 @@ def start_prompt(start: dict) -> str | None:
 def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
           tools: "list[str] | None" = None, job: TurnFn | None = None,
-          jobs_dir: "Path | None" = None) -> None:
+          jobs_dir: "Path | None" = None, jobs_session: str = "") -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -1577,6 +1577,12 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     turn. `_join_trailers()` is called before every exit path so a daemon thread killed by
     TTL-on-idle reaping never eats a commit mid-flight.
 
+    `jobs_session` — WHOSE JOBS THESE ARE (Vexa-ai/vexa#1613). The register directory lives under
+    the person's continuity root, which every one of their chats shares, so a boot scan that did not
+    know its own name reported another conversation's LIVE jobs as restart casualties — into a
+    chat that never asked for one — and deleted the records on the way. Every job event now says
+    which session owns it and the boot scan takes only its own; see `worker/jobs.JobRunner`.
+
     `job` — BACKGROUND JOBS (Vexa-ai/vexa#1584), the same idea taken one step further and applied to
     the WORK rather than to its paperwork. A prompt carrying the job mark never runs here at all:
     `JobRunner` takes it, this loop emits one line and completes the turn, and the act runs on its
@@ -1594,7 +1600,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     # which is every test and every deployment that has not wired one.
     _jobs = None if job is None else worker_jobs.JobRunner(
         emit=lambda ev: stream.xadd(out_topic, {"event": json.dumps(ev)}),
-        turn=job, register_dir=jobs_dir)
+        turn=job, register_dir=jobs_dir, session=jobs_session)
 
     def _spawn_from_tool(kind: str, target: str, brief: str) -> "tuple[bool, str]":
         """`spawn_job`'s answer to the model — an accepted job, or the refusal in words it can
@@ -1969,6 +1975,32 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     harness_warning = chat_harness.preflight()
     if harness_warning:
         log.warning("agent-api worker: %s", harness_warning)
+
+    def _job_turn(brief: str):
+        """A BACKGROUND JOB'S TURN, on the job's own thread (Vexa-ai/vexa#1584, #1613).
+
+        Two lines of difference from a chat turn, and both are about ownership:
+
+        · ``session_continuity=False`` — a job runs its OWN harness session. It does not resume the
+          conversation, does not move the continuity pointer and does not append to the transcript
+          the history reader serves. Two turns writing one transcript is the same one-writer failure
+          as two turns writing one page, and on `claude-code` a second ``--resume`` of a live
+          session is not a supported shape at all. The price — the job's two lines are live-only —
+          is stated in ``llm/JOBS.md`` rather than discovered.
+
+        · ``mark_job_thread`` — set INSIDE the generator body, which runs on the first ``next()``
+          and therefore on the thread ``JobRunner._run`` is iterating from. That is the whole point:
+          the chat turn running beside this one in the same process must keep the per-turn budget,
+          so the flag cannot be a process-wide env var. The harness reads it and gives the job a
+          budget sized for an act rather than for a sentence."""
+        llm_jobs.mark_job_thread(True)
+        try:
+            yield from run_turn_over_workspace(
+                work, brief, model=model, allowed_tools=chat_tools, session=session,
+                session_continuity=False, mcp_config=mcp_cfg, harness=chat_harness)
+        finally:
+            llm_jobs.mark_job_thread(False)
+
     serve(
         client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
         turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
@@ -1996,13 +2028,18 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # as two turns writing one page, and on `claude-code` a second `--resume` of a live session
         # is not a supported shape at all. The price — the job's two lines are live-only — is stated
         # in `llm/JOBS.md` rather than discovered.
-        job=lambda brief: run_turn_over_workspace(
-            work, brief, model=model, allowed_tools=chat_tools, session=session,
-            session_continuity=False, mcp_config=mcp_cfg, harness=chat_harness),
+        # …and A JOB IS NOT A TURN (Vexa-ai/vexa#1613). The mark is set INSIDE the generator, so it
+        # is set on the thread that iterates it — the job's own thread — and the chat turn
+        # running beside it in this same process keeps the per-turn budget it always had. The
+        # harness reads it (`llm/jobs.in_job`) to pick a budget that fits an act rather than a
+        # sentence: the founder's OeNB job ran 72 steps and then died on a 40-call turn budget.
+        job=_job_turn,
         # The register that makes "a restart cancels them and the chat is told" true. It sits beside
         # the session pointers, under the private continuity root, which is already outside the
-        # workspace commit.
+        # workspace commit — and is therefore SHARED by every chat this person has, which is why
+        # each record and each event carries the session that owns it.
         jobs_dir=_continuity_root(work) / ".claude" / "jobs",
+        jobs_session=session,
         start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
         harness=chat_harness,
         # What this session can actually call — the F70 detector's third condition, and the

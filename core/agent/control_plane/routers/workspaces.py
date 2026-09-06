@@ -15,6 +15,7 @@ from control_plane import git_credentials as git_creds
 from control_plane import global_layer
 from control_plane import publish as publish_mod
 from control_plane import repo_ref
+from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
 from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
@@ -493,6 +494,32 @@ def build(**d) -> APIRouter:
             "parked": result.parked_slug,
             "nested": result.nested,
         }
+    @router.get("/api/workspace/desk")
+    def ws_desk(request: Request):
+        """IS THERE A DESK HERE YET, and has anybody worked in it (Vexa-ai/vexa#1613).
+
+        The terminal used to answer this for itself by reading `.scaffolded` — and got it wrong for
+        the founder on 2026-09-06: a brand-new chat offered him *"My email is …, set up a workspace
+        for me"* over a desk that had existed since 13:30 with company, person and project entities
+        in it. `.scaffolded` is written by exactly ONE route (the personal onboarding conversation,
+        as its final act) and `flows_defs/production.py` says of it in as many words: *"survives as
+        a harmless marker; it gates nothing"* (decision 22a). Its absence therefore means "that
+        particular conversation did not happen", which is not the same question and has not been the
+        same answer since the desk got other ways to come into existence.
+
+        `desk_state` IS the question, and it has been on the server the whole time — the same three
+        words (`new` · `pile` · `warm`) a scaffold's facts block already tells the agent about the
+        person it is opening to. It reads the FILES, so it cannot disagree with what is there.
+
+        The marker is returned beside it rather than dropped: a finished setup is still a positive
+        fact and the fastest one, and a client that has both can fail closed on either."""
+        subject = subject_of(request)
+        try:
+            state = scaffolds_mod.desk_state(wsr.root, subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        marker = (Path(wsr.root) / str(subject) / ".scaffolded").exists()
+        return {"subject": subject, "state": state, "scaffolded": marker}
     @router.get("/api/workspace/active")
     def ws_active(request: Request):
         """The subject's ordered ACTIVE SET — the workspaces the next dispatch mounts (the private baseline

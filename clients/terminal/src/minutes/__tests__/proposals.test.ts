@@ -5,14 +5,15 @@
  *  or a real clock. That is the whole reason the rule lives in a function instead of in JSX.
  *
  *  Covered: each of the five rules alone · the priority order when they collide · the three-chip
- *  cap · the two ways a rule declines to fire (unknown scaffolding, a meeting already written
+ *  cap · the two ways a rule declines to fire (an unknown desk, a meeting already written
  *  about) · and, since 2026-09-02, that NOTHING is padded in behind them (F36 — the standing
  *  "Create a group for daily meetings" suggestion is deleted; a button is a scaffolded intent, not
  *  a default, and an empty row is the honest answer for an account with nothing to say about). */
 import { describe, expect, it } from "vitest";
 import type { MeetingMock } from "../../surfaces/meetingModel";
+import type { DeskFacts } from "../../surfaces/workspaceApi";
 import type { Chat } from "../chats";
-import { applyProposal, isUnlabeled, KICK, PREP_WINDOW_MS, proposals, setupProposal } from "../proposals";
+import { applyProposal, isUnlabeled, KICK, needsSetup, PREP_WINDOW_MS, proposals, setupProposal } from "../proposals";
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../canvas/actions";
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);            // a fixed "now" — nothing here reads the clock
@@ -35,7 +36,13 @@ const touched = (id: string) => chat({ id, touched: true });
 /** An auto-created chat nobody has written in — exactly what rule 4 counts. */
 const untouched = (id: string) => chat({ id, touched: false });
 
-const run = (m: MeetingMock[], c: Chat[], scaffolded: boolean | null = true) => proposals(m, c, scaffolded, NOW);
+/** The desk states rule 5 turns on, named once (Vexa-ai/vexa#1613). */
+const BLANK: DeskFacts = { state: "new", scaffolded: false };     // nothing has ever been written
+const WORKED_IN: DeskFacts = { state: "warm", scaffolded: false }; // THE FOUNDER'S CASE, 2026-09-06
+const A_PILE: DeskFacts = { state: "pile", scaffolded: false };    // reports landed, nobody wired
+const FINISHED: DeskFacts = { state: "warm", scaffolded: true };   // a setup conversation completed
+
+const run = (m: MeetingMock[], c: Chat[], desk: DeskFacts | null = FINISHED) => proposals(m, c, desk, NOW);
 const labels = (ps: { label: string }[]) => ps.map((p) => p.label);
 const kinds = (ps: { kind: string }[]) => ps.map((p) => p.kind);
 
@@ -144,7 +151,7 @@ describe("rule 4 — the pile the rail is hiding", () => {
 
 describe("rule 5 — the workspace has never been set up", () => {
   it("offers setup when the marker is absent, in the person's own words", () => {
-    const [p] = proposals([], [touched("main")], false, NOW, "ada@example.com");
+    const [p] = proposals([], [touched("main")], BLANK, NOW, "ada@example.com");
     expect(p.kind).toBe("setup");
     expect(p.label).toBe("My email is ada@example.com, set up a workspace for me");
     expect(p.say).toBe(p.label);                      // the chip's words ARE the user's — shown, not hidden
@@ -153,39 +160,67 @@ describe("rule 5 — the workspace has never been set up", () => {
   });
 
   it("an unknown address drops the clause rather than printing an empty one", () => {
-    const [p] = run([], [touched("main")], false);
+    const [p] = run([], [touched("main")], BLANK);
     expect(p.label).toBe("Set up a workspace for me");
     expect(p.label).not.toContain("undefined");
     expect(p.say).toBe(p.label);
   });
 
-  it("stays silent when the workspace IS scaffolded", () => {
-    expect(kinds(run([], [touched("main")], true))).not.toContain("setup");
+  it("stays silent when a setup conversation has finished", () => {
+    expect(kinds(run([], [touched("main")], FINISHED))).not.toContain("setup");
   });
 
   it("stays silent while the probe has not answered — null fails closed", () => {
     expect(kinds(run([], [touched("main")], null))).not.toContain("setup");
   });
+
+  // ── THE DEFECT (Vexa-ai/vexa#1613) ────────────────────────────────────────────────────────────
+  //
+  //  Founder, 2026-09-06 14:10Z: a brand-new chat offered him *"My email is dmitry@vexa.ai, set up
+  //  a workspace for me"* over a desk that had existed since 13:30 and already held company,
+  //  person and project entities. The rule was reading `.scaffolded` — a marker ONE route writes
+  //  (the personal onboarding conversation, as its final act) and which `flows_defs/production.py`
+  //  describes in as many words as *"a harmless marker; it gates nothing"*. Its absence had stopped
+  //  meaning "never set up" the moment a desk acquired other ways to come into existence.
+
+  it("stays silent over a desk somebody has WORKED IN, marker or no marker", () => {
+    expect(kinds(run([], [touched("main")], WORKED_IN))).not.toContain("setup");
+    expect(needsSetup(WORKED_IN)).toBe(false);
+  });
+
+  it("stays silent over a desk that meeting reports have landed in", () => {
+    // `pile` is a desk nobody has TALKED to — but something is written there, so offering to set
+    // it up is still the same lie.
+    expect(kinds(run([], [touched("main")], A_PILE))).not.toContain("setup");
+    expect(needsSetup(A_PILE)).toBe(false);
+  });
+
+  it("the derivation, in one place: only a desk with nothing in it is offered setup", () => {
+    expect(needsSetup(BLANK)).toBe(true);
+    expect(needsSetup(FINISHED)).toBe(false);
+    expect(needsSetup({ state: "new", scaffolded: true })).toBe(false);  // marker wins on its own
+    expect(needsSetup(null)).toBe(false);                                // not known yet → offer nothing
+  });
 });
 
 describe("priority + the cap", () => {
   it("the top three win, in rule order, when everything fires at once", () => {
-    const ps = run([LIVE, SOON, HELD], [touched("main"), untouched("a")], false);
+    const ps = run([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK);
     expect(ps).toHaveLength(3);
     expect(kinds(ps)).toEqual(["catch-up", "prep", "outcome"]);
   });
 
   it("a rule that does not fire promotes the ones below it", () => {
-    const ps = run([LIVE, HELD], [touched("main"), untouched("a")], false);
+    const ps = run([LIVE, HELD], [touched("main"), untouched("a")], BLANK);
     expect(kinds(ps)).toEqual(["catch-up", "outcome", "review"]);
   });
 
   it("never more than three, whatever the state", () => {
-    expect(run([LIVE, SOON, HELD], [untouched("a"), untouched("b")], false)).toHaveLength(3);
+    expect(run([LIVE, SOON, HELD], [untouched("a"), untouched("b")], BLANK)).toHaveLength(3);
   });
 
   it("every chip carries a distinct key", () => {
-    const ps = run([LIVE, SOON, HELD], [touched("main")], false);
+    const ps = run([LIVE, SOON, HELD], [touched("main")], BLANK);
     expect(new Set(ps.map((p) => p.id)).size).toBe(ps.length);
   });
 });
@@ -203,15 +238,15 @@ describe("F36 — nothing is padded in behind the rules", () => {
 
   it("every chip that IS offered comes from live state, never from a constant", () => {
     // the whole offered set, over a rich account: each kind is produced by a rule that read
-    // something real (a meeting's phase, the rail's hidden count, the `.scaffolded` marker).
-    const ps = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], false, NOW, "ada@example.com");
+    // something real (a meeting's phase, the rail's hidden count, the desk's own state).
+    const ps = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW, "ada@example.com");
     for (const p of ps) expect(["catch-up", "prep", "outcome", "review", "setup"]).toContain(p.kind);
   });
 
   it("the deleted suggestion is not reachable under any state", () => {
     for (const c of [[], [touched("main")], [untouched("a")]]) {
       for (const m of [[], [LIVE], [HELD], [LIVE, SOON, HELD]]) {
-        for (const sc of [true, false, null] as const) {
+        for (const sc of [FINISHED, BLANK, WORKED_IN, A_PILE, null]) {
           expect(labels(proposals(m, c, sc, NOW))).not.toContain("Create a group for daily meetings");
         }
       }
@@ -309,7 +344,7 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
   });
 
   it("NOTHING a live row can offer ever appends a chat", () => {
-    const offered = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], false, NOW, "ada@example.com");
+    const offered = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW, "ada@example.com");
     expect(offered.length).toBeGreaterThan(0);
     for (const p of [...offered, setupProposal("ada@example.com")]) {
       const e = applyProposal(p, NEW, [LIVE, SOON, HELD], NOW);

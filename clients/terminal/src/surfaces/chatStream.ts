@@ -61,7 +61,30 @@ export type ChatStreamEvent = {
   kind?: string;
   target?: string;
   line?: string;
+  /** WHICH CONVERSATION THE JOB BELONGS TO (Vexa-ai/vexa#1613). Stamped by the worker on every job
+   *  event. A connection reading a chat it does not name renders none of it — see `ownsJob`. */
+  session?: string;
+  /** `job-progress` only — the window that just ended and the job's running step count. */
+  window?: number;
+  calls?: number;
 };
+
+/** IS THIS JOB THIS CHAT'S? (Vexa-ai/vexa#1613.)
+ *
+ *  The founder opened a NEW EMPTY CHAT and its first content was two lines from another chat's
+ *  jobs — *"some leak to empty chat"*. The server half of that is fixed where it was caused (the
+ *  jobs register is shared by every chat a person has, and a booting worker was reporting other
+ *  conversations' LIVE jobs as its own restart casualties). This is the other half, and it is the
+ *  one that makes the promise unconditional: a job event names its session, and a connection
+ *  belonging to a different one drops it whole.
+ *
+ *  It fails OPEN on an unstamped event, deliberately: a deployment one release behind stamps
+ *  nothing, and refusing every job line there would replace a rare wrong line with a permanent
+ *  missing one. The stamp is what removes the doubt, not the client's suspicion. */
+export function ownsJob(ev: { session?: string }, session: string | undefined): boolean {
+  const owner = (ev.session ?? "").trim();
+  return !owner || !session || owner === session;
+}
 
 /** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
  *
@@ -145,6 +168,11 @@ export type ChatStreamCallbacks = {
   onJobStarted?: (j: { jobId: string; kind: string; target: string; line: string }) => void;
   /** one tool call the JOB made — the job's own step count, kept apart from the turn's */
   onJobStep?: (jobId: string, tool: string) => void;
+  /** THE JOB IS STILL GOING, in a fresh window (Vexa-ai/vexa#1613). A long act reaches its
+   *  per-window tool-call budget, checkpoints — its pages are already committed — and carries on.
+   *  The row says so rather than going quiet: a job that looks stopped and is not is the same lie
+   *  as a spinner that outlives its turn. */
+  onJobProgress?: (jobId: string, line: string) => void;
   /** the job landed, or died. `line` is the one sentence it posts into the chat — never silence. */
   onJobEnd?: (j: { jobId: string; ok: boolean; line: string }) => void;
 };
@@ -353,7 +381,10 @@ export async function streamChatTurn(
         // its `commit` would end this read while the job was still writing.
         const jid = typeof ev.job_id === "string" ? ev.job_id : "";
         if (ev.type === "job-started") {
-          if (jid && !myJobs.has(jid)) {
+          // …AND ONLY A JOB THIS CHAT OWNS IS EVER ADOPTED (Vexa-ai/vexa#1613). Adoption is the
+          // one decision that matters: every later event is gated on `myJobs`, so a job never
+          // taken here can never render, step a row, or post a line in this conversation.
+          if (jid && !myJobs.has(jid) && ownsJob(ev, req.session)) {
             myJobs.add(jid);
             sawVisibleOutput = true;
             cb.onJobStarted?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "", line: ev.line ?? "" });
@@ -368,6 +399,8 @@ export async function streamChatTurn(
             cb.onJobEnd?.({ jobId: jid, ok: ev.type === "job-done", line: ev.line ?? "" });
           } else if (ev.type === "tool-call") {
             cb.onJobStep?.(jid, ev.tool ?? "tool");
+          } else if (ev.type === "job-progress") {
+            cb.onJobProgress?.(jid, ev.line ?? "");
           } else if (ev.type === "commit") {
             // The one event the job shares with a turn verbatim: the panel re-reads the open
             // document on a commit, which is what makes the page the job wrote appear by itself.

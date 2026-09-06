@@ -25,6 +25,29 @@ export async function readWorkspaceFile(path: string, opts?: { slug?: string }):
   }
 }
 
+/** WHAT THE PERSON'S DESK IS — `new` (nothing has ever been written there) · `pile` (meeting
+ *  reports landed and nobody wired anything) · `warm` (entities exist; somebody has worked here).
+ *  The server's own three words (`control_plane/scaffolds.desk_state`), read off the FILES. */
+export type DeskState = "new" | "pile" | "warm";
+
+export interface DeskFacts {
+  state: DeskState;
+  /** the `.scaffolded` marker a finished personal setup leaves. A positive fact only — see
+   *  `minutes/proposals.needsSetup` for why its ABSENCE says nothing. */
+  scaffolded: boolean;
+}
+
+/** GET /api/workspace/desk. `null` when the read failed — the caller must fail closed on it. */
+export async function readDeskFacts(): Promise<DeskFacts | null> {
+  try {
+    const d = await getJson<{ state?: string; scaffolded?: boolean }>(`/api/workspace/desk`);
+    const state = (d.state === "warm" || d.state === "pile" || d.state === "new") ? d.state : "warm";
+    return { state, scaffolded: d.scaffolded === true };
+  } catch {
+    return null;
+  }
+}
+
 /** Materialize the user's workspace from the seed template — POST /api/workspace/init (idempotent: an
  *  existing workspace is returned untouched, `seeded:false`). `seeded` is true only on first creation. */
 export async function initWorkspace(): Promise<{ workspace: string; seeded: boolean; already_initialized: boolean }> {

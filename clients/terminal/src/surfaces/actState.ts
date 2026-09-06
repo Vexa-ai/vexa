@@ -101,6 +101,15 @@ export function stepAct(acts: Acts, job: string, label: string): Acts {
   return { ...acts, [target]: { ...rec, phase: "working", steps: rec.steps + 1, label } };
 }
 
+/** THE JOB IS STILL GOING (Vexa-ai/vexa#1613) — a window budget was reached, the work was
+ *  checkpointed and a fresh window opened. The label changes and THE COUNT DOES NOT: no step was
+ *  taken, so counting one here would be the same lie in the other direction. */
+export function noteAct(acts: Acts, job: string, label: string): Acts {
+  const target = byJob(acts, job);
+  if (!target || !label) return acts;
+  return { ...acts, [target]: { ...acts[target], phase: "working", label } };
+}
+
 /** LANDED OR DIED. Landed → the record goes and the control is a control again; the page it wrote
  *  is the result, and the commit event has already put it on screen. Died → the record STAYS,
  *  carrying the one line the control shows and the act it offers again. */
@@ -141,6 +150,7 @@ export const actQueued = (a: { target: string; kind: string }): void => commit(q
 export const actSending = (target: string): void => commit(sendAct(acts, target));
 export const actStarted = (j: { job: string; kind: string; target: string }): void => commit(startAct(acts, j));
 export const actStepped = (job: string, label: string): void => commit(stepAct(acts, job, label));
+export const actNoted = (job: string, label: string): void => commit(noteAct(acts, job, label));
 export const actEnded = (job: string, ok: boolean, line: string): void => commit(endAct(acts, job, ok, line));
 export const actSettled = (target: string): void => commit(settleAct(acts, target));
 export const actCleared = (target: string): void => commit(clearAct(acts, target));

@@ -13,11 +13,18 @@ TWO LINES OF POLICY, AND BOTH ARE THE HARNESS'S OWN RULES:
 * **A refusal is a normal tool result.** A duplicate job, a spawner that raised — the model is told,
   in words, and picks another move. That is what a loop is for.
 
-This module imports NOTHING (the `llm` package must stay liftable into a standalone brick): the
-worker injects its spawner at boot and the seam is a single callable.
+This module imports NOTHING of the project (the `llm` package must stay liftable into a standalone
+brick): the worker injects its spawner at boot and the seam is a single callable.
+
+IT ALSO CARRIES THE OTHER DIRECTION (Vexa-ai/vexa#1613) — whether the code running RIGHT NOW is a
+job. A job runs on its own thread (`worker/jobs.JobRunner._run`), so the mark is a THREAD-LOCAL and
+needs no signature change through `HarnessPort.run_turn`, which three adapters implement and only
+one of them cares. The harness reads it to pick a budget: a job is not a turn, and the founder's
+OeNB job died on the per-turn tool-call budget after 72 steps because it was billed as one.
 """
 from __future__ import annotations
 
+import threading
 from typing import Callable, Optional
 
 #: ``(kind, target, brief) -> (ok, text)``. Installed by the worker; absent everywhere else.
@@ -35,6 +42,26 @@ def set_spawner(fn: Optional[Spawner]) -> None:
 def configured() -> bool:
     """Can this process actually run a job? Read by the harness before attaching the tool."""
     return _spawner is not None
+
+
+# ── am I a job? ──────────────────────────────────────────────────────────────────────────────────
+#
+# THREAD-LOCAL, not an env var and not a parameter. A job shares the worker process with the chat
+# it was asked in — the two run at the same time, on different threads — so a process-wide flag
+# would give the chat turn the job's budget and vice versa, at random. The worker's job turn sets
+# it on the thread that will iterate the harness (`worker/engine.serve`), and nothing else writes it.
+
+_JOB_THREAD = threading.local()
+
+
+def mark_job_thread(on: bool = True) -> None:
+    """Declare (or clear) that THIS THREAD is running a background job's turn."""
+    _JOB_THREAD.on = bool(on)
+
+
+def in_job() -> bool:
+    """Is the current thread running a background job's turn? Default false everywhere else."""
+    return bool(getattr(_JOB_THREAD, "on", False))
 
 
 def spawn(kind: str, target: str, brief: str) -> "tuple[bool, str]":

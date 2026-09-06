@@ -28,7 +28,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from llm.openai_agent import (OpenAIAgentHarness, _Sandbox, mount_roots, run_builtin,
+from llm import jobs as llm_jobs
+from llm.openai_agent import (OpenAIAgentHarness, _Sandbox, _job_calls, mount_roots, run_builtin,
                               trim_messages)
 
 
@@ -224,6 +225,100 @@ def test_tool_call_budget_stops_the_turn_and_answers_every_call(tmp_path, monkey
     # F89: the truncation reaches the `done` event, which is the only one anything downstream reads
     assert evs[-1]["type"] == "done" and evs[-1]["ok"] is False
     assert "tool-call budget" in evs[-1]["reason"]
+
+
+# ── a job is not a turn (Vexa-ai/vexa#1613) ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def _not_a_job():
+    """Every other test in this file runs a TURN. The mark is thread-local and the suite is one
+    thread, so it is cleared around anything that sets it."""
+    llm_jobs.mark_job_thread(False)
+    yield
+    llm_jobs.mark_job_thread(False)
+
+
+def test_a_job_gets_its_own_tool_call_budget(tmp_path, monkeypatch, _not_a_job):
+    """The founder's OeNB job ran 72 steps and then died on the 40-call PER-TURN budget."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
+    monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "3")
+    script = [_msg("", [("a", "Glob", {"pattern": "*"})]),
+              _msg("", [("b", "Glob", {"pattern": "*"})]),
+              _msg("done")]
+    h = _harness(_server(script))
+    h.prepare(tmp_path)
+    llm_jobs.mark_job_thread(True)
+    evs = _events(h, tmp_path, "go", allowed_tools=["Glob"])
+    # two calls ran where a TURN would have stopped after one, and the job answered normally
+    assert len([e for e in evs if e["type"] == "tool-call"]) == 2
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is True
+    assert "reason" not in evs[-1]
+
+
+def test_the_job_budget_is_never_below_the_turn_budget(monkeypatch):
+    """The stopgap this issue's operator applies is `VEXA_AGENT_MAX_TOOL_CALLS=160` on the
+    containers. A job that then got the 160-default while turns had 160 would be fine; a job that
+    got LESS than a turn would be this bug with the numbers swapped."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "500")
+    monkeypatch.delenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", raising=False)
+    assert _job_calls() == 500
+    monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "160")
+    assert _job_calls() == 500
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "40")
+    assert _job_calls() == 160
+
+
+def test_a_job_that_hits_its_budget_continues_in_a_fresh_window(tmp_path, monkeypatch, _not_a_job):
+    """Reaching the budget is a CHECKPOINT, not a death: the pages are already committed, the row is
+    told how far it got, and the job carries on over the same brief."""
+    monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "1")
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")     # the floor, so the job window is 1
+    seen = []
+    script = [_msg("", [("a", "Glob", {"pattern": "*"})]),
+              _msg("", [("b", "Glob", {"pattern": "*"})]),
+              _msg("all done")]
+    h = _harness(_server(script, seen))
+    h.prepare(tmp_path)
+    llm_jobs.mark_job_thread(True)
+    evs = _events(h, tmp_path, "expand in every direction", allowed_tools=["Glob"])
+
+    progress = [e for e in evs if e["type"] == "job-progress"]
+    assert progress and progress[0]["window"] == 2 and progress[0]["calls"] == 1
+    assert "continuing" in progress[0]["line"]
+    # …and it ENDED WELL, which is the whole point — no truncation reached the `done`
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is True and evs[-1]["reply"] == "all done"
+    # the fresh window carries the brief and the checkpoint, and NOT the spent transcript
+    fresh = seen[-1]["messages"]
+    assert [m["role"] for m in fresh][:2] == ["user", "user"]
+    assert fresh[0]["content"] == "expand in every direction"
+    assert "already saved on disk" in fresh[1]["content"] or "saved on disk" in fresh[1]["content"]
+
+
+def test_a_window_that_made_no_progress_ends_the_job(tmp_path, monkeypatch, _not_a_job):
+    """The stop condition. Without it a job that can no longer do anything loops for ever."""
+    monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "0")
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "0")     # the floor, so the job's really is 0
+    h = _harness(_server([_msg("", [("a", "Glob", {"pattern": "*"})]), _msg("late")]))
+    h.prepare(tmp_path)
+    llm_jobs.mark_job_thread(True)
+    evs = _events(h, tmp_path, "go", allowed_tools=["Glob"])
+    assert [e for e in evs if e["type"] == "job-progress"] == []
+    assert evs[-1]["type"] == "done" and evs[-1]["ok"] is False
+    assert "tool-call budget" in evs[-1]["reason"]
+
+
+def test_a_plain_turn_is_untouched_by_any_of_this(tmp_path, monkeypatch, _not_a_job):
+    """A chat turn runs BESIDE a job in the same process, so the job's budget must not reach it —
+    which is why the mark is thread-local and not an env var."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
+    monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "160")
+    h = _harness(_server([_msg("", [("a", "Glob", {"pattern": "*"}),
+                                    ("b", "Glob", {"pattern": "*"})]), _msg("late")]))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "go", allowed_tools=["Glob"])
+    assert [e for e in evs if e["type"] == "job-progress"] == []
+    assert evs[-1]["ok"] is False and "tool-call budget" in evs[-1]["reason"]
 
 
 def _calls(*ids):

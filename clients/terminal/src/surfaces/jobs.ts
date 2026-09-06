@@ -104,6 +104,14 @@ export function stepJob(jobs: JobRec[], id: string, label: string): JobRec[] {
   return jobs.map((j) => (j.id === id ? { ...j, steps: j.steps + 1, label } : j));
 }
 
+/** THE JOB SAID SOMETHING ABOUT ITSELF (Vexa-ai/vexa#1613) — it reached a window budget, checkpointed
+ *  and carried on. The label changes; the step count does not, because no step was taken. It is the
+ *  only line in the product that reports a job is STILL running rather than what it is doing. */
+export function noteJob(jobs: JobRec[], id: string, label: string): JobRec[] {
+  if (!label) return jobs;
+  return jobs.map((j) => (j.id === id ? { ...j, label } : j));
+}
+
 export function endJob(jobs: JobRec[], id: string): JobRec[] {
   return jobs.filter((j) => j.id !== id);
 }

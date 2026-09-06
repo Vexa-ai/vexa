@@ -25,8 +25,8 @@ import { presentError } from "./apiClient";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import { isPageIntent, type ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
-import { actEnded, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
-import { actTarget, endJob, isJobIntent, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "./jobs";
+import { actEnded, actNoted, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
+import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
@@ -1123,6 +1123,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             const step = toolOp(tool).label.split(" · ").pop() ?? "";
             actStepped(jobId, step);
             updateChatState(key, (s) => ({ ...s, jobs: stepJob(s.jobs, jobId, step) }));
+          },
+          // STILL GOING, IN A FRESH WINDOW (Vexa-ai/vexa#1613). A long act that reached its
+          // per-window tool-call budget used to die there — the founder's OeNB job ran 72 steps
+          // and then said it had failed. It now checkpoints and continues, and the row it already
+          // has says so. No step is counted: nothing was done, something was RESUMED.
+          onJobProgress: (jobId, line) => {
+            actNoted(jobId, line);
+            updateChatState(key, (s) => ({ ...s, jobs: noteJob(s.jobs, jobId, line) }));
           },
           // ONE LINE, ALWAYS — landed or died. A job that finishes in silence is indistinguishable
           // from one that is still running, and the chip has just gone.

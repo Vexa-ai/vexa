@@ -7,8 +7,8 @@
  *  minute ago, and end the read while the job was still writing.
  */
 import { describe, it, expect, vi } from "vitest";
-import { endJob, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "../jobs";
-import { streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
+import { endJob, jobLine, jobTarget, noteJob, queueJob, startJob, stepJob, type JobRec } from "../jobs";
+import { ownsJob, streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
 
 function sseResponse(chunks: string[]): Response {
   const enc = new TextEncoder();
@@ -31,6 +31,7 @@ function recorder() {
     text: "", tools: [] as string[], commit: undefined as string | undefined,
     jobStarted: [] as { jobId: string; kind: string; target: string; line: string }[],
     jobSteps: [] as string[], jobEnded: [] as { jobId: string; ok: boolean; line: string }[],
+    jobNotes: [] as string[],
     lost: "",
   };
   const cb: ChatStreamCallbacks = {
@@ -43,6 +44,7 @@ function recorder() {
     onError: (m) => { state.lost += m; },
     onJobStarted: (j) => { state.jobStarted.push(j); },
     onJobStep: (_id, tool) => { state.jobSteps.push(tool); },
+    onJobProgress: (_id, line) => { state.jobNotes.push(line); },
     onJobEnd: (j) => { state.jobEnded.push(j); },
   };
   return { state, cb };
@@ -65,6 +67,15 @@ describe("the job chip", () => {
 
   it("falls back to the kind when there is no target to name", () => {
     expect(jobLine([j({ target: "" })])).toBe("job · extend");
+  });
+
+  it("a progress note changes what the row SAYS and not what it COUNTS", () => {
+    // Vexa-ai/vexa#1613 — a window ended and a fresh one opened. No step was taken.
+    const rows = noteJob([j({ steps: 160, label: "Grep" })], "j-1", "160 steps so far — continuing (window 2)");
+    expect(rows[0].steps).toBe(160);
+    expect(jobLine(rows)).toBe("job · kg/plan.md · 160 steps · 160 steps so far — continuing (window 2)");
+    expect(noteJob(rows, "j-1", "")).toBe(rows);          // nothing to say, nothing changed
+    expect(noteJob(rows, "j-other", "x")).toEqual(rows);  // a job this row is not
   });
 
   // ── PRESSED WHILE THE CHAT WAS WORKING (Vexa-ai/vexa#1594) ─────────────────────────────────────
@@ -227,6 +238,81 @@ describe("streamChatTurn — a turn that spawns a job", () => {
     expect(state.text).toBe("hello");
     expect(result.terminal).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // ── A JOB BELONGS TO ONE CHAT (Vexa-ai/vexa#1613) ─────────────────────────────────────────────
+  //
+  //  Founder, 2026-09-06 14:10Z: he opened a NEW EMPTY CHAT and its first content was two lines
+  //  about another chat's jobs — *"some leak to empty chat"*. The server half is fixed where it was
+  //  caused (a booting worker read the shared jobs register and announced other conversations'
+  //  LIVE jobs as its own restart casualties). This is the half that makes it unconditional: the
+  //  event names its session, and a connection reading a different one renders none of it.
+
+  it("a job event from session A never renders in chat B", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+      // everything chat A's job produces, arriving on a connection that belongs to chat B
+      ev({ type: "job-started", job_id: "j-a", kind: "extend", target: "oenb-b5e60c", session: "chat-a", line: "Extending oenb-b5e60c — I'll say when it's there." }, "1-0"),
+      ev({ type: "tool-call", tool: "Read", job_id: "j-a", session: "chat-a" }, "2-0"),
+      ev({ type: "job-failed", job_id: "j-a", session: "chat-a", line: "Extending oenb-b5e60c failed: the turn stopped early: tool-call budget" }, "3-0"),
+      ev({ type: "message-delta", text: "mine", turn_id: "t1" }, "4-0"),
+      ev({ type: "turn-complete", turn_id: "t1" }, "5-0"),
+    ]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn({ prompt: "hi", session: "chat-b", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    // NOTHING of the other chat's job: not the row, not a step, and above all not the line
+    expect(state.jobStarted).toEqual([]);
+    expect(state.jobSteps).toEqual([]);
+    expect(state.jobEnded).toEqual([]);
+    expect(state.text).toBe("mine");
+    expect(result.terminal).toBe(true);
+  });
+
+  it("the chat that OWNS the job still renders every bit of it", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+      ev({ type: "job-started", job_id: "j-a", kind: "extend", target: "oenb-b5e60c", session: "chat-a", line: "Extending oenb-b5e60c — I'll say when it's there." }, "1-0"),
+      ev({ type: "turn-complete", turn_id: "t1" }, "2-0"),
+      ev({ type: "tool-call", tool: "Read", job_id: "j-a", session: "chat-a" }, "3-0"),
+      ev({ type: "job-done", job_id: "j-a", ok: true, session: "chat-a", line: "oenb-b5e60c — extended." }, "4-0"),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn({ prompt: "Extend it", session: "chat-a", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    expect(state.jobStarted.map((j) => j.target)).toEqual(["oenb-b5e60c"]);
+    expect(state.jobSteps).toEqual(["Read"]);
+    expect(state.jobEnded).toEqual([{ jobId: "j-a", ok: true, line: "oenb-b5e60c — extended." }]);
+  });
+
+  it("an UNSTAMPED job still renders — the stamp removes doubt, it does not create it", () => {
+    // A deployment one release behind stamps nothing. Refusing every job line there would trade a
+    // rare wrong line for a permanent missing one.
+    expect(ownsJob({}, "chat-b")).toBe(true);
+    expect(ownsJob({ session: "chat-a" }, "chat-a")).toBe(true);
+    expect(ownsJob({ session: "chat-a" }, "chat-b")).toBe(false);
+    expect(ownsJob({ session: "chat-a" }, undefined)).toBe(true);
+  });
+
+  // ── A LONG JOB SAYS IT IS STILL GOING (Vexa-ai/vexa#1613) ─────────────────────────────────────
+
+  it("a job that reached a window budget reports progress instead of dying", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
+      ev({ type: "job-started", job_id: "j-1", kind: "extend", target: "oenb", session: "s1" }, "1-0"),
+      ev({ type: "turn-complete", turn_id: "t1" }, "2-0"),
+      ev({ type: "job-progress", job_id: "j-1", session: "s1", window: 2, calls: 160, line: "160 steps so far — continuing (window 2)" }, "3-0"),
+      ev({ type: "job-done", job_id: "j-1", ok: true, session: "s1", line: "oenb — extended." }, "4-0"),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn({ prompt: "expand", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    expect(state.jobNotes).toEqual(["160 steps so far — continuing (window 2)"]);
+    expect(state.jobSteps).toEqual([]);            // nothing was DONE — something was resumed
+    expect(state.jobEnded).toEqual([{ jobId: "j-1", ok: true, line: "oenb — extended." }]);
   });
 
   it("a refusal is the turn's own line — no chip, nothing to wait for", async () => {

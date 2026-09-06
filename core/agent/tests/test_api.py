@@ -965,6 +965,37 @@ def test_workspace_init_seeds_from_template(tmp_path, monkeypatch):
     assert r2.json()["system_seeded"] is False
 
 
+def test_workspace_desk_reports_the_state_not_the_marker(tmp_path):
+    """Vexa-ai/vexa#1613 — the stale setup chip. The terminal asked `.scaffolded` whether this
+    person had ever been set up; that marker is written by ONE route (the personal onboarding
+    conversation) and `flows_defs/production.py` says of it *"it gates nothing"*. On 2026-09-06 the
+    founder's desk had existed for forty minutes, held company/person/project entities, and carried
+    no marker — so a brand-new chat offered him *"set up a workspace for me"*.
+
+    This route answers the question the chip is actually asking, off the FILES."""
+    from control_plane.workspace_reader import WorkspaceReader
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+
+    # nothing at all — the one state that may offer the chip
+    assert c.get("/api/workspace/desk", headers=h).json() == {
+        "subject": "u_jane", "state": "new", "scaffolded": False}
+
+    # THE FOUNDER'S CASE: a desk somebody has worked in, and no marker anywhere near it
+    (workspaces / "u_jane" / "kg" / "entities" / "company").mkdir(parents=True)
+    (workspaces / "u_jane" / "kg" / "entities" / "company" / "oenb.md").write_text("# OeNB\n")
+    body = c.get("/api/workspace/desk", headers=h).json()
+    assert body["state"] == "warm" and body["scaffolded"] is False
+
+    # and the marker is still reported when it IS there — a finished setup is a positive fact
+    (workspaces / "u_jane" / ".scaffolded").write_text("2026-09-06\n")
+    assert c.get("/api/workspace/desk", headers=h).json()["scaffolded"] is True
+
+
 def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatch):
     """POST /api/workspace/swap clones a custom external git repo as the subject's active workspace
     (parking the seed), then swapping back to seed restores the parked tree. The store dir never

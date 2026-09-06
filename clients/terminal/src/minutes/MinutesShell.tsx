@@ -18,7 +18,7 @@ import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVE
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
-  readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile,
+  readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile, readDeskFacts, type DeskFacts,
   listSharedMemberships, listWorkspaceTree, type Membership,
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
@@ -175,12 +175,14 @@ export function MinutesShell() {
   // chat restores its documents, and starts your walk through them fresh.
   const [hist, setHist] = useState<{ stack: Artifact[]; i: number }>({ stack: [], i: -1 });
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
-  // `.scaffolded` — written by the personal setup flow as its FINAL act, so its ABSENCE is the one
-  // durable signal that this person has never been set up. Read ONCE, on mount: it is the only
-  // input the proposal row needs that is not already in hand, and it costs a single workspace read.
-  // `null` until it answers, and null never offers the chip (proposals.ts fails closed).
-  const [scaffolded, setScaffolded] = useState<boolean | null>(null);
-  useEffect(() => { void readWorkspaceFile(".scaffolded").then((c) => setScaffolded(c !== null)).catch(() => undefined); }, []);
+  // WHAT THIS PERSON'S DESK IS (Vexa-ai/vexa#1613) — the server's own three words, read off the
+  // files. This used to probe `.scaffolded` and read its absence as "never set up", which on
+  // 2026-09-06 offered the founder a workspace-setup chip over a desk that had been running for
+  // forty minutes. Read ONCE, on mount: it is the only input the proposal row needs that is not
+  // already in hand, and it costs one request. `null` until it answers, and null never offers the
+  // chip (`proposals.needsSetup` fails closed).
+  const [desk, setDesk] = useState<DeskFacts | null>(null);
+  useEffect(() => { void readDeskFacts().then(setDesk).catch(() => undefined); }, []);
   // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
   // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
   const [email, setEmail] = useState<string | null>(null);
@@ -560,7 +562,7 @@ export function MinutesShell() {
 
   /** Up to three chips, recomputed from the two lists already in hand plus one marker. Pure, so
    *  the row is decided in the render that draws it — no fetch, no model call, no effect. */
-  const chips = useMemo(() => proposals(meetings, allChats, scaffolded, Date.now(), email), [meetings, allChats, scaffolded, email]);
+  const chips = useMemo(() => proposals(meetings, allChats, desk, Date.now(), email), [meetings, allChats, desk, email]);
   /** THE STANDING ROW IS GONE (Vexa-ai/vexa#1600). #1586 put "Open transcript" · "Open note" above
    *  the composer of every meeting chat, because `×` on the transcript tab had left the founder with
    *  no way back to it. Shown that row, he ruled on the cause instead: *"just keep a tab that can't

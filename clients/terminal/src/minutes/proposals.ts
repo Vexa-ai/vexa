@@ -15,6 +15,7 @@
  *  one line to say on arrival (`kick`). The shell reads those; it never re-derives them. */
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
+import type { DeskFacts } from "../surfaces/workspaceApi";
 import { isPlaceholderLabel, meetingTitle, meetingWhen, railRows, visibleRows, type Chat } from "./chats";
 
 /** What a chip DOES, which is also what the shell switches on. */
@@ -49,7 +50,7 @@ export const KICK = {
 //  The garnish — a STANDING suggestion that padded the row to three whenever fewer rules fired. It
 //  was the button the founder found sitting under a chat he had never created, and it is the exact
 //  shape his ruling names: **buttons are scaffolded intents, not defaults.** A chip that comes from
-//  a scaffold or from live state (a meeting running now, a workspace with no `.scaffolded` marker)
+//  a scaffold or from live state (a meeting running now, a desk nobody has ever written in)
 //  says something true about this account; one that appears because the row looked short says
 //  nothing, and reads as the product asking to be used. So the pad is gone with it: fewer than three
 //  chips is a correct answer, and none at all is the correct answer for an account with nothing to
@@ -77,21 +78,20 @@ function startsAt(m: MeetingMock): number {
  *  2. a meeting starting inside two hours      → prep me for it
  *  3. the newest held meeting nobody wrote in  → what came out of it
  *  4. rows the rail's filter is hiding         → review them (flip the chip, create nothing)
- *  5. the personal workspace never set up      → set it up
+ *  5. a desk with nothing ever written in it   → set it up
  *
  *  …and NOTHING is padded in behind them (F36). Every rule above reads live state; a chip that
  *  appeared only because the row had space left was a default, and defaults are what the founder
  *  ruled out. An empty row is the honest answer when nothing is true.
  *
- *  `scaffolded` is the `.scaffolded` marker probe: `true` set up, `false` not, `null` NOT YET KNOWN.
- *  Null fails closed — a chip that appears a second late is a flicker, and a "set up my workspace"
- *  offered to someone whose workspace is already set up is a lie. `email` is the signed-in address,
- *  and it only ever reaches rule 5's chip.
+ *  `desk` is the server's answer about this person's desk (`GET /api/workspace/desk`), `null` until
+ *  it arrives. `needsSetup` below is the whole of rule 5 and says why it is not the `.scaffolded`
+ *  probe this used to be. `email` is the signed-in address, and it only ever reaches rule 5's chip.
  */
 export function proposals(
   meetings: MeetingMock[],
   chats: Chat[],
-  scaffolded: boolean | null,
+  desk: DeskFacts | null,
   now: number = Date.now(),
   email?: string | null,
 ): Proposal[] {
@@ -137,10 +137,35 @@ export function proposals(
     label: `Review ${hidden} new item${hidden === 1 ? "" : "s"}`,
   });
 
-  // 5 — the workspace has never been scaffolded. The chip is the person's own first sentence.
-  if (scaffolded === false) out.push(setupProposal(email));
+  // 5 — nothing has ever been written in this person's desk. The chip is their own first sentence.
+  if (needsSetup(desk)) out.push(setupProposal(email));
 
   return out.slice(0, 3);
+}
+
+/** MAY WE OFFER TO SET THIS PERSON UP? (Vexa-ai/vexa#1613.)
+ *
+ *  The founder opened a new chat at 14:10 and it offered him *"My email is dmitry@vexa.ai, set up a
+ *  workspace for me"* — over a desk that had existed since 13:30 and already held company, person
+ *  and project entities. The chip was reading `.scaffolded`, a marker written by exactly one route
+ *  (the personal onboarding conversation, as its last act) and which `flows_defs/production.py`
+ *  describes as *"a harmless marker; it gates nothing"*. Its ABSENCE was being read as "this person
+ *  has never been set up", and that has not been what it means since a desk acquired other ways to
+ *  come into existence.
+ *
+ *  So the derivation is pinned here, on the server's own answer about the FILES:
+ *
+ *    · no facts yet          → offer nothing (fails closed: a chip that arrives a second late is a
+ *                              flicker; one offered to somebody already set up is a lie)
+ *    · the marker is there   → a setup conversation finished. Nothing to offer.
+ *    · the desk is `warm` or `pile` → something is written in it. Nothing to offer.
+ *    · the desk is `new`     → nothing has ever been written here. Offer.
+ *
+ *  Exported and pure so the rule is testable on its own, which is the half that broke. */
+export function needsSetup(desk: DeskFacts | null): boolean {
+  if (!desk) return false;
+  if (desk.scaffolded) return false;
+  return desk.state === "new";
 }
 
 /** Rule 5's chip, written as the person's own opening line. Founder shape (2026-09-01): the button

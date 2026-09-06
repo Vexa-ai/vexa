@@ -255,6 +255,86 @@ def test_a_restart_cancels_every_job_and_tells_the_chat(tmp_path):
     runner.join_all()
 
 
+# ── the leak: a job belongs to ONE chat (Vexa-ai/vexa#1613) ─────────────────────────────────────
+#
+#  Founder, 2026-09-06 14:10Z, on opening a NEW EMPTY chat: *"some leak to empty chat"* — its first
+#  content was two lines about another chat's jobs. The register lives under the person's continuity
+#  root, which every one of their chats shares, so a booting worker read the OTHER conversation's
+#  LIVE jobs out of it, announced them as its own restart casualties, and deleted the records on the
+#  way past. Measured on the dogfood stack the same day: `j-58b3833e` reported in `pchat-mtppgd4w`
+#  (where it ran) and again in `pchat-mtpphl4o` (where it did not); `j-192ed731` the same across
+#  `meet-147` and `pchat-mtpthvmp`.
+
+
+def test_a_boot_never_reports_another_chats_job(tmp_path):
+    """THE LEAK ITSELF. Chat A's job is running; chat B's worker boots over the shared register."""
+    gate = threading.Event()
+    a_sink = _Sink()
+    a = JobRunner(emit=a_sink, turn=_slow_turn(gate), register_dir=tmp_path / "jobs", session="chat-a")
+    running = a.spawn("extend", "oenb/README.md", "Extend it.")
+    record = tmp_path / "jobs" / f"{running['job_id']}.json"
+    assert record.exists()
+
+    b_sink = _Sink()
+    b = JobRunner(emit=b_sink, turn=_slow_turn(threading.Event()),
+                  register_dir=tmp_path / "jobs", session="chat-b")
+    assert b.cancelled_at_boot() == []
+    assert b_sink.events == []                  # the empty chat is told NOTHING
+    # …and A's record is still there, so A can still report it when it really does die
+    assert record.exists()
+
+    gate.set()
+    a.join_all()
+    assert a_sink.types()[-1] == "job-done"
+
+
+def test_a_boot_still_reports_its_own_jobs(tmp_path):
+    """The other half: scoping must not cost the promise it is scoping. The SAME chat's leftovers
+    are still reported once, and once only."""
+    gate = threading.Event()
+    dead = JobRunner(emit=_Sink(), turn=_slow_turn(gate), register_dir=tmp_path / "jobs",
+                     session="chat-a")
+    started = dead.spawn("create", "kg/new.md", "Write it.")
+
+    fresh = _Sink()
+    reborn = JobRunner(emit=fresh, turn=_slow_turn(threading.Event()),
+                       register_dir=tmp_path / "jobs", session="chat-a")
+    reported = reborn.cancelled_at_boot()
+    assert [e["type"] for e in fresh.events] == ["job-failed"]
+    assert reported[0]["job_id"] == started["job_id"]
+    assert reborn.cancelled_at_boot() == []
+    gate.set()
+    dead.join_all()
+
+
+def test_a_record_from_before_owners_is_cleaned_up_in_silence(tmp_path):
+    """A register written by the previous build names nobody. Announcing it would be the leak again
+    (it may be another chat's); leaving it would leak files across every deploy."""
+    (tmp_path / "jobs").mkdir()
+    stale = tmp_path / "jobs" / "j-old.json"
+    stale.write_text(json.dumps({"job_id": "j-old", "kind": "extend", "target": "a.md"}))
+    sink = _Sink()
+    runner = JobRunner(emit=sink, turn=lambda _b: iter([]), register_dir=tmp_path / "jobs",
+                       session="chat-a")
+    assert runner.cancelled_at_boot() == []
+    assert sink.events == []
+    assert not stale.exists()
+
+
+def test_every_job_event_names_the_session_that_owns_it(tmp_path):
+    """The client half's whole input: a reader looking at a different conversation drops these
+    without having to know anything else about them."""
+    sink = _Sink()
+    runner = JobRunner(emit=sink, turn=lambda _b: iter([{"type": "tool-call", "tool": "Read"}]),
+                       register_dir=tmp_path / "jobs", session="chat-a")
+    runner.spawn("extend", "a.md", "go")
+    runner.spawn("extend", "a.md", "again")     # refused while the first is in flight, or after it
+    runner.join_all()
+    assert sink.events, "the runner emitted nothing at all"
+    assert all(e.get("session") == "chat-a" for e in sink.events), \
+        [e for e in sink.events if e.get("session") != "chat-a"]
+
+
 def test_no_register_dir_is_a_working_runner_that_reports_nothing_at_boot():
     sink = _Sink()
     runner = JobRunner(emit=sink, turn=lambda _b: iter([]), register_dir=None)
