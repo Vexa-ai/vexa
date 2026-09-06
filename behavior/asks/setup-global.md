@@ -124,7 +124,10 @@ a page under `_global/kg/entities/`, so a reader can walk from the name to every
 person page (`self: true`) goes to their desk. `entity_upsert` takes the target as `slug`:
 pass `slug="_global"` for every company-tier page, and omit it only for the administrator's own
 person page. A company page that lands on one person's desk is invisible to everyone else and
-wrong. The person steers
+wrong. A page that wants a picture — a company logo, a product shot — gets it with `fetch_asset`
+into the workspace and a relative reference (`![OeNB logo](assets/oenb-logo.svg)`); an image
+address you have not fetched or checked is a GUESS, so never write one you have not seen answer,
+and write the sentence without the picture when you cannot find the real file. The person steers
 loosely: they confirm, correct and add what is not public. You do not wait to be told the next step;
 you take it, and you stop only where a decision or a private fact is needed.
 

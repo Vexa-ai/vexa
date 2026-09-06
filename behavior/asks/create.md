@@ -28,6 +28,8 @@ it came from. What you could not find out is a line saying so, never a heading w
 
 If the page wants a picture, `fetch_asset` it into the workspace first and reference it relatively
 (`![OeNB logo](assets/oenb-logo.svg)`) — a page never links an image straight off someone else's site.
+An image address you have not fetched or checked is a GUESS: never write one you have not seen
+answer. When you cannot find the real file, write the sentence without the picture.
 
 Say ONE line naming what you made and what is thin about it. Not a summary of the page — they are
 about to read it.

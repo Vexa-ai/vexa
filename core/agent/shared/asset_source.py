@@ -153,7 +153,28 @@ def fetch_refusal(url: str, resolve: Optional[Callable[[str], list[str]]] = None
 
 
 class AssetFetchError(Exception):
-    """A remote asset could not be brought in. Its text is what the caller is told."""
+    """A remote asset could not be brought in. Its text is what the caller is told.
+
+    IT ALSO CARRIES WHOSE FAULT IT WAS (Vexa-ai/vexa#1624). The reader who pressed *Fetch into the
+    workspace* on a dead Wikimedia address was answered `400: … answered 404` — our own status code
+    for their request, with the remote's buried in a sentence, which reads as "the button is
+    broken". Three different things end up here and a caller can only say the right sentence about
+    them if it can tell them apart:
+
+    * ``refused`` — the URL never left this deployment: unparseable, not http(s), or pointed at our
+      own network. The request itself is wrong, so the caller's status is a 4xx of its own;
+    * ``upstream`` — the remote answered, and answered an error. ``status`` is ITS code, and that
+      is the number the person needs to see;
+    * ``unreachable`` — nothing answered, or what answered was unusable (transport failure, a
+      redirect loop, a body over the ceiling).
+    """
+
+    def __init__(self, message: str, *, kind: str = "unreachable", status: Optional[int] = None,
+                 url: str = ""):
+        super().__init__(message)
+        self.kind = kind
+        self.status = status
+        self.url = url
 
 
 def fetch_asset(url: str, *, client: Optional[httpx.Client] = None,
@@ -170,7 +191,7 @@ def fetch_asset(url: str, *, client: Optional[httpx.Client] = None,
         for hop in range(MAX_REDIRECTS + 1):
             refusal = fetch_refusal(target, resolve)
             if refusal:
-                raise AssetFetchError(refusal)
+                raise AssetFetchError(refusal, kind="refused", url=target)
             try:
                 with cli.stream("GET", target, headers=_UA, timeout=FETCH_TIMEOUT) as r:
                     location = r.headers.get("location")
@@ -178,7 +199,8 @@ def fetch_asset(url: str, *, client: Optional[httpx.Client] = None,
                         target = urljoin(str(r.request.url), location)
                         continue
                     if r.status_code >= 400:
-                        raise AssetFetchError(f"{target} answered {r.status_code}")
+                        raise AssetFetchError(f"{target} answered {r.status_code}",
+                                              kind="upstream", status=r.status_code, url=target)
                     ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
                     final_url = str(r.url)
                     buf = bytearray()
@@ -187,11 +209,12 @@ def fetch_asset(url: str, *, client: Optional[httpx.Client] = None,
                         if len(buf) > MAX_ASSET_BYTES:
                             raise AssetFetchError(
                                 f"{target} is larger than {MAX_ASSET_BYTES // (1024 * 1024)}MB — "
-                                "an asset is something a page shows, not a download")
+                                "an asset is something a page shows, not a download", url=target)
             except httpx.HTTPError as exc:
-                raise AssetFetchError(f"could not fetch {target}: {type(exc).__name__}: {exc}") from None
+                raise AssetFetchError(f"could not fetch {target}: {type(exc).__name__}: {exc}",
+                                      url=target) from None
             return bytes(buf), ctype, final_url
-        raise AssetFetchError(f"gave up after {MAX_REDIRECTS} redirects")
+        raise AssetFetchError(f"gave up after {MAX_REDIRECTS} redirects", url=target)
     finally:
         if own:
             cli.close()

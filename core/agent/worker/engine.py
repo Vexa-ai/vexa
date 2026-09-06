@@ -657,6 +657,23 @@ def _writeback_workspace_note(mounts: "list[dict] | None" = None) -> str:
     )
 
 
+def image_rule() -> str:
+    """THE ONE LINE ABOUT PICTURES, wherever a page is written (Vexa-ai/vexa#1624).
+
+    Founder, 2026-09-06, on the OeNB README: the page carried a Wikimedia address the agent had
+    invented, and it answers 404. `shared/page_images.py` catches that on the way in — the reference
+    never reaches the page — but a rule that only exists as an enforcement teaches nothing: the
+    agent's next turn writes the same guess, has it removed again, and never learns why the picture
+    it described is not there.
+
+    Its own function because that is all it is: one sentence, said in the write-back phase and in
+    the asks that write pages (`behavior/asks/{create,extend,setup-global}.md`), with nothing else
+    about the phase mixed into it."""
+    return ("An image address you have not fetched or checked is a GUESS: never write one you have "
+            "not seen answer. Use `fetch_asset` to bring a picture into the workspace and reference "
+            "it relatively; when you cannot find the real file, write the sentence without it.")
+
+
 def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) -> str:
     """The phase's one model call, with the work already identified.
 
@@ -704,6 +721,7 @@ def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) 
         "A name you cannot say one sourced thing about does NOT get a page: append it to "
         "`kg/MISSING.md` as one line — the name and what you would need to know — in a single "
         "write at the end. Never invent a fact to fill a page.\n\n"
+        + image_rule() + "\n\n"
         "Work only from this turn. You have a hard budget: no exploration, no reading files you "
         "have not already read.")
 

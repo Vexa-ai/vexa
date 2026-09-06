@@ -43,6 +43,8 @@ from pathlib import Path
 from workspaces.shared import entities as entities_mod
 from workspaces.shared import workspace_paths as wpaths
 from shared import asset_source as assets_mod
+from shared import friction as friction_mod
+from shared import page_images
 from shared.git_redaction import redact as redact_secrets
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional
@@ -148,6 +150,40 @@ def build(**d) -> APIRouter:
                 pass  # not shared — fall through; _read_target 403s anything outside the active set
         return _read_target(request, slug, write=True)
 
+    def _screen_images(request: Request, values: list[str], *, path: str = "",
+                       tool: str = "") -> list[str]:
+        """VERIFY EVERY EXTERNAL IMAGE ADDRESS BEFORE IT REACHES A PAGE (Vexa-ai/vexa#1624).
+
+        The OeNB README carried `![OeNB logo](https://upload.wikimedia.org/…/ÖNB_Logo.svg)`, an
+        address the agent invented and nobody ever requested; it answers 404. This is the two
+        page-writing doors — `workspace_write` (PUT /api/workspace/file) and `entity_upsert` — asking
+        the question the writer did not: does this address answer, with an image? A dead one is cut
+        out and the prose around it kept, because the sentence was not the mistake.
+
+        It costs one regex on the overwhelming majority of writes, which carry no external image
+        reference at all, and it never fails the write: a page saved without a picture is a page,
+        and a save refused because a CDN was slow is a lost edit.
+
+        THEN IT FILES THE FRICTION, because the writer cannot. An agent reports what it noticed
+        (`worker/friction.py` §1), and the whole defect here is that it noticed nothing — so the
+        record is written by the door that caught it, naming the address, exactly as the harness
+        files what the model failed to (`friction.py` §3, the same argument one layer down)."""
+        clean, dropped = page_images.screen_values(values)
+        if not dropped:
+            return list(values)
+        logger.info("page images: dropped %d unverified address(es) from %s (%s)",
+                    len(dropped), path or "a workspace write",
+                    "; ".join(f"{d.url} → {d.reason}" for d in dropped[:3]))
+        try:
+            rec = friction_mod.normalize({
+                **page_images.friction_report(dropped, path=path, tool=tool),
+                "subject": str(subject_of(request)),
+            })
+            publish_mod.post_friction(rec)
+        except Exception:  # noqa: BLE001 — a report is never worth failing the write it describes
+            logger.warning("page images: could not file the friction for %s", path or "(no path)")
+        return clean
+
     def _commit(target: Path, paths: list[str], message: str) -> None:
         """Commit exactly the paths named, so history stays honest and a concurrent write in the
         same workspace is not swept into somebody else's message (the index is a shared surface)."""
@@ -232,13 +268,28 @@ def build(**d) -> APIRouter:
 
         The server fetches, never the reader's browser: that is the whole rule (#1612). It is also
         the only place that CAN — a page in a bank's workspace must not make that browser talk to a
-        third party, and a browser cannot store the result in a workspace anyway."""
+        third party, and a browser cannot store the result in a workspace anyway.
+
+        AND IT ANSWERS WITH WHOSE FAULT IT WAS (Vexa-ai/vexa#1624). Every failure here used to be
+        a 400 — our status code for the reader's request — so a page whose address answers 404 told
+        them `400: … answered 404`, which reads as a broken button rather than a dead link. Now the
+        three cases are three answers: **400** when the URL itself is refused (it is the request
+        that is wrong), **424** when the remote answered and answered badly — its own code carried
+        as `upstream_status`, so the client can say *the site answered 404* in words — and **502**
+        when nothing usable came back at all."""
         url = str(body.get("url") or "").strip()
         slug = str(body.get("slug") or "").strip() or None
         try:
             content, ctype, final_url = assets_mod.fetch_asset(url)
         except assets_mod.AssetFetchError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+            if getattr(exc, "kind", "") == "refused":
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            upstream = getattr(exc, "status", None)
+            raise HTTPException(
+                status_code=424 if upstream else 502,
+                detail={"error": "asset_upstream" if upstream else "asset_unreachable",
+                        "message": str(exc), "url": getattr(exc, "url", "") or url,
+                        "upstream_status": upstream}) from None
         rel = assets_mod.asset_path_for(url, ctype, str(body.get("path") or ""))
         return _store_asset(request, rel, slug, content, final_url or url)
 
@@ -286,6 +337,8 @@ def build(**d) -> APIRouter:
         content = body.get("content")
         if not isinstance(content, str):
             raise HTTPException(status_code=400, detail="need a relative path and string content")
+        # #1624: an image address nobody checked never reaches the page (see `_screen_images`).
+        content = _screen_images(request, [content], path=rel, tool="workspace_write")[0]
         target = _write_dir(request, subject, rel, slug)
         try:
             f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
@@ -323,6 +376,13 @@ def build(**d) -> APIRouter:
         if isinstance(raw_facts, str):
             raw_facts = [raw_facts]
         facts = [str(f) for f in (raw_facts or []) if str(f).strip()]
+        summary = str(body.get("summary") or "").strip()
+        questions = [str(q) for q in (body.get("open_questions") or ())]
+        # #1624 — the card's free text goes through the same door a plain page does, in ONE call so
+        # a logo named in both the summary and a fact costs the host one question, not two.
+        screened = _screen_images(request, [summary, *facts, *questions],
+                                  path=f"kg/entities/{kind}/{name}", tool="entity_upsert")
+        summary, facts, questions = screened[0], screened[1:1 + len(facts)], screened[1 + len(facts):]
 
         global_target: Path | None = None
         if slug == system_mounts.GLOBAL_SLUG:
@@ -362,11 +422,11 @@ def build(**d) -> APIRouter:
             result = entities_mod.upsert_entity(
                 target, kind, name, facts, source,
                 mounts=_entity_mounts(subject), dates=body.get("dates"),
-                summary=str(body.get("summary") or "").strip(),
+                summary=summary,
                 fields=body.get("fields") if isinstance(body.get("fields"), dict) else None,
                 section=str(body.get("section") or "").strip(),
                 connections=body.get("connections") or (),
-                open_questions=body.get("open_questions") or ())
+                open_questions=questions)
         except entities_mod.EntityMalformed as e:
             # 400, and CAUGHT FIRST — `EntityMalformed` is a subclass, so the broader clause below
             # would swallow it. This is the one refusal that IS a retry: an argument the writer

@@ -19,6 +19,14 @@
  *     offer is the product: one press stores the bytes under `assets/`, records the source, and
  *     rewrites the reference in the page, so the document ends up in the shape it should have been
  *     written in. Nothing is loaded from the remote host until somebody asks for it.
+ *
+ *  AND WHEN THE OFFER FAILS, IT IS STILL THE PRODUCT (Vexa-ai/vexa#1624). Founder, the same day, on
+ *  the OeNB README: the agent had written a Wikimedia address that answers 404, and pressing the
+ *  offer printed the route and both status codes in red. A reader cannot act on a stack trace. So
+ *  the failure is one sentence about the picture — *This image does not exist at that address (the
+ *  site answered 404)* — and the two moves that exist from there: **Find it**, which queues a
+ *  same-target act on this chat to go and get the real one, and **Remove the link**, which commits
+ *  the page without it.
  */
 "use client";
 import { useContext, useEffect, useState, type CSSProperties } from "react";
@@ -61,6 +69,65 @@ export function rewriteImageReference(source: string, from: string, to: string):
   return source.split(from).join(to);
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** TAKE THE PICTURE OUT AND LEAVE THE PAGE (Vexa-ai/vexa#1624) — what "Remove the link" writes.
+ *
+ *  The whole reference goes: `![alt](src)` and `<img src="src">`, everywhere they appear, not just
+ *  the address inside them, because a `![OeNB logo]()` is a broken picture wearing a different
+ *  glyph. Everything around it stays — the sentence was not the mistake, the address was — and the
+ *  only tidying is the hole itself: a trailing space, and the blank line a picture on a line of its
+ *  own leaves behind. Sibling of `rewriteImageReference`, and exported for the same reason. */
+export function removeImageReference(source: string, src: string): string {
+  if (!src) return source;
+  const u = escapeRe(src);
+  return source
+    .replace(new RegExp(`!\\[[^\\]\\n]*\\]\\(\\s*${u}[^)]*\\)`, "g"), "")
+    .replace(new RegExp(`<img\\b[^>]*?src\\s*=\\s*(["'])${u}\\1[^>]*?/?>`, "gi"), "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/** WHAT "FIND IT" ASKS FOR. One sentence, in the person's shape not ours: the picture they can see
+ *  is missing is named by its own alt text, the destination is the one place a workspace image ever
+ *  lives, and the page's reference is part of the job — an image fetched into `assets/` with the
+ *  document still pointing at the dead address has fixed nothing the reader can see. */
+export function findItInstruction(alt: string | undefined, src: string): string {
+  const what = (alt ?? "").trim();
+  return `find the real ${what ? `${what} ` : ""}image, fetch it into assets/, and fix the link` +
+    ` — the page points at ${src}, which does not answer.`;
+}
+
+/** THE FAILED FETCH, IN WORDS (Vexa-ai/vexa#1624).
+ *
+ *  The reader who pressed the offer on the OeNB logo was shown, in red: *Could not fetch it:
+ *  /api/workspace/asset → 400: https://upload.wikimedia.org/… answered 404.* That is a route, two
+ *  status codes and a URL — the operator channel, printed at a person, who can only read it as "the
+ *  button is broken". What actually happened is one sentence long and the route now carries the
+ *  upstream code so it can be said: the picture is not there.
+ *
+ *  Duck-typed on purpose. The error is an `ApiError` from `surfaces/apiClient`, and a static import
+ *  of that module from the ui-kit would drag the HTTP client into every test that renders a
+ *  paragraph — the same reason `workspaceAssetUrl` lives here as a string template and `docLinks`
+ *  reaches the data layer through `await import(...)`. Reading two fields off a shape needs no type
+ *  from it. */
+export function fetchFailureLine(err: unknown, host: string): string {
+  const e = err as { status?: number; detail?: string; message?: string;
+    body?: { detail?: { upstream_status?: number | null } } } | null;
+  const upstream = e?.body?.detail?.upstream_status ?? null;
+  if (upstream) {
+    if (upstream === 404 || upstream === 410) return `This image does not exist at that address (the site answered ${upstream}).`;
+    if (upstream === 401 || upstream === 403) return `${host} will not hand this image over (it answered ${upstream}).`;
+    if (upstream >= 500) return `${host} is failing right now (it answered ${upstream}).`;
+    return `That address did not answer with an image (the site answered ${upstream}).`;
+  }
+  if (e?.status === 502) return `Nothing answered at ${host}.`;
+  // A 400 is OUR refusal of the address itself, and it is already a sentence written for a person
+  // (`asset_source.fetch_refusal` — "refusing 'redis' — that is an internal service name…").
+  if (e?.status === 400 && e.detail) return e.detail;
+  return `Could not fetch it: ${e?.message ?? String(err)}`;
+}
+
 const frame: CSSProperties = {
   display: "flex", alignItems: "center", gap: 10, border: "1px dashed var(--line2)",
   borderRadius: 10, background: "var(--panel)", padding: "10px 13px", margin: "8px 0 12px",
@@ -90,13 +157,28 @@ function WorkspaceImage({ path, slug, alt }: { path: string; slug?: string; alt?
   );
 }
 
+/** The small controls in the placeholder's right-hand end — the offer, and the two acts a failure
+ *  replaces it with. One shape, so a failure is answered by controls of the same weight as the
+ *  offer that failed rather than by a line of red text with nothing to press. */
+const chipButton = (tone: "plain" | "danger" = "plain"): CSSProperties => ({
+  flex: "none", background: "transparent", border: "1px solid var(--line2)", borderRadius: 6,
+  color: tone === "danger" ? "var(--t2)" : "var(--t1)", fontSize: 12, padding: "3px 9px",
+  cursor: "pointer",
+});
+
 /** A remote image, NOT loaded — named, and offered. */
 function ExternalImage({ src, alt }: { src: string; alt?: string }) {
   const meta = useContext(DocMetaContext);
   const [state, setState] = useState<"offer" | "fetching" | "failed">("offer");
   const [stored, setStored] = useState<string | null>(null);
-  const [error, setError] = useState<string>("");
+  const [failure, setFailure] = useState<string>("");
+  /** which act the reader pressed on the failure, so the box says what it did rather than sitting
+   *  there looking unpressed — the #1604 rule, in the smallest form this control has room for */
+  const [took, setTook] = useState<"" | "find" | "remove">("");
   const fetchable = FETCHABLE.test(src);
+  // AN ACT NEEDS A TARGET AND WE NEVER GUESS ONE (F63). Without the doc's own path there is no page
+  // to send the chat at and no file to edit, so the two acts are not offered at all.
+  const actable = !!meta.path;
 
   if (stored) return <WorkspaceImage path={stored} slug={meta.slug} alt={alt} />;
 
@@ -125,26 +207,82 @@ function ExternalImage({ src, alt }: { src: string; alt?: string }) {
       }
       setStored(asset.path);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setFailure(fetchFailureLine(e, externalHost(src)));
       setState("failed");
     }
   };
 
+  /** FIND IT — the same chat, the same page, one act (Vexa-ai/vexa#1624 · #1610's inbox). It goes
+   *  through `postIntent`, not through a hand-rolled POST, so it is a same-target act like every
+   *  other: it queues behind whatever that chat is doing instead of being refused, it raises the
+   *  act state the page's own controls wear, and the page it names is the one the reader is on.
+   *
+   *  Reached by `await import` for the reason the module header gives about `workspaceApi`: the
+   *  ui-kit renders markdown, and a static edge from it into a shell module would pull the chat
+   *  into every test that renders a paragraph. */
+  const findIt = async () => {
+    if (!meta.path) return;
+    setTook("find");
+    const { postIntent } = await import("../minutes/extend");
+    postIntent({ kind: "extend", workspace: meta.slug, path: meta.path,
+      instruction: findItInstruction(alt, src) });
+  };
+
+  /** REMOVE THE LINK — a commit, not a re-render. The reader's judgement is that the picture is not
+   *  coming, and the page should stop claiming otherwise for the next reader and for every export
+   *  of it; hiding the placeholder in this one tab would leave the document exactly as wrong as it
+   *  was. Same three steps as taking the offer, in the other direction. */
+  const dropIt = async () => {
+    if (!meta.path) return;
+    setTook("remove");
+    try {
+      const api = await import("../surfaces/workspaceApi");
+      const body = await api.readWorkspaceFile(meta.path, { slug: meta.slug });
+      if (body === null) return;
+      const next = removeImageReference(body, src);
+      if (next === body) return;
+      await api.writeWorkspaceFile(meta.path, next, { slug: meta.slug });
+      window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT));
+    } catch (e) {
+      setTook("");
+      setFailure(fetchFailureLine(e, externalHost(src)));
+    }
+  };
+
+  const failed = state === "failed";
   return (
-    <span data-external-image={src} style={frame}>
-      <Icon name="web" size={14} />
-      <span style={{ minWidth: 0 }}>
+    <span data-external-image={src} style={{ ...frame, flexWrap: "wrap" }}>
+      <Icon name={failed ? "alert" : "web"} size={14} />
+      <span style={{ minWidth: 0, flex: "1 1 55%" }}>
         External image — it lives on <strong style={{ color: "var(--t1)" }}>{externalHost(src)}</strong>, not in this workspace{alt ? `: “${alt}”` : ""}.
-        {state === "failed" && <span style={{ color: "var(--danger)" }}> Could not fetch it: {error}</span>}
+        {failed && <span data-image-failed style={{ display: "block", marginTop: 3, color: "var(--danger)" }}>{failure}</span>}
       </span>
-      {fetchable
-        ? <button type="button" data-image-fetch onClick={() => void bring()} disabled={state === "fetching"}
-            style={{ flex: "none", background: "transparent", border: "1px solid var(--line2)", borderRadius: 6,
-              color: state === "fetching" ? "var(--t3)" : "var(--t1)", fontSize: 12, padding: "3px 9px",
-              cursor: state === "fetching" ? "default" : "pointer" }}>
-            {state === "fetching" ? "Fetching…" : "Fetch into the workspace"}
-          </button>
-        : <span style={{ flex: "none", color: "var(--t3)" }}>nothing to fetch</span>}
+      {failed
+        // THE FAILURE IS A PLACE TO ACT FROM, not a dead end. Two moves and they are the only two
+        // there are: get the right picture, or stop the page promising one.
+        ? <span style={{ flex: "none", display: "flex", gap: 6 }}>
+            {took
+              ? <span data-image-took={took} style={{ color: "var(--t3)" }}>
+                  {took === "find" ? "Asked this chat to find it" : "Removing it from the page…"}
+                </span>
+              : actable && <>
+                  <button type="button" data-image-find onClick={() => void findIt()} style={chipButton()}
+                    title="Ask this chat to find the real image, fetch it into the workspace and fix the link">
+                    Find it
+                  </button>
+                  <button type="button" data-image-drop onClick={() => void dropIt()} style={chipButton("danger")}
+                    title="Take the image out of the page — the text stays">
+                    Remove the link
+                  </button>
+                </>}
+          </span>
+        : fetchable
+          ? <button type="button" data-image-fetch onClick={() => void bring()} disabled={state === "fetching"}
+              style={{ ...chipButton(), color: state === "fetching" ? "var(--t3)" : "var(--t1)",
+                cursor: state === "fetching" ? "default" : "pointer" }}>
+              {state === "fetching" ? "Fetching…" : "Fetch into the workspace"}
+            </button>
+          : <span style={{ flex: "none", color: "var(--t3)" }}>nothing to fetch</span>}
     </span>
   );
 }

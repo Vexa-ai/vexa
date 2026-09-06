@@ -29,6 +29,8 @@ replacing it.
 
 If the page wants a picture, `fetch_asset` it into the workspace first and reference it relatively
 (`![OeNB logo](assets/oenb-logo.svg)`) — a page never links an image straight off someone else's site.
+An image address you have not fetched or checked is a GUESS: never write one you have not seen
+answer. When you cannot find the real file, write the sentence without the picture.
 
 Say ONE line about what you added. The page is the deliverable and they are looking at it; a
 paragraph describing the paragraph you just wrote is the product reading its own work back to the

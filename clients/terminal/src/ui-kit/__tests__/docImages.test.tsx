@@ -21,7 +21,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { Markdown } from "../Markdown";
 import { MdxDoc } from "../MdxDoc";
 import { DocMetaContext } from "../docRefs";
-import { DocImage, rewriteImageReference, workspaceAssetUrl } from "../docImages";
+import { DocImage, fetchFailureLine, findItInstruction, removeImageReference, rewriteImageReference, workspaceAssetUrl } from "../docImages";
 import { WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
 
 const fetchWorkspaceAsset = vi.fn(async () => ({
@@ -30,6 +30,9 @@ const fetchWorkspaceAsset = vi.fn(async () => ({
 }));
 const readWorkspaceFile = vi.fn(async () => "# Note\n\n![OeNB logo](https://oenb.at/logo.svg)\n");
 const writeWorkspaceFile = vi.fn(async () => ({ path: "kg/note.md", written: true }));
+
+const postIntent = vi.fn(() => null);
+vi.mock("../../minutes/extend", () => ({ postIntent: (...a: unknown[]) => postIntent(...(a as [])) }));
 
 vi.mock("../../surfaces/workspaceApi", () => ({
   // the chips resolve against a workspace snapshot; nothing here is about them, so the world is empty
@@ -54,8 +57,35 @@ const placeholder = async (): Promise<HTMLElement> =>
     return el!;
   });
 
-beforeEach(() => { fetchWorkspaceAsset.mockClear(); readWorkspaceFile.mockClear(); writeWorkspaceFile.mockClear(); });
+beforeEach(() => {
+  fetchWorkspaceAsset.mockClear(); readWorkspaceFile.mockClear(); writeWorkspaceFile.mockClear();
+  postIntent.mockClear();
+});
 afterEach(cleanup);
+
+/** An `ApiError` as `surfaces/apiClient` mints one — read duck-typed by `fetchFailureLine`, which
+ *  is why this is a shape and not an import. */
+const apiFailure = (status: number, body?: unknown, detail = "") =>
+  Object.assign(new Error(`/api/workspace/asset → ${status}`), { status, detail, body });
+
+/** The placeholder after its offer has failed — the state everything in #1624 is about.
+ *
+ *  `DocImage` directly and not through `MdxDoc`, for the reason the stored-copy test above gives:
+ *  the MDX tree recompiles once when the workspace snapshot lands and replaces every component in
+ *  it, which resets the state this is about. The failure's DURABLE half — the page the reader
+ *  commits — is asserted through the API mocks, exactly as the fetch's is. */
+const afterFailedFetch = async (
+  meta: { path?: string; slug?: string } = { path: "kg/note.md", slug: "vexa-team-3183d1" },
+  err: unknown = apiFailure(424, { detail: { upstream_status: 404, url: "https://oenb.at/logo.svg" } }),
+): Promise<HTMLElement> => {
+  fetchWorkspaceAsset.mockRejectedValueOnce(err);
+  render(<DocMetaContext.Provider value={meta}>
+    <DocImage src="https://oenb.at/logo.svg" alt="OeNB logo" />
+  </DocMetaContext.Provider>);
+  document.querySelector<HTMLButtonElement>("[data-image-fetch]")!.click();
+  await waitFor(() => expect(document.querySelector("[data-image-failed]")).toBeTruthy());
+  return document.querySelector<HTMLElement>("[data-external-image]")!;
+};
 
 describe("a workspace path is a picture, served by the page's own door", () => {
   it("renders an <img> pointed at the asset route", async () => {
@@ -153,5 +183,92 @@ describe("the plain-Markdown fallback shows the same picture", () => {
     inDoc(<Markdown>{"[OeNB](https://oenb.at)"}</Markdown>);
     expect(document.querySelector("[data-external-image]")).toBeNull();
     expect(screen.getByText("OeNB")).toBeTruthy();
+  });
+});
+
+/** THE FAILED FETCH (Vexa-ai/vexa#1624). The founder pressed the offer on an address the agent had
+ *  invented and got, in red: *Could not fetch it: /api/workspace/asset → 400: https://…
+ *  answered 404.* A route, two status codes and a URL, printed at a person who can only read it as
+ *  "the button is broken". What is true is one sentence, and there are exactly two moves from it. */
+describe("a failed fetch is a sentence and two acts, not a stack trace", () => {
+  it("says what happened to the PICTURE, with the site's own status", async () => {
+    const box = await afterFailedFetch();
+    expect(box.textContent).toContain("This image does not exist at that address (the site answered 404).");
+    expect(box.textContent).not.toContain("/api/workspace/asset");
+    expect(box.textContent).not.toContain("424");
+  });
+
+  it("offers Find it and Remove the link, and nothing else", async () => {
+    const box = await afterFailedFetch();
+    expect(box.querySelector("[data-image-find]")).toBeTruthy();
+    expect(box.querySelector("[data-image-drop]")).toBeTruthy();
+    // the offer is gone: there is nothing left to fetch from an address that does not answer
+    expect(box.querySelector("[data-image-fetch]")).toBeNull();
+  });
+
+  it("Find it queues a SAME-TARGET act naming the image and the page", async () => {
+    const box = await afterFailedFetch();
+    box.querySelector<HTMLButtonElement>("[data-image-find]")!.click();
+    await waitFor(() => expect(postIntent).toHaveBeenCalled());
+    const [intent] = postIntent.mock.calls[0] as unknown as [Record<string, string>];
+    expect(intent.kind).toBe("extend");                       // a job on this chat, not a new one
+    expect(intent.path).toBe("kg/note.md");                   // …on the page the reader is on
+    expect(intent.workspace).toBe("vexa-team-3183d1");
+    expect(intent.instruction).toContain("find the real OeNB logo image, fetch it into assets/, and fix the link");
+    expect(intent.instruction).toContain("https://oenb.at/logo.svg");
+  });
+
+  it("Remove the link COMMITS the page without the image and keeps the words", async () => {
+    readWorkspaceFile.mockResolvedValueOnce(
+      "# OeNB\n\nThe logo is below.\n\n![OeNB logo](https://oenb.at/logo.svg)\n\nFounded in 1816.\n");
+    const commits = vi.fn();
+    window.addEventListener(WORKSPACE_COMMIT_EVENT, commits);
+    const box = await afterFailedFetch();
+    box.querySelector<HTMLButtonElement>("[data-image-drop]")!.click();
+    await waitFor(() => expect(writeWorkspaceFile).toHaveBeenCalled());
+    const [path, body] = writeWorkspaceFile.mock.calls[0] as unknown as [string, string];
+    expect(path).toBe("kg/note.md");
+    expect(body).not.toContain("https://oenb.at/logo.svg");
+    expect(body).toContain("The logo is below.");
+    expect(body).toContain("Founded in 1816.");
+    await waitFor(() => expect(commits).toHaveBeenCalled());
+    window.removeEventListener(WORKSPACE_COMMIT_EVENT, commits);
+  });
+
+  it("offers no act at all when the doc has no path — an act never guesses its target", async () => {
+    const box = await afterFailedFetch({});
+    expect(box.textContent).toContain("This image does not exist at that address");
+    expect(box.querySelector("[data-image-find]")).toBeNull();
+    expect(box.querySelector("[data-image-drop]")).toBeNull();
+  });
+
+  it("says the honest thing for each way a fetch can fail", () => {
+    const up = (n: number) => apiFailure(n >= 500 ? 424 : 424, { detail: { upstream_status: n } });
+    expect(fetchFailureLine(up(404), "oenb.at")).toContain("does not exist at that address");
+    expect(fetchFailureLine(up(403), "oenb.at")).toBe("oenb.at will not hand this image over (it answered 403).");
+    expect(fetchFailureLine(up(503), "oenb.at")).toBe("oenb.at is failing right now (it answered 503).");
+    expect(fetchFailureLine(apiFailure(502, { detail: { upstream_status: null } }), "oenb.at"))
+      .toBe("Nothing answered at oenb.at.");
+    // our own refusal of the address is already a sentence written for a person — passed through
+    expect(fetchFailureLine(apiFailure(400, { detail: "refusing 'redis' — that is an internal service name" },
+      "refusing 'redis' — that is an internal service name"), "redis"))
+      .toBe("refusing 'redis' — that is an internal service name");
+  });
+
+  it("takes the whole reference out, in both spellings, and leaves the page", () => {
+    const src = "before\n\n![a](https://x/i.png)\n\nmiddle\n\n<img src=\"https://x/i.png\" alt=\"a\" />\n\nafter";
+    const out = removeImageReference(src, "https://x/i.png");
+    expect(out).not.toContain("https://x/i.png");
+    expect(out).not.toContain("![a]");
+    expect(out).not.toContain("<img");
+    expect(out).toContain("before");
+    expect(out).toContain("middle");
+    expect(out).toContain("after");
+  });
+
+  it("names the picture by its own alt text, so the chat looks for the right thing", () => {
+    expect(findItInstruction("OeNB logo", "https://x/i.svg"))
+      .toBe("find the real OeNB logo image, fetch it into assets/, and fix the link — the page points at https://x/i.svg, which does not answer.");
+    expect(findItInstruction(undefined, "https://x/i.svg")).toContain("find the real image");
   });
 });

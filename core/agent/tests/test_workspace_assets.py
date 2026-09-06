@@ -160,6 +160,32 @@ def test_a_refused_url_is_a_named_400_not_a_silent_empty_asset(tmp_path):
     assert not (tmp_path / "u_jane" / "assets").exists()
 
 
+def test_a_remote_that_answered_badly_is_ITS_status_and_not_ours(tmp_path, monkeypatch):
+    """Vexa-ai/vexa#1624 — the reader who pressed the offer on the OeNB logo was shown `400: …
+    answered 404`, our code for their request with the remote's buried in a sentence. The request
+    was fine; the dependency failed. 424 carries the upstream code as a field, so the client can
+    say *the site answered 404* in words instead of printing two status codes at a person."""
+    def dead(_url, **_kw):
+        raise assets.AssetFetchError("https://x.example/logo.svg answered 404",
+                                     kind="upstream", status=404, url="https://x.example/logo.svg")
+    monkeypatch.setattr(assets, "fetch_asset", dead)
+    r = _app(tmp_path).post("/api/workspace/asset", params={"subject": "u_jane"},
+                            json={"url": "https://x.example/logo.svg"})
+    assert r.status_code == 424
+    assert r.json()["detail"]["upstream_status"] == 404
+    assert r.json()["detail"]["url"] == "https://x.example/logo.svg"
+
+
+def test_a_remote_that_never_answered_is_a_502(tmp_path, monkeypatch):
+    def unreachable(_url, **_kw):
+        raise assets.AssetFetchError("could not fetch https://x.example/logo.svg: ConnectError")
+    monkeypatch.setattr(assets, "fetch_asset", unreachable)
+    r = _app(tmp_path).post("/api/workspace/asset", params={"subject": "u_jane"},
+                            json={"url": "https://x.example/logo.svg"})
+    assert r.status_code == 502
+    assert r.json()["detail"]["upstream_status"] is None
+
+
 def test_an_uploaded_image_lands_where_a_fetched_one_does(tmp_path):
     r = _app(tmp_path).put("/api/workspace/asset", params={"subject": "u_jane"},
                            files={"file": ("Board photo.PNG", PNG, "image/png")})
