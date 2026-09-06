@@ -80,7 +80,7 @@ from llm.errors import LLMAuthError, LLMConfigError, LLMError
 from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _short, _written_artifact)
 from llm.ports import harness_subprocess_env
-from llm import web_tools
+from llm import jobs, web_tools
 
 
 def _parse_extra_body(raw: object) -> dict:
@@ -412,12 +412,31 @@ BUILTIN_SPECS: dict[str, dict] = {
                      "url": {"type": "string"},
                      "max_chars": {"type": "integer", "description": "default 12000"}},
                      "required": ["url"]}},
+    # THE ONE TOOL THAT ENDS THE TURN INSTEAD OF EXTENDING IT (Vexa-ai/vexa#1584). Everything else
+    # here does work; this hands work to a background job and comes straight back, so the person
+    # gets an answer now. Attached only where a spawner exists (`_CONDITIONAL`) — see `llm/jobs.py`.
+    "spawn_job": {"description": "Run a LONG act as a background job instead of inside this turn. "
+                                 "Returns immediately; the job posts its own line into this chat "
+                                 "when it lands, and the page it wrote refreshes itself. Use it for "
+                                 "anything that will take more than a few tool calls — writing or "
+                                 "extending a page, a research sweep — then answer the person now. "
+                                 "The job does NOT see this conversation, so `brief` must carry the "
+                                 "whole instruction. One job per `target`; a second is refused.",
+                  "parameters": {"type": "object", "properties": {
+                      "kind": {"type": "string", "description": "what kind of act: create, extend, "
+                                                                "research, …"},
+                      "target": {"type": "string", "description": "the one thing it acts on — a "
+                                                                  "workspace path, or a name"},
+                      "brief": {"type": "string", "description": "the whole instruction the job "
+                                                                 "runs on, standalone"}},
+                      "required": ["kind", "target", "brief"]}},
 }
 
 #: Built-ins whose attachment is CONDITIONAL. The harness's rule is that a tool it cannot serve is
 #: simply not attached and the turn's tool list says so — advertising a `WebSearch` with no backend
 #: behind it teaches the model that searching does not work, and that lesson outlives the turn.
-_CONDITIONAL: dict[str, Callable[[], bool]] = {"WebSearch": web_tools.search_configured}
+_CONDITIONAL: dict[str, Callable[[], bool]] = {"WebSearch": web_tools.search_configured,
+                                               "spawn_job": jobs.configured}
 
 
 def _attached(name: str) -> bool:
@@ -527,6 +546,12 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox,
         return web_tools.web_fetch(str(args.get("url") or ""),
                                    args.get("max_chars") or web_tools.DEFAULT_FETCH_CHARS,
                                    client=web)
+    # Answered before the sandbox too, and for a stronger reason than the web tools': this call
+    # touches no path and does no work at all — it hands an instruction to the worker's job runner
+    # and returns. A refusal (a job already running on that target) is an ordinary failed result.
+    if tool == "spawn_job":
+        return jobs.spawn(str(args.get("kind") or ""), str(args.get("target") or ""),
+                          str(args.get("brief") or ""))
     try:
         if tool == "Read":
             path = sandbox.resolve(str(args.get("file_path") or ""))

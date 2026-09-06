@@ -44,6 +44,7 @@ from llm import (
     provider_host,
     run_harness_turn,
 )
+from llm import jobs as llm_jobs
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # PRD decision 31 §1 — WHERE THIS PERSON IS IN TIME, on every dispatch (used in the preamble list
@@ -57,6 +58,9 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
 # Whoever composes that block appends what this returns.
 from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
+# THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
+# harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
+from worker import jobs as worker_jobs
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
                              report as report_friction, scan_turn, spawn_gap)
@@ -503,6 +507,11 @@ from shared.marks import MACHINERY_MARK  # noqa: E402 — re-export; see shared/
 # turn carrying this one and every agent turn up to the next thing a person actually said.
 # ONE literal, two names: `shared.marks.PHASE_MARK` is what control_plane calls it.
 from shared.marks import WRITEBACK_MARK  # noqa: E402 — re-export; see shared/marks.py
+
+# THE THIRD MARK (Vexa-ai/vexa#1584): this act runs as a background JOB, not on this turn. Written
+# by `control_plane/chat_intents.job_prefix`, read here in `run_message`. Same module, same reason
+# — a decision that changes how a prompt is run has to be legible in the prompt.
+from shared.marks import read_job_mark  # noqa: E402 — see shared/marks.py
 
 # ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
 # dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,
@@ -1506,7 +1515,8 @@ def start_prompt(start: dict) -> str | None:
 
 def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
-          tools: "list[str] | None" = None) -> None:
+          tools: "list[str] | None" = None, job: TurnFn | None = None,
+          jobs_dir: "Path | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -1537,9 +1547,45 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     `refresh_desk_readme`) never interleave; nothing else about a trailer needs to block the next
     turn. `_join_trailers()` is called before every exit path so a daemon thread killed by
     TTL-on-idle reaping never eats a commit mid-flight.
+
+    `job` — BACKGROUND JOBS (Vexa-ai/vexa#1584), the same idea taken one step further and applied to
+    the WORK rather than to its paperwork. A prompt carrying the job mark never runs here at all:
+    `JobRunner` takes it, this loop emits one line and completes the turn, and the act runs on its
+    own thread with its own harness session (`job` is built with `session_continuity=False`) while
+    the person carries on asking things. `jobs_dir` is the register that lets a restart report the
+    jobs it killed. Both optional: with no `job` turn injected there are no jobs, a marked prompt
+    runs inline exactly as it does today, and nothing else in this function changes.
     """
     _desk_lock = threading.Lock()
     _trailers: list[threading.Thread] = []
+
+    # BACKGROUND JOBS (Vexa-ai/vexa#1584). A marked act — Create, Extend, or anything the model
+    # hands to `spawn_job` — does not run here at all: the runner takes it, this loop emits one line
+    # and moves straight on to the next message. Off entirely when the caller injects no job turn,
+    # which is every test and every deployment that has not wired one.
+    _jobs = None if job is None else worker_jobs.JobRunner(
+        emit=lambda ev: stream.xadd(out_topic, {"event": json.dumps(ev)}),
+        turn=job, register_dir=jobs_dir)
+
+    def _spawn_from_tool(kind: str, target: str, brief: str) -> "tuple[bool, str]":
+        """`spawn_job`'s answer to the model — an accepted job, or the refusal in words it can
+        repeat. A refusal is not an error: the person asked twice for the same page."""
+        ev = _jobs.spawn(kind, target, brief)          # type: ignore[union-attr]
+        if ev.get("type") == "job-refused":
+            return False, ev.get("line") or "that job is already running"
+        return True, (f"started as a background job ({ev.get('job_id')}). Answer whatever else the "
+                      f"person asked — the job posts its own line when it lands.")
+
+    if _jobs is None:
+        # Cleared, not left standing: the spawner is process-global, so a serve() with no job turn
+        # must not inherit a previous one's runner.
+        llm_jobs.set_spawner(None)
+    else:
+        # Whatever the last process was running when it died is reported once, here, and forgotten.
+        _jobs.cancelled_at_boot()
+        # The harness's own `spawn_job` reaches the SAME runner: one register, one refusal rule,
+        # one set of events, whichever half of the product asked.
+        llm_jobs.set_spawner(_spawn_from_tool)
 
     def _join_trailers() -> None:
         """Block until every in-flight trailer has finished — called on every way `serve()` can
@@ -1580,6 +1626,19 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         if nonce:
             ack["nonce"] = nonce
         stream.xadd(out_topic, {"event": json.dumps(ack)})
+        # A MARKED ACT NEVER REACHES THE MODEL ON THIS TURN. The acknowledgement is composed by the
+        # runner, not asked for — a turn that had to ask a model for its own "I'll say when it's
+        # there" would be the two-minute wait it exists to remove, at a tenth of the length. So:
+        # spawn (or refuse), say the one line, complete. The job runs on its own thread from here.
+        asked = read_job_mark(prompt) if _jobs is not None else None
+        if asked is not None:
+            kind, target, brief = asked
+            ev = _jobs.spawn(kind, target, brief, turn_id=turn_id)   # emits job-started/job-refused
+            stream.xadd(out_topic, {"event": json.dumps(
+                {"type": "message-delta", "text": ev.get("line") or "", "turn_id": turn_id})})
+            stream.xadd(out_topic, {"event": json.dumps(
+                {"type": "turn-complete", "turn_id": turn_id})})
+            return
         tool_calls, upserts = 0, 0
         # What the phase's pre-pass reads: the person's message and the agent's answer, and NOT the
         # tool results.
@@ -1754,7 +1813,14 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     while True:
         resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
         if not resp:
+            # A JOB IS A THREAD IN THIS PROCESS, so an idle reap under one is a kill. Keep serving
+            # while any job runs — the loop is doing nothing anyway, and the alternative is a page
+            # that never gets written because nobody spoke for two minutes.
+            if _jobs is not None and _jobs.busy():
+                continue
             _join_trailers()  # a trailer still writing back must finish before the container reaps
+            if _jobs is not None:
+                _jobs.join_all()
             return  # idle → exit 0 → container reaped
         for _name, entries in resp:
             for entry_id, fields in entries:
@@ -1762,6 +1828,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 msg = json.loads(fields.get("turn", "{}"))
                 if msg.get("type") == "stop":
                     _join_trailers()
+                    if _jobs is not None:
+                        _jobs.join_all()
                     return
                 n += 1
                 run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor)
@@ -1792,7 +1860,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are committed by
     # run_harness_turn. Override with VEXA_CHAT_TOOLS (comma-separated).
     chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
-                  or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
+                  or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,spawn_job").split(",")
     session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION
     # The delegated vexa MCP (meetings, transcripts, workspaces) — attached ONLY when the dispatcher
     # minted a token for this dispatch. Attaching the server is not enough: `--strict-mcp-config`
@@ -1835,6 +1903,20 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             work, writeback_prompt(candidates, active_mounts()), model=model,
             allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
             mcp_config=mcp_cfg, harness=chat_harness),
+        # A BACKGROUND JOB'S TURN, and the one line of difference that matters:
+        # `session_continuity=False`. A job runs its OWN harness session — it does not resume the
+        # conversation, does not move the continuity pointer and does not append to the transcript
+        # the history reader serves. Two turns writing one transcript is the same one-writer failure
+        # as two turns writing one page, and on `claude-code` a second `--resume` of a live session
+        # is not a supported shape at all. The price — the job's two lines are live-only — is stated
+        # in `llm/JOBS.md` rather than discovered.
+        job=lambda brief: run_turn_over_workspace(
+            work, brief, model=model, allowed_tools=chat_tools, session=session,
+            session_continuity=False, mcp_config=mcp_cfg, harness=chat_harness),
+        # The register that makes "a restart cancels them and the chat is told" true. It sits beside
+        # the session pointers, under the private continuity root, which is already outside the
+        # workspace commit.
+        jobs_dir=_continuity_root(work) / ".claude" / "jobs",
         start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
         harness=chat_harness,
         # What this session can actually call — the F70 detector's third condition, and the

@@ -47,8 +47,44 @@ SILENT_KINDS = frozenset({"highlight"})
 # two literals rather than one flag.
 # ONE SOURCE, three images (shared/marks.py). Re-exported under the names this module has always
 # published, so every reader of `chat_intents.MACHINERY_MARK` is unmoved.
-from shared.marks import MACHINERY_MARK, PHASE_MARK  # noqa: E402 — re-export, see the note above
+from shared.marks import MACHINERY_MARK, PHASE_MARK, job_mark  # noqa: E402 — re-export, see above
 SILENT_PREFIX = MACHINERY_MARK + " " + PHASE_MARK + " "
+
+
+# Kinds whose act must NOT hold the chat (Vexa-ai/vexa#1584). Create and Extend read, search and
+# write for 30-120s; the founder pressed them four times on 2026-09-06 and the composer was busy
+# throughout. They run as background JOBS: the turn returns one line at once, the job runs on its
+# own thread in the worker, and its result lands as a line plus a refreshed page tab.
+#
+# A CLOSED SET, like SILENT_KINDS above and for the same reason: whether an act may spawn a job is
+# not a flag the wire gets to set. `explore` and `highlight` stay inline — one is a chip lookup, the
+# other is machinery that publishes terms and says nothing.
+JOB_KINDS = frozenset({"create", "extend"})
+
+
+def is_job(intent) -> bool:
+    """Does this intent run as a background job? Reads the KIND, never a client-supplied flag."""
+    if not isinstance(intent, dict):
+        return False
+    return str(intent.get("kind") or "").strip().lower() in JOB_KINDS
+
+
+def job_target(intent) -> str:
+    """The ONE thing the job acts on — the workspace-qualified page path. The duplicate refusal keys
+    on this string, so it has to name the page the same way twice: a bare path in one workspace and
+    the same path in another must not collide, and the same page reached twice must."""
+    d = intent if isinstance(intent, dict) else {}
+    ws = str(d.get("workspace") or "").strip()
+    path = str(d.get("path") or "").strip()
+    return f"{ws}/{path}" if ws and path else (path or ws)
+
+
+def job_prefix(intent) -> str:
+    """The mark a job act carries, or ``""``. The route prefixes it exactly as it prefixes
+    SILENT_PREFIX — one line there, the closed set and the composition here, where they are tested."""
+    if not is_job(intent):
+        return ""
+    return job_mark(str(intent.get("kind") or "").strip().lower(), job_target(intent))
 
 
 def is_silent(intent) -> bool:

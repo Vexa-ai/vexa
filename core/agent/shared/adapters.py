@@ -397,6 +397,14 @@ class RedisStreamReader(StreamReader):
         # output arrived' failure was the reader giving up / the stream ending before any resume).
         last_id = resume or "$"
         waited = 0
+        # A JOB OUTLIVES ITS TURN (Vexa-ai/vexa#1584), so `turn-complete` is no longer the whole
+        # answer to "is this view finished". The turn that spawns a job completes in a second; its
+        # job keeps writing progress to this same Stream for another two minutes, and closing the
+        # view on that first `turn-complete` would drop every one of those events on the floor.
+        # So the view closes when the turn is done AND no job it watched start is still open.
+        # With no job in play both lines are dead weight and the behaviour is exactly what it was.
+        open_jobs: set[str] = set()
+        turn_done = False
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
             if not resp:
@@ -414,7 +422,14 @@ class RedisStreamReader(StreamReader):
                     yield (ev, entry_id)
                     # `turn-complete` is the worker's terminal marker — it comes AFTER `done` + `commit`,
                     # so stopping on `done` would drop the commit. Close the view only on turn-complete.
-                    if ev.get("type") == "turn-complete":
+                    kind = ev.get("type")
+                    if kind == "job-started" and ev.get("job_id"):
+                        open_jobs.add(str(ev["job_id"]))
+                    elif kind in ("job-done", "job-failed"):
+                        open_jobs.discard(str(ev.get("job_id") or ""))
+                    elif kind == "turn-complete":
+                        turn_done = True
+                    if turn_done and not open_jobs:
                         return
 
 

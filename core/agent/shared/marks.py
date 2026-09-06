@@ -41,3 +41,43 @@ PHASE_MARK = "[vexa-phase:writeback]"
 
 #: The worker's historical name for PHASE_MARK. One literal, two names, no second source.
 WRITEBACK_MARK = PHASE_MARK
+
+
+# ── the third mark: this act does not hold the chat (Vexa-ai/vexa#1584) ──────────────────────────
+# A turn that takes two minutes holds the composer for two minutes. On 2026-09-06 the founder
+# pressed Create and Extend four times in the minutes panel; 38 tool calls later he still could not
+# ask anything. The act was never the problem — running it INSIDE the turn was.
+#
+# So the control plane marks such an act on its way past, and the worker runs it as a background
+# JOB: the turn returns at once with one line, the job runs on its own thread with its own harness
+# session, and its result arrives later as a line and a refreshed page (`worker/jobs.py`, and
+# `llm/JOBS.md` for the whole contract).
+#
+# WHY A MARK AND NOT A FIELD. The same reason the two above are marks: the decision has to be
+# recognisable in the RECORD. `_context_grounding` prepends the grounding and the context sentinel
+# before the worker ever sees this string, so the mark rides mid-prompt by construction and
+# `read_job_mark` SEARCHES rather than matching at the start — reading it strips it in place and
+# leaves everything else, so the job runs the whole composed prompt, grounding included.
+#
+# Unlike MACHINERY_MARK there is no TypeScript copy to keep honest: the server writes this literal
+# and the terminal never does.
+import re as _re
+
+#: Opens the job mark; the kind and target follow, closed by ``]``.
+JOB_MARK = "[vexa-job:"
+
+_JOB_RE = _re.compile(r"\[vexa-job:([a-z0-9_-]{1,32}):([^\]]{0,512})\]\s*")
+
+
+def job_mark(kind: str, target: str) -> str:
+    """The prefix a job act carries. ``target`` is the ONE thing the job acts on — the refusal of a
+    second job keys on it, so two acts on one page cannot run at once."""
+    return f"{JOB_MARK}{kind}:{target}] "
+
+
+def read_job_mark(text: str) -> "tuple[str, str, str] | None":
+    """``(kind, target, text-without-the-mark)`` when this prompt asks for a job, else None."""
+    m = _JOB_RE.search(text or "")
+    if not m:
+        return None
+    return m.group(1), m.group(2).strip(), (text[:m.start()] + text[m.end():])

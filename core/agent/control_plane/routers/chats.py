@@ -129,6 +129,19 @@ def build(**d) -> APIRouter:
                 except scaffolds_mod.ScaffoldError as e:
                     logger.warning("intent %s has no preset here (%s) — the turn runs on the "
                                    "client's fallback sentence", _preset, e)
+        # AND A LONG ACT DOES NOT HOLD THE CHAT (Vexa-ai/vexa#1584). Create and Extend are marked
+        # here, on the same carrier and for the same reason as SILENT_PREFIX above: the worker reads
+        # the mark and runs the act as a background job, so the turn returns one line at once and
+        # the composer stays answerable.
+        #
+        # OUTSIDE the preset branch on purpose. Whether this act blocks the chat must not depend on
+        # whether the preset library is current — a deployment one release behind the terminal falls
+        # back to the client's plainer sentence (the branch above says so), and the fallback wording
+        # is exactly as long to run as the preset's. The mark rides whichever words won.
+        # A deployment whose WORKER is older simply runs a marked prompt inline, as it does today.
+        _job_mark = chat_intents.job_prefix(body.intent)
+        if _job_mark:
+            body = body.model_copy(update={"prompt": _job_mark + body.prompt})
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None

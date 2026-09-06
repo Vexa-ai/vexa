@@ -64,6 +64,16 @@ would be an ImportError in the only process that runs this code.
 Raw `httpx`, no vendor SDKs — the protocols are ~10 lines each and a pinned SDK is a heavier
 supply-chain surface than the dialect itself.
 
+### Background jobs — [`JOBS.md`](JOBS.md)
+
+A long act (Create, Extend, anything the model hands to `spawn_job`) runs as a **job**: the turn
+returns one line at once, the job runs on its own thread with its own harness session and step
+count, and its result arrives later as a line plus a refreshed page. The runner is the worker's
+(`worker/jobs.py`) and sits ABOVE the harness, so every runner gets it. The only per-runner part is
+the `spawn_job` TOOL — a builtin here on `openai-agent`, absent on `claude-code` (whose native
+subagent runs inside the turn, which is the behaviour the contract exists to remove). `JOBS.md`
+carries the event vocabulary and the rest.
+
 ## Configuration
 
 | Env var | Meaning | Default |
