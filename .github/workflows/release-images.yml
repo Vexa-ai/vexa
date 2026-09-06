@@ -315,6 +315,45 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every registry read bills the vexaai account, never the runner's IP (#715) ────────────
+      # This job reads Docker Hub entirely through CLIENT-SIDE tools — `docker buildx imagetools
+      # inspect|create` and `docker manifest inspect` — which resolve their own credential out of
+      # the docker CLI config keyed by REGISTRY HOSTNAME, not through the daemon that
+      # docker/login-action authenticates. On 2026-09-06 that fell through to anonymous and killed
+      # the v0.13.0 publish twice (run 34057166572): attempt 1 died in `imagetools create` with
+      # "failed to copy: httpReadSeeker … 429" + "You have reached your UNAUTHENTICATED pull rate
+      # limit", after 53 reads had succeeded; attempt 2 died 35 min later on the very first
+      # `imagetools inspect` HEAD. Both after `Login Succeeded!`. Anonymous reads bill the runner's
+      # shared Azure NAT address at 100 pulls/hour, split with every other tenant on that IP;
+      # authenticated reads bill the vexaai account. Writing the same secret under every hostname
+      # spelling these clients can resolve removes the fall-through. Strictly additive — it changes
+      # no descriptor, no assertion and nothing about what is copied.
+      - name: Every client-side registry read carries the vexaai credential (#715)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+          CONFIG="$CONFIG_DIR/config.json"
+          mkdir -p "$CONFIG_DIR"
+          [ -s "$CONFIG" ] || echo '{}' > "$CONFIG"
+          if [ -n "$(jq -r '.credsStore // empty' "$CONFIG")" ]; then
+            echo "::warning title=registry-auth::the docker CLI config delegates to a credential helper, so these auths entries are ignored and client-side reads may still go out anonymous (#715)"
+          fi
+          VEXA_HUB_AUTH="$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 -w0)" \
+            jq '
+              .auths = ((.auths // {}) + {
+                "https://index.docker.io/v1/": { auth: env.VEXA_HUB_AUTH },
+                "index.docker.io":             { auth: env.VEXA_HUB_AUTH },
+                "registry-1.docker.io":        { auth: env.VEXA_HUB_AUTH },
+                "registry.docker.io":          { auth: env.VEXA_HUB_AUTH },
+                "docker.io":                   { auth: env.VEXA_HUB_AUTH }
+              })
+            ' "$CONFIG" > "$CONFIG.next"
+          mv "$CONFIG.next" "$CONFIG"
+          chmod 600 "$CONFIG"
+          echo "✓ Hub credential resolvable for: $(jq -r '.auths | keys | join(", ")' "$CONFIG")"
       - name: Copy descriptors without rebuilding or wrapping single-platform manifests
         run: |
           set -euo pipefail
@@ -465,6 +504,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
       - uses: astral-sh/setup-uv@v5
+      # #715 — this leg pulled the published images with NO login at all, so every pull billed the
+      # runner's shared Azure NAT address (100/hour, split with every other tenant on that IP)
+      # instead of the vexaai account (see the alias-candidate comment above for the field evidence).
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Published Bot has the promised identity
         run: |
           set -euo pipefail
@@ -515,6 +561,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
+      # #715 — no login here either: the published-Lite pull AND `make -C deploy/lite up`'s
+      # implicit third-party pulls both went out anonymous, on the runner's shared IP quota.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Published Lite has the promised identity and offline model
         run: |
           set -euo pipefail
@@ -567,6 +619,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
+      # #715 — same gap on the arm64 leg: the published-Lite pull carried no credential.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Published Lite is native arm64 content
         run: |
           set -euo pipefail
@@ -628,6 +685,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      # #715 — this receipt job reads Docker Hub with `imagetools inspect` + `manifest inspect` and
+      # had NO login at all, so every read was anonymous on the runner's shared IP quota. Log in for
+      # the daemon, then give the client-side readers the same credential explicitly (see the
+      # alias-candidate comment above). The readback assertions themselves are unchanged.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Every client-side registry read carries the vexaai credential (#715)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+          CONFIG="$CONFIG_DIR/config.json"
+          mkdir -p "$CONFIG_DIR"
+          [ -s "$CONFIG" ] || echo '{}' > "$CONFIG"
+          if [ -n "$(jq -r '.credsStore // empty' "$CONFIG")" ]; then
+            echo "::warning title=registry-auth::the docker CLI config delegates to a credential helper, so these auths entries are ignored and client-side reads may still go out anonymous (#715)"
+          fi
+          VEXA_HUB_AUTH="$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 -w0)" \
+            jq '
+              .auths = ((.auths // {}) + {
+                "https://index.docker.io/v1/": { auth: env.VEXA_HUB_AUTH },
+                "index.docker.io":             { auth: env.VEXA_HUB_AUTH },
+                "registry-1.docker.io":        { auth: env.VEXA_HUB_AUTH },
+                "registry.docker.io":          { auth: env.VEXA_HUB_AUTH },
+                "docker.io":                   { auth: env.VEXA_HUB_AUTH }
+              })
+            ' "$CONFIG" > "$CONFIG.next"
+          mv "$CONFIG.next" "$CONFIG"
+          chmod 600 "$CONFIG"
+          echo "✓ Hub credential resolvable for: $(jq -r '.auths | keys | join(", ")' "$CONFIG")"
       - name: Read back immutable Bot and Lite identities
         run: |
           set -euo pipefail

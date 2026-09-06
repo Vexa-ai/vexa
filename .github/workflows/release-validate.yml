@@ -169,6 +169,47 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every registry read bills the vexaai account, never the runner's IP (#715) ────────────
+      # `docker login` is not enough for the CLIENT-SIDE registry readers. `docker pull` hands its
+      # credential to the daemon; `docker manifest inspect` (the floor below) and
+      # `docker buildx imagetools` (release-images' alias-candidate) resolve their own credential
+      # out of the docker CLI config, keyed by REGISTRY HOSTNAME — and on 2026-09-06 both read
+      # Docker Hub ANONYMOUSLY inside jobs that had just authenticated. This job's floor died three
+      # times in six minutes on its FIRST manifest read, 0.2 s after `Login Succeeded!`, with Hub's
+      # own words: "You have reached your UNAUTHENTICATED pull rate limit"
+      # (runs 34055705272 / 34055855223 / 34055967681; release-images run 34057166572 died the same
+      # way twice in alias-candidate). An unauthenticated read bills the runner's shared Azure NAT
+      # address — 100 pulls/hour split with every other tenant on that IP, which is why the same
+      # code went green at 20:01 on different runners. An authenticated one bills the vexaai
+      # account. Writing the same secret under every hostname spelling these clients can resolve
+      # removes the fall-through to anonymous. Strictly additive: it never removes what
+      # docker/login-action wrote, and it prints key names only, never the credential.
+      - name: Every client-side registry read carries the vexaai credential (#715)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+          CONFIG="$CONFIG_DIR/config.json"
+          mkdir -p "$CONFIG_DIR"
+          [ -s "$CONFIG" ] || echo '{}' > "$CONFIG"
+          if [ -n "$(jq -r '.credsStore // empty' "$CONFIG")" ]; then
+            echo "::warning title=registry-auth::the docker CLI config delegates to a credential helper, so these auths entries are ignored and client-side reads may still go out anonymous (#715)"
+          fi
+          VEXA_HUB_AUTH="$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 -w0)" \
+            jq '
+              .auths = ((.auths // {}) + {
+                "https://index.docker.io/v1/": { auth: env.VEXA_HUB_AUTH },
+                "index.docker.io":             { auth: env.VEXA_HUB_AUTH },
+                "registry-1.docker.io":        { auth: env.VEXA_HUB_AUTH },
+                "registry.docker.io":          { auth: env.VEXA_HUB_AUTH },
+                "docker.io":                   { auth: env.VEXA_HUB_AUTH }
+              })
+            ' "$CONFIG" > "$CONFIG.next"
+          mv "$CONFIG.next" "$CONFIG"
+          chmod 600 "$CONFIG"
+          echo "✓ Hub credential resolvable for: $(jq -r '.auths | keys | join(", ")' "$CONFIG")"
 
       # ── the always-on floor (restored, #1237) ────────────────────────────────────────────────
       # This job's contract — stated in its own header and in delivery.mdx — is "every published
