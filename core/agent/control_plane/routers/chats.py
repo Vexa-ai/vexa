@@ -15,9 +15,10 @@ from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import routines as routines_mod
 from control_plane import scaffolds as scaffolds_mod
+from control_plane import global_layer, system_mounts
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.api_shared import (
-    CONTEXT_SENTINEL, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
+    CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, logger, meeting_binding, target_preamble, workspace_focus)
@@ -56,6 +57,7 @@ def build(**d) -> APIRouter:
     scaffolds = d['scaffolds']
     scheduler = d['scheduler']
     sess = d['sess']
+    settings = d['settings']
     stream_reader = d['stream_reader']
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
@@ -93,7 +95,12 @@ def build(**d) -> APIRouter:
         mounts = [str(w) for w in ((row or {}).get("workspaces") or [])
                   if str(w) not in ("_global", "_system")]
         desk = _ws_name(str(subject), fallback="your own desk")
-        target_name = _ws_name(target, fallback=target) if target else desk
+        # The registry names `_global` too — `The organisation` until the setup conversation
+        # writes the company's own — so this fallback is only reached when the lookup FAILS, and
+        # its whole job is to keep the slug out of the one line #1585/#1602 exist to keep
+        # slug-free. `Company` is what its own README calls it, and what the chip shows (#1616).
+        global_target = target == system_mounts.GLOBAL_SLUG
+        target_name = _ws_name(target, fallback="Company" if global_target else target) if target else desk
         others = [_ws_name(w, fallback=w) for w in mounts if w != target]
         # THE DESK IS ALWAYS READABLE, and saying so is the other half of the founder's rule — the
         # one that stops the fix from becoming a new failure. "Note this on my desk" must still
@@ -101,7 +108,11 @@ def build(**d) -> APIRouter:
         # would teach the agent it has nowhere else to write.
         if target and desk not in others:
             others.append(desk)
-        return target_preamble(target_name, others)
+        # WHAT THE COMPANY LAYER IS FOR, said to the one turn that can write there (#1616). An
+        # admin can now aim any chat at `_global`; a turn told only "writes go here" would fill
+        # the organisation tier with meeting notes, which its own README says it is not for.
+        return target_preamble(target_name, others,
+                               note=GLOBAL_TARGET_NOTE if global_target else "")
 
     # ── THE RAIL'S NAME FOR A ROW (Vexa-ai/vexa#1602) ────────────────────────────────────────
     #
@@ -708,7 +719,18 @@ def build(**d) -> APIRouter:
         wid = str(body.get("workspace") or "").strip()
         if wid and not _is_slug(wid):
             raise HTTPException(status_code=400, detail="not a workspace slug")
-        if wid:
+        if wid == system_mounts.GLOBAL_SLUG:
+            # THE COMPANY LAYER IS A TARGET FOR THE ADMIN AND NOBODY ELSE (Vexa-ai/vexa#1616).
+            # `_read_target` cannot make this call: it answers `_global` to EVERY subject on
+            # purpose, because the tier is mounted read-only into every worker and the read API
+            # mirrors that — `write=True` never narrowed it. The admin test is the one the file
+            # and entity routes already run, asked here for the same reason a target is checked
+            # at all: the field exists so the agent may trust it, and a chat pointed at a
+            # workspace its person cannot write is a promise the first write breaks.
+            if not global_layer.is_admin(settings, str(subject)):
+                raise HTTPException(status_code=403,
+                                    detail="only an org admin may write into _global")
+        elif wid:
             # WRITABLE, ASKED OF THE THING THAT KNOWS. `write=True` is the point: a target is where
             # writes go, so a workspace this subject may only READ is not one — the same seam, and
             # the same answer, the write route itself would give. A forwarded or stale id therefore

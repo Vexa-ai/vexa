@@ -12,7 +12,7 @@
  *  from here. Personal onboarding still has its own entry — app/OnboardingGate.tsx fires the seed.
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
-import { WORKSPACE_WORD } from "./vocabulary";
+import { COMPANY_WORD, WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
@@ -22,7 +22,7 @@ import {
   listSharedMemberships, listWorkspaceTree, type Membership,
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
-import { ContextBar } from "./ContextBar";
+import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
@@ -1283,6 +1283,21 @@ export function MinutesShell() {
   // reader cannot see which identity that was — so the card names it. Probed only when a refusal
   // actually exists: the common path is a link that opens, and it should cost nothing. Fail-soft —
   // an identity probe that does not answer leaves the copy exactly as it read before.
+  // IS THIS PERSON THE INSTANCE'S ADMIN (Vexa-ai/vexa#1616) — the one question the `+` menu's
+  // company-layer entry turns on. FAIL CLOSED: `is_admin` is three-valued (see /api/auth/me) and
+  // only a literal `true` counts, because an unknown answer must not offer a door the server
+  // would then slam. Nothing hangs on it being right — the write seam refuses a non-admin either
+  // way — so it is a probe, not a gate, and a probe that does not answer costs an offer.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (active) setIsAdmin((d as { is_admin?: boolean } | null)?.is_admin === true); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
   const [signedInAs, setSignedInAs] = useState<string | null>(null);
   useEffect(() => {
     if (!scaffoldRefusal) return;
@@ -1397,6 +1412,22 @@ export function MinutesShell() {
           if (sel.target === id) chooseTarget("");
         }}
         onSetTarget={(id) => chooseTarget(id)}
+        isAdmin={isAdmin}
+        onTargetGlobal={() => {
+          // THE ADMIN AIMS A CHAT AT THE COMPANY LAYER (Vexa-ai/vexa#1616) — MOUNT · TARGET ·
+          // OPEN, in that order, which is the same three beats the `focus` event performs and
+          // for the same reasons. The mount goes first because `chooseTarget` refuses a target
+          // the chat is not over and a restored row need not carry `_global` in its set at all;
+          // `justMounted` is what lets the second beat trust the first before React commits it.
+          //
+          // The README opens UNCONDITIONALLY here, unlike the `focus` handler which yields to a
+          // focus the reader chose: there the panel move is the turn's suggestion, here it IS
+          // the reader's ask — they clicked the thing whose whole meaning is "take me there".
+          setWorkspaces((ws) => (ws.includes(GLOBAL_MOUNT) ? ws : [...ws, GLOBAL_MOUNT]));
+          chooseTarget(GLOBAL_MOUNT, { justMounted: true });
+          readerChoseFocus.current = true;
+          openPage({ path: "README.md", slug: GLOBAL_MOUNT, label: COMPANY_WORD } as Page);
+        }}
         onAttachRepo={(id) => setAttachTo({ id })} />
       {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
           nullable id alone cannot tell "no dialog" from "dialog, aimed at the desk". */}

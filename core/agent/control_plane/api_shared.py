@@ -1038,21 +1038,36 @@ TARGET_LINE = ("target workspace: {target} — writes go here unless asked other
                "{others} are mounted to read; write there only on an explicit ask with its purpose.")
 TARGET_LINE_ALONE = "target workspace: {target} — writes go here unless asked otherwise."
 
+#: THE COMPANY LAYER SAYS WHAT IT IS FOR (Vexa-ai/vexa#1616). An admin may now aim any chat at
+#: `_global`, and a turn told only "writes go here" would fill the organisation tier with meeting
+#: notes — the one thing its own README says it is not for. One sentence, the seed's own words:
+#: the five files stay thin, and the company-tier PAGES the graph links to live under
+#: `kg/entities/` (the rule Vexa-ai/vexa#1589 settled when it stopped refusing entity writes here).
+GLOBAL_TARGET_NOTE = ("The company layer is thin: the five files at its root, and company-tier "
+                      "pages under `kg/entities/`. Meeting notes, customer records and personal "
+                      "documents belong on a desk or in an ordinary workspace, never here.")
 
-def target_preamble(target: str, others: "list[str] | None" = None) -> str:
+
+def target_preamble(target: str, others: "list[str] | None" = None, note: str = "") -> str:
     """The turn's target line, or ``""`` when there is no target to name.
 
     ``target`` and ``others`` are NAMES the caller already resolved — this function does no lookup,
     so what it renders is exactly what a test can state. An empty ``others`` drops the whole
     read-only clause rather than rendering an empty list: "nothing is mounted to read" is not a
-    thing worth a sentence, and a sentence about an empty set reads as a defect."""
+    thing worth a sentence, and a sentence about an empty set reads as a defect.
+
+    ``note`` is ONE SENTENCE about the target that a turn writing there has to know — today only
+    the company layer has one (``GLOBAL_TARGET_NOTE``). It is a parameter rather than a branch
+    because this function does no lookup by design: the caller knows which workspace it resolved,
+    and a composer that stayed pure is a composer a test can state exactly."""
     name = str(target or "").strip()
     if not name:
         return ""
     rest = [str(o).strip() for o in (others or []) if str(o).strip() and str(o).strip() != name]
     line = (TARGET_LINE.format(target=name, others=", ".join(rest)) if rest
             else TARGET_LINE_ALONE.format(target=name))
-    return f"## Where this turn writes\n\n{line}\n\n"
+    tail = f" {note.strip()}" if str(note or "").strip() else ""
+    return f"## Where this turn writes\n\n{line}{tail}\n\n"
 
 
 def _sse(events) -> Iterator[str]:

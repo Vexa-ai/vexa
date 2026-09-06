@@ -18,3 +18,12 @@
 
 /** What a person's own workspace is CALLED to that person. */
 export const WORKSPACE_WORD = "desk";
+
+/** What the ORGANISATION TIER (`_global`) is called where a person sees it — the header chip an
+ *  admin can aim a chat at, and the `+` menu entry that puts it there (Vexa-ai/vexa#1616).
+ *
+ *  It is a FALLBACK, not the name: the registry answers for `_global` too, with the company's own
+ *  name once the setup conversation writes one. This is what the chip wears in the gap before that
+ *  — because the alternative fallback is the slug, and a header reading `_global` is the defect
+ *  #1585/#1602 closed everywhere else. The word is its own README's heading. */
+export const COMPANY_WORD = "Company";
