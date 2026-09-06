@@ -59,6 +59,24 @@ class EntityRefused(ValueError):
     the grounding gate measured exactly that."""
 
 
+class EntityMalformed(EntityRefused):
+    """An ARGUMENT this module could not read — a shape error, not a rule the caller broke.
+
+    The two are different answers and the endpoint gives them different status codes. A sourceless
+    fact is a well-formed request whose refusal IS the product (422: read the sentence, fix the
+    fact, do not retry). A `connections` entry with no name is a request the writer could not parse
+    at all (400: here is the shape, send the same facts again in it).
+
+    ⚠ IT EXISTS BECAUSE THE ALTERNATIVE WAS A 500. `connections=[{"from": …, "type": …}]` — a
+    plausible guess at the shape, made by a live agent mid-walk on 2026-09-06 — reached `c["name"]`
+    inside the writing loop and raised `KeyError: 'name'`, which the endpoint could only render as
+    "internal server error": no shape named, nothing for the agent to fix, and a reciprocal chip
+    already written onto the neighbour's page by the same loop (Vexa-ai/vexa#1589).
+
+    It SUBCLASSES `EntityRefused` so that every caller which already catches a refusal keeps
+    working unchanged; the endpoint, which wants the finer answer, catches this one first."""
+
+
 def slugify(name: str) -> str:
     """kebab-case ascii, the shape the templates promise (``id: <slug>`` matches the filename).
 
@@ -382,6 +400,22 @@ def tool_sections_text() -> str:
     return "\n".join(lines)
 
 
+def tool_connection_text() -> str:
+    """The `connections` shape, as the tool description must state it.
+
+    Generated for exactly the reason `tool_sections_text` is, and now with an incident behind it:
+    the writer is here, the description an agent reads is in another tree (`deploy/dogfood/rig/`,
+    which imports nothing from this one), and a description that leaves the shape unstated is how a
+    live agent came to send `{"from": …, "type": …}` and get a 500 (Vexa-ai/vexa#1589). Derived from
+    `CONNECTION_KEYS` so the sentence cannot outlive the vocabulary it describes."""
+    return ('- `connections` — `["Acme"]` or `[{"name": "Acme", "relation": "works at"}]`: a bare '
+            'string, or an object whose `name` is the OTHER page, `relation` what the edge means '
+            'from HERE, `reverse` what it means from THERE (both optional).\n'
+            "- The keys read are " + ", ".join(f"`{k}`" for k in CONNECTION_KEYS) + " and no "
+            "others: an unknown key is refused by name, never ignored, so a relation you wrote is "
+            "either recorded or handed back to you.")
+
+
 class Card:
     """A parsed entity page, kept as RAW LINES.
 
@@ -684,8 +718,14 @@ def _chip(name: str, relation: str) -> str:
     return f"- [[{name}]] — {rel}" if rel else f"- [[{name}]]"
 
 
-def link_back(root, target_name: str, from_name: str, relation: str) -> "str | None":
-    """Put the reciprocal chip on the OTHER page, and return its path if anything changed.
+def plan_link_back(root, target_name: str, from_name: str, relation: str) -> "tuple[str, str] | None":
+    """`(relative path, the page's full new text)` for the reciprocal chip — or None for nothing to do.
+
+    COMPUTED, NOT WRITTEN, and the split is the fix for Vexa-ai/vexa#1589. This runs inside a loop
+    that could still refuse the call, over pages the call does not own; writing here meant a
+    neighbour ended up carrying a link back to a page the same call then failed to write, with no
+    message and no way to notice. `upsert_entity` performs every plan at the bottom, after the last
+    thing that can say no.
 
     Only onto a page that already exists. Minting one from a name with no facts behind it is the
     invention decision 24.5 forbids — the caller gets it back in `links_missing` instead, and the
@@ -705,7 +745,16 @@ def link_back(root, target_name: str, from_name: str, relation: str) -> "str | N
         card.title = _fm_get(fm, "title") or target_name
     if not card.add("Connected", _chip(from_name, relation)):
         return None
-    path.write_text(render_card(card, kind, fm), encoding="utf-8")
+    return rel, render_card(card, kind, fm)
+
+
+def link_back(root, target_name: str, from_name: str, relation: str) -> "str | None":
+    """`plan_link_back` and then do it. The one-shot spelling, for a caller writing a single edge."""
+    plan = plan_link_back(root, target_name, from_name, relation)
+    if not plan:
+        return None
+    rel, text = plan
+    (Path(root) / rel).write_text(text, encoding="utf-8")
     return rel
 
 
@@ -715,6 +764,78 @@ def _as_lines(value) -> list:
     if isinstance(value, (list, tuple, set)):
         return [str(v).strip() for v in value if str(v).strip()]
     return [str(value).strip()] if str(value).strip() else []
+
+
+# THE WHOLE VOCABULARY OF A CONNECTION, written where the writer reads it rather than where a
+# caller might guess it. `name` is the other page; `relation` is what the edge says from HERE;
+# `reverse` is what it says from THERE, defaulted through `_RECIPROCAL` when omitted.
+CONNECTION_KEYS = ("name", "relation", "reverse")
+_CONNECTION_SHAPE = ('a connection is `"Acme"` or `{"name": "Acme", "relation": "works at"}` — '
+                     '`name` (or the bare string) is the page this one links TO, `relation` and '
+                     '`reverse` are optional and say what the edge means from each end. The keys '
+                     'read are ' + ", ".join(CONNECTION_KEYS) + ", and no others")
+
+
+def _connection_list(connections) -> list[dict]:
+    """Every entry checked and normalised BEFORE the caller's first byte is written.
+
+    Two properties, and both were bought with an outage. (1) It runs at the TOP of `upsert_entity`,
+    not in the loop that writes, so an entry the writer cannot read costs the caller a message and
+    no files. (2) An unknown key is refused BY NAME rather than dropped: a caller that sent
+    `{"name": "Acme", "type": "works_at"}` and got a 200 back would believe it had recorded a
+    relation this writer never looked at — the plausible-success failure, which is the expensive
+    one to find. Vexa-ai/vexa#1589."""
+    if isinstance(connections, (str, bytes, dict)):
+        connections = [connections]
+    try:
+        items = list(connections or ())
+    except TypeError:
+        raise EntityMalformed(f"connections must be a list — {_CONNECTION_SHAPE}") from None
+    out: list[dict] = []
+    for i, c in enumerate(items):
+        where = f"connections[{i}]"
+        if isinstance(c, dict):
+            unknown = [k for k in c if k not in CONNECTION_KEYS]
+            if unknown:
+                raise EntityMalformed(
+                    f"{where} carries {', '.join(sorted(map(str, unknown)))}, which this tool does "
+                    f"not read, so the edge you meant would be lost in silence — {_CONNECTION_SHAPE}")
+            name = str(c.get("name") or "").strip()
+            if not name:
+                sent = ", ".join(sorted(map(str, c))) or "nothing"
+                raise EntityMalformed(
+                    f"{where} has no name (you sent {sent}) — {_CONNECTION_SHAPE}")
+            entry = {"name": name,
+                     "relation": str(c.get("relation") or "").strip(),
+                     "reverse": str(c.get("reverse") or "").strip(),
+                     # A `reverse` the CALLER supplied is not the same as one this module appended
+                     # for a field-edge: the second already put the chip on this page, so repeating
+                     # it here would double the bullet. The flag carries that distinction, which
+                     # used to be spelled `"reverse" in c` in the middle of the writing loop.
+                     "explicit_reverse": "reverse" in c}
+        else:
+            name = str(c if c is not None else "").strip()
+            if not name:
+                raise EntityMalformed(f"{where} is empty — {_CONNECTION_SHAPE}")
+            entry = {"name": name, "relation": "", "reverse": "", "explicit_reverse": False}
+        if not slugify(entry["name"]):
+            raise EntityMalformed(
+                f"{where} names {entry['name']!r}, which leaves nothing to file it under — "
+                f"{_CONNECTION_SHAPE}")
+        out.append(entry)
+    return out
+
+
+def _sourced(line: str, src: str) -> str:
+    """One bullet, attributed exactly once.
+
+    THE ATTRIBUTION IS THIS MODULE'S, not the caller's. `## Sources` and the `sources:` frontmatter
+    are both derived from the `source` ARGUMENT, so a `— source: …` a caller typed inside the
+    sentence reaches neither of them — and appending ours after theirs printed the clause on the
+    line twice. Strip what they wrote, stamp ours: the gate is `source=`, the tool description says
+    so, and a fact that arrives already attributed loses nothing it was ever going to keep
+    (Vexa-ai/vexa#1589)."""
+    return f"{_SOURCE_SUFFIX.sub('', str(line)).rstrip()} — source: {src}"
 
 
 def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
@@ -737,7 +858,10 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         sections, and in ``## Timeline`` under today when it does not. Timeline is the log; it is
         the fallback on purpose, so an unfiled fact is still kept and still dated.
       * ``connections`` — ``["Acme"]`` or ``[{"name": "Acme", "relation": "works at"}]`` — chips,
-        both ways.
+        both ways. ``name`` (or the bare string) is the OTHER page; ``relation`` and ``reverse``
+        say what the edge means from each end and are optional. Those three keys are the whole
+        vocabulary (``CONNECTION_KEYS``) and anything else is refused BY NAME, never dropped — a
+        relation this writer did not read is a relation the caller believes it recorded.
       * ``open_questions`` — the gaps, on the page, where the next turn can see them.
       * ``summary`` — the one line under the title. Set only when the page has none: the first
         sentence written about something is usually the person's own, and a tool that rewrites it
@@ -761,17 +885,29 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     kind = (kind or "").strip().lower()
     facts = [str(f).strip() for f in (facts or []) if str(f).strip()]
     fields = {k: v for k, v in (fields or {}).items() if _as_lines(v)}
-    connections = list(connections or [])
+    # EVERY ARGUMENT IS CHECKED BEFORE A SINGLE FILE IS TOUCHED. `connections` used to be read
+    # inside the loop that writes, so a malformed entry raised AFTER the reciprocal chips for the
+    # entries before it had already gone onto their pages — a refused call that still changed the
+    # workspace, one-sidedly, silently (Vexa-ai/vexa#1589). A refused call writes nothing.
+    connections = _connection_list(connections)
     open_questions = _as_lines(open_questions)
     stamps = _dated(dates)
     body_input = bool(facts or fields or connections or open_questions or summary)
     if not body_input and not stamps:
         raise EntityRefused("nothing to record — pass the facts this turn learned, or say nothing new")
     if not src and body_input:
+        # THE MESSAGE NAMES THE GATE. It used to say only "every fact needs a source", and a live
+        # agent that had dutifully written `— source: …` at the end of each fact read that as a
+        # contradiction and had nowhere to go: the suffix it wrote is not read, `source=` is, and
+        # nothing said so (Vexa-ai/vexa#1589).
         raise EntityRefused(
-            "every fact needs a source: what was said or read that this came from (the meeting, the "
-            "mail, the file, the person's own words). A page carries only what was said or read — "
-            "if you do not have a source the gap goes to kg/MISSING.md, never onto the page.")
+            "every fact needs a source: pass `source=` — ONE argument for the whole call, a few "
+            "words saying what was said or read that this came from (the meeting, the mail, the "
+            "file, the person's own words). That argument is the gate and the only one: a "
+            "`— source: …` written inside a fact does not satisfy it and is not read, because this "
+            "tool stamps the attribution onto every bullet and onto `## Sources` itself. Split the "
+            "call when the facts come from different places. A page carries only what was said or "
+            "read — if you do not have a source the gap goes to kg/MISSING.md, never onto the page.")
 
     rel = entity_rel_path(kind, name)
     path = root / rel
@@ -840,8 +976,8 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         for value in values:
             line = f"{label}: {value}" if label else value
             target = head if head in valid else None
-            landed = card.add(target, f"{line} — source: {src}") if target \
-                else card.add_timeline(day, f"{line} — source: {src}")
+            landed = card.add(target, _sourced(line, src)) if target \
+                else card.add_timeline(day, _sourced(line, src))
             if landed:
                 written += 1
                 filed[target or "Timeline"] = filed.get(target or "Timeline", 0) + 1
@@ -851,12 +987,13 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                 for target_name in (wikilinks([value]) or [value]):
                     if card.add("Connected", _chip(target_name, here)):
                         written += 1
-                    connections.append({"name": target_name, "relation": here, "reverse": there})
+                    connections.append({"name": target_name, "relation": here, "reverse": there,
+                                        "explicit_reverse": True})
 
     default = section.strip() if section.strip() in valid else ""
     for f in facts:
-        landed = card.add(default, f"{f} — source: {src}") if default \
-            else card.add_timeline(day, f"{f} — source: {src}")
+        landed = card.add(default, _sourced(f, src)) if default \
+            else card.add_timeline(day, _sourced(f, src))
         if landed:
             written += 1
             filed[default or "Timeline"] = filed.get(default or "Timeline", 0) + 1
@@ -869,33 +1006,40 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     # anybody typed and the one this tool may replace wholesale. One store, one reader.
     card.set_section("Sources", [f"- {s}" for s in _list_field(_fm_get(fm, "sources"))])
 
-    back_links, seen_edges = [], set()
+    # THE RECIPROCAL CHIPS ARE PLANNED HERE AND WRITTEN AT THE BOTTOM (Vexa-ai/vexa#1589), so that
+    # every file this call touches is touched after the last thing that can refuse it.
+    back_plans, seen_edges = [], set()
     for c in connections:
-        target_name = c["name"] if isinstance(c, dict) else str(c)
-        here = (c.get("relation") if isinstance(c, dict) else "") or ""
-        there = (c.get("reverse") if isinstance(c, dict) else "") or \
-            _RECIPROCAL.get(here.lower(), "") or kind
-        if not isinstance(c, dict) or "reverse" not in c:
+        target_name = c["name"]
+        here = c["relation"]
+        there = c["reverse"] or _RECIPROCAL.get(here.lower(), "") or kind
+        if not c["explicit_reverse"]:
             if card.add("Connected", _chip(target_name, here)):
                 written += 1
         key = (slugify(target_name), there)
         if key in seen_edges:
             continue
         seen_edges.add(key)
-        hit = link_back(root, target_name, card.title, there)
-        if hit:
-            back_links.append(hit)
+        plan = plan_link_back(root, target_name, card.title, there)
+        if plan:
+            back_plans.append(plan)
+    back_links = [p for p, _text in back_plans]
 
-    if existed and not written and not new_stamps and not migrated:
+    # A pending back-link COUNTS AS A CHANGE. It did not before, and the consequence was quiet: the
+    # chips were written and then reported under `changed: False`, so the endpoint — which commits
+    # only when something changed — left another page modified in the working tree and uncommitted.
+    if existed and not written and not new_stamps and not migrated and not back_plans:
         return {"path": rel, "created": False, "changed": False, "facts_written": 0,
                 "already_recorded": len(facts), "links_resolved": resolved,
                 "links_missing": unresolved, "links_rewritten": rewritten_all,
-                "kind": kind, "name": name, "dates": {}, "back_links": back_links,
+                "kind": kind, "name": name, "dates": {}, "back_links": [],
                 "migrated": False, "filed": {}}
 
     drop_empty_tail(card)          # a `## Timeline` that never had an entry helps nobody
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_card(card, kind, fm), encoding="utf-8")
+    for back_rel, back_text in back_plans:
+        (root / back_rel).write_text(back_text, encoding="utf-8")
     return {"path": rel, "created": not existed, "changed": True, "facts_written": written,
             "already_recorded": max(0, len(facts) - sum(filed.values())),
             "links_resolved": resolved, "links_missing": unresolved,

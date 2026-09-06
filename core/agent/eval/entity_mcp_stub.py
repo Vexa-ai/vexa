@@ -49,7 +49,9 @@ TOOL = {
             "fields": {"type": "object", "additionalProperties": True},
             "facts": {"type": "array", "items": {"type": "string"}},
             "section": {"type": "string"},
-            "connections": {"type": "array", "items": {"type": "string"}},
+            # A string is the name; an object is {"name", "relation", "reverse"} and NOTHING
+            # else — `entities._connection_list` refuses any other key by name (Vexa-ai/vexa#1589).
+            "connections": {"type": "array", "items": {"type": ["string", "object"]}},
             "open_questions": {"type": "array", "items": {"type": "string"}},
             "source": {"type": "string"},
         },

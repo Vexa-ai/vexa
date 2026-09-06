@@ -2384,13 +2384,18 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
       and they go to the Timeline.
     - `summary` — the single line under the title, in plain words. Set once; it is not overwritten,
       so give it when you create the page.
-    - `connections` — `["Acme"]` or `[{"name": "Acme", "relation": "works at"}]`. Chips on this
-      page and the reciprocal chip on theirs, when their page exists.
+    - `connections` — `["Acme"]` or `[{"name": "Acme", "relation": "works at"}]`: a bare string, or an object whose `name` is the OTHER page, `relation` what the edge means from HERE, `reverse` what it means from THERE (both optional).
+      Chips land on this page and the reciprocal chip on theirs, when their page exists.
+      - The keys read are `name`, `relation`, `reverse` and no others: an unknown key is refused by name, never ignored, so a relation you wrote is either recorded or handed back to you.
     - `open_questions` — what you would need to know, written AS the question. This is where a gap
       goes; it never goes on the page as a guess.
     - `source` — where it came from, in a few words: the meeting, the mail, the file, the person's
-      own message. REQUIRED. A fact with no source is refused, not written — if you do not have one,
-      the gap belongs in `kg/MISSING.md`, never on the page.
+      own message. REQUIRED, and THIS ARGUMENT IS THE GATE — one source for the whole call. Writing
+      `— source: …` inside a fact does not satisfy it and is not read: the tool stamps the
+      attribution onto every bullet and builds `## Sources` from this argument alone, so a fact
+      carrying its own suffix simply loses it. When the facts came from different places, split the
+      call. A fact with no source is refused, not written — if you do not have one, the gap belongs
+      in `kg/MISSING.md`, never on the page.
     - `slug` — a shared workspace, omitted means this person's own desk.
     - `dates` — WHEN, for a meeting: `{"scheduled_at": ..., "held_at": ..., "report_delivered_at":
       ...}`, ISO-8601 or epoch, any subset. Record `held_at` the moment you know a meeting ran and
@@ -2408,6 +2413,13 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
                       "summary": summary, "fields": fields or {}, "section": section,
                       "connections": connections or [],
                       "open_questions": open_questions or []})
+    if st == 400:
+        # The shape half of a refusal, and the only one worth retrying: the detail names the shape
+        # the argument should have had, so the same facts go back in a form that lands.
+        detail = (body or {}).get("detail") if isinstance(body, dict) else str(body)
+        return json.dumps({"refused": detail,
+                           "do": "an ARGUMENT was not in a shape this tool reads — the message says "
+                                 "which one and what shape. Send the same facts again in it."})
     if st == 422:
         detail = (body or {}).get("detail") if isinstance(body, dict) else str(body)
         return json.dumps({"refused": detail,

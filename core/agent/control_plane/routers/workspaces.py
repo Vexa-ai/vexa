@@ -232,6 +232,14 @@ def build(**d) -> APIRouter:
                 section=str(body.get("section") or "").strip(),
                 connections=body.get("connections") or (),
                 open_questions=body.get("open_questions") or ())
+        except entities_mod.EntityMalformed as e:
+            # 400, and CAUGHT FIRST — `EntityMalformed` is a subclass, so the broader clause below
+            # would swallow it. This is the one refusal that IS a retry: an argument the writer
+            # could not read (a `connections` entry with no name), whose detail names the shape, so
+            # the agent's next call is the same facts in a form that lands. Before
+            # Vexa-ai/vexa#1589 it was an uncaught KeyError — a 500 naming nothing, with a
+            # half-written edge already on the neighbour's page.
+            raise HTTPException(status_code=400, detail=str(e))
         except entities_mod.EntityRefused as e:
             # 422, not 400: the request is well-formed and the REFUSAL is the product — the agent is
             # meant to read the sentence and fix the fact, not to retry the call.
