@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.vexa/vexa",
+  "title": "Vexa",
+  "description": "Meeting bot and transcripts for Google Meet, Teams and Zoom. Live or after, speakers labelled.",
+  "version": "0.12.27",
+  "repository": {
+    "url": "https://github.com/Vexa-ai/vexa",
+    "source": "github"
+  },
+  "websiteUrl": "https://docs.vexa.ai/vexa-mcp",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.cloud.vexa.ai/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <Vexa API key> \u2014 from https://vexa.ai/account",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

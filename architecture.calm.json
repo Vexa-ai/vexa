@@ -730,6 +730,7 @@
     }
    ]
   },
+    {"unique-id": "claude-plugin", "node-type": "webclient", "name": "claude-plugin", "description": "claude-plugin — client (Claude Code plugin: manifest, skills, hosted MCP config; no code)", "metadata": [{"path": "clients/claude-plugin"}]},
   {
    "unique-id": "terminal",
    "node-type": "webclient",
