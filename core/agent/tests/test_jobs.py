@@ -31,7 +31,7 @@ from shared.marks import job_mark, read_job_mark
 from worker.jobs import JobRunner
 from worker.worker import serve
 
-from .test_worker import FakeStream, _msg
+from .test_worker import CursorStream, FakeStream, _msg
 
 
 # ── the mark: one writer, one reader ─────────────────────────────────────────────────────────────
@@ -452,3 +452,154 @@ def test_a_view_with_no_job_still_closes_on_turn_complete():
             sys.modules["redis"] = saved
 
     assert [e["type"] for e in got] == ["message-delta", "turn-complete"]
+
+
+# ── the act pressed WHILE a turn is running (Vexa-ai/vexa#1594) ──────────────────────────────────
+#
+# Founder walk 2026-09-06: *"extend this page button does not work when chat is working"*. On this
+# side the act was not dropped — it was READ LATE. The serve loop is one thread, `run_message` holds
+# it for the whole of a chat turn, and the marked act sat in the in-topic until that turn ended. A
+# job runs on its own thread with its own harness session; there is nothing for it to wait for.
+
+
+def _marked(eid, kind, target, nonce=None):
+    body = {"prompt": job_mark(kind, target) + "Go further on it."}
+    if nonce:
+        body["nonce"] = nonce
+    return (eid, {"turn": json.dumps(body)})
+
+
+def test_an_act_pressed_during_a_turn_starts_beside_it(tmp_path):
+    turn_gate, job_started = threading.Event(), threading.Event()
+    s = CursorStream(preloaded=[])
+
+    def chat(prompt):
+        # the press lands while this turn is streaming — exactly the founder's sequence
+        s.entries.append(_marked("6-0", "extend", "desk/kg/plan.md", nonce="n2"))
+        yield {"type": "message-delta", "text": "thinking"}
+        turn_gate.wait(5)
+        yield {"type": "done", "reply": "answered", "sessionId": "s", "ok": True}
+
+    def jobturn(_brief):
+        job_started.set()
+        yield {"type": "done", "reply": "ok", "sessionId": "s", "ok": True}
+
+    t = threading.Thread(target=serve, kwargs=dict(
+        stream=s, out_topic="o", in_topic="i", turn=chat, job=jobturn,
+        jobs_dir=tmp_path / "jobs", start={"entrypoint": {"inline": "hello"}}, idle_ms=10))
+    t.start()
+    assert job_started.wait(5), "the job never started while the chat turn was running"
+
+    # …and it started BEFORE the turn it was pressed during had finished: no `turn-complete` yet.
+    types = [e["type"] for e in s.events()]
+    assert "job-started" in types
+    assert "turn-complete" not in types[: types.index("job-started")]
+    # the delivery ack the dispatcher's watchdog waits on is echoed with the message's own nonce —
+    # a job that spawns without one reads to the watchdog as a message nobody took.
+    assert any(e["type"] == "turn-accepted" and e.get("nonce") == "n2" for e in s.events())
+
+    turn_gate.set()
+    t.join(10)
+    assert not t.is_alive()
+    evs = s.events()
+    assert [e["type"] for e in evs].count("job-done") == 1
+    # the two turns keep their own ids, and the job's events carry neither
+    job_id = next(e["job_id"] for e in evs if e["type"] == "job-started")
+    assert all("turn_id" not in e for e in evs if e.get("job_id") == job_id and e["type"] != "job-started")
+
+
+def test_the_drain_takes_only_marked_acts_and_never_reorders_the_rest(tmp_path):
+    """The cursor is ONE position: reaching past an ordinary message to grab an act behind it would
+    consume the ordinary message too. So the drain stops at the first entry it may not take, and
+    both run in arrival order once the turn ends."""
+    turn_gate = threading.Event()
+    s = CursorStream(preloaded=[])
+    ran: list[str] = []
+
+    def chat(prompt):
+        ran.append(prompt)
+        if prompt == "hello":
+            s.entries.append(("6-0", {"turn": json.dumps({"prompt": "and also this"})}))
+            s.entries.append(_marked("7-0", "create", "kg/new.md"))
+        yield {"type": "message-delta", "text": "thinking"}
+        if prompt == "hello":
+            turn_gate.wait(5)
+        yield {"type": "done", "reply": "answered", "sessionId": "s", "ok": True}
+
+    def jobturn(_brief):
+        yield {"type": "done", "reply": "ok", "sessionId": "s", "ok": True}
+
+    t = threading.Thread(target=serve, kwargs=dict(
+        stream=s, out_topic="o", in_topic="i", turn=chat, job=jobturn,
+        jobs_dir=tmp_path / "jobs", start={"entrypoint": {"inline": "hello"}}, idle_ms=10))
+    t.start()
+    # while the first turn runs, NOTHING has been taken: the act is behind an ordinary message.
+    threading.Event().wait(0.2)
+    assert not any(e["type"] == "job-started" for e in s.events())
+    assert ran == ["hello"]
+
+    turn_gate.set()
+    t.join(10)
+    assert not t.is_alive()
+    # the ordinary message ran as its own turn, in order, and the act then spawned
+    assert ran == ["hello", "and also this"]
+    assert any(e["type"] == "job-started" and e["target"] == "kg/new.md" for e in s.events())
+
+
+def test_a_marked_act_is_never_injected_into_the_running_turn(tmp_path):
+    """Mid-turn injection steers the model that is answering. A job is not steering: injected, the
+    mark would reach the model as prose and the act would never spawn at all."""
+    s = CursorStream(preloaded=[])
+
+    class SteeringHarness:
+        def __init__(self):
+            self.injected: list[str] = []
+
+        def midturn_enabled(self):
+            return True
+
+        def inject_user_message(self, text):
+            self.injected.append(text)
+            return True
+
+    harness = SteeringHarness()
+    started = threading.Event()
+
+    def chat(_prompt):
+        s.entries.append(_marked("6-0", "extend", "kg/plan.md"))
+        yield {"type": "message-delta", "text": "working"}
+        started.wait(5)
+        yield {"type": "done", "reply": "done", "sessionId": "s1", "ok": True}
+
+    def jobturn(_brief):
+        started.set()
+        yield {"type": "done", "reply": "ok", "sessionId": "s", "ok": True}
+
+    t = threading.Thread(target=serve, kwargs=dict(
+        stream=s, out_topic="o", in_topic="i", turn=chat, job=jobturn, harness=harness,
+        jobs_dir=tmp_path / "jobs", start={"entrypoint": {"inline": "hello"}}, idle_ms=10))
+    t.start()
+    assert started.wait(5)
+    t.join(10)
+    assert not t.is_alive()
+    assert harness.injected == []
+    assert any(e["type"] == "job-started" for e in s.events())
+
+
+def test_with_no_job_runner_the_drain_does_nothing_at_all(tmp_path):
+    """A deployment that wires no job turn is byte-for-byte unchanged: the message waits for the
+    turn, exactly as it did before, and runs after it."""
+    s = CursorStream(preloaded=[])
+    ran: list[str] = []
+
+    def chat(prompt):
+        ran.append(prompt)
+        if prompt == "hello":
+            s.entries.append(_marked("6-0", "extend", "kg/plan.md"))
+        yield {"type": "message-delta", "text": "re"}
+
+    serve(s, out_topic="o", in_topic="i", turn=chat,
+          start={"entrypoint": {"inline": "hello"}}, idle_ms=10)
+    assert len(ran) == 2 and ran[0] == "hello"
+    assert read_job_mark(ran[1]) is not None      # it ran INLINE, marked, as it always has
+    assert not any(e["type"] == "job-started" for e in s.events())

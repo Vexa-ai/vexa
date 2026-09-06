@@ -22,11 +22,38 @@ export type JobRec = {
   steps: number;
   /** the last step's short label — the same tail the turn's own live line shows */
   label: string;
+  /** PRESSED, BUT NOT SENT YET (Vexa-ai/vexa#1594) — the chat is mid-turn and this act is waiting
+   *  for it. A row and not silence: the founder pressed Extend while a turn was running and nothing
+   *  happened at all — *"extend this page button does not work when chat is working"*. Not a
+   *  disabled control either: the act still fires, it just fires next. */
+  queued?: boolean;
 };
 
 export function startJob(jobs: JobRec[], j: { id: string; kind: string; target: string }): JobRec[] {
   if (!j.id || jobs.some((x) => x.id === j.id)) return jobs;
   return [...jobs, { id: j.id, kind: j.kind, target: j.target, steps: 0, label: "" }];
+}
+
+/** WHAT A QUEUED ROW SAYS. One phrase, written here, because it is the whole of what the person
+ *  is told while they wait — and the founder's ruling names it: the act fires when pressed, and
+ *  when the turn in front of it has to finish first, the panel says so. */
+export const QUEUED_LINE = "queued behind the current turn";
+
+/** The row a PRESS puts on screen before there is a job id to put on it (Vexa-ai/vexa#1594). Its
+ *  `id` is the client's own — the real `job-started` hands the row its server id, so one line runs
+ *  from the press to the page landing rather than one line stopping and another starting. */
+export function queueJob(jobs: JobRec[], j: { id: string; kind: string; target: string }): JobRec[] {
+  if (!j.id || jobs.some((x) => x.id === j.id)) return jobs;
+  return [...jobs, { id: j.id, kind: j.kind, target: j.target, steps: 0, label: "", queued: true }];
+}
+
+/** THE ONE THING AN ACT IS ABOUT — the workspace-qualified page path, spelled exactly as the server
+ *  spells it (`control_plane/chat_intents.job_target`). The queued row and the job's own row name
+ *  the same page because they name it the same way, not because they happen to agree. */
+export function jobTarget(i: { workspace?: string; path?: string }): string {
+  const ws = (i.workspace ?? "").trim();
+  const path = (i.path ?? "").trim();
+  return ws && path ? `${ws}/${path}` : (path || ws);
 }
 
 export function stepJob(jobs: JobRec[], id: string, label: string): JobRec[] {
@@ -47,7 +74,11 @@ export function endJob(jobs: JobRec[], id: string): JobRec[] {
 export function jobLine(jobs: JobRec[]): string {
   return jobs
     .map((j) =>
-      ["job", j.target || j.kind, j.steps ? `${j.steps} step${j.steps === 1 ? "" : "s"}` : "", j.label]
+      // A QUEUED act has no steps to count and no label to show — it has not started. What it has
+      // is the reason it has not, which is the only thing the person needs while they wait.
+      (j.queued
+        ? ["job", j.target || j.kind, QUEUED_LINE]
+        : ["job", j.target || j.kind, j.steps ? `${j.steps} step${j.steps === 1 ? "" : "s"}` : "", j.label])
         .filter(Boolean)
         .join(" · "),
     )

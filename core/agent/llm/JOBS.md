@@ -94,6 +94,40 @@ way, which is the behaviour worth having.
 the send that started the job hands ownership of the flag over at that point (`ownsBusy`), so its
 own `finally` cannot clear a flag a later turn now owns.
 
+## The act does not wait for the turn in front of it
+
+`Vexa-ai/vexa#1594`, founder walk 2026-09-06: *"extend this page button does not work when chat is
+working"*. Two independent halves, and each one alone was enough to lose the press.
+
+**The terminal dropped it.** `postIntent` → `ASK_CHAT_EVENT` → `Chat`'s `onAsk` → `send`, whose first
+line returns on `state.busy`. No bubble, no row, no error, nothing on the wire, under a control that
+looked exactly as it does when it works. Now an ask that arrives mid-turn **queues whole** — display,
+prompt, intent, every option — and fires as its own turn the moment the current one ends; a page act
+also puts a job row at the foot of the transcript **at once**, reading `queued behind the current
+turn`, and that row is handed its job id on `job-started` rather than being replaced by a second one.
+Never a silent drop, and never a disabled control.
+
+**The worker read it late.** `serve()` is one thread and `run_message` holds it for the whole of a
+chat turn, so a marked act that landed in `unit:<id>:in` behind an ordinary turn was not *read* until
+that turn finished — which for the act that exists precisely to run beside the chat is the wait it was
+built to remove. `_drain_jobs` now takes MARKED messages off the in-topic between the running turn's
+output events: the job spawns then, its turn is acknowledged (nonce echoed, so the dispatcher's
+warm-delivery watchdog is satisfied) and completed then, and the model that is mid-answer is not
+touched at all.
+
+Two rules the drain keeps, both about not owning what it is walking over:
+
+- **It stops at the first entry it may not take.** The cursor is one position, so reaching past an
+  ordinary message to grab an act behind it would consume the ordinary message too. Ordinary messages
+  and `stop` are left where they are, in order, for the loop that owns them.
+- **A marked act is never *injected*.** `_drain_inject` (mid-turn steering, `VEXA_MIDTURN_INJECT=1`)
+  refuses one: injected, the mark would reach the running model as prose, the act would never spawn,
+  and the person would read their own plumbing. Unlike injection the job drain is behind no flag —
+  injection changes what the running turn is being told, a job touches nothing that turn owns.
+
+With no `job` turn wired the drain does nothing at all and a marked prompt still runs inline, exactly
+as before.
+
 ## Completion
 
 `job-done` posts its line into the live chat as an agent turn, and the job's `commit` dispatches

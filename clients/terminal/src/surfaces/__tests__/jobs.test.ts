@@ -7,7 +7,7 @@
  *  minute ago, and end the read while the job was still writing.
  */
 import { describe, it, expect, vi } from "vitest";
-import { endJob, jobLine, startJob, stepJob, type JobRec } from "../jobs";
+import { endJob, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "../jobs";
 import { streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
 
 function sseResponse(chunks: string[]): Response {
@@ -65,6 +65,45 @@ describe("the job chip", () => {
 
   it("falls back to the kind when there is no target to name", () => {
     expect(jobLine([j({ target: "" })])).toBe("job · extend");
+  });
+
+  // ── PRESSED WHILE THE CHAT WAS WORKING (Vexa-ai/vexa#1594) ─────────────────────────────────────
+  //
+  //  *"extend this page button does not work when chat is working"*. A press mid-turn used to reach
+  //  nothing at all; it now reaches THIS row, which is the only thing standing between the founder
+  //  and a control that silently does nothing when he presses it.
+
+  it("a queued act says why it has not started, and counts no steps it has not taken", () => {
+    expect(jobLine([j({ queued: true })])).toBe("job · kg/plan.md · queued behind the current turn");
+    // a step count on a job that has not begun would read as progress
+    expect(jobLine([j({ queued: true, steps: 3, label: "Grep" })]))
+      .toBe("job · kg/plan.md · queued behind the current turn");
+  });
+
+  it("queueJob adds exactly one row per press, and never a second for the same one", () => {
+    const one = queueJob([], { id: "q-1", kind: "extend", target: "kg/plan.md" });
+    expect(one).toHaveLength(1);
+    expect(one[0].queued).toBe(true);
+    expect(queueJob(one, { id: "q-1", kind: "extend", target: "kg/plan.md" })).toBe(one);
+    expect(queueJob(one, { id: "", kind: "extend", target: "x" })).toBe(one);
+  });
+
+  it("the queued row hands over to the job: endJob removes it, startJob puts the real one there", () => {
+    const queued = queueJob([], { id: "q-1", kind: "create", target: "kg/new.md" });
+    const running = startJob(endJob(queued, "q-1"), { id: "j-9", kind: "create", target: "kg/new.md" });
+    expect(running).toHaveLength(1);                       // ONE act, ONE line
+    expect(running[0].id).toBe("j-9");
+    expect(running[0].queued).toBeUndefined();
+    expect(jobLine(running)).toBe("job · kg/new.md");
+  });
+
+  it("names the page the way the SERVER names it (chat_intents.job_target)", () => {
+    // the queued row and the job's own row are about visibly the same page because they are
+    // spelled by the same rule, not because they happen to look alike
+    expect(jobTarget({ workspace: "desk", path: "kg/plan.md" })).toBe("desk/kg/plan.md");
+    expect(jobTarget({ path: "kg/plan.md" })).toBe("kg/plan.md");        // no slug = the own desk
+    expect(jobTarget({ workspace: "desk" })).toBe("desk");
+    expect(jobTarget({})).toBe("");
   });
 
   it("shows several at once — concurrent jobs are the normal case", () => {

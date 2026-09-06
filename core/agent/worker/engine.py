@@ -1620,6 +1620,12 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 text = msg.get("prompt", "")
                 if msg.get("type") == "stop" or not text:
                     return  # leave stop (and everything after) for the outer loop
+                # A MARKED ACT IS A JOB, NEVER STEERING (Vexa-ai/vexa#1594). Injected, its mark would
+                # reach the running model as prose: the act would never spawn, the person would read
+                # their own plumbing, and the press would look like it worked. `_drain_jobs` takes
+                # these — leave it, and everything behind it, where it is.
+                if read_job_mark(text) is not None:
+                    return
                 if not inject(text):
                     return  # no active stdin — leave queued
                 cursor[0] = entry_id
@@ -1627,6 +1633,51 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 if msg.get("nonce"):
                     stream.xadd(out_topic, {"event": json.dumps({"type": "turn-accepted", "nonce": msg["nonce"], "injected": True})})
                 stream.xadd(out_topic, {"event": json.dumps({"type": "user-injected", "text": text})})
+
+    # A JOB DOES NOT WAIT FOR THE TURN IN FRONT OF IT (Vexa-ai/vexa#1594).
+    #
+    # Founder walk 2026-09-06: *"extend this page button does not work when chat is working"*. The
+    # act reached the in-topic and then sat in it. This loop is ONE thread and `run_message` holds it
+    # for the whole of a chat turn — so an act whose entire contract is that it runs BESIDE the chat,
+    # on its own thread with its own harness session (`llm/JOBS.md`), was not even READ until the
+    # turn it happened to land behind had finished.
+    #
+    # So between the running turn's output events the in-topic is drained for MARKED messages, and
+    # only those: the job spawns now, its turn is acknowledged and completed now, and the model that
+    # is mid-answer is not touched at all. The cursor is ONE position, so the drain stops at the
+    # first entry it may not take — consuming past an ordinary message to reach an act behind it
+    # would swallow the ordinary message, which is the failure this whole issue is about.
+    #
+    # Unlike `_drain_inject` this is not behind a flag. Injection changes what the running turn is
+    # being told and a deployment may reasonably not want it; a job touches nothing the turn owns.
+    def _drain_jobs(cursor: list) -> None:
+        if _jobs is None:
+            return
+        nonlocal n
+        while True:
+            try:
+                resp = stream.xread({in_topic: cursor[0]}, count=8, block=None)
+            except Exception:  # noqa: BLE001 — a drain that cannot read simply drains nothing
+                return
+            took = False
+            for _name, entries in resp or []:
+                for entry_id, fields in entries:
+                    try:
+                        msg = json.loads(fields.get("turn", "{}"))
+                    except ValueError:
+                        return
+                    if msg.get("type") == "stop":
+                        return          # stopping is the outer loop's, and so is everything after it
+                    if read_job_mark(msg.get("prompt", "")) is None:
+                        return          # an ordinary message — the outer loop's turn to take it
+                    cursor[0] = entry_id
+                    took = True
+                    n += 1
+                    # `cursor=None`: this call takes the job branch below and returns without
+                    # streaming anything, so it neither drains again nor re-enters here.
+                    run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"))
+            if not took:
+                return
 
     def run_message(prompt: str, turn_id: str, nonce: str | None = None, cursor: list | None = None) -> None:
         ack: dict = {"type": "turn-accepted", "turn_id": turn_id}
@@ -1669,6 +1720,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 said.append(ev["text"])
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             if cursor is not None:
+                _drain_jobs(cursor)
                 _drain_inject(cursor)
         # THE WRITE-BACK PHASE (decision 24.2). It runs AFTER the answer has streamed — the person
         # is already reading — and before `turn-complete`, so its tool calls land as step lines on

@@ -22,9 +22,9 @@ import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
 import { promptCarriesActiveContext } from "./surfaceSync";
-import type { ChatIntent } from "./chatIntent";
+import { isPageIntent, type ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
-import { endJob, jobLine, startJob, stepJob, type JobRec } from "./jobs";
+import { endJob, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
@@ -685,6 +685,18 @@ function minutesEmptyGreeting(session: string): string {
   return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "").replace(/\*\*/g, "");
 }
 
+/** Everything a send carries besides its words. `queuedRowId` is the one that is not about the
+ *  turn at all: it names the "queued behind the current turn" row a PRESS already put on screen
+ *  (Vexa-ai/vexa#1594), so this send can hand that row over to the job it starts instead of leaving
+ *  a second one beside it. */
+type SendOpts = {
+  hidden?: boolean;
+  ground?: boolean;
+  scaffoldId?: string;
+  intent?: ChatIntent;
+  queuedRowId?: string;
+};
+
 export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
@@ -924,10 +936,10 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
     return data.files ?? [];
   };
 
-  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean; scaffoldId?: string; intent?: ChatIntent } = {}) => {
+  const send = async (text: string, prompt = text, referenceSource = text, opts: SendOpts = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
-    const { hidden = false, ground = true } = opts;
+    const { hidden = false, ground = true, queuedRowId } = opts;
     const v = text.trim();
     // A HIDDEN turn is machinery, and it must be hidden in the RECORD, not only in this render.
     // Without the mark the prompt lands in the transcript as a plain `user` message and comes back
@@ -937,7 +949,12 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
     const key = chatKey;
     const sessionForSend = session;
     const state = getChatState(key);
-    if (!v || !basePrompt || state.busy) return;
+    if (!v || !basePrompt || state.busy) {
+      // NOTHING IS BEING SENT, so a row saying this act is queued would spin over a press that will
+      // never fire — the same lie as a spinner that outlives its turn, one object along.
+      if (queuedRowId) updateChatState(key, (s) => ({ ...s, jobs: endJob(s.jobs, queuedRowId) }));
+      return;
+    }
     const n = state.nextId;
     const agentId = `a-${n}`;
     const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
@@ -1062,7 +1079,14 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
             ownsBusy = false;
             startedJobs.add(j.jobId);
             patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
-            updateChatState(key, (s) => ({ ...s, busy: false, jobs: startJob(s.jobs, { id: j.jobId, kind: j.kind, target: j.target }) }));
+            // THE QUEUED ROW BECOMES THE RUNNING ONE (Vexa-ai/vexa#1594). The press already put a
+            // line on screen; this is that line learning its job id. Two rows for one act would
+            // read as two acts.
+            updateChatState(key, (s) => ({
+              ...s, busy: false,
+              jobs: startJob(queuedRowId ? endJob(s.jobs, queuedRowId) : s.jobs,
+                             { id: j.jobId, kind: j.kind, target: j.target }),
+            }));
           },
           onJobStep: (jobId, tool) => updateChatState(key, (s) => ({
             ...s, jobs: stepJob(s.jobs, jobId, toolOp(tool).label.split(" · ").pop() ?? ""),
@@ -1113,6 +1137,10 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
       // outlives its turn is the same lie as a tick that precedes it.
       patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
       if (ownsBusy) updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
+      // A QUEUED ROW WHOSE TURN ENDED WITHOUT EVER STARTING A JOB goes here — a refusal, an error,
+      // or a deployment whose worker still runs the act inline. Nothing else will ever claim it, and
+      // a row that outlives its act is the same lie as a spinner that outlives its turn.
+      if (queuedRowId) updateChatState(key, (s) => ({ ...s, jobs: endJob(s.jobs, queuedRowId) }));
       // A JOB CHIP MUST NOT OUTLIVE ITS CONNECTION, for the same reason a spinner must not outlive
       // its turn. `onJobEnd` removes each one as it lands, so anything still in this set means the
       // stream died with that job unaccounted for — say so, and stop spinning.
@@ -1134,6 +1162,20 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
   // and stream the answer here. sendRef keeps the latest `send` closure so the listener stays stable.
   const sendRef = useRef(send);
   sendRef.current = send;
+  // AN ACT PRESSED WHILE A TURN IS RUNNING IS NEVER DROPPED (Vexa-ai/vexa#1594).
+  //
+  //  Founder walk 2026-09-06: *"extend this page button does not work when chat is working"*. The
+  //  press did reach `onAsk`; `onAsk` did call `send`; and `send`'s first line returns on
+  //  `state.busy`. The act evaporated between two functions — no bubble, no row, no error, nothing
+  //  on the wire — while the control that produced it looked exactly as it does when it works.
+  //
+  //  So an ask that arrives mid-turn QUEUES WHOLE — display, prompt, intent and every option — and
+  //  fires as its own turn the moment the current one ends. A page act (Extend / Create, the two
+  //  kinds the server runs as background jobs — `chat_intents.JOB_KINDS`, which is what
+  //  `isPageIntent` is) also puts a ROW at the foot of the transcript AT ONCE saying it is queued
+  //  behind the current turn. Never a silent drop, and never a disabled control.
+  const askQueue = useRef<{ display: string; prompt: string; opts: SendOpts; rowId?: string }[]>([]);
+  const askSeq = useRef(0);
   useEffect(() => {
     const onAsk = (e: Event) => {
       const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
@@ -1149,11 +1191,28 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
       // the user's own sentence renders as their message, and the grounding it carries does not.
-      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId, intent: detail?.intent });
+      const display = detail?.display || prompt;
+      const opts: SendOpts = { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId, intent: detail?.intent };
+      // MID-TURN: queue it, and say so where there is somewhere to say it (see the note on
+      // `askQueue` above — this is the line the founder's press fell through).
+      if (getChatState(chatKey).busy) {
+        // Only a PAGE act has a row to draw: it names a file, which is what a job row is about. A
+        // queued sentence names nothing, so it queues silently and arrives as its own bubble.
+        const act = detail?.intent && isPageIntent(detail.intent) ? detail.intent : null;
+        const rowId = act ? `q-${(askSeq.current += 1)}-${Date.now().toString(36)}` : undefined;
+        if (act && rowId) {
+          updateChatState(chatKey, (s) => ({
+            ...s, jobs: queueJob(s.jobs, { id: rowId, kind: act.kind, target: jobTarget(act) }),
+          }));
+        }
+        askQueue.current.push({ display, prompt, opts, rowId });
+        return;
+      }
+      void sendRef.current(display, prompt, prompt, opts);
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
-  }, [layout, session]);
+  }, [layout, session, chatKey]);
 
   // Consume a stashed session-targeted ask once THIS chat is the target and idle.
   useEffect(() => {
@@ -1194,6 +1253,13 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
   const queuedRef = useRef<{ id: string; display: string; prompt: string }[]>([]);
   useEffect(() => {
     if (busy) return;
+    // ACTS FIRST. A press names a page somebody is looking at right now; a queued sentence names
+    // nothing, and the act was the thing that appeared not to work.
+    const act = askQueue.current.shift();
+    if (act) {
+      void send(act.display, act.prompt, act.prompt, { ...act.opts, queuedRowId: act.rowId });
+      return;
+    }
     const next = queuedRef.current.shift();
     if (!next) return;
     updateChatState(chatKey, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== next.id) }));
