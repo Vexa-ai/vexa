@@ -11,12 +11,13 @@
  *  so the doc always displays — worst case it loses interactivity, never the page.
  */
 "use client";
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { isValidElement, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
 import { Markdown, stripHtmlComments } from "./Markdown";
 import { DocImage } from "./docImages";
+import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
 import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
@@ -96,6 +97,20 @@ function Tabs({ children }: { children?: ReactNode }) {
 const Tab = ({ children }: { title?: string; children?: ReactNode }) => <>{children}</>;
 
 // ── standard element mapping — matches the legacy Markdown.tsx look ──────────────
+/** The `<code class="language-x">…</code>` inside a `<pre>`, if that is what this is. mdast→hast
+ *  spells the class as an ARRAY and hast-util-to-jsx-runtime hands it over as a string, so both are
+ *  read; a `<pre>` with anything other than one code child (or with element children rather than a
+ *  string of source) is not a fence and gets no opinion from us. */
+function fencedCode(children: ReactNode): { lang: string; source: string } | null {
+  const node = Array.isArray(children) ? children.find(isValidElement) : children;
+  if (!isValidElement(node)) return null;
+  const props = node.props as { className?: string | string[]; children?: ReactNode };
+  const cls = Array.isArray(props.className) ? props.className.join(" ") : props.className ?? "";
+  const lang = /(?:^|\s)language-([\w-]+)/.exec(cls)?.[1];
+  if (!lang || typeof props.children !== "string") return null;
+  return { lang, source: props.children.replace(/\n$/, "") };
+}
+
 const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
 const h = (lvl: number) => ({ children }: { children?: ReactNode }) => (
   <div style={{ fontSize: HEADING_SIZE[lvl], fontWeight: 600, color: "var(--t1)", lineHeight: 1.3, margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>{children}</div>
@@ -131,9 +146,17 @@ const htmlComponents = {
   code: ({ children }: { children?: ReactNode }) => (
     <code style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>{children}</code>
   ),
-  pre: ({ children }: { children?: ReactNode }) => (
-    <pre style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>{children}</pre>
-  ),
+  // A FENCE CAN BE A PICTURE (#1617). Markdown gives a fenced block to `pre` wrapping a `code`
+  // whose class names the language, so this is the only seam where ```mermaid can be told from
+  // ```bash — and the fence's language is the author's whole statement of intent. Everything else
+  // still renders as the code block it is.
+  pre: ({ children }: { children?: ReactNode }) => {
+    const fence = fencedCode(children);
+    if (fence && isMermaidFence(fence.lang)) return <MermaidDiagram source={fence.source} />;
+    return (
+      <pre style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>{children}</pre>
+    );
+  },
   ul: ({ children }: { children?: ReactNode }) => <ul style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>{children}</ul>,
   ol: ({ children }: { children?: ReactNode }) => <ol style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>{children}</ol>,
   li: ({ children }: { children?: ReactNode }) => <li style={{ lineHeight: 1.55 }}>{children}</li>,

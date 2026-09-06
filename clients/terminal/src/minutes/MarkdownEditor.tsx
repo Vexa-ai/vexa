@@ -28,6 +28,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { tags as t } from "@lezer/highlight";
+import { mermaidPreview } from "./mermaidPreview";
 import type { Theme } from "../app/theme";
 
 const mdHighlight = HighlightStyle.define([
@@ -132,7 +133,9 @@ export function MarkdownEditor(p: { value: string; onChange: (v: string) => void
   // New identity on a theme flip → @uiw reconfigures the live view, so the switch repaints the
   // editor in place instead of only on the next mount.
   const extensions = useMemo(
-    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), syntaxHighlighting(mdHighlight), editorTheme(theme === "dark"), EditorView.lineWrapping, assetInsert],
+    // mermaidPreview draws every ```mermaid fence under itself (#1617) — and takes the theme by
+    // value, which is the second reason this list is rebuilt on a flip.
+    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), syntaxHighlighting(mdHighlight), editorTheme(theme === "dark"), mermaidPreview(theme), EditorView.lineWrapping, assetInsert],
     [theme, assetInsert],
   );
   return (

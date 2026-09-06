@@ -3,12 +3,14 @@
  *  (--t1/--t2/--t3, --accent, --blue, --mono, --line, --panel, --panel2). Supports:
  *  headings (#..####), bold, italic, inline code, fenced ```code```, bullet + numbered
  *  lists, links (new tab, rel noreferrer), [[wikilinks]], blockquotes, horizontal rules,
- *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
+ *  GFM pipe tables, ```mermaid diagrams (./docDiagrams), paragraphs and line breaks.
+ *  Intentionally a small subset — robust,
  *  not spec-complete. HTML comments never reach the page — see stripHtmlComments. */
 "use client";
 import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 import { DocImage } from "./docImages";
+import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -259,7 +261,15 @@ export function Markdown({ children, style }: { children: string; style?: React.
       const buf: string[] = [];
       i++;
       while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      const closed = i < lines.length;   // a fence still being typed/streamed has no closing line yet
       i++; // closing fence
+      // ```mermaid → the picture, same component MdxDoc renders (#1617). Only once the fence has
+      // CLOSED: this renderer draws the turn that is still streaming into the chat, and half a
+      // flowchart is a parse error the reader would watch flash past for no reason.
+      if (closed && isMermaidFence(fence[1])) {
+        blocks.push(<MermaidDiagram key={key++} source={buf.join("\n")} />);
+        continue;
+      }
       blocks.push(
         <pre key={key++} style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>
           <code>{buf.join("\n")}</code>

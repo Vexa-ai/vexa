@@ -425,15 +425,33 @@ function gateEvalBaseline() {
 // FINOS licence classifier (ADR-0004), shared by gate:licenses (npm/py deps) and gate:image-licenses
 // (baked apt packages + pinned container images). B is tested before X so LGPL never trips the GPL
 // match. Cat X is where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653 keeps out of our images.
-const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i, /OR CC0-1\.0/];
+const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i];
 const LICENSE_B = [/LGPL/i, /^MPL/i, /^EPL/i];                                    // weak copyleft — needs a logged exception
 const LICENSE_X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
-// → "A" (permissive, passes) | "B" (weak-copyleft, needs a logged exception) | "X" (forbidden) | "?" (unclassified)
-function classifyLicense(lic) {
+// One licence NAME, matched whole. → "A" | "B" | "X" | "?"; see classifyLicense for expressions.
+function classifyTerm(lic) {
   if (LICENSE_A.some((re) => re.test(lic))) return "A";
   if (LICENSE_B.some((re) => re.test(lic))) return "B";
   if (LICENSE_X.some((re) => re.test(lic))) return "X";
   return "?";
+}
+// → "A" (permissive, passes) | "B" (weak-copyleft, needs a logged exception) | "X" (forbidden) | "?" (unclassified)
+//
+// AN SPDX DISJUNCTION IS A CHOICE WE MAKE, so the expression is as clean as its cleanest option:
+// `(MPL-2.0 OR Apache-2.0)` — how dompurify, and therefore every mermaid diagram, reaches us —
+// is taken under Apache-2.0 and is Cat A. Matched as a whole string it was none of A, B or X (it
+// starts with a paren), so it landed on "?" and failed the build. The single `/OR CC0-1.0/` pattern
+// that used to sit in LICENSE_A was this same rule, hand-written for one package; it is gone
+// because the general one subsumes it.
+//
+// `AND` is deliberately NOT split: it binds us to every term at once, so the expression falls
+// through to the whole-string match and stays unclassified until a human reads it — the safe
+// direction, and the direction a gate should fail in.
+function classifyLicense(lic) {
+  const terms = String(lic).replace(/^\(\s*|\s*\)$/g, "").split(/\s+OR\s+/i).map((t) => t.trim());
+  if (terms.length < 2) return classifyTerm(lic);
+  const cats = terms.map(classifyTerm);
+  return cats.includes("A") ? "A" : cats.includes("B") ? "B" : cats.includes("X") ? "X" : "?";
 }
 
 function gateLicenses() {
@@ -442,9 +460,23 @@ function gateLicenses() {
   catch (e) { raw = (e.stdout || "").toString(); }
   if (!raw.trim()) { console.log("  ✓ gate:licenses — no resolved deps yet (green-on-empty)"); return true; }
   let data; try { data = JSON.parse(raw); } catch { return fail(["`pnpm licenses list --json` returned non-JSON — run `pnpm install` first"]); }
+  // pnpm answers a query it COULD NOT ANSWER with `{ "error": { code, message } }` on stdout —
+  // valid JSON, shaped nothing like a licence index. Read it before the loop: without this the gate
+  // dies on `pkgs.map is not a function`, which names nothing an operator can act on. The common way
+  // in is a store that has never seen a newly-locked package (a worktree where `pnpm install` has
+  // not run since the lockfile grew). "Cannot read the tree" is a FAILURE, not green-on-empty — the
+  // gate has verified nothing.
+  if (data?.error) return fail([`\`pnpm licenses list\` could not read the dependency tree: ${data.error.message ?? data.error.code ?? "unknown error"}`]);
   const exFile = join(ROOT, "license-exceptions.json");
-  const exceptions = existsSync(exFile) ? (JSON.parse(readFileSync(exFile, "utf8")).categoryB || []) : [];
-  const excepted = (name) => exceptions.some((e) => name === e.package || name.startsWith(e.package));
+  const exFileData = existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")) : {};
+  const exceptions = exFileData.categoryB || [];
+  // A package that DECLARES NO LICENCE AT ALL is reported by pnpm as "Unknown". That is not a
+  // licence to classify — it is a package.json field somebody left out — so the only honest
+  // resolution is a human reading the licence file the package actually ships and recording what it
+  // says. `undeclared` is that record; anything not in it still fails, exactly as Cat B does.
+  const undeclared = exFileData.undeclared || [];
+  const listedIn = (list, name) => list.some((e) => name === e.package || name.startsWith(e.package));
+  const excepted = (name) => listedIn(exceptions, name);
   const bad = [], flagged = [];
   for (const [lic, pkgs] of Object.entries(data)) {
     const names = pkgs.map((p) => p.name);
@@ -457,11 +489,17 @@ function gateLicenses() {
       continue;
     }
     if (cat === "X") { bad.push(`FORBIDDEN (Cat X) ${lic}: ${names.join(", ")} — replace this dependency`); continue; }
+    if (lic === "Unknown") {
+      const unlisted = names.filter((n) => !listedIn(undeclared, n));
+      if (unlisted.length) bad.push(`no licence declared by: ${unlisted.join(", ")} — read the package's own licence file and log it in license-exceptions.json (undeclared), or replace the dep`);
+      else flagged.push(`undeclared (${names.join(", ")})`);
+      continue;
+    }
     bad.push(`unclassified licence "${lic}": ${names.join(", ")} — classify it in scripts/gates.mjs or replace the dep`);
   }
   if (bad.length) return fail(bad);
   const total = Object.values(data).reduce((n, p) => n + p.length, 0);
-  console.log(`  ✓ gate:licenses — ${total} deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} Cat-B by exception: ${flagged.join("; ")}` : ""})`);
+  console.log(`  ✓ gate:licenses — ${total} deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} by logged exception: ${flagged.join("; ")}` : ""})`);
   return true;
 }
 
