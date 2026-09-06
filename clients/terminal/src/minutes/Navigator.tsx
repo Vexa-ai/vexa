@@ -22,6 +22,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
+import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
 import type { Page } from "./types";
 import { navigateView } from "./roomView";
 import {
@@ -94,6 +95,30 @@ export function Navigator(p: {
     const files = await loadNavTree(ws);
     setTrees((prev) => ({ ...prev, [ws.key]: files }));
   }, []);
+
+  // A TURN COMMITTED, AND THE TREE MAY BE ONE PAGE SHORTER (Vexa-ai/vexa#1621). `workspace_delete`
+  // and `workspace_move` take a page OUT of a workspace — the first acts this rail has ever had to
+  // survive that REMOVE a file rather than add one. Each workspace's list is read exactly once
+  // (`fetched`), so without this a removed page keeps its row until the browser is reloaded, and
+  // clicking it opens "no page here yet": the reader is shown a file that is gone, in the one
+  // surface whose whole job is saying what is there. The document in front already re-reads on this
+  // event (`MinutesShell`); this is the same fact reaching the other surface that shows the file.
+  //
+  // RE-READ IN PLACE rather than dropping the cache: clearing it would blank every expanded
+  // workspace until its fetch came back, which is a worse answer than a list one second stale.
+  // Only what has actually been read is re-read — a collapsed workspace still costs nothing, and a
+  // list handed in by a test is left alone, because a seeded key is one this component never owned.
+  useEffect(() => {
+    const seeded = new Set(Object.keys(p.trees ?? {}));
+    const onCommit = () => {
+      for (const ws of workspaces ?? []) {
+        if (!fetched.current.has(ws.key) || seeded.has(ws.key)) continue;
+        void loadNavTree(ws).then((files) => setTrees((prev) => ({ ...prev, [ws.key]: files })));
+      }
+    };
+    window.addEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
+    return () => window.removeEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
+  }, [workspaces, p.trees]);
 
   const parsed = useMemo(() => parseQuery(q), [q]);
   const filtering = parsed.text.length > 0;

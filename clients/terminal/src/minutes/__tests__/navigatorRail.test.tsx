@@ -10,6 +10,7 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-libra
 import { PagesPanel } from "../PagesPanel";
 import { NAV_OPEN_KEY } from "../navigatorApi";
 import { VIEW_NAVIGATE_EVENT } from "../roomView";
+import { WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
 import type { Page } from "../types";
 import * as nav from "../navigatorApi";
 
@@ -183,6 +184,36 @@ describe("opening a file (decision 28)", () => {
     fireEvent(rowOf(container, "desk|README.md") as HTMLElement,
       new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
     expect(onOpen).toHaveBeenCalledWith({ path: "README.md", slug: undefined, label: "README" });
+  });
+});
+
+describe("a page that went away (Vexa-ai/vexa#1621)", () => {
+  /** THE FIRST ACTS THIS RAIL HAS EVER HAD TO SURVIVE THAT REMOVE A FILE. `workspace_delete` and
+   *  `workspace_move` take a page OUT of a workspace; every workspace's list is read exactly once,
+   *  so without the commit listener the removed page keeps its row until the browser is reloaded —
+   *  and clicking it opens "No page here yet", which reads as a broken rail rather than as a page
+   *  that is gone. The document in front already re-reads on this event; this is the same fact
+   *  reaching the other surface that shows the file. */
+  it("re-reads an expanded workspace on a commit, so the deleted page loses its row", async () => {
+    const container = await openRail();
+    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);
+    await waitRow(container, "desk|README.md");
+    expect(nav.loadNavTree).toHaveBeenCalledTimes(1);
+
+    // the turn removed the page and committed
+    vi.mocked(nav.loadNavTree).mockImplementation(async (ws: nav.NavWorkspace) =>
+      (TREES[ws.key] ?? []).filter((f) => f !== "README.md"));
+    await act(async () => { window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT)); });
+
+    await waitFor(() => expect(rowOf(container, "desk|README.md")).toBeNull());
+    expect(nav.loadNavTree).toHaveBeenCalledTimes(2);
+    expect(rowOf(container, "desk|drafts/brief.md") ?? screen.getByText("drafts")).toBeTruthy();
+  });
+
+  it("walks nothing nobody has opened — a commit is not a reason to read five workspaces", async () => {
+    await openRail();
+    await act(async () => { window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT)); });
+    expect(nav.loadNavTree).not.toHaveBeenCalled();
   });
 });
 

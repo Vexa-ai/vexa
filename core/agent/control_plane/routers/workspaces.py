@@ -23,9 +23,9 @@ from control_plane import workspace_membership as membership_mod
 from control_plane.api_shared import (
     ArchiveBody, GitTokenBody, InviteAcceptBody, InviteCreateBody, MAX_UPLOAD_BYTES,
     RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
-    WorkspaceDeactivateBody, WorkspaceNewBody, WorkspacePublishBody, WorkspacePullBody,
-    WorkspacePurposeBody, WorkspacePushBody, WorkspaceRenameBody, WorkspaceSwapBody,
-    _upload_filename, logger)
+    WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
+    WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
+    WorkspaceRenameBody, WorkspaceSwapBody, _upload_filename, logger)
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace,
     attached_workspaces, create_shared_workspace_dir, create_workspace,
@@ -184,16 +184,31 @@ def build(**d) -> APIRouter:
             logger.warning("page images: could not file the friction for %s", path or "(no path)")
         return clean
 
-    def _commit(target: Path, paths: list[str], message: str) -> None:
+    def _commit(target: Path, paths: list[str], message: str) -> "str | None":
         """Commit exactly the paths named, so history stays honest and a concurrent write in the
-        same workspace is not swept into somebody else's message (the index is a shared surface)."""
+        same workspace is not swept into somebody else's message (the index is a shared surface).
+        Returns the workspace's HEAD afterwards, or None when it is not a repository.
+
+        STAGED ONE PATH AT A TIME, and that is not a style choice. `git add -- a b` refuses the
+        WHOLE call when any pathspec matches nothing git knows about — and a REMOVAL names a path
+        that is already gone from disk, which is unmatched whenever the file was never committed
+        (a page the harness `Write`-tool created earlier in this same turn, before the mount commit
+        runs). One such path would have sunk the other's staging silently, leaving a moved page on
+        disk and nothing in history. Per path, `check=False`, and the commit then names only what
+        actually staged."""
         import subprocess as _sp
         if not (target / ".git").is_dir():
-            return
-        _sp.run(["git", "-C", str(target), "add", "--", *paths], check=False, capture_output=True)
-        _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal",
-                 "-c", "user.email=terminal@vexa.local", "commit", "-m", message, "--", *paths],
-                check=False, capture_output=True)
+            return None
+
+        def _git(*args: str):
+            return _sp.run(["git", "-C", str(target), *args], check=False, capture_output=True,
+                           text=True)
+
+        staged = [p for p in paths if p and _git("add", "--", p).returncode == 0]
+        if staged:
+            _git("-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
+                 "commit", "-m", message, "--", *staged)
+        return _git("rev-parse", "HEAD").stdout.strip() or None
 
     def _store_asset(request: Request, rel: str, slug: Optional[str], content: bytes,
                      source: str) -> dict:
@@ -351,6 +366,157 @@ def build(**d) -> APIRouter:
             _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
                      "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
         return {"path": rel, "written": True}
+
+    # ── REMOVING AND MOVING A PAGE (Vexa-ai/vexa#1621) ───────────────────────────────────────────
+    #
+    # Founder, session 176, 13:36Z: *"remove from personal"* — and there was no verb for it. The
+    # agent moving the OeNB dossier off the desk had `workspace_write`, which creates or overwrites,
+    # and two read-only routes; so it collapsed each of the seven pages to a one-line pointer and had
+    # to report that "removed" meant "collapsed". The files stayed on the desk (friction
+    # `fr_a373e9448d2909a6`).
+    #
+    # A DELETE IS HISTORY, NEVER A LOSS. Both verbs commit in the workspace, so the bytes are one
+    # `git show` away forever — which is what makes removing a page a safe thing for an agent to do
+    # at all, and why neither of these needs a confirmation step the model would have to invent.
+
+    def _movable_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
+        """WHICH workspace dir a REMOVAL (or the source/target half of a move) lands in, or the
+        refusal. `_write_dir`'s rules — path guard, `kg/templates/`, `_global` admin-only, shared
+        needs contributor+, anything outside the active set 403s — plus ONE more.
+
+        `_system` IS NOT A REMOVAL TARGET, ever. It is read-write in the mount stack because chat
+        continuity, sessions, settings and `identity.md` live there and the platform writes them;
+        that is exactly why an agent verb must not be able to delete out of it. The write route
+        deliberately lets `_system` through (a turn recording who it is helping writes there); the
+        remove route deliberately does not, at either end of a move. Same reason `_global` is
+        admin-only rather than open: the tiers that are not a person's own pages are not a place a
+        turn tidies up."""
+        if str(slug or "") == system_mounts.SYSTEM_SLUG:
+            raise HTTPException(status_code=403, detail=(
+                "`_system` holds chats, sessions and identity — the platform writes that tier; "
+                "pages are removed from a desk or a workspace, never from it"))
+        return _write_dir(request, subject, rel, slug)
+
+    def _kg_index_after(target: Path, *rels: str) -> list[str]:
+        """Refresh `kg/INDEX.md` when one of ``rels`` was an ENTITY page, and say so as a pathspec.
+
+        The index is mounted into every dispatch (`worker/engine.entity_index_preamble`), so a page
+        removed without it is a page the next turn is still told the workspace holds — and the turn
+        after that either rewrites it or cites a file that is not there. Only touched for
+        `kg/entities/…`: `write_index` CREATES the file, and a workspace with no entities must not
+        grow one because somebody deleted a draft."""
+        if not any(str(r).startswith(entities_mod.ENTITIES_DIR + "/") for r in rels if r):
+            return []
+        try:
+            return [entities_mod.write_index(target, target.name)]
+        except OSError:
+            return []
+
+    #: What is left at the old path when a page moves WITHIN one workspace. A `[[wikilink]]` in this
+    #: workspace resolves by path or title, so the link keeps landing — on a page that says where the
+    #: real one went. ACROSS workspaces there is no stub, per the containment rule: the other
+    #: workspace's readers are not ours to leave a note for, and a stub in a customer's tree naming a
+    #: path in ours is a reference they cannot follow.
+    def _pointer_stub(new_rel: str) -> str:
+        name = new_rel.rsplit("/", 1)[-1]
+        return (f"---\nmoved_to: {new_rel}\n---\n\n"
+                f"Moved to [{name}]({new_rel}).\n\n"
+                f"This page now lives at `{new_rel}`. Its history is in this workspace's git log.\n")
+
+    @router.post("/api/workspace/remove")
+    def ws_file_remove(request: Request, body: WorkspaceRemoveBody = Body(...)):
+        """REMOVE one page from a workspace, as a commit — the verb behind `workspace_delete`.
+
+        NOT `DELETE /api/workspace/file`, which is what this was written as first: `DELETE
+        /api/workspace/{slug}` destroys a whole workspace and `{slug}` matches the literal `file`,
+        so the two would match one URL and registration order would pick the winner (see
+        `WorkspaceRemoveBody`, and the gate that caught it).
+
+        Refuses a folder (this removes A PAGE, and a recursive delete an agent can call is a
+        different decision nobody has made), a path outside the workspace, and every mount the write
+        route refuses plus `_system` (see `_movable_dir`). A path that is not there is a 404 — the
+        agent is meant to read that and say so, not retry."""
+        subject = subject_of(request)
+        rel = str(body.path or "").strip()
+        slug = (body.slug or "").strip() or None
+        target = _movable_dir(request, subject, rel, slug)
+        try:
+            f = wpaths.resolve_inside(target, rel)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if f.is_dir():
+            raise HTTPException(status_code=400, detail="that is a folder — this removes one page")
+        if not f.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        f.unlink()
+        sha = _commit(target, [rel, *_kg_index_after(target, rel)],
+                      f"{target.name}: {rel} — removed"[:72])
+        return {"path": rel, "deleted": True, "workspace": slug or "", "commit": sha}
+
+    @router.post("/api/workspace/move")
+    def ws_file_move(request: Request, body: WorkspaceMoveBody = Body(...)):
+        """MOVE one page — the verb behind `workspace_move`.
+
+        WITHIN one workspace it is a rename with a POINTER STUB left at the old path, so a
+        `[[wikilink]]` written before the move still lands somewhere that says where the page went.
+        ACROSS workspaces it is a WRITE IN THE TARGET AND A DELETE IN THE SOURCE — two repositories,
+        two commits, no stub (the containment rule: a link out of another workspace is the reader's
+        problem to hold, and a stub pointing at a path they cannot open is worse than a dead link).
+
+        BOTH ENDS ARE AUTHORIZED BEFORE ANYTHING IS WRITTEN, and both through `_movable_dir`, so a
+        read-only end refuses the whole move rather than half-performing it: `_system` always,
+        `_global` unless the caller is an org admin, a shared workspace unless they are a
+        contributor. Half a move is the one outcome worse than no move — the page would exist twice,
+        or nowhere."""
+        subject = subject_of(request)
+        src_rel = str(body.from_ or "").strip()
+        dst_rel = str(body.to or "").strip()
+        src_slug = (body.slug or "").strip() or None
+        # NO `to_slug` MEANS THE SAME WORKSPACE — the ordinary rename. Defaulting it to the caller's
+        # desk instead would turn every rename inside a shared workspace into a silent extraction of
+        # a page out of it, which is the failure `_writeback_workspace_note` already documents for
+        # `entity_upsert`'s slug default.
+        dst_slug = (body.to_slug or "").strip() or src_slug
+        src = _movable_dir(request, subject, src_rel, src_slug)
+        dst = _movable_dir(request, subject, dst_rel, dst_slug)
+        try:
+            src_f = wpaths.resolve_inside(src, src_rel)
+            dst_f = wpaths.resolve_inside(dst, dst_rel)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if src_f.is_dir():
+            raise HTTPException(status_code=400, detail="that is a folder — this moves one page")
+        if not src_f.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        if src_f.resolve() == dst_f.resolve():
+            raise HTTPException(status_code=400, detail="the page is already there")
+        same_workspace = src.resolve() == dst.resolve()
+        content = src_f.read_bytes()
+        dst_f.parent.mkdir(parents=True, exist_ok=True)
+        dst_f.write_bytes(content)
+        # A STUB IS A PAGE, so only a page gets one. A markdown pointer written over `assets/logo.png`
+        # is a broken picture wearing a helpful sentence.
+        stub = same_workspace and src_rel.lower().endswith(".md")
+        if stub:
+            src_f.write_text(_pointer_stub(dst_rel), encoding="utf-8")
+        else:
+            src_f.unlink()
+        subject_line = f"{dst.name}: {dst_rel} — moved from {src_rel}"[:72]
+        if same_workspace:
+            sha = _commit(src, [src_rel, dst_rel, *_kg_index_after(src, src_rel, dst_rel)],
+                          subject_line)
+            return {"from": src_rel, "to": dst_rel, "workspace": src_slug or "",
+                    "to_workspace": dst_slug or "", "moved": True,
+                    "pointer": src_rel if stub else None, "commit": sha, "source_commit": sha}
+        # TWO REPOSITORIES, TWO COMMITS — the target first, so the moment between them is one where
+        # the page exists twice rather than not at all.
+        to_sha = _commit(dst, [dst_rel, *_kg_index_after(dst, dst_rel)], subject_line)
+        from_sha = _commit(src, [src_rel, *_kg_index_after(src, src_rel)],
+                           f"{src.name}: {src_rel} — moved out"[:72])
+        return {"from": src_rel, "to": dst_rel, "workspace": src_slug or "",
+                "to_workspace": dst_slug or "", "moved": True, "pointer": None,
+                "commit": to_sha, "source_commit": from_sha}
+
     @router.post("/api/workspace/entity")
     def ws_entity_upsert(request: Request, body: dict = Body(...)):
         """UPSERT one knowledge-graph entity — PRD decision 24, the single call behind `entity_upsert`.

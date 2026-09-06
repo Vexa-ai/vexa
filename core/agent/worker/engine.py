@@ -324,6 +324,45 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         " say so — a shape is not a substitute for knowledge you do not have.\n\n"
     )
 
+
+def page_verbs_preamble() -> str:
+    """THE THREE THINGS THAT CAN HAPPEN TO A PAGE, named together (Vexa-ai/vexa#1621).
+
+    ⚠ THIS EXISTS BECAUSE OF WHAT AN AGENT DID WITH ONLY ONE OF THEM. Asked to *"remove from
+    personal"* — seven pages of a customer dossier being moved off the desk into that customer's own
+    workspace — the turn held `workspace_write`, which creates or overwrites, and two read-only
+    verbs. So it OVERWROTE each page with a one-line pointer and reported the move as done; the
+    founder was then told that "removed" meant "collapsed", with the seven files still on the desk
+    (friction `fr_a373e9448d2909a6`). A model reaches for the nearest verb it holds, and the nearest
+    verb to a delete it does not have is a write.
+
+    Named as a SET rather than left to the tool list for the reason `entity_upsert` is named in the
+    write-back prompt: the tools arrive DEFERRED (see `harness_subprocess_env`), so a verb the
+    prompt does not mention is one the model has to go looking for before it can believe it exists —
+    and a turn that does not believe a delete exists does not search for one, it improvises.
+
+    Ships on EVERY dispatch, like `kg_links_preamble`: this is about a class of act, not about a
+    particular mount, and the turns most likely to tidy a desk are ordinary chat turns with no
+    composed opening at all."""
+    return (
+        "## Moving and removing pages\n\n"
+        "A page can be written, moved or removed, and there is a verb for each — never improvise one "
+        "out of another:\n"
+        "- `workspace_write(path, content, slug)` — create it, or replace what is there.\n"
+        "- `workspace_move(path, to, slug, to_slug)` — take the page to another path, or to another "
+        "workspace. Inside one workspace a pointer is left behind so existing links still land; "
+        "across workspaces it is a write in the target and a removal in the source.\n"
+        "- `workspace_delete(path, slug)` — take the page away.\n\n"
+        "Both are COMMITS in the workspace, so a removal is history and never a loss — you do not "
+        "need to keep a copy, leave a stub, or ask before removing a page somebody asked you to "
+        "remove. **Never fake either one by overwriting a page with a note saying it moved**: the "
+        "file is still there, and the person who asked you to remove it now believes it is gone.\n"
+        "Refused where you may not write: the `_system` tier always, `_global` unless you are the "
+        "org admin, a shared workspace you only read. A refusal is the answer — say it, do not "
+        "route around it.\n\n"
+    )
+
+
 # The rule text of PRD decision 24, and the index it is a rule about. One string, because the rule
 # is unreadable without the list and the list is inert without the rule.
 _ENTITY_INDEX_MAX_CHARS = 12_000
@@ -842,13 +881,56 @@ def writeback_budget() -> "tuple[int, float]":
     return _int("VEXA_WRITEBACK_MAX_TOOL_CALLS", 8), float(_int("VEXA_WRITEBACK_MAX_SECONDS", 22))
 
 
-def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
+#: The two verbs that take a page AWAY from a mounted desk (Vexa-ai/vexa#1621), and the argument
+#: each one names the departing page in. `workspace_move`'s wire spelling is `from` (the HTTP body's
+#: field), the rig's tool signature spells it `path` because `from` is a Python keyword — both are
+#: read, because the same act reaching this loop under two names is exactly how a rule comes to hold
+#: on one runner and not the other.
+_REMOVAL_TOOLS = {"workspace_delete": ("path",), "workspace_move": ("from", "path")}
+
+
+def removed_page_slugs(tool: str, args: object) -> set:
+    """The entity slugs a removal call takes off the desk — the write-back phase's exclusion list.
+
+    ⚠ WITHOUT THIS THE PHASE UNDOES THE TURN. `writeback_candidates` asks "which names in this turn
+    has no mounted desk got a page for" — and a page the turn just DELETED is, by construction, a
+    name with no page. So the phase's own next act is to write it back, one beat after the person
+    asked for it to go: the founder says *"remove from personal"*, the agent removes it, and the
+    bookkeeping puts it back with a fresh dated entry. The name is in `said` because the turn had to
+    talk about the page in order to remove it.
+
+    A page MOVED is the same shape from here: it is gone from where it was, and if it landed in a
+    workspace this dispatch does not mount, no root will find it either.
+
+    The slug is the file STEM, which is what `entities.known_slugs` compares against — the same
+    answer `slugify(name)` gives for the name on the page, because that is how the page was named."""
+    if tool.rsplit("__", 1)[-1] not in _REMOVAL_TOOLS or not isinstance(args, dict):
+        return set()
+    keys = _REMOVAL_TOOLS[tool.rsplit("__", 1)[-1]]
+    out = set()
+    for k in keys:
+        rel = str(args.get(k) or "").strip()
+        if not rel:
+            continue
+        stem = rel.replace("\\", "/").rsplit("/", 1)[-1]
+        stem = stem[:-3] if stem.lower().endswith(".md") else stem
+        if stem:
+            out.add(stem)
+    return out
+
+
+def writeback_candidates(texts, mounts: list[dict] | None = None,
+                         removed: "set | None" = None) -> list[str]:
     """THE PRE-PASS — the phase's cheap half, in code, before any model is asked anything.
 
     Names out of what the turn already produced (the person's message, the agent's answer, the tool
     results), minus everything the mounted desks already have a page for. An empty list means the
     phase has nothing to do, and that is by far the commonest turn: it now costs a regex instead of
-    a two-minute model call."""
+    a two-minute model call.
+
+    ``removed`` — the slugs this turn deleted or moved away (`removed_page_slugs`). Filtered AFTER
+    `missing_names` rather than passed into it, so the shared entity module keeps one meaning of
+    "missing" and this stays a fact about THIS TURN, which is the only place that knows it."""
     from workspaces.shared.entities import missing_names
 
     # A ROOM RUN DOES NO BOOKKEEPING ON THE SUBJECT'S OWN DESK (decision 22, F103). The post-meeting
@@ -887,7 +969,21 @@ def writeback_candidates(texts, mounts: list[dict] | None = None) -> list[str]:
              and not (in_room and str(m.get("role") or "private") == "private")]
     if not roots:
         return []
-    return missing_names(roots, [t for t in texts if t])
+    names = missing_names(roots, [t for t in texts if t])
+    if not removed:
+        return names
+    from workspaces.shared.entities import slugify
+    # PREFIX, not equality — the same test `missing_names` makes against the slugs a desk already
+    # holds. A name clipped out of prose ("Zenith SI" for "Zenith SIG") slugifies to a prefix of the
+    # page's own slug, and a truncated echo of a page just deleted is no more worth writing than the
+    # page itself was.
+    kept = []
+    for n in names:
+        s = slugify(n)
+        if s and any(str(r).startswith(s) for r in removed):
+            continue
+        kept.append(n)
+    return kept
 
 
 def should_write_back(prompt: str, tool_calls: int, *, min_tokens: int | None = None,
@@ -1491,6 +1587,7 @@ def run_turn_over_workspace(
     # worth of onboarding/propose framing).
     turn_prompt = (imperative_preamble(prompt)
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
+                   + page_verbs_preamble()
                    + mounts_preamble(mounts, active_target())
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
@@ -1813,12 +1910,27 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # open. A truncated string is not a source of names. It may confirm one; it may never
         # introduce one, and confirmation buys nothing the complete text has not already given.
         said: list[str] = [prompt]
+        # WHAT THIS TURN TOOK AWAY (Vexa-ai/vexa#1621) — the write-back phase must not put it back.
+        # Recorded on the CALL (that is where the path is) and only counted on a SUCCESSFUL result,
+        # the same success-only discipline `llm.claude_code` applies to every other event it derives
+        # from a tool: a refused delete removed nothing, and suppressing a page for it would cost a
+        # write nobody asked to lose.
+        pending_removals: dict[str, set] = {}
+        removed_slugs: set = set()
         for ev in turn(prompt):
             t = ev.get("type")
             if t == "tool-call":
                 tool_calls += 1
-                if str(ev.get("tool") or "").endswith("entity_upsert"):
+                tool_name = str(ev.get("tool") or "")
+                if tool_name.endswith("entity_upsert"):
                     upserts += 1
+                gone = removed_page_slugs(tool_name, ev.get("args"))
+                if gone:
+                    pending_removals[str(ev.get("callId") or "")] = gone
+            elif t == "tool-result":
+                gone = pending_removals.pop(str(ev.get("callId") or ""), None)
+                if gone and ev.get("ok"):
+                    removed_slugs |= gone
             elif t == "message-delta" and ev.get("text"):
                 said.append(ev["text"])
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
@@ -1882,7 +1994,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         if writeback is not None and not room_run():
             try:
                 if should_write_back(prompt, tool_calls, upserts=upserts):
-                    candidates = writeback_candidates(said)
+                    candidates = writeback_candidates(said, removed=removed_slugs)
                 run_writeback = should_write_back(prompt, tool_calls, upserts=upserts, candidates=candidates)
             except Exception as e:  # noqa: BLE001 — the pre-pass must never cost the turn either
                 log.warning("write-back pre-pass failed on %s: %s: %s", turn_id, type(e).__name__, e)

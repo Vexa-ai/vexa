@@ -144,3 +144,44 @@ def test_a_path_that_climbs_or_carries_a_shell_metacharacter_is_refused(path):
 def test_the_paths_a_workspace_actually_holds_are_accepted(path, expected):
     safe, _ = _path_validator()
     assert safe(path) == expected
+
+
+# ── the other two halves of the same surface (Vexa-ai/vexa#1621) ─────────────────────────────────
+#
+# `workspace_write` alone is not a write surface, it is the half of one that can only add. Friction
+# `fr_a373e9448d2909a6`: told *"remove from personal"*, an agent holding only this verb overwrote
+# seven pages of a customer dossier with one-line pointers and reported them as removed. The other
+# two verbs go through the SAME door for the same reason F96 gave — the service that owns the
+# resource is the one that authorizes it — and that is what these pin.
+
+def test_removing_a_page_goes_through_agent_api_on_the_callers_identity():
+    body = _fn("workspace_delete")
+    assert "/api/workspace/remove" in body, "the removal must use agent-api's own route"
+    assert re.search(r'_http\(\s*"POST"', body), (
+        "a POST on its own path, not `DELETE /api/workspace/file` — that URL is also matched by "
+        "`DELETE /api/workspace/{slug}`, which destroys a whole workspace")
+    assert '"X-User-Id": uid' in body, (
+        "the removal must carry the CALLER's identity — that header is what makes the route's "
+        "membership check mean anything")
+    assert "subprocess" not in body and "docker" not in body
+    assert "_safe_ws_path" in body
+
+
+def test_moving_a_page_goes_through_agent_api_and_validates_BOTH_paths():
+    body = _fn("workspace_move")
+    assert "/api/workspace/move" in body
+    assert re.search(r'_http\(\s*"POST"', body)
+    assert '"X-User-Id": uid' in body
+    assert "_safe_ws_path(path), _safe_ws_path(to)" in body, (
+        "a move has two caller-supplied paths and both are outside input — validating only the "
+        "source is the traversal the destination walks through")
+    assert "subprocess" not in body and "docker" not in body
+
+
+def test_the_two_new_verbs_default_their_target_like_the_write_does():
+    """`_TARGET_DEFAULTING` (Vexa-ai/vexa#1611): an omitted `slug` on a WRITE means "wherever this
+    conversation is working". A removal that defaulted to the desk instead would take a page out of
+    a workspace nobody named — the same failure the write had, and worse, because what it removes
+    was not put there by this turn."""
+    block = _src().split("_TARGET_DEFAULTING = ", 1)[1].split("\n\n", 1)[0]
+    assert "workspace_delete" in block and "workspace_move" in block

@@ -800,7 +800,8 @@ CALL_TARGET = contextvars.ContextVar("vexa_call_target", default="")
 # working" — the founder's *"it creates files in the wrong workspace"*. READS are not here and that
 # is the point: `slug=""` on a read has always meant the person's own desk, nobody has ever been
 # surprised by it, and widening a read default would change what "" means in two directions at once.
-_TARGET_DEFAULTING = frozenset({"workspace_write", "entity_upsert"})
+_TARGET_DEFAULTING = frozenset({"workspace_write", "workspace_delete", "workspace_move",
+                                "entity_upsert"})
 
 # HOW THE MODEL NAMES THE DESK once the default is no longer the desk. `workspaces()` has always
 # answered `{"slug": "", "name": "personal"}` for it, so "personal" is the word it already knows —
@@ -1967,7 +1968,10 @@ mcp = MCPServer(
         "cloud. workspace_pull() mirrors flow outputs down in local mode.\n"
         "\u2022 TEAM MEMORY — workspace_tree/workspace_read/workspace_write: the shared files "
         "meetings write into and the team reads from; workspace_init starts one. When your "
-        "person asks 'what did we decide about X', the answer is in here. A picture on a page "
+        "person asks 'what did we decide about X', the answer is in here. A page can also be "
+        "taken away or taken elsewhere — workspace_delete(path) removes one, workspace_move(path, "
+        "to, to_slug) moves it, each a commit, so a removal is history and never a loss; never "
+        "fake either by overwriting a page with a note saying it went. A picture on a page "
         "is fetch_asset(url) first and `![alt](assets/<name>)` second — never a remote URL "
         "on the page.\n"
         "\u2022 A WORKSPACE THEY ALREADY KEEP ON GITHUB \u2014 workspace_attach(workspace, repo) "
@@ -2399,6 +2403,99 @@ def workspace_write(path: str, content: str, slug: str = "") -> str:
     return json.dumps({"url": _ws_url(rel, uid),
                        "paste_this_link": "[" + rel.rsplit("/", 1)[-1] + "](" + _ws_url(rel, uid) + ")",
                        "written": rel, "bytes": len(content)})
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_delete(path: str, slug: str = "") -> str:
+    """Remove a page from a workspace.
+
+    IT IS A COMMIT, NOT AN ERASURE. The workspace is a git repository, so the removed page stays in
+    its history forever — which is why you do not need to keep a copy, leave a note behind, or ask
+    twice before removing something a person asked you to remove.
+
+    NEVER FAKE THIS WITH `workspace_write`. Overwriting a page with a line saying it is gone leaves
+    the file exactly where it was, and the person who asked for it to go now believes it went. That
+    is the failure this verb exists to end: on 2026-09-06 an agent moving a seven-page customer
+    dossier off a desk had no delete, collapsed every page to a pointer, and had to explain that
+    "removed" meant "collapsed" (friction `fr_a373e9448d2909a6`).
+
+    WHERE IT LOOKS: the same rule as `workspace_write` — omit `slug` and it is this conversation's
+    target workspace, `slug="personal"` is the person's own desk, `slug=<workspace>` is one write
+    anywhere else they may write. Refused where they may not: `_global` unless they are the org
+    admin, a workspace they only read, and the private `_system` tier always.
+
+    To move a page rather than remove it, use `workspace_move` — a delete followed by a write loses
+    the page's history and leaves nothing pointing at where it went."""
+    uid = me()
+    try:
+        rel = _safe_ws_path(path)
+    except _BadPath as e:
+        return json.dumps({
+            "refused": "invalid_path", "path": path, "why": str(e),
+            "tell_your_person": "plainly, that the file name is not one a workspace can hold.",
+        })
+    body = {"path": rel}
+    if slug:
+        body["slug"] = slug
+    st, resp = _http("POST", f"{AGENT_API}/api/workspace/remove", {"X-User-Id": uid}, body)
+    if st != 200:
+        # 404 and 403 are ANSWERS, not faults: the page is not there, or this is not a workspace
+        # they may write. Either way the next move is to say so, never to retry or to route around
+        # it with a write.
+        return json.dumps({"refused": "not_deleted", "status": st, "path": rel,
+                           "workspace": slug or "your own",
+                           "why": resp if isinstance(resp, (str, dict)) else "removal refused",
+                           "tell_your_person": "plainly, what was refused and why — and do not "
+                                               "overwrite the page instead."})
+    return json.dumps({"deleted": rel, "workspace": slug or "your own",
+                       "in_history": "the page is in this workspace's git history and can be "
+                                     "restored from it",
+                       "result": resp})
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_move(path: str, to: str, slug: str = "", to_slug: str = "") -> str:
+    """Move a page — to another path, or to another workspace.
+
+    `path` is where it is now, `to` is where it should be. `slug` is the workspace it is in today
+    (omitted = this conversation's target; `"personal"` = the person's own desk) and `to_slug` is
+    where it is going — OMIT IT for a rename inside the same workspace.
+
+    INSIDE ONE WORKSPACE a pointer is left at the old path, so links written before the move still
+    land somewhere that says where the page went. ACROSS WORKSPACES it is a write in the target and
+    a removal in the source, with no pointer: a note in one person's workspace naming a path in
+    another is a reference they cannot follow.
+
+    ONE CALL, NOT TWO. A read-then-write-then-delete does the same thing to the files and loses
+    everything else: the page's history stops at the old path, the two halves can half-fail, and
+    nothing is left pointing at where it went. Both ends are checked before anything is written, so
+    a read-only destination refuses the whole move rather than leaving the page in both places or
+    neither."""
+    uid = me()
+    try:
+        src, dst = _safe_ws_path(path), _safe_ws_path(to)
+    except _BadPath as e:
+        return json.dumps({
+            "refused": "invalid_path", "from": path, "to": to, "why": str(e),
+            "tell_your_person": "plainly, that the file name is not one a workspace can hold.",
+        })
+    body = {"from": src, "to": dst}
+    if slug:
+        body["slug"] = slug
+    if to_slug:
+        body["to_slug"] = to_slug
+    st, resp = _http("POST", f"{AGENT_API}/api/workspace/move", {"X-User-Id": uid}, body)
+    if st != 200:
+        return json.dumps({"refused": "not_moved", "status": st, "from": src, "to": dst,
+                           "workspace": slug or "your own", "to_workspace": to_slug or slug or "your own",
+                           "why": resp if isinstance(resp, (str, dict)) else "move refused",
+                           "tell_your_person": "plainly, what was refused and why — the page has "
+                                               "not moved and nothing was copied."})
+    return json.dumps({"moved": src, "to": dst, "url": _ws_url(dst, uid),
+                       "paste_this_link": "[" + dst.rsplit("/", 1)[-1] + "](" + _ws_url(dst, uid) + ")",
+                       "result": resp})
 
 
 @mcp.tool()

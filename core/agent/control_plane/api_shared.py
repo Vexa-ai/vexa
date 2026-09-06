@@ -28,7 +28,7 @@ from typing import Callable, Iterator, Optional
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from control_plane import meeting_room
 from control_plane import meeting_steering
@@ -933,6 +933,46 @@ class WorkspaceNewBody(BaseModel):
     up. ``name`` (optional) → the new workspace's display label (default a unique "New workspace")."""
     model_config = {"extra": "forbid"}
     name: Optional[str] = None
+
+
+class WorkspaceRemoveBody(BaseModel):
+    """REMOVE one page from a workspace — the body behind `workspace_delete` (Vexa-ai/vexa#1621).
+
+    ``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the caller's own desk /
+    the chat's target).
+
+    ⚠ WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as
+    first. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE
+    irreversibly — and `{slug}` matches the literal segment `file`, so the two routes can match one
+    URL and the answer would be decided by which router `create_app` includes first.
+    `test_route_table.test_no_two_routes_can_match_the_same_url` caught it, which is the entire
+    point of that gate: of all the pairs to leave to registration order, "remove one page" and
+    "destroy the workspace" is the worst. A POST on its own literal path cannot be confused with
+    anything, and it reads beside its sibling `POST /api/workspace/move`."""
+    model_config = {"extra": "forbid"}
+    path: str
+    slug: Optional[str] = None
+
+
+class WorkspaceMoveBody(BaseModel):
+    """MOVE one page from one path to another — the body behind `workspace_move` (Vexa-ai/vexa#1621).
+
+    ``from``/``to`` are workspace-RELATIVE paths. ``slug`` names the workspace the page is in today
+    (omitted = the caller's own desk / the chat's target); ``to_slug`` names where it is going,
+    and omitted means *the same workspace*, which is the ordinary rename.
+
+    A CROSS-WORKSPACE MOVE IS A WRITE IN THE TARGET AND A DELETE IN THE SOURCE — two repositories,
+    two commits, and either end being read-only refuses the whole call before anything is written.
+
+    ``from`` is a Python keyword, so the field is ``from_`` with the alias the wire actually
+    carries. ``populate_by_name`` keeps the Python spelling usable from a caller that builds the
+    model directly (the tests do); the published OpenAPI property is ``from``, which is what a
+    manifest-bound tool would name and what the rig sends."""
+    model_config = {"extra": "forbid", "populate_by_name": True}
+    from_: str = Field(alias="from")
+    to: str
+    slug: Optional[str] = None
+    to_slug: Optional[str] = None
 
 
 class WorkspaceDeactivateBody(BaseModel):

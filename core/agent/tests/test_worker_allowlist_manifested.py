@@ -51,7 +51,13 @@ remain, and the note beside each says which:
     exactly the reason `workspace_write` and `entity_upsert` are, and it leaves this list by the
     same fix. Its allow-list entry is not optional in the way the others are: a worker asked for a
     picture on a page and refused this tool has one move left, and it is writing the remote URL
-    into the document.
+    into the document. `workspace_delete` and `workspace_move` (Vexa-ai/vexa#1621) are here for the
+    plainest reason of all and deliberately NOT separately: agent-api owns their routes (`DELETE
+    /api/workspace/file`, `POST /api/workspace/move`), and they are served beside `workspace_write`
+    by the rig because they are the same act's other two halves. Manifesting a DELETE through the
+    assembled edge while its WRITE is still unbindable would split one surface across two servers,
+    which is a worse state than either whole one; they leave this list with `workspace_write`, by
+    the same fix.
 
 CHECKED IN BOTH DIRECTIONS, same reason domain-doors.allow.json is: GAP shrinking without this test
 changing is a name this test forgot to stop tracking, and GAP growing without this test changing is
@@ -73,6 +79,7 @@ GAP = {
     "meeting_transcript", "meetings_list", "bot_send", "bot_stop", "meeting_info",   # meetings domain
     "transcript_terms",                                                             # meetings domain
     "workspace_write", "entity_upsert", "propose",                                  # agent: untyped dict body
+    "workspace_delete", "workspace_move",                                           # agent: rig-served, with the write
     "validate", "mark_scaffolded", "company_context",                               # agent: no server home
     "vexa_overview", "start_onboarding",                                            # agent: no server home
     "open_page",                                                                    # rig: the panel verb
