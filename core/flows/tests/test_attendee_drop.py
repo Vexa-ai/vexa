@@ -453,3 +453,104 @@ def test_the_drop_never_runs_an_agent_turn(monkeypatch):
 
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
     assert out.result["dropped"] == 3
+
+
+# ── 7 · THE MEETING'S PAGE IS ONE PAGE, AND THE REPORT IS A REGION OF IT (Vexa-ai/vexa#1598) ──
+#
+# Founder, live, 2026-09-06: *"it's a kind of doc that has live transcript widget in it"*, and
+# *"this minutes should just be appended from the agent that was processing the meeting"* (#1588).
+# So the file this step drops is the SAME file the person and their agent write on while the room
+# is running — which makes clobbering it the failure to guard, not writing it.
+
+def test_the_page_carries_the_live_transcript_widget_bound_to_the_row(monkeypatch):
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    doc = store.of("ben@bank.test")
+    # the marker the terminal splits on, naming the meetings-domain ROW id — the same id the
+    # frontmatter `meeting:` line carries, so the page and its widget cannot point at two rooms
+    assert "<!-- vexa:transcript meeting=97 -->" in doc
+    assert "meeting: 97" in doc
+    # it sits with the meeting's name, above the prose — the room is the page, not a footnote
+    assert doc.index("# Pilot sync") < doc.index("vexa:transcript") < doc.index("had Vexa in the room")
+
+
+def test_a_meeting_with_no_row_id_gets_no_widget_rather_than_one_bound_to_nothing(monkeypatch):
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    prior = {**PRIOR, "email_attendees": {**PRIOR["email_attendees"], "meeting_id": ""}}
+    refs = {k: v for k, v in REFS.items() if k != "meeting_id"}
+    reg.steps["drop_to_attendees"](_ctx(refs, prior))
+    doc = store.of("ben@bank.test")
+    assert "vexa:transcript" not in doc
+    assert "## Report" in doc          # the report still lands; only the widget is absent
+
+
+def test_the_report_is_a_fenced_region_and_a_re_run_rewrites_only_it(monkeypatch):
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    doc = store.of("ben@bank.test")
+    assert "<!-- meeting:report:start -->" in doc and "<!-- meeting:report:end -->" in doc
+    assert "ship it on the 21st" in doc
+
+    # THE PAGE GREW: an Expand wrote the meeting's own sections into it, and the person typed a line
+    # of their own. Then the report lands (or lands again, corrected).
+    grown = doc.replace(
+        "<!-- meeting:report:start -->",
+        "## Decisions\n<!-- meeting:decisions:start -->\n- ship it on the 21st\n"
+        "<!-- meeting:decisions:end -->\n\nI still owe Cara the migration doc.\n\n"
+        "<!-- meeting:report:start -->")
+    store.files[("uid-ben", ENTITY)] = grown
+    store.writes.clear()
+
+    later = {**PRIOR, "process_meeting": {**PRIOR["process_meeting"],
+                                          "report": "## Decided\n- ship it on the 28th"}}
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), later))
+    after = store.of("ben@bank.test")
+    # the region moved…
+    assert "ship it on the 28th" in after
+    # …and NOTHING else did: the agent's section and the person's own line are both still there
+    assert "<!-- meeting:decisions:start -->" in after
+    assert "I still owe Cara the migration doc." in after
+    assert "vexa:transcript meeting=97" in after
+
+
+def test_an_unchanged_report_on_a_grown_page_writes_nothing(monkeypatch):
+    """Idempotence across runs still holds once the write is a merge — otherwise every re-run of a
+    reaction would add a commit to everybody's history for a file that did not change."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    grown = store.of("ben@bank.test").replace(
+        "<!-- meeting:report:start -->",
+        "Something the person typed.\n\n<!-- meeting:report:start -->")
+    store.files[("uid-ben", ENTITY)] = grown
+    store.writes.clear()
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    assert ("uid-ben", ENTITY) not in store.writes
+    assert store.of("ben@bank.test") == grown
+
+
+def test_a_page_written_before_the_region_existed_is_replaced_as_it_always_was(monkeypatch):
+    """The honest degradation. A desk holding a pre-#1598 report has no region to merge into, so the
+    freshly composed page is the answer — which is exactly today's behaviour, and it is what gives
+    that page its widget for the first time."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    store.files[("uid-ben", ENTITY)] = ("---\ntype: meeting\n---\n\n# Pilot sync\n\n"
+                                        "## Decided\n- ship it on the 21st\n")
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    after = store.of("ben@bank.test")
+    assert "<!-- meeting:report:start -->" in after
+    assert "vexa:transcript meeting=97" in after
+
+
+def test_the_markers_are_the_ones_the_agent_side_writes():
+    """ONE SPELLING, TWO IMAGES. `core/agent/shared/meeting_doc.py` owns these on the agent side and
+    this domain cannot import it (flows' image carries neither `core/agent` nor `core/workspaces`),
+    so `gate:fact-parity` compares the two files. This pins the shape locally too, so a rename here
+    fails a test in this suite rather than only a gate on push."""
+    assert production.MEETING_REPORT_START == "<!-- meeting:report:start -->"
+    assert production.MEETING_REPORT_END == "<!-- meeting:report:end -->"
+    assert production.MEETING_SLOT.format(meeting="147") == "<!-- vexa:transcript meeting=147 -->"

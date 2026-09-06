@@ -331,6 +331,51 @@ def _meeting_stamp(ctx, uid) -> str:
 ATTENDEE_MAIL_ATTEMPTS = 3
 
 
+# ── THE MEETING DOC'S SHAPE, the half this domain writes (Vexa-ai/vexa#1598) ─────────────────────
+#
+# Founder, live, 2026-09-06: the meeting is ONE page — its own document with the live transcript
+# embedded in it — and *"this minutes should just be appended from the agent that was processing the
+# meeting"* (#1588). So the report this step drops is not the whole file any more: it is one REGION
+# of a page that a person and their agent also write, and the drop must land in that region and
+# nowhere else.
+#
+# ⚠ TWO IMAGES, ONE SPELLING. `core/agent/shared/meeting_doc.py` owns these markers on the agent
+# side (it is what an Expand writes between, and what the terminal splits on); this domain cannot
+# import it — flows' image carries no `core/workspaces`, let alone `core/agent` — so the strings are
+# declared once here and `gate:fact-parity` compares the two files. A marker that drifts by one
+# space renders as nothing and reports nothing, which is exactly the failure class that gate exists
+# for.
+MEETING_SLOT = "<!-- vexa:transcript meeting={meeting} -->"
+MEETING_REPORT_START = "<!-- meeting:report:start -->"
+MEETING_REPORT_END = "<!-- meeting:report:end -->"
+
+
+def _report_region(report: str) -> str:
+    """The report, fenced, under its heading — the block this step owns on the meeting's page."""
+    return (f"## Report\n{MEETING_REPORT_START}\n{(report or '').strip()}\n{MEETING_REPORT_END}")
+
+
+def _merge_meeting_doc(existing: "str | None", fresh: str, report: str) -> str:
+    """What to WRITE to a desk, given what is already on it.
+
+    THE PAGE MAY HAVE GROWN SINCE. Expand writes the meeting's own sections into it while the room
+    is running, and a person types on it — so replacing the file with a freshly composed one would
+    delete both, at the moment the report lands, on every desk in the room. When the page already
+    carries the report region, only that region is rewritten and every other byte comes back
+    untouched.
+
+    A page with no region is one this step wrote before the region existed, or none at all: the
+    fresh composition is the answer there, exactly as it has always been. That keeps a re-run of an
+    old drop byte-identical (which is what `_write_if_changed` reads to stay idempotent)."""
+    if not existing:
+        return fresh
+    i, j = existing.find(MEETING_REPORT_START), existing.find(MEETING_REPORT_END)
+    if i == -1 or j == -1 or j < i:
+        return fresh
+    return (existing[: i + len(MEETING_REPORT_START)] + "\n" + (report or "").strip() + "\n"
+            + existing[j:])
+
+
 def _note_path(ctx, uid, title) -> str:
     """THE ONE RECIPE for where a meeting's record lands on a desk:
     `kg/entities/meeting/<meeting-day>-<title-slug>.md`.
@@ -1750,9 +1795,20 @@ def build(reg: Registry, db) -> None:
             "",
             f"# {title}",
             "",
+            # THE LIVE TRANSCRIPT, IN THE PAGE (Vexa-ai/vexa#1598). An HTML comment, so the file
+            # stays plain markdown for every reader that is not this product's renderer — the mail
+            # that carries it, GitHub, Obsidian, the next agent that reads it as text — and the
+            # terminal paints the room here. Written only when the row id is known: a widget naming
+            # no meeting is a box bound to nothing.
+            *([MEETING_SLOT.format(meeting=str(meeting_id).strip()), ""]
+              if str(meeting_id or "").strip() else []),
             f"{date_prose} — {organizer} had Vexa in the room.",
             "",
-            (report or "").strip(),
+            # THE REPORT IS A REGION, not the rest of the file. This page is written by three hands
+            # now — this step, the person, and their agent's Expand — and a fence is what tells each
+            # of them where to stop (`shared/desk_readme.py` states the rule; `_merge_meeting_doc`
+            # applies it here).
+            _report_region(report),
             "",
         ]
         # NO LINK, NO LINE. Since the drop room is the invite rather than the mailing list, a
@@ -1783,13 +1839,21 @@ def build(reg: Registry, db) -> None:
             kept.pop()
         return "\n".join(kept) + "\n\n" + line + "\n" if kept else line + "\n"
 
-    def _write_if_changed(their_uid: str, path: str, content: str) -> bool:
+    def _write_if_changed(their_uid: str, path: str, content: str, *, report: str = "") -> bool:
         """Write only when the bytes differ. This is the ACROSS-RUN half of idempotence: scratch
         remembers who is done inside one run, but a worker restart loses scratch, and a re-run
-        that rewrites an identical file still produces a second commit in somebody's history."""
-        if ws_file(their_uid, path) == content:
+        that rewrites an identical file still produces a second commit in somebody's history.
+
+        `report` MAKES IT A MERGE (Vexa-ai/vexa#1598). The meeting's page is written by three hands
+        — this step, the person, and their agent's Expand — so when the page already carries the
+        report region, only that region is rewritten and everything else on the page survives. It is
+        the same read this function already makes; what changes is that the answer is used for more
+        than a comparison."""
+        current = ws_file(their_uid, path)
+        wanted = _merge_meeting_doc(current, content, report) if report else content
+        if current == wanted:
             return False
-        ag.workspace_write(their_uid, path, content)
+        ag.workspace_write(their_uid, path, wanted)
         return True
 
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
@@ -1928,7 +1992,10 @@ def build(reg: Registry, db) -> None:
                 _write_if_changed(their_uid, entity_path, _drop_entity(
                     title=title, day=day, entity_id=entity_id, date_prose=date_prose,
                     organizer=organizer, participants=roster, report=report,
-                    link=d.get("link") or "", meeting_id=str(mid or ""), native=native))
+                    link=d.get("link") or "", meeting_id=str(mid or ""), native=native),
+                    # A page this person has already grown keeps everything but its report region
+                    # (#1598). Their words are not this step's to overwrite.
+                    report=report)
                 _write_if_changed(their_uid, index_path, _index_entry(
                     ws_file(their_uid, index_path), title, filename, day))
                 done.append(a)

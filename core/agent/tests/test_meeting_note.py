@@ -193,3 +193,38 @@ def test_a_file_with_no_front_matter_is_not_a_meeting(tmp_path):
     desk = _desk(tmp_path)
     (desk / "notes.md").write_text("# DNA TSC 2026-03-02\n\nsome prose\n")
     assert meeting_note.resolve(tmp_path, "175", _row()) is None
+
+
+# ── AND WHETHER IT IS THE MEETING'S ONE PAGE (Vexa-ai/vexa#1598) ─────────────────────────────────
+#
+# Founder, live, 2026-09-06: the meeting is ONE page with the transcript embedded in it. `describe`
+# is what lets the room know whether THIS page is that: it reads the widget slot and the cursor off
+# the file. The claim worth pinning is the negative one — every report written before the widget
+# exists on somebody's desk right now, and answering "there is a note, so the transcript is in it"
+# would take the room off exactly their screen, silently.
+
+def test_describe_reads_the_widget_and_the_cursor_off_the_page(tmp_path):
+    from shared import meeting_doc
+    desk = _desk(tmp_path)
+    page = _entity("DNA TSC 2026-03-02", "2026-03-02", meeting="147")
+    page = meeting_doc.ensure_slot(page, "147")
+    page = meeting_doc.advance_cursor(page, "2026-09-06T12:04:31.000Z")
+    (desk / DNA).write_text(page)
+    got = meeting_note.describe(tmp_path, "175", _row())
+    assert got == {"path": f"kg/entities/meeting/{DNA}", "transcript": "147",
+                   "cursor": "2026-09-06T12:04:31.000Z"}
+
+
+def test_a_page_written_before_the_widget_says_so_rather_than_guessing(tmp_path):
+    desk = _desk(tmp_path)
+    (desk / DNA).write_text(_entity("DNA TSC 2026-03-02", "2026-03-02", meeting="147"))
+    got = meeting_note.describe(tmp_path, "175", _row())
+    assert got["path"] == f"kg/entities/meeting/{DNA}"
+    assert (got["transcript"], got["cursor"]) == ("", "")
+
+
+def test_no_report_describes_as_nothing_and_never_raises(tmp_path):
+    _desk(tmp_path)
+    assert meeting_note.describe(tmp_path, "175", _row()) == {"path": None, "transcript": "", "cursor": ""}
+    # a desk that is not there at all is the same answer, not an exception
+    assert meeting_note.describe(tmp_path / "nope", "175", _row()) == {"path": None, "transcript": "", "cursor": ""}

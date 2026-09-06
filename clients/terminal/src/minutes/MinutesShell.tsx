@@ -40,7 +40,7 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
-import { fetchMeetingNotePath } from "./meetingNote";
+import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
@@ -318,10 +318,15 @@ export function MinutesShell() {
         // THE SERVER SAYS WHERE THE MEETING'S DOCUMENT IS (Vexa-ai/vexa#1588). A `?mock=1` fixture
         // has no server to ask and its canned pages ARE keyed on the composed path
         // (`mockPhases.ts`), so the mock composes — and only the mock.
-        const notePath = fake
-          ? (native ? `kg/entities/meeting/${native}.md` : null)
-          : await fetchMeetingNotePath(c.meeting);
-        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, notePath);
+        // …AND WHETHER THAT DOCUMENT IS THE MEETING'S ONE PAGE (Vexa-ai/vexa#1598): a page that
+        // declares the transcript widget renders the room inside itself, so the strip carries no
+        // second Transcript tab. Read off the file by the server, never inferred from "a note
+        // exists" — the reports written before the widget carry none, and they keep both pages.
+        const note = fake
+          ? { path: native ? `kg/entities/meeting/${native}.md` : null, transcript: "", cursor: "" }
+          : await fetchMeetingNote(c.meeting);
+        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, note.path,
+                             { noteHasTranscript: !!note.transcript });
       }
       // THE DESK IS THE DEFAULT PAGE (PRD decision 26.4). This used to open the ORGANISATION's
       // README for a chat with no focus — the company's document, the same for everybody, and not
@@ -937,8 +942,9 @@ export function MinutesShell() {
     // A row the list has not caught up with is a meeting that has just begun — which is the only way
     // to reach this at all, so `live` is the honest reading rather than a default.
     const phase = m ? meetingPhase(m) : "live";
-    const notePath = await fetchMeetingNotePath(meetingId);
-    const room = meetingPages(phase, meetingId, notePath);
+    const note = await fetchMeetingNote(meetingId);
+    const room = meetingPages(phase, meetingId, note.path, null,
+                              { noteHasTranscript: !!note.transcript });
     setPages((prev) => withMeetingPages(prev as Artifact[], room) as Page[]);
   }, [persist]);
 

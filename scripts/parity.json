@@ -546,6 +546,25 @@
           ]
         }
       ]
+    },
+    {
+      "id": "transcript-slot-marker",
+      "fact": "the marker a meeting doc declares its live-transcript widget with",
+      "kind": "regex-source",
+      "enforced": true,
+      "canonical": "core/agent/shared/meeting_doc.py",
+      "how_to_agree": "one raw literal on each side, character for character — the TypeScript uses String.raw so its source text is the Python raw string's text",
+      "why": "Vexa-ai/vexa#1598. A meeting is ONE page with the transcript embedded in it, and the marker is an HTML comment so the file stays plain markdown for every other reader. Two engines must read it and no shared module can exist: the terminal's renderer splits a document on it (before #1590 strips comments, or the widget goes with them), and the agent writes it. A THIRD writer exists in core/flows (production.MEETING_SLOT, the post-meeting drop) and cannot be a site here — flows' image carries neither core/agent nor core/workspaces, so it composes the marker from a format string rather than a regex. It is pinned by its own test instead (core/flows/tests/test_attendee_drop.py). What makes this worth a gate is the failure shape: a marker that drifts by one space renders as NOTHING and reports NOTHING — the page silently loses the room off the reader's screen while they are in the meeting.",
+      "sites": [
+        {
+          "path": "core/agent/shared/meeting_doc.py",
+          "pattern": "SLOT_SOURCE = r\"\"\"(.+)\"\"\""
+        },
+        {
+          "path": "clients/terminal/src/ui-kit/transcriptSlot.ts",
+          "pattern": "TRANSCRIPT_SLOT_SOURCE = String\\.raw`(.+)`;"
+        }
+      ]
     }
   ]
 }

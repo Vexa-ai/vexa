@@ -142,3 +142,35 @@ def resolve(workspaces_root, subject: str, row) -> "str | None":
     # chronologically as a string, so "newest" here is a fact about the files rather than a guess —
     # and it is STABLE, which is the property that matters when the alternative is a coin flip.
     return f"{MEETING_DIR}/{sorted(n for _d, n in by_title)[-1]}"
+
+
+def describe(workspaces_root, subject: str, row) -> dict:
+    """The note, PLUS the two facts that decide whether it is the meeting's ONE page (#1598).
+
+    `transcript` is the meeting the page's own widget slot names — non-empty means the live
+    transcript renders INSIDE this document, so the room needs no separate Transcript tab. `cursor`
+    is where the last Expand stopped reading.
+
+    BOTH ARE READ OFF THE FILE, never assumed from the fact that a note exists. Every report written
+    before the widget existed is on somebody's desk right now and carries neither; a client that
+    inferred "there is a note, so the transcript is in it" would take the room off the screen of
+    exactly the people whose meetings predate this. Absent is the honest answer and it degrades to
+    the two-page room, which is what they have today.
+
+    Never raises: a note we could not read is a note we cannot describe, and the path — which is
+    what #1588 exists to answer — is still worth returning on its own."""
+    from shared import meeting_doc
+
+    path = resolve(workspaces_root, subject, row)
+    out = {"path": path, "transcript": "", "cursor": ""}
+    if not path:
+        return out
+    try:
+        with (Path(workspaces_root) / str(subject) / path).open("r", encoding="utf-8",
+                                                               errors="replace") as fh:
+            head = fh.read(_HEAD_BYTES)
+    except OSError:
+        return out
+    out["transcript"] = meeting_doc.slot_meeting(head)
+    out["cursor"] = meeting_doc.read_cursor(head)
+    return out

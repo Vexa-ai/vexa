@@ -35,7 +35,7 @@ def build(**d) -> APIRouter:
         return _txw.relay_health()
     @router.get("/api/meeting/note")
     def meeting_note(meeting_id: str, request: Request):
-        """WHERE THIS MEETING'S REPORT LIVES ON THE CALLER'S DESK — `{"path": … | null}`.
+        """WHERE THIS MEETING'S REPORT LIVES ON THE CALLER'S DESK — `{"path", "transcript", "cursor"}`.
 
         The client asks; it does not spell. `kg/entities/meeting/<meeting-day>-<title-slug>.md` is
         written by `core/flows`' `drop_to_attendees`, the day in the organiser's zone and the slug
@@ -51,12 +51,18 @@ def build(**d) -> APIRouter:
 
         OWNER-SCOPED BEFORE ANYTHING IS READ, exactly as `/api/meeting/stream` is one route down and
         for the same reason: row ids are sequential ints, and this answers with a path on a DESK.
-        `_meeting_owner_lookup` returns None for an absent row and for another tenant's."""
+        `_meeting_owner_lookup` returns None for an absent row and for another tenant's.
+
+        `transcript` AND `cursor` ARE READ OFF THE PAGE (Vexa-ai/vexa#1598). A meeting doc that
+        declares the transcript widget (`<!-- vexa:transcript meeting=… -->`) IS the meeting's one
+        page — the live transcript renders inside it — so the room shows no separate Transcript tab.
+        Both are `""` for every report written before the widget existed, and that absence is what
+        keeps those meetings on the two-page room they have today instead of losing the transcript."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
         row = _meeting_owner_lookup(subject, meeting_id)
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
-        return {"path": meeting_note_mod.resolve(wsr.root, subject, row)}
+        return meeting_note_mod.describe(wsr.root, subject, row)
     @router.get("/api/meeting/terms")
     def meeting_terms(meeting_id: str, request: Request):
         """THIS MEETING'S ANNOTATION LAYER — `{"meeting", "cursor", "terms"}` (Vexa-ai/vexa#1595).

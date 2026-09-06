@@ -229,9 +229,10 @@ export const personalPage = (): Page => ({ path: "README.md", label: "Personal p
  *  the scaffold), and ABSENT it drops the page rather than guessing one: a tab pointing at a
  *  guessed path opens a document that can never load. */
 export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null,
-                              notePath?: string | null): Page[] {
+                              notePath?: string | null,
+                              opts: { noteHasTranscript?: boolean } = {}): Page[] {
   if (!native) return [personalPage()];
-  return [...meetingPages(phase, meetingId, notePath, native), personalPage()];
+  return [...meetingPages(phase, meetingId, notePath, native, opts), personalPage()];
 }
 
 /** THE MEETING'S OWN PAGES — the transcript and its document, in reading order, and nothing else.
@@ -246,13 +247,27 @@ export function pagesForPhase(phase: MeetingPhase, native?: string | null, meeti
  *  a second spelling of the same two rules. `native` is here only for the `?mock=1` fallback, where
  *  a fixture with no row keeps its canned markdown transcript. */
 export function meetingPages(phase: MeetingPhase, meetingId?: string | null,
-                             notePath?: string | null, native?: string | null): Page[] {
+                             notePath?: string | null, native?: string | null,
+                             opts: { noteHasTranscript?: boolean } = {}): Page[] {
   // The meeting doc is the SAME file in every phase — it is the brief while the room is running and
   // the minutes once it is not, so only its NAME moves. That half was always right.
   const doc: Page[] = notePath ? [{ path: notePath, label: phase === "post" ? "Minutes" : "Brief" }] : [];
   // prep: no transcript yet. The one page that matters before the room — what you walk in to decide.
   if (phase === "prep") return doc;
-  // live or post: a transcript exists and it leads.
+  // ONE PAGE, NOT TWO (Vexa-ai/vexa#1598). Founder, live: *"we want this doc to open alongside
+  // transcript as a single thing in the right side so it's a kind of doc that has live transcript
+  // widget in it"*. When the meeting's own page DECLARES the widget, the transcript is already on
+  // that page — a second Transcript tab is then the same words in two tabs, which is the shape he
+  // asked to be rid of.
+  //
+  // GATED ON THE PAGE'S OWN DECLARATION, never on "a note exists". Every report written before the
+  // widget is on somebody's desk right now and carries none; dropping the tab for those would take
+  // the room off the screen of exactly the people whose meetings predate this, silently. The server
+  // reads the declaration off the file (`/api/meeting/note` → `transcript`) and absent is the
+  // honest answer, which lands them on the two-page room they have today.
+  if (opts.noteHasTranscript && doc.length) return doc;
+  // otherwise: a transcript exists, and the doc leads it — the page is what the meeting IS about,
+  // the transcript is what was said in it.
   const transcript: Page = meetingId
     ? { kind: "meeting", path: meetingId, label: "Transcript" }
     : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" };

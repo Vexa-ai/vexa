@@ -13,7 +13,7 @@
  *  person's own message — is pinned in `actLabel.test.ts`.
  */
 import { describe, it, expect, vi } from "vitest";
-import { fetchMeetingNotePath } from "../meetingNote";
+import { fetchMeetingNote, fetchMeetingNotePath } from "../meetingNote";
 import { artifactFromToken, isRetiredNotePath, pagesForPhase } from "../roomView";
 
 /** What `_note_path` produced for the meeting in the ledger — the whole stamp, the slugged title.
@@ -106,5 +106,61 @@ describe("asking the server where the note is", () => {
   it("refuses a path that walks out of the workspace", async () => {
     const f = (async () => res({ path: "../../etc/passwd" })) as unknown as typeof fetch;
     expect(await fetchMeetingNotePath(ROW, f)).toBeNull();
+  });
+});
+
+// ── ONE PAGE, NOT TWO (Vexa-ai/vexa#1598) ────────────────────────────────────────────────────
+//
+// Founder, live, 2026-09-06: *"we want this doc to open alongside transcript as a single thing in
+// the right side so it's a kind of doc that has live transcript widget in it"*. So when the
+// meeting's own page declares the widget, the room shows that page and no separate Transcript tab —
+// the transcript is IN it. The claim with the plausible wrong answer is the negative one: a report
+// written before the widget existed is on somebody's desk right now, and inferring "there is a note,
+// so the transcript is in it" would take the room off THEIR screen, silently.
+
+describe("the room is one page once the page carries the transcript", () => {
+  const room = (over: { noteHasTranscript?: boolean } = {}) =>
+    labels(pagesForPhase("live", NATIVE, ROW, FLOW_NOTE, over));
+
+  it("drops the separate Transcript tab when the page declares the widget", () => {
+    expect(room({ noteHasTranscript: true })).toEqual(["Brief", "Personal page"]);
+    expect(labels(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE, { noteHasTranscript: true })))
+      .toEqual(["Minutes", "Personal page"]);
+  });
+
+  it("keeps BOTH for a report written before the widget existed", () => {
+    expect(room()).toEqual(["Transcript", "Brief", "Personal page"]);
+    expect(room({ noteHasTranscript: false })).toEqual(["Transcript", "Brief", "Personal page"]);
+  });
+
+  it("keeps the transcript when there is no page at all — a widget on no page is no widget", () => {
+    expect(labels(pagesForPhase("live", NATIVE, ROW, null, { noteHasTranscript: true })))
+      .toEqual(["Transcript", "Personal page"]);
+  });
+});
+
+describe("what the server says about the page, beyond where it is", () => {
+  const res = (body: unknown, ok = true) => ({ ok, json: async () => body }) as Response;
+
+  it("carries the widget's meeting and the page's cursor through", async () => {
+    const f = (async () => res({ path: FLOW_NOTE, transcript: ROW, cursor: "2026-09-06T12:04:31Z" })) as unknown as typeof fetch;
+    expect(await fetchMeetingNote(ROW, f)).toEqual({ path: FLOW_NOTE, transcript: ROW, cursor: "2026-09-06T12:04:31Z" });
+  });
+
+  it("a page written before the widget answers with neither, and that is not a failure", async () => {
+    const f = (async () => res({ path: FLOW_NOTE })) as unknown as typeof fetch;
+    expect(await fetchMeetingNote(ROW, f)).toEqual({ path: FLOW_NOTE, transcript: "", cursor: "" });
+  });
+
+  it("a widget without a path is dropped — it could only hide a tab with nothing behind it", async () => {
+    const f = (async () => res({ path: null, transcript: ROW })) as unknown as typeof fetch;
+    expect(await fetchMeetingNote(ROW, f)).toEqual({ path: null, transcript: "", cursor: "" });
+    const walker = (async () => res({ path: "../../etc/passwd", transcript: ROW })) as unknown as typeof fetch;
+    expect(await fetchMeetingNote(ROW, walker)).toEqual({ path: null, transcript: "", cursor: "" });
+  });
+
+  it("an unreachable server costs the room its Minutes tab and nothing else", async () => {
+    const thrower = (async () => { throw new Error("offline"); }) as unknown as typeof fetch;
+    await expect(fetchMeetingNote(ROW, thrower)).resolves.toEqual({ path: null, transcript: "", cursor: "" });
   });
 });

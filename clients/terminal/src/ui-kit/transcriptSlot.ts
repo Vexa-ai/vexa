@@ -38,7 +38,10 @@ export function transcriptSlotMarker(meeting: string): string {
  *  character for character. Built into a fresh RegExp at every use — a module-level `g` regex
  *  carries `lastIndex` between calls, which is the classic way a second render of the same doc
  *  silently loses its widget. */
-export const TRANSCRIPT_SLOT_SOURCE = "<!--\\s*vexa:transcript\\s+meeting=[\"']?([A-Za-z0-9_.:-]{1,128})[\"']?\\s*-->";
+// `String.raw` rather than a quoted string ON PURPOSE: it makes this line's TEXT identical to the
+// Python side's raw literal, which is what lets `gate:fact-parity` compare them character for
+// character instead of comparing two escapings of the same idea.
+export const TRANSCRIPT_SLOT_SOURCE = String.raw`<!--\s*vexa:transcript\s+meeting=["']?([A-Za-z0-9_.:-]{1,128})["']?\s*-->`;
 
 const slotRe = (flags = "") => new RegExp(TRANSCRIPT_SLOT_SOURCE, flags);
 
