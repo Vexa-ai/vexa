@@ -450,7 +450,11 @@ export async function writeWorkspacePurpose(purpose: string, opts?: { slug?: str
  *  contributor = a read/write member (the single member rank). `subject` is the synthetic user id;
  *  `email` is their verified email when known (stamped at grant / on first manage-panel view) — the
  *  human label the roster prefers over the opaque subject. */
-export interface WorkspaceMember { subject: string; role: string; email?: string; added_by?: string; added_at?: string }
+/** A member of a shared workspace. `name` is what they are CALLED — their own `self: true`
+ *  person page, else the company directory (`control_plane/front_page.person_name`,
+ *  Vexa-ai/vexa#1634). Absent when nobody has written them down: the front page then counts
+ *  them in "and 2 more" rather than rendering their address as a name. */
+export interface WorkspaceMember { subject: string; role: string; name?: string | null; email?: string; added_by?: string; added_at?: string }
 export async function listWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
   const data = await getJson<{ members?: WorkspaceMember[] }>(`/api/workspace/members?workspace_id=${encodeURIComponent(workspaceId)}`);
   return data.members ?? [];
@@ -491,6 +495,47 @@ export interface WorkspaceHistory { slug: string; branch: string; path: string |
  *
  *  `slug` is a PATH segment here, not a query parameter, so the desk needs a word: `personal`, which
  *  is what `workspace_attach.PERSONAL_ALIAS` and the panel's own breadcrumb already call it. */
+/** One changed page, named the way a person names it (`front_page.page_title`: its `title:`, else
+ *  its first heading, else its own file name read aloud). */
+export interface ChangedPage { path: string; title: string }
+
+/** THE LAST CHANGE, AS A SENTENCE NEEDS IT (Vexa-ai/vexa#1634).
+ *
+ *  `author` is a NAME or `null` — never an address, and the route is where that is enforced.
+ *  `pages` are the pages a person is shown that this commit touched, so a turn-commit whose subject
+ *  reads `MISSING.md, OBJECTIVES.md +13` still answers with what it actually changed. */
+export interface LastChange {
+  sha: string;
+  msg: string;
+  when: string;
+  ts?: number;
+  kind?: "you" | "member" | "system";
+  author: string | null;
+  pages: ChangedPage[];
+  count: number;
+  files?: string[];
+}
+
+/** `GET /api/workspaces/{slug}/git/last-change` — the newest commit that changed a page, described.
+ *
+ *  Not a second history read: the newest commit's SUBJECT names the file its turn was about while
+ *  the commit touches several, and its AUTHOR is the principal a mount commits as (`%an` = the
+ *  subject id). So the route answers with the changed pages' own titles and the author's own name,
+ *  resolved on the server against the files — the two facts a git log does not carry and a client
+ *  cannot compose. `change: null` is an ordinary answer: nobody has committed here yet. */
+export interface LastChangeAnswer { slug: string; path: string | null; change: LastChange | null }
+export async function readLastChange(slug: string, opts?: { path?: string }): Promise<LastChangeAnswer> {
+  const qs = opts?.path ? `?path=${encodeURIComponent(opts.path)}` : "";
+  return getJson<LastChangeAnswer>(`/api/workspaces/${encodeURIComponent(slug)}/git/last-change${qs}`);
+}
+
+/** WHO THE READER IS, by name — `GET /api/people/me`. `name` is null when nobody has written them
+ *  down, and null is the answer: no address is ever put in a name's place. */
+export interface MyPerson { subject: string; name: string | null; first_name: string | null }
+export async function readMyPerson(): Promise<MyPerson> {
+  return getJson<MyPerson>(`/api/people/me`);
+}
+
 export async function readWorkspaceHistory(slug: string, opts?: { path?: string; limit?: number }): Promise<WorkspaceHistory> {
   const qs = new URLSearchParams();
   if (opts?.path) qs.set("path", opts.path);

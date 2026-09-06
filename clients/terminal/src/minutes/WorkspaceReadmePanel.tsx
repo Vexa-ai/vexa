@@ -1,28 +1,47 @@
 "use client";
-/** THE WORKSPACE'S FRONT PAGE — ONE HEADER STRIP between a workspace README's slug line and its
- *  prose, and everything else behind a disclosure.
+/** THE WORKSPACE'S FRONT PAGE — TWO SENTENCES and the acts this viewer may take, between a
+ *  workspace README's title and its prose. Everything else is behind one disclosure.
  *
- *  Founder, 2026-09-06, first look at what #1623 built, on `_global/README.md`: *"ups, the workspace
- *  panel should take only the header, 1/8 screen at max, the rest collapsed."* (Vexa-ai/vexa#1628).
- *  What he walked into filled the viewport — five rows of THIS WORKSPACE, then SHARED WITH, then
- *  GITHUB, then twenty commits of HISTORY — and pushed the page's own first line below the fold.
+ *  Founder, 2026-09-06, on what #1628 had just sized down to the header — *"Company layer · 25 pages
+ *  · _global: asks/policies-wizard.md … · dmitry@vexa.ai · 14 minutes ago · Everyone reads, the
+ *  admin writes · no repo attached · 10+ commits"*: **"what about this one? never spoke about how to
+ *  make it right, helpful and nice."** (Vexa-ai/vexa#1634.) The size was fixed; the content was a
+ *  list of repository facts — a path, an address, a commit count, a repo state. **A person needs a
+ *  sentence about a place.**
  *
- *  So the panel is now a STRIP: six summaries in one or two lines, each of them the ANSWER rather
- *  than a label for one (`Shared workspace` · `12 pages` · the last change · the roster in five
- *  words · the repo in three · a commit count), and each of them a button that opens exactly that
- *  section under the strip. Nothing is open by default; opening one closes the other, because the
- *  complaint was a wall of sections and two open sections are the beginning of one. The strip is
- *  capped at 12vh — a twelfth-and-a-half of the viewport is what "1/8 screen at max" means, measured
- *  where it can be measured — and no section's content is even RENDERED until its disclosure opens,
- *  so the cap is not a promise the layout has to keep on its own.
+ *  So the strip is two lines and a few buttons:
+ *
+ *      Company layer · everyone at Acme reads it, Jane writes it · 25 pages
+ *      Changed 14 minutes ago by Jane Smith: the policies wizard ask · policies: default profile
+ *          [Set up policies] [Add an editor] [History]
+ *
+ *  LINE ONE is where you are and who is here — people as NAMES with "you" first, or, where people
+ *  are not the point (a desk, the company layer), the visibility sentence derived from `POLICIES.md`
+ *  and the kind. LINE TWO is the last change as a sentence: the changed thing by its TITLE, the
+ *  author by their NAME, a relative time — none of which is in a git log, which is why the server
+ *  resolves all three (`control_plane/front_page.py`). The words themselves are decided by pure
+ *  functions in `./workspaceFrontPage`, so the three lines the founder wrote are held by tests
+ *  against fixture data rather than by a screenshot.
+ *
+ *  THE BUTTONS ARE ACTS, AND AN ACT IS A CONVERSATION (#1632's principle, founder: *"this add
+ *  member should just ask chat to do that with mcp, asking their emails etc."*). Each queues a
+ *  same-target act on the open chat; none opens a form. A READER sees exactly one of them —
+ *  History — because a control whose only outcome is a 403 teaches a person that the product is
+ *  broken rather than that they lack the role.
+ *
+ *  NOTHING ELSE IS ON THE STRIP (#1634 rule 3): no commit count, no *no repo attached*, no address,
+ *  no path. All of it is still true and still one click away — the six summaries and the sections
+ *  #1628 built are behind **History**, the one disclosure at the end of line two, unchanged. The
+ *  12vh cap stays on the strip for the reason #1628 put it there.
  *
  *  WHAT IS REMEMBERED, AND WHERE. Which section a person had open is remembered per workspace, in
  *  their browser and nowhere else: it is a reading posture, not a fact about the workspace, and it
- *  has no business in anybody's git history.
+ *  has no business in anybody's git history. A first visit opens nothing; a return opens what you
+ *  left open, which is the same rule seen from the other side.
  *
- *  KEYBOARD. The strip is ONE tab stop with six buttons inside it (`role="toolbar"`, roving
- *  tabindex): tab moves past the whole panel, arrows move within it. Six tab stops between the page
- *  title and the page's own text is a tax on every reader who is not looking at the panel.
+ *  KEYBOARD. The section summaries are ONE tab stop with six buttons inside them (`role="toolbar"`,
+ *  roving tabindex): tab moves past them, arrows move within. The strip's own acts are ordinary
+ *  buttons — there are at most three and each is a different thing to do.
  *
  *  THE FOUR RULES IT IS STILL BUILT ON, unchanged from #1623 and each readable against the code:
  *
@@ -59,17 +78,30 @@ import {
   readWorkspaceGitDiff,
   type GitCommit, type WorkspaceMember,
 } from "../surfaces/workspaceApi";
+import { ASK_CHAT_EVENT } from "../canvas/actions";
 import { AttachRepo } from "./AttachRepo";
 import { postIntent } from "./extend";
+import { POLICIES_PATH, POLICIES_WORKSPACE } from "./PoliciesAct";
 import { surface, type as ty } from "./tokens";
+import {
+  actDisplay, actInstruction, lineOne, lineTwo, stripActs,
+  type StripAct, type FrontPageFacts,
+} from "./workspaceFrontPage";
 import {
   DESK_SLUG, HISTORY_PAGE, kindLabel, lastChangeLine, loadHistory, loadWorkspaceFacts,
   repoInThreeWords, roleLabel, sharedInFiveWords, type WorkspaceFacts,
 } from "./workspaceReadme";
 
+/** THE STRIP IS NOT A CARD ANY MORE (#1634 rule 5: *"grey, small, sentence-like — the people-and-
+ *  last-edit line under a shared document's title. Body starts right under."*). A bordered panel
+ *  says "here is a component"; two grey lines and a hairline say "here is where you are", which is
+ *  what the founder asked for. The DETAILS keep the card, because they are a panel. */
 const box: CSSProperties = {
+  padding: "0 0 9px", marginBottom: 13, borderBottom: "1px solid var(--line)",
+};
+const detailsBox: CSSProperties = {
   border: "1px solid var(--line)", borderRadius: 8, background: surface.raised,
-  padding: "8px 10px", marginBottom: 16,
+  padding: "8px 10px", margin: "0 0 16px",
 };
 /** THE HEIGHT RULE, as a number the code and its test share. 12% of the viewport, which is inside
  *  the founder's "1/8 screen at max" with the rounding in the reader's favour. */
@@ -83,6 +115,14 @@ const stripS: CSSProperties = {
   maxHeight: `${STRIP_MAX_VH}vh`, overflowY: "auto", overflowX: "hidden",
 };
 const sectionS: CSSProperties = { borderTop: "1px solid var(--line)", marginTop: 8, paddingTop: 8 };
+/** A sentence, not a row of chips: the size and colour of the line under a shared document's
+ *  title, and it WRAPS — a sentence that ellipsizes is a sentence with its ending taken away. */
+const lineS: CSSProperties = { ...ty.meta, color: "var(--t2)", lineHeight: 1.55, minWidth: 0 };
+/** An act. Quiet enough to sit inside a grey line, and unmistakably a button. */
+const actS: CSSProperties = {
+  ...ty.meta, flex: "none", padding: "1px 8px", borderRadius: 999, cursor: "pointer",
+  border: "1px solid var(--line)", background: "transparent", color: "var(--t2)", lineHeight: 1.6,
+};
 const rowS: CSSProperties = { display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, lineHeight: 1.5 };
 const keyS: CSSProperties = { ...ty.meta, flex: "none", width: 74 };
 const valS: CSSProperties = { ...ty.body, color: "var(--t1)", flex: "1 1 0%", minWidth: 0, wordBreak: "break-word" };
@@ -197,6 +237,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
   const [shown, setShown] = useState(HISTORY_PAGE);
   const [thisPage, setThisPage] = useState(false);
   const [open, setOpen] = useState<SectionId | null>(null);
+  // THE ONE DISCLOSURE (#1634 rule 6). Everything #1628 built lives under it; History is the button
+  // that opens it. It starts open only when this reader left a section open here — a first visit
+  // shows two sentences and nothing else.
+  const [details, setDetails] = useState(false);
   const [focus, setFocus] = useState(0);
   const [openSha, setOpenSha] = useState<string | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
@@ -213,7 +257,8 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
     let live = true;
     setFacts(null); setFailed(null); setCommits(null); setThisPage(false); setShown(HISTORY_PAGE);
     setOpenSha(null); setArmed(null); setSaid(null); setAttaching(false);
-    setOpen(rememberedOpen(p.slug || DESK_SLUG)); setFocus(0);
+    const posture = rememberedOpen(p.slug || DESK_SLUG);
+    setOpen(posture); setDetails(posture !== null); setFocus(0);
     void loadWorkspaceFacts(p.slug)
       .then((f) => { if (live) setFacts(f); })
       .catch((e: unknown) => { if (live) setFailed(presentError(e).headline); });
@@ -290,7 +335,68 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
     { id: "history", name: "History", summary: historyCount },
   ];
 
-  /** ARROWS MOVE INSIDE THE STRIP, tab moves past it. The focused index is state so the pressed
+  /** WHAT THE TWO SENTENCES ARE MADE OF. Assembled here and worded in `./workspaceFrontPage`, so
+   *  every claim about the words is a pure function a test can hold against fixture data. */
+  const fp: FrontPageFacts = {
+    kind: facts.kind, name: facts.name, pages: facts.pages, policies: facts.policiesText,
+    company: facts.company,
+    // THE ADMINISTRATOR'S FIRST NAME, and only when this reader IS the administrator. `me` is who
+    // is READING, not who writes here — so on `_global` it names the writer only where the two are
+    // the same person, and everybody else reads "the admin". A reader's own name on a sentence
+    // about somebody else's permission would be a confident lie in the first line a person meets.
+    adminFirstName: facts.kind === "global" && owner ? (facts.me?.first_name ?? null) : null,
+    members: facts.members, mySubject: facts.me?.subject ?? null, myRole: facts.myRole,
+    bound: facts.bound,
+  };
+  const acts = stripActs({ kind: facts.kind, owner, remote });
+
+  /** OPENING THE DETAILS. History is the door, so History is what it opens — and closing it leaves
+   *  the section it opened remembered, which is what brings a reader back where they were. */
+  const openDetails = () => {
+    setDetails((was) => {
+      if (!was && open === null) { setOpen("history"); remember(p.slug || DESK_SLUG, "history"); }
+      return !was;
+    });
+  };
+
+  /** AN ACT IS A CONVERSATION, NOT A FORM (Vexa-ai/vexa#1632). The press queues a same-target act
+   *  on the open chat through `ASK_CHAT_EVENT` — the one door every act on this screen already uses
+   *  — and the agent asks for what it needs, confirms in one sentence, and does it.
+   *
+   *  **Set up policies** is #1627's typed intent, which exists: the server maps the KIND to
+   *  `_global/asks/policies-wizard.md` and nothing here composes a sentence. The other three carry
+   *  their instruction as text because their intent kinds are not on this branch yet — see the TODO
+   *  in `workspaceFrontPage.actInstruction`, which names #1632 and says what replaces it. */
+  const fire = (a: StripAct) => {
+    if (a.id === "policies") {
+      postIntent({ kind: "policies_wizard", workspace: POLICIES_WORKSPACE, path: POLICIES_PATH });
+      return;
+    }
+    // ADDING A MEMBER IS #1632'S OWN ACT, which landed on this branch while this was being built.
+    // The strip's button is a second door into it, not a second implementation: the same typed
+    // intent, the same ask, the same verb. `Add an editor` is deliberately NOT this — the company
+    // layer's editors are a named set in `POLICIES.md`, and `workspace_invite` refuses `_global`
+    // precisely because a membership record there would authorise nothing.
+    if (a.id === "member") { postIntent({ kind: "member_add", workspace: facts.slug }); return; }
+    // WHAT THE ACT CALLS THIS PLACE. A desk is "your desk" and the company layer is the company's
+    // own name — never the slug, which is an address: the same rule the chat header keeps (F49,
+    // where the founder met `126`) applied to the sentence an act puts in front of the agent.
+    const where = {
+      workspace: facts.slug,
+      name: facts.kind === "desk" ? "your desk"
+        : facts.kind === "global" ? (facts.company || "the company layer")
+        : facts.name,
+    };
+    const prompt = actInstruction(a.id, where);
+    if (!prompt) return;
+    window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+      // The bubble shows the ACT, never the instruction: a bubble that renders the instruction puts
+      // words in the person's mouth they did not write (`extend.ts`'s own rule).
+      detail: { prompt, display: actDisplay(a, where) },
+    }));
+  };
+
+  /** ARROWS MOVE INSIDE THE SECTION SUMMARIES, tab moves past them. The focused index is state so the pressed
    *  button keeps `tabIndex=0` after it is clicked — a toolbar that resets its entry point every
    *  time you use it sends the next Tab somewhere the reader did not leave it. */
   const onStripKey = (e: ReactKeyboardEvent) => {
@@ -306,14 +412,43 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
 
   return (
     <div data-ws-readme data-ws-kind={facts.kind} style={box}>
-      {/* THE STRIP — six answers, six buttons, one tab stop, 12vh at the very most. */}
-      <div ref={strip} data-ws-strip role="toolbar" aria-label="This workspace" aria-orientation="horizontal"
-        onKeyDown={onStripKey} style={stripS}>
+      {/* TWO SENTENCES — where you are and who is here, then what last happened and what you may
+          do about it. Capped at 12vh for #1628's reason and scrolling rather than clipping for its
+          reason too: a control a person can see the top of and cannot click is the one thing this
+          panel refuses to render. */}
+      <div data-ws-strip style={stripS}>
+        <div data-ws-line="where" style={lineS}>{lineOne(fp)}</div>
+        <div data-ws-line="changed" style={{ ...lineS, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+          <span data-ws-changed style={{ flex: "0 1 auto", minWidth: 0 }}>{lineTwo(fp, facts.change)}</span>
+          {/* THE ACTS. Each queues a same-target act on the open chat and none opens a form
+              (#1632). History is the disclosure — it opens the sections #1628 built, and it is the
+              only one a reader gets. */}
+          <span data-ws-acts style={{ display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+            {acts.map((a) => (
+              <button key={a.id} data-ws-strip-act={a.id} title={a.why}
+                {...(a.id === "history"
+                  ? { "data-ws-details": "", "aria-expanded": details, "aria-controls": "ws-details" }
+                  : {})}
+                onClick={() => (a.id === "history" ? openDetails() : fire(a))}
+                style={{ ...actS, ...(a.id === "history" && details
+                  ? { background: surface.raisedHi, borderColor: "var(--line2)", color: "var(--t1)" } : {}) }}>
+                {a.label}
+              </button>
+            ))}
+          </span>
+        </div>
+      </div>
+
+      {/* …AND EVERYTHING #1628 BUILT, when the reader asked for it. Nothing below this line exists
+          in the DOM until it does, which is what makes the strip's height rule hold without a
+          scroller — and what makes the front page two sentences rather than a panel. */}
+      {details && (<div data-ws-details-region id="ws-details" style={detailsBox}>
+      <div ref={strip} data-ws-sections role="toolbar" aria-label="This workspace" aria-orientation="horizontal"
+        onKeyDown={onStripKey} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 2px" }}>
         {/* THE SUMMARY IS THE WHOLE BUTTON. Its category name ("Kind", "GitHub") is carried by the
             accessible name and the tooltip and NOT printed beside it: on the 384px panel this lives
-            in, six printed labels doubled the strip's width and cost it the "one or two lines" the
-            founder asked for — and `Shared workspace`, `12 pages`, `main, 2 ahead` say what they are
-            without being told. */}
+            in, six printed labels doubled the width and cost the row its two lines — and `Shared
+            workspace`, `12 pages`, `main, 2 ahead` say what they are without being told. */}
         {items.map((it, i) => (
           <span key={it.id} style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
             {i > 0 && <span aria-hidden style={{ ...ty.meta, flex: "none", opacity: 0.5 }}>·</span>}
@@ -328,8 +463,6 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
         ))}
       </div>
 
-      {/* …AND ONE SECTION, if the reader asked for one. Nothing below this line exists in the DOM
-          until it does, which is what makes the strip's height rule hold without a scroller. */}
       {open === "this" && (
         <div data-ws-section="this" id="ws-section-this" style={sectionS}>
           <Fact k="kind" name="Kind">
@@ -549,6 +682,8 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
           </div>
         </div>
       )}
+
+      </div>)}
 
       {/* THE RECEIPT of whatever was last done here, and everything that could not be read. Both are
           statements of fact and both live at the foot, where a person looks after acting. */}

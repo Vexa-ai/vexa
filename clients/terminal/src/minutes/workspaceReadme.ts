@@ -22,9 +22,10 @@
 import { presentError } from "../surfaces/apiClient";
 import {
   gitRemoteStatus, listSharedMemberships, listWorkspaceMembers, listWorkspaceTree,
-  readWorkspaceBySlug, readWorkspaceFile, readWorkspaceHistory,
-  type GitCommit, type GitRemoteStatus, type WorkspaceMember,
+  readLastChange, readMyPerson, readWorkspaceBySlug, readWorkspaceFile, readWorkspaceHistory,
+  type GitCommit, type GitRemoteStatus, type LastChange, type MyPerson, type WorkspaceMember,
 } from "../surfaces/workspaceApi";
+import { authorPhrase, companyName } from "./workspaceFrontPage";
 import { isMachinery } from "./machinery";
 
 /** The server's own three (`workspaces/shared/workspace_id.KINDS`). A "customer workspace" is a
@@ -161,7 +162,22 @@ export interface WorkspaceFacts {
   /** the pages themselves — the same filter the count comes from, `null` when the tree read failed */
   pageList: string[] | null;
   lastChange: GitCommit | null;
+  /** THE LAST CHANGE AS A SENTENCE NEEDS IT (Vexa-ai/vexa#1634) — the changed pages by their titles
+   *  and the author by their name, resolved server-side because neither is in a git log. `null`
+   *  when nothing has been committed here, which is an ordinary state and not a failure. */
+  change: LastChange | null;
   policy: string | null;
+  /** `_global/POLICIES.md` ITSELF, not only the sentence lifted out of it. The front page's first
+   *  line is derived from the file's ANSWERS (`agent_reads_desk`, `global_admin_only`, `profile:`)
+   *  rather than from its prose — a rule heading is right in a facts table and wrong as the first
+   *  thing a person reads, which is a sentence about a place. */
+  policiesText: string | null;
+  /** The company's own name — the first heading of `_global/README.md`, where the setup
+   *  conversation puts it (`global_layer.company_of` reads the same line server-side). */
+  company: string | null;
+  /** Who the reader is, by name. `null` when the probe failed; a null NAME inside it is the answer
+   *  "nobody has written them down", and the line falls back to the role rather than an address. */
+  me: MyPerson | null;
   bound: BoundSeries[];
   /** this reader's own role in a shared workspace (`null` for a desk / the company layer) */
   myRole: Role | null;
@@ -248,15 +264,21 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
 
   // The identity read is what says which KIND this is — and for anything but the desk and the
   // company layer it is the only thing that does.
-  const [ident, tree, history, remote, policies] = await Promise.allSettled([
+  const [ident, tree, change, remote, policies, company, me] = await Promise.allSettled([
     isDesk || isGlobal ? Promise.resolve(null) : readWorkspaceBySlug(slug),
     listWorkspaceTree({ slug: isDesk ? undefined : slug }),
-    // ONE commit, because one is all this read is for: the strip's *last change*. The list the
-    // history disclosure shows is `loadHistory`'s own paged read, and asking for twenty here bought
-    // nineteen commits nothing rendered.
-    readWorkspaceHistory(slug, { limit: 1 }),
+    // THE LAST CHANGE, DESCRIBED (Vexa-ai/vexa#1634) — not a one-commit history read any more.
+    // What the strip needs is the changed pages' TITLES and the author's NAME, and a git log
+    // carries neither: `%s` names the file the turn was about while the commit touched several,
+    // and `%an` is the subject id a mount commits as. The route resolves both against the files.
+    readLastChange(slug),
     gitRemoteStatus({ slug: isDesk ? undefined : slug }),
     readWorkspaceFile("POLICIES.md", { slug: GLOBAL_SLUG }),
+    // The company's own name, for the company layer's visibility sentence. Its own README is where
+    // the setup conversation writes it, and it is read rather than retyped for the same reason the
+    // policy sentence is.
+    readWorkspaceFile("README.md", { slug: GLOBAL_SLUG }),
+    readMyPerson(),
   ]);
 
   const identity = ident.status === "fulfilled" ? ident.value : null;
@@ -264,15 +286,26 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     : identity?.kind === "desk" ? "desk" : identity?.kind === "global" ? "global" : "group";
   if (ident.status === "rejected") note("Could not read what this workspace is.");
   if (tree.status === "rejected") note("Could not count the pages.");
-  if (history.status === "rejected") note("Could not read the history.");
+  if (change.status === "rejected") note("Could not read what last changed here.");
   if (policies.status === "rejected") note("Could not read the company policy.");
+  // The company's name and the reader's own name are NOT notes. Both are optional clauses of one
+  // sentence: a missing one costs the line a clause, and a red line at the foot of the panel would
+  // be announcing a failure about furniture (#1628's rule for the GitHub read, one fact along).
   // The GitHub read's failure is NOT a note: it belongs to its own section, named, so that the red
   // line at the foot keeps meaning "something here is broken" (#1628 point 3).
   const remoteFailure = remote.status === "rejected" ? presentError(remote.reason).headline : null;
 
-  const commits = history.status === "fulfilled" ? history.value.commits : [];
-  const policy = policySentence(kind, policies.status === "fulfilled" ? policies.value : null);
-  if (policies.status === "fulfilled" && policies.value && !policy) {
+  const described = change.status === "fulfilled" ? change.value.change : null;
+  // THE "LAST CHANGE" SECTION reads the same commit the sentence does, with the person's own name
+  // where the git author id used to be — one read, one answer, so the strip and the row it opens
+  // cannot disagree about who changed what.
+  const lastCommit: GitCommit | null = described
+    ? { sha: described.sha, msg: described.msg, when: described.when, ts: described.ts,
+        author: authorPhrase(described), kind: described.kind, files: described.files }
+    : null;
+  const policiesText = policies.status === "fulfilled" ? policies.value : null;
+  const policy = policySentence(kind, policiesText);
+  if (policiesText && !policy) {
     note("The company policy does not state a rule for this kind of workspace.");
   }
 
@@ -306,8 +339,12 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     slug, kind, name: identity?.name ?? null,
     pages: pageList ? pageList.length : null,
     pageList,
-    lastChange: commits[0] ?? null,
-    policy, bound, myRole, members,
+    lastChange: lastCommit,
+    change: described,
+    policy, policiesText,
+    company: companyName(company.status === "fulfilled" ? company.value : null),
+    me: me.status === "fulfilled" ? me.value : null,
+    bound, myRole, members,
     remote: remote.status === "fulfilled" ? remote.value : null,
     remoteFailure,
     owner, notes,

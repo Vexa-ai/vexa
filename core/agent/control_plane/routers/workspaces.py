@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from control_plane import claims as claims_mod
 from control_plane import deploy_keys as deploy_keys_mod
+from control_plane import front_page as front_page_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
 from control_plane import membership_acts
@@ -52,6 +53,13 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional
 import hashlib
 import os
+
+
+#: HOW FAR BACK THE FRONT PAGE LOOKS for a change a person can read (Vexa-ai/vexa#1634). Deep enough
+#: to walk past a run of plumbing commits — an identity write, a roster write, a policy commit — and
+#: shallow enough that the answer is still "recently". A workspace whose last twenty commits are all
+#: plumbing has genuinely had no page changed lately, and the line says so by naming no page.
+LAST_CHANGE_SCAN = 20
 
 
 def build(**d) -> APIRouter:
@@ -690,6 +698,98 @@ def build(**d) -> APIRouter:
                                          viewer=subject_of(request))}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc) or "invalid path or subject")
+
+    def _page_head(base, rel: str) -> Optional[str]:
+        """The top of one page in a workspace, RAW — the bytes a title is read out of.
+
+        Not ``wsr.read_at``: that prepends the template and unfilled banners, which is right for a
+        page an agent is about to read and wrong for this, because a banner in front of the file
+        pushes its own front matter out of the leading ``---`` position and takes the ``title:``
+        with it. Guarded by the same ``resolve_inside`` every path from a caller goes through."""
+        try:
+            p = wpaths.resolve_inside(base, rel)
+        except (wpaths.PathRefused, OSError, ValueError):
+            return None
+        try:
+            with p.open("r", encoding="utf-8", errors="replace") as fh:
+                return fh.read(front_page_mod._HEAD_BYTES)
+        except OSError:
+            return None
+
+    @router.get("/api/workspaces/{slug}/git/last-change")
+    def ws_last_change(slug: str, request: Request, path: Optional[str] = None):
+        """THE NEWEST COMMIT AS A SENTENCE — what changed, by its TITLE, and who by, by their NAME.
+
+        Founder, 2026-09-06, on the front-page strip (Vexa-ai/vexa#1634): *"never spoke about how to
+        make it right, helpful and nice."* The strip was reading a git log out loud — a commit
+        subject, an author id, a file count — and the line a person needs is *Changed 14 minutes ago
+        by Jane Smith: the policies wizard ask*. Neither half of that is in a git log, so neither
+        half can be composed in the client:
+
+          * a commit's **subject** names the file the turn was about while the commit touches
+            several (`_global`'s README history is full of `MISSING.md, OBJECTIVES.md +13`), so the
+            changed THING is read off the changed pages themselves — their ``title:``, their first
+            heading, or their own file name — and several pages become a count;
+          * a commit's **author** is the principal a mount commits as (``%an`` = the subject id, D4),
+            so the PERSON is resolved through their own page and the company directory, and an
+            address is never the answer (``front_page.person_name``).
+
+        SCOPED BY `_read_target`, exactly like `git/history` beside it and the file read beside that —
+        the same call, not a similar rule, so this route can describe no commit whose page a subject
+        could not open. `_system` is refused here for the reason it is refused there: sessions and
+        settings are not a workspace's history, and there is no README to put this on.
+
+        `path` narrows to one page, the way the history's filter does — *when did THIS page last
+        change* — and goes through the same guard before it reaches git.
+
+        THE NEWEST COMMIT THAT CHANGED A PAGE, not simply the newest commit. Every workspace's log
+        carries plumbing — `<slug>: workspace identity` writing `.vexa/workspace.json`, `policy:
+        contributor for … ` writing the roster — and those are real commits that changed nothing a
+        person can open. *Changed 2 minutes ago by Vexa: nothing* is the repository-facts sentence
+        this issue exists to remove, so the scan walks back over the recent log and answers with the
+        first commit that touched a page. When none of them did, the newest commit is described with
+        no pages at all and the line degrades to *Changed 2 minutes ago* — which is true."""
+        if slug == system_mounts.SYSTEM_SLUG:
+            raise HTTPException(status_code=403, detail=(
+                "_system is sessions and settings, not a workspace with a history"))
+        target_slug = None if slug in ("", "personal") else slug
+        try:
+            target = _read_target(request, target_slug)   # authorizes exactly as the file read does
+            history = wsr.git_history_at(target, path=path, limit=LAST_CHANGE_SCAN,
+                                         viewer=subject_of(request))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "invalid path or subject")
+        commits = history.get("commits") or []
+        if not commits:
+            # NOTHING HAS BEEN COMMITTED HERE, which is an ordinary state of a new workspace and not
+            # a failure. The panel says so in words; a 404 would make it render an error.
+            return {"slug": slug, "path": history.get("path"), "change": None}
+        newest = next((c for c in commits
+                       if any(front_page_mod.is_page(p, slug) for p in (c.get("files") or []))),
+                      commits[0])
+        return {"slug": slug, "path": history.get("path"),
+                "change": front_page_mod.describe_commit(
+                    newest, slug=slug,
+                    read_page=lambda rel: _page_head(target, rel),
+                    name_of=lambda author: front_page_mod.person_name(wsr.root, author))}
+
+    @router.get("/api/people/me")
+    def people_me(request: Request):
+        """WHO THE READER IS, by name — their own `self: true` person page, then the directory.
+
+        One string, and the same resolution the last-change route uses for everybody else, so the
+        product cannot call one person two things on one screen. It is here because the front page's
+        first sentence needs it: the company layer's line reads *everyone at <company> reads it,
+        <first name> writes it*, and the administrator reading their own instance should meet their
+        own name rather than the word "administrator".
+
+        `name` is null when nothing has been written down. That is the answer, not an error — the
+        line falls back to the role, and no address is ever put in a name's place."""
+        subject = str(subject_of(request))
+        name = front_page_mod.person_name(wsr.root, subject)
+        return {"subject": subject, "name": name,
+                "first_name": front_page_mod.first_name(name)}
+
     @router.post("/api/workspace/git/reset")
     def ws_git_reset(request: Request, body: dict = Body(...)):
         """UNDO commits a run is known to have made on THIS subject's own desk, back to a witnessed
@@ -1526,7 +1626,18 @@ def build(**d) -> APIRouter:
                     request.headers.get("x-user-email"), commit_fn=_pc)
             except Exception:  # noqa: BLE001
                 logger.debug("member email backfill skipped for %s in %s", subject, workspace_id, exc_info=True)
-            return {"members": membership_mod.read_members(wsr.root, workspace_id)}
+            # WHO EACH MEMBER IS, by name (Vexa-ai/vexa#1634). The roster has carried `email`
+            # since memberships were stored, and an address is how the system finds a person rather
+            # than what they are called — so the front page's first sentence ("you, Jane Smith and 2
+            # more") needs a name beside it. Additive and nullable: `read_members` is unchanged, the
+            # roster renders exactly as it did for a member nobody has written down, and no caller
+            # has to know this field exists. `person_name` never answers with an address.
+            rows = []
+            for m in membership_mod.read_members(wsr.root, workspace_id):
+                named = front_page_mod.person_name(wsr.root, str(m.get("subject") or ""),
+                                                   email=m.get("email"))
+                rows.append({**m, "name": named} if named else dict(m))
+            return {"members": rows}
         except MembershipError as exc:
             raise _member_error(exc)
     @router.delete("/api/workspace/members/{member_subject}")

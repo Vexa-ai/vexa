@@ -33,6 +33,8 @@ vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
   readWorkspaceBySlug: vi.fn(),
   listWorkspaceTree: vi.fn(),
   readWorkspaceHistory: vi.fn(),
+  readLastChange: vi.fn(),
+  readMyPerson: vi.fn(),
   gitRemoteStatus: vi.fn(),
   readWorkspaceFile: vi.fn(),
   listSharedMemberships: vi.fn(),
@@ -63,6 +65,8 @@ beforeEach(() => {
   vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "Pilot", kind: "group", slug: SLUG, access: "readable", writable: false });
   vi.mocked(api.listWorkspaceTree).mockResolvedValue(["README.md"]);
   vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: SLUG, branch: "main", path: null, limit: 20, commits: [] });
+  vi.mocked(api.readLastChange).mockResolvedValue({ slug: SLUG, path: null, change: null });
+  vi.mocked(api.readMyPerson).mockResolvedValue({ subject: "126", name: null, first_name: null });
   vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: null, tracked: false, ahead: 0, behind: 0 });
   vi.mocked(api.readWorkspaceFile).mockResolvedValue(null);
   vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: SLUG, role: "viewer" }]);
@@ -87,12 +91,20 @@ const asOwner = () => {
   ]);
 };
 
-/** Render the panel and open SHARED WITH — nothing below the strip exists until a reader asks. */
+/** Render the panel and open SHARED WITH. Two clicks now: since #1634 the strip is two sentences,
+ *  and the sections #1628 built are behind **History**, the one disclosure at the end of line two.
+ *  Nothing below either exists until a reader asks for it. */
 const shared = async () => {
   const { container } = render(<WorkspaceReadmePanel slug={SLUG} path="README.md" />);
+  const details = await waitFor(() => {
+    const d = container.querySelector<HTMLButtonElement>("[data-ws-details]");
+    if (!d) throw new Error("the strip has not answered yet");
+    return d;
+  });
+  fireEvent.click(details);
   const disclosure = await waitFor(() => {
     const b = container.querySelector<HTMLButtonElement>('[data-ws-disclosure="shared"]');
-    if (!b) throw new Error("no strip yet");
+    if (!b) throw new Error("no sections behind the details yet");
     return b;
   });
   fireEvent.click(disclosure);
