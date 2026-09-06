@@ -28,6 +28,7 @@ are public.
 | `BOT_SPEAKER_CONFIRM_THRESHOLD` | `2` | Consecutive matching STT results required to confirm a segment. `1` lowers latency but reduces LocalAgreement protection against corrections. |
 | `BOT_SPEAKER_MAX_BUFFER_SEC` | `30` | Maximum buffered Google Meet audio before a forced submission. |
 | `BOT_SPEAKER_IDLE_TIMEOUT_SEC` | `15` | Flush/reset timeout after a speaker stops producing audio. |
+| `VEXA_CSRC_INACTIVE_MS` | `800` | Microsoft Teams: how long the transport sensor holds a contributing source active after its last observed contribution before it synthesizes a deactivation. Forwarded to spawned bots. Usable range `100`–`10000`; a non-blank unusable value warns and falls back to `800`. |
 
 The STT service is the **GPU workload, deployed separately** from this stack — see
 [Deployment → Transcription](/deployment#transcription-the-separate-gpu-unit). The main stack
