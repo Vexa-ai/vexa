@@ -25,7 +25,7 @@ import { AttachRepo } from "./AttachRepo";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
+  bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
   meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
@@ -39,7 +39,7 @@ import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { pendingArrival, useScaffoldArrival } from "./arrival";
-import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -105,6 +105,10 @@ export function MinutesShell() {
   const allChats = useMemo(() => (mock ? [...chats, ...MOCK_CHATS] : chats), [mock, chats]);
   const chatsRef = useRef(allChats);
   useEffect(() => { chatsRef.current = allChats; }, [allChats]);
+  // The meetings list polls, so anything that reads it from a LISTENER reads it here — a listener
+  // rebuilt on every poll is a listener re-registered every few seconds.
+  const meetingsRef = useRef(meetings);
+  useEffect(() => { meetingsRef.current = meetings; }, [meetings]);
   const [all, setAll] = useState<boolean>(() => loadRailAll());
 
   // ── WHERE THE SHELL OPENS, and the DRAFT (founder ruling 2026-09-02, F35) ──────────────────
@@ -134,6 +138,11 @@ export function MinutesShell() {
   const draftRef = useRef<ChatRec | null>(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);
   const [sel, setSel] = useState<Sel>(() => selOf(firstOpen));
+  // …and the same reason as `meetingsRef`: the artifact listener has to know which chat is in front
+  // WHEN THE EVENT ARRIVES, and re-registering it on every selection change would be a listener that
+  // can miss the event it exists for.
+  const selRef = useRef(sel);
+  useEffect(() => { selRef.current = sel; }, [sel]);
   const [pages, setPages] = useState<Page[]>([]);
   // `?view=` — a chat's opening `artifacts[]` (the right-sidebar tabs), NOT a URL feature. A chat
   // is the saved focus state and a deeplink is just its constructor: the meeting says which pages
@@ -546,9 +555,14 @@ export function MinutesShell() {
    *  because a room's own pages arrive PINNED — `openChat` pins them exactly so the reader's first
    *  navigation cannot evict them from the single preview slot, and the pin persists into
    *  `artifacts[]`. So "the room has a transcript" and "the transcript is in the strip" stay the
-   *  same statement. A page the reader has deliberately unpinned and forgotten leaves the row with
-   *  it, which is the correct reading of `×`: they said they did not want it kept. */
-  const opens = useMemo(() => openChips(sel.meetingId, pages), [sel.meetingId, pages]);
+   *  same statement — for the NOTE. The transcript is not a page in the record at all, it is the
+   *  meeting, so the row offers it whenever the meeting has one: `×` on the transcript tab is the
+   *  reader saying "stop keeping this page", and it took the way back with it (Vexa-ai/vexa#1597,
+   *  founder: *"i seem to have closed the transcript and now can't find one"*). The PHASE answers
+   *  whether a transcript exists; see `openChips`. */
+  const selMeeting = sel.kind === "meeting" ? meetings.find((m) => String(m.id) === sel.meetingId) : undefined;
+  const opens = useMemo(() => openChips(sel.meetingId, pages, selMeeting ? meetingPhase(selMeeting) : null),
+    [sel.meetingId, pages, selMeeting]);
   /** Which chat has already spent its offer — see `runProposal`. Per chat, because a different
    *  conversation has not been offered anything yet. */
   const [spent, setSpent] = useState<string | null>(null);
@@ -886,6 +900,48 @@ export function MinutesShell() {
     return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntityClick); window.removeEventListener(OPEN_MEETING_EVENT, onMeetingClick); };
   }, [meetings, openMeeting, openPage]);
 
+  /** THE CHAT THAT MADE THIS MEETING BECOMES ITS CHAT (Vexa-ai/vexa#1597).
+   *
+   *  Founder, 2026-09-06, in a live Meet he had started FROM a chat: *"if chat is a specific meeting
+   *  — and that's a chat feature that it gets after creating meeting from itself — this transcript
+   *  should be pinned. and the chat itself should be Live (left sidebar), while there is no need to
+   *  create a new chat for that — we already have meeting owner, just attach the status to it"*. His
+   *  rail showed the conversation AND an auto-created meeting row for the meeting it had made.
+   *
+   *  Four writes, and each one is a consumer of the ref that was missing:
+   *    · the RECORD takes the meeting — the rail claims it (one row), wears `live`, and the header
+   *      wears the badge, all of them from `railRows`/`flavor` reading the ref they always read;
+   *    · the SELECTION becomes a meeting's, so the chips and the room layout key off it now rather
+   *      than at the next open;
+   *    · the meetings list is ASKED for the row, which it has never listed — the bot went out a
+   *      second ago;
+   *    · and the meeting's own pages join the strip, PINNED (`withMeetingPages` — it adds behind the
+   *      reader and never re-opens the room, so the transcript the send just fronted stays in front).
+   *
+   *  A LATCH, exactly as `bindMeeting` and the server's index are: a chat already about a meeting is
+   *  not rebound by a second send. Its identity is what the reader is looking at.
+   *
+   *  The note is looked up ONCE, here, and is usually absent — a meeting that started a second ago
+   *  has no report yet. That is `pagesForPhase`'s own rule (no path ⇒ one document fewer, never a tab
+   *  onto a guess), and the report joins the strip at the next open of the chat, which is where every
+   *  meeting chat has always got it. */
+  const bindMeetingHere = useCallback(async (meetingId: string) => {
+    const id = selRef.current.chatId;
+    if (!id || selRef.current.meetingId) return;
+    const d = draftRef.current;
+    if (d && d.id === id) setDraft((cur) => (cur && cur.id === id ? { ...cur, meeting: meetingId } : cur));
+    persist((prev) => bindMeeting(prev, id, meetingId));
+    setSel((x) => (x.chatId === id ? { ...x, kind: "meeting", meetingId } : x));
+    ensureMeetingKnown(meetingId);
+    const m = meetingsRef.current.find((x) => String(x.id) === meetingId);
+    // A row the list has not caught up with is a meeting that has just begun — which is the only way
+    // to reach this at all, so `live` is the honest reading rather than a default.
+    const phase = m ? meetingPhase(m) : "live";
+    const notePath = await fetchMeetingNotePath(meetingId);
+    const room = meetingPages(phase, meetingId, notePath);
+    setPages((prev) => withMeetingPages(prev as Artifact[], room) as Page[]);
+  }, [persist]);
+
   // ── F41, AS AMENDED BY DECISION 28: A FILE THE TURN WROTE NAVIGATES THE VIEW ────────────────
   //
   //  F41 was the founder creating a shared workspace, the agent writing its README, and the right
@@ -906,6 +962,13 @@ export function MinutesShell() {
   useEffect(() => {
     const onArtifact = (e: Event) => {
       const detail = (e as CustomEvent<{ workspace?: string; path?: string; focus?: boolean }>).detail || {};
+      // …AND AN ARTIFACT THAT NAMES A MEETING BINDS ONE (Vexa-ai/vexa#1597). The harness emits this
+      // for a successful `bot_send` and for nothing else, so it says: a bot went into a room BECAUSE
+      // this conversation asked for one. That is the chat becoming the meeting's, and it happens
+      // whatever the event asks the panel to do — before `artifactViewEffect`, which can legitimately
+      // decide to move nothing (a reader who has since opened something else).
+      const named = pageForArtifact(detail);
+      if (named?.kind === "meeting") void bindMeetingHere(named.path);
       const eff = artifactViewEffect(detail, readerChoseFocus.current);
       if (!eff) return;              // neither pinned nor focused ⇒ NOTHING VISIBLE, not a quiet tab
       // PIN FIRST, then focus. `touchHistory` (inside openPage) carries a prior entry's `pinned`
@@ -921,7 +984,7 @@ export function MinutesShell() {
     };
     window.addEventListener(ARTIFACT_EVENT, onArtifact);
     return () => window.removeEventListener(ARTIFACT_EVENT, onArtifact);
-  }, [openPage]);
+  }, [openPage, bindMeetingHere]);
 
   // ── THE AGENT OPENS SOMETHING BECAUSE IT WAS ASKED TO (Vexa-ai/vexa#1586) ────────────────────
   //
@@ -980,7 +1043,6 @@ export function MinutesShell() {
   // meeting announced itself as "upcoming" beside a transcript that was visibly filling. Three
   // states now, in the meeting's own vocabulary.
   const PHASE_WORD = { prep: "upcoming", live: "live", post: "held" } as const;
-  const selMeeting = sel.kind === "meeting" ? meetings.find((m) => String(m.id) === sel.meetingId) : undefined;
   // THE CHAT SAYS WHAT IT IS; the header does not deduce it. This read `workspaces.filter(w => w !==
   // "_global").length === 0 ? "chat · admin" : "chat"` — mount arithmetic — and it was wrong the
   // moment the company-setup conversation legitimately mounted the admin's own desk beside
@@ -994,7 +1056,11 @@ export function MinutesShell() {
   // which does not exist. Founder: *"I explain this as stale code."* Now the record is the only
   // authority, and `Chat.scaffold` pairs the kind with the record's id so an admin-flavoured chat
   // with no scaffold behind it cannot be written in the first place.
-  const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
+  // A ROW THE LIST HAS NOT CAUGHT UP WITH GETS NO PHASE WORD (Vexa-ai/vexa#1597). This said "held"
+  // — a reasonable default while every meeting chat was opened from a row the list already had, and
+  // wrong the moment a chat can BIND a meeting the bot entered a second ago: the header announced a
+  // meeting as finished while its transcript filled beside it. `meeting` alone is true either way.
+  const flavor = sel.kind === "meeting" ? (selMeeting ? `meeting · ${PHASE_WORD[meetingPhase(selMeeting)]}` : "meeting")
     : selChat?.scaffold?.kind === "admin-setup" ? "chat · admin" : "chat";
 
   // PRD DECISION 30 — THE SURFACE WOULD BE A FACT THE SERVER HOLDS, not something the prompt

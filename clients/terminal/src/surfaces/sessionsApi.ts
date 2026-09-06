@@ -22,6 +22,17 @@ export interface SessionSummary {
   scaffold?: { kind?: string | null; id?: string | null } | null;
   /** has a PERSON written here, or is every turn in it machinery? absent → treat as yes */
   touched?: boolean | null;
+  /** THE MEETING THIS CHAT MADE — the row id, or null (Vexa-ai/vexa#1597).
+   *
+   *  Written server-side when a bot goes out from this session. A meeting somebody OPENED from the
+   *  rail needs nothing here — its session is named `meet-<row>` and `chatsFromSessions` reads the
+   *  ref off the id — but a chat that CREATED a meeting has an ordinary id, so this is the only
+   *  place that binding exists. Without it the rail listed one meeting twice. */
+  meeting?: string | null;
+  /** …and the same meeting's NATIVE id, or null. On the wire because the binding answers to both
+   *  addresses — the row is how the panel names a meeting, the native id is how meeting-api does.
+   *  Not read here: this client takes a native id off the meetings list. */
+  meeting_native?: string | null;
 }
 
 export interface SessionHistory { turns: { role: string; text: string; ops?: unknown[]; commit?: unknown }[] }

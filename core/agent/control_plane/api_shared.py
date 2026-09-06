@@ -225,7 +225,22 @@ class _Sessions:
 
     ``touched`` is a LATCH and its absence means ``True``: a row written before this field existed
     is a real conversation somebody had, and the failure the rail is being fixed for is chats that
-    do not show. A row that has only ever carried machinery says so explicitly ("0")."""
+    do not show. A row that has only ever carried machinery says so explicitly ("0").
+
+    ⚠ AND A CHAT THAT MADE A MEETING IS THAT MEETING'S CHAT (Vexa-ai/vexa#1597). ``meeting`` — the
+    row id, with ``meeting_native`` beside it — is written when a bot goes out FROM this session,
+    and it is why the field is here rather than derived like the rest: the terminal names a
+    meeting's own session ``meet-<row>`` and reads the ref back off that id, which answers for the
+    meeting somebody opened from the rail and answers NOTHING for the chat that created the meeting
+    from itself. That chat has an ordinary id, so the binding exists nowhere but here, and without it
+    the rail showed the founder TWO rows for one meeting — his conversation, and an auto-created
+    meeting row beside it: *"there is no need to create a new chat for that — we already have
+    meeting owner, just attach the status to it"*.
+
+    A LATCH, like ``touched``, and for a sharper reason: the chat's identity is what the reader is
+    looking at. A second send in the same conversation must not silently move the room, the pinned
+    transcript and the note out from under them — it is a second meeting, and a second meeting is a
+    second chat."""
 
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
@@ -263,7 +278,8 @@ class _Sessions:
 
     def upsert(self, subject: str, session: str, *, title: str | None = None,
                workspaces: "list[str] | None" = None, scaffold: "dict | None" = None,
-               touched: bool | None = None) -> None:
+               touched: bool | None = None, meeting: str | None = None,
+               meeting_native: str | None = None) -> None:
         """Record the session on use: create it (stamping ``created`` + a default ``title``) or touch its
         ``last_active``. An explicit ``title`` overrides; otherwise the first prompt seeds it once.
 
@@ -273,9 +289,14 @@ class _Sessions:
         stored alone.
 
         ``touched`` only ever goes UP. It answers "has a person written here", and a machinery turn
-        arriving after a human one does not un-write what they typed."""
+        arriving after a human one does not un-write what they typed.
+
+        ``meeting`` is written ONCE and never overwritten — see the class docstring. A send into a
+        second meeting from the same chat leaves the first binding standing."""
         now = self._now()
         pair = self._scaffold_pair(scaffold)
+        bind = str(meeting or "").strip()
+        native = str(meeting_native or "").strip()
         if self._redis is not None:
             mkey = self._meta_key(subject, session)
             existing = self._redis.hgetall(mkey) or {}
@@ -293,6 +314,10 @@ class _Sessions:
                 fields["workspaces"] = json.dumps([str(w) for w in workspaces if str(w).strip()])
             if pair is not None:
                 fields["scaffold"] = json.dumps(pair)
+            if bind and not (existing.get("meeting") or "").strip():
+                fields["meeting"] = bind
+                if native:
+                    fields["meeting_native"] = native
             self._redis.hset(mkey, mapping=fields)
             self._redis.sadd(self._ids_key(subject), session)
             return
@@ -311,6 +336,10 @@ class _Sessions:
             rec["workspaces"] = [str(w) for w in workspaces if str(w).strip()]
         if pair is not None:
             rec["scaffold"] = pair
+        if bind and not str(rec.get("meeting") or "").strip():
+            rec["meeting"] = bind
+            if native:
+                rec["meeting_native"] = native
 
     def list(self, subject: str) -> list[dict]:
         """The subject's sessions, most-recently-active first — the rail, as the server holds it."""
@@ -331,6 +360,8 @@ class _Sessions:
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     # absent → True: a row older than the field is a conversation that happened
                     "touched": meta.get("touched") != "0",
+                    "meeting": (meta.get("meeting") or "").strip() or None,
+                    "meeting_native": (meta.get("meeting_native") or "").strip() or None,
                 })
         else:
             for session, meta in self._mem.get(subject, {}).items():
@@ -340,6 +371,8 @@ class _Sessions:
                     "workspaces": list(meta.get("workspaces") or []),
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     "touched": meta.get("touched", True) is not False,
+                    "meeting": str(meta.get("meeting") or "").strip() or None,
+                    "meeting_native": str(meta.get("meeting_native") or "").strip() or None,
                 })
         rows.sort(key=lambda r: r["last_active"], reverse=True)
         return rows
@@ -689,6 +722,39 @@ def _decode_sse_cursor(raw: str | None) -> "str | None":
         return None
     head = raw.split("|")[0].strip()
     return head if head and head != "-" else None
+
+
+MEETING_ARTIFACT_PREFIX = "meeting:"
+
+
+def meeting_binding(ev: object) -> "tuple[str, str] | None":
+    """``(row, native)`` this turn BOUND its chat to, or None (Vexa-ai/vexa#1597).
+
+    ONE EVENT MEANS IT, and only one: the ``artifact`` carrying ``meeting:<row>``, which the harness
+    emits for a successful ``bot_send`` and for nothing else (``llm/claude_code.py::_bot_artifact``).
+    A bot went into a room BECAUSE this conversation asked for one, so this conversation is that
+    meeting's chat — the founder's rule, and his words for the alternative: *"there is no need to
+    create a new chat for that"*.
+
+    NOT the ``open`` event, which carries the same ``meeting:<row>`` dialect. Opening a transcript is
+    a person asking to LOOK at a meeting; it is not making one, and a chat that reads somebody's
+    transcript must not take that meeting's identity.
+
+    ``native`` may be empty — the send resolved a row either way, and the row is what every consumer
+    addresses. Pure, and here rather than inline in the route because what an event MEANS is a
+    contract with the worker, and a contract is worth a test."""
+    if not isinstance(ev, dict) or ev.get("type") != "artifact":
+        return None
+    path = str(ev.get("path") or "").strip()
+    if not path.startswith(MEETING_ARTIFACT_PREFIX):
+        return None
+    row = path[len(MEETING_ARTIFACT_PREFIX):].strip()
+    # `meeting:` with nothing after it, or a row that is really a path, names no meeting. Same
+    # refusal the client's own `pageForArtifact` makes, and for the same reason: a binding aimed at
+    # a guess is worse than no binding — it puts a chat permanently in a room that does not exist.
+    if not row or "/" in row:
+        return None
+    return row, str(ev.get("native") or "").strip()
 
 
 def _sse(events) -> Iterator[str]:

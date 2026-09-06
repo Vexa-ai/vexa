@@ -56,7 +56,11 @@ def _result(payload: dict) -> list:
 
 def test_a_successful_send_moves_the_panel_by_ROW():
     ev = _bot_artifact(_result({"sent": True, "meeting": "ios-xdtp-vmt", "meeting_row": 118}))
-    assert ev == {"type": "artifact", "path": "meeting:118", "pin": True, "focus": True}
+    # `native` rides along since Vexa-ai/vexa#1597 — the event is also the fact agent-api binds the
+    # meeting to this chat's session from, and a binding answers to both addresses. The PANEL move
+    # is untouched: path by row, pin and focus.
+    assert ev == {"type": "artifact", "path": "meeting:118", "pin": True, "focus": True,
+                  "native": "ios-xdtp-vmt"}
 
 
 def test_the_native_id_is_never_the_path():

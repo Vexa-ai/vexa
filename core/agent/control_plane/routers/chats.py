@@ -17,7 +17,7 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    _truncate_title, logger)
+    _truncate_title, logger, meeting_binding)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -45,6 +45,39 @@ def build(**d) -> APIRouter:
     stream_reader = d['stream_reader']
     subject_of = d['subject_of']
     wsr = d['wsr']
+
+    def _binding_watch(events, subject: str, session: str):
+        """Pass the turn's events through, and BIND the meeting any send in it created
+        (Vexa-ai/vexa#1597).
+
+        THE TURN'S OWN STREAM IS WHERE THIS IS KNOWN. `bot_send` is served by the vexa MCP, which is
+        stateless by design and has never been told which chat is calling it; the worker knows the
+        result but not that a chat is a rail row; agent-api knows the subject and the session because
+        it opened this response. So the one place holding both halves of *"this chat made that
+        meeting"* is right here, on the way past.
+
+        A READ, NOT A REROUTE. Every event still reaches the client, byte-for-byte and in order —
+        the client binds off the same event for the render it is doing now, and this is what makes
+        the binding survive a reload, a second window and a second machine.
+
+        NO OWNERSHIP RE-CHECK, deliberately. The row came back from a `bot_send` this subject's own
+        worker made with this subject's own credential, so re-asking meeting-api would add latency
+        inside a live SSE and no authority. Every READ of a meeting is owner-scoped where it matters
+        regardless — `/api/meeting/note` and `/api/meeting/stream` both refuse a row this caller does
+        not own, whatever a session record says.
+
+        NEVER FATAL. The binding is furniture; the turn is what the person is waiting for, so a
+        failed index write is logged and the stream goes on."""
+        for item in events:
+            ev = item[0] if isinstance(item, tuple) else item
+            bound = meeting_binding(ev)
+            if bound is not None:
+                try:
+                    sess.upsert(subject, session, meeting=bound[0], meeting_native=bound[1] or None)
+                except Exception:  # noqa: BLE001 — the turn outranks its own bookkeeping
+                    logger.exception("binding meeting %s to subject=%s session=%s failed",
+                                     bound[0], subject, session)
+            yield item
 
     @router.post("/invocations", status_code=202)
     def invocations(invocation: dict = Body(...)):
@@ -270,7 +303,7 @@ def build(**d) -> APIRouter:
                     _record_chat_turn_head(redis_url, unit_id, body.turn_id, start)
                 resume = start
         return StreamingResponse(
-            _sse(stream_reader.read(unit_id, resume=resume)),
+            _sse(_binding_watch(stream_reader.read(unit_id, resume=resume), subject, session)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
@@ -294,9 +327,15 @@ def build(**d) -> APIRouter:
         Most-recently-active first. Each row is `session` · `title` · `created` · `last_active` and,
         since the rail started deriving from here, `workspaces` · `scaffold` (`{kind, id}` or null) ·
         `touched`. The four original names are unchanged, so every existing consumer reads what it
-        always read; the client's own `meeting` ref is NOT here on purpose — `meet-<row>` is the
-        terminal's own naming of a meeting's session, and one convention with one owner beats a
-        second copy of it on the wire."""
+        always read.
+
+        `meeting` (+ `meeting_native`) IS here now, and was deliberately not before
+        (Vexa-ai/vexa#1597). The old rule — *"`meet-<row>` is the terminal's own naming of a
+        meeting's session, so it reads the ref back off the id"* — is still true and still enough
+        for the meeting somebody OPENED from the rail. It says nothing about the chat that CREATED
+        the meeting from itself: that chat has an ordinary `pchat-…` id, so its meeting exists
+        nowhere but in this index, and without it the rail showed one meeting as two rows. Null is
+        the ordinary answer, and a `meet-<row>` session still needs no field at all."""
         return {"sessions": sess.list(subject_of(request))}
     @router.get("/api/sessions/{session}/history")
     def session_history(session: str, request: Request):

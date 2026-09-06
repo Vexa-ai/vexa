@@ -12,7 +12,7 @@
  *  Everything here is a pure function on purpose (the shell wires them, the tests read them
  *  directly) except the two localStorage seams at the bottom.
  */
-import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
+import { meetingPhase, type MeetingMock, type MeetingPhase } from "../surfaces/meetingModel";
 
 /** One open document in the right panel — a TAB. Identical in shape to `Page`, and deliberately so:
  *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
@@ -202,9 +202,18 @@ export type Row = {
   whenLabel: string;
   live: boolean;
   upcoming: boolean;
+  /** THE MEETING'S STATUS, ON THE CHAT'S OWN ROW (Vexa-ai/vexa#1597, founder: *"the chat itself
+   *  should be Live … just attach the status to it"*). `live` while the bot is in the room, `held`
+   *  once it is over, and null for a chat about no meeting or a meeting still ahead — an upcoming
+   *  meeting's row already says when it is, which is the thing worth knowing about one. */
+  status: "live" | "held" | null;
   touched: boolean;
   workspaces: string[];
 };
+
+/** The row's status word from the meeting's phase. `prep` deliberately has none — see `Row.status`. */
+const statusOf = (phase: MeetingPhase | null): Row["status"] =>
+  phase === "live" ? "live" : phase === "post" ? "held" : null;
 
 /** Stored chats UNION live meetings-as-rows.
  *
@@ -217,7 +226,15 @@ export type Row = {
  *
  *  Sorting and LABELLING part company on one point: a meeting row is labelled with the MEETING's own
  *  time, never the chat's last activity, because "Blue Light Card · today" would be a plain lie about
- *  a meeting held on Monday. Reading a row is not the meeting moving. */
+ *  a meeting held on Monday. Reading a row is not the meeting moving.
+ *
+ *  ⚠ `claimed` IS THE WHOLE DEDUP, and Vexa-ai/vexa#1597 is what made it fire for the case it was
+ *  written for. A chat that SENT the bot had no `meeting` on it — the ref was read off a `meet-<row>`
+ *  session id, which only a meeting opened from the rail ever has — so the meeting it created was
+ *  unclaimed and came back as a second row beside the conversation that made it. The founder saw
+ *  both: *"there is no need to create a new chat for that — we already have meeting owner, just
+ *  attach the status to it."* Nothing here changed; the chat now carries the ref, so this loop
+ *  claims it. A meeting nobody chatted about is still listed, and still becomes a chat when opened. */
 export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now()): Row[] {
   const byId = new Map<string, MeetingMock>();
   for (const m of meetings) byId.set(String(m.id), m);
@@ -239,6 +256,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       when,
       whenLabel: whenShort(m ? meetingWhen(m) : when, { live, now }),
       live, upcoming,
+      status: statusOf(phase),
       touched: !!c.touched,
       workspaces: c.workspaces,
     });
@@ -258,6 +276,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       whenLabel: whenShort(when, { live: phase === "live", now }),
       live: phase === "live",
       upcoming: phase === "prep",
+      status: statusOf(phase),
       touched: false,
       workspaces: ["personal", "_global"],
     });
@@ -304,11 +323,19 @@ export type ServerSession = {
   workspaces?: string[] | null;
   scaffold?: { kind?: string | null; id?: string | null } | null;
   touched?: boolean | null;
+  /** THE MEETING THIS CHAT MADE (Vexa-ai/vexa#1597) — the row id, or null. Written server-side when
+   *  a bot goes out from this session; null for every chat that never sent one, including a
+   *  `meet-<row>` session whose id already says it. */
+  meeting?: string | null;
 };
 
-/** The meeting a session id names, or null. The inverse of `meetingChatId`, and the reason the
- *  server does NOT send a `meeting` field: `meet-<row>` is this client's own naming of a meeting's
- *  agent session, so reading it back here keeps one convention with one owner. */
+/** The meeting a session id names, or null. The inverse of `meetingChatId`.
+ *
+ *  This is the FIRST of two answers and it is the cheaper one: `meet-<row>` is this client's own
+ *  naming of a meeting's agent session, so a meeting somebody opened from the rail needs nothing on
+ *  the wire. It says nothing whatever about the chat that CREATED a meeting — that chat has an
+ *  ordinary `pchat-…` id — which is why the server now sends `meeting` as well and
+ *  `chatsFromSessions` asks this first and the field second. */
 export function meetingIdFromChatId(id: string): string | null {
   const m = /^meet-(.+)$/.exec(id ?? "");
   return m && m[1] ? m[1] : null;
@@ -340,7 +367,10 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
   for (const r of rows ?? []) {
     const id = typeof r?.session === "string" ? r.session.trim() : "";
     if (!id || NOT_A_RAIL_ROW.has(id)) continue;
-    const meeting = meetingIdFromChatId(id) ?? undefined;
+    // the id first (a meeting opened from the rail), then the binding (a chat that MADE one)
+    const bornAsMeeting = meetingIdFromChatId(id);
+    const bound = typeof r.meeting === "string" && r.meeting.trim() ? r.meeting.trim() : undefined;
+    const meeting = bornAsMeeting ?? bound;
     // The index defaults an untitled session's title to the session id — a placeholder, not a name.
     const title = typeof r.title === "string" ? r.title.trim() : "";
     const named = title && title !== id ? title : "";
@@ -352,9 +382,14 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
     const created = whenMs(r.created) || now;
     out.push({
       id,
-      // A meeting chat carries no label of its own — `railRows` names it from the meeting, so the
-      // row follows a rename instead of freezing whatever the first turn was called.
-      label: meeting ? "" : (named || "Chat"),
+      // A chat BORN as a meeting's carries no label of its own — `railRows` names it from the
+      // meeting, so the row follows a rename instead of freezing whatever the first turn was called.
+      //
+      // A chat that CREATED a meeting keeps its own name (Vexa-ai/vexa#1597). It was a conversation
+      // before it was a meeting and the person's own first sentence named it; the founder asked for
+      // the meeting's STATUS on that row — *"just attach the status to it"* — not for the row to
+      // become something else. `Row.status` is where the meeting shows.
+      label: bornAsMeeting ? "" : (named || "Chat"),
       meeting,
       workspaces: mounts.length ? mounts : ["personal", "_global"],
       artifacts: [],
@@ -378,7 +413,16 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
  *     proposal chip can rebind a chat — and the server's is the fallback for a chat this browser
  *     has never opened.
  *   · **`touched` is either.** Both are evidence a person wrote; neither un-writes it.
- *   · **a name beats a placeholder**, whichever side holds it. A meeting row keeps its empty label.
+ *   · **`meeting` is local-first.** A binding this browser made moments ago is not yet in the index
+ *     it will be read from next time; the server's is what a second window has never seen. Neither
+ *     erases the other and there is nothing to reconcile — the binding is a latch on both sides.
+ *   · **a name beats a placeholder**, whichever side holds it. A chat NAMED BY ITS MEETING has an
+ *     empty label on both sides, so it keeps it — this used to be spelled as a separate "either side
+ *     names a meeting ⇒ keep the local label" branch, whose premise stopped being true the moment a
+ *     named conversation could bind a meeting (Vexa-ai/vexa#1597). It said what the placeholder rule
+ *     already says for the case it was written for, and the wrong thing for the new one: a chat
+ *     still called "New chat" that sent a bot would have been barred from taking the real title the
+ *     server holds for it.
  *
  *  `hidden` is the rail's own delete. Removing a row here never removed the agent session (the
  *  comment on `deleteChat` says so), and with the rail derived from those sessions a delete would
@@ -392,9 +436,7 @@ export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = [])
     if (!l) { by.set(s.id, s); continue; }
     by.set(s.id, {
       ...l,
-      label: l.meeting || s.meeting
-        ? l.label
-        : (isPlaceholderLabel(l.label) && !isPlaceholderLabel(s.label) ? s.label : l.label),
+      label: isPlaceholderLabel(l.label) && !isPlaceholderLabel(s.label) ? s.label : l.label,
       meeting: l.meeting ?? s.meeting,
       workspaces: l.workspaces?.length ? l.workspaces : s.workspaces,
       scaffold: l.scaffold ?? s.scaffold,
@@ -416,6 +458,33 @@ export function markTouched(chats: Chat[], chatId: string, now = Date.now()): Ch
     return { ...c, touched: true, lastActivityAt: now };
   });
   return hit ? next : chats;
+}
+
+/** A CHAT THAT MADE A MEETING BECOMES THAT MEETING'S CHAT (Vexa-ai/vexa#1597).
+ *
+ *  Founder, 2026-09-06, in a meeting he had started from a chat: *"if chat is a specific meeting —
+ *  and that's a chat feature that it gets after creating meeting from itself — this transcript
+ *  should be pinned. and the chat itself should be Live (left sidebar), while there is no need to
+ *  create a new chat for that — we already have meeting owner, just attach the status to it"*.
+ *
+ *  Binding the ref is the whole of it, and everything else follows from the ref existing: `railRows`
+ *  claims the meeting so it stops appearing as a second row, puts `live` (later `held`) on this one,
+ *  the header wears the meeting badge, and the room's own pages open beside the conversation.
+ *
+ *  A LATCH, and that is the rule worth stating. A chat already about a meeting is NOT rebound by a
+ *  second send: its identity is what the reader is looking at, and quietly moving the room, the
+ *  pinned transcript and the note under them would be worse than the duplicate row this fixes. A
+ *  second meeting is a second chat. (The server's index latches identically — one rule, both sides.)
+ *
+ *  Returns the SAME array when nothing changed, so a caller can persist on identity. */
+export function bindMeeting(chats: Chat[], chatId: string, meetingId: string): Chat[] {
+  const id = String(meetingId ?? "").trim();
+  if (!id) return chats;
+  const i = chats.findIndex((c) => c.id === chatId);
+  if (i < 0 || chats[i].meeting) return chats;
+  const next = [...chats];
+  next[i] = { ...next[i], meeting: id };
+  return next;
 }
 
 export function upsertChat(chats: Chat[], chat: Chat): Chat[] {

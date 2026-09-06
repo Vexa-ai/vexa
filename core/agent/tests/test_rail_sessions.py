@@ -181,9 +181,11 @@ def test_sessions_list_hands_the_rail_everything_a_row_shows(client, stack):
     assert len(rows) == 1
     assert rows[0]["session"] == "meet-42" and rows[0]["title"] == "DNA TSC"
     assert rows[0]["workspaces"] == ["_global", "u_priya"] and rows[0]["touched"] is True
-    # `meeting` is deliberately NOT here: `meet-<row>` is the terminal's own naming of a meeting's
-    # session and the client reads it back off the id. One convention, one owner.
-    assert "meeting" not in rows[0]
+    # `meeting` is null for a session nobody bound one to — including this one, whose id NAMES the
+    # meeting. `meet-<row>` is still the terminal's own naming and the client still reads the ref
+    # back off the id; the field exists for the chat whose id names nothing (Vexa-ai/vexa#1597,
+    # pinned in test_chat_meeting_binding.py).
+    assert rows[0]["meeting"] is None and rows[0]["meeting_native"] is None
 
 
 def test_has_history_is_internal_tier(client):

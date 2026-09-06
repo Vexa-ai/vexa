@@ -117,7 +117,15 @@ def _bot_artifact(content: object) -> "dict | None":
     whole seam is careful about.
 
     `pin` and `focus` are separate and both are wanted here: pin KEEPS the transcript in the strip so
-    it survives the next thing opened, focus FRONTS it now."""
+    it survives the next thing opened, focus FRONTS it now.
+
+    …AND THE NATIVE ID RIDES ALONG (Vexa-ai/vexa#1597). This event is the only place in the system
+    where "a bot was sent, from THIS chat, into THAT meeting" is stated, and agent-api reads it to
+    BIND the meeting to the chat's session. The row addresses the meeting as the panel addresses it;
+    the native id is how everything that talks to meeting-api addresses it (`bot_stop`, the
+    transcript API), so the binding carries both rather than making a second lookup the price of
+    knowing the second one. Nothing renders it — the client already reads a native id off the
+    meetings list — so an absent one costs the binding a field, never the event."""
     try:
         obj = json.loads(_tool_result_text(content))
     except (json.JSONDecodeError, TypeError):
@@ -127,7 +135,11 @@ def _bot_artifact(content: object) -> "dict | None":
     row = str(obj.get("meeting_row") or "").strip()
     if not row:
         return None
-    return {"type": "artifact", "path": f"meeting:{row}", "pin": True, "focus": True}
+    ev = {"type": "artifact", "path": f"meeting:{row}", "pin": True, "focus": True}
+    native = str(obj.get("meeting") or "").strip()
+    if native:
+        ev["native"] = native
+    return ev
 
 
 def _open_event(content: object) -> "dict | None":

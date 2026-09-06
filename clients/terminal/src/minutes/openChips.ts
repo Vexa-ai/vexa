@@ -13,14 +13,28 @@
  *  · **Read off the CHAT RECORD, no model call and no fetch.** Pure, over the pages the room
  *    already holds — the same list the panel renders (PRD decision 18). A chip that had to ask a
  *    model whether a transcript exists would cost a turn to answer a question the record answers.
- *  · **Present only when the thing exists** — F36's rule. `pagesForPhase` mints the transcript page
- *    only when one exists (a `prep` room has none), and the note page only when the meeting has a
- *    document at all. So presence in the record IS existence, and a chip that appears because the
- *    row looked short is exactly the default the founder ruled out.
+ *  · **Present only when the thing exists** — F36's rule. The note page exists only when the meeting
+ *    has a document at all, so presence in the record IS existence for it, and a chip that appears
+ *    because the row looked short is exactly the default the founder ruled out.
+ *
+ *  ⚠ THE TRANSCRIPT IS NOT IN THE RECORD, IT IS THE MEETING (Vexa-ai/vexa#1597). This read the strip
+ *  for it too, and the founder found the hole the same day: *"i seem to have closed the transcript
+ *  and now can't find one"*. He had pressed `×` on the transcript tab — which is the reader saying
+ *  "stop keeping this page", a perfectly good thing to say — and the button that would bring it back
+ *  went with it, because the button was reading the strip to decide whether a transcript existed.
+ *  Existence is not a property of his tabs. A meeting chat HAS a transcript once the meeting has
+ *  begun, so the PHASE answers that (`live` or `post` — `pagesForPhase`'s own rule), and the strip
+ *  is used only for the page it already holds, so the chip and the tab agree when both are there.
+ *  With no phase in hand this falls back to the strip, which is exactly what it did before.
+ *
+ *  The NOTE keeps reading the strip, and the asymmetry is real rather than an oversight: its PATH is
+ *  the server's answer (`/api/meeting/note`) and the record is where that answer is held, while the
+ *  transcript's whole identity is the meeting id the chat already carries.
  *
  *  What a click DOES is the shell's — `openPage`, the one route into the panel, the same route the
  *  agent's own `open` event takes. Nothing here opens anything.
  */
+import type { MeetingPhase } from "../surfaces/meetingModel";
 import type { Page } from "./types";
 
 export type OpenChip = {
@@ -54,14 +68,25 @@ function isNote(pg: Page): boolean {
  *  happens to have a meeting note open is not one, and offering "Open transcript" there would name
  *  a transcript that belongs to no meeting in view.
  *
+ *  `phase` says whether this meeting HAS a transcript — `live` and `post` do, `prep` does not, which
+ *  is `pagesForPhase`'s rule and not a second opinion about it. Absent (a caller that does not know,
+ *  or a `?mock=1` room with no row behind it) the strip answers instead, as it always did.
+ *
  *  The note's chip takes the label the ROOM gave the page — "Brief" before the meeting, "Minutes"
  *  after — rather than a word of its own, so the button and the tab it opens cannot disagree about
  *  what the reader is being handed.
  */
-export function openChips(meeting: string | undefined, pages: Page[]): OpenChip[] {
+export function openChips(meeting: string | undefined, pages: Page[],
+                          phase?: MeetingPhase | null): OpenChip[] {
   if (!meeting) return [];
   const out: OpenChip[] = [];
-  const transcript = pages.find((pg) => pg.kind === "meeting");
+  // the strip's own entry when it has one — it carries the label the room gave it — and the meeting
+  // itself when it does not, which is the case `×` on the transcript tab leaves behind.
+  const inStrip = pages.find((pg) => pg.kind === "meeting");
+  const transcript = inStrip
+    ?? (phase === "live" || phase === "post"
+      ? { kind: "meeting" as const, path: meeting, label: "Transcript" }
+      : undefined);
   if (transcript) out.push({ id: "transcript", label: "Open transcript", page: transcript });
   const note = pages.find(isNote);
   if (note) out.push({ id: "note", label: `Open ${(note.label || "note").toLowerCase()}`, page: note });

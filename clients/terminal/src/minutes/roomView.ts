@@ -18,7 +18,7 @@
 import type { MeetingPhase } from "../surfaces/meetingModel";
 import { entitySlug, normalizeDocPath } from "../ui-kit/docLinks";
 import type { Page } from "./types";
-import { artifactKey, type Artifact } from "./chats";
+import { artifactKey, orderHistory, type Artifact } from "./chats";
 
 /** The tab a clicked LINK lands on — the whole of what the shell's open-entity listener decides.
  *
@@ -231,16 +231,60 @@ export const personalPage = (): Page => ({ path: "README.md", label: "Personal p
 export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null,
                               notePath?: string | null): Page[] {
   if (!native) return [personalPage()];
+  return [...meetingPages(phase, meetingId, notePath, native), personalPage()];
+}
+
+/** THE MEETING'S OWN PAGES — the transcript and its document, in reading order, and nothing else.
+ *
+ *  Split out of `pagesForPhase` for Vexa-ai/vexa#1597: a chat that BINDS a meeting mid-conversation
+ *  gains the meeting's furniture without gaining a room. It already has a home (the strip's desk
+ *  entry) and a reader looking at something, so `personalPage()` — the room's "there is always
+ *  somewhere to write" — would be a tab nobody asked for. What binding adds is exactly the two
+ *  pages that did not exist a moment ago.
+ *
+ *  ONE WRITER for what a meeting shows: `pagesForPhase` is this plus the personal page, rather than
+ *  a second spelling of the same two rules. `native` is here only for the `?mock=1` fallback, where
+ *  a fixture with no row keeps its canned markdown transcript. */
+export function meetingPages(phase: MeetingPhase, meetingId?: string | null,
+                             notePath?: string | null, native?: string | null): Page[] {
   // The meeting doc is the SAME file in every phase — it is the brief while the room is running and
   // the minutes once it is not, so only its NAME moves. That half was always right.
   const doc: Page[] = notePath ? [{ path: notePath, label: phase === "post" ? "Minutes" : "Brief" }] : [];
   // prep: no transcript yet. The one page that matters before the room — what you walk in to decide.
-  if (phase === "prep") return [...doc, personalPage()];
+  if (phase === "prep") return doc;
   // live or post: a transcript exists and it leads.
   const transcript: Page = meetingId
     ? { kind: "meeting", path: meetingId, label: "Transcript" }
     : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" };
-  return [transcript, ...doc, personalPage()];
+  return [transcript, ...doc];
+}
+
+/** MERGE the meeting's pages into a strip the reader is already using, PINNED (Vexa-ai/vexa#1597).
+ *
+ *  The founder's rule for a chat that creates a meeting: *"this transcript should be pinned"*. He
+ *  had closed the transcript tab and could not get back to it, because the pages a meeting chat owns
+ *  are laid out at OPEN — and this chat was a plain conversation when it opened.
+ *
+ *  So the binding lays them out now, and it ADDS rather than replaces. The reader is mid-turn with a
+ *  document in front of them; re-opening the room would put the desk back in front and undo the
+ *  transcript the send itself just fronted. Nothing here decides what is in front — the pages arrive
+ *  behind the reader, pinned so the single preview slot cannot evict them, which is exactly the rule
+ *  `openChat` applies to a room's own pages (founder ruling #1585: a room's pages are declared tabs).
+ *
+ *  A page already in the strip is PINNED IN PLACE, never duplicated — and the desk is left alone,
+ *  because it is a product default rather than something the reader put there (`homeEntry`). */
+export function withMeetingPages(strip: Artifact[], pages: Page[]): Artifact[] {
+  const out = [...strip];
+  for (const pg of pages) {
+    const key = artifactKey(pg);
+    const i = out.findIndex((a) => artifactKey(a) === key);
+    if (i >= 0) {
+      if (!out[i].desk) out[i] = { ...out[i], pinned: true };
+      continue;
+    }
+    out.push({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label, pinned: true });
+  }
+  return orderHistory(out);
 }
 
 /** THE RETIRED SPELLING — `kg/entities/meeting/<native>.md`, the path this client used to compose

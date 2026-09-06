@@ -28,6 +28,17 @@ const chatRowS = (on: boolean): CSSProperties => ({
   borderLeft: `2px solid ${on ? "var(--accent)" : "transparent"}`, width: "100%", textAlign: "left",
 });
 const liveDot: CSSProperties = { width: 6, height: 6, borderRadius: "50%", flex: "none", background: "var(--accent)", alignSelf: "center" };
+/** THE MEETING'S STATUS, ON THE ROW (Vexa-ai/vexa#1597) — *"just attach the status to it"*.
+ *
+ *  Rendered for `held` only, and that is not half a job: `live` is already on the row twice over —
+ *  the accent dot and the accent word where the time goes — so a third "live" beside them would be
+ *  noise in 248px. `held` had no rendering at all, which is why a chat that owns a finished meeting
+ *  read as an ordinary conversation. `Row.status` names both states so a test, and anything else
+ *  that ever asks, reads ONE field rather than reassembling it from a dot and a label. */
+const statusTag: CSSProperties = {
+  ...ty.meta, flex: "none", color: "var(--t3)", background: surface.raised,
+  border: "1px solid var(--line)", borderRadius: 4, padding: "0 4px", lineHeight: 1.5,
+};
 
 export function Rail(p: {
   rows: Row[]; hidden: number;
@@ -47,6 +58,7 @@ export function Rail(p: {
             ? <span style={liveDot} aria-hidden />
             : <span style={{ ...row.dot(on), alignSelf: "center", background: r.meetingId ? "var(--line2)" : "transparent", border: r.meetingId ? "none" : "1px solid var(--line2)" }} aria-hidden />}
           <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", ...(on ? ty.bodyStrong : ty.body) }}>{r.label}</span>
+          {r.status === "held" && <span data-row-status="held" style={statusTag}>held</span>}
           <span style={{ ...ty.meta, flex: "none", fontVariantNumeric: "tabular-nums", color: r.live ? "var(--accent)" : "var(--t3)" }}>{r.whenLabel}</span>
         </button>
         {r.chatId && (
