@@ -369,3 +369,33 @@ test("v0.12.26 canonical packet binds the rc.1 train candidate", () => {
   assert.equal(map.candidate_tag, "v0.12.26-rc.1");
   assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:d0d0444e04932a911866b8e9c4e6629a7830339bafb0c76117186479f62cbffa");
 });
+
+test("v0.13.0 canonical packet binds the alpha.3 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.13.0/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "eeac9e74c2a4351d2bd368b870d8d8366bd95aeed9010609b3871df52398681f",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.13.0");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.13.0-alpha.3");
+  assert.equal(map.build_source, "a549fef5e9664299e385e585f3b3cbf907888e6f");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/34053444728",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:d3a80ff329f94b2ac58ce0e92af53fb0324ddddd5539f319ae06aa935c76d337",
+  );
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
+  );
+});
