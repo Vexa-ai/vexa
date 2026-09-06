@@ -46,7 +46,14 @@ ENV NEXT_PUBLIC_DEFAULT_BOT_NAME=$NEXT_PUBLIC_DEFAULT_BOT_NAME
 ARG NEXT_PUBLIC_BUILD_ID=""
 ENV NEXT_PUBLIC_BUILD_ID=$NEXT_PUBLIC_BUILD_ID
 # Regular build (not standalone): produces .next served by the custom server in production.
-RUN npm run build
+#
+# `.next/cache` is deleted in the SAME layer that creates it. It is webpack's incremental-compile
+# cache (`cache/webpack` 522 MB + `cache/swc` 12 kB on 2026-09-06) and it is not part of the built
+# app: the runtime serves `.next/server`, `.next/static` and the manifests, and nothing in this image
+# ever runs `next build` again. Shipped, it was 522 MB of a 1.34 GB image — roughly half of every
+# transfer, the air-gapped registries a delivery is pushed into included. Same layer rather than a
+# later `RUN rm`, so the builder never materialises it either.
+RUN npm run build && rm -rf .next/cache
 
 # deps-prod: pruned production deps. typescript must ALSO be present — Next loads the TypeScript
 # next.config.ts at runtime and npm-installs its own at BOOT when it's absent. `npm i typescript`
