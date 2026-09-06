@@ -4,7 +4,7 @@
  *  headings (#..####), bold, italic, inline code, fenced ```code```, bullet + numbered
  *  lists, links (new tab, rel noreferrer), [[wikilinks]], blockquotes, horizontal rules,
  *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
- *  not spec-complete. */
+ *  not spec-complete. HTML comments never reach the page — see stripHtmlComments. */
 "use client";
 import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
@@ -26,6 +26,56 @@ function EntityCode({ code }: { code: string }) {
       {code}
     </code>
   );
+}
+
+// ── HTML comments are machinery, and machinery is not page copy ────────────────────
+// The desk README fences its regenerated regions with them — `<!-- desk:pinned:start -->`,
+// `<!-- desk:now:end -->`, the pinned hint (core/agent/shared/desk_readme.py) — and this
+// renderer printed every one of them as text, because a `<` that starts no known tag is escaped
+// into literal prose. Founder, 2026-09-06, walking his own desk: *"not everything is rendered
+// correctly here"*. Any markdown viewer shows none of them; the EDIT view, which reads the file
+// rather than this renderer, still shows them all.
+//
+// A FENCE is a transcript of literal text and inline code is the idiom for NAMING a marker, so
+// both are copied through untouched — the same rule MdxDoc's transformDocRefs already applies to
+// every other rewrite. An UNTERMINATED `<!--` is left as it stands rather than swallowing the
+// rest of the document: losing one stray marker is a blemish, losing the page is a failure.
+const FENCE_LINE = /^\s*(?:```|~~~)/;
+
+/** Drop every complete `<!-- … -->` from a prose run, fences and inline code excepted. */
+function stripProseComments(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      if (end === -1) { out += text.slice(i); break; }   // unterminated: literal, never eat the page
+      i = end + 3;                                       // the whole comment, however many lines
+      continue;
+    }
+    if (text[i] === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end !== -1) { out += text.slice(i, end + 1); i = end + 1; continue; }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+/** The source a reader is shown: the same markdown, minus its HTML comments. */
+export function stripHtmlComments(src: string): string {
+  const lines = (src ?? "").replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let prose: string[] = [];
+  let fenced = false;
+  const flush = () => { if (prose.length) { out.push(stripProseComments(prose.join("\n"))); prose = []; } };
+  for (const line of lines) {
+    if (FENCE_LINE.test(line)) { flush(); out.push(line); fenced = !fenced; continue; }
+    if (fenced) out.push(line); else prose.push(line);
+  }
+  flush();
+  return out.join("\n");
 }
 
 // ── inline span parsing: code, bold, italic, links, wikilinks ──────────────────────
@@ -176,7 +226,7 @@ function tableStart(lines: string[], index: number): { header: string[]; align: 
 
 // ── block parser: split lines into headings, lists, code fences, quotes, rules, paras ──
 export function Markdown({ children, style }: { children: string; style?: React.CSSProperties }): ReactNode {
-  const src = children ?? "";
+  const src = stripHtmlComments(children ?? "");
   const lines = src.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;

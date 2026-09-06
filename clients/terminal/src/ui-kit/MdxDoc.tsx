@@ -15,7 +15,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
-import { Markdown } from "./Markdown";
+import { Markdown, stripHtmlComments } from "./Markdown";
 import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
@@ -280,7 +280,10 @@ function stripFrontmatter(md: string): string {
 }
 
 export function MdxDoc({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
-  const src = stripFrontmatter(children ?? "");
+  // Comments out BEFORE anything else looks at the source: MDX has no HTML comment, so
+  // escapeUnknownTags below would turn `<!-- desk:pinned:start -->` into visible prose, and the
+  // plain-Markdown fallback reads this same string (#1590).
+  const src = stripHtmlComments(stripFrontmatter(children ?? ""));
   const [state, setState] = useState<CompileState>({ status: "loading" });
   // Recognizing a workspace NAME needs the known set, and the transform cannot await. Prime the
   // snapshot once and recompile when it lands; a warm snapshot costs no second compile.
