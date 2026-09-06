@@ -258,7 +258,10 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       key: `c:${c.id}`,
       chatId: c.id,
       meetingId: c.meeting ?? null,
-      label: c.label || (m ? meetingTitle(m) : "Chat"),
+      // The last guard, at the surface the founder was looking at: a stored label from before
+      // the rule (Vexa-ai/vexa#1602) is treated as the placeholder it is, so the row falls back to
+      // its meeting's title or to "Chat" rather than putting a mark on the rail.
+      label: (isMachineryLabel(c.label) ? "" : c.label) || (m ? meetingTitle(m) : "Chat"),
       when,
       whenLabel: whenShort(m ? meetingWhen(m) : when, { live, now }),
       live, upcoming,
@@ -324,6 +327,10 @@ export function visibleRows(rows: Row[], all: boolean, keep?: string | null): Ro
 export type ServerSession = {
   session: string;
   title?: string | null;
+  /** THE SERVER'S NAME FOR THIS ROW (Vexa-ai/vexa#1602) — one rule, computed once, for every
+   *  client. Empty means no name is recoverable; absent means a server that predates the rule.
+   *  `title` stays what it always was and is still read as the fallback. */
+  label?: string | null;
   created?: number | string | null;
   last_active?: number | string | null;
   workspaces?: string[] | null;
@@ -377,9 +384,16 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
     const bornAsMeeting = meetingIdFromChatId(id);
     const bound = typeof r.meeting === "string" && r.meeting.trim() ? r.meeting.trim() : undefined;
     const meeting = bornAsMeeting ?? bound;
+    // WHAT THE ROW IS CALLED (Vexa-ai/vexa#1602). The server computes it — the meeting's title,
+    // the scaffold's label, the act's label, or the person's first words with the machinery
+    // stripped — so the rail, a second window and any other client agree by construction rather
+    // than by three implementations of one rule.
+    const given = typeof r.label === "string" ? r.label.trim() : "";
     // The index defaults an untitled session's title to the session id — a placeholder, not a name.
+    // And a server that predates `label` sends the raw stored title, which is where the founder's
+    // `Active context: the u…` rows came from: it is read, but never when it is machinery.
     const title = typeof r.title === "string" ? r.title.trim() : "";
-    const named = title && title !== id ? title : "";
+    const named = title && title !== id && !isMachineryLabel(title) ? title : "";
     const mounts = Array.isArray(r.workspaces)
       ? r.workspaces.filter((w): w is string => typeof w === "string" && !!w.trim())
       : [];
@@ -395,7 +409,7 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
       // before it was a meeting and the person's own first sentence named it; the founder asked for
       // the meeting's STATUS on that row — *"just attach the status to it"* — not for the row to
       // become something else. `Row.status` is where the meeting shows.
-      label: bornAsMeeting ? "" : (named || "Chat"),
+      label: bornAsMeeting ? "" : (given || named || "Chat"),
       meeting,
       workspaces: mounts.length ? mounts : ["personal", "_global"],
       artifacts: [],
@@ -525,12 +539,33 @@ export function chatForRow(chats: Chat[], row: Row, meetings: MeetingMock[], now
   };
 }
 
+/** A label that is MACHINERY — the founder's own sentence as a predicate: *never a bracket, never
+ *  a mark, never "Active context"* (Vexa-ai/vexa#1602).
+ *
+ *  The rule that NAMES a row lives on the server (`shared/chat_label.py`) and this client does not
+ *  reimplement it — `label` arrives computed. This is the smaller, local question the client alone
+ *  can answer: **is a label already sitting in this browser one a person chose?** `vexa.minutes.
+ *  chats` is full of names taken from the old rule, and without this the merge below would prefer
+ *  a stored `[vexa-job:extend…` over the clean name the server now sends, because a machinery
+ *  string is not "New chat" and the merge only knew those two placeholders.
+ *
+ *  Shape, not vocabulary. A rail row never opens with a bracket or with that narration, whatever a
+ *  mark or a preamble is called this month; matching literals would need the marks copied here and
+ *  would go stale the first time one is renamed. */
+export function isMachineryLabel(label: string): boolean {
+  const t = (label ?? "").trim();
+  if (!t) return false;
+  return t.startsWith("[") || t.startsWith("Active context") || t.startsWith("Active meeting");
+}
+
 /** A label NOBODY CHOSE. The `+` button mints "New chat" and a normalised record falls back to
  *  "Chat"; both are placeholders, and both may be replaced by the person's own first sentence.
- *  Anything else is a name a human or a scaffold picked, and is never overwritten. */
+ *  Machinery is a third — a row called `[prep] They click…` is not a name anybody picked, it is
+ *  what the old rule left behind (Vexa-ai/vexa#1602) — so it is replaceable on exactly the same
+ *  terms. Anything else is a name a human or a scaffold picked, and is never overwritten. */
 export function isPlaceholderLabel(label: string): boolean {
   const t = (label ?? "").trim();
-  return !t || /^new chat$/i.test(t) || /^chat$/i.test(t);
+  return !t || /^new chat$/i.test(t) || /^chat$/i.test(t) || isMachineryLabel(t);
 }
 
 /** How long a rail row's name may be. The rail is 248px wide; past this the row truncates anyway,

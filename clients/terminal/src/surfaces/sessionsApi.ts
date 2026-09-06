@@ -14,6 +14,19 @@ import { getJson } from "./apiClient";
 export interface SessionSummary {
   session: string;
   title?: string | null;
+  /** WHAT THIS ROW IS CALLED (Vexa-ai/vexa#1602) — computed by the server so every client agrees.
+   *
+   *  `title` is what the session index STORED, which for a row minted before that rule is the first
+   *  60 characters of a composed prompt: the founder's rail read `Active context: the u…` four
+   *  times, plus `[vexa-job:extend…` and `[prep] They click…`. `label` is the one rule applied to
+   *  it — the meeting's title, the scaffold's label, the act's label, or the person's own first
+   *  words with every machinery preamble stripped.
+   *
+   *  Empty means NO NAME IS RECOVERABLE, never a name of the server's: "Chat" is this client's
+   *  placeholder (`minutes/chats.ts` — `isPlaceholderLabel`) and a server that shipped it would
+   *  outrank the reader's own rename in the merge. Absent means a server one release behind, which
+   *  costs a fallback and never a broken rail. */
+  label?: string | null;
   created?: number | string | null;
   last_active?: number | string | null;
   /** the mount set this chat is over, when the server knows it (a scaffold said so) */

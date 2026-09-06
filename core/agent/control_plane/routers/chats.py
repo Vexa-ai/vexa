@@ -17,14 +17,21 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    _truncate_title, logger, meeting_binding)
+    logger, meeting_binding)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from jsonschema.exceptions import ValidationError
+from shared import chat_label as chat_label_mod
 from shared import units
+
+#: How the terminal names a meeting's own agent session — `meet-<row id>`. The `/api/sessions`
+#: docstring below has always said so; #1602 is the first thing on this side to READ it, because a
+#: chat born as a meeting's is named by that meeting (and one that merely CREATED a meeting is not —
+#: Vexa-ai/vexa#1597).
+_MEET_SESSION_PREFIX = "meet-"
 
 
 def build(**d) -> APIRouter:
@@ -45,6 +52,84 @@ def build(**d) -> APIRouter:
     stream_reader = d['stream_reader']
     subject_of = d['subject_of']
     wsr = d['wsr']
+
+    # ── THE RAIL'S NAME FOR A ROW (Vexa-ai/vexa#1602) ────────────────────────────────────────
+    #
+    # The founder's rail, 2026-09-06 12:50Z: four rows reading `Active context: the u…`, plus
+    # `[vexa-job:extend…`, `[minutes-review…` and `[prep] They click…`. A row was labelled with the
+    # session's first user text, and the first user text of most sessions is machinery.
+    #
+    # `shared/chat_label.py` holds the RULE and reads nothing; these three resolve the facts it is
+    # given — the ask library, the meetings domain — because those live behind this control plane.
+
+    def _preset_label(name: str, cache: "dict[str, str]") -> str:
+        """`label:` from an ask's frontmatter, memoised for this request.
+
+        BEST-EFFORT BY CONSTRUCTION: a name this library does not hold has no label, the rule falls
+        through to its next clause, and nobody's rail 500s because a preset was renamed."""
+        if not name:
+            return ""
+        if name not in cache:
+            try:
+                fm, _ = scaffolds_mod.read_preset(_global_root(), name)
+                cache[name] = str(fm.get("label") or "")
+            except scaffolds_mod.ScaffoldError:
+                cache[name] = ""
+        return cache[name]
+
+    def _meeting_titles(subject: str, wanted: "set[str]") -> "dict[str, str]":
+        """`{row id: the title a person gave it}`, for the meetings the rail actually needs.
+
+        LAZY, AND NEVER FATAL. No row is a meeting's ⇒ no lookup at all; `_schedule_source` is
+        TTL-cached and returns `[]` rather than raising, so a meetings domain that is down costs the
+        rail its meeting names and nothing else. Only `data.title` — the title a PERSON gave the
+        meeting — is a name; the platform-and-code fallback is a rendering each client already has."""
+        if not wanted:
+            return {}
+        out: "dict[str, str]" = {}
+        try:
+            rows = _schedule_source(subject) or []
+        except Exception:  # noqa: BLE001 — a row's name is furniture; the rail outranks it
+            logger.warning("meeting titles for the rail could not be read for subject=%s", subject)
+            return out
+        for r in rows:
+            rid = str((r or {}).get("id") or "")
+            if rid not in wanted:
+                continue
+            data = r.get("data") if isinstance(r.get("data"), dict) else {}
+            title = str((data or {}).get("title") or "")
+            if title:
+                out[rid] = title
+        return out
+
+    def _labelled(subject: str, rows: "list[dict]") -> "list[dict]":
+        """Every session row with the `label` a client should show it under.
+
+        COMPUTED HERE RATHER THAN IN EACH CLIENT, which is the whole point: the rail, a second
+        window and anything else reading this route agree by construction instead of by three
+        implementations of one rule. `title` is untouched — it is what the index stores, every
+        existing consumer still reads what it always read, and `label` is what it MEANS.
+
+        The scaffold clause reads the `[kind]` an ask's body opens with rather than asking the
+        scaffold store, and that is deliberate: a row minted with its record's id already carries
+        that record's title (the mint path below writes it), while a row minted BEFORE the terminal
+        rode the id onto the first turn carries nothing but the composed opening — and the opening
+        names its own ask in its first bracket. One read of a small file per distinct ask, memoised,
+        against one store round-trip per row for an answer that is already in the title."""
+        wanted = {str(r.get("session") or "")[len(_MEET_SESSION_PREFIX):]
+                  for r in rows
+                  if str(r.get("session") or "").startswith(_MEET_SESSION_PREFIX)}
+        titles = _meeting_titles(subject, wanted)
+        cache: "dict[str, str]" = {}
+        out: "list[dict]" = []
+        for r in rows:
+            sid, title = str(r.get("session") or ""), str(r.get("title") or "")
+            meeting_title = (titles.get(sid[len(_MEET_SESSION_PREFIX):], "")
+                             if sid.startswith(_MEET_SESSION_PREFIX) else "")
+            out.append({**r, "label": chat_label_mod.chat_label(
+                title, meeting_title=meeting_title,
+                scaffold_label=_preset_label(chat_label_mod.preset_kind(title), cache))})
+        return out
 
     def _binding_watch(events, subject: str, session: str):
         """Pass the turn's events through, and BIND the meeting any send in it created
@@ -118,6 +203,10 @@ def build(**d) -> APIRouter:
         # this subject's is IGNORED rather than refused: a forwarded or stale id must not be
         # able to widen anybody's mounts, and must not break their turn either.
         scaffold_view = None
+        # The intent preset's own frontmatter, kept for the row's NAME (Vexa-ai/vexa#1602) — the
+        # loop below reads it to substitute the ask, and `label:` is the same record's answer to
+        # "what did this person open".
+        preset_fm = None
         if body.scaffold_id:
             rec = scaffolds.get(body.scaffold_id)
             if rec is not None and _scaffold_is_for(rec, request, subject):
@@ -162,6 +251,7 @@ def build(**d) -> APIRouter:
                     # something this route may assume — and a dropped instruction is invisible to
                     # everyone including the person who typed it.
                     _text = chat_intents.with_instruction(_text, _ask, body.intent)
+                    preset_fm = _fm
                     # A SILENT KIND IS MACHINERY END TO END (decision 35). The marks ride the prompt
                     # itself — the same carrier the write-back phase uses — so `workspace_reader.
                     # history` drops this turn and every agent turn after it until the person speaks
@@ -263,12 +353,31 @@ def build(**d) -> APIRouter:
                 start = _stream_tail_id(redis_url, units.output_topic(unit_id)) or None
                 # Upsert the durable index on first use of a thread: a new thread is titled by its first
                 # prompt; an existing one just bumps last_active (title preserved).
-                is_new = not any(r["session"] == session for r in sess.list(subject))
+                _stored = next((r for r in sess.list(subject) if r["session"] == session), None)
+                is_new = _stored is None
                 # A SCAFFOLDED chat is titled by its record, never by its opening: the opening
                 # is machinery, and titling a rail row with the first 60 characters of an
                 # instruction block is the same defect as painting it as the person's message.
-                _title = ((scaffold_view["header"]["title"] or scaffold_view["opening_label"])
-                          if scaffold_view is not None else _truncate_title(body.prompt))
+                #
+                # AND SO IS EVERY OTHER CHAT (Vexa-ai/vexa#1602). The `else` branch here used to be
+                # `_truncate_title(body.prompt)` — the first 60 characters of whatever reached this
+                # route — which is the person's sentence only when nothing composed anything in
+                # front of it. It rarely is: the terminal prepends "Active context: the user is
+                # viewing…", an act rides a job mark, an ask opens with its own `[kind]`. The rule
+                # is `shared/chat_label.py` and it runs on the WHOLE prompt, before the cut, which
+                # is the only place the person's words still exist in full.
+                #
+                # The ask's `label:` is passed as the scaffold clause for an intent-composed turn —
+                # the same record's name for the same thing — but NOT when the turn carries a job
+                # mark, because #1588 already ruled what an act is called and `Extend: <path>` says
+                # more than `extend` does.
+                _scaffold_label = ""
+                if scaffold_view is not None:
+                    _scaffold_label = (scaffold_view["header"]["title"]
+                                       or scaffold_view["opening_label"] or "")
+                elif preset_fm is not None and not _job_mark:
+                    _scaffold_label = str(preset_fm.get("label") or "")
+                _title = chat_label_mod.chat_label(body.prompt, scaffold_label=_scaffold_label)
                 # WHAT THE RAIL NEEDS, RECORDED WHERE IT IS KNOWN (Vexa-ai/vexa#1591). The chat list
                 # is derived from this index now, so a row has to carry what a row shows: the mount
                 # set, the record the chat was composed from, and whether a PERSON has written here.
@@ -277,7 +386,15 @@ def build(**d) -> APIRouter:
                 # act they asked for — which here is "not a scaffold opening and not a silent
                 # intent". A job mark (Extend, Create) IS a touch: somebody pressed it. The client
                 # could only ever see the turns typed in one browser; this sees all of them.
-                sess.upsert(subject, session, title=_title if is_new else None,
+                # A MACHINERY TITLE IS NOT A TITLE. The index names a thread once, on its first
+                # turn, which is exactly right for a name and exactly wrong for the rows #1602 is
+                # about: they read `Active context: the u…` because the rule above did not exist
+                # when they were minted. So a stored title the rule REFUSES is replaced by this
+                # turn's — and a title anybody's rule accepted, including a person's own rename, is
+                # still written once and never again.
+                _retitle = is_new or chat_label_mod.is_machinery_label(
+                    str((_stored or {}).get("title") or ""))
+                sess.upsert(subject, session, title=_title if (_retitle and _title) else None,
                             workspaces=((scaffold_view or {}).get("workspaces") or None),
                             scaffold=({"kind": scaffold_view.get("kind"), "id": scaffold_view.get("id")}
                                       if scaffold_view is not None else None),
@@ -341,8 +458,16 @@ def build(**d) -> APIRouter:
         for the meeting somebody OPENED from the rail. It says nothing about the chat that CREATED
         the meeting from itself: that chat has an ordinary `pchat-…` id, so its meeting exists
         nowhere but in this index, and without it the rail showed one meeting as two rows. Null is
-        the ordinary answer, and a `meet-<row>` session still needs no field at all."""
-        return {"sessions": sess.list(subject_of(request))}
+        the ordinary answer, and a `meet-<row>` session still needs no field at all.
+
+        `label` IS THE NAME (Vexa-ai/vexa#1602). `title` is what the index stored — for a row minted
+        before the rule, the first 60 characters of a composed prompt — and `label` is the one rule
+        applied to it: the meeting's title, the scaffold's label, the act's label, or the person's
+        own first words with every machinery preamble stripped. Empty means no name is recoverable,
+        never a name of ours: "Chat" is the client's placeholder and a server that shipped it would
+        outrank the reader's own rename in the merge."""
+        subject = subject_of(request)
+        return {"sessions": _labelled(subject, sess.list(subject))}
     @router.get("/api/sessions/{session}/history")
     def session_history(session: str, request: Request):
         """The session's prior conversation, as simplified turns the terminal can render (so clicking a
