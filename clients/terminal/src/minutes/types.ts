@@ -27,4 +27,15 @@ export type Page = {
   pinned?: boolean;
   /** when this page was last in front — the strip's order, and what the cap evicts on */
   at?: number;
+  /** THE MEETING'S OWN PAGE — a tab that cannot be closed (Vexa-ai/vexa#1600).
+   *
+   *  Founder, 2026-09-06, on the "Open transcript" chip a meeting chat used to carry: *"just keep a
+   *  tab that can't be closed instead"*. The transcript and the meeting's page belong to the
+   *  MEETING, not to the reader's tab habits — so the tab renders no close control and every close
+   *  path refuses it, which is what makes the chip unnecessary rather than merely redundant.
+   *
+   *  Stamped by `meetingPages()` — the ONE writer of what a meeting shows — and by nothing else. A
+   *  pin stays an ordinary pin: pinning is the reader saying "keep this", and what the reader kept
+   *  the reader may drop. */
+  permanent?: boolean;
 };

@@ -7,9 +7,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
-import { openChips } from "../../minutes/openChips";
 import { pageForArtifact } from "../../minutes/roomView";
-import type { Page } from "../../minutes/types";
 
 function sseResponse(chunks: string[]): Response {
   const enc = new TextEncoder();
@@ -107,40 +105,9 @@ describe("what the panel does with it", () => {
   });
 });
 
-describe("the standing chips of a meeting chat", () => {
-  const transcript: Page = { kind: "meeting", path: "147", label: "Transcript" };
-  const minutes: Page = { path: "kg/entities/meeting/2026-03-02-0000-dna-tsc.md", label: "Minutes" };
-  const personal: Page = { path: "README.md", label: "Personal page" };
-
-  it("offers both when the room has both", () => {
-    expect(openChips("147", [transcript, minutes, personal])).toEqual([
-      { id: "transcript", label: "Open transcript", page: transcript },
-      { id: "note", label: "Open minutes", page: minutes },
-    ]);
-  });
-
-  it("offers only what EXISTS — a prep room has no transcript yet", () => {
-    const brief: Page = { path: "kg/entities/meeting/2026-03-02-0000-dna-tsc.md", label: "Brief" };
-    expect(openChips("147", [brief, personal]).map((c) => c.id)).toEqual(["note"]);
-    // and it takes the room's own word for the page, so the button and the tab agree
-    expect(openChips("147", [brief, personal])[0].label).toBe("Open brief");
-    expect(openChips("147", [transcript, personal]).map((c) => c.id)).toEqual(["transcript"]);
-  });
-
-  it("offers nothing in a chat that is not about a meeting", () => {
-    // a plain conversation with a meeting note open is not a meeting chat, and "Open transcript"
-    // there would name a transcript belonging to no meeting in view
-    expect(openChips(undefined, [transcript, minutes])).toEqual([]);
-  });
-
-  it("does not mistake the folder's index or the mock's canned transcript for the note", () => {
-    const index: Page = { path: "kg/entities/meeting/index.md", label: "index" };
-    const canned: Page = { path: "kg/entities/meeting/abc.transcript.md", label: "Transcript" };
-    expect(openChips("147", [index, canned, personal]).map((c) => c.id)).toEqual([]);
-  });
-
-  it("is not spent by a click — opening the transcript is not an offer you take once", () => {
-    const row = openChips("147", [transcript, minutes, personal]);
-    expect(openChips("147", [transcript, minutes, personal])).toEqual(row);
-  });
-});
+/*  THE STANDING CHIPS ARE GONE (Vexa-ai/vexa#1600). The other half of #1586 stood here: a row above
+ *  the composer offering this meeting's transcript and note, because `×` on the transcript tab had
+ *  left the founder with no way back to it. Shown that row, he ruled on the cause — *"just keep a
+ *  tab that can't be closed instead"* — so the tab cannot be closed and the offer has nothing left
+ *  to recover. The agent's `open` event above is untouched: being ABLE to open a page when asked is
+ *  the half of #1586 that was never about the chips. Successor: `minutes/__tests__/permanentTab`.  */

@@ -652,13 +652,6 @@ function routineCreationPrompt(commandText: string): string {
  *  goes there (the minutes shell derives its proposal chips), so the two stay independent. */
 type ChatProps = Partial<TabProps> & {
   emptyExtra?: ReactNode;
-  /** `standing` — whatever the host wants ABOVE the composer, in every state of the conversation
-   *  (Vexa-ai/vexa#1586). `emptyExtra` renders in the void an empty chat leaves and is gone the
-   *  moment there is a first turn; the founder's complaint was about a chat with 677 segments
-   *  behind it — *"did not give a button that should open it"* — so the affordance that offers
-   *  this room's transcript and note cannot be an empty-state one. Same contract as `emptyExtra`
-   *  otherwise: the chat owns the layout and nothing else. */
-  standing?: ReactNode;
 };
 
 
@@ -698,7 +691,7 @@ type SendOpts = {
   queuedRowId?: string;
 };
 
-export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
+export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
@@ -1362,10 +1355,10 @@ export function Chat({ params = {}, emptyExtra, standing }: ChatProps) {
 
   const composer = (
     <>
-      {/* THE STANDING ROW. Above the composer and above the skills menu, so it is the last thing
-          between the conversation and the box you type in — and it is there whether the chat is
-          empty or a hundred turns long. */}
-      {standing}
+      {/* THE STANDING ROW that used to sit here — "Open transcript" · "Open note" (#1586) — is
+          gone with the chips it carried (Vexa-ai/vexa#1600, founder: *"just keep a tab that can't
+          be closed instead"*). It was this component's only host slot above the composer, so the
+          slot goes too rather than standing empty waiting for a second reason to exist. */}
       {slash && skills.length > 0 && (
         <div style={{ border: "1px solid var(--line2)", borderRadius: 11, background: "var(--panel)", overflow: "hidden" }}>
           {skills.map((c) => <div key={c.id} onMouseDown={() => setValue(c.skill! + " ")} style={{ display: "flex", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13 }}><code style={{ fontFamily: "var(--mono)", color: "var(--accent)", minWidth: 88 }}>{c.skill}</code><span style={{ color: "var(--t3)", fontSize: 12 }}>{c.title}</span></div>)}

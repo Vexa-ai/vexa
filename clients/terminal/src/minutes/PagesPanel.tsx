@@ -203,8 +203,11 @@ export function PagesPanel(p: {
                 {/^\d+$/.test(pg.label) ? "personal" : pg.label}
               </button>
               {/* THE PIN, ON THE TAB. The chat's home carries none: it is a product default rather
-                  than something the reader asked for, so there is no decision here to offer. */}
-              {p.onTogglePin && !pg.desk && (
+                  than something the reader asked for, so there is no decision here to offer. Nor
+                  does a page the MEETING owns (Vexa-ai/vexa#1600) — and there the control would be
+                  worse than pointless, because unpinning a tab that is not in front drops it, which
+                  is the close this tab must not have. */}
+              {p.onTogglePin && !pg.desk && !pg.permanent && (
                 <button data-tab-pin aria-pressed={kept} aria-label={kept ? `Unpin ${pg.label}` : `Keep ${pg.label} as a tab`}
                   title={kept ? "Unpin — this goes back to being the page you are reading" : "Keep this as a tab"}
                   onClick={(e) => { e.stopPropagation(); p.onTogglePin?.(pg); }}
@@ -212,8 +215,15 @@ export function PagesPanel(p: {
                   <Icon name="pin" size={11} />
                 </button>
               )}
-              {p.onClose && p.pages.length > 1 && (
-                <button aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
+              {/* `×` — EXCEPT ON THE MEETING'S OWN PAGES (Vexa-ai/vexa#1600). Founder, on the
+                  "Open transcript" chip that used to stand beside the composer: *"just keep a tab
+                  that can't be closed instead"*. A chip is a way back from a mistake the product
+                  did not have to allow; a tab with no `×` is the mistake not being available. So in
+                  a meeting chat the transcript, and the meeting's page when it has one, carry no
+                  close control at all — and an ordinary pinned tab keeps its own, because a pin is
+                  the reader saying "keep this" and what the reader kept the reader may drop. */}
+              {p.onClose && !pg.permanent && p.pages.length > 1 && (
+                <button data-tab-close aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
                   style={{ ...tabBtn(on), width: 16, marginRight: 3 }}>×</button>
               )}
             </span>

@@ -18,6 +18,11 @@
  *  So the binding is the fix and everything here is a consumer of it. The server half — where the
  *  binding is written so it outlives this browser — is pinned in
  *  `core/agent/tests/test_chat_meeting_binding.py`.
+ *
+ *  ⚠ THE CHIPS HALF OF THIS FILE IS GONE (Vexa-ai/vexa#1600). Shown the "Open transcript" chip that
+ *  gave him the way back, the founder ruled on the cause instead — *"just keep a tab that can't be
+ *  closed instead"* — so a meeting chat's pages are now unclosable and there is no way back to
+ *  offer. What remains here is the binding; the successor rule is `permanentTab.test.tsx`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
@@ -26,11 +31,9 @@ import {
   bindMeeting, chatsFromSessions, mergeChats, railRows, visibleRows,
   type Artifact, type Chat, type ServerSession,
 } from "../chats";
-import { openChips } from "../openChips";
 import { Rail } from "../Rail";
 import { meetingPages, pageForArtifact, withMeetingPages } from "../roomView";
 import type { MeetingMock } from "../../surfaces/meetingModel";
-import type { Page } from "../types";
 
 const NOW = Date.UTC(2026, 8, 6, 12, 0, 0);
 const at = (mins: number) => new Date(NOW + mins * 60000).toISOString();
@@ -229,22 +232,25 @@ const reading: Artifact = { path: "drafts/brief.md", label: "brief", at: 5 };
 const NOTE = "kg/entities/meeting/2026-09-06-1200-google-meet.md";
 
 describe("meetingPages — what binding ADDS, which is not a room", () => {
+  // `permanent` is stamped here and only here (Vexa-ai/vexa#1600) — these pages are the MEETING's,
+  // so they carry no close control and every close path refuses them. See `permanentTab.test.tsx`.
   it("is the transcript and the meeting's document, and nothing else", () => {
     expect(meetingPages("live", "118", NOTE)).toEqual([
-      { kind: "meeting", path: "118", label: "Transcript" },
-      { path: NOTE, label: "Brief" },
+      { kind: "meeting", path: "118", label: "Transcript", permanent: true },
+      { path: NOTE, label: "Brief", permanent: true },
     ]);
     // no personal page: the chat already has a home in its strip, and a tab nobody asked for is
     // exactly what the Obsidian ruling (#1585) removed.
   });
 
   it("degrades to the transcript alone before a report exists — which is every fresh send", () => {
-    expect(meetingPages("live", "118", null)).toEqual([{ kind: "meeting", path: "118", label: "Transcript" }]);
+    expect(meetingPages("live", "118", null))
+      .toEqual([{ kind: "meeting", path: "118", label: "Transcript", permanent: true }]);
   });
 
   it("names the document for the phase it is read in", () => {
     expect(meetingPages("post", "118", NOTE)[1].label).toBe("Minutes");
-    expect(meetingPages("prep", "118", NOTE)).toEqual([{ path: NOTE, label: "Brief" }]);
+    expect(meetingPages("prep", "118", NOTE)).toEqual([{ path: NOTE, label: "Brief", permanent: true }]);
   });
 });
 
@@ -277,35 +283,9 @@ describe("withMeetingPages — the transcript arrives PINNED, behind the reader"
 });
 
 // ── the way back to a transcript you closed ──────────────────────────────────────────────────────
-
-describe("openChips — closing the transcript leaves the chip", () => {
-  const transcript: Page = { kind: "meeting", path: "118", label: "Transcript" };
-  const minutes: Page = { path: NOTE, label: "Minutes" };
-  const home: Page = { path: "README.md", label: "Desk" };
-
-  it("offers the transcript when the meeting HAS one, whether or not the strip does", () => {
-    // the founder's own state: `×` on the transcript tab, and then no way back to it
-    const gone = openChips("118", [minutes, home], "live");
-    expect(gone.map((c) => c.id)).toEqual(["transcript", "note"]);
-    expect(gone[0].page).toEqual({ kind: "meeting", path: "118", label: "Transcript" });
-  });
-
-  it("takes the strip's own entry when it is there, so the chip and the tab agree", () => {
-    const named: Page = { kind: "meeting", path: "118", label: "Transcript · live" };
-    expect(openChips("118", [named, home], "live")[0].page).toBe(named);
-  });
-
-  it("still offers only what EXISTS — a prep room has no transcript to open", () => {
-    const brief: Page = { path: NOTE, label: "Brief" };
-    expect(openChips("118", [brief, home], "prep").map((c) => c.id)).toEqual(["note"]);
-  });
-
-  it("falls back to the strip when no phase is known, exactly as it always did", () => {
-    expect(openChips("118", [minutes, home]).map((c) => c.id)).toEqual(["note"]);
-    expect(openChips("118", [transcript, home]).map((c) => c.id)).toEqual(["transcript"]);
-  });
-
-  it("offers nothing in a chat that is about no meeting, phase or no phase", () => {
-    expect(openChips(undefined, [transcript, minutes], "live")).toEqual([]);
-  });
-});
+//
+//  There is none, because there is no way to close one (Vexa-ai/vexa#1600). The `openChips` suite
+//  that stood here — the standing "Open transcript" · "Open note" row #1586 added for exactly this
+//  state — went with the chips themselves. Its successor is `permanentTab.test.tsx`, which pins the
+//  stronger rule: the meeting's pages carry no `×`, every close path refuses them, and a strip
+//  stored before the ruling (including one whose transcript WAS closed) is repaired on open.

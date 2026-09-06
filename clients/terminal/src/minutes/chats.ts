@@ -35,6 +35,12 @@ export type Artifact = {
    *  one. Unpinned entries are the pre-28 accumulation and the migration in `normalise` removes
    *  them; nothing writes an unpinned artifact any more. */
   pinned?: boolean;
+  /** THE MEETING'S OWN PAGE, IN A MEETING CHAT — a tab that cannot be closed (Vexa-ai/vexa#1600).
+   *
+   *  A pin is the reader's; this is the meeting's. `forgetHistory`, `togglePinned` and the preview
+   *  cap all refuse it, so no route the strip has — the `×`, an unpin, an eviction — can take the
+   *  transcript off a meeting chat. See `Page.permanent` for the ruling it comes from. */
+  permanent?: boolean;
 };
 
 /** A tab's identity. Path alone is not enough — `README.md` exists in every workspace.
@@ -771,20 +777,27 @@ export function touchHistory(list: Artifact[], art: Artifact, now: number, cap =
   // and a page arriving for the FIRST TIME keeps the pin it arrived with. Taking it from `prev`
   // alone silently dropped the pin on an entry that had never been touched — which is every
   // artifact event carrying `pin: true`.
-  const next: Artifact = { ...(prev ?? art), ...art, pinned: prev?.pinned ?? art.pinned, desk: prev?.desk ?? art.desk, at: now };
+  const next: Artifact = { ...(prev ?? art), ...art, pinned: prev?.pinned ?? art.pinned, desk: prev?.desk ?? art.desk, permanent: prev?.permanent ?? art.permanent, at: now };
   const kept = list.filter((a) => artifactKey(a) !== key);
   const out = orderHistory([...kept, next]);
-  const unpinned = out.filter((a) => !a.pinned && !a.desk);
+  // EVICTION IS A CLOSE PATH (Vexa-ai/vexa#1600), so a permanent page is outside the cap the way the
+  // desk is. It arrives pinned and so would survive anyway — but "the transcript cannot leave a
+  // meeting chat" must not rest on a second field happening to be set.
+  const unpinned = out.filter((a) => !a.pinned && !a.desk && !a.permanent);
   if (unpinned.length <= cap) return out;
   const evict = new Set(unpinned.slice(0, unpinned.length - cap).map(artifactKey));
-  return out.filter((a) => a.pinned || a.desk || !evict.has(artifactKey(a)));
+  return out.filter((a) => a.pinned || a.desk || a.permanent || !evict.has(artifactKey(a)));
 }
 
 /** `×` on a tab: drop that entry. */
 export function forgetHistory(list: Artifact[], key: string): Artifact[] {
   // the desk is a product default, not something the reader put there, so it is not theirs to
   // forget — and a strip that could lose its first entry would have no default view to fall back to
-  return list.filter((a) => artifactKey(a) !== key || a.desk);
+  //
+  // …AND THE MEETING'S OWN PAGES, for the same reason one level up (Vexa-ai/vexa#1600, founder:
+  // *"just keep a tab that can't be closed instead"*). The panel renders no `×` on them, and this
+  // refuses them anyway: the button is one close path, and the rule is about all of them.
+  return list.filter((a) => artifactKey(a) !== key || a.desk || a.permanent);
 }
 
 /** THE PIN, AS THE TAB CARRIES IT (founder ruling 2026-09-06: *"tab icon is on tab"*).
@@ -796,10 +809,14 @@ export function forgetHistory(list: Artifact[], key: string): Artifact[] {
  *  it to be, and keeping it would put a second unpinned entry beside the preview, which is the very
  *  accumulation the ruling removed.
  *
- *  The desk is a product default, not a pin, so it is not togglable — see `homeEntry`. */
+ *  The desk is a product default, not a pin, so it is not togglable — see `homeEntry`.
+ *
+ *  NEITHER IS A MEETING'S OWN PAGE (Vexa-ai/vexa#1600), and here that is not tidiness: unpinning a
+ *  tab that is not in front DROPS it, so a pin control on the transcript would be the `×` under
+ *  another name. The panel renders none on those tabs; this refuses one anyway. */
 export function togglePinned(list: Artifact[], key: string, front: boolean, now: number): Artifact[] {
   const hit = list.find((a) => artifactKey(a) === key);
-  if (!hit || hit.desk) return list;
+  if (!hit || hit.desk || hit.permanent) return list;
   if (!hit.pinned) return orderHistory(list.map((a) => (artifactKey(a) === key ? { ...a, pinned: true } : a)));
   const without = list.filter((a) => artifactKey(a) !== key);
   return front ? touchHistory(without, { ...hit, pinned: undefined }, now) : orderHistory(without);
@@ -832,7 +849,7 @@ export function chatHistory(c: Chat): { workspace: string; path: string; title: 
 export function stripForRecord(pages: Artifact[]): Artifact[] {
   return pages.map((pg) => ({
     kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label,
-    pinned: pg.pinned, desk: pg.desk, at: pg.at,
+    pinned: pg.pinned, desk: pg.desk, permanent: pg.permanent, at: pg.at,
   }));
 }
 

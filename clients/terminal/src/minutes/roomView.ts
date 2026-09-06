@@ -245,13 +245,20 @@ export function pagesForPhase(phase: MeetingPhase, native?: string | null, meeti
  *
  *  ONE WRITER for what a meeting shows: `pagesForPhase` is this plus the personal page, rather than
  *  a second spelling of the same two rules. `native` is here only for the `?mock=1` fallback, where
- *  a fixture with no row keeps its canned markdown transcript. */
+ *  a fixture with no row keeps its canned markdown transcript.
+ *
+ *  …AND THE ONE WRITER OF `permanent` (Vexa-ai/vexa#1600). Founder, on the "Open transcript" chip:
+ *  *"just keep a tab that can't be closed instead"*. These pages are the meeting's, not the
+ *  reader's, so they carry no close control and every close path refuses them. The flag is stamped
+ *  HERE because this function is already the single answer to "what does this meeting show" — a
+ *  second place deciding it is how the strip and the panel come to disagree. The personal page is
+ *  the ROOM's, not the meeting's, and stays closable: it is not in this list. */
 export function meetingPages(phase: MeetingPhase, meetingId?: string | null,
                              notePath?: string | null, native?: string | null,
                              opts: { noteHasTranscript?: boolean } = {}): Page[] {
   // The meeting doc is the SAME file in every phase — it is the brief while the room is running and
   // the minutes once it is not, so only its NAME moves. That half was always right.
-  const doc: Page[] = notePath ? [{ path: notePath, label: phase === "post" ? "Minutes" : "Brief" }] : [];
+  const doc: Page[] = notePath ? [{ path: notePath, label: phase === "post" ? "Minutes" : "Brief", permanent: true }] : [];
   // prep: no transcript yet. The one page that matters before the room — what you walk in to decide.
   if (phase === "prep") return doc;
   // ONE PAGE, NOT TWO (Vexa-ai/vexa#1598). Founder, live: *"we want this doc to open alongside
@@ -269,8 +276,8 @@ export function meetingPages(phase: MeetingPhase, meetingId?: string | null,
   // otherwise: a transcript exists, and the doc leads it — the page is what the meeting IS about,
   // the transcript is what was said in it.
   const transcript: Page = meetingId
-    ? { kind: "meeting", path: meetingId, label: "Transcript" }
-    : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" };
+    ? { kind: "meeting", path: meetingId, label: "Transcript", permanent: true }
+    : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript", permanent: true };
   return [transcript, ...doc];
 }
 
@@ -287,17 +294,24 @@ export function meetingPages(phase: MeetingPhase, meetingId?: string | null,
  *  `openChat` applies to a room's own pages (founder ruling #1585: a room's pages are declared tabs).
  *
  *  A page already in the strip is PINNED IN PLACE, never duplicated — and the desk is left alone,
- *  because it is a product default rather than something the reader put there (`homeEntry`). */
+ *  because it is a product default rather than something the reader put there (`homeEntry`).
+ *
+ *  IT IS ALSO THE MIGRATION (Vexa-ai/vexa#1600). `permanent` is a property of the page, and a strip
+ *  STORED before that rule carries none — which is every meeting chat anybody has actually used, and
+ *  a stored strip is otherwise replayed verbatim forever. So the flag is stamped here, on the way
+ *  in, rather than only where the pages are composed; `openChat` runs a meeting chat's stored strip
+ *  through this for exactly that reason, and a transcript closed under the old rule comes back with
+ *  it. Nothing else in the strip is touched: a reader owns their tabs. */
 export function withMeetingPages(strip: Artifact[], pages: Page[]): Artifact[] {
   const out = [...strip];
   for (const pg of pages) {
     const key = artifactKey(pg);
     const i = out.findIndex((a) => artifactKey(a) === key);
     if (i >= 0) {
-      if (!out[i].desk) out[i] = { ...out[i], pinned: true };
+      if (!out[i].desk) out[i] = { ...out[i], pinned: true, permanent: pg.permanent };
       continue;
     }
-    out.push({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label, pinned: true });
+    out.push({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label, pinned: true, permanent: pg.permanent });
   }
   return orderHistory(out);
 }

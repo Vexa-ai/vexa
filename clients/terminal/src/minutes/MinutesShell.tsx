@@ -45,8 +45,6 @@ import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
-import { openChips } from "./openChips";
-import { OpenChips } from "./OpenChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface, type as ty } from "./tokens";
@@ -334,6 +332,14 @@ export function MinutesShell() {
       // tabs are NAMED from the registry rather than by slug: this strip read `126` (F49).
       return deskPanelPages(c.workspaces);
     };
+    /** THE MEETING'S OWN PAGES — the room's list, minus the personal page (Vexa-ai/vexa#1600).
+     *
+     *  They are wanted on the STORED path as well now, and that is the whole of the migration:
+     *  `permanent` is a property of the PAGE, a strip written before the rule carries none, and the
+     *  strips that exist are exactly the meeting chats somebody has used. `pagesForPhase` stays the
+     *  one composer — these are the pages it marked as the meeting's own. The two paths are
+     *  mutually exclusive, so this costs the note lookup once either way. */
+    const meetingOwn = async (): Promise<Page[]> => (await roomPages()).filter((pg) => pg.permanent);
     // THE CHAT'S HOME LEADS THE STRIP (decision 28.5). Composed here rather than stored, so it
     // follows the chat's mounts if they change and can never be `×`-ed away — it is the product's
     // first entry, not something the reader put there.
@@ -363,9 +369,16 @@ export function MinutesShell() {
         if (real) strip = strip.map((a, k) => (k === stale ? { ...a, path: real } : a));
       }
     }
+    //
+    // A MEETING CHAT'S STORED STRIP IS TOLD WHICH OF ITS TABS ARE THE MEETING'S (Vexa-ai/vexa#1600),
+    // and is given them back when it does not have them. That is not the "a reader owns their tabs"
+    // rule being broken: under the founder's ruling the transcript is not a tab a reader may drop at
+    // all, so a strip that dropped one under the OLD rule is not a decision there is anything to
+    // preserve. It is also the only way the ruling reaches the desks it was made about — his own
+    // included, since every meeting chat he has opened already has a strip on disk.
     const base: Page[] = withHome(
       (hasStrip
-        ? strip
+        ? (c.meeting ? withMeetingPages(strip, await meetingOwn()) : strip)
         : (await roomPages()).map((pg) => ({ ...pg, pinned: true }))) as Artifact[],
       c.workspaces,
     ) as Page[];
@@ -548,26 +561,13 @@ export function MinutesShell() {
   /** Up to three chips, recomputed from the two lists already in hand plus one marker. Pure, so
    *  the row is decided in the render that draws it — no fetch, no model call, no effect. */
   const chips = useMemo(() => proposals(meetings, allChats, scaffolded, Date.now(), email), [meetings, allChats, scaffolded, email]);
-  /** THE STANDING ROW (Vexa-ai/vexa#1586) — "Open transcript" · "Open note", in every meeting chat.
-   *
-   *  Same discipline as the proposals above and for the same reasons: pure, over the record the
-   *  panel already renders, decided in the render that draws it. It differs in exactly two ways,
-   *  and both are the founder's complaint: it does NOT go away when the conversation starts (the
-   *  chat he was in had 677 segments behind it), and it is NOT spent by a click — opening the
-   *  transcript is not an offer you take once.
-   *
-   *  IT READS `pages`, WHICH IS THE CHAT RECORD, and that is safe under the Obsidian rule (#1585)
-   *  because a room's own pages arrive PINNED — `openChat` pins them exactly so the reader's first
-   *  navigation cannot evict them from the single preview slot, and the pin persists into
-   *  `artifacts[]`. So "the room has a transcript" and "the transcript is in the strip" stay the
-   *  same statement — for the NOTE. The transcript is not a page in the record at all, it is the
-   *  meeting, so the row offers it whenever the meeting has one: `×` on the transcript tab is the
-   *  reader saying "stop keeping this page", and it took the way back with it (Vexa-ai/vexa#1597,
-   *  founder: *"i seem to have closed the transcript and now can't find one"*). The PHASE answers
-   *  whether a transcript exists; see `openChips`. */
+  /** THE STANDING ROW IS GONE (Vexa-ai/vexa#1600). #1586 put "Open transcript" · "Open note" above
+   *  the composer of every meeting chat, because `×` on the transcript tab had left the founder with
+   *  no way back to it. Shown that row, he ruled on the cause instead: *"just keep a tab that can't
+   *  be closed instead"*. A chip is a way back from a mistake the product allowed; a tab with no `×`
+   *  is the mistake not being available — so `openChips`, `OpenChips` and the composer slot they
+   *  stood in are deleted rather than left unreachable, and `Page.permanent` is what replaces them. */
   const selMeeting = sel.kind === "meeting" ? meetings.find((m) => String(m.id) === sel.meetingId) : undefined;
-  const opens = useMemo(() => openChips(sel.meetingId, pages, selMeeting ? meetingPhase(selMeeting) : null),
-    [sel.meetingId, pages, selMeeting]);
   /** Which chat has already spent its offer — see `runProposal`. Per chat, because a different
    *  conversation has not been offered anything yet. */
   const [spent, setSpent] = useState<string | null>(null);
@@ -616,7 +616,11 @@ export function MinutesShell() {
       const same = c.focus === focus && c.artifacts.length === pages.length
         && artifactKey(c.view ?? { path: "" }) === artifactKey(view)
         && c.artifacts.every((a, k) => artifactKey(a) === artifactKey(pages[k]) && a.label === pages[k].label
-          && !!a.pinned === !!pages[k].pinned && !!a.desk === !!pages[k].desk && a.at === pages[k].at);
+          && !!a.pinned === !!pages[k].pinned && !!a.desk === !!pages[k].desk
+          // `permanent` too, and it is not decoration: a chat that BINDS a meeting mid-conversation
+          // gains it on tabs it already had (Vexa-ai/vexa#1600 via `withMeetingPages`), changing
+          // nothing else — so without this the record would keep the closable copy.
+          && !!a.permanent === !!pages[k].permanent && a.at === pages[k].at);
       if (same) return prev;
       const next = [...prev];
       // THE STRIP IS COPIED, NOT RE-DECIDED (decision 28). This mapped every entry to
@@ -1280,8 +1284,7 @@ export function MinutesShell() {
             onDismiss={() => setScaffoldRefusal(null)} />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />}
-            standing={<OpenChips items={opens} onPick={(c) => { readerChoseFocus.current = true; openPage(c.page); }} />} />
+          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
         </div>
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
