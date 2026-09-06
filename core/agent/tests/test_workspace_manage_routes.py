@@ -109,3 +109,45 @@ def test_push_via_route_fast_forwards(tmp_path):
     # status now in sync
     body = c.get("/api/workspace/git-remote-status", headers=H).json()
     assert body["ahead"] == 0
+
+
+# ── the company layer: a state, not a 404 the client renders in red ───────────────────────────────
+def _seed_global(root: Path) -> Path:
+    g = root / "_global"
+    g.mkdir(parents=True)
+    _run(g, "init", "-q", "-b", "main"); _run(g, "config", "user.email", "t@t"); _run(g, "config", "user.name", "t")
+    (g / "README.md").write_text("# Company\n"); _run(g, "add", "-A"); _run(g, "commit", "-q", "-m", "seed")
+    return g
+
+
+def test_git_remote_status_answers_for_the_company_layer(tmp_path):
+    """`_global` is nobody's slot and nobody's membership, so `_manage_dir` answered 404 — and the
+    workspace README's front page, having asked a true question and been told the workspace does not
+    exist, rendered `not readable` with `Could not read the GitHub state.` in red, to the
+    administrator, about a tier that simply has no remote (Vexa-ai/vexa#1628 point 3).
+
+    *No repo attached* is a STATE. This route now resolves the company layer through the READ gate —
+    the same call `/api/workspace/git` beside it already uses for `_global` — so the client is told
+    the truth and can render it as the ordinary thing it is."""
+    _seed_primary(tmp_path, "u_jane", with_origin=False)
+    _seed_global(tmp_path)
+
+    r = _client(tmp_path).get("/api/workspace/git-remote-status?slug=_global", headers=H)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["has_home"] is False and r.json()["branch"] == "main"
+
+
+def test_the_company_layer_is_the_only_widening(tmp_path):
+    """The fallback is one slug, deliberately. `_read_target` falls through to another person's DESK
+    on a read (the 2026-09-02 ruling), so a general fallback here would start answering with somebody
+    else's remote URL — a seam change nobody asked for. Every other slug still goes through
+    `_manage_dir`, and every WRITE (push · pull · detach) always did."""
+    _seed_primary(tmp_path, "u_jane", with_origin=False)
+    _seed_primary(tmp_path, "u_someone_else", with_origin=True)
+    _seed_global(tmp_path)
+    c = _client(tmp_path)
+
+    assert c.get("/api/workspace/git-remote-status?slug=u_someone_else", headers=H).status_code == 404
+    assert c.get("/api/workspace/git-remote-status?slug=nope", headers=H).status_code == 404
+    assert c.get("/api/workspace/git-remote-status?slug=_global", headers=H).status_code == 200

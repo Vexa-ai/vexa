@@ -1068,9 +1068,26 @@ def build(**d) -> APIRouter:
     def ws_git_remote_status(request: Request, slug: Optional[str] = None):
         """The GitHub-sync state of a workspace (default = the caller's primary; ``slug`` = one of their
         own or shared workspaces). Read-only + no network: reports the home remote (origin / vexa-publish),
-        its URL, the branch, and ahead/behind counts vs the last-fetched tracking ref. No token needed."""
+        its URL, the branch, and ahead/behind counts vs the last-fetched tracking ref. No token needed.
+
+        ``_global`` RESOLVES THROUGH THE READ GATE, not through ``_manage_dir`` (Vexa-ai/vexa#1628).
+        The company layer is nobody's slot and nobody's membership, so ``_manage_dir`` answered 404 —
+        and the workspace README's panel, having asked a true question and been told the workspace
+        does not exist, rendered `not readable` with `Could not read the GitHub state.` in red, to
+        the administrator, about a tier that simply has no remote. *No repo attached* and *the read
+        failed* are different facts and the route was making them one.
+
+        The fallback is the READ target and only for this one slug — the same call
+        ``/api/workspace/git`` already uses to report the company layer's branch and commits, so this
+        route is not learning to see anything the one beside it could not. It is deliberately NOT a
+        general fallback: ``_read_target`` falls through to another person's DESK on a read (the
+        2026-09-02 ruling), and a desk's remote URL is not something this route has ever answered —
+        widening it here would be a seam change nobody asked for, and
+        `test_shared_workspace_attach.py` pins that 404. Every WRITE (push · pull · detach) stays on
+        ``_manage_dir``, untouched, so this adds no way to change anything."""
         subject = subject_of(request)
-        ws = _manage_dir(subject, slug)
+        ws = (_read_target(request, slug) if slug == system_mounts.GLOBAL_SLUG
+              else _manage_dir(subject, slug))
         s = remote_status(ws)
         return {
             "has_home": s.has_home, "remote": s.remote, "url": s.url, "branch": s.branch,

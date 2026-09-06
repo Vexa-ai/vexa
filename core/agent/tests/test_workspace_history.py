@@ -133,6 +133,49 @@ def test_the_path_filter_narrows_to_one_page(tmp_path):
     assert one_page["path"] == "kg/entities/acme.md"
 
 
+def test_two_commits_two_pages_and_each_filter_returns_only_its_own(tmp_path):
+    """*This page only* must MEAN this page only (Vexa-ai/vexa#1628 point 2).
+
+    The founder's reading of the screenshot was *"either the route ignores `path=` or the client
+    never sends it"*, and this is the route's half of the answer, stated the narrow way: two commits
+    that touch two different pages, then each filter asked for in turn. Excluding the wrong commit is
+    the claim — the test above only ever checked that the right one survives, and a route that
+    ignored `path` entirely would pass it whenever the pathspec happened to name the newest file.
+
+    The third commit is the one that matters most: it touches BOTH pages, so it must appear under
+    both filters, and its `files` must come back narrowed to the pathspec that matched it. That is
+    what lets the panel show the reader what the filter actually matched instead of a commit message
+    that names some other file."""
+    ws = _init_ws(tmp_path, "42")
+    _commit(ws, "asks/prep.md", "# Prep\n", "asks/prep.md — added")
+    f = ws / "kg/entities/acme.md"
+    f.write_text("# Acme\n\nmore\n")
+    (ws / "README.md").write_text("# hello\n\nlinks\n\nand more\n")
+    _git(ws, "add", "-A")
+    _git(ws, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "both pages at once")
+    c = _client(tmp_path)
+
+    readme = c.get("/api/workspaces/personal/git/history?path=README.md", headers=_h("42")).json()
+    entity = c.get("/api/workspaces/personal/git/history?path=kg/entities/acme.md", headers=_h("42")).json()
+    asks = c.get("/api/workspaces/personal/git/history?path=asks/prep.md", headers=_h("42")).json()
+
+    # what each page's history IS…
+    assert [x["msg"] for x in readme["commits"]] == ["both pages at once", "readme: link the entity", "seed"]
+    assert [x["msg"] for x in entity["commits"]] == ["both pages at once", "entity acme"]
+    assert [x["msg"] for x in asks["commits"]] == ["asks/prep.md — added"]
+    # …and, the half that was never asserted, what it is NOT
+    assert "asks/prep.md — added" not in [x["msg"] for x in readme["commits"]]
+    assert "entity acme" not in [x["msg"] for x in readme["commits"]]
+    # the shared commit comes back under both, with its file list narrowed to what matched
+    both_r = next(x for x in readme["commits"] if x["msg"] == "both pages at once")
+    both_e = next(x for x in entity["commits"] if x["msg"] == "both pages at once")
+    assert both_r["sha"] == both_e["sha"]
+    assert both_r["files"] == ["README.md"] and both_e["files"] == ["kg/entities/acme.md"]
+    # and the whole workspace still shows all four
+    every = c.get("/api/workspaces/personal/git/history", headers=_h("42")).json()
+    assert {"both pages at once", "asks/prep.md — added", *SEEDED} <= {x["msg"] for x in every["commits"]}
+
+
 def test_limit_is_honoured_and_bounded(tmp_path):
     idx = _shared(tmp_path, "wsA", owner="owner1", subject="reader1", role="viewer")
     c = _client(tmp_path, idx)

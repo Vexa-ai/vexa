@@ -19,6 +19,7 @@
  *  or "no members" when the roster 403'd, has told the reader something false about their own
  *  workspace — and this is the one page whose whole job is to be true about that.
  */
+import { presentError } from "../surfaces/apiClient";
 import {
   gitRemoteStatus, listSharedMemberships, listWorkspaceMembers, listWorkspaceTree,
   readWorkspaceBySlug, readWorkspaceFile, readWorkspaceHistory,
@@ -85,11 +86,14 @@ export function policySentence(kind: WorkspaceKind, policies: string | null): st
   return ruleHeading(policies, "global_admin_only");
 }
 
-/** HOW MANY PAGES A PERSON HAS HERE. `.md` only, and only the ones a reader is shown: the same
+/** WHICH PAGES A PERSON HAS HERE. `.md` only, and only the ones a reader is shown: the same
  *  `isMachinery` list the navigator and the breadcrumb use, so the count and the tree cannot
- *  disagree about what is in this workspace. */
-export const countPages = (paths: readonly string[]): number =>
-  paths.filter((p) => /\.mdx?$/i.test(p) && !isMachinery(p)).length;
+ *  disagree about what is in this workspace. The LIST and the COUNT come from this one filter
+ *  because the strip's `N pages` summary and the section it opens are the same claim — a count that
+ *  disagrees with the list under it is the panel lying to itself in two lines. */
+export const pagePaths = (paths: readonly string[]): string[] =>
+  paths.filter((p) => /\.mdx?$/i.test(p) && !isMachinery(p));
+export const countPages = (paths: readonly string[]): number => pagePaths(paths).length;
 
 /** A meeting row, as the meetings list serves it — the fields a binding is made of, and no others. */
 export interface MeetingRow {
@@ -154,6 +158,8 @@ export interface WorkspaceFacts {
   kind: WorkspaceKind;
   name: string | null;
   pages: number | null;
+  /** the pages themselves — the same filter the count comes from, `null` when the tree read failed */
+  pageList: string[] | null;
   lastChange: GitCommit | null;
   policy: string | null;
   bound: BoundSeries[];
@@ -162,10 +168,49 @@ export interface WorkspaceFacts {
   /** the roster — `null` when this reader may not read it (a reader of a group may not) */
   members: WorkspaceMember[] | null;
   remote: GitRemoteStatus | null;
+  /** WHY the GitHub read failed, in the presenter's words — `null` when it did not fail.
+   *
+   *  It is a field of its own, and not a line in `notes`, because *no repo attached* and *the read
+   *  failed* are different facts and the panel was rendering them as one: on 2026-09-06 `_global`
+   *  showed `not readable` with `Could not read the GitHub state.` in red under it, for the
+   *  administrator, on a workspace that simply has no remote (Vexa-ai/vexa#1628). A red line that
+   *  fires on an ordinary state is a red line nobody reads on the day it means something. */
+  remoteFailure: string | null;
   /** may this reader operate the owner-only controls? The server decides again on every act. */
   owner: boolean;
   /** what could not be read, in sentences — never silently rendered as an empty or zero fact */
   notes: string[];
+}
+
+/** SHARED WITH, IN FIVE WORDS — the strip's summary of the roster, which opens the section that
+ *  carries the whole of it (Vexa-ai/vexa#1628). Five words is the budget the founder set for the
+ *  collapsed line, so the sentence has to be the ANSWER rather than a label for one. */
+export function sharedInFiveWords(f: Pick<WorkspaceFacts, "kind" | "members" | "myRole">): string {
+  if (f.kind === "desk") return "Yours; company agents read it";
+  if (f.kind === "global") return "Everyone reads, the admin writes";
+  if (f.members) {
+    const n = f.members.length;
+    return `${n} member${n === 1 ? "" : "s"}${f.myRole ? `, you ${roleLabel(f.myRole)}` : ""}`;
+  }
+  return f.myRole ? `You are a ${roleLabel(f.myRole)}` : "A shared workspace";
+}
+
+/** THE REPO STATE IN THREE WORDS. The distinction the whole of #1628's third point is about lives
+ *  here: `no repo attached` is a state, `could not read` is a failure, and they are never the same
+ *  three words. */
+export function repoInThreeWords(remote: GitRemoteStatus | null, failure: string | null): string {
+  if (failure) return "could not read";
+  if (!remote) return "reading the repo";
+  if (!remote.has_home) return "no repo attached";
+  const branch = remote.branch ?? "HEAD";
+  return remote.tracked ? `${branch}, ${remote.ahead} ahead` : `${branch}, never fetched`;
+}
+
+/** THE LAST CHANGE, in the strip's one line: what was done, by whom, when. */
+export function lastChangeLine(c: GitCommit | null): string {
+  if (!c) return "nothing committed yet";
+  const msg = c.msg.length > 44 ? `${c.msg.slice(0, 43)}…` : c.msg;
+  return `${msg} · ${c.author ?? "unknown"} · ${c.when}`;
 }
 
 /** Is the signed-in person this instance's admin? Only a literal `true` counts, and an unanswered
@@ -206,7 +251,10 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
   const [ident, tree, history, remote, policies] = await Promise.allSettled([
     isDesk || isGlobal ? Promise.resolve(null) : readWorkspaceBySlug(slug),
     listWorkspaceTree({ slug: isDesk ? undefined : slug }),
-    readWorkspaceHistory(slug, { limit: 20 }),
+    // ONE commit, because one is all this read is for: the strip's *last change*. The list the
+    // history disclosure shows is `loadHistory`'s own paged read, and asking for twenty here bought
+    // nineteen commits nothing rendered.
+    readWorkspaceHistory(slug, { limit: 1 }),
     gitRemoteStatus({ slug: isDesk ? undefined : slug }),
     readWorkspaceFile("POLICIES.md", { slug: GLOBAL_SLUG }),
   ]);
@@ -217,8 +265,10 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
   if (ident.status === "rejected") note("Could not read what this workspace is.");
   if (tree.status === "rejected") note("Could not count the pages.");
   if (history.status === "rejected") note("Could not read the history.");
-  if (remote.status === "rejected") note("Could not read the GitHub state.");
   if (policies.status === "rejected") note("Could not read the company policy.");
+  // The GitHub read's failure is NOT a note: it belongs to its own section, named, so that the red
+  // line at the foot keeps meaning "something here is broken" (#1628 point 3).
+  const remoteFailure = remote.status === "rejected" ? presentError(remote.reason).headline : null;
 
   const commits = history.status === "fulfilled" ? history.value.commits : [];
   const policy = policySentence(kind, policies.status === "fulfilled" ? policies.value : null);
@@ -251,19 +301,29 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     : kind === "desk" ? (isDesk || identity?.writable === true)
     : myRole === "owner";
 
+  const pageList = tree.status === "fulfilled" ? pagePaths(tree.value) : null;
   return {
     slug, kind, name: identity?.name ?? null,
-    pages: tree.status === "fulfilled" ? countPages(tree.value) : null,
+    pages: pageList ? pageList.length : null,
+    pageList,
     lastChange: commits[0] ?? null,
     policy, bound, myRole, members,
     remote: remote.status === "fulfilled" ? remote.value : null,
+    remoteFailure,
     owner, notes,
   };
 }
 
+/** HOW MANY COMMITS THE HISTORY SHOWS BEFORE *more* — ten (Vexa-ai/vexa#1628 point 4), the same in
+ *  the whole-workspace view and in the one-page view. */
+export const HISTORY_PAGE = 10;
+
 /** The history list is loaded separately from the facts above: it is re-read whenever the page
  *  filter is toggled, and re-reading a workspace's whole identity to change one query parameter
- *  would be four round trips to answer a question about one. */
-export async function loadHistory(slug: string, path?: string): Promise<GitCommit[]> {
-  return (await readWorkspaceHistory(slug, { path, limit: 20 })).commits;
+ *  would be four round trips to answer a question about one.
+ *
+ *  It asks for ONE MORE than it will show, which is how *more* can exist without a second question:
+ *  the eleventh commit is never rendered, it is the answer to "is there an eleventh". */
+export async function loadHistory(slug: string, path: string | undefined, shown = HISTORY_PAGE): Promise<GitCommit[]> {
+  return (await readWorkspaceHistory(slug, { path, limit: shown + 1 })).commits;
 }

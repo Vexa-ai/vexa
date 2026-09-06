@@ -16,6 +16,11 @@
  *      product is broken rather than that they lack the role;
  *    · the history renders as commits a person can read — author, time, message — and the page
  *      filter re-reads scoped to the open page.
+ *
+ *  SINCE #1628 THE PANEL OPENS AS A STRIP, so every one of those claims is now made about a section
+ *  a reader has OPENED: `open()` below is the click the founder's "the rest collapsed" put between
+ *  arriving on the page and seeing any of this. The strip's own claims — the height, the collapsed
+ *  default, the toggle, the remembered posture — live in `workspaceStrip.test.tsx`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -72,6 +77,17 @@ const panel = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
   render(<PagesPanel pages={READ_ME} docPath="README.md" docSlug="oenb-b5e60c" onOpen={() => {}}
     body={"# OeNB\n\nThe workspace body."} {...over} />);
 
+/** Wait for the strip, then open one of its six disclosures — nothing below it exists before that. */
+const open = async (container: HTMLElement, id: string) => {
+  const button = await waitFor(() => {
+    const b = container.querySelector<HTMLButtonElement>(`[data-ws-disclosure="${id}"]`);
+    if (!b) throw new Error(`no disclosure "${id}" in the strip yet`);
+    return b;
+  });
+  fireEvent.click(button);
+  return button;
+};
+
 /** `/api/auth/me` (is this person the admin) and `/api/meetings` (what is bound here) are the two
  *  reads the panel makes outside `workspaceApi`. */
 const serveFetch = (meetings: unknown[] = [], isAdmin = false) => {
@@ -82,6 +98,7 @@ const serveFetch = (meetings: unknown[] = [], isAdmin = false) => {
 };
 
 beforeEach(() => {
+  window.localStorage.clear();     // the remembered open section is per browser — and per test
   vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "OeNB", kind: "group", slug: "oenb-b5e60c", access: "readable", writable: false });
   vi.mocked(api.listWorkspaceTree).mockResolvedValue(["README.md", "kg/entities/acme.md", "flows/post.md", ".git/config"]);
   vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "oenb-b5e60c", branch: "main", path: null, limit: 20, commits: COMMITS });
@@ -91,7 +108,7 @@ beforeEach(() => {
   vi.mocked(api.listWorkspaceMembers).mockRejectedValue(new Error("403"));
   serveFetch();
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); window.localStorage.clear(); });
 
 // ── pure rules ───────────────────────────────────────────────────────────────────────────────────
 describe("which page is a workspace's front page", () => {
@@ -137,11 +154,11 @@ describe("the counts and the bindings", () => {
 describe("the panel stands on a workspace README and nowhere else", () => {
   it("renders between the slug line and the body of a workspace-root README", async () => {
     const { container } = panel();
-    const front = await screen.findByText("This workspace");
+    const front = await screen.findByText("Shared workspace");
     expect(front).toBeTruthy();
     // between the crumb above and the prose below — the reading order is the claim
     const text = container.textContent ?? "";
-    expect(text.indexOf("This workspace")).toBeLessThan(text.indexOf("The workspace body."));
+    expect(text.indexOf("Shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("group");
   });
 
@@ -157,7 +174,7 @@ describe("the panel stands on a workspace README and nowhere else", () => {
 
   it("does not render while the README is being EDITED — an editor edits a file", async () => {
     const { container } = panel();
-    await screen.findByText("This workspace");
+    await screen.findByText("Shared workspace");
     fireEvent.click(container.querySelector('[data-doc-act="edit"]')!);
     expect(container.querySelector("[data-ws-readme]")).toBeNull();
   });
@@ -165,23 +182,30 @@ describe("the panel stands on a workspace README and nowhere else", () => {
 
 // ── the data ─────────────────────────────────────────────────────────────────────────────────────
 describe("the data a workspace README carries", () => {
-  it("says what it is, where it is, how big it is, when it last changed, and who may read it", async () => {
+  it("says what it is, where it is and who may read it", async () => {
     const { container } = panel();
-    await screen.findByText("This workspace");
+    await open(container, "this");
     const fact = (k: string) => container.querySelector(`[data-ws-fact="${k}"]`)?.textContent ?? "";
     expect(fact("kind")).toContain("Shared workspace");
     expect(fact("slug")).toContain("oenb-b5e60c");
-    expect(fact("pages")).toContain("2");                       // machinery and dotfiles are not pages
-    expect(fact("last")).toContain("readme: link the entity");
-    expect(fact("last")).toContain("2 hours ago");
     expect(fact("policy")).toContain("a member reads a group");
+    // …and the size and the last change are answered in the strip above, without opening anything
+    expect(container.querySelector('[data-ws-disclosure="pages"]')?.textContent).toContain("2 pages");
+    expect(container.querySelector('[data-ws-disclosure="last"]')?.textContent).toContain("readme: link the entity");
+  });
+
+  it("lists the pages the count came from — one filter, so the two cannot disagree", async () => {
+    const { container } = panel();
+    await open(container, "pages");
+    const listed = [...container.querySelectorAll("[data-ws-page]")].map((d) => d.getAttribute("data-ws-page"));
+    expect(listed).toEqual(["README.md", "kg/entities/acme.md"]);   // machinery and dotfiles are not pages
   });
 
   it("names what it could not read instead of rendering a zero", async () => {
     vi.mocked(api.listWorkspaceTree).mockRejectedValue(new Error("boom"));
     const { container } = panel();
-    await screen.findByText("This workspace");
-    expect(container.querySelector('[data-ws-fact="pages"]')?.textContent).toContain("not readable");
+    await screen.findByText("Shared workspace");
+    expect(container.querySelector('[data-ws-disclosure="pages"]')?.textContent).toContain("not readable");
     expect([...container.querySelectorAll("[data-ws-note]")].map((n) => n.textContent))
       .toContain("Could not count the pages.");
   });
@@ -191,11 +215,15 @@ describe("the data a workspace README carries", () => {
 describe("a reader sees data and history, and no controls", () => {
   it("renders not one control for a viewer of the workspace", async () => {
     const { container } = panel();
-    await screen.findByText("This workspace");
+    await open(container, "shared");
     await screen.findByText(/You are a reader here/);
     expect(container.querySelectorAll("[data-ws-act]")).toHaveLength(0);
+    await open(container, "github");
+    expect(container.querySelectorAll("[data-ws-act]")).toHaveLength(0);
     // …and the data is all there, which is the other half of the claim
+    await open(container, "this");
     expect(container.querySelector('[data-ws-fact="kind"]')).toBeTruthy();
+    await open(container, "history");
     expect(container.querySelector("[data-ws-history]")).toBeTruthy();
   });
 
@@ -206,11 +234,16 @@ describe("a reader sees data and history, and no controls", () => {
       { subject: "77", role: "viewer", email: "ana@oenb.at" },
     ]);
     const { container } = panel();
+    await open(container, "shared");
     await screen.findByText("dmitry@vexa.ai");
-    const acts = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
-    expect(acts).toEqual(expect.arrayContaining(["invite", "sync", "pull", "push", "detach", "remove:77", "role:77"]));
+    const shared = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
+    expect(shared).toEqual(expect.arrayContaining(["invite", "remove:77", "role:77"]));
     // the OWNER's own row carries no remove/role control — a workspace with no owner is not a state
-    expect(acts).not.toContain("remove:126");
+    expect(shared).not.toContain("remove:126");
+
+    await open(container, "github");
+    const git = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
+    expect(git).toEqual(expect.arrayContaining(["sync", "pull", "push", "detach"]));
   });
 
   it("an owner-only act ARMS before it fires, and says what it will do", async () => {
@@ -220,6 +253,7 @@ describe("a reader sees data and history, and no controls", () => {
       { subject: "77", role: "viewer", email: "ana@oenb.at" },
     ]);
     const { container } = panel();
+    await open(container, "shared");
     await screen.findByText("ana@oenb.at");
 
     fireEvent.click(container.querySelector('[data-ws-act="remove:77"]')!);
@@ -242,34 +276,63 @@ describe("a reader sees data and history, and no controls", () => {
 
 // ── the history ──────────────────────────────────────────────────────────────────────────────────
 describe("git history lookup", () => {
-  it("lists the workspace's commits with who, when and what", async () => {
+  it("lists the workspace's commits with who, when and what — and the files each one touched", async () => {
     const { container } = panel();
-    await screen.findByText("This workspace");
+    await open(container, "history");
     await waitFor(() => expect(container.querySelectorAll("[data-ws-commit]").length).toBe(2));
     const rows = [...container.querySelectorAll("[data-ws-commit]")].map((r) => r.textContent ?? "");
     expect(rows[0]).toContain("7f6b769");
     expect(rows[0]).toContain("readme: link the entity");
     expect(rows[0]).toContain("126");
     expect(rows[1]).toContain("Ana");
+    // THE FILES ARE THE CHECK ON THE MESSAGE. A turn-commit's message names the file the turn was
+    // about while the commit touches several — which is how a correctly filtered list read as an
+    // unfiltered one on `_global` (Vexa-ai/vexa#1628).
+    expect(rows[1]).toContain("kg/entities/acme.md");
   });
 
-  it("the page filter re-reads the history scoped to the open page", async () => {
+  it("the page filter re-reads the history scoped to the open page, and SAYS which scope is showing", async () => {
     const { container } = panel();
-    await screen.findByText("This workspace");
+    await open(container, "history");
     await waitFor(() => expect(container.querySelectorAll("[data-ws-commit]").length).toBe(2));
+    // the unfiltered list does not claim to be filtered — the founder's screenshot was this state
+    expect(container.querySelector("[data-ws-history-scope]")?.textContent).toBe("every commit in this workspace");
+    expect(container.querySelector("[data-ws-history-filter]")?.getAttribute("aria-pressed")).toBe("false");
     vi.mocked(api.readWorkspaceHistory).mockResolvedValue({
-      slug: "oenb-b5e60c", branch: "main", path: "README.md", limit: 20, commits: [COMMITS[0]],
+      slug: "oenb-b5e60c", branch: "main", path: "README.md", limit: 11, commits: [COMMITS[0]],
     });
 
     fireEvent.click(container.querySelector("[data-ws-history-filter]")!);
 
     await waitFor(() => expect(container.querySelectorAll("[data-ws-commit]").length).toBe(1));
-    expect(api.readWorkspaceHistory).toHaveBeenLastCalledWith("oenb-b5e60c", { path: "README.md", limit: 20 });
+    expect(api.readWorkspaceHistory).toHaveBeenLastCalledWith("oenb-b5e60c", { path: "README.md", limit: 11 });
+    expect(container.querySelector("[data-ws-history-scope]")?.textContent).toBe("only commits touching README.md");
+    expect(container.querySelector("[data-ws-history-filter]")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shows ten and a MORE link — in the whole workspace and on one page alike", async () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ ...COMMITS[0], sha: `c${i}`, msg: `commit ${i}` }));
+    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "oenb-b5e60c", branch: "main", path: null, limit: 11, commits: many(11) });
+    const { container } = panel();
+    await open(container, "history");
+
+    await waitFor(() => expect(container.querySelectorAll("[data-ws-commit]").length).toBe(10));
+    expect(container.querySelector("[data-ws-history-more]")).toBeTruthy();
+    // the eleventh was never rendered — it is the answer to "is there an eleventh"
+    expect(container.textContent).not.toContain("commit 10");
+
+    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "oenb-b5e60c", branch: "main", path: null, limit: 21, commits: many(15) });
+    fireEvent.click(container.querySelector("[data-ws-history-more]")!);
+
+    await waitFor(() => expect(container.querySelectorAll("[data-ws-commit]").length).toBe(15));
+    expect(api.readWorkspaceHistory).toHaveBeenLastCalledWith("oenb-b5e60c", { path: undefined, limit: 21 });
+    expect(container.querySelector("[data-ws-history-more]")).toBeNull();     // nothing left to ask for
   });
 
   it("clicking a commit shows its diff, read-only", async () => {
     vi.mocked(api.readWorkspaceGitDiff).mockResolvedValue({ sha: "7f6b769", diff: "@@ -1 +1 @@\n-# OeNB\n+# OeNB\n+links" });
     const { container } = panel();
+    await open(container, "history");
     await waitFor(() => expect(container.querySelectorAll("[data-ws-commit]").length).toBe(2));
 
     fireEvent.click(container.querySelector('[data-ws-commit="7f6b769"] button')!);
@@ -279,29 +342,89 @@ describe("git history lookup", () => {
   });
 });
 
+// ── no repo attached is a STATE, not a failure ────────────────────────────────────────────────────
+describe("the GitHub section tells a missing repo from a broken read", () => {
+  it("says NO REPO ATTACHED, with the existing attach flow for an owner and no red line", async () => {
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: null, tracked: false, ahead: 0, behind: 0 });
+    vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "oenb-b5e60c", role: "owner" }]);
+    vi.mocked(api.listWorkspaceMembers).mockResolvedValue([{ subject: "126", role: "owner", email: "dmitry@vexa.ai" }]);
+    const { container } = panel();
+    await open(container, "github");
+
+    expect(container.querySelector('[data-ws-github="unattached"]')?.textContent).toContain("No repo attached");
+    expect(container.querySelector('[data-ws-act="attach"]')).toBeTruthy();
+    // nothing red, anywhere: an ordinary state must not spend the colour that means "this is broken"
+    expect(container.querySelector("[data-ws-github-failed]")).toBeNull();
+    expect(container.querySelectorAll("[data-ws-note]")).toHaveLength(0);
+    expect(container.querySelector('[data-ws-disclosure="github"]')?.textContent).toContain("no repo attached");
+  });
+
+  it("offers a READER no attach control — it would only ever produce a refusal", async () => {
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: null, tracked: false, ahead: 0, behind: 0 });
+    const { container } = panel();       // the default membership in this file is `viewer`
+    await open(container, "github");
+
+    await screen.findByText("No repo attached.");
+    expect(container.querySelector('[data-ws-act="attach"]')).toBeNull();
+  });
+
+  it("keeps the red line for a read that actually failed, and NAMES what failed", async () => {
+    vi.mocked(api.gitRemoteStatus).mockRejectedValue(new Error("upstream unreachable: ConnectError"));
+    const { container } = panel();
+    await open(container, "github");
+
+    const said = container.querySelector("[data-ws-github-failed]")?.textContent ?? "";
+    expect(said).toContain("Could not read the GitHub state");
+    expect(said).toContain("upstream unreachable: ConnectError");
+    expect(container.querySelector('[data-ws-disclosure="github"]')?.textContent).toContain("could not read");
+    expect(container.querySelector('[data-ws-github="unattached"]')).toBeNull();
+  });
+});
+
 // ── the desk and the company layer ───────────────────────────────────────────────────────────────
 describe("the two workspaces that are not groups", () => {
   it("a DESK says who writes it and that the company's agents read it", async () => {
-    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "personal", branch: "main", path: null, limit: 20, commits: COMMITS });
+    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "personal", branch: "main", path: null, limit: 11, commits: COMMITS });
     const { container } = panel({
       pages: [{ path: "README.md", label: "Desk", desk: true }], docSlug: undefined,
     });
-    await screen.findByText("This workspace");
+    await open(container, "shared");
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("desk");
     expect(container.querySelector('[data-ws-members="desk"]')?.textContent).toContain("agents read it");
+    await open(container, "this");
     expect(container.querySelector('[data-ws-fact="policy"]')?.textContent).toContain("an agent may read its user's desk");
     // the desk tab carries no slug, so the history route is addressed by the name the server keeps for it
-    expect(api.readWorkspaceHistory).toHaveBeenCalledWith("personal", { limit: 20 });
+    expect(api.readWorkspaceHistory).toHaveBeenCalledWith("personal", { limit: 1 });
+    expect(api.readWorkspaceHistory).toHaveBeenCalledWith("personal", { path: undefined, limit: 11 });
   });
 
   it("the COMPANY LAYER says everybody reads and the admin writes — and offers a non-admin nothing", async () => {
-    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "_global", branch: "main", path: null, limit: 20, commits: COMMITS });
+    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "_global", branch: "main", path: null, limit: 11, commits: COMMITS });
     const { container } = panel({
       pages: [{ path: "README.md", slug: "_global", label: "Company" }], docSlug: "_global",
     });
-    await screen.findByText("This workspace");
+    await open(container, "shared");
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("global");
     expect(container.querySelector('[data-ws-members="global"]')?.textContent).toContain("administrator writes it");
     expect(container.querySelectorAll("[data-ws-act]")).toHaveLength(0);
+  });
+
+  it("the COMPANY LAYER with no remote reads NO REPO ATTACHED for the admin, not an error", async () => {
+    // The exact screen the founder was looking at: `_global`, signed in as the administrator.
+    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "_global", branch: "main", path: null, limit: 11, commits: COMMITS });
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: null, tracked: false, ahead: 0, behind: 0 });
+    serveFetch([], true);
+    const { container } = panel({
+      pages: [{ path: "README.md", slug: "_global", label: "Company" }], docSlug: "_global",
+    });
+    await open(container, "github");
+
+    expect(container.querySelector('[data-ws-github="unattached"]')?.textContent).toContain("No repo attached");
+    expect(container.querySelector("[data-ws-github-failed]")).toBeNull();
+    expect(container.querySelectorAll("[data-ws-note]")).toHaveLength(0);
+    // …and no attach button, because the company layer is not one of that flow's targets: a control
+    // whose only outcome is a refusal is the thing this panel refuses to render.
+    expect(container.querySelector('[data-ws-act="attach"]')).toBeNull();
+    await screen.findByText(/mounted read-only into every worker/);
   });
 });
