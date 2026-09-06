@@ -19,12 +19,17 @@
  *
  *  SINCE #1628 THE PANEL OPENS AS A STRIP, and since #1634 the strip is TWO SENTENCES with all of
  *  this behind one disclosure — so every one of those claims is now made about a section a reader
- *  has opened, two clicks in: `open()` below presses **History** (the disclosure at the end of line
- *  two) and then the summary the claim is about. That is the distance the founder's "the rest
- *  collapsed" and "a sentence about a place" put between arriving on the page and seeing any of
- *  this. The strip's own claims — the height, the two sentences, the acts, the collapsed default,
- *  the remembered posture — live in `workspaceStrip.test.tsx`; the words themselves in
+ *  has opened: `open()` below presses **History** (the disclosure at the end of line two), which
+ *  opens the three sections it carries. That is the distance the founder's "the rest collapsed" and
+ *  "a sentence about a place" put between arriving on the page and seeing any of this. The strip's
+ *  own claims — the height, the two sentences, the acts, the closed default, the absence of any
+ *  summary line under the disclosure — live in `workspaceStrip.test.tsx`; the words themselves in
  *  `frontPageLines.test.ts`.
+ *
+ *  SINCE #1642's SECOND LOOK there are THREE sections and no summaries of them: **People**, **Repo**,
+ *  **History**. The kind, the address, the policy sentence, the page LIST and the last change had
+ *  their own summaries and sections here; the first three of those are what the header now says in
+ *  two sentences, and the six summaries that opened them were the line the founder rejected.
  *
  *  SINCE #1632 THE THREE MEMBERSHIP CONTROLS POST AN ACT TO THE CHAT rather than calling a route,
  *  so what they do is claimed in `memberActs.test.tsx` and what remains here is where they APPEAR —
@@ -90,23 +95,20 @@ const panel = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
     body={"# Pilot\n\nThe workspace body."} {...over} />);
 
 /** Wait for the strip, press **History** — the one disclosure #1634 left at the end of line two —
- *  and then open one of the six summaries behind it. Nothing below either exists before the click. */
-const open = async (container: HTMLElement, id: string) => {
+ *  and wait for the section the claim is about. Nothing below it exists before the click, and since
+ *  #1642 all three sections arrive together: the helper means "have this section on the page". */
+const open = async (container: HTMLElement, id: "people" | "repo" | "history") => {
   const details = await waitFor(() => {
     const d = container.querySelector<HTMLButtonElement>("[data-ws-details]");
     if (!d) throw new Error("the strip has not answered yet");
     return d;
   });
   if (details.getAttribute("aria-expanded") !== "true") fireEvent.click(details);
-  const button = await waitFor(() => {
-    const b = container.querySelector<HTMLButtonElement>(`[data-ws-disclosure="${id}"]`);
-    if (!b) throw new Error(`no disclosure "${id}" behind the details yet`);
-    return b;
+  return waitFor(() => {
+    const s = container.querySelector<HTMLElement>(`[data-ws-section="${id}"]`);
+    if (!s) throw new Error(`no "${id}" section behind the details yet`);
+    return s;
   });
-  // Pressing History opens the details WITH the history section showing, so asking for that one
-  // again would close it. This helper means "have this section open", not "click this button".
-  if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button);
-  return button;
 };
 
 /** `/api/auth/me` (is this person the admin) and `/api/meetings` (what is bound here) are the two
@@ -228,30 +230,25 @@ describe("the panel stands on a workspace README and nowhere else", () => {
 
 // ── the data ─────────────────────────────────────────────────────────────────────────────────────
 describe("the data a workspace README carries", () => {
-  it("says what it is, where it is and who may read it", async () => {
+  it("says what it is, how big it is and who is here — in the header, before anything is opened", async () => {
     const { container } = panel();
-    await open(container, "this");
-    const fact = (k: string) => container.querySelector(`[data-ws-fact="${k}"]`)?.textContent ?? "";
-    expect(fact("kind")).toContain("Shared workspace");
-    expect(fact("slug")).toContain("pilot-b5e60c");
-    expect(fact("policy")).toContain("a member reads a group");
-    // …and the size and the last change are answered in the strip above, without opening anything
-    expect(container.querySelector('[data-ws-disclosure="pages"]')?.textContent).toContain("2 pages");
-    expect(container.querySelector('[data-ws-disclosure="last"]')?.textContent).toContain("readme: link the entity");
-  });
+    await waitFor(() => expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Shared workspace"));
 
-  it("lists the pages the count came from — one filter, so the two cannot disagree", async () => {
-    const { container } = panel();
-    await open(container, "pages");
-    const listed = [...container.querySelectorAll("[data-ws-page]")].map((d) => d.getAttribute("data-ws-page"));
-    expect(listed).toEqual(["README.md", "kg/entities/acme.md"]);   // machinery and dotfiles are not pages
+    // WHAT IT IS is the eyebrow, HOW BIG is the people row's count, WHO IS HERE is its sentence, and
+    // WHAT LAST HAPPENED is line two. All four without a click — and the ADDRESS is not among them:
+    // `pilot-b5e60c` is how the panel reaches this workspace, not something a person needs told.
+    expect(container.querySelector("[data-ws-pages]")?.textContent).toBe("2 pages");
+    expect(container.querySelector('[data-ws-line="where"]')?.textContent).toContain("you");
+    expect(container.querySelector("[data-ws-changed]")?.textContent).toContain("the front page");
+    expect(container.querySelector("[data-ws-readme]")?.textContent).not.toContain("pilot-b5e60c");
   });
 
   it("names what it could not read instead of rendering a zero", async () => {
     vi.mocked(api.listWorkspaceTree).mockRejectedValue(new Error("boom"));
     const { container } = panel();
-    await open(container, "this");
-    expect(container.querySelector('[data-ws-disclosure="pages"]')?.textContent).toContain("not readable");
+    await waitFor(() => expect(container.querySelector("[data-ws-strip]")).toBeTruthy());
+    // the count is absent rather than `0 pages`, and the failure is named at the foot
+    await waitFor(() => expect(container.querySelector("[data-ws-pages]")).toBeNull());
     expect([...container.querySelectorAll("[data-ws-note]")].map((n) => n.textContent))
       .toContain("Could not count the pages.");
   });
@@ -261,15 +258,13 @@ describe("the data a workspace README carries", () => {
 describe("a reader sees data and history, and no controls", () => {
   it("renders not one control for a viewer of the workspace", async () => {
     const { container } = panel();
-    await open(container, "shared");
+    await open(container, "people");
     await screen.findByText(/You are a reader here/);
-    expect(container.querySelectorAll("[data-ws-act]")).toHaveLength(0);
-    await open(container, "github");
+    // ALL THREE SECTIONS ARE ON THE PAGE AT ONCE since #1642, so this is the whole claim in one
+    // assertion rather than three: not one control anywhere behind the disclosure.
     expect(container.querySelectorAll("[data-ws-act]")).toHaveLength(0);
     // …and the data is all there, which is the other half of the claim
-    await open(container, "this");
-    expect(container.querySelector('[data-ws-fact="kind"]')).toBeTruthy();
-    await open(container, "history");
+    expect(container.querySelector('[data-ws-fact="remote"]')).toBeTruthy();
     expect(container.querySelector("[data-ws-history]")).toBeTruthy();
   });
 
@@ -280,15 +275,15 @@ describe("a reader sees data and history, and no controls", () => {
       { subject: "77", role: "viewer", email: "jdoe@example.com" },
     ]);
     const { container } = panel();
-    await open(container, "shared");
+    const people = await open(container, "people");
     await screen.findByText("jsmith@example.com");
-    const shared = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
+    const shared = [...people.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
     expect(shared).toEqual(expect.arrayContaining(["member-add", "member-remove:77", "member-role:77"]));
     // the OWNER's own row carries no remove/role control — a workspace with no owner is not a state
     expect(shared).not.toContain("member-remove:126");
 
-    await open(container, "github");
-    const git = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
+    const repo = await open(container, "repo");
+    const git = [...repo.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
     expect(git).toEqual(expect.arrayContaining(["sync", "pull", "push", "detach"]));
   });
 
@@ -299,7 +294,7 @@ describe("a reader sees data and history, and no controls", () => {
     vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "pilot-b5e60c", role: "owner" }]);
     vi.mocked(api.detachWorkspaceRemote).mockResolvedValue({ detached: true, remote: "origin", url: "https://github.com/pilot/kg" });
     const { container } = panel();
-    await open(container, "github");
+    await open(container, "repo");
     await screen.findByText("https://github.com/pilot/kg");
 
     fireEvent.click(container.querySelector('[data-ws-act="detach"]')!);
@@ -395,20 +390,22 @@ describe("the GitHub section tells a missing repo from a broken read", () => {
     vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "pilot-b5e60c", role: "owner" }]);
     vi.mocked(api.listWorkspaceMembers).mockResolvedValue([{ subject: "126", role: "owner", email: "jsmith@example.com" }]);
     const { container } = panel();
-    await open(container, "github");
+    await open(container, "repo");
 
     expect(container.querySelector('[data-ws-github="unattached"]')?.textContent).toContain("No repo attached");
     expect(container.querySelector('[data-ws-act="attach"]')).toBeTruthy();
     // nothing red, anywhere: an ordinary state must not spend the colour that means "this is broken"
     expect(container.querySelector("[data-ws-github-failed]")).toBeNull();
     expect(container.querySelectorAll("[data-ws-note]")).toHaveLength(0);
-    expect(container.querySelector('[data-ws-disclosure="github"]')?.textContent).toContain("no repo attached");
+    // …and the state is said HERE and nowhere else: `no repo attached` was also one of #1628's six
+    // summaries, which is the line the founder rejected (Vexa-ai/vexa#1642).
+    expect(container.querySelector("[data-ws-sections]")).toBeNull();
   });
 
   it("offers a READER no attach control — it would only ever produce a refusal", async () => {
     vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: null, tracked: false, ahead: 0, behind: 0 });
     const { container } = panel();       // the default membership in this file is `viewer`
-    await open(container, "github");
+    await open(container, "repo");
 
     await screen.findByText("No repo attached.");
     expect(container.querySelector('[data-ws-act="attach"]')).toBeNull();
@@ -417,12 +414,11 @@ describe("the GitHub section tells a missing repo from a broken read", () => {
   it("keeps the red line for a read that actually failed, and NAMES what failed", async () => {
     vi.mocked(api.gitRemoteStatus).mockRejectedValue(new Error("upstream unreachable: ConnectError"));
     const { container } = panel();
-    await open(container, "github");
+    await open(container, "repo");
 
     const said = container.querySelector("[data-ws-github-failed]")?.textContent ?? "";
     expect(said).toContain("Could not read the GitHub state");
     expect(said).toContain("upstream unreachable: ConnectError");
-    expect(container.querySelector('[data-ws-disclosure="github"]')?.textContent).toContain("could not read");
     expect(container.querySelector('[data-ws-github="unattached"]')).toBeNull();
   });
 });
@@ -434,11 +430,13 @@ describe("the two workspaces that are not groups", () => {
     const { container } = panel({
       pages: [{ path: "README.md", label: "Desk", desk: true }], docSlug: undefined,
     });
-    await open(container, "shared");
+    await open(container, "people");
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("desk");
     expect(container.querySelector('[data-ws-members="desk"]')?.textContent).toContain("agents read it");
-    await open(container, "this");
-    expect(container.querySelector('[data-ws-fact="policy"]')?.textContent).toContain("an agent may read its user's desk");
+    // …and the rule it comes from is not ALSO printed as a fact row: `Policy — an agent may read
+    // its user's desk when its user is a participant` was a rule in a table, which is what the
+    // header's own sentence replaced (Vexa-ai/vexa#1634, and #1642's second look).
+    expect(container.querySelector('[data-ws-fact="policy"]')).toBeNull();
     // the desk tab carries no slug, so both reads are addressed by the name the server keeps for it
     expect(api.readLastChange).toHaveBeenCalledWith("personal");
     expect(api.readWorkspaceHistory).toHaveBeenCalledWith("personal", { path: undefined, limit: 11 });
@@ -449,7 +447,7 @@ describe("the two workspaces that are not groups", () => {
     const { container } = panel({
       pages: [{ path: "README.md", slug: "_global", label: "Company" }], docSlug: "_global",
     });
-    await open(container, "shared");
+    await open(container, "people");
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("global");
     expect(container.querySelector('[data-ws-members="global"]')?.textContent).toContain("administrator writes it");
     expect(container.querySelectorAll("[data-ws-act]")).toHaveLength(0);
@@ -463,7 +461,7 @@ describe("the two workspaces that are not groups", () => {
     const { container } = panel({
       pages: [{ path: "README.md", slug: "_global", label: "Company" }], docSlug: "_global",
     });
-    await open(container, "github");
+    await open(container, "repo");
 
     expect(container.querySelector('[data-ws-github="unattached"]')?.textContent).toContain("No repo attached");
     expect(container.querySelector("[data-ws-github-failed]")).toBeNull();

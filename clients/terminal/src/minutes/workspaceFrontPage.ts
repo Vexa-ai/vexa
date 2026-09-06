@@ -164,8 +164,8 @@ export function peopleLine(members: readonly NamedMember[] | null, mySubject?: s
 }
 
 /** What a person calls this kind of place, in the first line. `group` is the server's word and
- *  `shared workspace` is what the panel has always shown for it (`kindLabel`); this is the same
- *  gloss in the middle of a sentence. */
+ *  `shared workspace` is what the panel has always shown for it; this is the same gloss in the
+ *  middle of a sentence. */
 export const placeWord = (kind: WorkspaceKind): string =>
   kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "shared workspace";
 

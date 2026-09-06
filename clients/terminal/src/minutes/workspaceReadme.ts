@@ -47,11 +47,6 @@ export const DESK_SLUG = "personal";
 export const isWorkspaceReadme = (path: string): boolean =>
   /^readme\.mdx?$/i.test(String(path ?? "").trim());
 
-/** What a person calls each kind. The server's word is kept beside it in the panel — this is the
- *  gloss, not a replacement, because `group` is what every API answer says. */
-export const kindLabel = (kind: WorkspaceKind): string =>
-  kind === "desk" ? "Personal desk" : kind === "global" ? "Company layer" : "Shared workspace";
-
 /** Markdown markers out of a sentence lifted from `POLICIES.md`, so it reads as a sentence in a
  *  panel that is not rendering markdown. Deliberately only the three that appear there. */
 const plain = (s: string): string =>
@@ -204,36 +199,18 @@ export interface WorkspaceFacts {
   notes: string[];
 }
 
-/** SHARED WITH, IN FIVE WORDS — the strip's summary of the roster, which opens the section that
- *  carries the whole of it (Vexa-ai/vexa#1628). Five words is the budget the founder set for the
- *  collapsed line, so the sentence has to be the ANSWER rather than a label for one. */
-export function sharedInFiveWords(f: Pick<WorkspaceFacts, "kind" | "members" | "myRole">): string {
-  if (f.kind === "desk") return "Yours; company agents read it";
-  if (f.kind === "global") return "Everyone reads, the admin writes";
-  if (f.members) {
-    const n = f.members.length;
-    return `${n} member${n === 1 ? "" : "s"}${f.myRole ? `, you ${roleLabel(f.myRole)}` : ""}`;
-  }
-  return f.myRole ? `You are a ${roleLabel(f.myRole)}` : "A shared workspace";
-}
-
-/** THE REPO STATE IN THREE WORDS. The distinction the whole of #1628's third point is about lives
- *  here: `no repo attached` is a state, `could not read` is a failure, and they are never the same
- *  three words. */
-export function repoInThreeWords(remote: GitRemoteStatus | null, failure: string | null): string {
-  if (failure) return "could not read";
-  if (!remote) return "reading the repo";
-  if (!remote.has_home) return "no repo attached";
-  const branch = remote.branch ?? "HEAD";
-  return remote.tracked ? `${branch}, ${remote.ahead} ahead` : `${branch}, never fetched`;
-}
-
-/** THE LAST CHANGE, in the strip's one line: what was done, by whom, when. */
-export function lastChangeLine(c: GitCommit | null): string {
-  if (!c) return "nothing committed yet";
-  const msg = c.msg.length > 34 ? `${c.msg.slice(0, 33)}…` : c.msg;
-  return `${msg} · ${c.author ?? "unknown"} · ${c.when}`;
-}
+/** THE FOUR SUMMARY PHRASES THAT USED TO LIVE HERE ARE GONE (Vexa-ai/vexa#1642) — `kindLabel`,
+ *  `sharedInFiveWords`, `repoInThreeWords` and `lastChangeLine`, which composed #1628's collapsed
+ *  strip: *Company layer · 30 pages · \_global: .claude/mcp.json… · you · 49 minutes ago · Everyone
+ *  reads, the admin writes · no repo attached · 10+ commits*. #1634 took that line off the front
+ *  page and it reappeared as the first block inside the disclosure, where the founder met it again.
+ *  The panel now renders the sections themselves and nothing that summarises them, so the phrases
+ *  have no caller — and they are deleted rather than left behind, because a function that composes
+ *  a rejected line is an invitation to render it somewhere else.
+ *
+ *  What each fact is said by now: the KIND is the eyebrow and the PAGE COUNT and LAST CHANGE are the
+ *  two sentences (`workspaceFrontPage`); who is here is the People section; the repo state is the
+ *  Repo section; the commits are the History list. */
 
 /** Is the signed-in person this instance's admin? Only a literal `true` counts, and an unanswered
  *  probe costs an OFFER, never a refusal — the write seam refuses a non-admin either way. */

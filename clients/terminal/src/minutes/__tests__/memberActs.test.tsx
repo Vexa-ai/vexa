@@ -91,9 +91,10 @@ const asOwner = () => {
   ]);
 };
 
-/** Render the panel and open SHARED WITH. Two clicks now: since #1634 the strip is two sentences,
- *  and the sections #1628 built are behind **History**, the one disclosure at the end of line two.
- *  Nothing below either exists until a reader asks for it. */
+/** Render the panel and open the PEOPLE section. One click: since #1634 the strip is two sentences
+ *  with everything behind **History**, the one disclosure at the end of line two, and since #1642
+ *  that disclosure opens the three sections themselves rather than a row of summaries. Nothing below
+ *  it exists until a reader asks for it. */
 const shared = async () => {
   const { container } = render(<WorkspaceReadmePanel slug={SLUG} path="README.md" />);
   const details = await waitFor(() => {
@@ -102,12 +103,11 @@ const shared = async () => {
     return d;
   });
   fireEvent.click(details);
-  const disclosure = await waitFor(() => {
-    const b = container.querySelector<HTMLButtonElement>('[data-ws-disclosure="shared"]');
-    if (!b) throw new Error("no sections behind the details yet");
-    return b;
+  await waitFor(() => {
+    const s = container.querySelector<HTMLElement>('[data-ws-section="people"]');
+    if (!s) throw new Error("no people section behind the details yet");
+    return s;
   });
-  fireEvent.click(disclosure);
   return container;
 };
 

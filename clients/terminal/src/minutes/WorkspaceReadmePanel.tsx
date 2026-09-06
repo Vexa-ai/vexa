@@ -30,18 +30,28 @@
  *  broken rather than that they lack the role.
  *
  *  NOTHING ELSE IS ON THE STRIP (#1634 rule 3): no commit count, no *no repo attached*, no address,
- *  no path. All of it is still true and still one click away — the six summaries and the sections
- *  #1628 built are behind **History**, the one disclosure at the end of line two, unchanged. The
- *  12vh cap stays on the strip for the reason #1628 put it there.
+ *  no path. All of it is still true and still one click away — behind **History**, the one
+ *  disclosure at the end of line two. The 12vh cap stays on the strip for the reason #1628 put it
+ *  there.
  *
- *  WHAT IS REMEMBERED, AND WHERE. Which section a person had open is remembered per workspace, in
- *  their browser and nowhere else: it is a reading posture, not a fact about the workspace, and it
- *  has no business in anybody's git history. A first visit opens nothing; a return opens what you
- *  left open, which is the same rule seen from the other side.
+ *  AND NOTHING ELSE IS IN THE DETAILS EITHER (Vexa-ai/vexa#1642, second look). #1628's six SUMMARIES
+ *  — *Company layer · 30 pages · \_global: .claude/mcp.json… · you · 49 minutes ago · Everyone reads,
+ *  the admin writes · no repo attached · 10+ commits* — were still the first thing under the
+ *  disclosure, which is the exact line the founder rejected, printed one level down. They are gone.
+ *  What is behind the disclosure is THREE SECTIONS and no summary of them: **the people here with
+ *  their roles**, **the repo state**, **the history list with its scope toggle**. The kind, the page
+ *  count and the last change are not repeated there because the two sentences above already say
+ *  them, and a line that answers a question the header answered is the strip again.
  *
- *  KEYBOARD. The section summaries are ONE tab stop with six buttons inside them (`role="toolbar"`,
- *  roving tabindex): tab moves past them, arrows move within. The strip's own acts are ordinary
- *  buttons — there are at most three and each is a different thing to do.
+ *  NOTHING IS REMEMBERED. The disclosure opens closed, every time, on every workspace. #1628 asked
+ *  for the open section to be remembered per workspace and it was — in `vexa.wsreadme.open:<slug>`,
+ *  which is how the founder's browser arrived at `_global` with the details ALREADY OPEN from a build
+ *  three shas earlier. A posture that may not default the disclosure open has no effect left to have,
+ *  so it is not stored: the key is retired rather than versioned, this panel reads no storage at all,
+ *  and any value an earlier build wrote is inert by construction rather than by a version check.
+ *
+ *  KEYBOARD. The strip's acts are ordinary buttons — there are at most three and each is a different
+ *  thing to do — and the details are one region under the one that opened them.
  *
  *  THE FOUR RULES IT IS STILL BUILT ON, unchanged from #1623 and each readable against the code:
  *
@@ -68,8 +78,8 @@
  *     failure: the red line is reserved for a read that actually broke, and it names what broke.
  */
 import {
-  useCallback, useEffect, useRef, useState,
-  type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
+  useCallback, useEffect, useState,
+  type CSSProperties, type ReactNode,
 } from "react";
 import { Icon } from "../ui-kit";
 import { presentError } from "../surfaces/apiClient";
@@ -90,8 +100,7 @@ import {
   type StripAct, type FrontPageFacts,
 } from "./workspaceFrontPage";
 import {
-  DESK_SLUG, HISTORY_PAGE, kindLabel, lastChangeLine, loadHistory, loadWorkspaceFacts,
-  repoInThreeWords, roleLabel, sharedInFiveWords, type WorkspaceFacts,
+  DESK_SLUG, HISTORY_PAGE, loadHistory, loadWorkspaceFacts, roleLabel, type WorkspaceFacts,
 } from "./workspaceReadme";
 
 /** THE STRIP IS NOT A CARD ANY MORE (#1634 rule 5: *"grey, small, sentence-like — the people-and-
@@ -128,6 +137,14 @@ const rowsS: CSSProperties = {
   maxHeight: `${STRIP_MAX_VH}vh`, overflowY: "auto", overflowX: "hidden",
 };
 const sectionS: CSSProperties = { borderTop: "1px solid var(--line)", marginTop: 8, paddingTop: 8 };
+const firstSectionS: CSSProperties = { marginTop: 0, paddingTop: 0 };
+/** A SECTION'S NAME IS A LABEL, NEVER AN ANSWER. *People* · *Repo* · *History* — 12px, muted, the
+ *  quietest thing in the panel. The moment one of them reads `no repo attached` or `10+ commits` it
+ *  has become #1628's summary strip again, which is the line the founder rejected twice. */
+const sectionNameS: CSSProperties = {
+  ...ty.chip, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em",
+  textTransform: "uppercase", margin: "0 0 5px",
+};
 /** A sentence, not a row of chips: the size and colour of the line under a shared document's
  *  title, and it WRAPS — a sentence that ellipsizes is a sentence with its ending taken away.
  *
@@ -205,14 +222,6 @@ const linkBtn: CSSProperties = {
   ...ty.meta, background: "transparent", border: "none", padding: 0, color: "var(--accent)",
   cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2,
 };
-const summaryS = (open: boolean): CSSProperties => ({
-  ...ty.meta, display: "inline-flex", alignItems: "baseline", gap: 5, maxWidth: "100%",
-  padding: "2px 6px", borderRadius: 6, cursor: "pointer", border: "1px solid transparent",
-  background: open ? surface.raisedHi : "transparent",
-  borderColor: open ? "var(--line)" : "transparent",
-  color: "var(--t2)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
-});
-
 function Fact(p: { k: string; name: string; children: ReactNode }) {
   return (
     <div style={rowS} data-ws-fact={p.k}>
@@ -221,8 +230,6 @@ function Fact(p: { k: string; name: string; children: ReactNode }) {
     </div>
   );
 }
-
-const unknown = <span style={{ ...ty.meta, fontStyle: "italic" }}>not readable</span>;
 
 /** AN ACT IS ARMED, THEN COMMITTED. The armed state carries the SENTENCE — what is about to happen,
  *  to whom — because "Confirm" on its own is a button that asks a person to remember what they
@@ -283,22 +290,17 @@ function CommitRow(p: { c: GitCommit; open: boolean; diff: string | null; onOpen
   );
 }
 
-/** The six things the strip says, in the order it says them. Ids are stable because they are what
- *  the remembered open-state is written as. */
-type SectionId = "this" | "pages" | "last" | "shared" | "github" | "history";
-
-const OPEN_KEY = (slug: string) => `vexa.wsreadme.open:${slug}`;
-/** The reader's posture, in their own browser. Every access is guarded: a private window with site
- *  data blocked throws on the getter itself, and a panel that cannot render because storage is off
- *  would be a worse failure than forgetting which section was open. */
-const rememberedOpen = (slug: string): SectionId | null => {
-  try { return (window.localStorage.getItem(OPEN_KEY(slug)) as SectionId | null) || null; }
-  catch { return null; }
-};
-const remember = (slug: string, id: SectionId | null) => {
-  try { if (id) window.localStorage.setItem(OPEN_KEY(slug), id); else window.localStorage.removeItem(OPEN_KEY(slug)); }
-  catch { /* storage off — the posture is simply not remembered */ }
-};
+/** ONE SECTION — its name, then the thing itself. The first carries no rule above it: a hairline
+ *  under the disclosure's own border is a line drawn twice. */
+function Section(p: { id: string; name: string; first?: boolean; children: ReactNode }) {
+  return (
+    <section data-ws-section={p.id} id={`ws-section-${p.id}`}
+      style={p.first ? { ...sectionS, ...firstSectionS } : sectionS}>
+      <h2 data-ws-section-name style={sectionNameS}>{p.name}</h2>
+      {p.children}
+    </section>
+  );
+}
 
 /** THE FACES, overlapping, with the sentence's own people in the sentence's own order. `aria-hidden`
  *  on the whole stack: every name in it is already in the row beside it (or in *and N more*), and a
@@ -321,19 +323,16 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
   const [shown, setShown] = useState(HISTORY_PAGE);
   const [thisPage, setThisPage] = useState(false);
-  const [open, setOpen] = useState<SectionId | null>(null);
-  // THE ONE DISCLOSURE (#1634 rule 6). Everything #1628 built lives under it; History is the button
-  // that opens it. It starts open only when this reader left a section open here — a first visit
-  // shows two sentences and nothing else.
+  // THE ONE DISCLOSURE (#1634 rule 6). The three sections live under it; History is the button that
+  // opens it. **It starts closed, always** (Vexa-ai/vexa#1642): the front page is two sentences, and
+  // a stored posture that reopened it is how the founder met this panel already open on `_global`.
   const [details, setDetails] = useState(false);
-  const [focus, setFocus] = useState(0);
   const [openSha, setOpenSha] = useState<string | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<string | null>(null);   // the receipt of the last act
   const [attaching, setAttaching] = useState(false);
-  const strip = useRef<HTMLDivElement | null>(null);
   // THE CHANGED PAGE OPENS WHERE IT LIVES. The same callback every link inside a document uses, so
   // the title in the last-change row behaves exactly like a link in the prose under it — including
   // in-place navigation with the pane's own back/forward, which a bespoke handler would not have.
@@ -346,8 +345,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
     let live = true;
     setFacts(null); setFailed(null); setCommits(null); setThisPage(false); setShown(HISTORY_PAGE);
     setOpenSha(null); setArmed(null); setSaid(null); setAttaching(false);
-    const posture = rememberedOpen(p.slug || DESK_SLUG);
-    setOpen(posture); setDetails(posture !== null); setFocus(0);
+    // CLOSED, WITHOUT ASKING ANYTHING (Vexa-ai/vexa#1642). No storage is read here — not the
+    // retired `vexa.wsreadme.open:<slug>`, not a versioned successor to it — so a posture written
+    // by any earlier build cannot open this panel on arrival, in the founder's browser or anyone's.
+    setDetails(false);
     void loadWorkspaceFacts(p.slug)
       .then((f) => { if (live) setFacts(f); })
       .catch((e: unknown) => { if (live) setFailed(presentError(e).headline); });
@@ -366,14 +367,6 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
       .catch(() => { if (live) setCommits([]); });
     return () => { live = false; };
   }, [facts, addr, thisPage, shown, p.path]);
-
-  const toggle = useCallback((id: SectionId) => {
-    setOpen((was) => {
-      const next = was === id ? null : id;
-      remember(p.slug || DESK_SLUG, next);
-      return next;
-    });
-  }, [p.slug]);
 
   const run = useCallback(async (what: () => Promise<string>) => {
     setBusy(true);
@@ -422,21 +415,8 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   const remote = facts.remote;
   const sync = (slug?: string) => (slug === undefined ? {} : { slug });
   const syncSlug = p.slug;               // absent = the caller's own desk, which is what the API means
-  const last = facts.lastChange;
   const more = (commits?.length ?? 0) > shown;
   const listed = commits ? commits.slice(0, shown) : null;
-  const historyCount = commits === null ? "reading…"
-    : `${more ? `${shown}+` : commits.length} commit${!more && commits.length === 1 ? "" : "s"}`;
-
-  /** The strip, as data — so the roving tabindex and the sections cannot disagree about the order. */
-  const items: { id: SectionId; name: string; summary: string }[] = [
-    { id: "this", name: "Kind", summary: kindLabel(facts.kind) },
-    { id: "pages", name: "Pages", summary: facts.pages === null ? "not readable" : `${facts.pages} page${facts.pages === 1 ? "" : "s"}` },
-    { id: "last", name: "Last change", summary: lastChangeLine(facts.lastChange) },
-    { id: "shared", name: "Shared with", summary: sharedInFiveWords(facts) },
-    { id: "github", name: "GitHub", summary: repoInThreeWords(remote, facts.remoteFailure) },
-    { id: "history", name: "History", summary: historyCount },
-  ];
 
   /** WHAT THE TWO SENTENCES ARE MADE OF. Assembled here and worded in `./workspaceFrontPage`, so
    *  every claim about the words is a pure function a test can hold against fixture data. */
@@ -471,14 +451,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
     || (facts.kind === "global" ? facts.company : facts.kind === "group" ? facts.name : null);
   const heading = named && named.toLowerCase() !== eye.toLowerCase() ? named : null;
 
-  /** OPENING THE DETAILS. History is the door, so History is what it opens — and closing it leaves
-   *  the section it opened remembered, which is what brings a reader back where they were. */
-  const openDetails = () => {
-    setDetails((was) => {
-      if (!was && open === null) { setOpen("history"); remember(p.slug || DESK_SLUG, "history"); }
-      return !was;
-    });
-  };
+  /** OPENING THE DETAILS. History is the door and the three sections are what is behind it — all
+   *  three, at once: a person who has just asked for the history should not then have to ask which
+   *  of six summaries carries it. Closing it leaves nothing behind, here or in storage. */
+  const openDetails = () => { setDetails((was) => !was); };
 
   /** AN ACT IS A CONVERSATION, NOT A FORM (Vexa-ai/vexa#1632). The press queues a same-target act
    *  on the open chat through `ASK_CHAT_EVENT` — the one door every act on this screen already uses
@@ -515,20 +491,6 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
       // words in the person's mouth they did not write (`extend.ts`'s own rule).
       detail: { prompt, display: actDisplay(a, where) },
     }));
-  };
-
-  /** ARROWS MOVE INSIDE THE SECTION SUMMARIES, tab moves past them. The focused index is state so the pressed
-   *  button keeps `tabIndex=0` after it is clicked — a toolbar that resets its entry point every
-   *  time you use it sends the next Tab somewhere the reader did not leave it. */
-  const onStripKey = (e: ReactKeyboardEvent) => {
-    const at = ["ArrowRight", "ArrowDown"].includes(e.key) ? focus + 1
-      : ["ArrowLeft", "ArrowUp"].includes(e.key) ? focus - 1
-      : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : null;
-    if (at === null) return;
-    e.preventDefault();
-    const next = (at + items.length) % items.length;
-    setFocus(next);
-    strip.current?.querySelectorAll<HTMLButtonElement>("[data-ws-disclosure]")[next]?.focus();
   };
 
   return (
@@ -572,8 +534,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                     ? { "data-ws-details": "", "aria-expanded": details, "aria-controls": "ws-details" }
                     : {})}
                   onClick={() => (isHistory ? openDetails() : fire(a))}
+                  // The open state is a whole `border`, not a `borderColor` beside the shorthand:
+                  // React warns on the mix, and closing the disclosure logged it every time.
                   style={{ ...(isHistory ? iconActS : actS), ...(isHistory && details
-                    ? { background: surface.raisedHi, borderColor: "var(--line2)", color: "var(--t1)" } : {}) }}>
+                    ? { background: surface.raisedHi, border: "1px solid var(--line2)", color: "var(--t1)" } : {}) }}>
                   {isHistory ? <Icon name="history" size={13} /> : a.label}
                 </button>
               );
@@ -602,79 +566,18 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
         </div>
       </div>
 
-      {/* …AND EVERYTHING #1628 BUILT, when the reader asked for it. Nothing below this line exists
-          in the DOM until it does, which is what makes the strip's height rule hold without a
-          scroller — and what makes the front page two sentences rather than a panel. */}
+      {/* …AND THE THREE SECTIONS, when the reader asked for them. Nothing below this line exists in
+          the DOM until it does, which is what makes the strip's height rule hold without a scroller
+          — and what makes the front page two sentences rather than a panel.
+
+          THERE IS NO SUMMARY LINE HERE (Vexa-ai/vexa#1642). #1628's six summaries were the first
+          block under this disclosure, which put *Company layer · 30 pages · … · no repo attached ·
+          10+ commits* back in front of the founder one level down. The kind, the page count and the
+          last change are said once, in the header; what is left is the people, the repo and the
+          history, each under a label that answers nothing. */}
       {details && (<div data-ws-details-region id="ws-details" style={detailsBox}>
-      <div ref={strip} data-ws-sections role="toolbar" aria-label="This workspace" aria-orientation="horizontal"
-        onKeyDown={onStripKey} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 2px" }}>
-        {/* THE SUMMARY IS THE WHOLE BUTTON. Its category name ("Kind", "GitHub") is carried by the
-            accessible name and the tooltip and NOT printed beside it: on the 384px panel this lives
-            in, six printed labels doubled the width and cost the row its two lines — and `Shared
-            workspace`, `12 pages`, `main, 2 ahead` say what they are without being told. */}
-        {items.map((it, i) => (
-          <span key={it.id} style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
-            {i > 0 && <span aria-hidden style={{ ...ty.meta, flex: "none", opacity: 0.5 }}>·</span>}
-            <button data-ws-disclosure={it.id} tabIndex={i === focus ? 0 : -1}
-              aria-expanded={open === it.id} aria-controls={`ws-section-${it.id}`}
-              aria-label={`${it.name}: ${it.summary}`} title={`${it.name} — ${it.summary}`}
-              onClick={() => { setFocus(i); toggle(it.id); }}
-              style={summaryS(open === it.id)}>
-              {it.summary}
-            </button>
-          </span>
-        ))}
-      </div>
 
-      {open === "this" && (
-        <div data-ws-section="this" id="ws-section-this" style={sectionS}>
-          <Fact k="kind" name="Kind">
-            {kindLabel(facts.kind)}
-            <span style={{ ...ty.mono, marginLeft: 6 }}>{facts.kind}</span>
-            {facts.name && <span style={{ ...ty.body, color: "var(--t2)", marginLeft: 6 }}>· {facts.name}</span>}
-          </Fact>
-          <Fact k="slug" name="Address"><span style={{ ...ty.mono, color: "var(--t2)" }}>{facts.slug}</span></Fact>
-          <Fact k="policy" name="Policy">
-            {facts.policy ?? <span style={{ ...ty.meta, fontStyle: "italic" }}>no rule stated for this kind</span>}
-          </Fact>
-          {/* WHAT DROPPED IN HERE. Only when something did: an empty list on a workspace nothing is
-              bound to says nothing and takes a line to say it. */}
-          {facts.bound.map((b) => (
-            <div key={b.key} data-ws-bound={b.key} style={rowS}>
-              <span style={keyS}>Bound to</span>
-              <span style={valS}>{b.title}</span>
-              <span style={{ ...ty.meta, flex: "none" }}>
-                {b.recurring ? `recurring · ${b.runs} run${b.runs === 1 ? "" : "s"}` : "one meeting"}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {open === "pages" && (
-        <div data-ws-section="pages" id="ws-section-pages" style={sectionS}>
-          {facts.pageList === null && <div style={ty.meta}>{unknown}</div>}
-          {facts.pageList?.length === 0 && <div style={ty.meta}>No pages here yet.</div>}
-          {facts.pageList && facts.pageList.length > 0 && (
-            <div style={{ maxHeight: 220, overflowY: "auto" }}>
-              {facts.pageList.map((f) => (
-                <div key={f} data-ws-page={f} style={{ ...ty.mono, color: "var(--t2)", lineHeight: 1.6 }}>{f}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {open === "last" && (
-        <div data-ws-section="last" id="ws-section-last" style={sectionS}>
-          {last
-            ? <CommitRow c={last} open={openSha === last.sha} diff={diff} onOpen={() => void openCommit(last.sha)} />
-            : <div style={ty.meta}>Nothing has been committed here yet.</div>}
-        </div>
-      )}
-
-      {open === "shared" && (
-        <div data-ws-section="shared" id="ws-section-shared" style={sectionS}>
+      <Section id="people" name="People" first>
           {facts.kind === "desk" && (
             <div data-ws-members="desk" style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>
               Its owner writes it. The company&apos;s agents read it for meetings the owner is in.
@@ -736,15 +639,13 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               )}
             </div>
           )}
-        </div>
-      )}
+      </Section>
 
-      {/* GITHUB. THREE STATES, AND THEY ARE THREE (#1628 point 3): a repo is attached · none is ·
+      {/* THE REPO. THREE STATES, AND THEY ARE THREE (#1628 point 3): a repo is attached · none is ·
           the read broke. `_global` for the administrator was rendering the second as the third —
           `not readable`, with `Could not read the GitHub state.` in red at the foot — on a workspace
           that simply has no remote. The red line now fires only on a failure and says what failed. */}
-      {open === "github" && (
-        <div data-ws-section="github" id="ws-section-github" style={sectionS}>
+      <Section id="repo" name="Repo">
           {facts.remoteFailure && (
             <div data-ws-github-failed role="alert" style={{ ...ty.body, color: "var(--danger)", lineHeight: 1.5 }}>
               Could not read the GitHub state: {facts.remoteFailure}
@@ -813,12 +714,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               )}
             </>
           )}
-        </div>
-      )}
+      </Section>
 
       {/* HISTORY — ten, then *more*, in both scopes (#1628 point 4). */}
-      {open === "history" && (
-        <div data-ws-section="history" id="ws-section-history" style={sectionS}>
+      <Section id="history" name="History">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
             <button data-ws-history-filter aria-pressed={thisPage}
               onClick={() => { setThisPage((v) => !v); setShown(HISTORY_PAGE); }}
@@ -843,8 +742,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                 onClick={() => setShown((n) => n + HISTORY_PAGE)}>more</button>
             )}
           </div>
-        </div>
-      )}
+      </Section>
 
       </div>)}
 

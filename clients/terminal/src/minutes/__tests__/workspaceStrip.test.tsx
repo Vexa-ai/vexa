@@ -16,10 +16,15 @@
  *    · NOTHING IS OPEN BY DEFAULT — and *closed* means the content is not in the document at all,
  *      not that it is hidden with CSS. Since #1634 that includes the six SUMMARIES themselves: the
  *      front page is two sentences and its acts, and nothing else.
- *    · A DISCLOSURE OPENS AND CLOSES, and opening the next one puts the first away: two open
- *      sections are the beginning of the wall #1628 exists to remove.
- *    · THE POSTURE IS REMEMBERED PER WORKSPACE AND IN THE BROWSER ONLY. Which section a person had
- *      open is not a fact about the workspace and never reaches the server.
+ *    · THE DISCLOSURE IS CLOSED ON ARRIVAL WHATEVER IS IN STORAGE (Vexa-ai/vexa#1642, second look).
+ *      The founder's browser opened `_global` with the details ALREADY OPEN, because #1628's
+ *      remembered posture (`vexa.wsreadme.open:<slug>`) was read on mount and a build three shas
+ *      earlier had written `history` into it. The key is retired, nothing is read, and a value left
+ *      by any earlier build is inert.
+ *    · WHAT IS BEHIND IT IS THREE SECTIONS AND NO SUMMARY OF THEM. *Company layer · 30 pages ·
+ *      \_global: .claude/mcp.json… · you · 49 minutes ago · Everyone reads, the admin writes · no
+ *      repo attached · 10+ commits* was the first block under the disclosure — the exact line the
+ *      founder rejected on the front page, one level down. The sections are People, Repo, History.
  *
  *  Rendered through `PagesPanel`, like the panel's own tests, because the claim is about what a
  *  reader meets on the page — not about a component in isolation.
@@ -69,17 +74,16 @@ const panel = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
     body={"# Pilot\n\nThe workspace body."} {...over} />);
 
 const strip = (c: HTMLElement) => c.querySelector("[data-ws-strip]") as HTMLElement | null;
-const sections = (c: HTMLElement) => c.querySelector("[data-ws-sections]") as HTMLElement | null;
-const disclosures = (c: HTMLElement) => [...c.querySelectorAll<HTMLButtonElement>("[data-ws-disclosure]")];
+const details = (c: HTMLElement) => c.querySelector("[data-ws-details-region]") as HTMLElement | null;
 const openIds = (c: HTMLElement) => [...c.querySelectorAll("[data-ws-section]")].map((s) => s.getAttribute("data-ws-section"));
 const acts = (c: HTMLElement) => [...c.querySelectorAll<HTMLButtonElement>("[data-ws-strip-act]")];
 
-/** THE ONE DISCLOSURE (#1634 rule 6) — History, at the end of line two. Everything #1628 built is
+/** THE ONE DISCLOSURE (#1634 rule 6) — History, at the end of line two. The three sections are
  *  behind it, so every test about a section starts by pressing it. */
 const openDetails = async (c: HTMLElement) => {
   await waitFor(() => expect(c.querySelector("[data-ws-details]")).toBeTruthy());
   fireEvent.click(c.querySelector("[data-ws-details]")!);
-  await waitFor(() => expect(disclosures(c).length).toBe(6));
+  await waitFor(() => expect(details(c)).toBeTruthy());
 };
 
 beforeEach(() => {
@@ -128,9 +132,8 @@ describe("the strip takes the header and no more", () => {
     await waitFor(() => expect(acts(container).length).toBeGreaterThan(0));
 
     expect(openIds(container)).toEqual([]);
-    // not hidden — absent: since #1634 the six summaries are behind the disclosure too
-    expect(sections(container)).toBeNull();
-    expect(disclosures(container)).toHaveLength(0);
+    // not hidden — absent: the whole details region, and with it every section
+    expect(details(container)).toBeNull();
     expect(container.querySelector("[data-ws-history]")).toBeNull();
     expect(container.querySelector("[data-ws-member]")).toBeNull();
     expect(container.querySelector('[data-ws-fact="remote"]')).toBeNull();
@@ -143,23 +146,19 @@ describe("the strip takes the header and no more", () => {
       .toBe("Jane Smith changed the governing board page 2 hours ago");
   });
 
-  it("opens the section its summary belongs to, closes it on a second click, and holds one at a time", async () => {
+  it("opens the three sections at once — the reader asked for the history, not for a menu", async () => {
     const { container } = panel();
     await openDetails(container);
 
-    fireEvent.click(container.querySelector('[data-ws-disclosure="github"]')!);
-    expect(openIds(container)).toEqual(["github"]);
+    // ALL THREE, in reading order, and no fourth: the kind, the page count and the last change are
+    // said once each in the header above, and saying them again here is the strip returning.
+    expect(openIds(container)).toEqual(["people", "repo", "history"]);
+    expect([...container.querySelectorAll("[data-ws-section-name]")].map((h) => h.textContent))
+      .toEqual(["People", "Repo", "History"]);
     await waitFor(() => expect(container.querySelector('[data-ws-fact="remote"]')).toBeTruthy());
-    expect(container.querySelector('[data-ws-disclosure="github"]')!.getAttribute("aria-expanded")).toBe("true");
-
-    // a second disclosure REPLACES it — two open sections are the wall #1628 removed
-    fireEvent.click(container.querySelector('[data-ws-disclosure="shared"]')!);
-    expect(openIds(container)).toEqual(["shared"]);
-    expect(container.querySelector('[data-ws-fact="remote"]')).toBeNull();
-
-    // …and clicking the open one closes it
-    fireEvent.click(container.querySelector('[data-ws-disclosure="shared"]')!);
-    expect(openIds(container)).toEqual([]);
+    expect(container.querySelector("[data-ws-member]")).toBeTruthy();
+    expect(container.querySelector("[data-ws-history]")).toBeTruthy();
+    expect(container.querySelector("[data-ws-history-filter]")).toBeTruthy();   // with its scope toggle
   });
 
   it("puts the whole of #1628's panel away again when History is pressed a second time", async () => {
@@ -168,89 +167,105 @@ describe("the strip takes the header and no more", () => {
 
     fireEvent.click(container.querySelector("[data-ws-details]")!);
 
-    expect(sections(container)).toBeNull();
+    expect(details(container)).toBeNull();
     expect(openIds(container)).toEqual([]);
     expect(container.querySelector("[data-ws-details]")!.getAttribute("aria-expanded")).toBe("false");
   });
 });
 
-describe("the open section is remembered per workspace, in the browser only", () => {
-  it("comes back on the next visit to the SAME workspace, and nothing is open on another", async () => {
-    const first = panel();
-    await openDetails(first.container);
-    fireEvent.click(first.container.querySelector('[data-ws-disclosure="pages"]')!);
-    expect(openIds(first.container)).toEqual(["pages"]);
-    cleanup();
+/** THE ASSERTION THE SECOND LOOK IS ABOUT (Vexa-ai/vexa#1642): *"its first block is the OLD strip
+ *  line … the exact text the founder rejected, now one level down."* */
+describe("the details body carries its sections and never a summary of them", () => {
+  const forbidden = ["no repo attached", "10+ commits", "everyone reads"];
 
-    const again = panel();
-    await waitFor(() => expect(openIds(again.container)).toEqual(["pages"]));
-    cleanup();
-
-    // another workspace is another posture — and its default is still nothing open
-    vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w2", name: "Acme", kind: "group", slug: "acme-1", access: "readable", writable: false });
-    const other = panel({ pages: [{ path: "README.md", slug: "acme-1", label: "Acme" }], docSlug: "acme-1" });
-    await waitFor(() => expect(other.container.querySelector("[data-ws-details]")).toBeTruthy());
-    expect(openIds(other.container)).toEqual([]);
-    expect(sections(other.container)).toBeNull();
-  });
-
-  it("writes the posture nowhere but this browser", async () => {
+  it("opens on the People section, with no summary line above it and none in it", async () => {
     const { container } = panel();
     await openDetails(container);
 
-    fireEvent.click(container.querySelector('[data-ws-disclosure="pages"]')!);
+    // the FIRST thing under the disclosure is the first section itself
+    expect(details(container)!.firstElementChild?.getAttribute("data-ws-section")).toBe("people");
+    // …and #1628's summary row is not in the document in any form
+    expect(container.querySelector("[data-ws-sections]")).toBeNull();
+    expect(container.querySelectorAll("[data-ws-disclosure]")).toHaveLength(0);
 
-    expect(window.localStorage.getItem("vexa.wsreadme.open:pilot-b5e60c")).toBe("pages");
-    // the server was asked nothing: every call this panel made was a READ of the workspace
+    const said = (details(container)!.textContent ?? "").toLowerCase();
+    for (const word of forbidden) expect(said).not.toContain(word);
+    // nor the header's own answers, repeated one level down. (The commit MESSAGE is not among them:
+    // it is the history list's own content, which is what a reader pressed History for.)
+    expect(said).not.toContain("shared workspace");           // the kind is the eyebrow
+    expect(said).not.toContain("2 pages");                    // the count is in the people row
+    // …while the header still says all three, so this is a claim about WHERE, not about whether
+    const head = strip(container)!.textContent ?? "";
+    expect(head).toContain("Shared workspace");
+    expect(head).toContain("2 pages");
+  });
+
+  it("says nothing summary-shaped on the company layer with no repo either — the founder's own screen", async () => {
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: null, tracked: false, ahead: 0, behind: 0 });
+    vi.mocked(api.readWorkspaceHistory).mockResolvedValue({
+      slug: "_global", branch: "main", path: null, limit: 11,
+      commits: Array.from({ length: 11 }, (_, i) => ({ ...COMMITS[0], sha: `c${i}`, msg: `commit ${i}` })),
+    });
+    const { container } = asCompanyLayer(true);
+    await openDetails(container);
+
+    const said = details(container)!.textContent ?? "";
+    // eleven commits, and nowhere the words `10+ commits`; a missing remote, and nowhere the words
+    // `no repo attached` as a summary — the Repo SECTION says `No repo attached.` and that is the
+    // section answering for itself, which is the whole difference this issue is about.
+    expect(said).not.toContain("10+ commits");
+    expect(said).not.toContain("Everyone reads, the admin writes");
+    expect(container.querySelector("[data-ws-sections]")).toBeNull();
+    expect(container.querySelectorAll("[data-ws-disclosure]")).toHaveLength(0);
+    expect(details(container)!.firstElementChild?.getAttribute("data-ws-section")).toBe("people");
+    expect(container.querySelector('[data-ws-github="unattached"]')?.textContent).toContain("No repo attached");
+  });
+});
+
+describe("the disclosure is closed on arrival, whatever an earlier build remembered", () => {
+  /** THE FOUNDER'S BROWSER, RECONSTRUCTED: `vexa.wsreadme.open:<slug>` written by the build that
+   *  shipped #1628's summaries, and read on mount by the one that shipped #1634's disclosure. */
+  const stale = (slug: string, value: string) => window.localStorage.setItem(`vexa.wsreadme.open:${slug}`, value);
+
+  it("ignores a stored `open` posture — the panel reads no storage at all", async () => {
+    stale("pilot-b5e60c", "history");
+    const { container } = panel();
+    await waitFor(() => expect(acts(container).length).toBeGreaterThan(0));
+
+    expect(container.querySelector("[data-ws-details]")!.getAttribute("aria-expanded")).toBe("false");
+    expect(details(container)).toBeNull();
+    expect(openIds(container)).toEqual([]);
+    expect(container.querySelector("[data-ws-history]")).toBeNull();
+    // …and the stale value is left exactly as it was: not read, not migrated, not rewritten
+    expect(window.localStorage.getItem("vexa.wsreadme.open:pilot-b5e60c")).toBe("history");
+  });
+
+  it("stores nothing when the reader opens it, so the next visit opens closed again", async () => {
+    const { container } = panel();
+    await openDetails(container);
+    expect(window.localStorage.length).toBe(0);           // no key, versioned or otherwise
+    cleanup();
+
+    const again = panel();
+    await waitFor(() => expect(again.container.querySelector("[data-ws-details]")).toBeTruthy());
+    expect(details(again.container)).toBeNull();
+    expect(again.container.querySelector("[data-ws-details]")!.getAttribute("aria-expanded")).toBe("false");
+
+    // the server was asked nothing either: every call this panel made was a READ of the workspace
     const posted = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
       .filter((c) => (c[1] as RequestInit | undefined)?.method && (c[1] as RequestInit).method !== "GET");
     expect(posted).toEqual([]);
   });
 });
 
-describe("the section summaries are one tab stop with buttons inside them", () => {
-  it("puts exactly one disclosure in the tab order, and the arrows move it", async () => {
-    const { container } = panel();
-    await openDetails(container);
-
-    expect(sections(container)!.getAttribute("role")).toBe("toolbar");
-    expect(disclosures(container).map((b) => b.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
-    expect(disclosures(container).every((b) => b.tagName === "BUTTON")).toBe(true);
-    // the category each summary answers is in its accessible name, not printed beside it
-    expect(disclosures(container).map((b) => b.getAttribute("aria-label")?.split(":")[0]))
-      .toEqual(["Kind", "Pages", "Last change", "Shared with", "GitHub", "History"]);
-
-    fireEvent.keyDown(sections(container)!, { key: "ArrowRight" });
-    expect(disclosures(container).map((b) => b.tabIndex)).toEqual([-1, 0, -1, -1, -1, -1]);
-
-    fireEvent.keyDown(sections(container)!, { key: "End" });
-    expect(disclosures(container).map((b) => b.tabIndex)).toEqual([-1, -1, -1, -1, -1, 0]);
-  });
-});
-
-describe("the summaries still say the six things, each as an answer", () => {
-  it("kind · pages · last change · shared with · the repo · a commit count", async () => {
-    const { container } = panel();
-    await openDetails(container);
-
-    const say = (id: string) => container.querySelector(`[data-ws-disclosure="${id}"]`)?.textContent ?? "";
-    expect(say("this")).toContain("Shared workspace");
-    expect(say("pages")).toContain("2 pages");
-    expect(say("last")).toContain("readme: link the entity");
-    // …and the author in that row is the PERSON now, not the principal a mount commits as
-    expect(say("last")).toContain("Jane Smith");
-    expect(say("last")).toContain("2 hours ago");
-    expect(say("shared")).toContain("1 member, you owner");
-    expect(say("github")).toContain("main, 2 ahead");
-    await waitFor(() => expect(say("history")).toContain("1 commit"));
-  });
-
-  it("says a read failed rather than rendering a zero", async () => {
+describe("what could not be read is still said", () => {
+  it("names the failed read rather than rendering a zero", async () => {
     vi.mocked(api.listWorkspaceTree).mockRejectedValue(new Error("boom"));
     const { container } = panel();
-    await openDetails(container);
+    await waitFor(() => expect(acts(container).length).toBeGreaterThan(0));
 
-    expect(container.querySelector('[data-ws-disclosure="pages"]')?.textContent).toContain("not readable");
+    // the count is simply absent from the people row — never a `0 pages` that reads as an answer
+    expect(container.querySelector("[data-ws-pages]")).toBeNull();
     await screen.findByText("Could not count the pages.");
   });
 });
