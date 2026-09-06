@@ -163,9 +163,12 @@ def test_plural_calendars_are_independent_and_never_echo_secret_urls(client):
     internal = client.get("/internal/calendar-configs",
                           headers={"X-Internal-Secret": INTERNAL_SECRET}).json()["configs"]
     active = next(c for c in internal if c.get("calendar_id") == personal.json()["id"])
+    # `provider` is new: a LIVE config now names how it is read, so the sweep never has to infer
+    # "no provider means a feed URL". Tombstones are unchanged — a retired connection retires the
+    # same way whatever it was read from.
     assert active == {
         "user_id": uid, "calendar_id": personal.json()["id"], "calendar_name": "Family",
-        "ics_url": ICS_2, "auto_join": True, "bot_name": "Family Notes",
+        "provider": "ics", "ics_url": ICS_2, "auto_join": True, "bot_name": "Family Notes",
     }
     retired = next(c for c in internal if c.get("calendar_id") == work.json()["id"])
     # The first connection is the legacy claimant even as a tombstone: its sweep
