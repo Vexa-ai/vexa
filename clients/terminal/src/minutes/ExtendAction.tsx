@@ -10,7 +10,7 @@
  *  have already been wrong on this screen (a folder listing renaming the document behind it), and
  *  an intent built from one sends the agent to work on a file nobody opened.
  */
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
 import { Icon } from "../ui-kit";
@@ -28,6 +28,50 @@ export function useIntentLanding(): void {
   }, []);
 }
 
+/** ONE CONTROL SHAPE FOR THE TWO ACTS (founder ruling 2026-09-06: *"create this page should also
+ *  work in the background and should probably look like extend — same thing, but also creates
+ *  file"*).
+ *
+ *  Extend and Create ask the same chat to do the same kind of work on the same resolved slot, and
+ *  on the server they are the same thing again — both are background job kinds in
+ *  `chat_intents.JOB_KINDS`, so the chat stays answerable while either one runs. Create said
+ *  otherwise on screen: a small plus-chip, a third the size, in the chip type, with no words about
+ *  what pressing it would do, standing next to an Extend that is a labelled control. Two shapes
+ *  read as two different kinds of thing, and the smaller of them reads as the lesser.
+ *
+ *  So the shape lives HERE, once, and both acts wear it: an icon, what the act is called, and one
+ *  line of what it does — under the content, where the reader arrives with the question. The only
+ *  difference left is the one the founder named. Create makes the file, which is what its icon
+ *  says; everything else about the two controls is the same object. */
+const actBox: CSSProperties = {
+  display: "flex", alignItems: "center", gap: 10, width: "100%", marginTop: 28,
+  padding: "10px 13px", textAlign: "left", background: surface.raised,
+  border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer",
+};
+
+function PageAct(p: {
+  /** the act, and the handle every test and every walk-through reaches it by */
+  act: "extend" | "create";
+  icon: "spark" | "plus";
+  title: string;
+  /** ONE line of what pressing it does. Not two — this is a label, not documentation. */
+  line: string;
+  hint: string;
+  onPress: () => void;
+}) {
+  return (
+    <button data-doc-act={p.act} title={p.hint} onClick={p.onPress} style={actBox}
+      onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; e.currentTarget.style.borderColor = "var(--accent)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; e.currentTarget.style.borderColor = "var(--line)"; }}>
+      <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name={p.icon} size={15} /></span>
+      <span style={{ minWidth: 0 }}>
+        <span data-act-title style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>{p.title}</span>
+        <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2 }}>{p.line}</span>
+      </span>
+    </button>
+  );
+}
+
 /** THE PAGE ACTION — the open page, whole, UNDER IT (founder ruling 2026-09-06: *"extend button
  *  should be available in the doc body under content, noticeable as one click knowledge
  *  expansion"*).
@@ -39,41 +83,23 @@ export function useIntentLanding(): void {
  *  Same act, same resolved slot (F63) — only its place, its size and its words have moved. */
 export function ExtendPageButton(p: { workspace?: string; path: string }) {
   return (
-    <button data-doc-act="extend" title="Ask this chat to go further on this page"
-      onClick={() => postIntent({ kind: "extend", workspace: p.workspace, path: p.path })}
-      style={{
-        display: "flex", alignItems: "center", gap: 10, width: "100%", marginTop: 28,
-        padding: "10px 13px", textAlign: "left", background: surface.raised,
-        border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; e.currentTarget.style.borderColor = "var(--accent)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; e.currentTarget.style.borderColor = "var(--line)"; }}>
-      <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name="spark" size={15} /></span>
-      <span style={{ minWidth: 0 }}>
-        <span style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>Extend this page</span>
-        <span style={{ ...ty.meta, display: "block", marginTop: 2 }}>Research it, write what is found around it, link both ways.</span>
-      </span>
-    </button>
+    <PageAct act="extend" icon="spark" hint="Ask this chat to go further on this page"
+      title="Extend this page"
+      line="Research it, write what is found around it, link both ways."
+      onPress={() => postIntent({ kind: "extend", workspace: p.workspace, path: p.path })} />
   );
 }
 
 /** THE EMPTY STATE'S ACTION (decision 32.4) — a page that does not exist yet is a thing the chat
  *  can make. The old empty state named the absence and offered nothing; this is the same sentence
- *  with the obvious next move attached. */
+ *  with the obvious next move attached, in the shape above and in the same words as its sibling:
+ *  the work Create does is Extend's work, on a page that has to be written first. */
 export function CreatePageButton(p: { workspace?: string; path: string }) {
   return (
-    <button data-doc-act="create" title={`Ask this chat to write ${p.path}`}
-      onClick={() => postIntent({ kind: "create", workspace: p.workspace, path: p.path })}
-      style={{
-        ...ty.chip, display: "inline-flex", alignItems: "center", gap: 6, marginTop: 12,
-        color: "var(--t1)", background: surface.raised, border: "1px solid var(--line)",
-        borderRadius: 6, padding: "4px 10px", cursor: "pointer",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; }}>
-      <Icon name="plus" size={13} />
-      Create this page
-    </button>
+    <PageAct act="create" icon="plus" hint={`Ask this chat to write ${p.path}`}
+      title="Create this page"
+      line="Research it, write it, link what is found around it both ways."
+      onPress={() => postIntent({ kind: "create", workspace: p.workspace, path: p.path })} />
   );
 }
 

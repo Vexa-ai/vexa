@@ -106,6 +106,47 @@ describe("the empty state's action (decision 32.4)", () => {
   });
 });
 
+/** Founder ruling 2026-09-06: *"create this page should also work in the background and should
+ *  probably look like extend — same thing, but also creates file"*. Both halves are pinned here —
+ *  the shape (this describe) and the act, which stays `create` and is a background job kind on the
+ *  server (`chat_intents.JOB_KINDS`), so the chat is answerable while it runs. */
+describe("one control shape for the two acts", () => {
+  /** the two controls, each rendered from the state that offers it */
+  const controls = () => {
+    const extend = panel().container.querySelector('[data-doc-act="extend"]') as HTMLElement;
+    const create = panel({ body: null }).container.querySelector('[data-doc-act="create"]') as HTMLElement;
+    return { extend, create };
+  };
+
+  it("Create is the same object as Extend — same element, same box, down to the inline style", () => {
+    const { extend, create } = controls();
+    expect(extend).toBeTruthy();
+    expect(create).toBeTruthy();
+    expect(create.tagName).toBe(extend.tagName);
+    expect(create.getAttribute("style")).toBe(extend.getAttribute("style"));
+  });
+
+  it("and is labelled the way Extend is — a title, and one line of what it does", () => {
+    const { extend, create } = controls();
+    for (const el of [extend, create]) {
+      expect(el.querySelectorAll("[data-act-title]")).toHaveLength(1);
+      expect(el.querySelectorAll("[data-act-line]")).toHaveLength(1);
+    }
+    expect(create.querySelector("[data-act-title]")?.textContent).toBe("Create this page");
+    expect(create.querySelector("[data-act-line]")?.textContent)
+      .toBe("Research it, write it, link what is found around it both ways.");
+    expect(extend.querySelector("[data-act-title]")?.textContent).toBe("Extend this page");
+  });
+
+  it("wearing Extend's shape did not turn it into Extend — the act is still [create]", () => {
+    const { container } = panel({ body: null });
+    fireEvent.click(container.querySelector('[data-doc-act="create"]') as HTMLElement);
+    expect(asks).toHaveLength(1);
+    expect(asks[0].intent?.kind).toBe("create");
+    expect(asks[0].intent).toEqual({ kind: "create", workspace: "acme-kg", path: PATH });
+  });
+});
+
 /** Select `length` characters of the first text node inside `host`, starting at `from`. */
 function highlight(host: HTMLElement, from: number, length: number) {
   const node = host.firstChild as Text;
