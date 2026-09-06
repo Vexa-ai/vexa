@@ -1,0 +1,20 @@
+# Paths in this workspace the PERSON never sees as pages.
+#
+# Founder ruling 2026-09-02: a new desk keeps its machinery — the agent reads CLAUDE.md, the flows,
+# the skills, the routines, the views and the entity templates on every turn — but none of it is
+# content, and a person who opens a desk should not be handed the product's own wiring as their
+# documents. He signed in as a new user and was shown a README template rendered as a page.
+#
+# The list is DATA, not code, so the terminal and the agent read one source instead of each keeping
+# a copy of the rule that drifts. One glob per line; `#` comments and blank lines ignored.
+# A path listed here is still committed, still mounted, still read by the agent — only hidden from
+# the tree and never opened as a tab.
+CLAUDE.md
+.vexa-machinery
+.gitignore
+flows/**
+skills/**
+routines/**
+views/**
+kg/templates/**
+kg/.gateignore

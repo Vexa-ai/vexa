@@ -1,0 +1,19 @@
+[project]
+name = "vexa-lite-tests"
+version = "0.12.0"
+description = "The single-image (Lite) bundle — its Dockerfile, Makefile, supervisor program set and launchers, plus the offline hygiene suite that reads them."
+requires-python = ">=3.11"
+# Nothing to install: the suite reads deploy/compose/.env.example and deploy/lite/Makefile as TEXT.
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# gate:python discovers a tree by `pyproject.toml` + `tests/`, so this file is what puts the Lite
+# bundle in CI at all. Only the OFFLINE suite runs here — `tests/concurrent-bots.sh` needs a booted
+# image and belongs to pr-value/lite-smoke, which builds and boots one.
+testpaths = ["tests"]

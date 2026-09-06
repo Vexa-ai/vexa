@@ -8,6 +8,7 @@ session-resolution seams behave.
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from meeting_api.bot_spawn import mint_meeting_token
@@ -62,6 +63,77 @@ def _client_for(repo, storage):
     app = FastAPI()
     app.include_router(build_router(repo, storage, token_secret=SECRET))
     return TestClient(app)
+
+
+def test_delete_recording_is_owner_scoped_storage_first_and_removes_metadata():
+    repo, storage = _seeded()
+    repo._meetings[MEETING_ID]["status"] = "completed"
+    import asyncio
+
+    receipt = asyncio.run(upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=_wav(), media_format="wav", chunk_seq=0, is_final=True,
+    ))
+    rid = receipt["recording_id"]
+    client = _client_for(repo, storage)
+
+    assert client.delete(f"/recordings/{rid}", headers={"x-user-id": "999"}).status_code == 404
+    assert storage.blobs, "another tenant cannot touch storage"
+    deleted = client.delete(f"/recordings/{rid}", headers={"x-user-id": str(USER)})
+    assert deleted.status_code == 200
+    assert deleted.json()["scope"] == "primary_object_storage"
+    assert storage.blobs == {}
+    assert asyncio.run(repo.get_recordings(MEETING_ID)) == []
+
+
+def test_delete_recording_storage_failure_keeps_metadata_retryable():
+    class FailsOnceStorage(InMemoryStorage):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        async def delete(self, key: str) -> None:
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("injected delete failure")
+            await super().delete(key)
+
+    import asyncio
+
+    repo = InMemoryRecordingRepo()
+    repo.seed(
+        meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID, status="completed"
+    )
+    storage = FailsOnceStorage()
+    receipt = asyncio.run(upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=_wav(), media_format="wav", chunk_seq=0, is_final=True,
+    ))
+    rid = receipt["recording_id"]
+    client = TestClient(FastAPI(), raise_server_exceptions=False)
+    client.app.include_router(build_router(repo, storage, token_secret=SECRET))
+
+    headers = {"x-user-id": str(USER)}
+    assert client.delete(f"/recordings/{rid}", headers=headers).status_code == 500
+    assert asyncio.run(repo.get_recordings(MEETING_ID))[0]["id"] == rid
+    assert client.delete(f"/recordings/{rid}", headers=headers).status_code == 200
+    assert asyncio.run(repo.get_recordings(MEETING_ID)) == []
+
+
+def test_delete_recording_does_not_become_an_active_bot_stop_operation():
+    import asyncio
+
+    repo, storage = _seeded()
+    receipt = asyncio.run(upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=_wav(), media_format="wav", chunk_seq=0, is_final=False,
+    ))
+    response = _client_for(repo, storage).delete(
+        f"/recordings/{receipt['recording_id']}", headers={"x-user-id": str(USER)}
+    )
+    assert response.status_code == 409
+    assert storage.blobs
+    assert asyncio.run(repo.get_recordings(MEETING_ID))
 
 
 # ── flow: upload folds chunks into JSONB; finalize builds the master ─────────────────────────────
@@ -293,8 +365,14 @@ async def test_multichunk_plus_empty_final_raw_serves_master_not_signal_chunk():
     assert len(recs) == 1
     rec = recs[0]
     rid, mf = rec["id"], _first_audio(rec)
-    # A3 defence-in-depth: the LISTED pointer must never be the zero-byte final-signal chunk.
-    assert not mf["storage_path"].endswith(f"/audio/{n:06d}.wav"), mf["storage_path"]
+    # A3 defence-in-depth: the stored pointer must never be the zero-byte final-signal chunk.
+    # Read off the DETAIL route: `storage_path` is upload bookkeeping and the list row no longer
+    # carries it (fr_db203061a7a1d953) — the property is about what is stored, not about which
+    # route shows it.
+    detail = client.get(f"/recordings/{rid}", headers=_HDRS)
+    assert detail.status_code == 200, detail.text
+    detail_mf = _first_audio(detail.json())
+    assert not detail_mf["storage_path"].endswith(f"/audio/{n:06d}.wav"), detail_mf["storage_path"]
 
     # Hit /raw DIRECTLY (no prior /master) — finalize-on-read must assemble + serve the master.
     raw = client.get(f"/recordings/{rid}/media/{mf['id']}/raw?type=audio", headers=_HDRS)
@@ -540,3 +618,31 @@ async def test_s3_storage_list_paginates_past_1000_keys():
     listed = await storage.list(prefix)
     assert len(listed) == 1500, f"expected all 1500 keys across pages, got {len(listed)}"
     assert listed == sorted(keys)
+
+
+def test_a_persisted_path_outside_the_owners_namespace_is_never_deleted():
+    """A ``storage_path`` is data, not authority: deletion stays inside ``recordings/{user_id}/``.
+
+    Server-derived paths always satisfy this, so the negative control has to forge one — which is
+    exactly the precondition worth pinning, because the day a ``storage_path`` becomes writable
+    from a request is the day this is the only thing standing between a delete and another tenant.
+    """
+    import asyncio
+
+    from meeting_api.recordings.deletion import recording_object_keys
+
+    storage = InMemoryStorage()
+    mine = f"recordings/{USER}/1/{SESSION_UID}/audio/000000.wav"
+    theirs = "recordings/999/1/conn-xyz/audio/000000.wav"
+    storage.blobs[mine] = b"mine"
+    storage.blobs[theirs] = b"theirs"
+
+    recording = {
+        "id": 1, "user_id": USER, "session_uid": SESSION_UID,
+        "media_files": [{"storage_path": mine}, {"storage_path": theirs}],
+    }
+
+    keys = asyncio.run(recording_object_keys(storage, recording))
+
+    assert mine in keys
+    assert theirs not in keys, "a foreign-owner path must never enter the delete set"

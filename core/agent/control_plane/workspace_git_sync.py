@@ -28,8 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
-from shared.gitenv import scrubbed_git_env
+from shared.gitenv import pinned_git_env, scrubbed_git_env
 
 from control_plane.workspace_publish import PUBLISH_REMOTE, _URL_CREDENTIAL_RE, _display_url
 
@@ -42,20 +43,53 @@ SYNC_PUSH_REMOTE = "vexa-sync"
 _HOME_REMOTES = ("origin", PUBLISH_REMOTE)
 
 
+def _push_with_pat(wsp: Path, url: str, branch: str, token: str) -> str:
+    """The https half of the push: the PAT rides the URL for the network op and is scrubbed after
+    (``push_with_token``), and a diverged remote is reported rather than forced over."""
+    try:
+        return push_with_token(wsp, url, branch, token, remote=SYNC_PUSH_REMOTE)
+    except GitPushError as exc:  # already token-redacted (P15)
+        msg = str(exc)
+        if "non-fast-forward" in msg or "fetch first" in msg or "rejected" in msg:
+            raise RemoteSyncError(
+                f"push rejected — the remote has commits this workspace doesn't. Pull first (no force push): {msg}"
+            ) from None
+        raise RemoteSyncError(f"git push failed: {msg}") from None
+
+
+def _is_ssh_url(url: str) -> bool:
+    """``git@host:org/repo`` / ``ssh://…`` — a home whose credential is a KEY, not a token."""
+    u = (url or "").strip()
+    return u.startswith("ssh://") or bool(re.match(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:", u))
+
+
 class RemoteSyncError(RuntimeError):
     """A push/pull failed. The message is REDACTED of any access token (P15) so it is safe to surface."""
 
 
 def _redacted(text: str, token: Optional[str]) -> str:
-    return text.replace(token, "***") if token else text
+    """SHAPE-BASED (git_redaction), with the known token as belt to the braces. The previous version
+    was the replace() alone, which redacts nothing whenever the credential reached us by a route the
+    caller did not classify as a credential — which is precisely when it matters."""
+    return redact(text, token)
 
 
-def _git(ws: Path, *args: str, token: Optional[str] = None, check: bool = True) -> subprocess.CompletedProcess:
+def _git(ws: Path, *args: str, token: Optional[str] = None, check: bool = True,
+         ssh_env: Optional[dict] = None, url: Optional[str] = None) -> subprocess.CompletedProcess:
     """Run a git command in ``ws`` with a scrubbed env + prompts disabled; failures raise a token-redacted
-    ``RemoteSyncError`` (unless ``check=False``, which returns the completed process for the caller to read)."""
+    ``RemoteSyncError`` (unless ``check=False``, which returns the completed process for the caller to read).
+
+    ``ssh_env`` carries ``GIT_SSH_COMMAND`` from the workspace's deploy key (``deploy_keys.ssh_env``) —
+    the credential for an ``ssh://``/``git@`` home. It rides the ENVIRONMENT, never the URL, so unlike a
+    PAT there is nothing to embed, nothing to redact and nothing that can be persisted by accident.
+
+    ``url`` marks this as a NETWORK op and pins git's transport allow-list to what that remote needs —
+    the home remote was written from a repository the subject supplied at attach time, so it is a
+    caller-influenced URL even though it is read back out of ``.git/config``."""
+    overrides = {"GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0", **(ssh_env or {})}
     proc = subprocess.run(
         ["git", "-C", str(ws), *args], capture_output=True, text=True,
-        env=scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0"),
+        env=pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides),
     )
     if check and proc.returncode != 0:
         raise RemoteSyncError(_redacted(f"git {' '.join(args)} failed: {proc.stderr.strip()}", token))
@@ -83,6 +117,27 @@ def home_remote(ws: str | Path) -> Optional[tuple[str, str]]:
         if url:
             return name, url
     return None
+
+
+def detach_home(ws: str | Path) -> Optional[tuple[str, str]]:
+    """DROP the workspace's home remote — the exact inverse of attach, and nothing more.
+
+    What it does: ``git remote remove <home>``. What it deliberately does NOT do: touch one file in
+    the working tree, rewrite one commit, or delete anything. Detaching means *stop syncing this
+    workspace to GitHub*; a person who detaches has not asked to lose the tree they are reading, and
+    the tree is the whole of what they would have lost had this been implemented as "swap back to
+    the parked copy" (``swap_workspace``), which is a different act with a different name.
+
+    Returns the ``(remote, url)`` that was removed, or ``None`` when there was no home to remove —
+    an already-detached workspace is a no-op, not an error, because the answer the caller wants is
+    "this workspace has no GitHub home", and it is true either way."""
+    wsp = Path(ws)
+    home = home_remote(wsp)
+    if home is None:
+        return None
+    remote, url = home
+    _git(wsp, "remote", "remove", remote)
+    return remote, _display_url(url)
 
 
 def _current_branch(ws: Path) -> Optional[str]:
@@ -144,31 +199,38 @@ class PushResult:
     head_sha: str
 
 
-def push_origin(ws: str | Path, *, token: str) -> PushResult:
+def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None) -> PushResult:
     """Push the current branch to the workspace's home remote (origin / vexa-publish), full history,
-    fast-forward only. The ``token`` authenticates the push and is NEVER persisted (P15); a diverged
-    remote fails loud (no force). Attached clones keep their token-free ``origin`` intact throughout."""
+    fast-forward only. A diverged remote fails loud (no force).
+
+    TWO credentials, and the home URL decides: an ``ssh://``/``git@`` home pushes with the workspace's
+    DEPLOY KEY (``ssh_env``) and needs no token at all; an ``https`` home uses the ``token``, which is
+    NEVER persisted (P15) — attached clones keep their token-free ``origin`` intact throughout."""
     wsp = Path(ws)
-    if not (token or "").strip():
-        raise ValueError("a GitHub access token is required")  # bad input (API → 400)
-    token = token.strip()
+    token = (token or "").strip() or None
     home = home_remote(wsp)
     if home is None:
         raise RemoteSyncError("this workspace has no GitHub home yet — publish or attach a repo first")
     remote, url = home
+    over_ssh = bool(ssh_env) and _is_ssh_url(url)
+    if not token and not over_ssh:
+        raise ValueError("a GitHub access token is required")  # bad input (API → 400)
     branch = _current_branch(wsp)
     if not branch:
         raise RemoteSyncError("workspace is on a detached HEAD — check out a branch to push")
-    _git(wsp, "rev-parse", "--verify", "HEAD", token=token)  # at least one commit, or fail loud
-    try:
-        head_sha = push_with_token(wsp, url, branch, token, remote=SYNC_PUSH_REMOTE)
-    except GitPushError as exc:  # already token-redacted (P15)
-        msg = str(exc)
-        if "non-fast-forward" in msg or "fetch first" in msg or "rejected" in msg:
-            raise RemoteSyncError(
-                f"push rejected — the remote has commits this workspace doesn't. Pull first (no force push): {msg}"
-            ) from None
-        raise RemoteSyncError(f"git push failed: {msg}") from None
+    _git(wsp, "rev-parse", "--verify", "HEAD", token=token, ssh_env=ssh_env)  # at least one commit, or fail loud
+    if over_ssh:
+        # No remote is written and no credential touches the URL — the key is in the environment.
+        pushed = _git(wsp, "push", "--quiet", url, f"HEAD:refs/heads/{branch}", ssh_env=ssh_env, check=False)
+        if pushed.returncode != 0:
+            err = (pushed.stderr or "").strip()
+            if "non-fast-forward" in err or "fetch first" in err or "rejected" in err:
+                raise RemoteSyncError(_redacted(
+                    f"push rejected — the remote has commits this workspace doesn't. Pull first (no force push): {err}", None))
+            raise RemoteSyncError(_redacted(f"git push failed: {err}", None))
+        head_sha = _git(wsp, "rev-parse", "HEAD", ssh_env=ssh_env).stdout.strip()
+    else:
+        head_sha = _push_with_pat(wsp, url, branch, token)
     # The ff push succeeded, so the home ref now equals HEAD — advance the tracking ref locally so the
     # panel's ahead/behind reflects the push without a follow-up fetch.
     _git(wsp, "update-ref", f"refs/remotes/{remote}/{branch}", head_sha, check=False)
@@ -186,7 +248,7 @@ class PullResult:
     behind_before: int  # how many commits we were behind before the pull
 
 
-def pull_origin(ws: str | Path, *, token: Optional[str] = None) -> PullResult:
+def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None) -> PullResult:
     """Fetch the home branch and FAST-FORWARD only. No merge commit, no rebase, no force: a divergence
     (local commits the remote lacks) is reported as a conflict for the user to resolve. The ``token``
     (optional — public repos need none) is used for the fetch ONLY and NEVER persisted: we fetch from the
@@ -201,17 +263,20 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None) -> PullResult:
         raise RemoteSyncError("workspace is on a detached HEAD — check out a branch to pull")
     token = (token or "").strip() or None
     auth_url = url
-    if token and "://" in url:
+    if ssh_env and _is_ssh_url(url):
+        token = None            # an ssh home authenticates by key; there is nothing to embed
+    elif token and "://" in url:
         proto, rest = url.split("://", 1)
         auth_url = f"{proto}://{token}@{rest}"
     # Fetch from the URL directly (not a persisted remote) so the credential never lands anywhere.
-    fetch = _git(wsp, "fetch", "--quiet", auth_url, branch, token=token, check=False)
+    fetch = _git(wsp, "fetch", "--quiet", auth_url, branch, token=token, ssh_env=ssh_env,
+                 check=False, url=url)
     if fetch.returncode != 0:
         raise RemoteSyncError(_redacted(f"fetch from {remote} failed: {fetch.stderr.strip()}", token))
-    fetched = _git(wsp, "rev-parse", "FETCH_HEAD", token=token).stdout.strip()
+    fetched = _git(wsp, "rev-parse", "FETCH_HEAD", token=token, ssh_env=ssh_env).stdout.strip()
     # Record the tracking ref so status stays coherent whether or not the merge fast-forwards.
     _git(wsp, "update-ref", f"refs/remotes/{remote}/{branch}", fetched, check=False)
-    before = _git(wsp, "rev-parse", "HEAD", token=token).stdout.strip()
+    before = _git(wsp, "rev-parse", "HEAD", token=token, ssh_env=ssh_env).stdout.strip()
     # left = FETCH_HEAD-only commits (how far behind we are), right = HEAD-only commits (local divergence).
     rl = _git(wsp, "rev-list", "--left-right", "--count", "FETCH_HEAD...HEAD", token=token, check=False)
     parts = rl.stdout.split()
@@ -226,7 +291,7 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None) -> PullResult:
     merged = _git(wsp, "merge", "--ff-only", "FETCH_HEAD", token=token, check=False)
     if merged.returncode != 0:
         raise RemoteSyncError(_redacted(f"fast-forward failed: {merged.stderr.strip()}", token))
-    after = _git(wsp, "rev-parse", "HEAD", token=token).stdout.strip()
+    after = _git(wsp, "rev-parse", "HEAD", token=token, ssh_env=ssh_env).stdout.strip()
     log.info("workspace pull subject-ws=%s remote=%s ref=%s updated=%s", wsp.name, remote, branch, before != after)
     return PullResult(remote=remote, url=_display_url(url), branch=branch, head_sha=after,
                       updated=before != after, behind_before=behind_before)

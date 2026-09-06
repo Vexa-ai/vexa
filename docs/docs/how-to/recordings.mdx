@@ -15,6 +15,10 @@ self-host, your own MinIO bucket, so it never leaves your environment. The recor
 stored separately from the transcript (speaker separation lives in the transcript as text — there is no
 per-speaker audio).
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ## List recordings
 
 ```bash
@@ -60,7 +64,22 @@ curl -I -H "X-API-Key: $API_KEY" -H "Range: bytes=0-1023" \
 ## Where it's stored
 
 Recordings live in the bucket configured by `MINIO_*` ([Configuration](/configuration#database-storage)).
-On a self-host that's infrastructure you control; air-gapped deployments keep recordings entirely in-VPC.
+On a self-host that's infrastructure you control; a no-egress deployment keeps recordings entirely in-VPC.
+
+## Delete a recording
+
+```bash
+curl -X DELETE -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
+```
+
+After the meeting becomes terminal, the owner-scoped delete removes the recording's chunks and
+master from configured primary object storage before removing its metadata (`409` while the meeting
+is still in flight). A storage error leaves the metadata intact so you can safely retry. To erase a
+completed meeting's transcript and every recording together, use
+`DELETE /meetings/{meeting_id}`.
+
+Deletion does not promise immediate removal from database snapshots, object-store version history,
+or backups. Those copies expire according to the retention policy of the deployment operator.
 
 <Note>
 A recording is the raw meeting audio. For the **text** of who-said-what with timestamps, use the

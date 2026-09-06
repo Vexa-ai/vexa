@@ -3,11 +3,14 @@
  *  (--t1/--t2/--t3, --accent, --blue, --mono, --line, --panel, --panel2). Supports:
  *  headings (#..####), bold, italic, inline code, fenced ```code```, bullet + numbered
  *  lists, links (new tab, rel noreferrer), [[wikilinks]], blockquotes, horizontal rules,
- *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
- *  not spec-complete. */
+ *  GFM pipe tables, ```mermaid diagrams (./docDiagrams), paragraphs and line breaks.
+ *  Intentionally a small subset — robust,
+ *  not spec-complete. HTML comments never reach the page — see stripHtmlComments. */
 "use client";
 import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
+import { DocImage } from "./docImages";
+import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -26,6 +29,56 @@ function EntityCode({ code }: { code: string }) {
       {code}
     </code>
   );
+}
+
+// ── HTML comments are machinery, and machinery is not page copy ────────────────────
+// The desk README fences its regenerated regions with them — `<!-- desk:pinned:start -->`,
+// `<!-- desk:now:end -->`, the pinned hint (core/agent/shared/desk_readme.py) — and this
+// renderer printed every one of them as text, because a `<` that starts no known tag is escaped
+// into literal prose. Founder, 2026-09-06, walking his own desk: *"not everything is rendered
+// correctly here"*. Any markdown viewer shows none of them; the EDIT view, which reads the file
+// rather than this renderer, still shows them all.
+//
+// A FENCE is a transcript of literal text and inline code is the idiom for NAMING a marker, so
+// both are copied through untouched — the same rule MdxDoc's transformDocRefs already applies to
+// every other rewrite. An UNTERMINATED `<!--` is left as it stands rather than swallowing the
+// rest of the document: losing one stray marker is a blemish, losing the page is a failure.
+const FENCE_LINE = /^\s*(?:```|~~~)/;
+
+/** Drop every complete `<!-- … -->` from a prose run, fences and inline code excepted. */
+function stripProseComments(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      if (end === -1) { out += text.slice(i); break; }   // unterminated: literal, never eat the page
+      i = end + 3;                                       // the whole comment, however many lines
+      continue;
+    }
+    if (text[i] === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end !== -1) { out += text.slice(i, end + 1); i = end + 1; continue; }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+/** The source a reader is shown: the same markdown, minus its HTML comments. */
+export function stripHtmlComments(src: string): string {
+  const lines = (src ?? "").replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let prose: string[] = [];
+  let fenced = false;
+  const flush = () => { if (prose.length) { out.push(stripProseComments(prose.join("\n"))); prose = []; } };
+  for (const line of lines) {
+    if (FENCE_LINE.test(line)) { flush(); out.push(line); fenced = !fenced; continue; }
+    if (fenced) out.push(line); else prose.push(line);
+  }
+  flush();
+  return out.join("\n");
 }
 
 // ── inline span parsing: code, bold, italic, links, wikilinks ──────────────────────
@@ -51,9 +104,13 @@ function inline(text: string): ReactNode[] {
   return out;
 }
 
-// bold / italic / links / wikilinks within a non-code segment
+// bold / italic / images / links / wikilinks within a non-code segment
 function emphasis(text: string, key: string, out: ReactNode[]): void {
-  const re = /(\[\[[^\]]+\]\])|(\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)/g;
+  // `!` BEFORE THE BRACKET IS THE WHOLE DIFFERENCE between a link and an image, and this renderer
+  // used to eat it: `![logo](assets/x.svg)` matched the LINK arm, so the page printed a stray `!`
+  // followed by a clickable "logo" and no picture at all (#1612). The alternation now takes the
+  // optional bang with the token, and the arm branches on it.
+  const re = /(\[\[[^\]]+\]\])|(!?\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -65,6 +122,10 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
       // title with no entity doc renders muted + tooltip instead of a dead click)
       out.push(<Wikilink key={`${key}-w${i}`} title={tok.slice(2, -2)} />);
     } else if (m[2]) {
+      // ![alt](src) — the SAME image component MdxDoc registers, so a doc that failed to compile as
+      // MDX shows the same picture and offers the same fetch (shared resolver, one behaviour).
+      const im = tok.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+      if (im) { out.push(<DocImage key={`${key}-img${i}`} src={im[2]} alt={im[1]} />); last = re.lastIndex; i++; continue; }
       // [text](url) — workspace-internal (schemeless) hrefs navigate in place, resolving
       // relative paths against the linking doc; external links open a browser tab
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;
@@ -176,7 +237,7 @@ function tableStart(lines: string[], index: number): { header: string[]; align: 
 
 // ── block parser: split lines into headings, lists, code fences, quotes, rules, paras ──
 export function Markdown({ children, style }: { children: string; style?: React.CSSProperties }): ReactNode {
-  const src = children ?? "";
+  const src = stripHtmlComments(children ?? "");
   const lines = src.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -200,7 +261,15 @@ export function Markdown({ children, style }: { children: string; style?: React.
       const buf: string[] = [];
       i++;
       while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      const closed = i < lines.length;   // a fence still being typed/streamed has no closing line yet
       i++; // closing fence
+      // ```mermaid → the picture, same component MdxDoc renders (#1617). Only once the fence has
+      // CLOSED: this renderer draws the turn that is still streaming into the chat, and half a
+      // flowchart is a parse error the reader would watch flash past for no reason.
+      if (closed && isMermaidFence(fence[1])) {
+        blocks.push(<MermaidDiagram key={key++} source={buf.join("\n")} />);
+        continue;
+      }
       blocks.push(
         <pre key={key++} style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>
           <code>{buf.join("\n")}</code>

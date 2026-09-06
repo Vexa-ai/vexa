@@ -1,0 +1,96 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "flows",
+  "source": "oss",
+  "owner": "core/flows",
+  "base_url_env": "FLOWS_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": ["identity"],
+  "admin_auth": { "header": "X-Flows-Operator-Key", "key_env": "VEXA_FLOWS_API_KEY" },
+  "tools": [
+    {
+      "name": "flows_list",
+      "identity": "operator",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/flows" }
+    },
+    {
+      "name": "reactions_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/reactions" },
+      "arguments": ["status", "subject"],
+      "note": "A person's own queue: the subject is taken from their credential, so `subject` is optional and may only name themselves."
+    },
+    {
+      "name": "reaction_signal",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/reactions/{reaction_id}/{verb}" },
+      "note": "resume | retry | cancel | wake. The path parameters are arguments without being declared — the route cannot be called without them."
+    },
+    {
+      "name": "whats_waiting",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/queue/waiting" },
+      "note": "PRD decision 42.2 — what is waiting IS flows: this subject's pending reactions, each naming the flow that produced it and its typed reason (human | failed | not_present | pending). Nothing is unioned at the edge. `auth: subject` means the person is the authenticated caller: flows resolves them from their own credential, and the tool takes no subject argument."
+    },
+    {
+      "name": "timeline",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/timeline" },
+      "arguments": ["subject", "since", "until", "limit"]
+    },
+    {
+      "name": "report_friction",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/friction" },
+      "arguments": ["session", "what_i_tried", "what_happened", "severity", "meeting_id", "tool", "deployment", "worker_image", "kind"],
+      "note": "PRD 40.9 open-decision 8 — friction is not a domain and this is its whole product surface: what did not work, dumped where the dev agent can read it and fix behaviour from it. Requires no agent domain: this is flows-api's own route, so it works in the no-agents profile too. NOTHING ON THIS ROUTE IS REQUIRED and no value a caller sends or omits produces a 400 (F-D27, prod 2026-09-04 11:0xZ: the route answered 400 \"session is required\" and threw away the report describing that refusal). `session` (the chat/meeting session this happened in) is what ties a report back to the conversation that produced it, so the tool description tells the agent to include it whenever it has one — but a report without one is filed, stored, and read back as \"no session\", because a missing join key is our gap and an absent session is signal too. Same for `what_i_tried`/`what_happened`. The only refusal left is authentication (401): a report attributed to nobody is a different object, not a poorer one. THE SINK TAKES ANY REPORT AS SENT (founder ruling 2026-09-04: \"we want to catch all signal … rich data, does not have to be too structured\"): `kind` and `severity` are FREE TEXT, stored verbatim, and any argument this route does not name is kept with the report under `extra` rather than dropped. The eight kinds are SUGGESTIONS, carried as `examples` plus one worked example each in the argument descriptions the MCP tool schema is derived from — never as an `enum`, because the MCP SDK validates a call against the tool schema and an enum there refuses the report instead of forwarding it. Never a 400 on a word; F-D26 lost twelve prod reports in twenty minutes to exactly that. TRANSPORT: the route now takes the whole report as a JSON BODY, which is where a person's own words about a failure belong — a query string is copied into every proxy and ingress access log in front of the service. The nine argument names above are UNCHANGED and still accepted as query parameters for one release (deprecated, warned once per process), because that is what this manifest's consumers already send; the body wins when a field arrives twice."
+    },
+    {
+      "name": "friction_so_far",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/friction" },
+      "arguments": ["since", "limit"],
+      "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+    },
+    {
+      "name": "flows_submit",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows" },
+      "arguments": ["name", "on_event", "steps", "params", "activate"],
+      "note": "Author a new flow version (ADR-0037 / PRD decision 40.5's own registry write). `auth: admin` because `POST /flows` is gated by flows-api's own operator key (flows_api.auth), not the caller's credential — a person's own key 401s here, so the caller's credential does not travel. `steps` must name vocabulary flows-api already knows (`GET /flows`'s own `steps_vocabulary` lists it); an unknown step is a 400 naming it. `activate` defaults true (live within ~10s); false files a draft version."
+    },
+    {
+      "name": "flow_lifecycle",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows/{name}/{version}/{action}" },
+      "note": "`action` is activate | retire on one flow version, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. Same admin gate as flows_submit: flows-api's `auth` dependency, not the caller's own credential."
+    }
+  ],
+  "publishes_events": [
+    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v3" },
+    { "event": "friction.reported", "status": "published today", "triggers": "friction_log v1 — `flows_defs/production.py` registers it on this event, and without a matching flow `admit()` would create nothing and the report would not be readable back (`flows/admission.py`; `tests/test_friction.py::test_friction_reported_has_a_registered_flow_in_every_profile`). This line used to deny that any flow reacted to the event, which was the manifest asserting the exact failure the flow exists to prevent. Registered in every profile: friction must work with no agent domain deployed (PRD 40.9 open-decision 8)." },
+    { "event": "friction.fixed", "status": "published today", "triggers": "friction_fix v1 — recorded as a fact on the timeline only, same as friction_log; #1510's C3 close-out half of the same sink" }
+  ],
+  "handed_off_events": [
+    { "event": "meeting.started", "event_v2_owner": "meetings", "note": "F168/F181: meeting-api now publishes this too (config.v1 publish-edge, meeting_api/events.py), and the carrier census records meetings as owner. invite_intake v3's own emit_started keeps running unchanged — same source_event_id scheme (live-<meeting_id>), so admission dedups the two producers into one reaction (flows/admission.py) rather than firing live_meeting twice. Retiring emit_started is a follow-up, not part of this change." },
+    { "event": "meeting.completed", "event_v2_owner": "meetings", "note": "F168/F181: same handover as meeting.started (source_event_id done-<meeting_id>). invite_intake v3's emit_completed keeps running for calendar-intake meetings; the two producers dedupe at admission, not here." }
+  ]
+}

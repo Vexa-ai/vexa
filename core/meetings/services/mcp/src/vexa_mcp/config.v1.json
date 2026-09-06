@@ -1,0 +1,175 @@
+{
+  "contract": "config.v1",
+  "service": "mcp",
+  "keys": [
+    {
+      "key": "GATEWAY_URL",
+      "class": "defaulted",
+      "default": "http://gateway:8000",
+      "description": "The PUBLIC API this service forwards every built-in tool to, with the caller's own key. It never reaches past the gateway.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "PORT",
+      "class": "defaulted",
+      "default": "8010",
+      "description": "The port the MCP transport listens on; the gateway's MCP_URL points here.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "HOST",
+      "class": "defaulted",
+      "default": "0.0.0.0",
+      "description": "Bind address. Container-internal only \u2014 the gateway is the edge.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_ENV",
+      "class": "defaulted",
+      "default": "development",
+      "description": "`production` closes /docs, /redoc and /openapi.json on the PUBLIC app. Note the ASSEMBLER still reads each DOMAIN's OpenAPI over the internal network to derive tool schemas \u2014 that is a different app's docs, on a different edge.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "LOG_LEVEL",
+      "class": "defaulted",
+      "default": "info",
+      "description": "Log verbosity.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_JITSI_HOSTS",
+      "class": "defaulted",
+      "default": "(empty)",
+      "description": "Declared Jitsi hosts for meeting-link parsing \u2014 the SAME setting meeting-api reads, because two parsers that disagree about what a link is accept different meetings.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "ADMIN_API_URL",
+      "class": "capability",
+      "capability": "assembly",
+      "description": "identity's base URL. A domain whose URL is set is ASKED for its tool manifest; one whose URL is unset is never asked and its tools are absent. Identity is the one domain everyone may depend on.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "MEETING_API_URL",
+      "class": "capability",
+      "capability": "assembly",
+      "description": "meetings' base URL, on the same terms.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "FLOWS_API_URL",
+      "class": "capability",
+      "capability": "assembly",
+      "description": "flows' base URL, on the same terms.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_API_KEY",
+      "class": "capability",
+      "capability": "assembly",
+      "secret": true,
+      "description": "flows' own operator key, forwarded as X-Flows-Operator-Key on the two admin-gated tools (flows_submit, flow_lifecycle — core/flows/mcp.tools.v1.json's `auth: admin`). Their doors read ONLY this key, never the caller's own credential, so unset alongside a set FLOWS_API_URL is a deployment whose facts assembly refuses to publish (manifest.py's admin-key check fails the boot) rather than list two tools their own door would 401.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "AGENT_API_URL",
+      "class": "capability",
+      "capability": "assembly",
+      "description": "agent's base URL, on the same terms. Unset is the no-agents deployment, which is a product and not a degraded state.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MCP_MANIFEST_DIR",
+      "class": "capability",
+      "capability": "private_domains",
+      "description": "A directory a private deployment mounts its own tool manifests into \u2014 billing, seats, entitlement. Assembled identically to the OSS ones and competing for names in the same space, so a mount can COLLIDE but never SHADOW. EMPTY IS THE OSS PRODUCT, exactly.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_TICKET_SINK_URL",
+      "class": "capability",
+      "capability": "ticket_sink",
+      "description": "Where `report_issue` files an agent-written ticket. POINT IT AT A DEDICATED TICKETS REPO: ticket bodies are third-party text, and an operational repo's issues are read as work signal by planning loops.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_TICKET_SINK_TOKEN",
+      "class": "capability",
+      "capability": "ticket_sink",
+      "secret": true,
+      "description": "Credential for that sink. Fine-grained, SINGLE-REPO, issues:write only, from a secret store.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_TICKET_SINK_FORMAT",
+      "class": "capability",
+      "capability": "ticket_sink",
+      "description": "`raw` (default) POSTs the ticket JSON to an opaque webhook; `github` maps it onto POST /repos/{owner}/{repo}/issues so an issue tracker IS the sink.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_TICKET_SINK_LABELS",
+      "class": "capability",
+      "capability": "ticket_sink",
+      "description": "Labels applied to filed tickets.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_TICKET_FINGERPRINT_SALT",
+      "class": "defaulted",
+      "default": "vexa-mcp-report-issue",
+      "description": "Salt for the caller fingerprint that dedupes tickets. A deployment SHOULD set its own so fingerprints are not comparable across deployments.",
+      "targets": [
+        "compose"
+      ]
+    }
+  ],
+  "capabilities": {
+    "assembly": {
+      "description": "Assembling one MCP surface from the tool manifests of the domains this deployment carries (PRD decision 40). Each domain serves its own manifest and its OpenAPI; this service asks, refuses the combinations that cannot be right, and presents the union.",
+      "mode": "any",
+      "when_unconfigured": "No domain is asked, so the surface is exactly this service's own built-in tools. That is a smaller product, never a broken one \u2014 a tool whose domain is absent is ABSENT from tools/list rather than present-and-failing."
+    },
+    "private_domains": {
+      "description": "A paid or private domain composing onto this line without a line of it living in this repo: its manifest is mounted, discovered and assembled like any other.",
+      "when_unconfigured": "There are no mounted manifests, which IS the OSS product. This repo never carries a gate shipped dark."
+    },
+    "ticket_sink": {
+      "description": "`report_issue` \u2014 an agent filing a ticket a human reads.",
+      "mode": "any",
+      "when_unconfigured": "`report_issue` answers 503 `not configured` and nothing else changes."
+    }
+  }
+}

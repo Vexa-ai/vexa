@@ -1,6 +1,6 @@
 {
   "name": "vexa",
-  "version": "0.12.22",
+  "version": "0.13.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -21,6 +21,8 @@
     "gate:schema": "node scripts/gates.mjs schema",
     "gate:contract-version": "node scripts/gates.mjs contract-version",
     "gate:config-contract": "node scripts/gates.mjs config-contract",
+    "gate:domain-doors": "node scripts/gates.mjs domain-doors",
+    "gate:fact-parity": "node scripts/gates.mjs fact-parity",
     "gate:db-schema": "node scripts/gates.mjs db-schema",
     "gate:db-budget": "node scripts/gates.mjs db-budget",
     "gate:merge-card": "node scripts/merge-card-gate.mjs",

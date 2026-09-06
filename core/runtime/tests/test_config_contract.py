@@ -97,12 +97,58 @@ def test_file_probe_uses_the_mirror_mount_fallback(tmp_path):
     assert result["ok"] is True and result["path"] == str(mirror)
 
 
+# ── the inode defect (dogfood 2026-08-31 → 09-01, ~32h of "Not logged in") ───────────────────────
+
+
+def test_declared_mirrors_prefer_the_directory_mount_over_the_legacy_file():
+    """A single-FILE bind is pinned to the inode it was created with; the claude CLI refreshes a
+    token by rename(2)-ing a NEW inode over .credentials.json, so a long-lived container reads the
+    pre-refresh token forever while `claude` works fine on the host. The DIRECTORY mirror resolves
+    the filename live — so it is tried FIRST, and the file stays only as the compat fallback."""
+    spec = cp.load_declaration()["capabilities"]["model_inference"]["probe"]["file"]
+    assert spec["fallback_paths"] == [
+        "/var/lib/vexa/host-claude/.credentials.json",
+        "/var/lib/vexa/host-claude-credentials",
+    ]
+
+
+def test_file_probe_reads_the_directory_mirror_through_an_inode_swap(tmp_path):
+    d = tmp_path / "host-claude"
+    d.mkdir()
+    creds = d / ".credentials.json"
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "before"}}))
+    spec = {**cp.load_declaration()["capabilities"]["model_inference"]["probe"]["file"],
+            "fallback_paths": [str(creds), str(tmp_path / "legacy")]}
+    env = {"HOST_CLAUDE_CREDENTIALS": "/home/user/.claude/.credentials.json"}  # host path, unseen in-container
+    assert cp._file_probe(spec, env, 2)["ok"] is True
+    tmp = d / ".credentials.json.tmp"
+    tmp.write_text(json.dumps({"claudeAiOauth": {"accessToken": "after"}}))
+    tmp.rename(creds)                       # the refresh: atomic replace, NEW inode
+    out = cp._file_probe(spec, env, 2)
+    assert out["ok"] is True and out["path"] == str(creds)
+    assert json.loads(creds.read_text())["claudeAiOauth"]["accessToken"] == "after"
+
+
+def test_worker_credential_bind_falls_back_to_the_directory():
+    """The worker bind is created fresh at every spawn, so it never went stale — but a deployment
+    that configures only HOST_CLAUDE_DIR must still produce an authenticated worker."""
+    from runtime_kernel.docker_backend import host_claude_credentials as hcc
+
+    assert hcc({}) is None
+    assert hcc({"HOST_CLAUDE_CREDENTIALS": "/h/.claude/.credentials.json"}) == "/h/.claude/.credentials.json"
+    assert hcc({"HOST_CLAUDE_DIR": "/h/.claude"}) == "/h/.claude/.credentials.json"
+    assert hcc({"HOST_CLAUDE_DIR": "/h/.claude/"}) == "/h/.claude/.credentials.json"
+    # an explicit file always wins over the derived one
+    assert hcc({"HOST_CLAUDE_DIR": "/h/.claude",
+                "HOST_CLAUDE_CREDENTIALS": "/elsewhere/creds.json"}) == "/elsewhere/creds.json"
+
+
 # ── /health rows (ADDITIVE next to the existing checks) ──────────────────────────────────────────
 
 
 def test_health_carries_capability_rows_additively(monkeypatch):
     for k in ("REDIS_URL", "BROWSER_IMAGE", "AGENT_IMAGE", "HOST_CLAUDE_CREDENTIALS",
-              "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "VEXA_LLM_API_KEY"):
+              "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     app = create_app(Runtime(profiles={"test": ["sleep", "30"]}))
     r = TestClient(app).get("/health")

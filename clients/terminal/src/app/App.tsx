@@ -14,11 +14,14 @@ import { registerEngineCommands } from "../workbench/commands";
 import { Workbench } from "../workbench/Workbench";
 import { MinutesShell } from "../minutes/MinutesShell";
 import { minutesOnly } from "./mode";
+import { VersionBar } from "./VersionBar";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
 import { SetupGate } from "./SetupGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
+import { redeemScaffoldShare } from "../minutes/scaffold";
+import { beginArrival } from "../minutes/arrival";
 import "../surfaces";
 
 const roleLabel = (role: string) => (role === "viewer" ? "read-only" : "read & write");
@@ -39,12 +42,23 @@ function InviteGate({ children }: { children: ReactNode }) {
   const meeting = params.get("meeting");   // ?meeting=<platform>/<native> deep-link → open that meeting
   const assign = params.get("assign");     // ?assign=<uid> — MINUTES: choose a group for an unbound meeting
   const setup = params.get("setup");       // ?setup=global — MINUTES: the admin org-tier conversation
+  const view = params.get("view");         // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
+  const ask = params.get("ask");           // ?ask=<preset> — MINUTES: open a chat already primed
+  const scaffold = params.get("s");        // ?s=<id> — THE SCAFFOLD: one record per arrival (§5.5)
 
-  // MINUTES `?setup=global`: stash the intent; the workbench fires the admin conversation once
-  // the chat is mounted. Re-runnable on purpose — amending the org tier is the same conversation.
+  // MINUTES `?setup=global`: the ADMIN company-layer conversation. It stashes a PRESET — the same
+  // `vexa.pendingPreset` every emailed `?ask=` link stashes — so the opening turn comes from
+  // `_global/asks/setup-global.md`, admin-authored and read hot at click time. It used to stash a
+  // bespoke flag that the workbench turned into a prompt string baked into this client, pointing
+  // the agent at a file that exists on no deployment; the one conversation that decides how every
+  // agent in the company behaves opened by reading nothing, and its wording could only change by
+  // rebuilding a cold image. Re-runnable on purpose — amending the company layer is the same
+  // conversation.
   useEffect(() => {
     if (setup !== "global") return;
-    try { localStorage.setItem("vexa.setupGlobal", "1"); } catch { /* locked-down storage */ }
+    try {
+      localStorage.setItem("vexa.pendingPreset", JSON.stringify({ ask: "setup-global" }));
+    } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [setup, invite, tshare]);
 
@@ -58,6 +72,69 @@ function InviteGate({ children }: { children: ReactNode }) {
     } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [assign, invite, tshare]);
+
+  // A `?view=` composed-layout deep-link: the sender (usually the person's own agent over MCP)
+  // constructs WHICH panes open — e.g. a meeting beside its minutes doc. Same stash-and-clean
+  // discipline as `?meeting=`.
+  useEffect(() => {
+    if (!view) return;
+    try { localStorage.setItem("vexa.composedView", view); } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [view, invite, tshare]);
+
+  // A `?ask=<preset>` deep-link — the link an extract email actually carries. It names a preset;
+  // the preset BODY lives in `_global/asks/<name>.md`, which only an admin can write. The URL never
+  // carries prompt text: a link that could would let anyone who can send mail drive the recipient's
+  // agent. `ws` and `meeting` ride along as refs the preset may substitute.
+  useEffect(() => {
+    if (!ask) return;
+    try {
+      localStorage.setItem("vexa.pendingPreset", JSON.stringify({
+        // `?ws=` IS NOT CARRIED (F97). It used to reach the mount set and the opening's `{{ws}}`
+        // token, so a URL could name the workspaces a chat mounted. The mount set is the server's
+        // to derive from the caller and the meeting; a link states neither.
+        ask, meeting: params.get("meeting") || "",
+      }));
+    } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [ask, invite, tshare]);
+
+  // `?s=<id>` — THE SCAFFOLD (PRD §5.5). The link carries an ID and nothing else: no prompt text,
+  // no mount set, no tabs. The terminal fetches the record as the signed-in identity and renders a
+  // chat from it, and the agent is handed the same record — one record, two renderers, so neither
+  // side composes from whatever was there before.
+  //
+  // THE ARRIVAL FINISHES IN THIS DOCUMENT — and that is what makes `?s=` different from every
+  // other deep-link above. They clean their URL by RELOADING (`location.replace`), on purpose, so
+  // the stash is in place before the grid mounts. This one must not, and the difference is the
+  // whole of the 2026-09-05 defect: MinutesShell's effect runs BEFORE this one (React does children
+  // first), so by the time the reload fired it had already taken the id out of storage and had a
+  // `GET /api/scaffolds/<id>` in flight. The navigation aborted that request, the second document
+  // found nothing pending, and neither the chat nor the refusal card ever rendered — a real
+  // first-time invitee landed on an empty "New chat". `beginArrival` stashes the id, takes `?s=`
+  // off the URL with `history.replaceState` (no request, no unload, nothing aborted) and says
+  // *look now*, so either effect order lands. The rules are stated in `minutes/arrival.ts`.
+  //
+  //  THE SHARE COMES OFF THE RECORD, NOT OFF THE URL (R-A08). When the meeting is not the reader's
+  //  own, the scaffold carries a restricted transcript grant. It used to ride this same link as
+  //  `&tshare=`, where a bearer credential enters every access log and proxy trace between us and
+  //  the inbox. It is redeemed here instead — one authenticated POST against the id the link
+  //  already carries — and it runs ALONGSIDE the arrival rather than in front of it:
+  //  `redeemScaffoldShare` never throws and answers null for the ordinary no-share case, so the
+  //  arrival is never held up by it. It used to gate the URL clean, because `location.replace`
+  //  would have aborted it; there is no navigation left to sequence against.
+  useEffect(() => {
+    if (!scaffold) return;
+    beginArrival(scaffold);
+    void (async () => {
+      const token = await redeemScaffoldShare(scaffold);
+      if (!token) return;
+      try {
+        const r = await acceptTranscriptShare(token);
+        if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+      } catch (e) { console.error("scaffold transcript share redeem failed:", e); }
+    })();
+  }, [scaffold]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.
@@ -180,6 +257,12 @@ export function App() {
   // InviteGate then shows the consent screen for any ?invite= INSIDE the authed subtree, so its preview /
   // redeem calls carry the user's real API key (the fail-closed gateway rejects anonymous calls).
   return (
+    <>
+      {/* The swap is invisible now (PRD decision 39) — so the tab tells the person when the
+          deployment underneath it moved. OUTSIDE AuthGate on purpose: the tab most likely to be
+          running a stale bundle is one sitting on a sign-in screen, and /api/version needs no
+          session. Renders nothing until it has something to say. */}
+      <VersionBar />
     <AuthGate>
       <InviteGate>
         {/* SetupGate: the bootstrap-claimed admin's first-run wizard (models + transcription,
@@ -193,5 +276,6 @@ export function App() {
         </SetupGate>
       </InviteGate>
     </AuthGate>
+    </>
   );
 }

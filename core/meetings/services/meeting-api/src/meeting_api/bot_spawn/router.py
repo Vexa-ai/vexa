@@ -25,19 +25,25 @@ from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
 )
-from .env_flags import env_flag
+from .env_flags import InvalidFlagValue, resolve_spawn_flag
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
     MaxBotsExceeded,
     MeetingRepo,
+    MeetingStopped,
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
     TranscriptionNotConfigured,
 )
 from .invocation import SPAWNABLE_PLATFORMS
-from .service import DuplicateMeeting, construct_meeting_url, request_bot
+from .service import (
+    DuplicateMeeting,
+    construct_meeting_url,
+    request_bot,
+    resolve_teams_base_host,
+)
 
 #: Max length of a native meeting id, mirroring the `meetings.platform_specific_id`
 #: varchar(255) column. Bounded at the request boundary so an over-long id is a typed
@@ -53,47 +59,52 @@ NATIVE_MEETING_ID_MAX_LEN = 255
 #: short ids, and Jitsi rooms all exclude `? # & = /` and whitespace (see collector.meeting_link).
 NATIVE_MEETING_ID_URL_CHARS = "?#&=/"
 
+#: Top-level body keys that MEAN "passcode" but are not the api.v1 field. A caller who reaches for
+#: one of these is asking for a credential to be used; accepting the request and ignoring the key
+#: hands them a bot that joins nothing and a 201 that says it worked — the failure mode a hosted
+#: integrator reported after spending hours on it (#892 A2). Named and refused, with the real
+#: field in the message.
+#:
+#: Deliberately a NAMED FAMILY rather than a blanket unknown-key guard. The api.v1 ``POST /bots``
+#: request body is OPEN by contract (no ``additionalProperties: false``; ``continue_meeting`` and
+#: ``teams_base_host`` both ride on it), so refusing every undeclared key would be a contract
+#: break that 422s working integrations — including the ones this refusal exists to protect. The
+#: silent-drop class this closes is the one where the DROPPED FIELD IS A CREDENTIAL.
+PASSCODE_ALIASES = (
+    "password",
+    "meeting_password",
+    "meetingPassword",
+    "meeting_passcode",
+    "meetingPasscode",
+    "passCode",
+    "pass_code",
+    "pwd",
+)
+
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
-    """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
-    (default ``true``), so a dashboard bot records by default. The request value is type-validated —
-    a bool is honored, a string is parsed (``"true"``/``"false"`` etc.), and any other type is a 422
-    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``).
+    """Recording default for POST /bots: the HTTP skin over the shared ``resolve_spawn_flag`` —
+    an explicit request value wins, else the ``RECORDING_ENABLED`` env (default ``true``), so a
+    dashboard bot records by default. An unparseable value is a 422, never a silent ``bool()``
+    coercion (which would turn the string ``"false"`` into ``True``).
 
-    The env is read through ``env_flag``, so a set-but-empty ``RECORDING_ENABLED=`` keeps the
-    default instead of resolving False (see env_flags — the v0.12.5 witness bug)."""
-    if value is None:
-        return env_flag("RECORDING_ENABLED", True)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("true", "1", "yes", "on"):
-            return True
-        if v in ("false", "0", "no", "off", ""):
-            return False
-    raise HTTPException(status_code=422, detail="recording_enabled must be a boolean")
+    The resolution itself lives in ``env_flags`` so the auto-join sweep resolves IDENTICALLY
+    (#1216): calendar-joined bots record exactly like manual ones."""
+    try:
+        return resolve_spawn_flag("RECORDING_ENABLED", value, default=True,
+                                  field="recording_enabled")
+    except InvalidFlagValue as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
-    """Transcription default: an explicit request value wins; else the ``TRANSCRIBE_ENABLED`` env
-    (default ``true``). Type-validated like ``recording_enabled`` (CC3) — a bare ``bool(...)`` turned the
-    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable.
-
-    The env is read through ``env_flag``: a set-but-empty ``TRANSCRIBE_ENABLED=`` kept the default
-    OFF and shipped capture-only bots to every Lite self-host (the v0.12.5 witness bug)."""
-    if value is None:
-        return env_flag("TRANSCRIBE_ENABLED", True)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("true", "1", "yes", "on"):
-            return True
-        if v in ("false", "0", "no", "off", ""):
-            return False
-    raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
+    """Transcription default for POST /bots — same shared resolver, same 422 skin (CC3)."""
+    try:
+        return resolve_spawn_flag("TRANSCRIBE_ENABLED", value, default=True,
+                                  field="transcribe_enabled")
+    except InvalidFlagValue as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _resolve_automatic_leave(value: Optional[object]) -> dict:
@@ -102,8 +113,10 @@ def _resolve_automatic_leave(value: Optional[object]) -> dict:
     Admission keeps its deployment default. The active-phase silence timeout is omitted when the
     caller does not set it, allowing the bot module's configurable ten-minute default to apply.
     """
+    from .service import lobby_budget_ms
+
     if value is None:
-        return {"waitingRoomTimeout": 600_000}
+        return {"waitingRoomTimeout": lobby_budget_ms()}
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="automatic_leave must be an object")
 
@@ -125,7 +138,7 @@ def _resolve_automatic_leave(value: Optional[object]) -> dict:
             raise HTTPException(status_code=422, detail=f"automatic_leave.{primary} must be a positive integer")
         return raw
 
-    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or 600_000
+    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or lobby_budget_ms()
     resolved = {"waitingRoomTimeout": waiting_room}
     no_one_joined = timeout("no_one_joined_timeout")
     everyone_left = timeout("max_time_left_alone", "everyone_left_timeout")
@@ -242,8 +255,14 @@ def build_router(
 ) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
 
-    ``transcript_stream_purge`` (redis-backed in prod, None offline) clears a fresh meeting's transcript
-    stream so it never inherits a reused row id's stale data — see ``request_bot``."""
+    NO ``fetch_bot_context`` HERE, on purpose. The person's default bot name is still resolved by
+    the domain that owns the bot, on every path a bot is spawned (founder ruling, 2026-09-02 — no
+    fourth store) — but ``request_bot`` ALREADY fetches that person's whole spawn context, on this
+    same request, to resolve the transcription backend and the capture-signal decision. A
+    router-level fetcher made `POST /bots` ask identity for the same body TWICE, with two different
+    timeouts (10s here, 5s there), for one string: up to +15s on a path a person is waiting on,
+    while each fetcher's comment claimed to be the only one. The name now comes out of the context
+    the service already has (``service._bot_name_from_context``)."""
     router = APIRouter()
 
     @router.post("/bots", status_code=201)
@@ -251,6 +270,9 @@ def build_router(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
         x_user_limits: Optional[str] = Header(default=None),
+        # The caller's workspace memberships, injected by the gateway from identity. Read ONLY to
+        # authorize an explicit `workspace_id` in the body against real membership.
+        x_user_workspaces: Optional[str] = Header(default=None),
         x_user_webhook_url: Optional[str] = Header(default=None),
         x_user_webhook_secret: Optional[str] = Header(default=None),
         x_user_webhook_events: Optional[str] = Header(default=None),
@@ -274,6 +296,24 @@ def build_router(
         if not isinstance(body, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
 
+        # A passcode sent under a name we do not read is a credential DROPPED — refuse before any
+        # DB, runtime or network work, and name the field that works. Only a NON-EMPTY alias is
+        # refused: a caller whose client emits `"password": null` for an unset field asked for
+        # nothing, and 422-ing them would break working integrations over an absent value.
+        supplied_aliases = [
+            k for k in PASSCODE_ALIASES
+            if isinstance(body.get(k), str) and body.get(k).strip()
+        ]
+        if supplied_aliases:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{', '.join(repr(a) for a in supplied_aliases)} is not a recognized field and "
+                    "the meeting passcode it carries would be ignored — send the passcode as "
+                    "'passcode', or supply the full 'meeting_url' with the passcode in its query"
+                ),
+            )
+
         platform = str(body.get("platform", "")).strip()
         native_meeting_id = str(body.get("native_meeting_id", "")).strip()
         meeting_url = body.get("meeting_url")
@@ -282,6 +322,25 @@ def build_router(
         if meeting_url is not None:
             meeting_url = _validate_meeting_url(meeting_url)
         passcode = body.get("passcode")
+        # api.v1's `teams_base_host` — WHICH Teams web client a constructed URL is built on. The
+        # MCP link parser fills it from the link it parsed (gov./dod. clouds, teams.live.com for
+        # personal meetings); without it every constructed URL lands on the world-wide host, so a
+        # GCC-High caller's bot browses to a meeting that is not theirs. The bot navigates this
+        # host, so an unrecognized one is a typed 422 here, never a passthrough (same SSRF rule
+        # `_validate_meeting_url` applies to the URL path).
+        teams_base_host = body.get("teams_base_host")
+        if teams_base_host is not None:
+            if not isinstance(teams_base_host, str):
+                raise HTTPException(status_code=422, detail="teams_base_host must be a string")
+            if resolve_teams_base_host(teams_base_host) is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"teams_base_host '{teams_base_host}' is not a Teams web client host — "
+                        "use teams.microsoft.com, teams.live.com, gov.teams.microsoft.us or "
+                        "dod.teams.microsoft.us"
+                    ),
+                )
         # api.v1 promise: a meeting_url provided WITHOUT native_meeting_id is parsed to extract
         # platform, native_meeting_id, and passcode (collector.meeting_link — the same parser the
         # planned-meeting routes use). An underivable URL is a typed 422, NEVER a persisted ''
@@ -391,6 +450,34 @@ def build_router(
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
 
+        # THE NAME THIS PERSON'S BOT SHOWS UP AS — an explicit name on THIS request, and nothing
+        # else here. `request_bot` fills in this person's default from identity out of the bot
+        # context it already fetches (one hop, three readers: transcription backend, capture-signal
+        # decision, bot name), and the deployment default underneath that. A FAILED LOOKUP NEVER
+        # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
+        bot_name = body.get("bot_name")
+
+        # WHICH WORKSPACE THIS MEETING BELONGS TO. Optional and additive: a caller that sends nothing
+        # gets exactly the meeting it got before — its own, visible to itself alone.
+        #
+        # The caller's OWN membership is what makes this safe to accept from a request body. The
+        # gateway resolves the api key to an identity and injects `x-user-workspaces` from that
+        # identity's memberships; the body cannot forge that header. So a `workspace_id` the caller
+        # does not belong to is REFUSED here rather than persisted — without the check, anyone with an
+        # api key could publish a meeting into a workspace they are not in, and every member of it
+        # would find a stranger's call in their list, on their meeting page and in its live
+        # transcript, since `data.workspace_id` is exactly what those surfaces trust.
+        workspace_id = body.get("workspace_id")
+        if workspace_id is not None:
+            if not isinstance(workspace_id, str) or not workspace_id.strip():
+                raise HTTPException(
+                    status_code=422, detail="'workspace_id' must be a non-empty string")
+            workspace_id = workspace_id.strip()
+            member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+            if workspace_id not in member_of:
+                raise HTTPException(
+                    status_code=403, detail=f"not a member of workspace '{workspace_id}'")
+
         try:
             meeting = await request_bot(
                 repo,
@@ -399,9 +486,10 @@ def build_router(
                 user_id=user_id,
                 platform=platform,
                 native_meeting_id=native_meeting_id,
-                bot_name=body.get("bot_name"),
+                bot_name=bot_name,
                 passcode=passcode,
                 meeting_url=meeting_url,
+                teams_base_host=teams_base_host,
                 language=body.get("language"),
                 task=body.get("task"),
                 transcription_tier=body.get("transcription_tier", "realtime"),
@@ -412,6 +500,7 @@ def build_router(
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
                 continue_meeting=bool(body.get("continue_meeting", False)),
+                workspace_id=workspace_id,
                 max_concurrent=max_concurrent,
                 webhook_url=x_user_webhook_url,
                 webhook_secret=x_user_webhook_secret,
@@ -429,12 +518,22 @@ def build_router(
             # refused naming the conflicting meeting (per-identity serialization, #725).
             raise HTTPException(status_code=409, detail=str(e))
         except ServiceAuthorityDenied as e:
+            # `code` and `reason` are for a program to branch on; `message` and `action_url` are
+            # for whoever has to DO something about it. This service authors neither of the second
+            # pair — it carries what the deciding service said, so a deployment can change what it
+            # tells people without an OSS release, and a deployment that says nothing is unchanged
+            # (both fields OMITTED, never null).
+            #
+            # `reason` is passed through WHATEVER it says. There is no allow-list here and there
+            # must not be one: a reason this build has never heard of still reaches the caller
+            # intact, because the alternative is a refusal that no surface can explain.
             raise HTTPException(
                 status_code=403,
                 detail={
                     "code": "service_not_allowed",
                     "reason": e.reason,
                     "decision_id": e.decision_id,
+                    **e.caller_fields(),
                 },
             )
         except ServiceAuthorityUnavailable:
@@ -445,6 +544,11 @@ def build_router(
                     "reason": "service_authority_unavailable",
                 },
             )
+        except MeetingStopped as e:
+            # The user's stop wins over this spawn — either it raced the workload creation, or the
+            # request asked to CONTINUE a stopped meeting. 409 (conflicting state), not 5xx: nothing
+            # is broken, and the detail names the request that works.
+            raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:

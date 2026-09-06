@@ -36,7 +36,7 @@ export interface MixedAudioOptions {
 
 export async function createMixedAudioCapture(
   stream: MediaStream,
-  onPcm: (pcm: Float32Array) => void,
+  onPcm: (pcm: Float32Array, tsMs?: number) => void,
   opts: MixedAudioOptions = {},
 ): Promise<MixedAudioCapture> {
   const SR = opts.sampleRate ?? 16000;
@@ -47,11 +47,21 @@ export async function createMixedAudioCapture(
   const ctx = new AudioContext({ sampleRate: SR });
   const source = ctx.createMediaStreamSource(stream);
   const proc = ctx.createScriptProcessor(4096, 1, 1);
+  // Accumulated-audio-time clock: stamp each frame with the wall-clock of the AUDIO it holds
+  // (anchor + samples-so-far / rate), NOT Date.now() at callback time. The ScriptProcessor fires a
+  // buffer-length (~256ms) AFTER the audio was captured, and that latency + event-loop jitter is
+  // exactly what pushed frames out of the speaker-hint binder's match window (misattribution). Count
+  // ALL processed samples — silent frames included — so the clock never drifts from real time. It's
+  // the same page clock the active-speaker hints carry, so the binder can align them.
+  const startMs = Date.now();
+  let processedSamples = 0;
   proc.onaudioprocess = (e: AudioProcessingEvent) => {
     const input = e.inputBuffer.getChannelData(0);
+    const tsMs = startMs + (processedSamples / SR) * 1000;   // wall-clock of this frame's first sample
+    processedSamples += input.length;
     let maxVal = 0;
     for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
-    if (maxVal > SILENCE) onPcm(new Float32Array(input));   // copy — the buffer is reused
+    if (maxVal > SILENCE) onPcm(new Float32Array(input), tsMs);   // copy — the buffer is reused
   };
   source.connect(proc);
   proc.connect(ctx.destination);                           // pull the processor (outputs silence)

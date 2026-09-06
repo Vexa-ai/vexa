@@ -1,0 +1,114 @@
+---
+title: "Agent web search"
+description: "How to give agent turns WebSearch and WebFetch: you supply the search endpoint, Vexa speaks to it. One opt-in compose profile runs a SearXNG for you."
+---
+
+Agent turns can read the open web with two tools:
+
+| Tool | What it does | Needs a backend? |
+|---|---|---|
+| `WebFetch` | GET one `http(s)` page, return its readable text | No — always available |
+| `WebSearch` | Query a search endpoint, return `[{title, url, snippet}]` | **Yes — you supply it** |
+
+<Note>
+These are built-ins of the `openai-agent` harness (`VEXA_RUNNER=openai-agent` — the loop Vexa runs
+against a model you host yourself). The `claude-code` and `codex` runners bring their own web tools.
+</Note>
+
+## The backend is yours
+
+Vexa speaks a small adapter to **any endpoint of the right shape** — one you already run, one you
+already pay for, or the SearXNG the `search` compose profile starts for you. The whole interface is
+two environment variables, and no search code is built into Vexa.
+
+The [Brave Search API](https://brave.com/search/api/) is a hosted option that needs no server of your
+own. Nothing is required: leave the variables empty and agent turns simply have no `WebSearch`.
+
+## Configure it
+
+Set these in `deploy/compose/.env` (they are forwarded from the runtime into every spawned worker):
+
+```bash
+# Any endpoint answering GET /search?q=…&format=json with {"results":[{title,url,content}]}
+VEXA_SEARCH_URL=http://searxng:8080
+VEXA_SEARCH_DIALECT=searxng      # default when unset
+VEXA_SEARCH_API_KEY=             # searxng needs none
+```
+
+```bash
+# Brave Search API
+VEXA_SEARCH_URL=https://api.search.brave.com
+VEXA_SEARCH_DIALECT=brave
+VEXA_SEARCH_API_KEY=<your Brave subscription token>
+```
+
+`VEXA_SEARCH_URL` may be a bare origin (each dialect appends its own path) or a full URL.
+
+**With `VEXA_SEARCH_URL` unset, `WebSearch` is not attached to the turn at all** — it is absent from
+the model's tool list rather than present and always failing, because a tool that fails every time
+teaches the model to stop reaching for it.
+
+## Running the bundled-by-profile SearXNG
+
+If you would rather not stand one up yourself, compose ships a SearXNG service behind an opt-in
+profile:
+
+```bash
+docker compose --profile search up -d searxng
+```
+
+Then point the harness at it (in `deploy/compose/.env`):
+
+```bash
+VEXA_SEARCH_URL=http://searxng:8080
+VEXA_SEARCH_DIALECT=searxng
+```
+
+<Note>
+**[SearXNG](https://github.com/searxng/searxng) is AGPL-3.0 and is not part of Vexa.** The profile
+pins an unmodified upstream image that **you** pull from SearXNG's own registry and run as a separate
+service beside the stack — it is never bundled into a `vexaai/*` image, so no AGPL obligation
+attaches to Vexa's Apache-2.0 artifacts; it rests with the upstream image you run. Declared as a
+sidecar in `image-licenses.json`, the same disposition as MinIO. Nothing starts unless you ask for
+the profile by name.
+</Note>
+
+Its settings live at `deploy/compose/searxng/settings.yml` — read-only in the container, and yours to
+edit. Two lines there are load-bearing: `search.formats` includes `json` (SearXNG's JSON output is
+**off by default** and the endpoint answers `403` without it), and `server.limiter: false` (the bot
+detection refuses the JSON format for a non-browser client, which is exactly what the harness is).
+The secret key comes from `SEARXNG_SECRET` in the environment — SearXNG does not expand `${...}`
+inside that file. Set `SEARXNG_HOST_PORT` to change the loopback publish port.
+
+**Kubernetes operators run their own.** There is no chart component for this, deliberately: the Helm
+chart deploys Vexa, and the search endpoint is a thing you point it at.
+
+### If you run SearXNG yourself
+
+Same two settings, in your own `settings.yml`:
+
+```yaml
+server:
+  limiter: false
+search:
+  formats:
+    - html
+    - json
+```
+
+## What `WebFetch` refuses
+
+A URL the model chose is an outbound destination picked by something that is not the operator, so
+`WebFetch`:
+
+- follows `http` and `https` only;
+- re-checks **every redirect hop**, not just the URL it was given;
+- refuses any host that resolves into loopback, link-local (cloud metadata), private or reserved
+  address space, and refuses bare single-label names (`redis`, `admin-api`) outright;
+- caps the response body and the request at 15 seconds.
+
+The one exemption is the host in your own `VEXA_SEARCH_URL` — you named it, and the search tool
+already talks to it.
+
+Both tools count against the turn's tool-call budget (`VEXA_AGENT_MAX_TOOL_CALLS`) and their results
+are trimmed to the turn's context budget like any other tool result.

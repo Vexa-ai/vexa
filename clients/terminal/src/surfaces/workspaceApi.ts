@@ -25,6 +25,29 @@ export async function readWorkspaceFile(path: string, opts?: { slug?: string }):
   }
 }
 
+/** WHAT THE PERSON'S DESK IS — `new` (nothing has ever been written there) · `pile` (meeting
+ *  reports landed and nobody wired anything) · `warm` (entities exist; somebody has worked here).
+ *  The server's own three words (`control_plane/scaffolds.desk_state`), read off the FILES. */
+export type DeskState = "new" | "pile" | "warm";
+
+export interface DeskFacts {
+  state: DeskState;
+  /** the `.scaffolded` marker a finished personal setup leaves. A positive fact only — see
+   *  `minutes/proposals.needsSetup` for why its ABSENCE says nothing. */
+  scaffolded: boolean;
+}
+
+/** GET /api/workspace/desk. `null` when the read failed — the caller must fail closed on it. */
+export async function readDeskFacts(): Promise<DeskFacts | null> {
+  try {
+    const d = await getJson<{ state?: string; scaffolded?: boolean }>(`/api/workspace/desk`);
+    const state = (d.state === "warm" || d.state === "pile" || d.state === "new") ? d.state : "warm";
+    return { state, scaffolded: d.scaffolded === true };
+  } catch {
+    return null;
+  }
+}
+
 /** Materialize the user's workspace from the seed template — POST /api/workspace/init (idempotent: an
  *  existing workspace is returned untouched, `seeded:false`). `seeded` is true only on first creation. */
 export async function initWorkspace(): Promise<{ workspace: string; seeded: boolean; already_initialized: boolean }> {
@@ -75,6 +98,57 @@ export interface ActiveSet { subject: string; active: ActiveMount[] }
  *  ones in `slots`, which are AVAILABLE to activate). The private baseline is first and always present. */
 export async function readActiveSet(): Promise<ActiveSet> {
   return getJson(`/api/workspace/active`);
+}
+
+// ── workspace identity + link resolution (PRD decision 26) ──────────────────────────────────────
+/** What a workspace IS, addressed by its immutable id. `access` is this reader's, not a property of
+ *  the workspace: `not-yours` and `gone` come back 200, because they are answers and not errors. */
+export interface WorkspaceIdentity {
+  id: string; name: string | null; kind: string | null; slug?: string | null;
+  access: "readable" | "not-yours" | "gone";
+  /** may this reader WRITE here — the other half of the desk's shape ("readable by everyone,
+   *  writable by one", `workspace_ids.writable_for`). Reported beside `access` rather than folded
+   *  into it because they are two answers, and a client that cannot tell them apart either hides an
+   *  editor a person may use or offers one that will 403. Optional so a pre-upgrade agent-api parses. */
+  writable?: boolean;
+}
+
+/** Resolve a workspace id → what it is now, for this reader. */
+export async function readWorkspaceById(id: string): Promise<WorkspaceIdentity> {
+  return getJson(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+/** Resolve a workspace SLUG → its identity, which is where its display NAME lives.
+ *  The whole of F49: the chat header printed `126`, a directory name showing through. */
+export async function readWorkspaceBySlug(slug: string): Promise<WorkspaceIdentity> {
+  return getJson(`/api/workspaces/by-slug/${encodeURIComponent(slug)}`);
+}
+
+export interface ResolvedLinkRow {
+  ref: string; title: string; url: string | null;
+  access: "readable" | "not-yours" | "gone";
+  workspace?: string | null; path?: string; slug?: string; missing?: boolean;
+}
+
+/** A page's worth of link refs → what each points at NOW. One round trip per document: the panel
+ *  renders a doc at once, and a request per link is a burst against the same three directories. */
+export async function resolveLinks(refs: string[], slug?: string): Promise<ResolvedLinkRow[]> {
+  const data = await getJson<{ results?: ResolvedLinkRow[] }>(`/api/links/resolve`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(slug ? { refs, slug } : { refs }),
+  });
+  return data.results ?? [];
+}
+
+/** Report that this reader OPENED one page — the ranking signal behind the desk README (founder,
+ *  2026-09-02: it is "mostly links to the other cards in different workspaces", and a list of links
+ *  is only useful if the ones they use are at the top). 202: the caller has nothing to do with the
+ *  answer, and a panel must never wait on bookkeeping to render a document. */
+export async function touchDeskPage(workspace: string, path: string): Promise<{ recorded: boolean }> {
+  return getJson(`/api/desk/touch`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace, path }),
+  });
 }
 
 // ── sharing (Lane M/Lane A): create a shared workspace, mint/redeem invites ──────────────────────
@@ -177,6 +251,20 @@ export async function unshareWorkspace(workspaceId: string): Promise<{ slug: str
   return getJson(`/api/workspace/${encodeURIComponent(workspaceId)}/unshare`, { method: "POST" });
 }
 
+/** POINT A CHAT'S WRITES at one of its workspaces (Vexa-ai/vexa#1611) — the header chip's click.
+ *
+ *  `workspace: ""` is the person's own desk, which is the default rather than a second name for it.
+ *  The AGENT does not come through here: when the person says *"work in the OeNB workspace"* it
+ *  calls `workspace_target`, whose result becomes a `focus` event agent-api reads on the way past.
+ *  One field, one writer per side, and the two halves of "where does this chat write" cannot
+ *  disagree about a chat neither of them saw last. */
+export async function setChatTarget(session: string, workspace: string): Promise<{ session: string; target: string | null; changed: boolean }> {
+  return getJson(`/api/chat/target`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session, workspace }),
+  });
+}
+
 /** Switch a shared workspace ON (mount) or OFF (hide) in your active set — membership is unchanged. */
 export async function setSharedActive(workspace_id: string, active: boolean): Promise<{ workspace_id: string; active: boolean }> {
   return getJson(`/api/workspace/shared/${encodeURIComponent(workspace_id)}/active`, {
@@ -258,6 +346,36 @@ export async function renameWorkspace(slug: string, name: string): Promise<Attac
   });
 }
 
+// ── assets: the pictures a page carries (Vexa-ai/vexa#1612) ──────────────────────────────────────
+// A page's image is a FILE IN THE WORKSPACE, served by the same scoped door the page came through.
+// Never a hotlink: a document in a customer's workspace must not send that customer's browser to a
+// third party, and an image that lives somewhere else stops existing without telling us.
+
+// (the `src` an <img> points at is built in ui-kit/docImages.tsx — a pure URL template, kept beside
+//  the renderer that needs it synchronously rather than reached for through this module's async API)
+
+export interface StoredAsset { path: string; bytes: number; source: string; content_type: string }
+
+/** FETCH a remote image into the workspace — what the external-image placeholder offers. The SERVER
+ *  fetches: it is the only party that can (CORS aside, the bytes have to land in the workspace) and
+ *  the only one whose outbound traffic we can reason about. */
+export async function fetchWorkspaceAsset(url: string, opts?: { path?: string; slug?: string }): Promise<StoredAsset> {
+  return getJson(`/api/workspace/asset`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url, path: opts?.path, slug: opts?.slug }),
+  });
+}
+
+/** STORE a file the person dropped, pasted or attached — same directory, same index, same shape of
+ *  reference as the one the agent fetches. */
+export async function uploadWorkspaceAsset(file: File, opts?: { path?: string; slug?: string }): Promise<StoredAsset> {
+  const form = new FormData();
+  form.append("file", file, file.name || "upload");
+  if (opts?.path) form.append("path", opts.path);
+  if (opts?.slug) form.append("slug", opts.slug);
+  return getJson(`/api/workspace/asset`, { method: "PUT", body: form });
+}
+
 /** List a workspace's files. `slug` (Lane A) targets a SHARED workspace the caller is a member of;
  *  omitted → the caller's own (primary) workspace. */
 export async function listWorkspaceTree(opts?: { hidden?: boolean; slug?: string }): Promise<string[]> {
@@ -332,7 +450,11 @@ export async function writeWorkspacePurpose(purpose: string, opts?: { slug?: str
  *  contributor = a read/write member (the single member rank). `subject` is the synthetic user id;
  *  `email` is their verified email when known (stamped at grant / on first manage-panel view) — the
  *  human label the roster prefers over the opaque subject. */
-export interface WorkspaceMember { subject: string; role: string; email?: string; added_by?: string; added_at?: string }
+/** A member of a shared workspace. `name` is what they are CALLED — their own `self: true`
+ *  person page, else the company directory (`control_plane/front_page.person_name`,
+ *  Vexa-ai/vexa#1634). Absent when nobody has written them down: the front page then counts
+ *  them in "and 2 more" rather than rendering their address as a name. */
+export interface WorkspaceMember { subject: string; role: string; name?: string | null; email?: string; added_by?: string; added_at?: string }
 export async function listWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
   const data = await getJson<{ members?: WorkspaceMember[] }>(`/api/workspace/members?workspace_id=${encodeURIComponent(workspaceId)}`);
   return data.members ?? [];
@@ -362,6 +484,98 @@ export async function revokeWorkspaceInvite(workspaceId: string, inviteId: strin
   return getJson(`/api/workspace/invites/${encodeURIComponent(inviteId)}?workspace_id=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
 }
 
+export interface WorkspaceHistory { slug: string; branch: string; path: string | null; limit: number; commits: GitCommit[] }
+/** A WORKSPACE'S RECENT COMMITS, optionally filtered to one page — what the workspace README's
+ *  history section reads (Vexa-ai/vexa#1623).
+ *
+ *  `readWorkspaceGit` above answers a different question (what is going on here right now: branch,
+ *  uncommitted changes, last eight commits) and this one answers *how did this page get here*, which
+ *  needs a pathspec and a caller-set limit. Both are scoped by the server's `_read_target`, the same
+ *  call the file read uses — so there is no page whose history is readable and whose text is not.
+ *
+ *  `slug` is a PATH segment here, not a query parameter, so the desk needs a word: `personal`, which
+ *  is what `workspace_attach.PERSONAL_ALIAS` and the panel's own breadcrumb already call it. */
+/** One changed page, named the way a person names it (`front_page.page_title`: its `title:`, else
+ *  its first heading, else its own file name read aloud). */
+export interface ChangedPage { path: string; title: string }
+
+/** THE LAST CHANGE, AS A SENTENCE NEEDS IT (Vexa-ai/vexa#1634).
+ *
+ *  `author` is a NAME or `null` — never an address, and the route is where that is enforced.
+ *  `pages` are the pages a person is shown that this commit touched, so a turn-commit whose subject
+ *  reads `MISSING.md, OBJECTIVES.md +13` still answers with what it actually changed. */
+export interface LastChange {
+  sha: string;
+  msg: string;
+  when: string;
+  ts?: number;
+  kind?: "you" | "member" | "system";
+  author: string | null;
+  pages: ChangedPage[];
+  count: number;
+  files?: string[];
+}
+
+/** `GET /api/workspaces/{slug}/git/last-change` — the newest commit that changed a page, described.
+ *
+ *  Not a second history read: the newest commit's SUBJECT names the file its turn was about while
+ *  the commit touches several, and its AUTHOR is the principal a mount commits as (`%an` = the
+ *  subject id). So the route answers with the changed pages' own titles and the author's own name,
+ *  resolved on the server against the files — the two facts a git log does not carry and a client
+ *  cannot compose. `change: null` is an ordinary answer: nobody has committed here yet. */
+export interface LastChangeAnswer { slug: string; path: string | null; change: LastChange | null }
+export async function readLastChange(slug: string, opts?: { path?: string }): Promise<LastChangeAnswer> {
+  const qs = opts?.path ? `?path=${encodeURIComponent(opts.path)}` : "";
+  return getJson<LastChangeAnswer>(`/api/workspaces/${encodeURIComponent(slug)}/git/last-change${qs}`);
+}
+
+/** WHO THE READER IS, by name — `GET /api/people/me`. Since Vexa-ai/vexa#1642 the server resolves
+ *  it from the reader's own ADDRESS (their desk's person page, the company directory, the people
+ *  record, the identity note, and finally the address read as a name), so `null` means there was
+ *  genuinely nothing to read rather than that the wrong key was used. An address is still never put
+ *  in a name's place. */
+export interface MyPerson { subject: string; name: string | null; first_name: string | null }
+export async function readMyPerson(): Promise<MyPerson> {
+  return getJson<MyPerson>(`/api/people/me`);
+}
+
+/** WHO WRITES THE COMPANY LAYER, by name — `GET /api/people/admin` (Vexa-ai/vexa#1642).
+ *
+ *  The first line of `_global` reads *everyone at <company> reads it, <first name> writes it*, and
+ *  it was reading *the admin* because the only name the panel had was the READER's. The layer's own
+ *  history is the record of who writes it (`_global/STRUCTURE.md`: every acceptance is a commit
+ *  authored by the administrator who made it), and the route resolves that person the same way
+ *  every other name on this page is resolved. Both fields are null when the answer would be a
+ *  guess — the clause is then dropped, never filled with the role word. No address on the wire. */
+export interface InstanceAdmin { name: string | null; first_name: string | null }
+export async function readInstanceAdmin(): Promise<InstanceAdmin> {
+  return getJson<InstanceAdmin>(`/api/people/admin`);
+}
+
+export async function readWorkspaceHistory(slug: string, opts?: { path?: string; limit?: number }): Promise<WorkspaceHistory> {
+  const qs = new URLSearchParams();
+  if (opts?.path) qs.set("path", opts.path);
+  if (opts?.limit) qs.set("limit", String(opts.limit));
+  const q = qs.toString();
+  const url = `/api/workspaces/${encodeURIComponent(slug)}/git/history`;
+  const h = await getJson<WorkspaceHistory>(`${url}${q ? `?${q}` : ""}`);
+  // A 200 with the wrong shape is still a failure — the panel shows the error rather than rendering
+  // an empty history that reads as "nothing ever happened here" (the GitSection lesson, one route on).
+  if (!h || !Array.isArray(h.commits)) throw new ApiError(200, "malformed history (missing commits)", url);
+  return h;
+}
+
+export interface DetachResult { detached: boolean; remote: string | null; url: string | null; detail?: string }
+/** DETACH a workspace from its GitHub home — the inverse of *Attach existing repo…*. It removes the
+ *  remote and nothing else: no file changes, no commit, no deletion, so the tree the person is
+ *  reading is exactly where they left it. Refused for a shared workspace this caller only reads. */
+export async function detachWorkspaceRemote(opts?: { slug?: string }): Promise<DetachResult> {
+  return getJson(`/api/workspace/git-remote-detach`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: opts?.slug ?? null }),
+  });
+}
+
 export interface GitDiff { sha: string; path?: string; diff: string; truncated?: boolean }
 /** Unified diff of a single commit (optionally one file) — for highlighting exactly what changed.
  *  `slug` targets a shared workspace the caller is a member of; omitted → the caller's own primary. */
@@ -370,4 +584,94 @@ export async function readWorkspaceGitDiff(opts: { sha: string; slug?: string; p
   if (opts.slug) qs.set("slug", opts.slug);
   if (opts.path) qs.set("path", opts.path);
   return getJson<GitDiff>(`/api/workspace/git/show?${qs.toString()}`);
+}
+
+// ── LOADING AN EXISTING REPO ("we already have our workspace on GitHub") ───────────────────────────
+//
+// Two lanes, one mechanic. A person's own desk swaps through `swapWorkspace` above; a GROUP workspace
+// goes through the routes below. They are separate routes only because the AUTHORIZATION differs — a
+// desk belongs to its subject, a group belongs to a member list, and replacing a group's tree is a
+// write, so the server refuses a viewer with 403.
+//
+// The credential model is deliberately NOT "paste a token". The primary path is a per-workspace
+// ed25519 DEPLOY KEY whose private half never leaves the server: we hand out our PUBLIC half, the
+// person adds it to THEIR repository, and nothing of theirs travels to us. The saved PAT
+// (`getGitToken`/`setGitToken`) stays as the fallback for `https://` remotes.
+
+/** What the server actually did — and `state` is the whole answer, in the server's own vocabulary:
+ *  `cloned` (fetched from the remote), `restored` (a copy was already here, swapped back to with no
+ *  re-clone) or `already attached` (nothing changed). `parked` names the tree set aside, which is what
+ *  makes the swap reversible. Callers must repeat these three back rather than collapsing them into
+ *  "done": a person deciding whether their data is where they think it is needs them told apart. */
+export interface SharedAttachResult {
+  workspace_id: string;
+  active: string;
+  repo: string | null;
+  ref: string | null;
+  attached: boolean;
+  cloned: boolean;
+  parked: string | null;
+  nested: boolean;
+  state: "cloned" | "restored" | "already attached";
+}
+
+/** A shared workspace's attachment view — what is mounted, what is parked and available to swap back
+ *  to, and where its GitHub home is. `credential` is a CAPABILITY line ("origin https://…, deploy key
+ *  set") — whether a credential exists and of what kind, NEVER its value; it is safe to render. */
+export interface SharedAttached {
+  workspace_id: string;
+  active: string | null;
+  slots: Record<string, WorkspaceSlot>;
+  home: { remote: string | null; url: string | null; branch: string | null; ahead: number; behind: number };
+  credential: string;
+}
+
+/** A workspace's deploy key, PUBLIC half only. `add_at` is GitHub's deploy-keys settings URL for the
+ *  repo and is null when no repo was named — surfaces must not invent one. `add_as` · `then` · `message`
+ *  are the server's own composed instruction; the GET (state-only) shape carries just `add_as`. */
+export interface DeployKey {
+  slug: string;
+  public_key: string | null;
+  fingerprint: string | null;
+  add_at?: string | null;
+  add_as: string;
+  then?: string;
+  message?: string;
+}
+
+/** Attach an existing git repo as a SHARED workspace's tree (contributor or owner — a viewer gets 403).
+ *  Park-and-clone like the desk swap: the current tree is kept and can be swapped back to by `slug` with
+ *  no re-clone. `token` is a one-off used server-side for this clone only and never stored (P15) — the
+ *  normal credential is the workspace's deploy key, which needs nothing passed here. */
+export async function attachSharedWorkspace(
+  workspaceId: string,
+  opts: { repo?: string; ref?: string; slug?: string; token?: string },
+): Promise<SharedAttachResult> {
+  return getJson(`/api/workspace/shared/${encodeURIComponent(workspaceId)}/attach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: opts.repo ?? null, ref: opts.ref ?? null, slug: opts.slug ?? null, token: opts.token ?? null }),
+  });
+}
+
+/** Read a shared workspace's attachment view. Any member may — it says WHAT is mounted, never a secret. */
+export async function readSharedAttached(workspaceId: string): Promise<SharedAttached> {
+  return getJson(`/api/workspace/shared/${encodeURIComponent(workspaceId)}/attached`);
+}
+
+/** Generate-or-return this workspace's deploy key and say where to add it. IDEMPOTENT by design: a
+ *  second call returns the SAME key, so a key the person already pasted into their repo is never
+ *  invalidated by clicking twice. Pass `repo` to get the exact GitHub settings URL back in `add_at`. */
+export async function ensureDeployKey(slug: string, repo?: string): Promise<DeployKey> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}/deploy-key`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: repo ?? null }),
+  });
+}
+
+/** This workspace's public deploy key, or `public_key: null` when none has been generated. A pure read:
+ *  it never creates one, so a surface can show the state before the person commits to anything. */
+export async function readDeployKey(slug: string): Promise<DeployKey> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}/deploy-key`);
 }

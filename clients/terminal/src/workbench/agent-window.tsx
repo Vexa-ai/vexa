@@ -17,9 +17,20 @@ export interface Op { icon: string; label: string; status: OpStatus; file?: stri
  *  can tick an elapsed-seconds counter. Rendered as a verbose status line so the pane never looks frozen. */
 export type TurnPhase = "connecting" | "working" | "reconnecting" | "stalled";
 export interface TurnStatus { phase: TurnPhase; since: number }
+/** THE TURN RAN OUT OF BUDGET (Vexa-ai/vexa#1622) — the harness's own words for how far it got, and
+ *  the act it offers. `line` is `done.reason` ("stopped at the tool-call budget after 40 of 40
+ *  steps"); `act` is present only when there is something to continue.
+ *
+ *  A FIELD, not prose appended to `t.text`, which is what F89 did. Text cannot carry a button, and a
+ *  turn that stops silently is exactly the failure this replaces — the founder re-typed the same
+ *  instruction into three dead turns because the chat showed a finished one each time. */
+export interface TurnStopped { line: string; act?: { label: string; instruction: string } }
 export type Turn =
   | { id: string; role: "user"; text: string }
-  | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null }
+  | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null;
+      /** the SERVER's step count for this turn (Vexa-ai/vexa#1622). Absent on a deployment one
+       *  release behind, where the op line falls back to counting what this browser saw. */
+      steps?: number; stopped?: TurnStopped }
   | { id: string; role: "insight"; t?: string; text: string };
 
 const PHASE_LABEL: Record<TurnPhase, string> = {
@@ -36,11 +47,15 @@ function StatusLine({ status }: { status: TurnStatus }) {
   useEffect(() => { const t = setInterval(() => force((n) => n + 1), 1000); return () => clearInterval(t); }, []);
   const secs = Math.max(0, Math.floor((Date.now() - status.since) / 1000));
   const alert = status.phase === "reconnecting" || status.phase === "stalled";
+  // F66 (5): a turn can genuinely think for a long time. Past 30s of one phase the line says so in
+  // words — a spinner alone reads as hung, and "still working" is the difference between a product
+  // that is slow and a product that is broken.
+  const quiet = !alert && secs >= 30;
   const color = alert ? "var(--accent)" : "var(--t3)";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 12, color, fontFamily: "var(--mono)" }}>
       <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />
-      <span>{PHASE_LABEL[status.phase]}{secs >= 2 ? ` · ${secs}s` : ""}{alert ? "" : "…"}</span>
+      <span data-turn-status>{quiet ? "still working" : PHASE_LABEL[status.phase]}{secs >= 2 ? ` · ${secs}s` : ""}{alert ? "" : "…"}</span>
     </div>
   );
 }
@@ -82,8 +97,35 @@ function FileChip({ path }: { path: string }) {
   );
 }
 
+// ── the act a stopped turn offers — one control, in the bubble it belongs to (Vexa-ai/vexa#1622) ──
+function StoppedLine({ stopped, onContinue }: { stopped: TurnStopped; onContinue?: () => void }) {
+  return (
+    <div style={{ marginTop: 9, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+      <span style={{ fontSize: 11, color: "var(--t2)", fontFamily: "var(--mono)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "3px 8px" }}>
+        <Icon name="zap" size={12} style={{ color: "var(--accent)" }} />{stopped.line}
+      </span>
+      {stopped.act && onContinue && (
+        <button
+          data-continue-act
+          onClick={onContinue}
+          title={stopped.act.instruction}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          {stopped.act.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── the conversation: a timeline of user bubbles · agent turns (ops + text) · insights ──
-export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
+export function Conversation({ turns, busy, empty, onContinue }: {
+  turns: Turn[]; busy?: boolean; empty?: ReactNode;
+  /** WHERE THE CONTINUE PRESS GOES (Vexa-ai/vexa#1622). Passed in rather than dispatched from here:
+   *  the shell owns the act the stopped turn was running, and a same-target act needs that intent —
+   *  this component knows a turn, not a target. Absent = no control is drawn, so a surface that
+   *  cannot resubmit never shows a button that would do nothing. */
+  onContinue?: (turn: Extract<Turn, { role: "agent" }>) => void;
+}) {
   const bubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
   if (turns.length === 0 && empty) return <>{empty}</>;
   return (
@@ -111,9 +153,19 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
               // must not grow the transcript vertically (founder ruling 2026-08-22).
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px 5px" }}>
                 <OpRow op={t.ops[t.ops.length - 1]} />
-                {t.ops.length > 1 && (
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>· {t.ops.length} steps</span>
-                )}
+                {/* F66: the count ticks from the FIRST step. It used to appear only at two, so the
+                    one number that proves a long turn is moving was hidden exactly when the reader
+                    starts looking for it.
+                    …and the SERVER's count wins once it arrives (Vexa-ai/vexa#1622): this browser
+                    counts the `tool-call` events IT saw, which is one event short of the truth on
+                    any turn it attached to mid-flight, and the settled number is the one the budget
+                    was measured against. */}
+                {(() => {
+                  const n = typeof t.steps === "number" ? t.steps : t.ops.length;
+                  return <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>
+                    · {n} step{n === 1 ? "" : "s"}
+                  </span>;
+                })()}
               </div>
             )}
             {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>
@@ -144,6 +196,7 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
                 <Icon name="x" size={12} />{t.rejected}
               </div>
             )}
+            {t.stopped && <StoppedLine stopped={t.stopped} onContinue={onContinue && (() => onContinue(t))} />}
           </div>
         );
       })}

@@ -28,7 +28,7 @@ from typing import Protocol
 
 import yaml
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitenv import pinned_git_env, scrubbed_git_env
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
 
@@ -56,12 +56,17 @@ def parse_entity(text: str) -> tuple[dict, str]:
 
 # ── git helpers ──────────────────────────────────────────────────────────────
 
-def _git(cwd: Path, *args: str, token: str | None = None) -> str:
+def _git(cwd: Path, *args: str, token: str | None = None, url: str | None = None) -> str:
     """Run a git command in ``cwd``; return trimmed stdout. ``token`` (if given) is passed via env
     for the duration of the call only and is NEVER placed on the argv (which can leak via ps).
     Always runs on a scrubbed env — a hook-exported GIT_DIR must never re-point the workspace op
-    at the hook's repo (see shared/gitenv.py)."""
-    env = scrubbed_git_env(GIT_ASKPASS="true") if token is not None else scrubbed_git_env()
+    at the hook's repo (see shared/gitenv.py).
+
+    ``url`` marks this call as a NETWORK op against that remote and pins git's transport allow-list
+    to what the URL legitimately needs, so a remote reference can never reach a transport that runs a
+    command (``ext::``) or reads this host's disk (``file://``)."""
+    overrides = {"GIT_ASKPASS": "true"} if token is not None else {}
+    env = pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides)
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -160,7 +165,8 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
         except RuntimeError:
             _git(work, "remote", "add", remote, auth_url, token=token)
         try:
-            _git(work, "push", remote, ref, token=token)
+            # The push is the network op — pin the transports to what ``remote_url`` needs.
+            _git(work, "push", remote, ref, token=token, url=remote_url)
             return _git(work, "rev-parse", "HEAD", token=token)
         finally:
             # Strip the token from the persisted remote so it can't leak to the repo/object store.
@@ -190,10 +196,11 @@ class RealGitWorkspace(WorkspacePort):
         if (self.work_dir / ".git").exists():
             _git(self.work_dir, "checkout", ref)
             return
-        # Local clone (file path or file:// URL) — derived from parent git_clone_init.
+        # Local clone (file path or file:// URL) — derived from parent git_clone_init. The transport
+        # allow-list is pinned to what this reference needs; `--` keeps a leading `-` a repository.
         subprocess.run(
-            ["git", "clone", repo_url, str(self.work_dir)],
-            capture_output=True, text=True, check=True, env=scrubbed_git_env(),
+            ["git", "clone", "--", repo_url, str(self.work_dir)],
+            capture_output=True, text=True, check=True, env=pinned_git_env(repo_url),
         )
         name, email = self._identity
         _git(self.work_dir, "config", "user.name", name)
@@ -390,6 +397,14 @@ class RedisStreamReader(StreamReader):
         # output arrived' failure was the reader giving up / the stream ending before any resume).
         last_id = resume or "$"
         waited = 0
+        # A JOB OUTLIVES ITS TURN (Vexa-ai/vexa#1584), so `turn-complete` is no longer the whole
+        # answer to "is this view finished". The turn that spawns a job completes in a second; its
+        # job keeps writing progress to this same Stream for another two minutes, and closing the
+        # view on that first `turn-complete` would drop every one of those events on the floor.
+        # So the view closes when the turn is done AND no job it watched start is still open.
+        # With no job in play both lines are dead weight and the behaviour is exactly what it was.
+        open_jobs: set[str] = set()
+        turn_done = False
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
             if not resp:
@@ -407,7 +422,19 @@ class RedisStreamReader(StreamReader):
                     yield (ev, entry_id)
                     # `turn-complete` is the worker's terminal marker — it comes AFTER `done` + `commit`,
                     # so stopping on `done` would drop the commit. Close the view only on turn-complete.
-                    if ev.get("type") == "turn-complete":
+                    kind = ev.get("type")
+                    # `job-queued` opens a job for the same reason `job-started` does
+                    # (Vexa-ai/vexa#1610): a second act on the same page now WAITS for the first
+                    # instead of being refused, so closing the view on its turn's `turn-complete`
+                    # would drop the very thing the person is waiting to see — the moment it starts,
+                    # its steps, and the line it posts when it lands.
+                    if kind in ("job-started", "job-queued") and ev.get("job_id"):
+                        open_jobs.add(str(ev["job_id"]))
+                    elif kind in ("job-done", "job-failed"):
+                        open_jobs.discard(str(ev.get("job_id") or ""))
+                    elif kind == "turn-complete":
+                        turn_done = True
+                    if turn_done and not open_jobs:
                         return
 
 
@@ -507,7 +534,7 @@ class AdminApiModelConfig:
     ``/internal/users/{id}/model-config``) over the same internal edge as the membership index.
 
     Dispatch-time seam for the Settings → Models surface: the returned
-    ``{mode, model, meeting_model, base_url, api_key}`` (all optional) overlays the deployment env
+    ``{mode, model, base_url, api_key}`` (all optional) overlays the deployment env
     defaults in ``build_unit_env``. Best-effort by contract: the caller catches failures and
     dispatches on env defaults — a down identity service must never block a turn. The ``api_key``
     is a SECRET riding one internal hop into the worker's brokered env; never log the payload."""

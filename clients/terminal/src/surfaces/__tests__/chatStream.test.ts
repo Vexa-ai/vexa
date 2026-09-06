@@ -44,7 +44,9 @@ function ev(o: Record<string, unknown>, id?: string): string {
 
 /** Collect the callback effects into a simple record for assertions. */
 function recorder() {
-  const state = { text: "", tools: [] as string[], commit: undefined as string | undefined, rejected: false, error: "", modelFailure: 0, starting: 0 };
+  const state = { text: "", tools: [] as string[], commit: undefined as string | undefined, rejected: false, error: "", modelFailure: 0, starting: 0, truncated: "",
+    stop: undefined as { steps?: number; budget?: number; act?: { label: string; instruction: string } } | undefined,
+    steps: [] as number[] };
   const cb: ChatStreamCallbacks = {
     onStarting: () => { state.starting += 1; },
     onDelta: (t) => { state.text += t; },
@@ -53,6 +55,8 @@ function recorder() {
     onRejected: () => { state.rejected = true; },
     onModelFailure: () => { state.modelFailure += 1; },
     onError: (m) => { state.error += m; },
+    onTruncated: (reason, _partial, stop) => { state.truncated = reason; state.stop = stop; },
+    onSteps: (n) => { state.steps.push(n); },
   };
   return { state, cb };
 }
@@ -202,6 +206,28 @@ describe("streamChatTurn — cold start & resume", () => {
   });
 
   it("surfaces a 4xx as terminal (a real client error — does not retry forever)", async () => {
+    // Was written with a 401 as its stand-in 4xx; a 401 now has its own vocabulary (below), so the
+    // "names the status, stops retrying" property is pinned on a status that really is about THIS
+    // request rather than about the session.
+    const fetchImpl = vi.fn().mockResolvedValueOnce({ ok: false, status: 422, body: null } as unknown as Response);
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.error).toContain("422");
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);  // 4xx is terminal — no resume loop
+  });
+
+  it("a 401 is the SESSION, not this request — and still terminal", async () => {
+    // 2026-09-01: a revoked login token used to reach the user as a status code, or (via the SSE
+    // error event, which is the path /api/chat actually takes) as the gateway's raw JSON body under
+    // a generic "something went wrong". Behaviour of the auth-vs-not split lives in
+    // src/app/__tests__/sessionExpiry.test.tsx; this pins that the resume contract is unchanged.
     const fetchImpl = vi.fn().mockResolvedValueOnce({ ok: false, status: 401, body: null } as unknown as Response);
     const { state, cb } = recorder();
 
@@ -211,9 +237,10 @@ describe("streamChatTurn — cold start & resume", () => {
       { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
     );
 
-    expect(state.error).toContain("401");
+    expect(state.error).toBe("Your session ended — sign in again.");
+    expect(state.error).not.toContain("401");
     expect(result.terminal).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);  // 4xx is terminal — no resume loop
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("stops resuming when the caller aborts", async () => {
@@ -331,5 +358,162 @@ describe("streamChatTurn — turn-accepted liveness ack", () => {
     expect(state.text).toBe("hello");
     expect(result.sawVisibleOutput).toBe(true);
     expect(result.terminal).toBe(true);
+  });
+});
+
+/** PRD decision 35 — the `terms` event: what the transcript's chips are made of.
+ *
+ *  It rides the CHAT stream and not the meeting stream on purpose (decision 18: the chips are part
+ *  of the chat's record), and it is forwarded here rather than stored, exactly like `artifact`. */
+describe("streamChatTurn — the transcript's terms", () => {
+  const terms = [{ term: "Kaar Tech", known: null }];
+
+  it("forwards a publish with its meeting and its cursor", async () => {
+    const seen: unknown[] = [];
+    const { cb } = recorder();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "terms", meeting: "41", cursor: "c9", terms }, "1-0"),
+      ev({ type: "turn-complete" }, "2-0"),
+    ]));
+    await streamChatTurn({ prompt: "x", session: "s", active: undefined },
+      { ...cb, onTerms: (t) => seen.push(t) },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([{ meeting: "41", cursor: "c9", terms }]);
+  });
+
+  it("an empty or unaddressed publish is dropped — an empty event would CLEAR the chips on screen", async () => {
+    const seen: unknown[] = [];
+    const { cb } = recorder();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "terms", meeting: "41", cursor: "c9", terms: [] }, "1-0"),
+      ev({ type: "terms", cursor: "c9", terms }, "2-0"),
+      ev({ type: "turn-complete" }, "3-0"),
+    ]));
+    await streamChatTurn({ prompt: "x", session: "s", active: undefined },
+      { ...cb, onTerms: (t) => seen.push(t) },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([]);
+  });
+
+  it("is not visible output — a silent Highlight turn produces prose for nobody", async () => {
+    const { cb } = recorder();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse([ev({ type: "terms", meeting: "41", cursor: "c9", terms }, "1-0")]))
+      .mockResolvedValueOnce(sseResponse([ev({ type: "turn-complete" }, "2-0")]));
+    const result = await streamChatTurn({ prompt: "x", session: "s", active: undefined },
+      { ...cb, onTerms: () => {} },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(result.sawVisibleOutput).toBe(false);
+  });
+
+  it("a client with no onTerms handler is not a crash — the callback is optional", async () => {
+    const { cb } = recorder();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "terms", meeting: "41", cursor: "c9", terms }, "1-0"),
+      ev({ type: "turn-complete" }, "2-0"),
+    ]));
+    const result = await streamChatTurn({ prompt: "x", session: "s", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(result.terminal).toBe(true);
+  });
+});
+
+/** F89 — `done.reason`: the harness's `turn-truncated` / `context-trimmed` events had NO consumer
+ *  anywhere, so a turn that stopped on its budget was rendered exactly like one that finished. The
+ *  reason now rides on `done`, which this reducer reads, and it is NOT reported as a model failure:
+ *  the model worked, the budget ran out, and saying "Model inference failed" sends the person
+ *  looking at the wrong thing. */
+describe("streamChatTurn — a turn that stopped early (F89)", () => {
+  it("reports done.reason through onTruncated, not as a model failure", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "message-delta", text: "half an " }),
+      ev({ type: "done", ok: false, reply: "half an answer", reason: "the turn stopped early: tool-call budget" }),
+    ]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.truncated).toContain("tool-call budget");
+    expect(state.modelFailure).toBe(0);
+    expect(result.terminal).toBe(true);
+    expect(result.sawVisibleOutput).toBe(true);
+  });
+
+  it("still reports a genuine ok=false with no reason as a model failure", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "done", ok: false, reply: "Not logged in" }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.modelFailure).toBe(1);
+    expect(state.truncated).toBe("");
+  });
+
+  // ── a budget stop carries the count and the act (Vexa-ai/vexa#1622) ──────────────────────────
+
+  it("carries the step count, the budget and the Continue act off a budget-stopped done", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "message-delta", text: "I started the workspace" }),
+      ev({ type: "done", ok: false, reply: "I started the workspace", steps: 40, budget: 40,
+           reason: "stopped at the tool-call budget after 40 of 40 steps",
+           act: { label: "Continue", instruction: "continue where you stopped" } }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "build the OeNB workspace", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.truncated).toBe("stopped at the tool-call budget after 40 of 40 steps");
+    expect(state.stop).toEqual({ steps: 40, budget: 40,
+      act: { label: "Continue", instruction: "continue where you stopped" } });
+    expect(state.steps).toEqual([40]);
+    expect(state.modelFailure).toBe(0);
+  });
+
+  it("drops a half-record act rather than drawing a button that posts nothing", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "done", ok: false, reply: "", steps: 3, budget: 3,
+           reason: "stopped at the tool-call budget after 3 of 3 steps", act: { label: "Continue" } }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.truncated).toContain("tool-call budget");
+    expect(state.stop?.act).toBeUndefined();
+  });
+
+  it("reports the server's step count off turn-complete too, on a turn that finished", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "tool-call", tool: "Read" }),
+      ev({ type: "turn-complete", steps: 12 }),
+    ]));
+    const { state, cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "go", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.steps).toEqual([12]);
+    expect(state.truncated).toBe("");
   });
 });

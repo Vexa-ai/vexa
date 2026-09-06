@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""vexa_cloud_bridge.py — the Vexa Cloud → live-meeting-copilot Integration (inbound watch → fire).
+"""vexa_cloud_bridge.py — the Vexa Cloud → live-transcript Integration (inbound watch → fire).
 
 The real-source counterpart of ``replay_transcript.py``: instead of replaying a fixture, it sends a REAL
-Vexa Cloud bot to a meeting and bridges that bot's LIVE transcript into the copilot's wire. No local bot,
+Vexa Cloud bot to a meeting and bridges that bot's LIVE transcript onto the meeting's wire. No local bot,
 no WhisperLive — Vexa Cloud runs the bot + transcription; we consume and fan in.
 
     You start a Google Meet ─▶ Vexa Cloud bot joins + transcribes  (api.cloud.vexa.ai)
                                          │  wss://api.cloud.vexa.ai/ws  (event: transcript.mutable)
                                          ▼
                                this bridge  ──XADD──▶  tc:meeting:{native_id}   (local redis)
-                                   │  POST /api/meeting/start
+                                   │  (no dispatch — PRD decision 34)
                                    ▼
                           agent-api ─▶ dispatch agent-meet-{native_id} ─▶ worker tails the stream → cards
 
-A new transcript SOURCE is config, not a new copilot — the canonical Integration primitive.
+A new transcript SOURCE is config, not a new consumer — the canonical Integration primitive.
 
     python vexa_cloud_bridge.py --meeting-url https://meet.google.com/abc-defg-hij
 
@@ -98,13 +98,6 @@ def main() -> None:
         except Exception as e:  # already-joined / race — keep consuming
             print(f"[bridge] POST /bots note: {e}", flush=True)
 
-    # 2) fire the copilot dispatch (built through the ONE make_dispatch on the control plane)
-    started = _req("POST", args.agent_api, "/api/meeting/start", {
-        "platform": platform, "native_id": native_id, "subject": args.subject,
-        "title": f"{platform} · {native_id}",
-    })
-    print(f"[bridge] copilot dispatched → {started.get('unit_id')}", flush=True)
-
     # dedup: the REST transcript restates the whole meeting each poll; emit each segment once. ASR may
     # refine a segment's text after first sight — we take the first finalized version (clean growing feed).
     seen: set[str] = set()
@@ -133,7 +126,7 @@ def main() -> None:
 
     # 3) live: poll the REST transcript and fan NEW segments onto the wire. REST is the source of truth
     # (the /ws frame shape varies and ships mutable drafts); a few seconds' latency is well inside the
-    # copilot's multi-segment beat. Bootstrap is just the first poll.
+    # consumer's multi-segment read. Bootstrap is just the first poll.
     print(f"[bridge] polling /transcripts/{platform}/{native_id} every {args.poll}s", flush=True)
     t0 = time.monotonic()
     last_seg = time.monotonic()

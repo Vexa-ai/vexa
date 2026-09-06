@@ -38,7 +38,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset recording-blob [writers: bot, meeting-api]
   data-asset userdata-blob [writers: remote-browser, bot]
 
-system agent  # copilot; owns the processed (cleaned) transcript + signals
+system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api
   contract event.v1
   contract invoke.v1
@@ -47,12 +47,9 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   contract task.v1
   contract tool.v1
   contract unit.v1
-  contract processed-notes.v1
-  contract workspace.v1
   service agent-worker
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in
-  data-asset proc-stream [writers: agent-worker]
   data-asset va-chat
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
@@ -87,6 +84,17 @@ system platform  # shared infra backing the services
   database postgres
   service minio
 
+system flows  # the reaction engine; owns the reaction row and its effect receipts
+  module flows-engine
+  module flows-defs
+  module flows-steps
+  module flows-schema
+  module flows-timeline
+  service flows-api
+  service flows-worker
+  data-asset flows-rows
+  contract flows.v1
+
 edges:
   bot -write-> segments-stream
   bot -write-> tc-mutable
@@ -97,7 +105,6 @@ edges:
   agent-api -read-> tc-stream
   gateway -read-> tc-mutable
   terminal -read-> tc-stream
-  terminal -read-> proc-stream
   terminal -read-> out-stream
   bot -write-> recording-blob
   bot -read-write-> userdata-blob  # restore session before launch (read) + write rotated session back on clean teardown (write)
@@ -112,6 +119,7 @@ edges:
   meeting-api -write-> postgres
   meeting-api -write-> minio
   meeting-api -req-> runtime  # POST /workloads spawn bot
+  meeting-api -req-> admin-api  # GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
   meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate
   agent-api -read-> segments-stream  # XREADGROUP agent_copilot (proactive watcher)
@@ -119,13 +127,12 @@ edges:
   agent-api -read-> out-stream  # SSE relay (/api/chat, /api/meeting/stream)
   agent-worker -read-> tc-stream  # copilot tails transcript
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
-  agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
-  gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
+  gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> mcp  # proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)
-  gateway -req-> admin-api  # POST /internal/validate (authz oracle)
+  gateway -req-> admin-api  # POST /internal/validate (authz oracle) plus user calendar connection CRUD
   gateway -read-> bm-status  # WS fan-out
   gateway -read-> u-meetings  # WS auto-subscribe
   gateway -read-> va-chat  # WS fan-out
@@ -137,9 +144,16 @@ edges:
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
+  flows-worker -write-> flows-rows
+  flows-api -write-> flows-rows  # the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer
+  flows-api -read-> flows-rows
+  flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
+  flows-worker -req-> gateway
+  flows-worker -req-> admin-api
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
+  flows-api, flows-worker deployed-in deploy
 
 flows:
-  live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative -> aw-proc -> terminal-reads-processed
+  live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative
   dispatch-flow: aa-runtime -> workers-deployed -> aw-unitout -> aa-unitout

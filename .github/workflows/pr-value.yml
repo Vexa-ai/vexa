@@ -64,7 +64,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
       # No COMPOSE_NO_BUILD: the stack builds FROM THIS PR's TREE — that is the point.
@@ -153,9 +153,26 @@ jobs:
           load: true
           tags: vexa-lite:dev
           cache-from: type=registry,ref=vexaai/vexa-lite:buildcache
+      # A REAL INTERNAL_API_SECRET, minted per run. Since the #1424 security hotfix every service
+      # refuses to boot on a documented placeholder — the literal is published in this repository,
+      # so it is not a secret and anyone can present it. `deploy/lite/Dockerfile.lite` still bakes
+      # `INTERNAL_API_SECRET=lite-internal-secret` as an image default, so a lite container gets the
+      # forbidden literal unless something overrides it; `docker run --env-file` does, which is what
+      # the Makefile's `up` passes this file to. Without this line all five services refuse, the
+      # front doors never come up, and the job spends 10 attempts and 12 minutes discovering it.
+      #
+      # Minted, not stored: the value must be unpredictable and it is thrown away when the job ends,
+      # so a repo secret would buy nothing and add one more thing that can be wrong. The refusal
+      # itself is deliberately untouched — a boot that accepts the placeholder is the defect.
       - name: Seed the lite .env
         if: steps.scope.outputs.hit == '1'
-        run: printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\n' > .env
+        run: |
+          {
+            echo "ADMIN_TOKEN=ci-admin-token"
+            echo "INTERNAL_API_SECRET=$(openssl rand -hex 32)"
+            echo "TRANSCRIPTION_SERVICE_URL="
+            echo "TRANSCRIPTION_SERVICE_TOKEN="
+          } > .env
       - name: Bring lite up from the PR-built image
         if: steps.scope.outputs.hit == '1'
         run: make -C deploy/lite up init-db

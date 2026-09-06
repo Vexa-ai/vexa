@@ -1,0 +1,139 @@
+"""THE WORKER'S ALLOW-LIST vs. WHAT THE ASSEMBLED EDGE ACTUALLY SERVES.
+
+ADR-0037 / PRD decision 40.5: the worker's `mcp_tools.v1.json` (`core/agent/worker/`) names the
+tools it may CALL through the one assembled MCP edge; a domain's `mcp.tools.v1.json` names the
+tools that domain PUBLISHES into that edge. The allow-list is only meaningful once every name in it
+is actually served — an allowed tool the edge does not serve is not a narrower permission, it is a
+silent 404 waiting for a worker turn to hit it.
+
+BOTH SIDES READ FROM SOURCE, never restated here: the allow-list is the shipped
+`core/agent/worker/mcp_tools.v1.json`; the served surface is the union of every domain's own
+`core/*/mcp.tools.v1.json` (the same glob `test_manifest_files.py` in the mcp package's own suite
+uses to find them) plus MCP's fourteen built-in tools, which this test does not need to name because
+none of them collide with the allow-list's own 25.
+
+TODAY THE UNION IS SMALLER THAN THE ALLOW-LIST, on purpose and by name — GAP below is that
+migration backlog, exactly as `scripts/domain-doors.allow.json` tracks the doors still open. `bind.py`
+now derives an argument's schema from a route's OpenAPI `requestBody` as well as its `parameters`
+(the assembler issue this manifest and `core/flows/mcp.tools.v1.json` shipped beside), which moved
+`flow_lifecycle`, `flows_submit` and `workspace_new` OUT of this backlog — three kinds of entry
+remain, and the note beside each says which:
+
+  * meetings tools with a real backing route this manifest never touches (`meetings_list`,
+    `bot_send`, `bot_stop`, `meeting_transcript`, `transcript_terms`, `meeting_info` are meeting-api
+    routes reached through the gateway) — another domain's manifest to write, not this one's;
+  * agent-api routes that exist but are STILL not bindable, for a narrower reason than before —
+    `workspace_write`, `entity_upsert`, `propose` each take a bare `body: dict = Body(...)`, which
+    FastAPI publishes with NO named `properties` (`{"type": "object", "additionalProperties": true}`)
+    — there is nothing there for `bind.py` to derive a schema from, unlike `workspace_new`'s
+    `WorkspaceNewBody` or flows' `FlowSubmission`, which are named pydantic models. Closing this one
+    needs those three routes moved to named body models in
+    `core/agent/control_plane/routers/workspaces.py` + `api_shared.py` first (see
+    `core/agent/mcp.tools.v1.json`'s own top-level `note`);
+  * genuinely no server home yet — `validate`, `mark_scaffolded`, `company_context` are explicitly
+    scoped OUT of `control_plane/claims.py` ("remain the rig's for now"); `vexa_overview` reads a
+    public docs URL directly; `start_onboarding` is the rig's own onboarding/mail flow; and
+    `open_page` (Vexa-ai/vexa#1586) is the rig's too, deliberately — it is the one verb that acts
+    on the person's SCREEN rather than on their data, it answers out of routes that already exist
+    (`/api/workspace/file`, the gateway's transcripts), and it is served there rather than as a
+    harness builtin because a builtin is unreachable from `claude-code`, whose tool list is the
+    CLI's own (`llm/JOBS.md` states this for `spawn_job`). One MCP verb is what makes it work on
+    both runners from one implementation. `workspace_target` (Vexa-ai/vexa#1611) is the rig's for
+    the same shape of reason and a sharper one: it changes where a CHAT writes, and the chat is not
+    something agent-api's workspace routes address at all. The record is written by the ONE writer
+    that already holds a session and a subject — the `focus` event `_binding_watch` reads on the way
+    past — so an agent-api route for it would be a second writer of one field, which is the failure
+    the seam exists to prevent. What the tool itself does is check the person may write there and
+    answer with the slug; the harness turns that answer into the event. `fetch_asset`
+    (Vexa-ai/vexa#1612) is here for the plainest reason of the three: the ROUTE it calls IS
+    agent-api's own (`POST /api/workspace/asset` — where the outbound guard and the membership
+    rules live), but that route takes a bare `body: dict = Body(...)`, so it is unbindable for
+    exactly the reason `workspace_write` and `entity_upsert` are, and it leaves this list by the
+    same fix. Its allow-list entry is not optional in the way the others are: a worker asked for a
+    picture on a page and refused this tool has one move left, and it is writing the remote URL
+    into the document. `workspace_delete` and `workspace_move` (Vexa-ai/vexa#1621) are here for the
+    plainest reason of all and deliberately NOT separately: agent-api owns their routes (`DELETE
+    /api/workspace/file`, `POST /api/workspace/move`), and they are served beside `workspace_write`
+    by the rig because they are the same act's other two halves. Manifesting a DELETE through the
+    assembled edge while its WRITE is still unbindable would split one surface across two servers,
+    which is a worse state than either whole one; they leave this list with `workspace_write`, by
+    the same fix. `workspace_invite` and `workspace_membership` (Vexa-ai/vexa#1632)
+    are the one pair here whose routes are BINDABLE today — `POST /api/workspace/invite` and
+    `POST /api/workspace/membership` take named pydantic bodies precisely so they would not join
+    the untyped-dict list on the day they shipped — and they are still here, for a different
+    reason than every name above: the membership SURFACE is the rig's. `workspace_members` reads
+    the roster there, and manifesting the two verbs at the assembled edge while the read they are
+    answered against stays rig-only would split one surface across two servers, which is the
+    argument `workspace_delete`/`workspace_move` make one sentence up. Manifesting all three
+    together is the fix, and it is a worker-capability decision rather than an assembler one —
+    this manifest's own note says exactly that about `workspace_purpose`'s set side, which is the
+    identical shape.
+
+CHECKED IN BOTH DIRECTIONS, same reason domain-doors.allow.json is: GAP shrinking without this test
+changing is a name this test forgot to stop tracking, and GAP growing without this test changing is
+a newly-allow-listed tool nobody manifested. Either one should fail here rather than be discovered
+by a worker calling a tool that is not there.
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+
+REPO = pathlib.Path(__file__).resolve().parents[3]
+ALLOWLIST_PATH = REPO / "core" / "agent" / "worker" / "mcp_tools.v1.json"
+MANIFEST_GLOBS = ["core/*/mcp.tools.v1.json", "core/*/services/*/mcp.tools.v1.json"]
+
+#: The exact migration backlog, as of the manifest this test shipped beside — see the module
+#: docstring for why each name is here rather than in a manifest.
+GAP = {
+    "meeting_transcript", "meetings_list", "bot_send", "bot_stop", "meeting_info",   # meetings domain
+    "transcript_terms",                                                             # meetings domain
+    "workspace_write", "entity_upsert", "propose",                                  # agent: untyped dict body
+    "workspace_delete", "workspace_move",                                           # agent: rig-served, with the write
+    "workspace_invite", "workspace_membership",                                     # agent: rig-served, with the roster
+    "validate", "mark_scaffolded", "company_context",                               # agent: no server home
+    "vexa_overview", "start_onboarding",                                            # agent: no server home
+    "open_page",                                                                    # rig: the panel verb
+    "workspace_target",                                                             # rig: the target verb
+    "fetch_asset",                                                                  # rig: the picture verb
+}
+
+
+def _allowlisted() -> set:
+    return set(json.loads(ALLOWLIST_PATH.read_text())["tools"])
+
+
+def _manifested() -> set:
+    names = set()
+    for pattern in MANIFEST_GLOBS:
+        for p in REPO.glob(pattern):
+            names |= {t["name"] for t in json.loads(p.read_text()).get("tools") or []}
+    return names
+
+
+def test_the_allowlist_and_the_manifests_actually_disagree_by_exactly_the_named_gap():
+    allowlisted, manifested = _allowlisted(), _manifested()
+    missing = allowlisted - manifested
+    assert missing == GAP, (
+        f"the worker allow-list and the published manifests moved:\n"
+        f"  newly covered (drop from GAP): {sorted(GAP - missing)}\n"
+        f"  newly uncovered (add to GAP):  {sorted(missing - GAP)}\n"
+        "Update GAP (and, for a name that is now covered, celebrate — that is the point of this "
+        "test getting smaller) rather than deleting the assertion.")
+
+
+def test_the_gap_names_only_tools_the_allowlist_actually_carries():
+    """GAP is a subset of the allow-list by construction — a stale entry here would silently stop
+    covering anything the moment the allow-list itself changed shape."""
+    assert GAP <= _allowlisted()
+
+
+def test_every_agent_bound_tool_the_manifest_declares_is_in_the_worker_allowlist():
+    """The inverse direction: nothing agent-api's own manifest serves should be a tool the worker
+    is refused. `core/agent/mcp.tools.v1.json` is the file this reads; a name only there and not in
+    the allow-list is a tool a worker cannot reach even though the edge would serve it."""
+    agent_manifest = json.loads((REPO / "core" / "agent" / "mcp.tools.v1.json").read_text())
+    agent_tool_names = {t["name"] for t in agent_manifest["tools"]}
+    assert agent_tool_names <= _allowlisted(), (
+        f"agent-api's manifest serves tools the worker's allow-list does not name: "
+        f"{sorted(agent_tool_names - _allowlisted())}")

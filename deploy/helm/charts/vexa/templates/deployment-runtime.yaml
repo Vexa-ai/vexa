@@ -20,8 +20,7 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -32,8 +31,7 @@ spec:
       {{- end }}
       containers:
         - name: runtime
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
@@ -125,6 +123,20 @@ spec:
               value: {{ .Values.runtime.tolerations | default .Values.global.tolerations | toJson | quote }}
             - name: RUNTIME_K8S_NODE_SELECTOR
               value: {{ .Values.runtime.nodeSelector | default .Values.global.nodeSelector | toJson | quote }}
+            # Per-class sizing for SPAWNED Pods (#1005). A namespace whose policy requires every
+            # container to declare CPU/memory requests AND limits rejects an unsized Pod at admission,
+            # so both shipped workload classes carry their own — sized independently, since a Chromium
+            # meeting bot and a code-harness agent worker are nothing alike. One value per dimension
+            # (runtime.v1's shape) sets BOTH the request and the limit. Empty ⇒ that class emits no
+            # resources, preserving the optional contract and the pre-#1005 unbounded spawn.
+            - name: RUNTIME_BOT_CPU
+              value: {{ .Values.runtime.workloadResources.meetingBot.cpu | default "" | quote }}
+            - name: RUNTIME_BOT_MEMORY_MB
+              value: {{ .Values.runtime.workloadResources.meetingBot.memoryMb | default "" | quote }}
+            - name: RUNTIME_AGENT_WORKER_CPU
+              value: {{ .Values.runtime.workloadResources.agentWorker.cpu | default "" | quote }}
+            - name: RUNTIME_AGENT_WORKER_MEMORY_MB
+              value: {{ .Values.runtime.workloadResources.agentWorker.memoryMb | default "" | quote }}
             {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}

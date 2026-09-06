@@ -13,7 +13,7 @@
  *
  *   tsx src/hallucination-gate.test.ts
  */
-import { hallucinationRule } from './hallucination-gate.js';
+import { hallucinationRule, teamsWindowHallucinationRule } from './hallucination-gate.js';
 import { ChunkedTranscriber, type BoundarySource } from './chunked-transcriber.js';
 import type { BoundaryEvent } from './pyannote-segmenter.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
@@ -49,6 +49,10 @@ for (const t of HALLUC) check(`suppressed: ${JSON.stringify(t)}`, hallucinationR
 for (const t of REAL) check(`kept: ${JSON.stringify(t)}`, hallucinationRule(t) === null, String(hallucinationRule(t)));
 check('repetition loop suppressed',
   hallucinationRule('thank you so much thank you so much thank you so much thank you so much') === 'repetition');
+check('pure repetition is still suppressed for a Teams growing window',
+  teamsWindowHallucinationRule('thank you so much thank you so much thank you so much thank you so much') === 'repetition');
+check('a repeated prefix cannot delete the genuine tail of a Teams growing window',
+  teamsWindowHallucinationRule('good that sounds good that sounds good that sounds good that sounds good well sorry we have been chaotic recently because it has been too busy here with bits and pieces but we are back now') === null);
 check('the gate is switchable off', (() => {
   process.env.VEXA_MIXED_HALLUCINATION_GATE = 'off';
   const r = hallucinationRule('Субтитры сделал DimaTorzok');

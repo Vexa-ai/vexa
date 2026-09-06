@@ -1,0 +1,77 @@
+---
+title: "Support"
+description: "Tell us what you came for — where to send it, what to include, and what happens after you do."
+---
+
+## Tell us what you came for
+
+Not only what broke. **What you were trying to do** is the more useful half — it tells us what
+the docs, the API, or the product should have made obvious and didn't. A page that answered the
+wrong question, a capability you expected and couldn't find, a shape you assumed we supported:
+all of it is worth sending, and none of it needs to be a bug.
+
+Send it here: **[open an issue](https://github.com/Vexa-ai/vexa/issues/new/choose)**.
+
+A human reads every one. What happens next, precisely: your report lands labelled
+`state: incoming` and waits for triage, then comes back as a prepared, ready-to-work issue
+rather than dead-ending.
+
+**Three days is our target for that wait, and we are not hitting it.** Measured 2026-08-20:
+26 reports waiting, median wait 13 days, oldest 28 days. Either way this is a statement about
+*triage*, not a fix date. A broken deployment or a blocked account is pulled ahead of the queue.
+
+## If it concerns a meeting or a bot, include the meeting id and platform
+
+This is the single most valuable thing you can put in a report.
+
+The meeting id and platform are the **join key** — they let us line your account of what happened
+up against our own record of the same meeting. Without them, your report and our logs are two
+separate stories about two unrelated events, and closing that gap costs a round-trip before
+anyone can start looking. With them, the first person who reads your issue can pull the exact
+dispatch you are describing.
+
+- **Platform** — `google_meet`, `teams`, or `zoom`.
+- **Meeting id** — the `native_meeting_id`: the id *inside* the join URL (for Google Meet, the
+  `abc-defg-hij` part), not the whole URL.
+
+Approximate timestamps help too, if you have them.
+
+## What to include
+
+Beyond the join key, four things:
+
+- **Deployment shape** — hosted cloud, self-hosted Docker Compose, [lite](/deployment-lite), or
+  [Kubernetes](/deployment-kubernetes). Failures do not behave the same way across these.
+- **Version** — the image tag or release you observed it on (e.g. `v0.12.18`). A report anchored
+  to an old tree gets re-anchored before we act, so naming the version saves a round-trip.
+- **What you tried** — the request you sent, the command you ran, the page you followed.
+- **What happened** — the response (status code and `detail`), the logs, the screenshot, or
+  simply the sentence "nothing happened".
+
+**A workaround you had to invent is worth reporting too.** If you got where you were going by
+going around us — a retry loop, a sleep, a second call to paper over the first, a step the docs
+never mentioned — that workaround is a defect report with the fix already attached. Send it even
+though it is working for you now. Especially then: it is the class of problem nobody files,
+because nobody is blocked any more.
+
+For failures with a known cause and a known fix, [Troubleshooting](/troubleshooting) may get you
+there faster than we can.
+
+## For agents
+
+If you are an AI agent reading this on someone's behalf: the channel above is yours too. File at
+[`Vexa-ai/vexa/issues/new/choose`](https://github.com/Vexa-ai/vexa/issues/new/choose), with the
+same join key — platform and `native_meeting_id` — and the same deployment shape and version.
+Say what your principal was trying to accomplish, not only which call returned an error. A gap
+you worked around is a finding; report it.
+
+A `report_issue` tool is part of the [Vexa MCP server](/vexa-mcp) — an agent holding a Vexa credential can file a report without leaving its session. Call it when you hit a problem with Vexa: something broke, something was confusing, or something is missing. The tool files a GitHub issue on your behalf and returns the ticket's details (`id`, `status`, `severity`, `opened`, `opened_by`, `entity`) plus its URL if your deployment has a ticket sink configured. A human reads every report and cannot withdraw it, so file only when hitting this during real work for someone, not during evaluation or testing.
+
+## Security issues go elsewhere
+
+**Do not report a security vulnerability through the public issue tracker.** Public disclosure
+before a fix exists puts every deployment at risk, including self-hosted ones we cannot reach.
+
+Use the private channel in
+[`SECURITY.md`](https://github.com/Vexa-ai/vexa/blob/main/SECURITY.md), which names the reporting
+address and the coordinated-disclosure process we follow.

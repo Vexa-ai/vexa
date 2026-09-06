@@ -52,6 +52,13 @@ async function run() {
     const f = await faultOf(() => client.transcribe(pcm, 'en'));
     check('401 → kind=unauthorized, non-retryable', f?.kind === 'unauthorized' && f?.retryable === false);
   }
+  // An unrelated 400 remains a non-retryable provider fault; only explicit verbose_json rejection negotiates.
+  {
+    const calls = stubFetch(400, 'unsupported audio encoding');
+    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', maxRetries: 3, retryDelayMs: 1 });
+    const f = await faultOf(() => client.transcribe(pcm, 'en'));
+    check('unrelated 400 → bad_request without format fallback', f?.kind === 'bad_request' && calls() === 1, `calls=${calls()}`);
+  }
 
   (globalThis as any).fetch = realFetch;
   if (failed) { console.error(`\n❌ stt errors: ${failed} check(s) FAILED.`); process.exit(1); }

@@ -1,13 +1,16 @@
 ---
 title: "Calendar sync"
-description: "Connect your calendar with its secret ICS address — upcoming meetings import automatically and the bot joins them at start."
+description: "Connect one or more calendars with secret ICS addresses — upcoming meetings import automatically and retain their source."
 ---
 
-Connect a calendar once and Vexa keeps your **Upcoming** meetings in sync: every calendar event
+Connect your calendars once and Vexa keeps your **Upcoming** meetings in sync: every calendar event
 with a Meet/Zoom/Teams link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
 and the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start
 time. No OAuth, no calendar permissions — it works off the **secret ICS address** your calendar
 already provides.
+
+You can connect up to **ten** calendars, each with its own auto-join policy and bot name — see the
+[Calendar API](/api/calendar) for the endpoints.
 
 ## 1. Find your secret ICS address
 
@@ -60,38 +63,186 @@ settings ("Reset" in Google Calendar) — then reconnect with the new address.
 
 ## 2. Connect it — and get an answer immediately
 
-In the Terminal's **Meetings** list, click **Connect your calendar** (under *+ Plan a meeting*; the
-calendar icon in the header opens the same panel and stays there for managing the connection).
-Paste the address and hit **Connect**.
+On hosted Vexa, the dashboard lives at **[dashboard.vexa.ai](https://dashboard.vexa.ai)** — a
+different host from `vexa.ai`, which carries the site and sign-in and has no calendar page. Sign
+in there and open **Calendar** from the sidebar. Give the connection a recognizable
+name such as **Work** or **Personal**, paste the secret address, choose whether meetings from that
+calendar should auto-join, and click **Connect**. Repeat this for each feed you want Vexa to follow
+(up to 10 active connections).
+
+Everything the dashboard does here is the [calendar API](/api/calendar) underneath, so a self-hosted
+deployment — which ships the API but not the hosted dashboard — connects feeds the same way with
+`POST /user/calendars`. The API is the complete surface; the examples are below.
+
+The same page groups **Upcoming auto-joins** by source calendar. Each calendar has its own
+**Default bot name**, used when that calendar arms an unattended join. For a meeting present in
+several calendars, the first source with auto-join enabled supplies the bot name.
 
 **Connecting runs a sync on the spot** — within seconds the panel answers with the result, not
 silence:
 
 - `✓ Synced just now — imported 3` — done; the meetings are under **Upcoming**.
-- `✓ Synced just now — no meetings with joinable links found` — the feed is fine, but no upcoming
-  event carries a Meet/Zoom/Teams link (see [what imports](#what-imports-and-what-doesnt)).
+- `✓ Synced just now — 0 imported, 0 updated` — the feed is fine and already reconciled, or it has
+  no event inside the current import window.
 - `⚠ Last sync failed: …` — the actual reason, named (see the
   [error reference](#reading-the-sync-status) below).
 
-The panel keeps showing the **last sync status**, and the **Sync now** button re-pulls the feed on
-demand — no waiting on the background cycle (default 5 minutes) after you add an event.
+Each connection keeps its own **last sync status**, **Auto-join** switch, **Sync now**, and
+**Disconnect** action — no waiting on the background cycle after you add an event or change a
+preference.
+
+### How often Vexa checks the feed
+
+- **Connect and Sync now:** run the same reconciliation immediately.
+- **Hosted calendar rollout:** polls each connected feed every **60 seconds**.
+- **Self-hosted default:** polls every **5 minutes**. Operators can change this with
+  `CALENDAR_SYNC_INTERVAL_S`.
+- **Bot scheduling:** checks due planned meetings every **30 seconds** by default. A bot becomes
+  eligible **60 seconds before** `scheduled_at` and remains eligible until **10 minutes after** it.
+
+The calendar provider controls when an edit appears in its published ICS feed, so the practical
+delay is provider publication time plus up to one Vexa polling interval. Sync now cannot make an
+edit visible before Google or Outlook has published it to the feed.
 
 Over the API:
 
-```bash Connect
-curl -X PUT "$API_BASE/user/calendar" \
+```bash Connect a named feed
+curl -X POST "$API_BASE/user/calendars" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/private-…/basic.ics"}'
+  -d '{"name":"Work","ics_url":"https://calendar.google.com/calendar/ical/…/private-…/basic.ics","auto_join":true,"bot_name":"Work Notes"}'
 ```
 
 ```bash Sync right now → the fresh result
-curl -X POST "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
-# {"last_sync":"2026-07-08T15:30:00+00:00","last_error":null,"counts":{"created":3,"updated":0,"cancelled":0}}
+curl -X POST "$API_BASE/user/calendars/$CALENDAR_ID/sync" -H "X-API-Key: $API_KEY"
+# {"calendar_id":"…","calendar_name":"Work","last_sync":"2026-07-08T15:30:00+00:00","last_error":null,"counts":{"created":3,"updated":0,"cancelled":0}}
 ```
 
 ```bash Read the last sync status
-curl "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
+curl "$API_BASE/user/calendars/$CALENDAR_ID/sync" -H "X-API-Key: $API_KEY"
 ```
+
+`GET /user/calendars` lists the masked connections. The original `/user/calendar` endpoint remains
+available for single-calendar clients and refers to the first active connection. The singular
+`/user/calendar/sync` compatibility endpoint synchronizes all active connections and returns an
+aggregate stamp. See the [Calendar API](/api/calendar) for exact schemas and statuses.
+
+Legacy single-calendar clients can still set or read the user-wide fallback bot name through the
+compatible singular preferences edge:
+
+```bash Set the default auto-join bot name
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"bot_name":"My Meeting Notes"}'
+```
+
+### Multi-calendar API reference
+
+| Operation | Endpoint | Result |
+|---|---|---|
+| List connections | `GET /user/calendars` | Named connections with masked URLs; secret feed URLs are never returned. |
+| Connect | `POST /user/calendars` | Creates one connection from `name`, `ics_url`, `auto_join`, and optional `bot_name`. |
+| Rename or configure | `PATCH /user/calendars/{calendar_id}` | Updates `name`, `ics_url`, `auto_join`, `bot_name`, or `enabled` for only that connection. |
+| Disconnect | `DELETE /user/calendars/{calendar_id}` | Removes that source without changing other connections. |
+| Read sync state | `GET /user/calendars/{calendar_id}/sync` | Returns that connection's latest sync stamp. |
+| Sync now | `POST /user/calendars/{calendar_id}/sync` | Fetches and reconciles only that connection immediately. |
+
+Imported meeting metadata includes `data.calendar_sources`, an array of source objects with the
+stable connection `id`, display `name`, provider event `uid`, source `auto_join` preference,
+per-calendar `bot_name`, and the complete event snapshot. Consumers should use the array rather
+than the single-source convenience fields when they need complete provenance.
+
+## What Vexa stores
+
+Vexa does not keep a second calendar-event database. A connected feed and an imported meeting
+have separate storage responsibilities:
+
+| Data | Durable home | Notes |
+|---|---|---|
+| Named calendar connections, secret ICS URLs, per-feed auto-join, per-feed bot name | The user's `data` JSON document in Postgres | User-facing reads mask the feed URL. The full URL crosses only the authenticated internal sync edge. |
+| Imported events | Ordinary rows in the Postgres `meetings` table | A future event is a planned meeting with `status: "scheduled"`. |
+| Event and calendar provenance | The meeting's `data` JSON document | Includes scheduling, attendees, calendar source IDs/names, and provider event UIDs. |
+| Latest sync time, error, and created/updated/cancelled counts | Redis | Operational status under the user/connection sync key; this is not the durable event authority. |
+| Bot attempts | The same meeting row plus `meeting_sessions` rows | Auto-join claims the planned meeting in place through the normal bot lifecycle. |
+| Transcript segments | Postgres `transcriptions` rows linked to the meeting | Finalized meeting output remains addressable by the meeting ID. |
+| Recording and processed post-meeting metadata | The meeting's `data` JSON document | Media objects themselves use the configured object store. |
+
+An imported meeting currently carries this calendar-specific shape (alongside its ordinary meeting
+fields):
+
+```json
+{
+  "status": "scheduled",
+  "data": {
+    "scheduled_at": "2026-08-14T15:00:00+00:00",
+    "calendar_uid": "provider-event-uid",
+    "calendar_connection_id": "calendar-uuid",
+    "calendar_name": "Work",
+    "calendar_managed": true,
+    "calendar_sources": [
+      {
+        "id": "calendar-uuid",
+        "name": "Work",
+        "uid": "provider-event-uid",
+        "auto_join": true,
+        "bot_name": "Work Notes",
+        "event": {
+          "resolved_start": "2026-08-14T15:00:00+00:00",
+          "calendar": {
+            "name": "VCALENDAR",
+            "properties": {
+              "VERSION": [{"value": "2.0"}],
+              "PRODID": [{"value": "-//Provider//Calendar//EN"}]
+            }
+          },
+          "component": {
+            "name": "VEVENT",
+            "properties": {
+              "UID": [{"value": "provider-event-uid"}],
+              "ORGANIZER": [{
+                "value": "mailto:owner@example.com",
+                "parameters": {"CN": "Owner"}
+              }],
+              "X-PROVIDER-FIELD": [{"value": "provider-value"}]
+            }
+          }
+        }
+      }
+    ],
+    "attendees": [
+      {
+        "email": "person@example.com",
+        "name": "Person",
+        "partstat": "accepted"
+      }
+    ]
+  }
+}
+```
+
+`calendar_sources` is the authoritative multi-calendar provenance. The singular
+`calendar_connection_id`, `calendar_name`, and `calendar_uid` fields are compatibility conveniences
+for the first source.
+
+### Participants and current metadata boundary
+
+ICS `ATTENDEE` entries are synchronized into `data.attendees`. Vexa preserves the normalized email,
+optional display name, and participation status (`partstat`, such as `accepted` or `tentative`) for
+ordinary people. Calendar rooms and resources are excluded from this convenience list, but remain
+present in the complete event snapshot. Attendee additions, removals, and response changes follow
+the feed while the meeting is still planned.
+
+The per-source `event` snapshot preserves every event property in its canonical iCalendar text
+representation, including every property parameter, repeated property, provider `X-` extension,
+and nested component such as `VALARM`. It also preserves the top-level `VCALENDAR` properties. For
+a moved or otherwise overridden recurring occurrence, `event.component` is the selected occurrence
+and `event.series_master` retains the RRULE master. `event.resolved_start` is the UTC occurrence Vexa
+actually scheduled.
+
+This is a JSON-safe event snapshot, not the original feed: it deliberately does not contain the
+secret ICS URL or unrelated events. Vexa normalizes the commonly queried title, start, meeting link,
+and people into ordinary meeting fields while retaining the complete source component for consumers
+that need organizer, description, location, end time, recurrence, sequence, revision, categories,
+custom provider properties, or other calendar metadata.
 
 ## Reading the sync status
 
@@ -109,28 +260,36 @@ can show:
 
 ## What imports (and what doesn't)
 
-- **Only events with a recognizable meeting link** — Meet, Zoom, or Teams, found in the event's
-  conferencing field, location, or description. Events without one (lunches, focus blocks) are
-  ignored.
+- **Events with a recognizable meeting link** — Meet, Zoom, or Teams, found in the event's
+  conferencing field, location, or description — can auto-join. Link-less events still appear as
+  planned calendar entries, but Vexa has nowhere to send a bot until a meeting link is added.
 - **One meeting per event — the next occurrence only.** A recurring series tracks its next
   upcoming occurrence; the one after imports once the current completes.
 - **Moves and cancellations follow the feed.** A rescheduled event moves its meeting; a cancelled
-  or deleted event removes it — unless the bot already joined, in which case sync never touches it.
+  or deleted event removes it. Title, start time, meeting link, and attendee changes are also
+  reconciled while the row remains planned. Once the bot lifecycle claims the meeting (requested,
+  active, completed, or failed), calendar sync never rewrites that live or historical record.
 - **Your manual plans are respected.** If you already planned a meeting on the same link, the
   calendar event links up with it instead of creating a duplicate — your title and workspace
   binding win.
+- **One meeting can have several sources.** If Work and Personal contain the same native meeting,
+  Vexa keeps one meeting and records both named calendar sources. The meeting detail page shows
+  them under **Imported from**.
 
 ## Auto-join for imported meetings
 
-The calendar panel has one global switch — **Auto-join imported meetings** (default on). It sets
-the default for every meeting the sync creates; you can still flip auto-join per meeting in its
-prep view. Turn the global switch off if you want the calendar only to *populate* Upcoming while
-you send the bot by hand.
+Every calendar connection has its own **Auto-join** switch and **Default bot name**. A meeting
+shared by multiple connected feeds auto-joins when at least one source has auto-join enabled; the
+first auto-joining source in stable source order supplies its bot name. You can still override
+auto-join per meeting in its prep view. Connections created without an explicit bot name default
+to the legacy user-wide setting, then `Vexa`.
 
 ## Disconnect
 
-Calendar icon → **Disconnect** (or `PUT /user/calendar` with `{"ics_url": null}`). Already-imported
-meetings stay; they just stop following the feed.
+On **Calendar**, choose **Disconnect** for the exact named feed. Meetings that also belong to
+another calendar keep that source and remain. A future planned meeting owned only by the removed
+calendar is cleaned up; a manual plan that the calendar had adopted remains. Other connections
+and their credentials are untouched.
 
 ## It's not syncing?
 

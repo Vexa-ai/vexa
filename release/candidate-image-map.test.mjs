@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,9 @@ import test from "node:test";
 import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
+  FLOWS_IMAGE,
+  CURRENT_REQUIRED_IMAGES,
+  requiredImagesFor,
   BUILD_MATRIX_BY_IMAGE,
   RUNTIME_INPUTS_BY_IMAGE,
   assertNoRuntimeInputDrift,
@@ -57,6 +61,95 @@ function validMap() {
 
 test("accepts the exact candidate set", () => {
   assert.equal(validateCandidateMap(validMap(), "v0.12.18").release, "v0.12.18");
+});
+
+test("v0.12.23 bootstrap packet freezes build identity without claiming validation", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.23/candidate-images.bootstrap.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "a993d466d3aa083dafde3e882375b70d1e1c95120af5f2dc542c856c8e80039f",
+  );
+  const map = JSON.parse(raw);
+  assert.equal(map.packet_state, "bootstrap");
+  assert.equal(map.release, "v0.12.23");
+  assert.equal(map.stable_tag, "v0.12.23");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.10");
+  assert.equal(map.validation_source, undefined);
+  assert.equal(map.validation_run, undefined);
+  assert.equal(Object.keys(map.images).length, 10);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    19,
+  );
+});
+
+test("v0.12.23 canonical packet freezes the rc.21 train candidate", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.23/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.21");
+  assert.equal(map.build_source, "2dec308224155586f24906a7a4d6241ff18392cb");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/32185449851",
+  );
+  assert.equal(
+    map.validation_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/32188980106",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:2bd879c61cb24f3e20d698ded475f565ebfb4f07f2bf842d1ebf0299e9814314",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-lite"].digest,
+    "sha256:bb382b2031c4040c3121c421580d3af7d9c6a94581079d30b01d2622586df524",
+  );
+  assert.equal(Object.keys(map.images).length, 10);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    19,
+  );
+});
+
+test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () => {
+  const ten = validMap();
+  assert.equal(requiredImagesFor(ten).length, 10);
+  assert.throws(() => validateCandidateMap({ ...ten, schema_version: 2 }), /image set mismatch/);
+  const eleven = validMap();
+  eleven.schema_version = 2;
+  eleven.images[FLOWS_IMAGE] = {
+    ...eleven.images["vexaai/v012-mcp"],
+    digest: "sha256:" + "f".repeat(64),
+  };
+  const map = validateCandidateMap(eleven, eleven.release);
+  assert.equal(requiredImagesFor(map).length, 11);
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(map.images[FLOWS_IMAGE].class, "oss_only");
+  assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 1 }), /image set mismatch/);
+  const plan = candidateBuildPlan(null);
+  assert.equal(plan.mode, "full");
+  assert.equal(plan.changed_images.length, 11);
+  assert.deepEqual(plan.build_matrix.find((row) => row.name === "flows"), {
+    name: "flows",
+    repository: "v012-flows",
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
+    use_registry_cache: true,
+  });
 });
 
 test("refuses a missing image", () => {
@@ -145,6 +238,7 @@ test("a root .dockerignore-only change invalidates every affected candidate", (t
     "vexaai/v012-agent-worker: .dockerignore",
     "vexaai/v012-agent-api: .dockerignore",
     "vexaai/v012-meeting-api: .dockerignore",
+    "vexaai/v012-gateway: .dockerignore",
     "vexaai/vexa-bot: .dockerignore",
   ]);
 });
@@ -172,7 +266,7 @@ test("the replacement build plan is bounded to Bot and Lite", () => {
 test("release-images consumes the planner's dynamic matrix instead of a literal fan-out", () => {
   assert.deepEqual(
     Object.keys(BUILD_MATRIX_BY_IMAGE),
-    REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot"),
+    CURRENT_REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot"),
   );
   const workflow = readFileSync(
     new URL("../.github/workflows/release-images.yml", import.meta.url),
@@ -198,6 +292,11 @@ test("release-images consumes the planner's dynamic matrix instead of a literal 
     workflow,
     /node release\/dockerhub-tag-audit\.mjs[\s\S]*--target "\$VERSION"/,
   );
+  assert.match(
+    workflow,
+    /RELEASE="v\$\{VERSION#v\}"[\s\S]*RELEASE="\$\{RELEASE%%-\*\}"[\s\S]*--arg release "\$RELEASE"/,
+  );
+  assert.doesNotMatch(workflow, /--arg release "v0\.12\.18"/);
   assert.doesNotMatch(
     workflow.match(/outputs:[\s\S]*?steps:\n/)?.[0] ?? "",
     /changed_images/,
@@ -219,11 +318,11 @@ test("a partial build cannot silently widen beyond the validated Bot+Lite path",
   );
 });
 
-test("a release with no prior candidate map retains the full ten-image plan", () => {
+test("a release with no prior candidate map retains the full current (eleven-image) plan", () => {
   const plan = candidateBuildPlan(null);
   assert.equal(plan.mode, "full");
-  assert.equal(plan.changed_images.length, REQUIRED_IMAGES.length);
-  assert.equal(plan.build_matrix.length, REQUIRED_IMAGES.length - 1);
+  assert.equal(plan.changed_images.length, CURRENT_REQUIRED_IMAGES.length);
+  assert.equal(plan.build_matrix.length, CURRENT_REQUIRED_IMAGES.length - 1);
   assert.ok(plan.build_matrix.every(({ use_registry_cache }) => use_registry_cache));
   assert.equal(plan.build_bot, true);
   assert.equal(plan.base_candidate_tag, null);
@@ -234,5 +333,69 @@ test("refuses any runtime-input drift", () => {
   assert.throws(
     () => assertNoRuntimeInputDrift(["core/runtime/src/runtime_kernel/api.py"]),
     /new candidate|runtime image inputs differ/,
+  );
+});
+
+test("v0.12.25 canonical packet binds the rc.1 train candidate", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.25/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "d9d0cdd13623cb1a9b3772adff271b2b1b0aa457c11a7286cfb13655d813b289",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.25");
+  assert.equal(map.candidate_tag, "v0.12.25-rc.1");
+  assert.equal(map.build_source, "dedb017355aa5a2827b6c910b87d91c730b33963");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/33303578205",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:65f6904b98abb110f591c5082f12319955723e2a6e2c777f26aac9709548f00a",
+  );
+});
+
+test("v0.12.26 canonical packet binds the rc.1 train candidate", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.26/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "91e5d99e0b1c801902a2da3b7f4f5b4f78a23339a30ca87311cee81f4639477f",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.26");
+  assert.equal(map.candidate_tag, "v0.12.26-rc.1");
+  assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:d0d0444e04932a911866b8e9c4e6629a7830339bafb0c76117186479f62cbffa");
+});
+
+test("v0.13.0 canonical packet binds the alpha.3 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.13.0/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "274e2e6a2dfae70fc00fe7c99eb44af29864d7a07bc69ed25b4f73e0f4c8dae8",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.13.0");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.13.0-alpha.3");
+  assert.equal(map.build_source, "a549fef5e9664299e385e585f3b3cbf907888e6f");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/34053444728",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:d3a80ff329f94b2ac58ce0e92af53fb0324ddddd5539f319ae06aa935c76d337",
+  );
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
   );
 });

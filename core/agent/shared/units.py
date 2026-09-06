@@ -14,8 +14,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
-RUNNER = "claude-code"
+DEFAULT_RUNNER = "claude-code"
+
+
+def deployment_runner() -> str:
+    """The deployment's default harness, resolved AT CALL TIME (F92).
+
+    This used to be a module constant frozen into ``make_dispatch``'s default argument, which is the
+    exact pattern ``control_plane/config_test.py`` documents at length as a 32-hour outage: a value
+    decided ONCE at import cannot follow the environment, so an operator who changes ``VEXA_RUNNER``
+    sees nothing happen until the container is recreated, and every test that sets the variable is
+    reading whatever the interpreter saw first. The per-subject overlay (Settings → Models) stamps
+    the runner into the worker env; this is only the floor under it."""
+    return (os.environ.get("VEXA_RUNNER") or "").strip() or DEFAULT_RUNNER
+
+# The harness names a dispatch may carry. `llm/registry.HARNESS_RUNNERS` is the AUTHORITY — it maps
+# each name to the class that implements it — but `llm/` ships only in the WORKER image: the
+# control plane cannot import it (`ModuleNotFoundError: No module named 'llm'` inside
+# vexa-dogfood-agent-api-1), and it is the control plane that has to decide whether a subject's
+# stored runner preference is a name this deployment knows.
+#
+# So the list lives here, in `shared/`, which both images carry — and `llm/tests/test_registry.py`
+# asserts the two agree exactly. That is the difference between one authority with a proven mirror
+# and two copies that drift: the mirror cannot go stale without a red test naming both files.
+RUNNERS = ("claude-code", "codex", "openai-agent")
 
 
 def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:
@@ -58,7 +82,7 @@ def make_dispatch(
     tools: list[str] | tuple[str, ...] = (),
     context: dict | None = None,
     launcher: str | None = None,
-    runner: str = RUNNER,
+    runner: str = "",
     token: str | None = None,
     principal: dict | None = None,
 ) -> dict:
@@ -68,7 +92,7 @@ def make_dispatch(
     dispatch stamps it as the git author (see dispatch.py D4)."""
     inv: dict = {
         "identity": {"subject": subject, "launcher": launcher or launcher_for(trigger, subject)},
-        "runner": runner,
+        "runner": runner or deployment_runner(),
         "workspaces": workspaces or [{"id": subject, "mode": mode_for(trigger)}],
         "trigger": trigger,
         "start": start,
@@ -107,11 +131,35 @@ def dispatch_id(inv: dict) -> str:
     if inv["trigger"] == "message":
         # One warm chat unit per (person, conversation thread), TTL-reaped; continuity = the per-session
         # file. ``session`` defaults to ``"main"`` so a dispatch with no session keeps the legacy id.
-        return f"agent-{subject}-chat-{chat_session(inv)}"
+        #
+        # …AND PER MOUNT GENERATION (Vexa-ai/vexa#1603). A worker is spawned with its mount table and
+        # keeps it for the whole warm window — the runtime's create is an idempotent TOUCH that
+        # discards the spec env — so a workspace created mid-conversation was unreachable to the
+        # agent for the rest of it: *"the new workspace isn't in my native mount stack"*. The chat's
+        # focus generation rides the id, so the turn after a create addresses a DIFFERENT warm unit
+        # and is therefore spawned, with the new stack. Nothing is stopped: the old worker finishes
+        # its background jobs and idles out on its own clock.
+        #
+        # ABSENT MEANS THE ID IT ALWAYS HAD. Generation 0 — every chat that has never made a
+        # workspace, and every session record written before the field existed — is byte-identical
+        # to the previous id, so a deploy does not re-spawn a single live conversation.
+        return chat_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
     digest = hashlib.sha1(
         f"{subject}|{inv['trigger']}|{json.dumps(inv['start'], sort_keys=True)}".encode()
     ).hexdigest()[:10]
     return f"agent-{subject}-{inv['trigger']}-{digest}"
+
+
+def chat_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm chat unit for a (person, conversation thread) — the id ``dispatch_id`` derives above.
+
+    SPELLED ONCE so a reader holding no invocation can address the same unit (Vexa-ai/vexa#1610: the
+    inbox route answers "what is still queued for this chat" and has only a subject and a session).
+    Two spellings of a unit id is the one-writer-per-fact failure with a stream on the end of it —
+    the reader would look in a topic nobody writes and honestly report an empty inbox."""
+    gen = str(mount_gen or "").strip()
+    base = f"agent-{subject}-chat-{session or DEFAULT_CHAT_SESSION}"
+    return f"{base}-g{gen}" if gen and gen != "0" else base
 
 
 def output_topic(unit_id: str) -> str:
@@ -122,3 +170,28 @@ def output_topic(unit_id: str) -> str:
 def input_topic(unit_id: str) -> str:
     """The per-dispatch input Stream — interactive messages to a live dispatch (the duplex evolution)."""
     return f"unit:{unit_id}:in"
+
+
+def unit_of_topic(topic: str) -> str:
+    """The unit id inside ``unit:<id>:in`` / ``unit:<id>:out`` — the inverse of the two above.
+
+    The worker is handed its topics and never its unit id, and it is the one process that knows how
+    far it has read. Deriving the id back out of the topic keeps that fact addressable without a new
+    environment variable for something both sides can already compute."""
+    t = str(topic or "")
+    if t.startswith("unit:") and (t.endswith(":in") or t.endswith(":out")):
+        return t[len("unit:"):t.rindex(":")]
+    return ""
+
+
+def inbox_cursor_key(unit_id: str) -> str:
+    """WHERE THE WORKER SAYS HOW FAR IT HAS READ ITS INBOX (Vexa-ai/vexa#1610).
+
+    The in-topic is the chat's inbox: everything submitted is XADD'd to it the moment it is
+    submitted, and the worker takes entries off it in order. "What is still queued" is therefore
+    exactly "the entries after this cursor", and this key is how the worker publishes it — one
+    writer (the worker, which owns the cursor), one reader (the pending route, which owns nothing).
+
+    A key rather than an event on the out-topic because it has to be answerable on a cold load, when
+    nobody is streaming anything and the answer is the first thing the chat needs."""
+    return f"unit:{unit_id}:cursor"
