@@ -30,11 +30,20 @@
  *     explain why they will not work — none. A control whose only outcome is a 403 teaches a person
  *     that the product is broken rather than that they lack the role (`AttachRepo`'s own lesson,
  *     three files over). `facts.owner` is the switch, and the server decides again on every act.
- *  2. **Every control is a confirmed act.** One click arms, a second commits, and the armed state
- *     says what will happen in words.
- *  3. **Every write is a commit or a receipt.** Membership and role changes commit into the
- *     workspace's own `policy/members.json` server-side; push, pull and detach answer with the
- *     remote and branch they touched.
+ *  2. **Every control is a confirmed act** — one click arms, a second commits, and the armed state
+ *     says what will happen in words — **except the three membership controls, which are now plain
+ *     buttons** (founder, 2026-09-06, Vexa-ai/vexa#1632). *"So we do not have to create UI here —
+ *     button to trigger the chat."* Add a member, Change role and Remove queue an act on the
+ *     workspace's chat; the agent asks for the addresses and the role in one question and confirms
+ *     in one sentence a person can answer in words. The confirmation did not disappear, it MOVED —
+ *     and arming a button that only opens a conversation would be a confirmation of the question
+ *     rather than of the act. Rule 2 is unchanged for push, pull and detach, which still fire from
+ *     here.
+ *  3. **Every write is a commit or a receipt.** Push, pull and detach answer here with the remote
+ *     and branch they touched. Membership and role changes still commit into the workspace's own
+ *     `policy/members.json` server-side — but the write now comes from the agent's own verbs
+ *     (`workspace_invite` · `workspace_membership`), so its receipt is the agent's sentence in the
+ *     chat and this panel renders none.
  *  4. **Nothing is guessed.** Every fact is nullable; a read that failed says so in its own section
  *     rather than rendering as a zero — and, since #1628, *no repo attached* is a STATE and not a
  *     failure: the red line is reserved for a read that actually broke, and it names what broke.
@@ -44,14 +53,14 @@ import {
   type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from "react";
 import { Icon } from "../ui-kit";
-import { copyText } from "../ui-kit/ContextMenu";
 import { presentError } from "../surfaces/apiClient";
 import {
-  detachWorkspaceRemote, gitRemoteStatus, mintInvite, pullWorkspace, pushWorkspace,
-  readWorkspaceGitDiff, removeWorkspaceMember, setWorkspaceMemberRole,
+  detachWorkspaceRemote, gitRemoteStatus, pullWorkspace, pushWorkspace,
+  readWorkspaceGitDiff,
   type GitCommit, type WorkspaceMember,
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
+import { postIntent } from "./extend";
 import { surface, type as ty } from "./tokens";
 import {
   DESK_SLUG, HISTORY_PAGE, kindLabel, lastChangeLine, loadHistory, loadWorkspaceFacts,
@@ -194,7 +203,6 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<string | null>(null);   // the receipt of the last act
-  const [invite, setInvite] = useState<string | null>(null);
   const [attaching, setAttaching] = useState(false);
   const strip = useRef<HTMLDivElement | null>(null);
 
@@ -204,7 +212,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
   useEffect(() => {
     let live = true;
     setFacts(null); setFailed(null); setCommits(null); setThisPage(false); setShown(HISTORY_PAGE);
-    setOpenSha(null); setArmed(null); setSaid(null); setInvite(null); setAttaching(false);
+    setOpenSha(null); setArmed(null); setSaid(null); setAttaching(false);
     setOpen(rememberedOpen(p.slug || DESK_SLUG)); setFocus(0);
     void loadWorkspaceFacts(p.slug)
       .then((f) => { if (live) setFacts(f); })
@@ -389,25 +397,22 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
                       <Icon name="user" size={12} style={{ color: "var(--t3)" }} />
                       <span style={{ ...valS, flex: "0 1 auto" }}>{m.email || m.subject}</span>
                       <span style={{ ...ty.meta, flex: "none" }}>{roleLabel(m.role)}</span>
+                      {/* THE ROW'S TWO ACTS ARE NOW QUESTIONS (Vexa-ai/vexa#1632). One press queues
+                          the act on this workspace's chat and the agent asks which role, or asks to
+                          be sure, in one sentence. The person the act is about is named from the
+                          row that was pressed — their address when the roster has one, else the
+                          subject — never inferred, because the sentence the agent says back has to
+                          be about somebody the reader can see. */}
                       {owner && m.role !== "owner" && (
                         <>
-                          <Act id={`role:${m.subject}`} label={m.role === "viewer" ? "Make contributor" : "Make reader"}
-                            sentence={`${m.email || m.subject} → ${m.role === "viewer" ? "contributor" : "reader"}`}
-                            busy={busy} armed={armed} onArm={setArmed}
-                            onRun={() => void run(async () => {
-                              const next = m.role === "viewer" ? "contributor" : "viewer";
-                              await setWorkspaceMemberRole(facts.slug, m.subject, next);
-                              const f = await loadWorkspaceFacts(p.slug); setFacts(f);
-                              return `${m.email || m.subject} is now a ${roleLabel(next)}.`;
-                            })} />
-                          <Act id={`remove:${m.subject}`} label="Remove" danger
-                            sentence={`Remove ${m.email || m.subject} from this workspace`}
-                            busy={busy} armed={armed} onArm={setArmed}
-                            onRun={() => void run(async () => {
-                              await removeWorkspaceMember(facts.slug, m.subject);
-                              const f = await loadWorkspaceFacts(p.slug); setFacts(f);
-                              return `${m.email || m.subject} was removed.`;
-                            })} />
+                          <button data-ws-act={`member-role:${m.subject}`} style={btnS}
+                            onClick={() => { postIntent({ kind: "member_role", workspace: facts.slug, member: m.email || m.subject }); }}>
+                            Change role
+                          </button>
+                          <button data-ws-act={`member-remove:${m.subject}`} style={dangerS}
+                            onClick={() => { postIntent({ kind: "member_remove", workspace: facts.slug, member: m.email || m.subject }); }}>
+                            Remove
+                          </button>
                         </>
                       )}
                     </div>
@@ -418,21 +423,19 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
                     member list is shown to contributors and owners.
                   </div>
                 )}
+              {/* ADDING A MEMBER IS A CONVERSATION (Vexa-ai/vexa#1632). This used to mint an invite
+                  link for a reader and print it here — which is how the founder met
+                  `invite role must be one of ('contributor',)` on a control that offered no role at
+                  all. It is now one press and no field: *"this add member should just ask chat to do
+                  that with mcp, asking their emails etc."* The addresses and the role are what the
+                  agent asks for, and there is nothing this page could ask that it would not ask
+                  better — the roles need a sentence each, and a select box has nowhere to put one. */}
               {owner && (
                 <div style={{ marginTop: 7 }}>
-                  <Act id="invite" label="Add a member…" sentence="Mint an invite link for a reader"
-                    busy={busy} armed={armed} onArm={setArmed}
-                    onRun={() => void run(async () => {
-                      const minted = await mintInvite({ workspace_id: facts.slug, role: "viewer", mode: "open", max_uses: 1 });
-                      setInvite(`${window.location.origin}/?invite=${encodeURIComponent(minted.token)}`);
-                      return "Invite minted — the link is shown once.";
-                    })} />
-                </div>
-              )}
-              {invite && (
-                <div data-ws-invite style={{ ...ty.mono, marginTop: 7, wordBreak: "break-all", color: "var(--t1)" }}>
-                  {invite}
-                  <button style={{ ...linkBtn, marginLeft: 8 }} onClick={() => void copyText(invite)}>copy</button>
+                  <button data-ws-act="member-add" style={btnS}
+                    onClick={() => { postIntent({ kind: "member_add", workspace: facts.slug }); }}>
+                    Add a member…
+                  </button>
                 </div>
               )}
             </div>

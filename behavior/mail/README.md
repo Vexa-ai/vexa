@@ -21,13 +21,24 @@ mails correctly before anyone has edited anything.
 Plain text. One link at most, and the step appends it — a template never writes a URL, because a
 link that a template could write is a link anyone who can edit a file can point anywhere.
 
-## The three templates
+## The four templates
 
 | file | who reads it | when |
 |---|---|---|
 | `prepare.md` | the ORGANISER, and people who are already users | before the meeting |
 | `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the shared report |
 | `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
+| `workspace-invite.md` | **a stranger** — somebody a person here named by address | when they are invited to a group |
+
+**`workspace-invite.md` is the only mail here that nothing about a meeting produced**
+(Vexa-ai/vexa#1632). A person pressed **Add a member…**, was asked for an address and a role, read
+one sentence back and said yes — so it is sent on a human's own act rather than on a fan-out, and
+no switch on this page can swallow it. It goes only to an address this deployment does not already
+know: somebody with an account here is handed the link in the chat instead, because mailing a person
+who is signed in on the other side of the same screen is a worse product. Like `attendee-head.md`
+it may be the first thing a stranger ever reads from us, so it carries the introduction; unlike it,
+it is rendered by `mailtext.render`, so `{{visibility}}` travels as a token rather than as literal
+text.
 
 **`prepare.md` never goes to a stranger and never claims a workspace was started.** Founder,
 2026-09-02, on a pre-meeting fan-out: *"I'm afraid this will not work for a 50 attendee meeting."*
@@ -72,7 +83,7 @@ step does not fill is left STANDING, not blanked — a visible `{{organizer}}` i
 report; a silently empty sentence is not — so putting a token into the wrong file ships braces to a
 customer.
 
-`prepare.md` and `minutes-head.md` (rendered by `flows_steps/mailtext.render`):
+`prepare.md`, `minutes-head.md` and `workspace-invite.md` (rendered by `flows_steps/mailtext.render`):
 
 | token | becomes |
 |---|---|
@@ -83,6 +94,8 @@ customer.
 | `{{organizer}}` | who had Vexa in the room |
 
 `prepare.md` and `minutes-head.md` also get `{{visibility}}` and `{{workspace}}` — see below.
+
+`workspace-invite.md` gets `{{company}}`, `{{service}}` and `{{visibility}}` from the renderer, plus four its own step fills: `{{inviter}}` (who asked), `{{workspace_name}}` (the group they were invited to), `{{role}}` and `{{role_sentence}}` (what that role IS, derived in `workspace_membership.ROLE_SENTENCES` from `behavior/global/POLICIES.md`'s own line). It gets none of the meeting tokens, because no meeting produced it.
 
 `attendee-head.md` (rendered by `email_attendees` in `flows_defs/production.py`):
 

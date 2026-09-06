@@ -360,6 +360,53 @@ def page_verbs_preamble() -> str:
         "Refused where you may not write: the `_system` tier always, `_global` unless you are the "
         "org admin, a shared workspace you only read. A refusal is the answer — say it, do not "
         "route around it.\n\n"
+        + member_verbs_preamble()
+    )
+
+
+def member_verbs_preamble() -> str:
+    """WHO IS IN A WORKSPACE, and the two verbs that change it (Vexa-ai/vexa#1632).
+
+    ⚠ THIS IS DELIVERABLE 4 OF THE ISSUE AND IT IS NOT DECORATION. The workspace front page no
+    longer has a membership form: the founder's ruling is *"so we do not have to create UI here —
+    button to trigger the chat"*, so its three controls queue an act and the ONLY way a member is
+    added, re-roled or removed is a turn calling one of these. The tools arrive DEFERRED
+    (`harness_subprocess_env`), so a verb the prompt does not mention is one the model must go
+    looking for before it can believe it exists — and the failure mode is the one
+    `page_verbs_preamble` was written for, one surface over: a model that does not believe a verb
+    exists does not search for it, it improvises. The nearest verb to a membership change it does not
+    hold is a WRITE, and the thing it would write is a page saying somebody was added.
+
+    Named BESIDE `workspace_write` — the issue says *"the turn's prompt naming the verbs beside
+    `workspace_write`"* — so it is appended to that preamble rather than shipped as a block of its
+    own: a person asking *"add Marvin to this workspace"* is asking about the same surface as a
+    person asking to move a page, and two separate sections would let a turn read one and not the
+    other.
+
+    THE ROLE SENTENCES ARE `workspace_membership.ROLE_SENTENCES`, and they are derived in that module
+    from `behavior/global/POLICIES.md`'s own line — *"a member reads a group; an owner or contributor
+    writes it"*. They are retyped here because the worker ships in its own image and this module is
+    prompt text rather than an importable contract; `core/agent/tests/test_membership_acts.py` pins
+    the two together so a rewrite in one cannot quietly disagree with the other."""
+    return (
+        "## Who is in a workspace\n\n"
+        "Membership is a CONVERSATION, not a page and not a form. When somebody asks you to add, "
+        "re-role or remove a person, ask for what you need in one question, confirm in one sentence, "
+        "and then call the verb:\n"
+        "- `workspace_invite(slug, email, role)` — invite one address. It mints the invite, commits "
+        "the act into the workspace with the person who asked as its author, and either mails the "
+        "link or hands it back for you to give them. Its answer says which.\n"
+        "- `workspace_membership(slug, email, role)` — change what somebody already here IS, with "
+        "`role=\"remove\"` to take them off it.\n\n"
+        "The roles are three, and say which one you mean in the confirmation: **owner** — an owner "
+        "writes this group and can add or remove its members; **contributor** — a contributor writes "
+        "this group; **reader** — a reader reads this group and does not write it.\n"
+        "Both take an EMAIL, and you never guess one: an invite minted against a guessed address is "
+        "a link mailed to a stranger, and nothing afterwards can tell you it was wrong. Ask.\n"
+        "Refused where you may not: owner-only on a shared workspace, the `_system` tier never, "
+        "`_global` only its administrator — and the company layer's editors are named in "
+        "`_global/POLICIES.md` rather than invited. A refusal is the answer; say it in its own words "
+        "and never write a page instead.\n\n"
     )
 
 

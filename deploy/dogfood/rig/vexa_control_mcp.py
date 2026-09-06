@@ -1974,6 +1974,19 @@ mcp = MCPServer(
         "fake either by overwriting a page with a note saying it went. A picture on a page "
         "is fetch_asset(url) first and `![alt](assets/<name>)` second — never a remote URL "
         "on the page.\n"
+        # WHO IS IN A GROUP, beside the verbs that change what is IN one (Vexa-ai/vexa#1632). Its own
+        # bullet rather than a clause on TEAM MEMORY: a person asking "add Marvin to this workspace"
+        # is not asking about files, and a verb buried mid-sentence about pages is a verb the model
+        # does not reach for. The founder's ruling is that this is a CONVERSATION \u2014 the front
+        # page's button queues an act and there is no form behind it \u2014 so the order is ask,
+        # confirm, act, and the instruction says so in that order.
+        "\u2022 WHO IS IN A GROUP \u2014 workspace_members(slug) lists them; "
+        "workspace_invite(slug, email, role) invites one person by address; "
+        "workspace_membership(slug, email, role) changes what they are, with role='remove' to "
+        "take them off it. Roles are owner (writes it and can add or remove members), contributor "
+        "(writes it) and reader (reads it). Ask for the address and the role in ONE question, "
+        "confirm in ONE sentence, then call the verb \u2014 and never guess an address. Owner "
+        "only; the private tier never; the company layer only its administrator.\n"
         "\u2022 A WORKSPACE THEY ALREADY KEEP ON GITHUB \u2014 workspace_attach(workspace, repo) "
         "makes that repository the workspace (whatever was there is parked, not lost), and "
         "workspace_pull/workspace_push keep the two in step. If it is private you are handed a "
@@ -2861,8 +2874,8 @@ def workspace_purpose(slug: str = "", text: str = "") -> str:
 @mcp.tool()
 @_anon_guard
 def workspace_members(slug: str) -> str:
-    """Who is in a shared workspace, and what they can do. owner writes and invites; contributor
-    writes; viewer reads."""
+    """Who is in a shared workspace, and what they can do. An owner writes this group and can add or
+    remove its members; a contributor writes it; a reader reads it and does not write it."""
     uid = me()
     # X-User-Email lets the endpoint backfill the CALLER's own label, so the roster shows a
     # person instead of a subject id. It cannot invent anyone else's — theirs fills in when they
@@ -2879,65 +2892,91 @@ def workspace_members(slug: str) -> str:
     rows = (r or {}).get("members") or []
     return json.dumps({
         "workspace": slug, "count": len(rows),
+        # `reader` is the word, and the roster says it (Vexa-ai/vexa#1632). The store spells the
+        # read-only rank `viewer`; the product has said `reader` since #1623, and a chat that reads
+        # a roster back in the store's spelling teaches a person a word the screen never uses.
         "members": [{"who": m.get("email") or f"(id {m.get('subject')})",
-                     "role": m.get("role")} for m in rows],
+                     "role": "reader" if m.get("role") == "viewer" else m.get("role")}
+                    for m in rows],
     })
 
 
 @mcp.tool()
 @_anon_guard
-def workspace_invite(slug: str, role: str = "contributor", emails: str = "",
-                     days: int = 7) -> str:
-    """Mint an invite link to a shared workspace. THE ONLY WAY SOMEONE JOINS.
+def workspace_invite(slug: str, email: str, role: str = "reader") -> str:
+    """Invite ONE person to a shared workspace, by their email address.
 
-    There is no add-a-member verb, deliberately: a person joins by redeeming an invite they
-    chose to accept. So this hands back a link for your person to send — you cannot put someone
-    in a shared space on their behalf.
+    ASK BEFORE YOU CALL THIS, AND CONFIRM IN ONE SENTENCE. *"Invite jsmith@example.com as a
+    contributor to pilot — a contributor writes this group. Yes?"* Then call it once per address.
 
-    role: contributor (writes) | viewer (reads). Never owner.
-    emails: comma-separated, to restrict the link to those addresses; omit for anyone-with-link.
-    days: how long it lives, default 7."""
+    role: **owner** — an owner writes this group and can add or remove its members; **contributor** —
+    a contributor writes this group; **reader** — a reader reads this group and does not write it.
+
+    `slug` is REQUIRED and never defaults. An omitted workspace on a write means "wherever this
+    conversation is working" and that is right for a page; on a membership change it would mean
+    putting a stranger into whichever group happened to be open.
+
+    NEVER GUESS AN ADDRESS — not from a name, not from a company's domain, not from somebody with a
+    similar name in the workspace. An invite minted against a guessed address is a link mailed to a
+    stranger and nothing afterwards can tell you it was wrong.
+
+    WHAT COMES BACK SAYS WHERE THE LINK WENT. `delivery: "mailed"` — this deployment does not know
+    that address, so the invite went to them by mail. `delivery: "link"` — they already have an
+    account here, or this deployment sends no mail: give them the `link`, in full and exactly as it
+    came. It is minted for that one address and grants nobody else anything, so a forwarded copy is
+    harmless and a truncated one is useless.
+
+    ⚠ WHAT THIS REPLACED (Vexa-ai/vexa#1632). This verb used to take `role, emails, days`, mint
+    through `POST /api/workspace/invites` and compose its own link as `<canonical>/join?i=<token>` —
+    a path this product has never served, from a base that is the MCP endpoint rather than the
+    person's terminal. Every link it ever handed out went nowhere. The route composes the link now,
+    from `VEXA_UI_URL`, which is the one place that knows where a person's terminal actually is; and
+    its docstring's *"there is no add-a-member verb, deliberately"* is exactly the sentence the
+    founder overruled: *"this add member should just ask chat to do that with mcp, asking their
+    emails etc."*"""
     uid = me()
-    if role not in ("contributor", "viewer"):
-        return json.dumps({"refused": "role is contributor or viewer",
-                           "why": "owner cannot be granted by invite"})
-    allowed = [e.strip() for e in emails.split(",") if e.strip()]
-    body = {"workspace_id": slug, "role": role,
-            "expires_in_sec": max(1, int(days)) * 86400, "max_uses": 1 if allowed else 10,
-            "mode": "restricted" if allowed else "open"}
-    if allowed:
-        body["allowed_emails"] = allowed
-    st, r = _http("POST", f"{AGENT_API}/api/workspace/invites", {"X-User-Id": uid}, body)
+    st, r = _http("POST", f"{AGENT_API}/api/workspace/invite", {"X-User-Id": uid},
+                  {"slug": slug, "email": email, "role": role})
     if st not in (200, 201):
-        return json.dumps({"error": "could not mint an invite", "status": st,
-                           "detail": str(r)[:200],
-                           "note": "only an owner or contributor of that workspace can invite"})
-    tok = (r or {}).get("token")
-    base = CANONICAL.rsplit("/mcp", 1)[0]
-    return json.dumps({
-        "invite_link": f"{base}/join?i={tok}",
-        "role": role, "expires_in_days": days,
-        "restricted_to": allowed or None,
-        "give_this_to_your_person": "Hand them the link to send. It works once per person and "
-                                    "then it is spent — treat it like a key.",
-        "never_show": "Do not paste the raw token anywhere else; the link is the whole thing.",
-    })
+        # A REFUSAL IS AN ANSWER, NOT A FAULT: not the owner, the private tier, the company layer,
+        # an address that is not one. Say what came back and stop — never fall back to the older
+        # invite route, which does not run this gate.
+        return json.dumps({"refused": "not_invited", "status": st, "workspace": slug,
+                           "why": r if isinstance(r, (str, dict)) else "invite refused",
+                           "tell_your_person": "plainly, what was refused and why — do not try "
+                                               "another way to do it."})
+    return json.dumps(r)
 
 
 @mcp.tool()
 @_anon_guard
-def workspace_remove(slug: str, member: str) -> str:
-    """Take someone out of a shared workspace. Owner only. `member` is the email or subject id
-    shown by workspace_members."""
+def workspace_membership(slug: str, email: str, role: str) -> str:
+    """Change what somebody already in a shared workspace IS, or take them off it. Owner only.
+
+    role: **owner** · **contributor** · **reader** — or **remove**, to take them out.
+
+    ONE VERB FOR ALL FOUR because it is one question with four answers: *what is this person here?*
+    Two verbs would make you choose before you had asked.
+
+    `email` is the address the roster shows (`workspace_members`). A person who is not a member yet
+    is refused — invite them first; this verb never adds anybody.
+
+    CONFIRM IN ONE SENTENCE FIRST. *"Remove jsmith@example.com from pilot? They lose access to it."*
+    A removal is reversible — they can be invited again, and everything they wrote stays in the
+    workspace's history with their name on it — so the question is one line, not a warning.
+
+    THE LAST OWNER CANNOT BE DEMOTED OR REMOVED (409). A workspace must always have one. Say that in
+    the words the refusal gives you and name the move that exists: make somebody else an owner
+    first."""
     uid = me()
-    st, r = _http("DELETE",
-                  f"{AGENT_API}/api/workspace/members/{member}?workspace_id={slug}",
-                  {"X-User-Id": uid})
-    if st not in (200, 204):
-        return json.dumps({"error": "could not remove them", "status": st,
-                           "detail": str(r)[:160], "note": "only an owner can do this"})
-    return json.dumps({"removed": member, "workspace": slug,
-                       "tell_your_person": "Done — they can no longer read or write there."})
+    st, r = _http("POST", f"{AGENT_API}/api/workspace/membership", {"X-User-Id": uid},
+                  {"slug": slug, "email": email, "role": role})
+    if st not in (200, 201):
+        return json.dumps({"refused": "not_changed", "status": st, "workspace": slug,
+                           "who": email, "why": r if isinstance(r, (str, dict)) else "invite refused",
+                           "tell_your_person": "plainly, what was refused and why — nothing "
+                                               "changed, and there is no other verb for this."})
+    return json.dumps(r)
 
 
 @mcp.tool()

@@ -13,6 +13,7 @@ from control_plane import claims as claims_mod
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
+from control_plane import membership_acts
 from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import scaffolds as scaffolds_mod
@@ -24,6 +25,7 @@ from control_plane.api_shared import (
     ArchiveBody, GitTokenBody, InviteAcceptBody, InviteCreateBody, MAX_UPLOAD_BYTES,
     RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
+    WorkspaceInviteBody, WorkspaceMembershipBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
     WorkspaceRenameBody, WorkspaceSwapBody, _upload_filename, logger)
 from control_plane.workspace_attach import (
@@ -57,6 +59,12 @@ def build(**d) -> APIRouter:
     router = APIRouter()
     _clone_fn = d['_clone_fn']
     _credential_refusal = d['_credential_refusal']
+    # THE ADDRESS → SUBJECT RESOLVER (Vexa-ai/vexa#1632). Already built for the meeting room, and
+    # the same question one door over: does this deployment know this address? Here the answer
+    # decides whether an invite link is handed back in the chat or mailed, and a resolver that
+    # cannot answer means EXTERNAL — the fail-closed direction, which mails rather than silently
+    # handing the agent a link it will tell somebody is already theirs.
+    _email_subject_lookup = d['_email_subject_lookup']
     _entity_mounts = d['_entity_mounts']
     _internal_caller = d['_internal_caller']
     _manage_dir = d['_manage_dir']
@@ -1545,6 +1553,95 @@ def build(**d) -> APIRouter:
         except MembershipError as exc:
             raise _member_error(exc)
         return rec
+    # ── THE TWO VERBS (Vexa-ai/vexa#1632) ────────────────────────────────────────────────────────
+    #
+    # The front page has no membership form any more: its three controls queue an act on the chat,
+    # the agent asks for the address and the role in one question, and then it calls one of these.
+    # Both are addressed by EMAIL, which is the whole reason they are new routes rather than a body
+    # change on the three above — those take a `member_subject`, the opaque platform id, which is
+    # exactly right for a panel holding a roster it just read and useless to an agent whose person
+    # said a name out loud.
+    #
+    # THE THINKING IS IN `control_plane/membership_acts.py`, not here. These are the door: identity,
+    # the gate's two inputs, the injected collaborators, and the refusal translation. Everything that
+    # can be wrong about an act — who may run it, what an address resolves to, whether the link is
+    # mailed or handed over — is decided there, where a test drives it with a directory and three
+    # callables instead of a running app.
+
+    def _act_commit(request: Request, subject: str):
+        """The `policy/` writer for an act, with THE PERSON WHO ASKED as the commit's author.
+
+        `_pc` (the platform writer) is what every membership route above uses and what this one
+        cannot: the issue asks for the act to be "recorded as a commit in the workspace with the
+        inviter as author", and until now every membership change in every workspace's history read
+        `vexa-platform` — so *who added this person* was answerable only by reading a JSON diff. The
+        committer stays the platform, because the platform is what physically holds the write."""
+        return membership_mod.policy_commit_as(
+            subject, request.headers.get("x-user-email") or "")
+
+    def _act_refusal(exc: "membership_acts.ActRefused"):
+        # ONE SENTENCE, THE ACT'S OWN. `_member_error` does the same job for `MembershipError` and
+        # `ActRefused` carries the identical `.status`, so this is that translation and not a second
+        # policy: the rig prints `detail` to the agent, which says it to the person.
+        return HTTPException(status_code=exc.status, detail=str(exc))
+
+    @router.post("/api/workspace/invite")
+    def ws_invite_person(request: Request, body: WorkspaceInviteBody = Body(...)):
+        """Invite ONE address to a workspace as one of `owner · contributor · reader` — the verb
+        behind `workspace_invite`.
+
+        Owner-only, and the check is the same `require_role(..., "owner")` the role and remove routes
+        run. `_system` is refused for everybody; `_global` is admin-only and then refused, because the
+        company layer's editors are a named set in `POLICIES.md` and a membership record there would
+        authorise nothing. The invite is the one `POST /api/workspace/invites` mints — same store,
+        same hash-only persistence — minted `restricted` to the named address, so a forwarded link
+        grants nobody anything.
+
+        Where the link GOES is the question this route exists to answer: an address this instance
+        already knows gets it handed back for the agent to give them in the chat they are in, and
+        every other address is published to the mail carrier. The answer says which happened."""
+        subject = subject_of(request)
+        try:
+            membership_acts.assert_may_manage(
+                wsr.root, body.slug, subject,
+                is_admin=bool(global_layer.is_admin(settings, str(subject))))
+            rec = workspace_registry.by_slug(body.slug) or {}
+            return membership_acts.invite(
+                wsr.root, body.slug, email=body.email, role=body.role, inviter=subject,
+                inviter_email=request.headers.get("x-user-email") or "",
+                workspace_name=str(rec.get("name") or ""),
+                index=mindex, ui_url=(settings.ui_url if settings is not None else ""),
+                commit_fn=_act_commit(request, subject),
+                resolve_subject=_email_subject_lookup,
+                mail=publish_mod.publish_invite)
+        except membership_acts.ActRefused as exc:
+            raise _act_refusal(exc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+
+    @router.post("/api/workspace/membership")
+    def ws_membership_set(request: Request, body: WorkspaceMembershipBody = Body(...)):
+        """Change what an address IS in a workspace, or take them off it — the verb behind
+        `workspace_membership`. `role` is one of the three, or `remove`.
+
+        Same gate as the invite above, and one verb rather than two because it is one question with
+        four answers: an agent that had to choose a verb before asking would have to guess the answer
+        first. The last-owner refusal reaches the person as itself (409) — it is about the workspace,
+        not about them, and a generic failure would leave somebody trying it again."""
+        subject = subject_of(request)
+        try:
+            membership_acts.assert_may_manage(
+                wsr.root, body.slug, subject,
+                is_admin=bool(global_layer.is_admin(settings, str(subject))))
+            return membership_acts.set_membership(
+                wsr.root, body.slug, email=body.email, role=body.role, actor=subject,
+                index=mindex, commit_fn=_act_commit(request, subject),
+                resolve_subject=_email_subject_lookup)
+        except membership_acts.ActRefused as exc:
+            raise _act_refusal(exc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+
     @router.post("/api/workspace/{workspace_id}/leave")
     def ws_member_leave(workspace_id: str, request: Request):
         """LEAVE a shared workspace — the caller removes THEMSELVES (any role; no owner gate). The

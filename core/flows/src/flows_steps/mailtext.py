@@ -130,6 +130,37 @@ DEFAULTS: dict[str, str] = {
         "\n"
         "{{visibility}}\n"
     ),
+    # THE MEMBERSHIP INVITE (Vexa-ai/vexa#1632). Sent by `production_agent.mail_workspace_invite`
+    # to an address that is EXTERNAL to this instance -- somebody with an account here is handed
+    # the link in the chat instead -- so this is the SECOND stranger-facing template, and for a
+    # person invited before they have ever met us it is the whole introduction, exactly as
+    # `attendee-head` is for an attendee. That is why it carries {{company}} and {{service}}.
+    #
+    # {{visibility}} IS HERE ON PURPOSE and is the one line beyond "who invited you, to what, as
+    # what". Accepting a membership is the moment a person starts keeping things on a desk, and
+    # this mail is the last one they read before deciding to -- which is the founder's own test
+    # for where that sentence belongs (`behavior/mail/README.md`, "the only moment at which telling
+    # them is still a choice they can act on"). It is a TOKEN, not a literal, so it stays derived
+    # from this deployment's rules and adds no fourth copy of the sentence to keep in step.
+    #
+    # NO URL, and no token that could become one: `notify.compose` appends the link as its own
+    # last paragraph, and a link a template could write is a link anyone who can edit a file can
+    # point anywhere. `{{workspace_name}}` is the DISPLAY name; `{{workspace}}` is not used here
+    # and would not mean the slug if it were -- `render` fills it with WORKSPACE_WORD above.
+    #
+    # BYTE-FOR-BYTE `behavior/mail/workspace-invite.md`, on the same terms as `attendee-head`:
+    # `test_the_baked_defaults_match_the_files_in_behavior_mail` reads both, for every template.
+    "workspace-invite": (
+        "subject: {{inviter}} invited you to {{workspace_name}}\n"
+        "---\n"
+        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "\n"
+        "{{inviter}} invited you to {{workspace_name}} as a {{role}}. {{role_sentence}}\n"
+        "\n"
+        "{{visibility}}\n"
+        "\n"
+        "The link below is yours alone — it signs you in, so please do not forward it.\n"
+    ),
 }
 
 

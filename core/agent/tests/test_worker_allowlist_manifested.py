@@ -57,7 +57,17 @@ remain, and the note beside each says which:
     by the rig because they are the same act's other two halves. Manifesting a DELETE through the
     assembled edge while its WRITE is still unbindable would split one surface across two servers,
     which is a worse state than either whole one; they leave this list with `workspace_write`, by
-    the same fix.
+    the same fix. `workspace_invite` and `workspace_membership` (Vexa-ai/vexa#1632)
+    are the one pair here whose routes are BINDABLE today — `POST /api/workspace/invite` and
+    `POST /api/workspace/membership` take named pydantic bodies precisely so they would not join
+    the untyped-dict list on the day they shipped — and they are still here, for a different
+    reason than every name above: the membership SURFACE is the rig's. `workspace_members` reads
+    the roster there, and manifesting the two verbs at the assembled edge while the read they are
+    answered against stays rig-only would split one surface across two servers, which is the
+    argument `workspace_delete`/`workspace_move` make one sentence up. Manifesting all three
+    together is the fix, and it is a worker-capability decision rather than an assembler one —
+    this manifest's own note says exactly that about `workspace_purpose`'s set side, which is the
+    identical shape.
 
 CHECKED IN BOTH DIRECTIONS, same reason domain-doors.allow.json is: GAP shrinking without this test
 changing is a name this test forgot to stop tracking, and GAP growing without this test changing is
@@ -80,6 +90,7 @@ GAP = {
     "transcript_terms",                                                             # meetings domain
     "workspace_write", "entity_upsert", "propose",                                  # agent: untyped dict body
     "workspace_delete", "workspace_move",                                           # agent: rig-served, with the write
+    "workspace_invite", "workspace_membership",                                     # agent: rig-served, with the roster
     "validate", "mark_scaffolded", "company_context",                               # agent: no server home
     "vexa_overview", "start_onboarding",                                            # agent: no server home
     "open_page",                                                                    # rig: the panel verb

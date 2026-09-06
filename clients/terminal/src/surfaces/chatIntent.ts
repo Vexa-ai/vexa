@@ -35,8 +35,13 @@ export const TERM_MAX = 120;
  *  bound is stated on the wire rather than left to whatever the input happened to accept. */
 export const INSTRUCTION_MAX = 400;
 
+/** The most a NAMED MEMBER carries (Vexa-ai/vexa#1632). An email address plus a display label, and
+ *  never a paragraph: a member act names ONE person the roster already rendered, so anything past
+ *  this is a paste rather than a name, and the roster is where the value came from. */
+export const MEMBER_MAX = 320;
+
 export type ChatIntentKind = "extend" | "create" | "explore" | "highlight" | "extend_transcript"
-  | "policies_wizard";
+  | "policies_wizard" | "member_add" | "member_role" | "member_remove";
 
 /** An act on a FILE (decision 32). Split into one interface per kind — rather than one carrying
  *  `kind: "extend" | "create"` — so the union is DISCRIMINATED all the way down and `IntentOf<K>`
@@ -146,8 +151,52 @@ export interface PoliciesWizardIntent {
   path: string;
 }
 
+/** MEMBERSHIP IS A CONVERSATION (Vexa-ai/vexa#1632) — pressed on a workspace's own front page.
+ *
+ *  Founder, 2026-09-06, after *"Add a member…"* on a group page answered him with
+ *  `invite role must be one of ('contributor',)`: *"this add member should just ask chat to do that
+ *  with mcp, asking their emails etc."* and — on what the page should carry — *"so we do not have to
+ *  create UI here — button to trigger the chat."*
+ *
+ *  A FOURTH FAMILY, and the only one that names neither a file nor a room. It names a WORKSPACE and,
+ *  where the row had one, a PERSON. There is nothing else to name: the addresses, the role, and the
+ *  yes are what the agent asks for, and asking is the whole act.
+ *
+ *  `isPageIntent` stays false, as it does for the wizard and for the same reason one issue on: a
+ *  page intent LANDS when its turn commits, and there is no page to land on here — the act opens a
+ *  conversation, and navigating away from the question would take the reader off the one screen the
+ *  answer is wanted on.
+ *
+ *  IT CARRIES NO INSTRUCTION LINE AND NO SELECTION. The agent's own question is the field. A line
+ *  typed on the button would be a second question asked before the first, and a form on the page is
+ *  precisely what the founder's ruling removes — the confirmation lives in the chat, in one
+ *  sentence, where a person can answer it in words.
+ *
+ *  `workspace` IS REQUIRED, and that is the F63 rule at its narrowest: these three acts change who
+ *  can read and write somebody's workspace, so an act that does not name which workspace is not a
+ *  near-miss to be repaired from whatever tab happened to be open — it is refused below.
+ *
+ *  SPLIT ONE INTERFACE PER KIND, like `extend`/`create` above and for the reason stated there — the
+ *  three carry identical fields, so writing them as ONE record with `kind: "member_add" | …` reads
+ *  like the tidier spelling. It is not: a member whose own `kind` is a union is not extractable by
+ *  kind, so `IntentOf<"member_add">` collapses to `never`, and the compiler cannot rule the record
+ *  out of the branch below either — `compactLabel`'s tail then reads `.path` off a type that has
+ *  none. Both symptoms were observed on the way to this shape. The union is the validation. */
+export interface MemberActFields {
+  /** the workspace slug the act is about — REQUIRED, never guessed (F63) */
+  workspace: string;
+  /** the member the row named — their email when the roster has one, else the subject.
+   *  Absent on `member_add`, which has nobody yet. */
+  member?: string;
+}
+
+export interface MemberAddIntent extends MemberActFields { kind: "member_add" }
+export interface MemberRoleIntent extends MemberActFields { kind: "member_role" }
+export interface MemberRemoveIntent extends MemberActFields { kind: "member_remove" }
+export type MemberActIntent = MemberAddIntent | MemberRoleIntent | MemberRemoveIntent;
+
 export type ChatIntent = ExtendIntent | CreateIntent | ExploreIntent | HighlightIntent | ExtendTranscriptIntent
-  | PoliciesWizardIntent;
+  | PoliciesWizardIntent | MemberActIntent;
 
 /** The intents the person must NOT see as a bubble in their conversation. Mirrors
  *  `chat_intents.SILENT_KINDS` server-side — the founder's correction on Highlight is that it is
@@ -156,6 +205,14 @@ export const SILENT_KINDS: ReadonlySet<ChatIntentKind> = new Set<ChatIntentKind>
 
 export const isPageIntent = (i: ChatIntent): i is PageIntent => i.kind === "extend" || i.kind === "create";
 export const isSilent = (i: ChatIntent): boolean => SILENT_KINDS.has(i.kind);
+
+/** The three membership acts (Vexa-ai/vexa#1632) — as a set, and as the guard every consumer uses.
+ *  `isPageIntent` one family along: the three kinds always travel together, so the places that
+ *  handle them ask one question rather than three, and the set is the one place a fourth would be
+ *  added. */
+export const MEMBER_KINDS: ReadonlySet<ChatIntentKind> =
+  new Set<ChatIntentKind>(["member_add", "member_role", "member_remove"]);
+export const isMemberIntent = (i: ChatIntent): i is MemberActIntent => MEMBER_KINDS.has(i.kind);
 
 /** The loose record a caller hands in — every field optional, because a button knows only its own. */
 export type RawIntent = {
@@ -171,6 +228,7 @@ export type RawIntent = {
   since?: string | null;
   speaker?: string | null;
   at?: string | null;
+  member?: string | null;
 };
 
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
@@ -241,6 +299,20 @@ export function normalizeIntent(raw: RawIntent): ChatIntent | null {
     if (!path || path.split("/").includes("..")) return null;
     const workspace = str(raw.workspace) || undefined;
     return { kind, ...(workspace ? { workspace } : {}), path };
+  }
+
+  if (kind === "member_add" || kind === "member_role" || kind === "member_remove") {
+    // AN ACT ON NOBODY'S WORKSPACE IS NOT AN ACT (Vexa-ai/vexa#1632). These three change who reads
+    // and writes a workspace, so the slug is the one thing that may never be inferred: refused
+    // here, exactly as a page act with no path is, rather than repaired from the open tab.
+    const workspace = str(raw.workspace);
+    if (!workspace) return null;
+    // ONE LINE, CAPPED. The roster hands this over — an email, or the subject when there is no
+    // address — and it goes into a sentence the agent says back. A pasted paragraph arriving as a
+    // "member" would be read aloud as a name, so it is bounded on the wire like every other
+    // person-shaped field here. `member_add` has nobody yet, and absent is the honest answer.
+    const member = str(raw.member).replace(/\s+/g, " ").trim().slice(0, MEMBER_MAX);
+    return { kind, workspace, ...(member ? { member } : {}) };
   }
 
   if (kind !== "extend" && kind !== "create") return null;

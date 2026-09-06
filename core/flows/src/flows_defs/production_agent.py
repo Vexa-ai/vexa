@@ -1,20 +1,29 @@
-"""THE AGENT-ONLY HALF OF THE PRODUCTION DEFINITIONS — four flows that have no meaning in a
+"""THE AGENT-ONLY HALF OF THE PRODUCTION DEFINITIONS — five flows that have no meaning in a
 deployment without the agent domain, kept in their own file so a `no-agents` cut removes them by
 deleting one module rather than by editing seven flows out of eighteen hundred lines.
 
-  meeting_prep  (v1, on meeting.upcoming)      — the "prepare?" note, one link into a prep chat
-  email_chat    (v1, on mail.reply)            — every threaded reply becomes an agent turn
-  desk_setup    (v1, on desk.unscaffolded)     — the SETUP card on somebody's desk
-  desk_claim    (v1, on claim.proposed)        — the QUESTION card, one claim awaiting a person
+  meeting_prep     (v1, on meeting.upcoming)   — the "prepare?" note, one link into a prep chat
+  email_chat       (v1, on mail.reply)         — every threaded reply becomes an agent turn
+  desk_setup       (v1, on desk.unscaffolded)  — the SETUP card on somebody's desk
+  desk_claim       (v1, on claim.proposed)     — the QUESTION card, one claim awaiting a person
+  workspace_invite (v1, on workspace.invited)  — the mail carrying a membership invite outward
 
-WHY THESE FOUR AND NOT THE OTHER THREE. `invite_intake`, `post_meeting` and `live_meeting` still
+WHY THESE FIVE AND NOT THE OTHER THREE. `invite_intake`, `post_meeting` and `live_meeting` still
 DO something where there is no agent: an invite is still accepted and a bot still joins, a meeting
 is still recorded, a live call is still a queue item. Half of `post_meeting`'s steps answer
 `agent:not_present` and the flow degrades — that is decision 40.7 working, and it is why those
-three stay in `production.py`. These four degrade to nothing. Two of them (`desk_setup`,
-`desk_claim`) react to events only agent-api publishes, so in that deployment the fact never
-arrives either; the other two would exist purely to write a queue row that says "there is no agent
-here", per subject, forever.
+three stay in `production.py`. These five degrade to nothing. Three of them (`desk_setup`,
+`desk_claim`, `workspace_invite`) react to events only agent-api publishes, so in that deployment
+the fact never arrives either; the other two would exist purely to write a queue row that says
+"there is no agent here", per subject, forever.
+
+`workspace_invite` is the newest of the five and the one whose placement is easiest to get wrong
+(Vexa-ai/vexa#1632). Its step reaches NO domain — it renders a template and posts one
+notification, which is a mailbox and nothing else — so `needs=` would be empty and the step would
+run happily in a deployment with no agents. It still belongs here, on exactly `desk_setup`'s
+stated ground: the PRODUCING domain is the agent domain, so where there is no agent-api nobody
+mints a workspace invite, `workspace.invited` is never published, and a flow registered for it
+would exist to do nothing, forever, in every such deployment.
 
 REGISTRATION IS CONDITIONAL, AND THE CONDITION IS THE ONE THAT ALREADY EXISTS.
 `production._register_agent_flows` calls this module's `build` only when
@@ -43,8 +52,15 @@ thread."""
 from __future__ import annotations
 
 import json
+import logging
 
 from flows import Block, Done, Registry, StepCtx, StepError, Wait
+
+#: THE SAME CHANNEL AS THE OTHER HALF, deliberately: `production.py` logs to `flows.production`,
+#: and these five flows are one production definition that happens to live in two files. An
+#: operator filtering on `flows.production` to see what the definitions are saying must not have
+#: to know which side of the split a step was written on.
+logger = logging.getLogger("flows.production")
 
 #: Where the claim book lives on a desk. The rig writes it through agent-api's generic file route
 #: (`deploy/dogfood/rig/vexa_control_mcp.py:3396` `propose`), which is also why `claim.proposed`
@@ -300,6 +316,111 @@ def build(reg: Registry, db, home=None) -> None:
             return Done({"claim_id": cid, "outcome": "already_answered"})
         return Block(str(claim.get("claim") or "")[:200] or "claim proposed")
 
+    # ── the membership invite's mail leg (Vexa-ai/vexa#1632) ──────────────────
+    # NO `needs=`. This step reaches no domain: it renders a template and posts ONE notification,
+    # and the notify port is a mailbox, which every profile has. It is the same shape as the other
+    # mail-only steps (`email_reply` above, `ack_by_email` next door) and it is declared the same
+    # way — by declaring nothing.
+    @reg.step
+    def mail_workspace_invite(ctx: StepCtx):
+        """Carry one membership invite to somebody who is NOT on this instance.
+
+        THE FLOW LIVES IN THIS MODULE FOR `desk_setup`'s REASON, NOT FOR THIS STEP'S. The step
+        itself would run anywhere — see the `needs=` note above. What is agent-shaped is the
+        PRODUCER: `workspace.invited` comes off the control plane that mints the invite, so in a
+        deployment with no agent domain the fact is never published and a flow registered for it
+        would sit in the registry doing nothing, in every such deployment, forever.
+
+        AND IT ONLY EVER CARRIES AN OUTWARD ONE. agent-api publishes this fact only for an address
+        that is EXTERNAL to this instance; a person who already has an account here is handed the
+        link in the chat that invited them, which is faster, needs no mailbox, and cannot be lost
+        to a spam folder. So this step never has to ask whether the recipient is one of ours, and
+        must never grow that question — the answer lives at the producer, where the account lookup
+        already happened.
+
+        Reads: refs.{email, link, uid, workspace, workspace_name?, role?, role_sentence?, inviter?}
+        Effect: one notification · Result: {message_id, to, workspace}."""
+        # NO POLICY GATE, AND THAT IS A DECISION, NOT AN OVERSIGHT (Vexa-ai/vexa#1632).
+        #
+        # `prepare_meeting` two steps up consults `prep_and_invite_mail` before it sends. This step
+        # deliberately does not, and the reason is in that rule's own text: it governs *"the prep
+        # note before a meeting, and the line that tells an organiser how to put Vexa in a meeting
+        # of their own"*, and `POLICIES.md`'s enforcement table maps it to exactly one step
+        # (`emit_prep`). It is a switch over mail WE decide to send about a meeting — a fan-out an
+        # admin may not want their fifty-person rooms to produce. This mail is the opposite kind of
+        # thing: a person opened a chat, was asked for an address and a role, read one sentence
+        # back and said yes. There is no rule in `_global/POLICIES.md` about membership mail, and
+        # borrowing one written for a fan-out would silently repurpose it.
+        #
+        # Swallowing this send would make the product lie. The agent has already told the inviter
+        # the invitation went out; a policy that drops the mail underneath that sentence leaves one
+        # person believing they invited somebody and the other never hearing from us, with nothing
+        # anywhere saying which. If a deployment ever does want to refuse membership mail, that is
+        # a NEW rule with its own name and its own paragraph about what it costs — and the honest
+        # place to enforce it is at the invite itself, where the person is present to be told no.
+        #
+        # There is no per-person `setting()` here either, for a plainer reason: the settings this
+        # engine reads are the RECIPIENT's, and by construction the recipient has no account on
+        # this instance to hold one.
+        to = str(ctx.refs.get("email") or "").strip()
+        link = str(ctx.refs.get("link") or "").strip()
+        workspace = str(ctx.refs.get("workspace") or "").strip()
+        # TYPED AND TERMINAL, like every other refusal in this module. Not retryable because the
+        # refs are frozen at admission: a retry would ask the same unanswerable question of the
+        # same frozen row, every ten minutes, forever. Two refs and not five, because these two are
+        # the only ones without which the mail cannot do its job — a mail with no address goes
+        # nowhere, and a mail with no link asks somebody to do nothing. A missing role or inviter
+        # makes a worse mail; a missing link makes a mail that is not one.
+        if not to or not link:
+            raise StepError(
+                f"cannot mail the invite to workspace {workspace or '<unnamed>'}: refs carry "
+                f"{'no address' if not to else 'an address'} and "
+                f"{'no link' if not link else 'a link'} — an invite mail without both is a mail "
+                f"that asks somebody to do nothing.", retryable=False)
+        # THE COMPANY LAYER IS READ THROUGH THE INVITER, and it has to be: `{{company}}` and
+        # `{{visibility}}` come from `_global`, which is reached by a uid this instance knows, and
+        # the recipient is by construction not one of those. `uid` is the INVITER for exactly this
+        # reason — they are the person this deployment can look a setting up for.
+        uid = str(ctx.refs.get("uid") or "")
+        # ONLY THE REFS THAT ARE THERE. `mailtext.render` leaves an unknown `{{token}}` STANDING
+        # rather than blanking it, on purpose — a visible `{{role}}` in a test inbox is a bug
+        # report and a silently empty sentence is not — so a producer that drops a ref is loud
+        # instead of shipping "invited you as a : ." The two that must not travel:
+        #   `workspace` — the SLUG. `render` already fills `{{workspace}}` with the product's word
+        #     for a person's own space ("desk"); passing the slug under that name would overwrite
+        #     it for this one template and quietly mean two different things in two mails.
+        #   `link` — a template never writes a URL (`behavior/mail/README.md`): a link a template
+        #     could write is a link anyone who can edit a file can point anywhere.
+        values = {k: ctx.refs[k] for k in ("inviter", "role", "role_sentence")
+                  if str(ctx.refs.get(k) or "").strip()}
+        # The display name, falling back to the slug — which is a name, just a worse one. agent-api
+        # already sends the slug when there is no display name; this is the belt for a producer
+        # that forgets, and it is a fallback rather than a token left standing because a mail whose
+        # subject line has a hole in it is not deliverable prose.
+        values["workspace_name"] = str(ctx.refs.get("workspace_name") or workspace)
+        subject, body = p.mailtext.render("workspace-invite", uid, values)
+        if not subject:
+            # `mailtext._split` answers "" when a template lost its `subject:` line and says the
+            # caller must supply one — an empty subject reads as spam. Same fallback and same
+            # warning as `email_attendees`, because somebody editing the live file is the only way
+            # to get here and they should be able to find out.
+            logger.warning("the workspace-invite template carries no `subject:` line — falling "
+                           "back to the workspace name")
+            subject = f"You have been invited to {values['workspace_name']}"
+        # THE LINK TRAVELS AS THE PORT'S ARGUMENT, never inside the body. `notify.compose` puts it
+        # last and on its own paragraph because a URL buried mid-paragraph is a URL nobody clicks,
+        # and a step that hands over a URL should not also decide its typography.
+        mid = p.notify(to, subject, body, link=link)
+        # NO `register_thread`, and this is the deliberate half of the decision rather than the
+        # forgotten half. That row exists to route a REPLY into an ongoing conversation, by thread,
+        # for the subject who owns it (`flows_integrations/mailbox.py`) — and there is no such
+        # subject here. The recipient has no account on this instance, which is the precondition
+        # for this fact being published at all; the only uid on the fact is the INVITER's, and a
+        # row keyed to them would be one the intake refuses anyway, since a reply from anybody but
+        # that subject is `THREAD_MISMATCH` and quarantined. It would be a row whose only possible
+        # outcome is a quarantine entry. This mail also expects no reply: its answer is the click.
+        return Done({"message_id": mid, "to": to, "workspace": workspace}, provider_ref=mid)
+
     s = reg.steps
     # THE EVENT TYPES STAY IN `production` and are read through it. They are the module's published
     # vocabulary — `flows_queue`, the timeline and the tests all name `production.DESK_UNSCAFFOLDED`
@@ -318,3 +439,10 @@ def build(reg: Registry, db, home=None) -> None:
              steps=[s["await_scaffold"]])
     reg.flow(name="desk_claim", version=1, on=p.CLAIM_PROPOSED,
              steps=[s["await_claim"]])
+    # THE MAIL CARRIER (Vexa-ai/vexa#1632). One step, one effect, no queue row: unlike the two
+    # cards above it does not wait for a person, it tells one. It is registered HERE rather than in
+    # `production.py` for `desk_setup`'s stated reason and not for its step's — the step reaches no
+    # domain, but the producing domain is the agent domain, so where there is no agent-api the fact
+    # is never published and this flow would exist to do nothing.
+    reg.flow(name="workspace_invite", version=1, on=p.WORKSPACE_INVITED,
+             steps=[s["mail_workspace_invite"]])

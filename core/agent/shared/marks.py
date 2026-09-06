@@ -100,8 +100,15 @@ def read_job_mark(text: str) -> "tuple[str, str, str] | None":
 #: ``policies_wizard`` (Vexa-ai/vexa#1627) is here for the same reason ``explore`` is: it runs
 #: INLINE — a wizard is a conversation, not a 30-120s write — so it carries an act mark rather
 #: than a job one, and without a verb here the label a reload rebuilds would be `Policies_wizard`.
+#: The three membership acts (Vexa-ai/vexa#1632) are here for the same reason ``policies_wizard`` is
+#: — they run INLINE, so they carry an act mark rather than a job one, and without a verb here the
+#: label a reload rebuilds would read ``Member_add``. The words are the BUTTONS' and match
+#: `clients/terminal/src/minutes/extend.ts`'s `VERB`, which is the copy a person reads live; this is
+#: the copy they read after a refresh, and the two must not be two.
 _ACT_VERBS = {"create": "Create", "extend": "Extend", "extend_transcript": "Extend",
-              "explore": "Explore", "policies_wizard": "Set up policies"}
+              "explore": "Explore", "policies_wizard": "Set up policies",
+              "member_add": "Add a member", "member_role": "Change role",
+              "member_remove": "Remove a member"}
 
 
 # ── the fourth and fifth marks: NOBODY TYPED THIS TURN EITHER (Vexa-ai/vexa#1605) ────────────────

@@ -21,7 +21,7 @@
  */
 import { ASK_CHAT_EVENT } from "../canvas/actions";
 import { actPressed } from "../surfaces/actState";
-import { isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
+import { isMemberIntent, isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
 import { actTarget, isJobIntent } from "../surfaces/jobs";
 import { navigateView } from "./roomView";
 
@@ -39,7 +39,18 @@ const VERB: Record<ChatIntentKind, string> = {
   // Vexa-ai/vexa#1627 — the page's own act. `shared/marks._ACT_VERBS` carries the same words
   // for the label a reload rebuilds from the record.
   policies_wizard: "Set up policies",
+  // Vexa-ai/vexa#1632 — the workspace front page's three membership acts. `shared/marks._ACT_VERBS`
+  // carries the same three words for the label a reload rebuilds from the record.
+  member_add: "Add a member", member_role: "Change role", member_remove: "Remove a member",
 };
+
+/** WHAT EACH ROLE MEANS, IN THE WORDS THE PERSON IS ASKED TO AGREE TO (Vexa-ai/vexa#1632). Derived
+ *  from the seed `POLICIES.md` — *"a member reads a group; an owner or contributor writes it"* — and
+ *  written once, here, because all three membership acts say them and three spellings of one
+ *  permission is three chances to describe the same grant differently. */
+export const ROLE_SENTENCES =
+  "an owner writes this group and can add or remove its members; " +
+  "a contributor writes this group; a reader reads this group and does not write it";
 
 /** HOW THE PERSON'S OWN LINE IS INTRODUCED to the agent (Vexa-ai/vexa#1593). One sentence, and the
  *  same one the server writes when a preset carries no `{{instruction}}` token
@@ -78,6 +89,13 @@ export function compactLabel(intent: ChatIntent): string {
   // The wizard names the file it walks and nothing else — it has no selection to quote and the
   // same path every time it is pressed.
   if (intent.kind === "policies_wizard") return `${VERB[intent.kind]}: ${intent.path}`;
+  // A MEMBERSHIP ACT NAMES THE WORKSPACE, and the person when the row it was pressed on had one
+  // (Vexa-ai/vexa#1632). `Add a member` has nobody yet — that is the act, not a missing field — so
+  // its label stops at the workspace rather than padding itself with an empty slot.
+  if (isMemberIntent(intent)) {
+    const head = `${VERB[intent.kind]}: ${intent.workspace}`;
+    return intent.member ? `${head} · ${intent.member}` : head;
+  }
   const head = `${VERB[intent.kind]}: ${intent.path}`;
   if (!intent.selection) return head;
   return `${head} — “${preview(intent.selection)}”`;
@@ -116,6 +134,43 @@ export function fallbackText(intent: ChatIntent): string {
       `the body alone, and APPEND a \`## Decision\` section at the foot of the file with the date, ` +
       `who decided, the five answers in their words, the profile and the overrides. Never rewrite an ` +
       `older decision.`;
+  }
+  // WITHOUT THE ASK (Vexa-ai/vexa#1632), for the three membership acts. Same gap as the wizard's —
+  // `_global/asks/` is admin-owned and top-up is additive, so an instance whose library predates
+  // these presets runs the sentences below instead.
+  //
+  // WHAT MUST SURVIVE THE GAP IS THE VERB. A fallback that described the act without naming the tool
+  // would leave the agent to reach for whatever membership-shaped thing it could find — and the
+  // whole reason this act exists is that the page's own route answered `invite role must be one of
+  // ('contributor',)`. An act that asks nicely and then invites through the wrong door is worse than
+  // the button it replaced, because it looks like it worked.
+  //
+  // The other two are the founder's shape (*"asking their emails etc."*): ONE question, then ONE
+  // sentence to say yes to. Two questions is a form with the fields asked one at a time.
+  if (isMemberIntent(intent)) {
+    const ws = intent.workspace;
+    const who = intent.member ? `\`${intent.member}\`` : "them";
+    if (intent.kind === "member_add") {
+      return `Add one or more members to the workspace \`${ws}\`. Ask ONE question: which address ` +
+        `or addresses, and which role — \`owner\`, \`contributor\` or \`reader\`. Then confirm in ONE ` +
+        `sentence, saying what that role means (${ROLE_SENTENCES}) — ` +
+        `*Invite jsmith@example.com as a contributor to ${ws} — yes?* Only if they say yes, call ` +
+        `workspace_invite(slug="${ws}", email=..., role=...) ONCE PER ADDRESS. Then say in ONE line ` +
+        `what you did. Never write a page for this.`;
+    }
+    if (intent.kind === "member_role") {
+      return `Change ${who}'s role in the workspace \`${ws}\`. Name them, and ask ONE question: which ` +
+        `role — \`owner\`, \`contributor\` or \`reader\` (${ROLE_SENTENCES}). Then confirm in ONE ` +
+        `sentence — *Make ${intent.member ?? "jsmith@example.com"} a contributor in ${ws} — yes?* ` +
+        `Only if they say yes, call workspace_membership(slug="${ws}", email=..., role=...). Then ` +
+        `say in ONE line what you did. Never write a page for this.`;
+    }
+    return `Remove ${who} from the workspace \`${ws}\`. Ask nothing else: confirm in ONE sentence ` +
+      `that this person will be removed and will no longer read or write it — whatever they are ` +
+      `there now, \`owner\`, \`contributor\` or \`reader\` (${ROLE_SENTENCES}) — ` +
+      `*Remove ${intent.member ?? "jsmith@example.com"} from ${ws} — yes?* Only if they say yes, ` +
+      `call workspace_membership(slug="${ws}", email=..., role="remove"). Then say in ONE line what ` +
+      `you did. Never write a page for this.`;
   }
   // The two page kinds name a FILE and the transcript one names a ROOM (Vexa-ai/vexa#1596); past
   // that they are the same act, and the person's own line rides all three identically — so it is

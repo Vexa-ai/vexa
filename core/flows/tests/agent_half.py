@@ -4,8 +4,8 @@
 says so in the product code: it checks `importlib.util.find_spec` before importing, *"so a cut that
 deletes `production_agent.py` outright leaves this module registering the three flows it keeps
 rather than failing to import"*. A cut that omits the agent half is a supported tree, and
-`flows_defs/README.md` names the four flows that live there — `meeting_prep`, `email_chat`,
-`desk_setup`, `desk_claim`.
+`flows_defs/README.md` names the five flows that live there — `meeting_prep`, `email_chat`,
+`desk_setup`, `desk_claim`, `workspace_invite`.
 
 **The suite has to be honest on BOTH trees, and that is not the same as passing on both.** Before
 this module, fourteen tests asserted on steps and flows that only the full tree registers; on the
@@ -38,8 +38,9 @@ import pytest
 PRESENT: bool = importlib.util.find_spec("flows_defs.production_agent") is not None
 
 WHY = ("flows_defs/production_agent.py is not in this tree — the agent half of the production "
-       "definitions (meeting_prep · email_chat · desk_setup · desk_claim, and the steps "
-       "prepare_meeting · feedback_turn · await_scaffold · await_claim) is an optional module "
+       "definitions (meeting_prep · email_chat · desk_setup · desk_claim · workspace_invite, and "
+       "the steps prepare_meeting · feedback_turn · await_scaffold · await_claim · "
+       "mail_workspace_invite) is an optional module "
        "this cut omits, and `production._register_agent_flows` skips it by find_spec. This "
        "assertion is about those flows and can say nothing here.")
 
@@ -48,10 +49,16 @@ required = pytest.mark.skipif(not PRESENT, reason=WHY)
 
 #: The production steps that are registered ONLY by the agent half. Written out for the same
 #: reason `test_no_agents.AGENT_STEPS` is: the point of the list is to be READ in review.
-STEPS = frozenset({"prepare_meeting", "feedback_turn", "await_scaffold", "await_claim"})
+#:
+#: `mail_workspace_invite` is on this list and NOT on `test_no_agents.AGENT_STEPS`, and the two
+#: lists are answering different questions: that one is "which steps declare `needs=("agent",)`"
+#: (this one declares nothing — it renders a template and sends a notification), this one is
+#: "which steps does the optional module register at all".
+STEPS = frozenset({"prepare_meeting", "feedback_turn", "await_scaffold", "await_claim",
+                   "mail_workspace_invite"})
 
 #: The flows it registers, likewise (flows_defs/README.md's own table).
-FLOWS = frozenset({"meeting_prep", "email_chat", "desk_setup", "desk_claim"})
+FLOWS = frozenset({"meeting_prep", "email_chat", "desk_setup", "desk_claim", "workspace_invite"})
 
 
 def only_if_present(names) -> set:

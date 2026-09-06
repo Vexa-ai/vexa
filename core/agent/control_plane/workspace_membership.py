@@ -54,13 +54,90 @@ POLICY_DIR = "policy"
 MEMBERS_FILE = f"{POLICY_DIR}/members.json"
 INVITES_FILE = f"{POLICY_DIR}/invites.json"
 
-# Role lattice: owner > contributor > viewer. SINGLE-RANK model (owner ruling 2026-07-07): normal
-# workspaces have ONE member rank — every member is read/write and can share; the ``owner`` is just the
-# CREATOR (the only one who can unshare/delete). ``viewer`` (read-only) is retained in the lattice for
-# back-compat but is NO LONGER invitable — you never mint a read-only or owner invite, only a member.
+# Role lattice: owner > contributor > viewer. The STORED spelling, unchanged: ``viewer`` is what every
+# ``policy/members.json`` on every running instance already says, and renaming a value on disk is a
+# migration nobody asked for.
 ROLES = ("viewer", "contributor", "owner")
 _RANK = {r: i for i, r in enumerate(ROLES)}
-INVITABLE_ROLES = ("contributor",)  # single-rank: mint a read/write MEMBER (never viewer/owner)
+
+# ── THE THREE ROLES, IN THE WORDS THE PRODUCT USES (Vexa-ai/vexa#1632) ───────────────────────────
+#
+# ⚠ WHAT THIS REPLACED, AND WHAT IT COST. ``INVITABLE_ROLES`` was ``("contributor",)`` — the
+# single-rank model of the 2026-07-07 owner ruling, where every member is read/write and ``owner`` is
+# just the creator. On 2026-09-06 the founder pressed **Add a member…** on a workspace front page and
+# read this back:
+#
+#     invite role must be one of ('contributor',)
+#
+# The panel was minting a ``viewer`` invite against a set that held one value. Two defects in one
+# sentence: a control that could not work, and a python tuple repr shown to a person as an answer.
+#
+# THE SET IS THE PRIMITIVES' NOW, and it is not an invention — it is read off the seed
+# ``behavior/global/POLICIES.md``, under *What is not yours to choose*: **"a member reads a group; an
+# owner or contributor writes it"**. That sentence names exactly three ranks, so these are the three.
+#
+# `reader` IS `viewer`, one layer up. The lattice keeps its stored spelling and the product says
+# ``reader``, because that is the word the terminal has said since #1623 (`workspaceReadme.roleLabel`
+# maps `viewer` → `reader`) and the word a person recognises. Every value crossing this module's
+# boundary is normalised on the way IN (``normalize_role``) and worded on the way OUT
+# (``role_word``), so no caller has to know that the two spellings exist and no second reader of the
+# lattice can disagree with this one.
+ROLE_WORDS = ("owner", "contributor", "reader")
+
+#: The outward word → the lattice spelling. Both spellings of the read-only rank are accepted on the
+#: way in, because an existing record says ``viewer`` and a person says ``reader``.
+_ROLE_IN = {"owner": "owner", "contributor": "contributor", "reader": "viewer", "viewer": "viewer"}
+
+#: The lattice spelling → the outward word. The inverse, written out rather than derived, because a
+#: derived inverse of a many-to-one map picks a winner by dict order.
+_ROLE_OUT = {"owner": "owner", "contributor": "contributor", "viewer": "reader"}
+
+#: WHAT EACH ROLE MEANS, in one sentence, DERIVED from the POLICIES.md line quoted above and from
+#: nothing else. It is here rather than in the caller that shows it because three surfaces say it —
+#: the agent's confirmation before it acts, the verb's own answer, and the invite mail a stranger
+#: reads — and a person who is told one thing by the chat and another by the mail has been told
+#: nothing. Present tense, no "can": these are what the role IS.
+ROLE_SENTENCES = {
+    "owner": "an owner writes this group and can add or remove its members",
+    "contributor": "a contributor writes this group",
+    "reader": "a reader reads this group and does not write it",
+}
+
+#: Every role an invite may be minted for, and every role a membership may be set to. The three the
+#: product has, in rank order, in the words a person reads — so the refusal sentence this appears in
+#: names roles somebody can actually type.
+INVITABLE_ROLES = ROLE_WORDS
+
+
+def normalize_role(role) -> str:
+    """One role as the LATTICE spells it, or ``MembershipError`` naming the three that exist.
+
+    THE ONE DOOR a role comes through. Callers hand in whatever a person, a route body or an old
+    record said; everything below this line sees ``owner``/``contributor``/``viewer`` and nothing
+    else. Case and surrounding space are the caller's accident, not their meaning."""
+    word = str(role or "").strip().lower()
+    lattice = _ROLE_IN.get(word)
+    if not lattice:
+        raise MembershipError(
+            f"{role!r} is not a role here — the roles are "
+            + ", ".join(ROLE_WORDS)
+            + ". " + "; ".join(f"{r}: {ROLE_SENTENCES[r]}" for r in ROLE_WORDS),
+            status=400)
+    return lattice
+
+
+def role_word(role) -> str:
+    """One role as the PRODUCT says it — ``viewer`` on disk reads ``reader`` to a person.
+
+    Never raises: an unrecognised stored value is returned as it is. A roster that shows a strange
+    word is a finding; a roster that refuses to render because one row is odd is a bug."""
+    word = str(role or "").strip().lower()
+    return _ROLE_OUT.get(word, word)
+
+
+def role_sentence(role) -> str:
+    """The one sentence ``role`` means, or ``""`` for a role with no sentence to give."""
+    return ROLE_SENTENCES.get(role_word(role), "")
 
 DEFAULT_EXPIRES_IN_SEC = 604800  # 7 days
 DEFAULT_MAX_USES = 1
@@ -168,11 +245,44 @@ def policy_commit(ws: Path, message: str) -> None:
     tree) with the PLATFORM identity as committer. This is the control-plane commit path that policy/ is
     write-restricted TO — distinct from the agent turn-commit. Best-effort no-op on an empty policy diff.
     Scrubbed git env: a hook-exported GIT_DIR must never redirect this commit (see shared/gitenv)."""
+    _policy_commit(ws, message, author_name="vexa-platform", author_email="platform@vexa.ai")
+
+
+def policy_commit_as(author_name: str, author_email: str) -> CommitFn:
+    """A ``policy/`` writer whose AUTHOR is the person who asked for the change (Vexa-ai/vexa#1632).
+
+    THE COMMITTER STAYS THE PLATFORM AND THE AUTHOR BECOMES THE HUMAN — git's two identities, used
+    for the two things they are for. The platform is what physically made the commit (it holds the
+    only write on ``policy/``); the person is who decided. Before this, every membership change in
+    every workspace's history read ``vexa-platform``, so *who added this person* was answerable only
+    by reading the JSON diff and hoping ``added_by`` was still there. The issue asks for the act to
+    be recorded "with the inviter as author", and this is that, literally — `git log --format=%an`
+    on `policy/members.json` now names them.
+
+    ``_global.commit`` already does exactly this for the company layer, one directory over. Same
+    shape, same reason, and neither invented it: a workspace is a git repository and this is what git
+    authorship is.
+
+    A blank name or address falls back to the platform identity rather than committing with an empty
+    author, which git accepts and nobody can read."""
+    name = " ".join(str(author_name or "").split()) or "vexa-platform"
+    email = str(author_email or "").strip() or "platform@vexa.ai"
+
+    def _commit_as(ws: Path, message: str) -> None:
+        _policy_commit(ws, message, author_name=name, author_email=email)
+
+    return _commit_as
+
+
+def _policy_commit(ws: Path, message: str, *, author_name: str, author_email: str) -> None:
+    """The one commit body both writers share — extracted verbatim when the authored variant arrived,
+    because a second copy of a git-env-scrubbing commit path is a second place the scrub can be
+    forgotten."""
     import subprocess
     from shared.gitenv import scrubbed_git_env
 
     env = scrubbed_git_env(
-        GIT_AUTHOR_NAME="vexa-platform", GIT_AUTHOR_EMAIL="platform@vexa.ai",
+        GIT_AUTHOR_NAME=author_name, GIT_AUTHOR_EMAIL=author_email,
         GIT_COMMITTER_NAME="vexa-platform", GIT_COMMITTER_EMAIL="platform@vexa.ai",
     )
     ws = Path(ws)
@@ -289,11 +399,35 @@ def is_member(root: Path, workspace_id: str, subject: str) -> Optional[str]:
     return None
 
 
+def member_by_email(root: Path, workspace_id: str, email: str) -> Optional[dict]:
+    """The member record whose stored email is ``email``, or None (Vexa-ai/vexa#1632).
+
+    THE ROSTER IS ADDRESSED BY EMAIL NOW, because that is what a person says. Every route above takes
+    a ``subject`` — the opaque platform id — which is right for a panel that read the roster and has
+    the id in its hand, and useless to an agent whose person just typed a name out loud. So the acts
+    resolve an address here first, and only fall back to asking identity for a subject when this
+    workspace has never seen the address.
+
+    Compared normalised on both sides: a member added from a form and one added from a mail header
+    differ by case and nothing else, and matching them as strings would silently create a second
+    membership for one person."""
+    wanted = _normalize_email(email)
+    if not wanted:
+        return None
+    for m in read_members(root, workspace_id):
+        if _normalize_email(m.get("email")) == wanted:
+            return dict(m)
+    return None
+
+
 def require_role(root: Path, workspace_id: str, subject: str, min_role: str) -> str:
     """Assert ``subject`` holds AT LEAST ``min_role`` in ``workspace_id``; return their actual role.
 
     owner > contributor > viewer. Raises ``MembershipError(status=403)`` if the subject is not a member
     or ranks below ``min_role``. The ONE place every ``/api/workspace/*`` shared route gates through."""
+    # ``reader`` is what a person says and ``viewer`` is what the lattice stores (Vexa-ai/vexa#1632);
+    # a gate that took only one of them would refuse a rank that exists.
+    min_role = _ROLE_IN.get(str(min_role or "").strip().lower(), min_role)
     if min_role not in _RANK:
         raise MembershipError(f"unknown role {min_role!r}", status=400)
     role = is_member(root, workspace_id, subject)
@@ -412,8 +546,7 @@ def grant_membership(root: Path, workspace_id: str, subject: str, role: str, *,
     an existing member is updated in place (accepting an invite twice = still one membership). ``email``
     is the grantee's VERIFIED email (from the redeem request), stored so the roster shows a human label
     rather than the opaque subject id; a re-grant refreshes it when a newer value is supplied."""
-    if role not in ROLES:
-        raise MembershipError(f"unknown role {role!r}", status=400)
+    role = normalize_role(role)
     if not _valid_subject(subject):
         raise MembershipError("invalid subject", status=400)
     ws = assert_shareable(root, workspace_id)
@@ -443,8 +576,7 @@ def set_role(root: Path, workspace_id: str, subject: str, role: str, *,
     """Flip a member's role (the "easily change read/write permissions" DoD item). Owner-only at the API
     layer. Refuses to demote/alter a non-member and refuses to strip the LAST owner (a workspace must
     always retain an owner)."""
-    if role not in ROLES:
-        raise MembershipError(f"unknown role {role!r}", status=400)
+    role = normalize_role(role)
     ws = assert_shareable(root, workspace_id)
     with _ws_lock(workspace_id):  # serialize the members.json read-modify-write (last-owner check + flip)
         members = _read_json_list(ws, MEMBERS_FILE)
@@ -508,8 +640,10 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
     ACCESS MODES (AMENDMENT 5): ``mode="open"`` = anyone-with-link (authenticated) redeems;
     ``mode="restricted"`` = redeem allowed only for an authenticated user whose VERIFIED email is in
     ``allowed_emails``. A restricted invite with an empty ``allowed_emails`` admits no one (fail-closed)."""
-    if role not in INVITABLE_ROLES:
-        raise MembershipError(f"invite role must be one of {INVITABLE_ROLES}", status=400)
+    # THE THREE ROLES, NOT THE ONE (Vexa-ai/vexa#1632). This line used to read
+    # ``if role not in INVITABLE_ROLES`` against ``("contributor",)`` and put the tuple's own repr in
+    # front of a person. ``normalize_role`` refuses with the three words and what each one means.
+    role = normalize_role(role)
     if max_uses < 1:
         raise MembershipError("max_uses must be >= 1", status=400)
     if expires_in_sec <= 0:

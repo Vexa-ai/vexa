@@ -38,6 +38,20 @@ from typing import Optional
 EVENT_DESK_UNSCAFFOLDED = "desk.unscaffolded"
 EVENT_CLAIM_PROPOSED = "claim.proposed"
 
+# THE THIRD CARRIER (Vexa-ai/vexa#1632) — somebody was invited to a workspace and the address is not
+# one this instance knows. Same shape as the two above and one difference worth naming: this fact is
+# not re-derivable from a desk. `policy/invites.json` holds only the token's HASH, so a publish that
+# never lands cannot be replayed from disk — the plaintext link existed once, in the answer the verb
+# gave the agent. That is why `membership_acts.invite` REPORTS which way the link went (`delivery`)
+# instead of assuming: a dropped publish means the person who asked still has the link in front of
+# them and can pass it on, and they are told so in the same sentence.
+#
+# It is published ONLY for an EXTERNAL address. An address with an account here gets the link handed
+# back in the chat, and nothing is published at all — mailing somebody who is signed in on the other
+# side of the same screen is a worse product, and a fact admitted for it would put a card on a queue
+# for a mail nobody needed.
+EVENT_WORKSPACE_INVITED = "workspace.invited"
+
 #: Bounded on purpose. Both publishes run INSIDE a request a person is waiting on — a sign-in that
 #: provisions a desk, and an agent turn writing what it learned — so the ceiling on how slow flows
 #: can make those is this number, not flows' own timeout.
@@ -119,6 +133,50 @@ def claim_refs(subject, claim_id) -> dict:
     """`{uid, claim_id}` — both required by `await_claim`, which fails typed and non-retryable
     without either: *"without both there is nothing to look up and nothing to resolve"*."""
     return {"uid": str(subject), "claim_id": str(claim_id)}
+
+
+def invite_source_id(workspace_id, invite_id) -> str:
+    """Keyed to (workspace, invite) — ONE EVENT PER INVITE (Vexa-ai/vexa#1632).
+
+    Not keyed to the ADDRESS, which is the id a reader expects and the wrong one: inviting the same
+    person to the same workspace twice — after the first invite expired, or was revoked, or went to
+    a mailbox they no longer read — is two invites and must be two mails. The invite id is minted
+    fresh each time and never reused, so this dedupes a REDELIVERY (which is what the intake's
+    dedupe is for) without ever collapsing two deliberate acts into one."""
+    return f"invite-{workspace_id}-{invite_id}"
+
+
+def invite_refs(fact: dict) -> dict:
+    """The refs `mail_workspace_invite` reads, every value a string but the expiry.
+
+    `uid` IS THE INVITER, and it is here because every agent-owned carrier must carry one
+    (`tests/test_desk_events.py`) and because the inviter is the person this deployment can look a
+    setting up for — the invitee, by construction on this path, has no account and therefore no
+    settings. The recipient is `email`, and it is never `uid`: a step that mailed `uid` would mail
+    the sender their own invitation, which is exactly the class of mistake a named ref prevents."""
+    f = fact or {}
+    return {
+        "uid": str(f.get("uid") or ""),
+        "email": str(f.get("email") or ""),
+        "workspace": str(f.get("workspace") or ""),
+        "workspace_name": str(f.get("workspace_name") or f.get("workspace") or ""),
+        "role": str(f.get("role") or ""),
+        "role_sentence": str(f.get("role_sentence") or ""),
+        "inviter": str(f.get("inviter") or ""),
+        "link": str(f.get("link") or ""),
+        "expires_at": int(f.get("expires_at") or 0),
+    }
+
+
+def publish_invite(fact: dict, *, timeout: Optional[float] = None) -> bool:
+    """Hand ONE invite to the mail carrier. Returns whether it landed; NEVER raises.
+
+    The return value IS read here, unlike the desk publishes — not to decide whether to carry on
+    (the invite is minted and committed either way) but to tell the truth about where the link went.
+    See `EVENT_WORKSPACE_INVITED` above."""
+    return publish(EVENT_WORKSPACE_INVITED,
+                   invite_source_id(fact.get("workspace"), fact.get("invite_id")),
+                   invite_refs(fact), timeout=timeout)
 
 
 # --- friction: a direct HTTP client of flows OWN /friction route (#1510) -------------------

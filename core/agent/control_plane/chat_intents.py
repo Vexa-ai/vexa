@@ -34,6 +34,22 @@ INTENT_PRESETS: dict[str, str] = {
     # conversation with five questions in it, so there is no background job to run, and the
     # person pressed a labelled control, so the turn reads as that label.
     "policies_wizard": "policies-wizard",
+    # Vexa-ai/vexa#1632 — the workspace front page's three membership controls. Founder, 2026-09-06:
+    # *"this add member should just ask chat to do that with mcp, asking their emails etc."* and
+    # *"so we do not have to create UI here — button to trigger the chat."*
+    #
+    # THREE KINDS AND NOT ONE WITH AN ARGUMENT, for the reason `extend` and `create` are two: the
+    # kind is what the person READS back (`shared/marks._ACT_VERBS`), and *Add a member* and
+    # *Remove a member* are not the same act with a parameter — they are the two ends of the
+    # decision. A single kind would render one label for both and put the wrong word in the
+    # transcript of whichever half you did not name it after.
+    #
+    # NOT in JOB_KINDS: each one opens a QUESTION, and a question that runs on a background thread
+    # is a question nobody is there to answer. NOT in SILENT_KINDS: the person pressed a labelled
+    # control and must read that label back.
+    "member_add": "member-add",
+    "member_role": "member-role",
+    "member_remove": "member-remove",
 }
 
 # Kinds whose turn the person must NOT see as a bubble. `highlight` is machinery end to end: the
@@ -124,6 +140,11 @@ def job_prefix(intent) -> str:
     return job_mark(str(intent.get("kind") or "").strip().lower(), job_target(intent))
 
 
+#: The three membership acts (Vexa-ai/vexa#1632), named once because two functions below ask the
+#: same question about them and a second inline tuple is a second answer waiting to disagree.
+MEMBER_KINDS = frozenset({"member_add", "member_role", "member_remove"})
+
+
 def act_target(intent) -> str:
     """What an act that runs INLINE is named after — the page, or for a transcript chip the TERM.
 
@@ -131,8 +152,18 @@ def act_target(intent) -> str:
     chip does not: `explore` carries a meeting, a segment and the clicked word, so ``job_target``
     would answer `""` and the label would read `Explore` with nothing after it."""
     d = intent if isinstance(intent, dict) else {}
-    if str(d.get("kind") or "").strip().lower() == "explore":
+    kind = str(d.get("kind") or "").strip().lower()
+    if kind == "explore":
         return _passage(d.get("term"))
+    # A MEMBERSHIP ACT NAMES A WORKSPACE AND, WHEN THERE IS ONE, A PERSON (Vexa-ai/vexa#1632). There
+    # is no path, so `job_target` would fall through to the bare slug and *Change role: pilot* would
+    # not say whose. The separator is the transcript act's own ` · `, so the two labels a person
+    # sees in one conversation are punctuated alike. `_passage` is what keeps an address out of the
+    # mark's closing bracket.
+    if kind in MEMBER_KINDS:
+        ws = str(d.get("workspace") or "").strip()
+        who = _passage(d.get("member"))
+        return f"{ws} · {who}" if ws and who else (ws or who)
     return job_target(intent)
 
 
@@ -237,6 +268,11 @@ def tokens_for(intent) -> dict:
         # would be the placeholder-spoken-with-confidence failure the docstring above names.
         "speaker": s("speaker"),
         "at": s("at"),
+        # WHO A MEMBERSHIP ACT IS ABOUT (Vexa-ai/vexa#1632) — the address the roster row showed, or
+        # the subject when it had no address. Empty on `member_add`, which has nobody yet: that is
+        # the act whose whole first move is to ASK, and a preset that read a name here would be
+        # answering its own question.
+        "member": s("member"),
     }
 
 

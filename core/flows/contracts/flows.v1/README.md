@@ -24,6 +24,7 @@ restore, and a second producer somebody adds later.
 | `desk.unscaffolded` | agent | exactly once per subject |
 | `claim.proposed` | agent | once per occurrence |
 | `friction.reported` | flows | once per occurrence |
+| `workspace.invited` | agent | once per occurrence |
 
 `meeting.completed` and `invite.received` are recorded from `core/flows/mcp.tools.v1.json`'s own
 `publishes_events`; the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None
@@ -38,6 +39,17 @@ no product surface beyond `report_friction`, so its one canonical ingestion poin
 timeline already lives, and works whether or not the agent domain is deployed at all. `friction.
 fixed` (the close-out half) is not registered here yet; it stays on the agent-domain's operator
 surface (`friction_dump`/`friction_fixed`) pending a follow-up that gives it the same treatment.
+
+`workspace.invited` (Vexa-ai/vexa#1632) is the third agent-owned carrier and the one that is
+easiest to over-promise. It ends in a mail to a stranger, which reads like an irreversible action
+and invites `exactly_once_per_subject` — but the subject a membership invite is about is the
+INVITE, not the person: a re-invite after an expiry, or the same address at a different role, is a
+second fact and must mail again, and deduping it away would leave the inviter told an invitation
+went out and the invitee with nothing. So it is `once_per_occurrence`, it holds no stamp, and what
+stops one invite mailing twice is a `source_event_id` keyed to the invite. It is published ONLY
+for an address that is external to this instance — an invitee who already has an account here is
+handed the link in the chat that invited them and no fact is published at all, so the consumer
+never has to ask whether the recipient is one of ours.
 
 `desk.unscaffolded` claims exactly-once and its stamp is **the desk itself** rather than a column.
 That is a weaker guarantee than `onboarding.completed`'s and it is the right one here: the fact is

@@ -882,6 +882,33 @@ class RoleSetBody(BaseModel):
     role: str                            # viewer | contributor | owner
 
 
+class WorkspaceInviteBody(BaseModel):
+    """Invite ONE address to a workspace — the body behind `workspace_invite` (Vexa-ai/vexa#1632).
+
+    NAMED FIELDS, NOT A BARE `dict`, and that is not a style preference: `core/agent/mcp.tools.v1.json`
+    records that `PUT /api/workspace/file`, `POST /api/workspace/entity` and `POST /api/claims` are
+    UNBINDABLE at the assembled edge precisely because they take `body: dict = Body(...)`, which
+    FastAPI publishes with no `properties` for `bind.py` to derive an argument schema from. A verb
+    written today with a bare dict would join that list on the day it shipped."""
+    model_config = {"extra": "forbid"}
+    slug: str                            # the workspace this is about — never guessed, always named
+    email: str                           # the person's address; the handle a human actually says
+    role: str = "reader"                 # owner | contributor | reader (the default is the smallest)
+
+
+class WorkspaceMembershipBody(BaseModel):
+    """Change what an address IS in a workspace, or take them off it — the body behind
+    `workspace_membership` (Vexa-ai/vexa#1632).
+
+    ``role`` carries `remove` as a fourth value rather than a second route, because it is one
+    question with four answers and an agent choosing between two verbs would have to guess the
+    answer before asking it."""
+    model_config = {"extra": "forbid"}
+    slug: str
+    email: str
+    role: str                            # owner | contributor | reader | remove
+
+
 class SharedNewBody(BaseModel):
     """CREATE a new shared workspace (top-level, caller becomes owner) — the bootstrap that makes a
     workspace shareable so invites can be minted against it. ``name`` → display + workspace-id base."""

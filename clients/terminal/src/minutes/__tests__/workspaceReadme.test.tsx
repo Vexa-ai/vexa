@@ -21,6 +21,12 @@
  *  a reader has OPENED: `open()` below is the click the founder's "the rest collapsed" put between
  *  arriving on the page and seeing any of this. The strip's own claims — the height, the collapsed
  *  default, the toggle, the remembered posture — live in `workspaceStrip.test.tsx`.
+ *
+ *  SINCE #1632 THE THREE MEMBERSHIP CONTROLS POST AN ACT TO THE CHAT rather than calling a route,
+ *  so what they do is claimed in `memberActs.test.tsx` and what remains here is where they APPEAR —
+ *  the owner sees them, the reader sees none. The arm-then-commit claim moved with them: it was
+ *  written on `remove:` because that was the nearest confirmed act, and it is a claim about the
+ *  PANEL's own acts, so it is now made on `detach` — which still fires from here and still arms.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -36,7 +42,7 @@ vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
   listSharedMemberships: vi.fn(),
   listWorkspaceMembers: vi.fn(),
   readWorkspaceGitDiff: vi.fn(),
-  removeWorkspaceMember: vi.fn(),
+  detachWorkspaceRemote: vi.fn(),
 }));
 
 import { PagesPanel } from "../PagesPanel";
@@ -237,40 +243,40 @@ describe("a reader sees data and history, and no controls", () => {
     await open(container, "shared");
     await screen.findByText("dmitry@vexa.ai");
     const shared = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
-    expect(shared).toEqual(expect.arrayContaining(["invite", "remove:77", "role:77"]));
+    expect(shared).toEqual(expect.arrayContaining(["member-add", "member-remove:77", "member-role:77"]));
     // the OWNER's own row carries no remove/role control — a workspace with no owner is not a state
-    expect(shared).not.toContain("remove:126");
+    expect(shared).not.toContain("member-remove:126");
 
     await open(container, "github");
     const git = [...container.querySelectorAll("[data-ws-act]")].map((b) => b.getAttribute("data-ws-act"));
     expect(git).toEqual(expect.arrayContaining(["sync", "pull", "push", "detach"]));
   });
 
+  // RULE 2 IS STILL RULE 2 — for the acts this panel still fires itself (#1632). It was claimed on
+  // `remove:` while removal was one of them; `detach` is now the destructive one that stays here,
+  // and it is the same claim on the same `Act` component.
   it("an owner-only act ARMS before it fires, and says what it will do", async () => {
     vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "oenb-b5e60c", role: "owner" }]);
-    vi.mocked(api.listWorkspaceMembers).mockResolvedValue([
-      { subject: "126", role: "owner", email: "dmitry@vexa.ai" },
-      { subject: "77", role: "viewer", email: "ana@oenb.at" },
-    ]);
+    vi.mocked(api.detachWorkspaceRemote).mockResolvedValue({ detached: true, remote: "origin", url: "https://github.com/oenb/kg" });
     const { container } = panel();
-    await open(container, "shared");
-    await screen.findByText("ana@oenb.at");
+    await open(container, "github");
+    await screen.findByText("https://github.com/oenb/kg");
 
-    fireEvent.click(container.querySelector('[data-ws-act="remove:77"]')!);
+    fireEvent.click(container.querySelector('[data-ws-act="detach"]')!);
 
     // the armed state SAYS what will happen, and the first click has done nothing
-    expect(screen.getByText("Remove ana@oenb.at from this workspace")).toBeTruthy();
-    expect(api.removeWorkspaceMember).not.toHaveBeenCalled();
+    expect(screen.getByText("Stop syncing to GitHub — the files here stay exactly as they are")).toBeTruthy();
+    expect(api.detachWorkspaceRemote).not.toHaveBeenCalled();
 
-    fireEvent.click(container.querySelector('[data-ws-act-cancel="remove:77"]')!);
+    fireEvent.click(container.querySelector('[data-ws-act-cancel="detach"]')!);
 
-    expect(container.querySelector('[data-ws-confirm="remove:77"]')).toBeNull();
-    expect(api.removeWorkspaceMember).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-ws-confirm="detach"]')).toBeNull();
+    expect(api.detachWorkspaceRemote).not.toHaveBeenCalled();
 
     // …and the second click is the one that acts
-    fireEvent.click(container.querySelector('[data-ws-act="remove:77"]')!);
-    fireEvent.click(container.querySelector('[data-ws-act-confirm="remove:77"]')!);
-    await waitFor(() => expect(api.removeWorkspaceMember).toHaveBeenCalledWith("oenb-b5e60c", "77"));
+    fireEvent.click(container.querySelector('[data-ws-act="detach"]')!);
+    fireEvent.click(container.querySelector('[data-ws-act-confirm="detach"]')!);
+    await waitFor(() => expect(api.detachWorkspaceRemote).toHaveBeenCalled());
   });
 });
 

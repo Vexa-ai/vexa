@@ -29,7 +29,7 @@ asked, rather than into an email thread that chases them.
                           now" is a queue item rather than a `/bots/status` read at the edge
 
 THE AGENT-ONLY FLOWS LIVE IN `production_agent.py` (2026-09-03) — `meeting_prep`, `email_chat`,
-`desk_setup`, `desk_claim`. They are a conversation with an agent and two cards on a desk, so in a
+`desk_setup`, `desk_claim`, `workspace_invite`. They are a conversation with an agent and two cards on a desk, so in a
 deployment with no agent domain there is nothing for them to degrade TO: two of them react to
 events only agent-api publishes, and the other two would exist to write a queue row saying "there
 is no agent here", per subject, forever. The three flows above DO degrade — an invite is still
@@ -96,6 +96,14 @@ STARTED = EventType("meeting.started")
 #: which is correct rather than degraded: there is no desk in that deployment to have a card on.
 DESK_UNSCAFFOLDED = EventType("desk.unscaffolded")
 CLAIM_PROPOSED = EventType("claim.proposed")
+#: Vexa-ai/vexa#1632 — *"this add member should just ask chat to do that with mcp, asking their
+#: emails etc."* PUBLISHED BY THE AGENT DOMAIN, from the control plane that mints the invite
+#: (`workspace_invite`), on the same publish edge as the two desk facts above, and ONLY for an
+#: address that is EXTERNAL to this instance: somebody who already has an account here is handed
+#: the link in the chat instead, so the mail leg never has to decide that and never mails a person
+#: who is already looking at the answer. The reaction is the mail carrier and nothing else — see
+#: `production_agent.mail_workspace_invite` for why the leg lives on this side at all.
+WORKSPACE_INVITED = EventType("workspace.invited")
 #: PRD 40.9 open-decision 8. PUBLISHED BY FLOWS ITSELF — `POST /friction` calls `admit()` in
 #: process, no publish-edge and no agent-api dependency, which is why the carrier census owns this
 #: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives
@@ -793,9 +801,10 @@ def _register_agent_flows(reg: Registry, db) -> None:
     var, no new mechanism: one predicate decides both whether a step's body is entered and whether
     a whole flow exists.
 
-    IT IS A REGISTRATION CONDITIONAL, NOT A SECOND `not_present`. The four flows behind it —
-    `meeting_prep`, `email_chat`, `desk_setup`, `desk_claim` — are conversations with an agent and
-    cards on a desk. There is nothing for them to degrade TO: a `no-agents` deployment has no desk
+    IT IS A REGISTRATION CONDITIONAL, NOT A SECOND `not_present`. The five flows behind it —
+    `meeting_prep`, `email_chat`, `desk_setup`, `desk_claim`, `workspace_invite` — are
+    conversations with an agent, cards on a desk, and one mail carried for a fact only agent-api
+    publishes. There is nothing for them to degrade TO: a `no-agents` deployment has no desk
     to hold a card and no agent to answer a mail, and two of the four react to events only agent-api
     publishes, so they would never arrive there anyway. A flow that exists only to answer
     `agent:not_present` is a queue row that says nothing, per subject, forever.
@@ -2465,8 +2474,8 @@ def build(reg: Registry, db) -> None:
              steps=[s["record_friction_fixed"]])
 
     # ── the agent-only half ───────────────────────────────────────────────────
-    # `meeting_prep`, `email_chat`, `desk_setup` and `desk_claim` are registered by
-    # `flows_defs/production_agent.py`, and ONLY where the agent domain is deployed. The call is
+    # `meeting_prep`, `email_chat`, `desk_setup`, `desk_claim` and `workspace_invite` are
+    # registered by `flows_defs/production_agent.py`, and ONLY where the agent domain is deployed. The call is
     # last on purpose: those flows read this module's helpers and event types, so this one must be
     # fully built before it hands the registry over. See `_register_agent_flows` for the signal.
     _register_agent_flows(reg, db)
