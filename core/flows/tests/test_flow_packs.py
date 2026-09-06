@@ -68,7 +68,7 @@ def test_a_pack_composes_on_top_and_replaces_nothing(db, monkeypatch, pack_on_pa
     monkeypatch.setenv(production.DEFS_EXTRA_ENV, pack_on_path)
     reg = Registry()
     production.build(reg, db)
-    for kept in ("post_meeting", "live_meeting", "invite_intake", "friction_log"):
+    for kept in ("onboarding", "post_meeting", "live_meeting", "invite_intake", "friction_log"):
         assert kept in {n for n, _v in reg.flows}
 
 

@@ -79,6 +79,11 @@ from flows_steps import common as _common
 from flows_steps.common import (address_for_uid, ensure_platform_user, mint_scaffold,  # noqa: F401
                                 platform_user_id, scaffolded, setting, ws_file)
 from flows_steps.notify import notify
+# THE ONE SCOPING PREDICATE, imported rather than re-written. `flows_timeline.model` is pure and
+# stdlib-only; `concerns` answers "is this fact about this person" over BOTH the uid and the email
+# because the two lineages spell the subject differently, and a second implementation of that in
+# this file would be a second place to get it half right (see its own docstring).
+from flows_timeline.model import concerns as _concerns
 
 INVITE = EventType("invite.received")
 ONB_PERSON = EventType("onboarding.person.needed")
@@ -114,7 +119,49 @@ FRICTION_REPORTED = EventType("friction.reported")
 #: sibling rather than behind the agent-only half this module hands off to at the bottom.
 FRICTION_FIXED = EventType("friction.fixed")
 
+#: PUBLISHED BY IDENTITY at account creation — `core/identity/services/admin-api/src/admin_api/
+#: app/events.py`, one producer, exactly once, in every configuration. Its refs are the founder's
+#: three fields `{subject, org, seat}`: `subject` is the platform uid and there is NO `uid` key on
+#: this fact, which is why `_subject_uid` below reads both names rather than one.
+ONBOARDED = EventType("onboarding.completed")
+
 NUDGE_EVERY_S = 15 * 60
+
+#: How often the onboarding reaction looks again for this person's first transcribed meeting —
+#: THE FIRST INTERVAL, then doubling to `ONBOARDING_POLL_MAX_S`. It parks between looks and burns
+#: no attempt (`flows/loop.tick`), so the cost is a row and one bounded read per interval.
+#:
+#: IT USED TO BE THIS EVERY TIME, FOREVER (R-B3). Thirty seconds is right for the first minutes
+#: after somebody signs up — that is when they are actually going to try it, and the queue item
+#: should clear while they are still looking at the screen. It is wrong on day nine: the same
+#: person, never activated, costs a 200-row scan and a transcript read every half-minute for as
+#: long as the account exists, and by then nothing about them changes in thirty seconds.
+#:
+#: THE BACKOFF IS THE WHOLE FIX, AND THERE IS STILL NO CAP ON THE ITEM. The founder's ruling
+#: (2026-09-04) is that activation is one meeting with transcription and the offer is not taken
+#: away from the people who have not taken it up yet — so this reaction never expires and never
+#: fails; what changes is only how often it asks. `attend_live`'s `LIVE_CAP_S` is a different
+#: question (a `meeting.completed` that never arrives, against a call that is long over) and the
+#: two must not be confused: that one is waiting on a FACT, this one is waiting on a PERSON.
+ONBOARDING_POLL_S = 30
+#: The ceiling the interval doubles up to. Fifteen minutes: still far inside the window in which
+#: "you have your first transcript" is a useful thing to be told, and ~1/30th of the reads.
+ONBOARDING_POLL_MAX_S = 15 * 60
+
+
+def onboarding_backoff(looks: int) -> float:
+    """The wait before look number `looks + 1` — 30s, 60s, 120s … capped at 15 min.
+
+    A pure function of how many times this reaction has already looked, so it is decided by the
+    reaction's own durable scratch rather than by anything in the worker's memory: a restart
+    resumes at the interval it had reached, and a replay of the same reaction produces the same
+    schedule."""
+    return float(min(ONBOARDING_POLL_S * (2 ** max(int(looks), 0)), ONBOARDING_POLL_MAX_S))
+
+#: HOW MANY `meeting.completed` ROWS the activation check scans back over. The same bound and the
+#: same reason `_completion_seen` and `flows_timeline` give: `subject_refs` is a JSON blob with no
+#: index to push the predicate into.
+ONBOARDING_SCAN_ROWS = 200
 
 #: How often the live reaction looks again while a call is running, and how long it may do so.
 #: The cap is not a timeout on the meeting — it is the answer to a `meeting.completed` that never
@@ -2413,6 +2460,108 @@ def build(reg: Registry, db) -> None:
             return Done({"meeting_id": mid, "outcome": "lapsed"})
         return Wait(seconds=LIVE_POLL_S)
 
+    # ── the first meeting (founder, 2026-09-04) ───────────────────────────────
+    # *"whats_waiting — that's the one agent must call after got installed and that one will prompt
+    # them to try a meeting"*. A person who has just connected an agent has a queue, and it is
+    # empty, and an empty queue is indistinguishable from a finished one. This flow is the row that
+    # makes it not empty: pending from the moment identity says they exist until the moment they
+    # have seen Vexa transcribe something, spoken in `behavior/queue/onboarding.pending.md`.
+    def _subject_uid(refs: dict) -> str:
+        """THE PERSON THIS FACT IS ABOUT. `onboarding.completed` spells it `subject` (identity's
+        `onboarding_refs`); every meetings fact spells the same value `uid`. Reading one name only
+        is how a flow silently scopes to nobody — and `concerns` accepts both, so the two halves
+        of this step must agree with it rather than with each other."""
+        return str(refs.get("subject") or refs.get("uid") or "").strip()
+
+    def _transcribed_completion(uid: str, seen: dict) -> tuple[str, int] | None:
+        """This person's first `meeting.completed` THAT ACTUALLY TRANSCRIBED — `(meeting_id, n)`,
+        or None.
+
+        ACTIVATION IS A TRANSCRIPT, NOT A MEETING (founder, 2026-09-04: *"activated meaning 1
+        meeting with transcription"*). A bot that joined an empty room and left completes a meeting
+        and shows the person nothing, so a completion alone must not clear the item that is asking
+        them to try one — they would be told they were finished by the one run that proved least.
+
+        THE FACT COMES FROM FLOWS' OWN TABLE and the segment count from the meetings domain,
+        deliberately in that order: the completion is already here as a reaction row the instant it
+        is admitted (`_completion_seen` says why a step must not poll another domain to find out
+        whether a fact arrived), and only the count needs a read. `seen` is the reaction's own
+        durable scratch, so a meeting already read as silent is never read twice — over the days an
+        item can be pending that is the difference between one read per meeting and one per tick.
+
+        An UNREADABLE transcript (`None`) is not recorded in `seen`: it is a gateway that was
+        restarting, not a meeting that captured nothing, and the two must not decide the same thing
+        about a person's first impression.
+        """
+        rows = db.execute("SELECT subject_refs FROM reaction WHERE event_type = :et "
+                          "ORDER BY created_at DESC LIMIT :lim",
+                          {"et": COMPLETED.name, "lim": ONBOARDING_SCAN_ROWS})
+        for row in rows:
+            try:
+                refs = json.loads(row[0]) or {}
+            except Exception:  # noqa: BLE001 — one unreadable row is not an answer about the rest
+                continue
+            if not _concerns(refs, uid=uid):
+                continue
+            mid = str(refs.get("meeting_id") or "").strip()
+            if not mid or mid in seen:
+                continue
+            n = mt.transcript_segment_count(uid, mid)
+            if n is None:
+                continue                      # unreadable — ask again next tick, do not decide
+            if n > 0:
+                return mid, n
+            seen[mid] = 0                     # read, and it captured nothing: never read it again
+        return None
+
+    # REACHES THE MEETINGS DOMAIN — it reads the transcript's segment count to tell a meeting that
+    # transcribed from one that did not. Declared, never checked in the body, for the reason
+    # `Registry.step` gives. NOT `needs=("agent",)`: this flow is the no-agents product's own
+    # onboarding and there is no turn anywhere in it — the agent that reads the queue is the
+    # person's own, on the other side of the MCP.
+    @reg.step(needs=("meetings",))
+    def first_meeting(ctx: StepCtx):
+        """PENDING UNTIL THIS PERSON HAS SEEN VEXA TRANSCRIBE SOMETHING — the queue row that is a
+        new person's first step.
+
+        It does nothing, like `attend_live`, and for the same reason: the value is the ROW. While
+        it is pending, `whats_waiting` carries `behavior/queue/onboarding.pending.md`, which tells
+        the person's agent to offer them a meeting now — meet.new, `request_meeting_bot`, admit the
+        bot, watch the words arrive. When their first transcribed meeting lands, the row completes
+        and the item disappears without anybody dismissing it, which is the property the founder
+        asked for: *"the queue advances as they go"*.
+
+        THERE IS NO CAP, unlike the live-call reaction. `attend_live` bounds itself because a
+        `meeting.completed` that never arrives would park it forever against a call that is long
+        over; here the thing being waited for is the person themselves, and an item that expired
+        would take the offer away from exactly the people who have not taken it up yet.
+
+        THE INTERVAL IS BOUNDED EVEN THOUGH THE ITEM IS NOT (R-B3), and the two are different
+        questions. This looked every thirty seconds forever, per person who had never activated:
+        a 200-row scan plus a transcript read, every half-minute, for the life of every dormant
+        account. Thirty seconds is right in the minutes after somebody signs up and meaningless on
+        day nine, so the wait doubles to fifteen minutes (`onboarding_backoff`) — the offer stays
+        open, the cost stops growing with the number of people who have not taken it yet.
+
+        The look count lives in the reaction's own durable scratch, so a worker restart resumes at
+        the interval this reaction had reached rather than starting the ramp again.
+
+        Reads: refs.{subject|uid} · Reaches: meetings (segment count) · Result:
+        {meeting_id, segments}."""
+        uid = _subject_uid(ctx.refs)
+        if not uid:
+            raise StepError(
+                "onboarding.completed carried no subject — there is nobody to onboard, and every "
+                "reader of this reaction identifies the person by that field.", retryable=False)
+        seen = ctx.scratch.setdefault("silent_meetings", {})
+        hit = _transcribed_completion(uid, seen)
+        if hit is None:
+            looks = int(ctx.scratch.get("looks") or 0)
+            ctx.scratch["looks"] = looks + 1
+            return Wait(seconds=onboarding_backoff(looks))
+        mid, segments = hit
+        return Done({"meeting_id": mid, "segments": segments, "activated": True})
+
     @reg.step
     def record_friction(ctx: StepCtx):
         """THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already wrote
@@ -2472,6 +2621,14 @@ def build(reg: Registry, db) -> None:
     # #1510's C3 — the close-out half of the sink, registered the same way for the same reason.
     reg.flow(name="friction_fix", version=1, on=FRICTION_FIXED,
              steps=[s["record_friction_fixed"]])
+
+    # THE NEW PERSON'S FIRST STEP (founder, 2026-09-04). One step and no effect, the same shape as
+    # `live_meeting` and for the same reason: what it produces is a REACTION ROW in a state the
+    # queue can speak — pending from account creation until this person has watched Vexa transcribe
+    # something. `whats_waiting` is the verb an agent calls the moment it is installed, and until
+    # this flow existed it answered a brand-new person with an empty list.
+    reg.flow(name="onboarding", version=1, on=ONBOARDED,
+             steps=[s["first_meeting"]])
 
     # ── the agent-only half ───────────────────────────────────────────────────
     # `meeting_prep`, `email_chat`, `desk_setup`, `desk_claim` and `workspace_invite` are

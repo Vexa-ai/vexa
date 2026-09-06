@@ -233,6 +233,14 @@ def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(m
 
     absent = lambda d: d != "agent"                                          # noqa: E731
     terminal = {"done", "failed", "cancelled"}
+    # FLOWS THAT DO NOT END, AND MUST NOT — the exemption is about what they wait FOR.
+    # This contract is that no flow parks BECAUSE THE AGENT DOMAIN IS ABSENT; `onboarding` parks
+    # because it is waiting for the PERSON, and it is uncapped on purpose (founder, 2026-09-04:
+    # activation is one meeting with transcription). A cap here would take the offer away from
+    # exactly the people who have not taken it up yet. So it is exempted from ending and held to
+    # the two properties that still matter with agents absent: it must not FAIL, and — via the
+    # shared `calls` assertion below — it must not have knocked on the agent door to get there.
+    unbounded_by_design = {"onboarding"}
     for (name, version), flow in reg.flows.items():
         db, clock = SqliteDB(), FakeClock()
         admit(db, reg, clock, source_event_id=f"e-{name}", event_type=flow.on.name,
@@ -248,6 +256,10 @@ def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(m
                     break
                 clock._t = max(clock._t, nxt)
         st = status(db, rid)
+        if name in unbounded_by_design:
+            assert st["status"] not in {"failed", "cancelled"}, (
+                f"{name}@{version} is meant to wait, not to give up: {st['reason']}")
+            continue
         assert st["status"] in terminal, f"{name}@{version} parked in {st['status']}: {st['reason']}"
         if flow.steps[0] in AGENT_STEPS:
             assert st["status"] == "done", f"{name} FAILED instead of degrading: {st['reason']}"

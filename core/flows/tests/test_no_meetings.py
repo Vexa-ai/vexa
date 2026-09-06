@@ -44,8 +44,12 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 #: `_meeting_stamp` / `_scaffold_refs`, which call `mt.meeting_start`. Written out rather than
 #: derived, for the reason `test_no_agents.AGENT_STEPS` gives: the point of the list is to be READ
 #: in review, and the contract test below is the net underneath it.
+#:
+#: `first_meeting` is here because the onboarding flow reads the TRANSCRIPT SEGMENT COUNT to
+#: tell a meeting that transcribed from one that did not (`mt.transcript_segment_count`) — it
+#: is declared on the step and so it belongs on this list, which is read in review.
 MEETINGS_STEPS = {
-    "await_start", "dispatch_bot", "run_meeting",
+    "await_start", "dispatch_bot", "run_meeting", "first_meeting",
     "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees", "prepare_meeting",
 }
 
