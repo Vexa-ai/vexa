@@ -60,6 +60,11 @@ import os
 #: shallow enough that the answer is still "recently". A workspace whose last twenty commits are all
 #: plumbing has genuinely had no page changed lately, and the line says so by naming no page.
 LAST_CHANGE_SCAN = 20
+#: How far back `/api/people/admin` reads `_global` for a commit a PERSON made. Deeper than the
+#: last-change scan because a run of platform commits (a policy seed, a re-run of setup) can sit on
+#: top of the acceptance that names the administrator, and answering `null` because plumbing was
+#: busy would put the word "the admin" back on the line this exists to fix.
+ADMIN_SCAN = 60
 
 
 def build(**d) -> APIRouter:
@@ -771,7 +776,13 @@ def build(**d) -> APIRouter:
                 "change": front_page_mod.describe_commit(
                     newest, slug=slug,
                     read_page=lambda rel: _page_head(target, rel),
-                    name_of=lambda author: front_page_mod.person_name(wsr.root, author))}
+                    # BOTH HALVES OF THE GIT AUTHOR (Vexa-ai/vexa#1642). `%an` is the person's
+                    # sign-in address and `%ae` is `<subject>@vexa.local`, so the desk is opened
+                    # through the second and the name is read off the first. `display_name` — not
+                    # `person_name` — because the sentence must never say *someone*: where nobody
+                    # has written this person down, their own address read as a name is the floor.
+                    name_of=lambda author, email: front_page_mod.display_name(
+                        wsr.root, address=author, principal=email))}
 
     @router.get("/api/people/me")
     def people_me(request: Request):
@@ -786,9 +797,54 @@ def build(**d) -> APIRouter:
         `name` is null when nothing has been written down. That is the answer, not an error — the
         line falls back to the role, and no address is ever put in a name's place."""
         subject = str(subject_of(request))
-        name = front_page_mod.person_name(wsr.root, subject)
+        # THE ADDRESS IS PART OF THE QUESTION (Vexa-ai/vexa#1642). The gateway strips any
+        # client-sent `x-user-email` and re-injects the one it resolved from the session, so this is
+        # the reader's own verified address — the key every step of the chain is actually written
+        # against, and the floor under it when no page names them.
+        address = (request.headers.get("x-user-email") or "").strip() or None
+        name = front_page_mod.display_name(wsr.root, subject, email=address)
         return {"subject": subject, "name": name,
                 "first_name": front_page_mod.first_name(name)}
+
+    @router.get("/api/people/admin")
+    def people_admin(request: Request):
+        """WHO WRITES THE COMPANY LAYER, by name (Vexa-ai/vexa#1642).
+
+        Founder, 2026-09-07, on his own instance: the line read *everyone at Vexa reads it, **the
+        admin** writes it* on the one deployment where the administrator is certainly known. *The
+        admin* is a role, and the first line a person meets should name the person.
+
+        WHERE THE ANSWER COMES FROM, and why it needs nothing new. `_global/STRUCTURE.md` states it:
+        *"every acceptance is a commit authored by the administrator who made it"*
+        (`global_layer.commit_global` sets `user.name`/`user.email` to that person). So the company
+        layer's own history IS the record of who writes it, and the newest commit there that a
+        person made names them.
+
+        GATED ON `global_admin_only`. With it on, the layer has exactly one writer by policy, so
+        "the newest author" and "the admin" are the same person and the claim is safe. With it off
+        they are not — and the sentence does not name a writer in that case anyway, so the honest
+        answer is `null` rather than the most recent editor promoted to administrator.
+
+        NEVER AN ADDRESS ON THE WIRE. The name and its first word, and nothing else: the strip may
+        not print an address (#1634 rule 3) and a route that hands one over invites it to."""
+        empty = {"name": None, "first_name": None}
+        try:
+            target = _read_target(request, system_mounts.GLOBAL_SLUG)
+        except (ValueError, HTTPException):
+            return empty
+        policies = _page_head(target, "POLICIES.md") or ""
+        if str(front_page_mod.front_matter(policies).get("global_admin_only", "")).strip().lower() \
+                not in ("on", "true", "yes"):
+            return empty
+        try:
+            history = wsr.git_history_at(target, limit=ADMIN_SCAN, viewer=subject_of(request))
+        except ValueError:
+            return empty
+        author, email = front_page_mod.admin_principal(history.get("commits") or [])
+        if not author and not email:
+            return empty
+        name = front_page_mod.display_name(wsr.root, address=author, principal=email)
+        return {"name": name, "first_name": front_page_mod.first_name(name)}
 
     @router.post("/api/workspace/git/reset")
     def ws_git_reset(request: Request, body: dict = Body(...)):

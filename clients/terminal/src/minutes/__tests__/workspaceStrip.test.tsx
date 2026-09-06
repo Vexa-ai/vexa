@@ -39,6 +39,7 @@ vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
   readWorkspaceFile: vi.fn(),
   listSharedMemberships: vi.fn(),
   listWorkspaceMembers: vi.fn(),
+  readInstanceAdmin: vi.fn(),
   mintInvite: vi.fn(),
 }));
 
@@ -88,6 +89,7 @@ beforeEach(() => {
   vi.mocked(api.readWorkspaceHistory).mockResolvedValue({ slug: "pilot-b5e60c", branch: "main", path: null, limit: 11, commits: COMMITS });
   vi.mocked(api.readLastChange).mockResolvedValue(CHANGE);
   vi.mocked(api.readMyPerson).mockResolvedValue({ subject: "126", name: "Alex Roe", first_name: "Alex" });
+  vi.mocked(api.readInstanceAdmin).mockResolvedValue({ name: "Jane Smith", first_name: "Jane" });
   vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: true, remote: "origin", url: "https://github.com/pilot/kg", branch: "main", tracked: true, ahead: 2, behind: 0 });
   vi.mocked(api.readWorkspaceFile).mockResolvedValue("# Policies\n");
   vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "pilot-b5e60c", role: "owner" }]);
@@ -128,7 +130,10 @@ describe("the strip takes the header and no more", () => {
     expect(container.querySelector("[data-ws-details]")!.getAttribute("aria-expanded")).toBe("false");
     // …while the two sentences have already said where you are and what last happened
     expect(container.querySelector('[data-ws-line="where"]')!.textContent).toBeTruthy();
-    expect(container.querySelector("[data-ws-changed]")!.textContent).toContain("Changed 2 hours ago by Jane Smith");
+    // The person is the SUBJECT of the sentence now (#1634's design spec, point 4) — the colon
+    // form was a log entry with words around it.
+    expect(container.querySelector("[data-ws-changed]")!.textContent)
+      .toBe("Jane Smith changed the governing board page 2 hours ago");
   });
 
   it("opens the section its summary belongs to, closes it on a second click, and holds one at a time", async () => {
@@ -303,30 +308,77 @@ describe("the acts are conversations, and they are this viewer's", () => {
     await waitFor(() => expect(acts(container).length).toBe(1));
 
     expect(acts(container).map((b) => b.getAttribute("data-ws-strip-act"))).toEqual(["history"]);
-    expect(acts(container)[0].textContent).toBe("History");
+    // …and it is the icon alone, with its name where a name costs no room (#1634's design spec)
+    expect(acts(container)[0].getAttribute("aria-label")).toBe("History");
+    expect(acts(container)[0].querySelector("svg")).toBeTruthy();
   });
 });
 
-describe("the company layer names the writer, and only when it knows them", () => {
+describe("the company layer names its writer, to everybody (Vexa-ai/vexa#1642)", () => {
   const asGlobal = asCompanyLayer;
 
-  it("the ADMINISTRATOR reading their own instance meets their own name", async () => {
+  it("names the ADMINISTRATOR, resolved from the layer's own history rather than from the reader", async () => {
     const { container } = asGlobal(true);
 
     await waitFor(() => expect(container.querySelector('[data-ws-line="where"]')?.textContent)
-      .toBe("Company layer · everyone at Pilot Industries reads it, Alex writes it · 2 pages"));
-    expect(container.querySelector("[data-ws-changed]")?.textContent)
-      .toContain("· policies: default profile");
-    await waitFor(() => expect(acts(container).map((b) => b.textContent))
-      .toEqual(["Set up policies", "Add an editor", "History"]));
+      .toBe("everyone at Pilot Industries reads it, Jane writes it"));
+    expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Company layer");
+    expect(container.querySelector("[data-ws-pages]")?.textContent).toBe("2 pages");
+    expect(container.querySelector("[data-ws-pill]")?.textContent).toContain("policies: default profile");
+    await waitFor(() => expect(acts(container).map((b) => b.getAttribute("data-ws-strip-act")))
+      .toEqual(["policies", "editor", "history"]));
   });
 
-  it("EVERYBODY ELSE reads the role — a reader's own name there would be a lie", async () => {
+  it("names the SAME person to a reader who is not the administrator", async () => {
+    // Before #1642 this line said *the admin* to everybody but the administrator — and to the
+    // administrator too, whenever his own name failed to resolve, which is what the founder met.
     const { container } = asGlobal(false);
 
     await waitFor(() => expect(container.querySelector('[data-ws-line="where"]')?.textContent)
-      .toBe("Company layer · everyone at Pilot Industries reads it, the admin writes it · 2 pages"));
-    expect(acts(container).map((b) => b.textContent)).toEqual(["History"]);
+      .toBe("everyone at Pilot Industries reads it, Jane writes it"));
+    expect(acts(container).map((b) => b.getAttribute("data-ws-strip-act"))).toEqual(["history"]);
+  });
+
+  it("drops the clause rather than writing *the admin* when nobody could be resolved", async () => {
+    vi.mocked(api.readInstanceAdmin).mockResolvedValue({ name: null, first_name: null });
+    const { container } = asGlobal(true);
+
+    await waitFor(() => expect(container.querySelector('[data-ws-line="where"]')?.textContent)
+      .toBe("everyone at Pilot Industries reads it"));
+  });
+});
+
+/** THE ASSERTION THE ISSUE IS NAMED AFTER (Vexa-ai/vexa#1642), snapshot-free and over the whole
+ *  rendered header: *"Company layer · everyone at Vexa reads it, **the admin** writes it · 29 pages
+ *  / Changed 60 minutes ago by **someone**: five pages"*, on the one instance where both people are
+ *  certainly known. Neither word is a thing this header says, in any state it has. */
+describe("no rendered word stands in for a person", () => {
+  const forbidden = ["someone", "the admin", "@"];
+  const saidBy = (c: HTMLElement) => (strip(c)!.textContent ?? "").toLowerCase();
+
+  it("not on a shared workspace, not on the company layer, not with nothing resolved", async () => {
+    const shared = panel();
+    await waitFor(() => expect(acts(shared.container).length).toBeGreaterThan(0));
+    for (const word of forbidden) expect(saidBy(shared.container)).not.toContain(word);
+    cleanup();
+
+    const company = asCompanyLayer(true);
+    await waitFor(() => expect(acts(company.container).length).toBeGreaterThan(0));
+    for (const word of forbidden) expect(saidBy(company.container)).not.toContain(word);
+    cleanup();
+
+    // …and with every name unresolved, which is the state that produced both words
+    vi.mocked(api.readInstanceAdmin).mockResolvedValue({ name: null, first_name: null });
+    vi.mocked(api.readMyPerson).mockResolvedValue({ subject: "126", name: null, first_name: null });
+    vi.mocked(api.readLastChange).mockResolvedValue({
+      ...CHANGE, change: { ...CHANGE.change, author: null },
+    });
+    const anon = asCompanyLayer(true);
+    await waitFor(() => expect(acts(anon.container).length).toBeGreaterThan(0));
+    for (const word of forbidden) expect(saidBy(anon.container)).not.toContain(word);
+    // what it says instead names nobody rather than naming a pronoun
+    expect(anon.container.querySelector("[data-ws-changed]")?.textContent)
+      .toBe("Changed the governing board page 2 hours ago");
   });
 });
 

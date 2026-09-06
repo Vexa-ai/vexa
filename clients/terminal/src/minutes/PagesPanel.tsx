@@ -43,6 +43,7 @@ import { registry } from "../contributions";
 import { ReportPageButton } from "../surfaces/ReportThis";
 import { header, surface, type as ty } from "./tokens";
 import { WorkspaceReadmePanel } from "./WorkspaceReadmePanel";
+import { splitLeadingH1 } from "./workspaceFrontPage";
 import { isWorkspaceReadme } from "./workspaceReadme";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
@@ -361,9 +362,22 @@ export function PagesPanel(p: {
                      reader's primary workspace. It went unnoticed while the only consumers were
                      links (which mostly still land, via the search order); an IMAGE has no search
                      order — the picture is either in this workspace or it is missing (#1612). */
+                  /* THE HEADER OWNS THE TITLE (Vexa-ai/vexa#1634's design spec, point 2, applied
+                     in #1642): on a workspace README the first heading is LIFTED out of the body
+                     and rendered above the eyebrow's two rows, so the page reads eyebrow → title →
+                     who is here → what last changed → hairline → prose. Rendering it in both
+                     places was the alternative, and a title printed twice two lines apart is the
+                     shape a person reads as a bug. Every other page is untouched. */
                   : <DocMetaContext.Provider value={{ path: p.docPath, slug: p.docSlug }}>
-                      {isWorkspaceReadme(p.docPath) && <WorkspaceReadmePanel slug={p.docSlug} path={p.docPath} />}
-                      <MdxDoc>{p.body}</MdxDoc>
+                      {isWorkspaceReadme(p.docPath)
+                        ? (() => {
+                            const front = splitLeadingH1(p.body);
+                            return <>
+                              <WorkspaceReadmePanel slug={p.docSlug} path={p.docPath} title={front.title} />
+                              <MdxDoc>{front.body}</MdxDoc>
+                            </>;
+                          })()
+                        : <MdxDoc>{p.body}</MdxDoc>}
                     </DocMetaContext.Provider>}
           {/* EXTEND, UNDER THE CONTENT (decision 32.1, as ruled 2026-09-06). Only while READING a
               document that exists: an empty page offers Create instead, and a canvas has no page to

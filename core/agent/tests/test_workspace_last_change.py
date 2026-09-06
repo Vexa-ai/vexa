@@ -12,9 +12,13 @@ So the tests below hold exactly those two claims, plus the scope:
     several pages become a count. The floor matters as much as the first two: `asks/policies-
     wizard.md` has neither a title nor a heading — it opens with the prompt it is — and *the
     policies wizard ask* is the founder's own words for it, which is its file name read aloud.
-  * **THE PERSON, BY THEIR NAME, NEVER AN ADDRESS.** Their own `self: true` page first, then the
-    company directory, then nothing. `None` is an answer the panel renders as *someone*; an
-    address in a name's place is the defect this route was opened to remove.
+  * **THE PERSON, BY THEIR NAME, RESOLVED FROM THEIR ADDRESS** (Vexa-ai/vexa#1642). The address is
+    the key and the desk is uid-numbered, so the chain starts by turning one into the other
+    (`subject_for_address`) and only then reads: the desk's own person page, the company directory,
+    the people record, the identity note, and finally the address's local part read as a name.
+    *someone* is not a step — it was what the chain answered when every step above it was reached
+    with the wrong key, which is what the founder met on his own instance. An address VERBATIM is
+    still never the answer; an address read as a name is the floor under one.
   * **THE SCOPE IS `_read_target`'S**, the same call the file read makes — so this route can
     describe no commit whose page a subject could not open. Held here as a COMPARISON against
     `GET /api/workspace/file`, exactly as `test_workspace_history.py` holds it for the history.
@@ -220,18 +224,164 @@ def test_the_company_directory_answers_when_the_desk_does_not(tmp_path):
     assert _change(tmp_path, "wsA", "owner1", idx)["change"]["author"] == "Jane Smith"
 
 
-def test_it_never_answers_with_an_address(tmp_path):
-    """Nothing written down anywhere: the answer is null, and the panel says *someone*. The one
-    thing this must never do is reach for the address it can see — that is the line the founder
-    read as repository facts rather than as a sentence about a place."""
+def test_it_never_answers_with_the_address_itself_but_it_does_read_it(tmp_path):
+    """Nothing written down anywhere — the floor (Vexa-ai/vexa#1642).
+
+    Before this issue the answer here was null and the panel printed *someone*, which is the line
+    the founder met on the one instance where the person certainly exists. The address is still
+    never rendered VERBATIM; it is read as a name, which is a thing the person chose and recognises
+    rather than a pronoun that says the product does not know who works here."""
     ws = _init_ws(tmp_path, "wsA")
     idx = _shared(tmp_path, "wsA")
     _commit(ws, {"kg/board.md": "# board\n"}, "wsA: kg/board.md — added",
             who=("jsmith@example.com", "jsmith@example.com"))
 
     change = _change(tmp_path, "wsA", "owner1", idx)["change"]
-    assert change["author"] is None
+    assert change["author"] == "Jsmith"
     assert "@" not in str(change["author"])
+    assert str(change["author"]).lower() not in ("someone", "the admin")
+
+
+def test_a_subject_id_is_never_read_as_a_name(tmp_path):
+    """The floor is an ADDRESS read as a name, not any string in the author position.
+
+    `%an` is a subject id on some commits and `%ae` is `<subject>@vexa.local` on every turn commit,
+    so a floor that read either aloud would print an internal id dressed as a person — the same
+    class of mistake as the address it replaces. Nothing written down, nothing claimed: the sentence
+    ends at the time and names nobody."""
+    ws = _init_ws(tmp_path, "wsA")
+    idx = _shared(tmp_path, "wsA")
+    _commit(ws, {"kg/board.md": "# board\n"}, "wsA: kg/board.md — added",
+            who=("176", "176@vexa.local"))
+
+    assert _change(tmp_path, "wsA", "owner1", idx)["change"]["author"] is None
+
+
+# ── the founder's own shape (Vexa-ai/vexa#1642) ─────────────────────────────────────────────────
+#
+# Seen 2026-09-07 on the dogfood stack: *"Changed 60 minutes ago by **someone**"* on an instance
+# whose `_global` log reads `dmitry@vexa.ai|176@vexa.local`, whose desk is `/workspaces/176`, and
+# whose person page is `kg/entities/person/dmitry.md` — `type: person / id: dmitry / title: Dmitry`,
+# with no `self:` key and no `name:` key. Three separate misses, each of which alone produced
+# *someone*:
+#
+#   1. the route asked for the name of `dmitry@vexa.ai` and that string was joined onto the store
+#      root as if it were a subject, so no desk was ever opened;
+#   2. the desk's own page carries neither the `self: true` marker nor a `name:` — the two keys the
+#      resolver knew — while the schema it was written to uses `title:`;
+#   3. with both of those missing there was no floor at all, and `None` printed as a pronoun.
+#
+# The fixtures below are that shape with this repository's names (`pilot`, `Jane Smith`).
+
+FOUNDER_SHAPE_PAGE = (
+    "---\n"
+    "type: person\n"
+    "id: jsmith\n"
+    "title: Jane Smith\n"
+    "aliases: []\n"
+    "created: 2026-09-06\n"
+    "---\n\n"
+    "# Jane Smith\n\n"
+    "Instance administrator.\n"
+)
+
+
+def _uid_desk(root, subject: str, filename: str, page: str) -> None:
+    """A uid-numbered desk with one person page, named the way the KG writes them."""
+    d = root / subject / front_page.PERSON_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    (d / filename).write_text(page)
+
+
+def test_the_founders_shape_resolves_to_the_name_on_the_uid_numbered_desk(tmp_path):
+    """The whole bug in one test: an address in `%an`, a subject in `%ae`, a uid-numbered desk, and
+    a person page that carries `title:` and no `self:`."""
+    ws = _init_ws(tmp_path, "wsA")
+    idx = _shared(tmp_path, "wsA", owner="176")
+    _uid_desk(tmp_path, "176", "jsmith.md", FOUNDER_SHAPE_PAGE)
+    _commit(ws, {"kg/board.md": "# board\n"}, "wsA: kg/board.md — added",
+            who=("jsmith@example.com", "176@vexa.local"))
+
+    change = _change(tmp_path, "wsA", "176", idx)["change"]
+
+    assert change["author"] == "Jane Smith"
+    # …and not any of the three things it said instead
+    assert change["author"] != "Jsmith"          # the floor is under the desk, not over it
+    assert change["author"] is not None
+    assert "@" not in change["author"]
+
+
+def test_the_address_alone_opens_no_desk_which_is_why_the_directory_step_exists(tmp_path):
+    """The mechanical claim under the test above, stated on its own so a regression names itself."""
+    (tmp_path / "176").mkdir()
+
+    assert front_page.subject_for_address(tmp_path, "176@vexa.local") == "176"
+    assert not (tmp_path / "jsmith@example.com").exists()
+
+
+def test_the_people_record_is_the_directory_for_an_ordinary_address(tmp_path):
+    """An address that is NOT a mount principal is resolved through the roster — the one file this
+    product writes an address and a subject on the same line of."""
+    ws = _init_ws(tmp_path, "wsA")
+    idx = _shared(tmp_path, "wsA", owner="176")
+    (tmp_path / "wsA" / "policy").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "wsA" / "policy" / "members.json").write_text(
+        '[{"subject": "176", "role": "owner", "email": "jsmith@example.com"}]')
+    _uid_desk(tmp_path, "176", "me.md", SELF_PAGE)
+    _commit(ws, {"kg/board.md": "# board\n"}, "wsA: kg/board.md — added",
+            who=("jsmith@example.com", "jsmith@example.com"))
+
+    assert front_page.subject_for_address(tmp_path, "jsmith@example.com") == "176"
+    assert _change(tmp_path, "wsA", "176", idx)["change"]["author"] == "Jane Smith"
+
+
+def test_the_roster_name_answers_when_no_page_does(tmp_path):
+    (tmp_path / "wsA" / "policy").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "wsA" / "policy" / "members.json").write_text(
+        '[{"subject": "176", "role": "owner", "email": "jsmith@example.com", "name": "Jane Smith"}]')
+
+    assert front_page.person_name(tmp_path, "176") == "Jane Smith"
+
+
+def test_the_identity_note_answers_when_no_page_and_no_roster_does(tmp_path):
+    """`.system/<subject>/identity.md` is the product's own "who you're helping" note, and the one
+    fact `engine.py` tells every agent not to leave blank. One bullet is read out of it."""
+    note = tmp_path / front_page.SYSTEM_STORE_DIRNAME / "176"
+    note.mkdir(parents=True)
+    (note / "identity.md").write_text(
+        "# Who you're helping\n\n## User\n\n"
+        "- **name:** Jane Smith (jsmith@example.com)\n"
+        "- **personal profile:** `kg/entities/person/jsmith.md`\n")
+
+    assert front_page.person_name(tmp_path, "176") == "Jane Smith"
+
+
+def test_the_identity_stubs_own_placeholder_is_not_a_name(tmp_path):
+    """*(unknown — ask the user, then record it here)* is the QUESTION. Printing it on a front page
+    would be the product asking a stranger who its own user is."""
+    note = tmp_path / front_page.SYSTEM_STORE_DIRNAME / "176"
+    note.mkdir(parents=True)
+    (note / "identity.md").write_text(
+        "## User\n\n- **name:** _(unknown — ask the user, then record it here)_\n")
+
+    assert front_page.identity_name(tmp_path, "176") is None
+
+
+def test_no_rendered_name_is_ever_someone_or_the_admin(tmp_path):
+    """THE ASSERTION THE ISSUE IS NAMED AFTER, over every shape this chain has an answer for."""
+    _uid_desk(tmp_path, "176", "jsmith.md", FOUNDER_SHAPE_PAGE)
+    answers = [
+        front_page.display_name(tmp_path, "176", address="jsmith@example.com"),
+        front_page.display_name(tmp_path, address="jsmith@example.com", principal="176@vexa.local"),
+        front_page.display_name(tmp_path, address="nobody@example.com"),
+        front_page.display_name(tmp_path, address="176", principal="176@vexa.local"),
+    ]
+
+    assert answers[:3] == ["Jane Smith", "Jane Smith", "Nobody"]
+    assert answers[3] is None                       # nothing to read — the clause is dropped, not filled
+    for a in answers:
+        assert a is None or "@" not in a
+        assert (a or "").lower() not in ("someone", "the admin")
 
 
 def test_a_page_naming_itself_with_an_address_is_still_not_a_name(tmp_path):
@@ -252,11 +402,86 @@ def test_the_reader_asks_what_they_are_called(tmp_path):
     assert r.json() == {"subject": "owner1", "name": "Jane Smith", "first_name": "Jane"}
 
 
-def test_a_reader_nobody_has_written_down_is_named_null_not_addressed(tmp_path):
+def test_a_reader_nobody_has_written_down_is_read_off_their_own_address(tmp_path):
+    """Vexa-ai/vexa#1642. The company layer's first line reads *<first name> writes it*, and it was
+    reading *the admin* on the instance whose administrator is certainly known. `x-user-email` is
+    the address the gateway resolved from the session, so it is both the key the chain is written
+    against and the floor under it."""
+    r = _client(tmp_path).get("/api/people/me",
+                              headers={**_h("176"), "X-User-Email": "jsmith@example.com"})
+
+    assert r.status_code == 200
+    assert r.json() == {"subject": "176", "name": "Jsmith", "first_name": "Jsmith"}
+
+
+def test_a_reader_with_neither_a_page_nor_an_address_is_named_null(tmp_path):
+    """`null` is still an answer where there is genuinely nothing to read — the panel drops the
+    clause rather than inventing a person."""
     r = _client(tmp_path).get("/api/people/me", headers=_h("owner1"))
 
     assert r.status_code == 200
     assert r.json() == {"subject": "owner1", "name": None, "first_name": None}
+
+
+def test_the_reader_of_a_uid_numbered_desk_meets_the_name_on_it(tmp_path):
+    _uid_desk(tmp_path, "176", "jsmith.md", FOUNDER_SHAPE_PAGE)
+
+    r = _client(tmp_path).get("/api/people/me",
+                              headers={**_h("176"), "X-User-Email": "jsmith@example.com"})
+
+    assert r.json() == {"subject": "176", "name": "Jane Smith", "first_name": "Jane"}
+
+
+# ── who writes the company layer ────────────────────────────────────────────────────────────────
+ADMIN_ONLY = "---\nkind: policies\nprofile: default\nglobal_admin_only: on\n---\n\n# Policies\n"
+
+
+def _company_layer(root, policies: str = ADMIN_ONLY, *, accepted=True):
+    """`_global` as the platform seeds it, and (optionally) one acceptance on top of it."""
+    g = root / front_page.GLOBAL_SLUG
+    g.mkdir(parents=True)
+    _git(g, "init", "-q")
+    _commit(g, {"POLICIES.md": policies, "README.md": "# Pilot Industries\n"},
+            "policy: seed", who=("vexa-platform", "platform@vexa.ai"))
+    if accepted:
+        _commit(g, {"OBJECTIVES.md": "# Objectives\n"}, "company layer: Pilot Industries",
+                who=("jsmith@example.com", "176@vexa.local"))
+    return g
+
+
+def test_the_company_layer_names_its_writer_from_its_own_acceptances(tmp_path):
+    """`_global/STRUCTURE.md`: *"every acceptance is a commit authored by the administrator who made
+    it"*. So the layer's own history is the record of who writes it — no second store, no new
+    credential, no hop to another service."""
+    _company_layer(tmp_path)
+    _uid_desk(tmp_path, "176", "jsmith.md", FOUNDER_SHAPE_PAGE)
+
+    r = _client(tmp_path).get("/api/people/admin", headers=_h("reader9"))
+
+    assert r.status_code == 200
+    assert r.json() == {"name": "Jane Smith", "first_name": "Jane"}
+
+
+def test_the_administrator_is_not_claimed_when_the_layer_has_more_than_one_writer(tmp_path):
+    """With `global_admin_only` off the newest author and *the administrator* are not the same
+    person, so the honest answer is nothing rather than the most recent editor promoted."""
+    _company_layer(tmp_path, ADMIN_ONLY.replace("global_admin_only: on", "global_admin_only: off"))
+    _uid_desk(tmp_path, "176", "jsmith.md", FOUNDER_SHAPE_PAGE)
+
+    assert _client(tmp_path).get("/api/people/admin", headers=_h("reader9")).json() \
+        == {"name": None, "first_name": None}
+
+
+def test_platform_plumbing_is_not_the_administrator(tmp_path):
+    """A seed and a policy rewrite are the platform writing, not a person accepting."""
+    _company_layer(tmp_path, accepted=False)
+
+    assert _client(tmp_path).get("/api/people/admin", headers=_h("reader9")).json() \
+        == {"name": None, "first_name": None}
+
+
+def test_no_company_layer_is_not_an_error(tmp_path):
+    assert _client(tmp_path).get("/api/people/admin", headers=_h("reader9")).status_code == 200
 
 
 def test_the_roster_carries_names_beside_the_addresses(tmp_path):

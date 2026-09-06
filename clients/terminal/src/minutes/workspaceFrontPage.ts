@@ -8,11 +8,16 @@
  *  repository facts — a path, an address, a commit count, a repo state — six answers to six
  *  questions nobody had asked. **The person needs a sentence about a place.**
  *
- *  So the strip is two lines, and every function in this file exists to make one clause of them:
+ *  So the front page is a HEADER — an eyebrow, the title, and two grey rows under it — and every
+ *  function in this file exists to make one clause of it (#1634's design spec, 2026-09-06 22:15Z:
+ *  *"no one will read it and no one will be happy about this, make it a proper design"*):
  *
- *      Company layer · everyone at Acme reads it, Jane writes it · 25 pages
- *      Changed 14 minutes ago by Jane Smith: the policies wizard ask · policies: default profile
- *          [Set up policies] [Add an editor] [History]
+ *      Company layer                                                          ← the eyebrow (kind)
+ *      Acme                                                                   ← the title
+ *      (JS) everyone at Acme reads it, Jane writes it · 25 pages · ⚑ policies: default profile
+ *                                          [Set up policies] [Add an editor] [🕘]
+ *      🕐 Jane Smith changed the policies wizard ask 14 minutes ago
+ *      ──────────────────────────────────────────────────────────────────────  ← the hairline
  *
  *  FOUR RULES ARE IN HERE, AND THEY ARE ALL SUBTRACTIONS.
  *
@@ -23,9 +28,13 @@
  *  2. **The changed thing by its TITLE, the author by their NAME.** Both are resolved on the server
  *     (`control_plane/front_page.py`), because neither is in a git log: `%s` is a commit subject and
  *     `%an` is the principal a mount commits as. This file only chooses the WORDS around them.
- *  3. **An address is never a name.** The server answers `null` when nobody has written a person
- *     down, and `null` renders as *someone*. `dmitry@vexa.ai` in that position — which is what the
- *     founder was shown — tells the reader the product does not know who works here.
+ *  3. **An address is never a name — and neither is a pronoun** (Vexa-ai/vexa#1642). The server
+ *     resolves the person FROM their address (`front_page.display_name`: their desk's own page, the
+ *     company directory, the people record, the identity note, and finally the address's local part
+ *     read as a name), so the answer is a name a reader can check. `null` survives only where there
+ *     was nothing at all to read, and it renders as NO CLAUSE rather than as *someone*: the founder
+ *     met *Changed 60 minutes ago by someone* on the instance whose every commit is authored by
+ *     him, which told him the product does not know who works there.
  *  4. **Nothing that is not a sentence.** No commit count, no *no repo attached*, no address, no
  *     path (#1634 rule 3). Those are still true and still one click away, in the sections #1628
  *     built, behind the one disclosure at the end of line two.
@@ -114,8 +123,17 @@ export function visibilitySentence(
     const adminOnly = on("global_admin_only");
     if (adminOnly === null) return null;
     const everyone = who.company ? `everyone at ${who.company}` : "everyone here";
-    const writer = who.adminFirstName || "the admin";
-    return adminOnly ? `${everyone} reads it, ${writer} writes it` : `${everyone} reads and writes it`;
+    if (!adminOnly) return `${everyone} reads and writes it`;
+    // **THE WRITER IS A PERSON OR NOBODY — never the words *the admin*** (Vexa-ai/vexa#1642).
+    // That was the fallback, and the founder met it on his own instance: *"everyone at Vexa reads
+    // it, THE ADMIN writes it"*, where the administrator is himself, his desk holds his person
+    // page and every commit in `_global` is authored by his address. A role word in a name's slot
+    // reads as a template nobody filled in. `/api/people/admin` resolves the name from the layer's
+    // own acceptances now; where it genuinely cannot, the clause is DROPPED rather than filled with
+    // a placeholder — *everyone at Acme reads it* is true, and who may write it is one click away
+    // in the details, stated as the rule it is.
+    const writer = (who.adminFirstName || "").trim();
+    return writer ? `${everyone} reads it, ${writer} writes it` : `${everyone} reads it`;
   }
   return null;                                  // a group's people ARE the point — see `peopleLine`
 }
@@ -151,6 +169,76 @@ export function peopleLine(members: readonly NamedMember[] | null, mySubject?: s
 export const placeWord = (kind: WorkspaceKind): string =>
   kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "shared workspace";
 
+/** THE EYEBROW (#1634's design spec, point 1) — the kind, 12px and muted, above the title.
+ *
+ *  The same three words as `placeWord`, capitalised for the position they are in: an eyebrow is a
+ *  label rather than a clause, so *Shared workspace* opens it and the people sentence underneath no
+ *  longer has to carry the kind at all. That subtraction is the whole reason the eyebrow exists —
+ *  `Pilot · shared workspace · you, Jane Smith and 2 more` says the kind in the middle of a
+ *  sentence about people, where it reads as one more fact in a list. */
+export const eyebrow = (kind: WorkspaceKind): string =>
+  kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "Shared workspace";
+
+/** THE PAGE'S OWN TITLE, and the body with that heading taken off it.
+ *
+ *  The header owns the title (#1634's spec, point 2: *"the page H1 the README already has; the
+ *  header does not repeat it"*), so the README's first heading is LIFTED rather than duplicated —
+ *  a title in the header and the same words again two lines down is the shape a person reads as a
+ *  bug. A README with no heading leaves `title: null` and the header falls back to the workspace's
+ *  own name, which is the spec's other half. */
+export function splitLeadingH1(md: string | null): { title: string | null; body: string } {
+  const text = String(md ?? "");
+  const lines = text.split("\n");
+  let i = 0;
+  // front matter, if the page opens with it — a title under it is still the page's first heading
+  if (lines[0]?.trim() === "---") {
+    const end = lines.indexOf("---", 1);
+    if (end === -1) return { title: null, body: text };
+    i = end + 1;
+  }
+  const from = i;
+  while (i < lines.length && !lines[i].trim()) i++;
+  const m = /^#\s+(.+?)\s*$/.exec(lines[i] ?? "");
+  if (!m) return { title: null, body: text };
+  const rest = [...lines.slice(0, from), ...lines.slice(i + 1)];
+  while (rest.length && !rest[0].trim()) rest.shift();
+  return { title: m[1].trim(), body: rest.join("\n") };
+}
+
+/** WHOSE FACE IS ON THIS PAGE — the avatars of the people the first line is about (#1634's spec,
+ *  point 3), in the order the sentence names them.
+ *
+ *  A desk is one person's and the company layer has one writer, so both show exactly one circle;
+ *  a shared workspace shows you first and then whoever is written down, three at most, because the
+ *  fourth is what *and N more* is for. Somebody nobody has written down has no initials and is
+ *  simply not drawn — an avatar reading `?` is a hole with a border around it. */
+export interface Avatar { key: string; name: string; you: boolean }
+export const AVATARS_SHOWN = 3;
+export function avatarPeople(f: FrontPageFacts): Avatar[] {
+  const mine = (f.myName || "").trim();
+  if (f.kind === "desk") return mine ? [{ key: "me", name: mine, you: true }] : [];
+  if (f.kind === "global") {
+    const admin = (f.adminName || "").trim();
+    return admin ? [{ key: "admin", name: admin, you: admin === mine }] : [];
+  }
+  const others = (f.members ?? []).filter((m) => m.subject !== f.mySubject);
+  const iAmIn = (f.members ?? []).length !== others.length;
+  const rows: Avatar[] = iAmIn && mine ? [{ key: "me", name: mine, you: true }] : [];
+  for (const m of others) {
+    const name = (m.name || "").trim();
+    if (name) rows.push({ key: m.subject, name, you: false });
+  }
+  return rows.slice(0, AVATARS_SHOWN);
+}
+
+/** A NAME, AS TWO LETTERS. The first letter of the first two words — *Jane Smith* is JS and
+ *  *Dmitry* is D, which is what an avatar of a person with one name should be rather than a padded
+ *  two-letter guess. Non-letters are dropped, so a hyphenated or accented name still reads. */
+export function initialsOf(name: string): string {
+  const words = String(name ?? "").split(/[\s._-]+/).map((w) => w.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean);
+  return words.slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "";
+}
+
 export interface FrontPageFacts {
   kind: WorkspaceKind;
   name: string | null;
@@ -158,6 +246,10 @@ export interface FrontPageFacts {
   policies: string | null;
   company: string | null;
   adminFirstName?: string | null;
+  /** the administrator's whole name — the avatar wants both initials, the sentence wants one word */
+  adminName?: string | null;
+  /** the reader's own name, for their avatar and for the "you" the sentence already says */
+  myName?: string | null;
   members: readonly NamedMember[] | null;
   mySubject?: string | null;
   myRole?: Role | null;
@@ -168,22 +260,24 @@ export interface FrontPageFacts {
 const join = (parts: (string | null | undefined)[]): string =>
   parts.map((p) => (p ?? "").trim()).filter(Boolean).join(" · ");
 
-const pageCount = (n: number | null): string | null =>
+export const pageCount = (n: number | null): string | null =>
   n === null ? null : `${n} page${n === 1 ? "" : "s"}`;
 
-/** LINE ONE — where you are and who is here.
+/** WHO IS HERE, in the one clause the people row is built around.
  *
  *  Three shapes, and the difference between them is not decoration: a desk and the company layer are
- *  answered by a RULE (who may read this), a shared workspace by PEOPLE (who is here). Putting the
- *  page count on the first two and the names on the third is that difference, in the order the
- *  founder wrote them. */
-export function lineOne(f: FrontPageFacts): string {
-  const visible = visibilitySentence(f.kind, f.policies,
+ *  answered by a RULE (who may read this), a shared workspace by PEOPLE (who is here).
+ *
+ *  It no longer carries the KIND or the workspace's NAME, and that is #1634's design spec rather
+ *  than a subtraction of meaning: the kind is the eyebrow and the name is the title, both directly
+ *  above this row. `Pilot · shared workspace · you, Jane Smith and 2 more` was three answers in a
+ *  row with no sentence among them. */
+export function peopleClause(f: FrontPageFacts): string | null {
+  if (f.kind === "group") return peopleLine(f.members, f.mySubject);
+  return visibilitySentence(f.kind, f.policies,
     { company: f.company, adminFirstName: f.adminFirstName });
-  if (f.kind === "desk") return join(["Your desk", pageCount(f.pages), visible]);
-  if (f.kind === "global") return join(["Company layer", visible, pageCount(f.pages)]);
-  return join([f.name || "This workspace", placeWord(f.kind), peopleLine(f.members, f.mySubject)]);
 }
+
 
 // ── line two: the last change, as a sentence ────────────────────────────────────────────────────
 
@@ -230,25 +324,59 @@ export function whenPhrase(change: Pick<LastChange, "when" | "ts">, now: number 
   return change.when;
 }
 
-/** WHO, AS A PERSON. Their own name; *you* when it was this reader; *someone* when nobody has
- *  written them down. Never an address — the server answers `null` rather than one, and this is the
- *  word that stands in its place. */
-export function authorPhrase(change: Pick<LastChange, "kind" | "author">): string {
+/** WHO, AS A PERSON. Their own name, or *you* when it was this reader.
+ *
+ *  **`null`, NEVER *someone*** (Vexa-ai/vexa#1642). That word was what this returned when the
+ *  server's chain answered nothing, and the founder met it on the one instance where the person
+ *  certainly exists — the server now resolves the name from the ADDRESS and falls back to that
+ *  address read as a name, so `null` here means there was genuinely nothing to read. The sentence
+ *  then names nobody rather than naming a pronoun: *Changed 2 hours ago* is true and *someone*
+ *  tells a reader the product does not know who works here. */
+export function authorPhrase(change: Pick<LastChange, "kind" | "author">): string | null {
   if (change.kind === "you") return "you";
-  return (change.author || "").trim() || "someone";
+  return (change.author || "").trim() || null;
 }
 
-/** LINE TWO's first half — the last change, as a sentence. */
+/** THE LAST-CHANGE ROW, IN ITS PARTS (#1634's design spec, point 4: *"a clock icon, `<Name> changed
+ *  <the page title> <relative time>` — the title a quiet link that opens the page"*).
+ *
+ *  Parts rather than a string, because one of them is a LINK and the rest is not: the changed page
+ *  opens where it lives, and a sentence assembled in the panel could only underline the whole of
+ *  itself. `page` is null when several changed (the count is in `thing` instead) or when the commit
+ *  touched no page a person is shown. */
+export interface LastChangeParts {
+  who: string | null;
+  thing: string | null;
+  page: { path: string; title: string } | null;
+  when: string;
+}
+export function lastChangeParts(change: LastChange, now?: number): LastChangeParts {
+  const pages = change.pages ?? [];
+  return {
+    who: authorPhrase(change),
+    thing: changedThing(change),
+    page: pages.length === 1 ? pages[0] : null,
+    when: whenPhrase(change, now),
+  };
+}
+
+/** LINE TWO's first half — the last change, as a sentence, in the founder's own order.
+ *
+ *  *Jane Smith changed the governing board page 2 hours ago*, not *Changed 2 hours ago by Jane
+ *  Smith: the governing board page*. The person is the subject of the sentence because they are
+ *  what the row is about; the colon form was a log entry with words around it. */
 export function lastChangeSentence(change: LastChange | null, now?: number): string {
-  if (!change) return "Nothing has been written here yet";
-  const head = `Changed ${whenPhrase(change, now)} by ${authorPhrase(change)}`;
-  const thing = changedThing(change);
-  return thing ? `${head}: ${thing}` : head;
+  if (!change) return "Nothing written here yet";
+  const { who, thing, when } = lastChangeParts(change, now);
+  const subject = who === "you" ? "You" : who;
+  const tail = [thing, when].filter(Boolean).join(" ");
+  return subject ? `${subject} changed ${tail}` : `Changed ${tail}`;
 }
 
-/** LINE TWO's second half — the one fact this KIND of place carries (#1634 rule 4): the policy
- *  profile on the company layer, the bound meeting series on a group. A desk carries neither, and a
- *  clause invented to fill the space would be the thing this issue removed. */
+/** THE PILL — the one fact this KIND of place carries (#1634 rule 4, and point 3 of its design
+ *  spec, which moved it up beside the page count): the policy profile on the company layer, the
+ *  bound meeting series on a group. A desk carries neither, and a clause invented to fill the space
+ *  would be the thing this issue removed. */
 export function kindFact(f: FrontPageFacts): string | null {
   if (f.kind === "global") {
     const profile = policyProfile(f.policies);
@@ -262,8 +390,6 @@ export function kindFact(f: FrontPageFacts): string | null {
   return null;
 }
 
-export const lineTwo = (f: FrontPageFacts, change: LastChange | null, now?: number): string =>
-  join([lastChangeSentence(change, now), kindFact(f)]);
 
 // ── the acts this viewer may take ───────────────────────────────────────────────────────────────
 

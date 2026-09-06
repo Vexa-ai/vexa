@@ -187,11 +187,24 @@ describe("the panel stands on a workspace README and nowhere else", () => {
       if (!w?.textContent) throw new Error("the first line has not answered yet");
       return w;
     });
-    expect(where.textContent).toContain("shared workspace");
+    // The KIND is the eyebrow since #1642 applied #1634's design spec — it is a label above the
+    // title, not a clause in the middle of a sentence about people.
+    expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Shared workspace");
+    expect(where.textContent).toContain("you");
     // between the crumb above and the prose below — the reading order is the claim
     const text = container.textContent ?? "";
-    expect(text.indexOf("shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
+    expect(text.indexOf("Shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("group");
+  });
+
+  it("takes the README's own first heading as the title, and the body does not repeat it", async () => {
+    const { container } = panel();
+    await waitFor(() => expect(container.querySelector("[data-ws-title]")).toBeTruthy());
+
+    expect(container.querySelector("[data-ws-title]")?.textContent).toBe("Pilot");
+    // …and exactly once as a heading: a title printed twice two lines apart reads as a bug
+    expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Pilot"]);
+    expect(container.textContent).toContain("The workspace body.");
   });
 
   it("does NOT render on an ordinary page", async () => {

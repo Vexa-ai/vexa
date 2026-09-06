@@ -529,11 +529,27 @@ export async function readLastChange(slug: string, opts?: { path?: string }): Pr
   return getJson<LastChangeAnswer>(`/api/workspaces/${encodeURIComponent(slug)}/git/last-change${qs}`);
 }
 
-/** WHO THE READER IS, by name — `GET /api/people/me`. `name` is null when nobody has written them
- *  down, and null is the answer: no address is ever put in a name's place. */
+/** WHO THE READER IS, by name — `GET /api/people/me`. Since Vexa-ai/vexa#1642 the server resolves
+ *  it from the reader's own ADDRESS (their desk's person page, the company directory, the people
+ *  record, the identity note, and finally the address read as a name), so `null` means there was
+ *  genuinely nothing to read rather than that the wrong key was used. An address is still never put
+ *  in a name's place. */
 export interface MyPerson { subject: string; name: string | null; first_name: string | null }
 export async function readMyPerson(): Promise<MyPerson> {
   return getJson<MyPerson>(`/api/people/me`);
+}
+
+/** WHO WRITES THE COMPANY LAYER, by name — `GET /api/people/admin` (Vexa-ai/vexa#1642).
+ *
+ *  The first line of `_global` reads *everyone at <company> reads it, <first name> writes it*, and
+ *  it was reading *the admin* because the only name the panel had was the READER's. The layer's own
+ *  history is the record of who writes it (`_global/STRUCTURE.md`: every acceptance is a commit
+ *  authored by the administrator who made it), and the route resolves that person the same way
+ *  every other name on this page is resolved. Both fields are null when the answer would be a
+ *  guess — the clause is then dropped, never filled with the role word. No address on the wire. */
+export interface InstanceAdmin { name: string | null; first_name: string | null }
+export async function readInstanceAdmin(): Promise<InstanceAdmin> {
+  return getJson<InstanceAdmin>(`/api/people/admin`);
 }
 
 export async function readWorkspaceHistory(slug: string, opts?: { path?: string; limit?: number }): Promise<WorkspaceHistory> {

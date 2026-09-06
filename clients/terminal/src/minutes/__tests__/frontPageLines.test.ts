@@ -1,31 +1,38 @@
-/** THE THREE LINES THE FOUNDER WROTE (Vexa-ai/vexa#1634).
+/** THE THREE LINES THE FOUNDER WROTE (Vexa-ai/vexa#1634), AS THE HEADER THE DESIGN SPEC ASKED FOR
+ *  (Vexa-ai/vexa#1642).
  *
  *  *"what about this one? never spoke about how to make it right, helpful and nice."* — on a strip
  *  reading `Company layer · 25 pages · _global: asks/policies-wizard.md … · dmitry@vexa.ai · 14
  *  minutes ago · Everyone reads, the admin writes · no repo attached · 10+ commits`. The issue then
- *  wrote out what it should say instead, three times, one per viewer. **Those three lines are the
- *  specification, so this file renders them from fixture data and compares the strings.**
+ *  wrote out what it should say instead, three times, one per viewer, and its design comment of
+ *  22:15Z said where each clause goes: an eyebrow, a title, a people row, a last-change row.
+ *  **Those are the specification, so this file composes them from fixture data and compares the
+ *  strings.**
  *
  *  A screenshot could not hold this. Every claim here is about WORDS — which fact is in the line,
  *  which is not, what stands where a fact is missing — and words are exactly what a rendering test
  *  turns into "something appeared". So the panel is left to `workspaceStrip.test.tsx` and the
  *  sentences are held here, character for character.
  *
- *  Four things are pinned besides the three lines, each of them a rule with a plausible wrong
+ *  Five things are pinned besides the three lines, each of them a rule with a plausible wrong
  *  answer that would still look fine on screen:
  *
  *    · TITLE RESOLUTION — one page reads as *the <title> page*, and an ask as *the … ask*. A path is
  *      never a title, and `asks/policies-wizard.md` was exactly the string the founder was shown.
  *    · THE COUNT FORM — several pages become *five pages*, not five titles and not `+13`.
- *    · NAME RESOLUTION — *you*, else the person's name, else *someone*, and NEVER an address. An
- *      address in that position is what made the founder's line read as repository facts.
+ *    · NAME RESOLUTION — *you*, else the person's name, else NOTHING (#1642). *someone* used to
+ *      stand there and the founder met it on the instance where the person certainly exists; an
+ *      address in that position is what made his line read as repository facts before that.
  *    · BUTTONS BY ROLE — a reader gets History and nothing else. Not a greyed control, not one that
  *      explains why it will refuse: none.
+ *    · THE HEADER'S OWN SHAPE — the kind is the eyebrow, the README's first heading is the title and
+ *      is lifted out of the body, and the people row carries neither.
  */
 import { describe, it, expect } from "vitest";
 import {
-  actInstruction, authorPhrase, changedThing, companyName, countWord, kindFact, lineOne, lineTwo,
-  peopleLine, policyProfile, stripActs, visibilitySentence, whenPhrase,
+  actInstruction, authorPhrase, avatarPeople, changedThing, companyName, countWord, eyebrow,
+  initialsOf, kindFact, lastChangeParts, lastChangeSentence, pageCount, peopleClause, peopleLine,
+  policyProfile, splitLeadingH1, stripActs, visibilitySentence, whenPhrase,
   type FrontPageFacts, type LastChange,
 } from "../workspaceFrontPage";
 
@@ -50,27 +57,37 @@ const change = (over: Partial<LastChange> = {}): LastChange => ({
   ...over,
 });
 
+/** THE PEOPLE ROW, exactly as `WorkspaceReadmePanel` assembles it — the people sentence, the page
+ *  count and the one kind pill, in that order, separated by middle dots. Composed here rather than
+ *  exported from the module because the row is three ELEMENTS on screen (one of them a pill with an
+ *  icon in it) and only its words are this file's business. */
+const row = (f: FrontPageFacts): string =>
+  [peopleClause(f), pageCount(f.pages), kindFact(f)].filter(Boolean).join(" · ");
+
 // ── the three lines, as the issue wrote them ────────────────────────────────────────────────────
 describe("the three viewers' lines", () => {
   it("THE COMPANY LAYER, an admin viewing", () => {
     const facts: FrontPageFacts = {
       kind: "global", name: null, pages: 25, policies: POLICIES,
-      company: companyName(README), adminFirstName: "Jane",
-      members: null, mySubject: "126",
+      company: companyName(README), adminFirstName: "Jane", adminName: "Jane Smith",
+      myName: "Jane Smith", members: null, mySubject: "126",
     };
 
-    expect(lineOne(facts)).toBe(
-      "Company layer · everyone at Pilot Industries reads it, Jane writes it · 25 pages");
-    expect(lineTwo(facts, change())).toBe(
-      "Changed 14 minutes ago by Jane Smith: the policies wizard ask · policies: default profile");
+    expect(eyebrow(facts.kind)).toBe("Company layer");
+    expect(row(facts)).toBe(
+      "everyone at Pilot Industries reads it, Jane writes it · 25 pages · policies: default profile");
+    expect(lastChangeSentence(change())).toBe(
+      "Jane Smith changed the policies wizard ask 14 minutes ago");
     expect(stripActs({ kind: "global", owner: true }).map((a) => a.label))
       .toEqual(["Set up policies", "Add an editor", "History"]);
+    // one face, and it is the person the sentence names — not the person reading
+    expect(avatarPeople(facts).map((a) => initialsOf(a.name))).toEqual(["JS"]);
   });
 
   it("A SHARED WORKSPACE, its owner viewing", () => {
     const facts: FrontPageFacts = {
       kind: "group", name: "Pilot", pages: 9, policies: POLICIES, company: companyName(README),
-      mySubject: "126", myRole: "owner",
+      mySubject: "126", myRole: "owner", myName: "Alex Roe",
       members: [
         { subject: "126", role: "owner", email: "jsmith@example.com" },
         { subject: "77", role: "contributor", name: "Jane Smith" },
@@ -83,16 +100,20 @@ describe("the three viewers' lines", () => {
       pages: [{ path: "kg/board.md", title: "the governing board" }],
     });
 
-    expect(lineOne(facts)).toBe("Pilot · shared workspace · you, Jane Smith and 2 more");
-    expect(lineTwo(facts, board)).toBe("Changed 2 hours ago by Jane Smith: the governing board page");
+    expect(eyebrow(facts.kind)).toBe("Shared workspace");
+    expect(facts.name).toBe("Pilot");                       // …and the name is the TITLE, not a clause
+    expect(row(facts)).toBe("you, Jane Smith and 2 more · 9 pages");
+    expect(lastChangeSentence(board)).toBe("Jane Smith changed the governing board page 2 hours ago");
     expect(stripActs({ kind: "group", owner: true, remote: REMOTE }).map((a) => a.label))
       .toEqual(["Add a member", "Sync", "History"]);
+    // you first, then whoever is written down; the two nobody has named are in the "2 more"
+    expect(avatarPeople(facts).map((a) => initialsOf(a.name))).toEqual(["AR", "JS"]);
   });
 
   it("A DESK, its owner viewing", () => {
     const facts: FrontPageFacts = {
       kind: "desk", name: null, pages: 12, policies: POLICIES, company: companyName(README),
-      members: null, mySubject: "126",
+      members: null, mySubject: "126", myName: "Jane Smith",
     };
     const now = new Date(2026, 8, 6, 12, 0, 0).getTime();      // local: the claim is calendar days
     const mine = change({
@@ -101,8 +122,9 @@ describe("the three viewers' lines", () => {
       pages: [{ path: "kg/standing-orders.md", title: "standing orders" }],
     });
 
-    expect(lineOne(facts)).toBe("Your desk · 12 pages · agents read it for meetings you are in");
-    expect(lineTwo(facts, mine, now)).toBe("Changed yesterday by you: the standing orders page");
+    expect(eyebrow(facts.kind)).toBe("Your desk");
+    expect(row(facts)).toBe("agents read it for meetings you are in · 12 pages");
+    expect(lastChangeSentence(mine, now)).toBe("You changed the standing orders page yesterday");
     expect(stripActs({ kind: "desk", owner: true, remote: null }).map((a) => a.label))
       .toEqual(["Connect a repo", "History"]);
   });
@@ -110,6 +132,44 @@ describe("the three viewers' lines", () => {
 
 const REMOTE = { has_home: true, remote: "origin", url: "https://github.com/pilot/kg",
                  branch: "main", tracked: true, ahead: 2, behind: 0 };
+
+// ── the header's own shape ──────────────────────────────────────────────────────────────────────
+describe("the kind is the eyebrow and the README's heading is the title", () => {
+  it("lifts the first heading off the body so it is not printed twice", () => {
+    const front = splitLeadingH1("# Pilot Industries\n\nWe make the things.\n");
+    expect(front.title).toBe("Pilot Industries");
+    expect(front.body).toBe("We make the things.\n");
+  });
+
+  it("reads past front matter, and leaves a body that has no heading alone", () => {
+    const withFm = splitLeadingH1("---\nkind: readme\n---\n\n# Pilot\n\nprose\n");
+    expect(withFm.title).toBe("Pilot");
+    expect(withFm.body).toBe("---\nkind: readme\n---\n\nprose\n");
+
+    const none = splitLeadingH1("Just prose, no heading.\n\n## A subheading\n");
+    expect(none.title).toBeNull();
+    expect(none.body).toBe("Just prose, no heading.\n\n## A subheading\n");
+    expect(splitLeadingH1(null)).toEqual({ title: null, body: "" });
+  });
+
+  it("initials come from the display name, and one name is one letter", () => {
+    expect(initialsOf("Jane Smith")).toBe("JS");
+    expect(initialsOf("Dmitry")).toBe("D");
+    expect(initialsOf("jane-smith")).toBe("JS");
+    expect(initialsOf("Ada Byron Lovelace")).toBe("AB");   // two, never three
+    expect(initialsOf("")).toBe("");                       // nothing to draw → no circle
+  });
+
+  it("draws nobody it cannot name", () => {
+    const anon: FrontPageFacts = {
+      kind: "group", name: "Pilot", pages: 2, policies: POLICIES, company: null,
+      mySubject: "126", members: [{ subject: "77", role: "viewer", email: "jsmith@example.com" }],
+    };
+    expect(avatarPeople(anon)).toEqual([]);
+    expect(avatarPeople({ ...anon, kind: "global", adminName: null })).toEqual([]);
+    expect(avatarPeople({ ...anon, kind: "desk", myName: null })).toEqual([]);
+  });
+});
 
 // ── the changed thing, by its title ─────────────────────────────────────────────────────────────
 describe("the changed thing is named, never pathed", () => {
@@ -128,37 +188,44 @@ describe("the changed thing is named, never pathed", () => {
     expect(countWord(17)).toBe("17");                 // a number pretending to be a word is worse
   });
 
+  it("only ONE changed page is a link — a count has nothing to open", () => {
+    const one = lastChangeParts(change());
+    expect(one.page).toEqual({ path: "asks/policies-wizard.md", title: "policies wizard" });
+    const many = lastChangeParts(change({
+      count: 2, pages: [{ path: "kg/a.md", title: "a" }, { path: "kg/b.md", title: "b" }],
+    }));
+    expect(many.page).toBeNull();
+    expect(many.thing).toBe("two pages");
+  });
+
   it("a commit that touched no page says the time and the person and stops", () => {
     expect(changedThing({ count: 0, pages: [] })).toBeNull();
-    expect(lineTwo({ kind: "desk", name: null, pages: 3, policies: null, company: null,
-                     members: null },
-                   change({ count: 0, pages: [], when: "3 minutes ago", author: "Jane Smith" })))
-      .toBe("Changed 3 minutes ago by Jane Smith");
+    expect(lastChangeSentence(change({ count: 0, pages: [], when: "3 minutes ago", author: "Jane Smith" })))
+      .toBe("Jane Smith changed 3 minutes ago");
   });
 
   it("a workspace nobody has written in says so, rather than saying nothing", () => {
-    expect(lineTwo({ kind: "group", name: "Pilot", pages: 0, policies: null, company: null,
-                     members: [] }, null))
-      .toBe("Nothing has been written here yet");
+    expect(lastChangeSentence(null)).toBe("Nothing written here yet");
   });
 });
 
 // ── who, as a person ────────────────────────────────────────────────────────────────────────────
-describe("the author is a person, never an address", () => {
-  it("you, then their name, then someone", () => {
+describe("the author is a person — never an address, and never a pronoun", () => {
+  it("you, then their name, then nothing", () => {
     expect(authorPhrase({ kind: "you", author: "Jane Smith" })).toBe("you");
     expect(authorPhrase({ kind: "member", author: "Jane Smith" })).toBe("Jane Smith");
-    expect(authorPhrase({ kind: "member", author: null })).toBe("someone");
-    expect(authorPhrase({ kind: "member", author: "" })).toBe("someone");
+    expect(authorPhrase({ kind: "member", author: null })).toBeNull();
+    expect(authorPhrase({ kind: "member", author: "" })).toBeNull();
   });
 
-  it("*someone* is what stands where nobody has been written down", () => {
-    // The server answers `null` rather than the address it can see, and this is the word that takes
-    // its place: `Changed 14 minutes ago by jsmith@example.com` is the line #1634 was opened about.
-    const line = lineTwo({ kind: "group", name: "Pilot", pages: 1, policies: null, company: null,
-                           members: [] },
-                          change({ author: null, when: "14 minutes ago" }));
-    expect(line).toBe("Changed 14 minutes ago by someone: the policies wizard ask");
+  it("names NOBODY where nobody could be resolved — *someone* is not a word this line says", () => {
+    // Vexa-ai/vexa#1642. The server resolves the person from their ADDRESS now and falls back to
+    // that address read as a name, so a null here means there was genuinely nothing to read. The
+    // sentence loses its subject rather than gaining a pronoun: *Changed 14 minutes ago: …* is
+    // true, and *someone* told the founder the product does not know who works there.
+    const line = lastChangeSentence(change({ author: null, when: "14 minutes ago" }));
+    expect(line).toBe("Changed the policies wizard ask 14 minutes ago");
+    expect(line).not.toContain("someone");
     expect(line).not.toContain("@");
   });
 
@@ -214,13 +281,22 @@ describe("where people are not the point, the rule is", () => {
     expect(visibilitySentence("group", POLICIES)).toBeNull();     // a group's people ARE the point
   });
 
+  it("drops the writer's clause rather than writing *the admin* in it", () => {
+    // Vexa-ai/vexa#1642, the founder's own line: *"everyone at Vexa reads it, THE ADMIN writes
+    // it"*, on the deployment whose administrator is himself. A role word in a name's slot reads as
+    // a template nobody filled in — so where the name cannot be resolved the clause is not there.
+    const said = visibilitySentence("global", POLICIES, { company: "Pilot Industries" });
+    expect(said).toBe("everyone at Pilot Industries reads it");
+    expect(said).not.toContain("the admin");
+  });
+
   it("says nothing rather than something invented when a fact is missing", () => {
     expect(visibilitySentence("desk", null)).toBeNull();
-    expect(visibilitySentence("global", POLICIES, {}))
-      .toBe("everyone here reads it, the admin writes it");
-    // …and a line with a missing clause is a shorter line, never a line with a hole in it
-    expect(lineOne({ kind: "desk", name: null, pages: null, policies: null, company: null,
-                     members: null })).toBe("Your desk");
+    expect(visibilitySentence("global", POLICIES, {})).toBe("everyone here reads it");
+    // …and a row with a missing clause is a shorter row, never a row with a hole in it
+    expect(peopleClause({ kind: "desk", name: null, pages: null, policies: null, company: null,
+                          members: null })).toBeNull();
+    expect(pageCount(null)).toBeNull();
   });
 
   it("refuses the placeholder headings the setup conversation writes while it is still asking", () => {

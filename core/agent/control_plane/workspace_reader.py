@@ -226,7 +226,11 @@ def _commit_records(raw: str, viewer_email: Optional[str]) -> list[dict]:
             f.strip() for f in lines[1:]
             if f.strip() and f.split("/", 1)[0].lstrip(".") not in ("git", "claude")
         ][:20]                       # cap: a root/seed commit can touch hundreds
-        out.append({"sha": sha, "msg": msg, "when": when, "author": an, "kind": kind,
+        # %ae RIDES ALONG (Vexa-ai/vexa#1642). `author` is `%an`, which on a turn commit is the
+        # person's SIGN-IN ADDRESS while `%ae` is `<subject>@vexa.local` — so the desk that holds
+        # their name is findable only through the second, and the front page asked for the first as
+        # if it were a subject and answered `someone`. Both halves, one record, one parser.
+        out.append({"sha": sha, "msg": msg, "when": when, "author": an, "email": ae, "kind": kind,
                     "files": files, "ts": int(ct) if ct.isdigit() else 0})
     return out
 

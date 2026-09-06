@@ -37,6 +37,11 @@ const PATHS: Record<string, string> = {
   moon: "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z",
   info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 16v-4M12 8h.01",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6",
+  // The front-page header (Vexa-ai/vexa#1634 design spec): the last-change row's clock, the
+  // icon-only History act beside it, and the outline mark on the company layer's policy pill.
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 6.5V12l3.5 2",
+  history: "M3.1 9A9 9 0 1 1 3 12M3 4v5h5M12 7.5V12l3.5 2",
+  shield: "M12 22s8-4 8-10V5.5L12 2.5 4 5.5V12c0 6 8 10 8 10z",
   alert: "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01",
   key: "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3-3.5 3.5",
   copy: "M8 8h12v12H8zM16 8V4H4v12h4",

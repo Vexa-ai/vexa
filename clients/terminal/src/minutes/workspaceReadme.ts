@@ -22,8 +22,10 @@
 import { presentError } from "../surfaces/apiClient";
 import {
   gitRemoteStatus, listSharedMemberships, listWorkspaceMembers, listWorkspaceTree,
-  readLastChange, readMyPerson, readWorkspaceBySlug, readWorkspaceFile, readWorkspaceHistory,
-  type GitCommit, type GitRemoteStatus, type LastChange, type MyPerson, type WorkspaceMember,
+  readInstanceAdmin, readLastChange, readMyPerson, readWorkspaceBySlug, readWorkspaceFile,
+  readWorkspaceHistory,
+  type GitCommit, type GitRemoteStatus, type InstanceAdmin, type LastChange, type MyPerson,
+  type WorkspaceMember,
 } from "../surfaces/workspaceApi";
 import { authorPhrase, companyName } from "./workspaceFrontPage";
 import { isMachinery } from "./machinery";
@@ -178,6 +180,10 @@ export interface WorkspaceFacts {
   /** Who the reader is, by name. `null` when the probe failed; a null NAME inside it is the answer
    *  "nobody has written them down", and the line falls back to the role rather than an address. */
   me: MyPerson | null;
+  /** WHO WRITES THE COMPANY LAYER, by name (Vexa-ai/vexa#1642) — read only on `_global`, where the
+   *  first line is a sentence about that person. `null` outside it and when the answer would be a
+   *  guess; the clause is then dropped rather than filled with the word "the admin". */
+  admin: InstanceAdmin | null;
   bound: BoundSeries[];
   /** this reader's own role in a shared workspace (`null` for a desk / the company layer) */
   myRole: Role | null;
@@ -264,7 +270,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
 
   // The identity read is what says which KIND this is — and for anything but the desk and the
   // company layer it is the only thing that does.
-  const [ident, tree, change, remote, policies, company, me] = await Promise.allSettled([
+  const [ident, tree, change, remote, policies, company, me, admin] = await Promise.allSettled([
     isDesk || isGlobal ? Promise.resolve(null) : readWorkspaceBySlug(slug),
     listWorkspaceTree({ slug: isDesk ? undefined : slug }),
     // THE LAST CHANGE, DESCRIBED (Vexa-ai/vexa#1634) — not a one-commit history read any more.
@@ -279,6 +285,10 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     // policy sentence is.
     readWorkspaceFile("README.md", { slug: GLOBAL_SLUG }),
     readMyPerson(),
+    // WHO WRITES THE COMPANY LAYER (Vexa-ai/vexa#1642) — only where the sentence names them. Every
+    // other kind's first line is about the people here or about a rule, and a round trip to answer
+    // a question that page does not ask is a round trip on every README a person opens.
+    isGlobal ? readInstanceAdmin() : Promise.resolve(null),
   ]);
 
   const identity = ident.status === "fulfilled" ? ident.value : null;
@@ -301,7 +311,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
   // cannot disagree about who changed what.
   const lastCommit: GitCommit | null = described
     ? { sha: described.sha, msg: described.msg, when: described.when, ts: described.ts,
-        author: authorPhrase(described), kind: described.kind, files: described.files }
+        author: authorPhrase(described) ?? undefined, kind: described.kind, files: described.files }
     : null;
   const policiesText = policies.status === "fulfilled" ? policies.value : null;
   const policy = policySentence(kind, policiesText);
@@ -344,6 +354,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     policy, policiesText,
     company: companyName(company.status === "fulfilled" ? company.value : null),
     me: me.status === "fulfilled" ? me.value : null,
+    admin: admin.status === "fulfilled" ? admin.value : null,
     bound, myRole, members,
     remote: remote.status === "fulfilled" ? remote.value : null,
     remoteFailure,

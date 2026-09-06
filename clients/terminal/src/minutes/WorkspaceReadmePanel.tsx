@@ -82,9 +82,11 @@ import { ASK_CHAT_EVENT } from "../canvas/actions";
 import { AttachRepo } from "./AttachRepo";
 import { postIntent } from "./extend";
 import { POLICIES_PATH, POLICIES_WORKSPACE } from "./PoliciesAct";
+import { useOpenEntity } from "../ui-kit/docRefs";
 import { surface, type as ty } from "./tokens";
 import {
-  actDisplay, actInstruction, lineOne, lineTwo, stripActs,
+  actDisplay, actInstruction, avatarPeople, eyebrow, initialsOf, kindFact, lastChangeParts,
+  lastChangeSentence, pageCount, peopleClause, stripActs,
   type StripAct, type FrontPageFacts,
 } from "./workspaceFrontPage";
 import {
@@ -107,7 +109,7 @@ const detailsBox: CSSProperties = {
  *  the founder's "1/8 screen at max" with the rounding in the reader's favour. */
 export const STRIP_MAX_VH = 12;
 const stripS: CSSProperties = {
-  display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 2px",
+  display: "flex", flexDirection: "column", alignItems: "stretch", gap: 3,
   // The cap is the founder's; `auto` rather than `hidden` is this file's own rule 1 applied to the
   // cap itself. A 384px panel can wrap six summaries past 12vh, and clipping them would leave a
   // disclosure a person can see the top of and cannot click — a control that is present and does
@@ -116,13 +118,55 @@ const stripS: CSSProperties = {
 };
 const sectionS: CSSProperties = { borderTop: "1px solid var(--line)", marginTop: 8, paddingTop: 8 };
 /** A sentence, not a row of chips: the size and colour of the line under a shared document's
- *  title, and it WRAPS — a sentence that ellipsizes is a sentence with its ending taken away. */
-const lineS: CSSProperties = { ...ty.meta, color: "var(--t2)", lineHeight: 1.55, minWidth: 0 };
-/** An act. Quiet enough to sit inside a grey line, and unmistakably a button. */
-const actS: CSSProperties = {
-  ...ty.meta, flex: "none", padding: "1px 8px", borderRadius: 999, cursor: "pointer",
-  border: "1px solid var(--line)", background: "transparent", color: "var(--t2)", lineHeight: 1.6,
+ *  title, and it WRAPS — a sentence that ellipsizes is a sentence with its ending taken away.
+ *
+ *  13px and `--t2` are the design spec's own values for both rows (#1634, 22:15Z), taken from the
+ *  type scale rather than typed as numbers: `ty.body` IS 13px there, so a change to the shell's
+ *  scale moves this with it. */
+const lineS: CSSProperties = { ...ty.body, color: "var(--t2)", lineHeight: 1.55, minWidth: 0 };
+/** THE EYEBROW — 12px, muted, sentence case. `ty.chip` is the scale's 12px face; the colour is the
+ *  quietest of the three text tokens, in both themes, because an eyebrow is a label and the title
+ *  under it is the thing. */
+const eyebrowS: CSSProperties = { ...ty.chip, color: "var(--t3)", lineHeight: 1.5 };
+/** THE TITLE. The page's own H1, lifted out of the body so it is not printed twice. */
+const titleS: CSSProperties = {
+  fontFamily: "var(--sans)", fontSize: 19, fontWeight: 600, letterSpacing: "-0.01em",
+  color: "var(--t1)", margin: "1px 0 5px", lineHeight: 1.25, wordBreak: "break-word",
 };
+/** The two grey rows. `baseline` so the icons and the initials sit on the sentence rather than
+ *  above it, and the acts are pushed to the right edge by `marginLeft: auto` on their own span. */
+const rowFlow: CSSProperties = {
+  display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", minWidth: 0,
+};
+/** ONE FACE — 22px, initials, `-6px` overlap, a ring in the surface colour so the stack reads as
+ *  cards rather than as a smear (#1634's design spec, point 3). */
+const avatarS: CSSProperties = {
+  width: 22, height: 22, borderRadius: "50%", flex: "none",
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  fontFamily: "var(--sans)", fontSize: 9.5, fontWeight: 600, letterSpacing: ".02em",
+  background: surface.raisedHi, color: "var(--t2)",
+  border: "1px solid var(--line)", boxShadow: "0 0 0 2px var(--sidebar)",
+  marginLeft: -6, position: "relative",
+};
+/** THE KIND PILL — 12px, a hairline, an outline icon. One per kind, or none. */
+const pillS: CSSProperties = {
+  ...ty.chip, display: "inline-flex", alignItems: "center", gap: 4, flex: "none",
+  padding: "0 7px", borderRadius: 999, lineHeight: 1.7,
+  border: "1px solid var(--line)", color: "var(--t3)", background: "transparent",
+};
+/** AN ACT — a small secondary button: 26px high, 12px text, quiet until it is hovered. */
+const actS: CSSProperties = {
+  ...ty.chip, flex: "none", height: 26, padding: "0 9px", borderRadius: 7, cursor: "pointer",
+  display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+  border: "1px solid var(--line)", background: surface.raised, color: "var(--t2)",
+};
+/** …and the last one is the icon alone, with its name carried by `aria-label` and the tooltip. */
+const iconActS: CSSProperties = { ...actS, width: 26, padding: 0, justifyContent: "center" };
+/** THE LOADING STATE — the two rows as skeleton bars, so the header does not jump when they arrive
+ *  and nothing false is said in the meantime (#1634's design spec, "States"). */
+const barS = (w: number | string): CSSProperties => ({
+  display: "block", height: 9, width: w, borderRadius: 5, background: surface.raisedHi,
+});
 const rowS: CSSProperties = { display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, lineHeight: 1.5 };
 const keyS: CSSProperties = { ...ty.meta, flex: "none", width: 74 };
 const valS: CSSProperties = { ...ty.body, color: "var(--t1)", flex: "1 1 0%", minWidth: 0, wordBreak: "break-word" };
@@ -131,6 +175,14 @@ const btnS: CSSProperties = {
   border: "1px solid var(--line)", background: surface.raisedHi, color: "var(--t2)",
 };
 const dangerS: CSSProperties = { ...btnS, borderColor: "var(--danger)", color: "var(--danger)" };
+/** A QUIET LINK — the changed page's title in the last-change row. Not the accent colour and not a
+ *  full underline: it sits inside a grey sentence, so it is the sentence's own colour with a
+ *  hairline under it (#1634's design spec, point 4), and it only warms up on hover. */
+const quietLink: CSSProperties = {
+  font: "inherit", color: "var(--t1)", background: "transparent", border: "none", padding: 0,
+  cursor: "pointer", textDecoration: "underline", textDecorationThickness: "0.5px",
+  textDecorationColor: "var(--line2)", textUnderlineOffset: 3,
+};
 const linkBtn: CSSProperties = {
   ...ty.meta, background: "transparent", border: "none", padding: 0, color: "var(--accent)",
   cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2,
@@ -230,7 +282,22 @@ const remember = (slug: string, id: SectionId | null) => {
   catch { /* storage off — the posture is simply not remembered */ }
 };
 
-export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
+/** THE FACES, overlapping, with the sentence's own people in the sentence's own order. `aria-hidden`
+ *  on the whole stack: every name in it is already in the row beside it (or in *and N more*), and a
+ *  screen reader reading "J S" before hearing "you, Jane Smith and 2 more" is being told the same
+ *  thing twice, badly. */
+function Avatars(p: { people: { key: string; name: string; you: boolean }[] }) {
+  if (!p.people.length) return null;
+  return (
+    <span data-ws-avatars aria-hidden style={{ display: "inline-flex", flex: "none", paddingLeft: 6, alignSelf: "center" }}>
+      {p.people.map((a) => (
+        <span key={a.key} data-ws-avatar={a.key} title={a.name} style={avatarS}>{initialsOf(a.name)}</span>
+      ))}
+    </span>
+  );
+}
+
+export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: string | null }) {
   const [facts, setFacts] = useState<WorkspaceFacts | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
@@ -249,6 +316,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
   const [said, setSaid] = useState<string | null>(null);   // the receipt of the last act
   const [attaching, setAttaching] = useState(false);
   const strip = useRef<HTMLDivElement | null>(null);
+  // THE CHANGED PAGE OPENS WHERE IT LIVES. The same callback every link inside a document uses, so
+  // the title in the last-change row behaves exactly like a link in the prose under it — including
+  // in-place navigation with the pane's own back/forward, which a bespoke handler would not have.
+  const openEntity = useOpenEntity();
 
   const addr = facts?.slug ?? (p.slug || DESK_SLUG);
 
@@ -311,8 +382,22 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
       </div>
     );
   }
+  // LOADING IS THE HEADER'S OWN SHAPE, greyed (#1634's design spec, "States"). A sentence saying
+  // "Reading the workspace…" is a fourth thing to read on a page whose whole complaint was that it
+  // said too much; two bars in the place the two rows will be say the same and then get out of the
+  // way without moving the body when they do.
   if (!facts) {
-    return <div data-ws-readme data-ws-state="loading" style={{ ...box, ...ty.meta }}>Reading the workspace…</div>;
+    return (
+      <div data-ws-readme data-ws-state="loading" style={box} aria-busy="true"
+        aria-label="Reading this workspace">
+        <div style={{ ...stripS }}>
+          <span style={{ ...barS(96), height: 8, opacity: 0.7 }} />
+          <span style={{ ...barS("48%"), height: 15, margin: "3px 0 6px" }} />
+          <span style={barS("72%")} />
+          <span style={{ ...barS("54%"), marginTop: 6 }} />
+        </div>
+      </div>
+    );
   }
 
   const owner = facts.owner;
@@ -340,15 +425,27 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
   const fp: FrontPageFacts = {
     kind: facts.kind, name: facts.name, pages: facts.pages, policies: facts.policiesText,
     company: facts.company,
-    // THE ADMINISTRATOR'S FIRST NAME, and only when this reader IS the administrator. `me` is who
-    // is READING, not who writes here — so on `_global` it names the writer only where the two are
-    // the same person, and everybody else reads "the admin". A reader's own name on a sentence
-    // about somebody else's permission would be a confident lie in the first line a person meets.
-    adminFirstName: facts.kind === "global" && owner ? (facts.me?.first_name ?? null) : null,
+    // THE ADMINISTRATOR IS ASKED FOR BY NAME (Vexa-ai/vexa#1642). This used to be the reader's own
+    // first name and only when the reader WAS the administrator, so everybody else — and, when the
+    // resolution failed, the administrator himself — read *the admin*. `/api/people/admin` answers
+    // it from the company layer's own acceptances, which is where the product already records who
+    // writes there; a null answer drops the clause rather than filling it with the role word.
+    adminFirstName: facts.kind === "global" ? (facts.admin?.first_name ?? null) : null,
+    adminName: facts.kind === "global" ? (facts.admin?.name ?? null) : null,
+    myName: facts.me?.name ?? null,
     members: facts.members, mySubject: facts.me?.subject ?? null, myRole: facts.myRole,
     bound: facts.bound,
   };
   const acts = stripActs({ kind: facts.kind, owner, remote });
+  const people = peopleClause(fp);
+  const pill = kindFact(fp);
+  const faces = avatarPeople(fp);
+  const changed = facts.change ? lastChangeParts(facts.change) : null;
+  // THE TITLE. The README's own first heading, lifted by the pane that renders the body so it is
+  // not printed twice (#1634's design spec, point 2); a README with no heading falls back to what
+  // this place is called — the company's name on the company layer, the workspace's on a group.
+  const heading = (p.title || "").trim()
+    || (facts.kind === "global" ? facts.company : facts.kind === "group" ? facts.name : null);
 
   /** OPENING THE DETAILS. History is the door, so History is what it opens — and closing it leaves
    *  the section it opened remembered, which is what brings a reader back where they were. */
@@ -412,29 +509,68 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string }) {
 
   return (
     <div data-ws-readme data-ws-kind={facts.kind} style={box}>
-      {/* TWO SENTENCES — where you are and who is here, then what last happened and what you may
-          do about it. Capped at 12vh for #1628's reason and scrolling rather than clipping for its
-          reason too: a control a person can see the top of and cannot click is the one thing this
-          panel refuses to render. */}
+      {/* THE HEADER — eyebrow, title, the people row, the last-change row, then the hairline
+          (#1634's design spec, 2026-09-06 22:15Z: *"no one will read it and no one will be happy
+          about this, make it a proper design — follow guidelines"*). Capped at 12vh for #1628's
+          reason and scrolling rather than clipping for its reason too: a control a person can see
+          the top of and cannot click is the one thing this panel refuses to render. */}
       <div data-ws-strip style={stripS}>
-        <div data-ws-line="where" style={lineS}>{lineOne(fp)}</div>
-        <div data-ws-line="changed" style={{ ...lineS, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-          <span data-ws-changed style={{ flex: "0 1 auto", minWidth: 0 }}>{lineTwo(fp, facts.change)}</span>
+        <div data-ws-eyebrow style={eyebrowS}>{eyebrow(facts.kind)}</div>
+        {heading && <h1 data-ws-title style={titleS}>{heading}</h1>}
+
+        {/* WHO IS HERE — faces, the sentence, the count, the one pill, and this viewer's acts at
+            the right edge. One accessible name for the whole row (`lineOne`), because it is one
+            claim however many elements it takes to draw. */}
+        <div data-ws-people-row style={{ ...lineS, ...rowFlow }}>
+          <Avatars people={faces} />
+          {people && <span data-ws-line="where" style={{ minWidth: 0 }}>{people}</span>}
+          {pageCount(facts.pages) && <>
+            {people && <span aria-hidden style={{ color: "var(--t3)" }}>·</span>}
+            <span data-ws-pages>{pageCount(facts.pages)}</span>
+          </>}
+          {pill && <span data-ws-pill style={pillS}>
+            <Icon name={facts.kind === "global" ? "shield" : "cal"} size={11} style={{ opacity: 0.75 }} />
+            {pill}
+          </span>}
           {/* THE ACTS. Each queues a same-target act on the open chat and none opens a form
-              (#1632). History is the disclosure — it opens the sections #1628 built, and it is the
-              only one a reader gets. */}
-          <span data-ws-acts style={{ display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-            {acts.map((a) => (
-              <button key={a.id} data-ws-strip-act={a.id} title={a.why}
-                {...(a.id === "history"
-                  ? { "data-ws-details": "", "aria-expanded": details, "aria-controls": "ws-details" }
-                  : {})}
-                onClick={() => (a.id === "history" ? openDetails() : fire(a))}
-                style={{ ...actS, ...(a.id === "history" && details
-                  ? { background: surface.raisedHi, borderColor: "var(--line2)", color: "var(--t1)" } : {}) }}>
-                {a.label}
+              (#1632). History is the disclosure — it opens the sections #1628 built, it is the only
+              one a reader gets, and it is the icon alone: it is the act nobody needs a word for,
+              and its name is in `aria-label` and the tooltip where a word costs no room. */}
+          <span data-ws-acts style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginLeft: "auto" }}>
+            {acts.map((a) => {
+              const isHistory = a.id === "history";
+              return (
+                <button key={a.id} data-ws-strip-act={a.id} title={a.why}
+                  aria-label={isHistory ? a.label : undefined}
+                  {...(isHistory
+                    ? { "data-ws-details": "", "aria-expanded": details, "aria-controls": "ws-details" }
+                    : {})}
+                  onClick={() => (isHistory ? openDetails() : fire(a))}
+                  style={{ ...(isHistory ? iconActS : actS), ...(isHistory && details
+                    ? { background: surface.raisedHi, borderColor: "var(--line2)", color: "var(--t1)" } : {}) }}>
+                  {isHistory ? <Icon name="history" size={13} /> : a.label}
+                </button>
+              );
+            })}
+          </span>
+        </div>
+
+        {/* WHAT LAST HAPPENED — a clock, a sentence, and, when exactly one page changed, its TITLE
+            as a quiet link that opens it. Two paths and not three: everything with no page to link
+            (nothing written yet · several pages · a commit that touched none) is the same sentence
+            `lastChangeSentence` composes, so there is one place the words are decided. */}
+        <div data-ws-line="changed" style={{ ...lineS, ...rowFlow, gap: 6 }}>
+          <Icon name="clock" size={12} style={{ color: "var(--t3)", alignSelf: "center" }} />
+          <span data-ws-changed style={{ minWidth: 0 }}>
+            {!changed?.page ? lastChangeSentence(facts.change) : <>
+              {changed.who ? `${changed.who === "you" ? "You" : changed.who} changed ` : "Changed "}
+              <button data-ws-changed-page={changed.page.path} style={quietLink}
+                title={`Open ${changed.page.path}`}
+                onClick={() => openEntity({ path: changed.page!.path, slug: p.slug })}>
+                {changed.thing}
               </button>
-            ))}
+              {` ${changed.when}`}
+            </>}
           </span>
         </div>
       </div>
