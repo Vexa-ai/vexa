@@ -44,7 +44,14 @@ remain, and the note beside each says which:
     that already holds a session and a subject — the `focus` event `_binding_watch` reads on the way
     past — so an agent-api route for it would be a second writer of one field, which is the failure
     the seam exists to prevent. What the tool itself does is check the person may write there and
-    answer with the slug; the harness turns that answer into the event.
+    answer with the slug; the harness turns that answer into the event. `fetch_asset`
+    (Vexa-ai/vexa#1612) is here for the plainest reason of the three: the ROUTE it calls IS
+    agent-api's own (`POST /api/workspace/asset` — where the outbound guard and the membership
+    rules live), but that route takes a bare `body: dict = Body(...)`, so it is unbindable for
+    exactly the reason `workspace_write` and `entity_upsert` are, and it leaves this list by the
+    same fix. Its allow-list entry is not optional in the way the others are: a worker asked for a
+    picture on a page and refused this tool has one move left, and it is writing the remote URL
+    into the document.
 
 CHECKED IN BOTH DIRECTIONS, same reason domain-doors.allow.json is: GAP shrinking without this test
 changing is a name this test forgot to stop tracking, and GAP growing without this test changing is
@@ -70,6 +77,7 @@ GAP = {
     "vexa_overview", "start_onboarding",                                            # agent: no server home
     "open_page",                                                                    # rig: the panel verb
     "workspace_target",                                                             # rig: the target verb
+    "fetch_asset",                                                                  # rig: the picture verb
 }
 
 

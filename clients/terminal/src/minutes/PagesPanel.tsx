@@ -28,6 +28,7 @@ import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
+import { DocMetaContext } from "../ui-kit/docRefs";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { transcriptSlotMeeting } from "../ui-kit/transcriptSlot";
 import { writeWorkspaceFile } from "../surfaces/workspaceApi";
@@ -331,8 +332,17 @@ export function PagesPanel(p: {
                     <CreatePageButton workspace={p.docSlug} path={p.docPath} />
                   </div>
                 : mode === "edit"
-                  ? <MarkdownEditor value={draft} onChange={setDraft} />
-                  : <MdxDoc>{p.body}</MdxDoc>}
+                  ? <MarkdownEditor value={draft} onChange={setDraft} slug={p.docSlug} />
+                  /* WHERE THIS DOCUMENT LIVES. `DocMetaContext` is how every link renderer learns
+                     the base a relative reference resolves against and the workspace to read it
+                     from — the workspace surface has provided it since it existed, and this panel
+                     never did, so a doc opened HERE resolved its own neighbours against the
+                     reader's primary workspace. It went unnoticed while the only consumers were
+                     links (which mostly still land, via the search order); an IMAGE has no search
+                     order — the picture is either in this workspace or it is missing (#1612). */
+                  : <DocMetaContext.Provider value={{ path: p.docPath, slug: p.docSlug }}>
+                      <MdxDoc>{p.body}</MdxDoc>
+                    </DocMetaContext.Provider>}
           {/* EXTEND, UNDER THE CONTENT (decision 32.1, as ruled 2026-09-06). Only while READING a
               document that exists: an empty page offers Create instead, and a canvas has no page to
               extend at all. */}

@@ -1967,7 +1967,9 @@ mcp = MCPServer(
         "cloud. workspace_pull() mirrors flow outputs down in local mode.\n"
         "\u2022 TEAM MEMORY — workspace_tree/workspace_read/workspace_write: the shared files "
         "meetings write into and the team reads from; workspace_init starts one. When your "
-        "person asks 'what did we decide about X', the answer is in here.\n"
+        "person asks 'what did we decide about X', the answer is in here. A picture on a page "
+        "is fetch_asset(url) first and `![alt](assets/<name>)` second — never a remote URL "
+        "on the page.\n"
         "\u2022 A WORKSPACE THEY ALREADY KEEP ON GITHUB \u2014 workspace_attach(workspace, repo) "
         "makes that repository the workspace (whatever was there is parked, not lost), and "
         "workspace_pull/workspace_push keep the two in step. If it is private you are handed a "
@@ -2397,6 +2399,54 @@ def workspace_write(path: str, content: str, slug: str = "") -> str:
     return json.dumps({"url": _ws_url(rel, uid),
                        "paste_this_link": "[" + rel.rsplit("/", 1)[-1] + "](" + _ws_url(rel, uid) + ")",
                        "written": rel, "bytes": len(content)})
+
+
+@mcp.tool()
+@_anon_guard
+def fetch_asset(url: str, path: str = "", slug: str = "") -> str:
+    """Bring a picture INTO the workspace, so a page can show it.
+
+    A page's image is a file in the workspace, referenced relatively. Fetch it here first, then
+    write `![alt](assets/<name>)` on the page — NEVER put the remote URL in the page. A page that
+    links a picture off someone else's site sends your person's browser to a stranger every time
+    they open it, and the picture stops existing the day that site rearranges itself.
+
+    `path` is optional — the URL's own filename under `assets/` is used when you give none. The
+    source URL is recorded in `assets/SOURCES.md`, which is the same rule every fact in a workspace
+    obeys: the thing is only as good as where it came from.
+
+    Goes through agent-api's own asset route on the CALLER'S identity, exactly as `workspace_write`
+    goes through the write route (F96): the server fetches, so the refusals that matter — a URL
+    pointing back into this deployment's own network, an asset too large to be one — are decided
+    once, in the service that owns the resource, instead of in whichever caller got here first."""
+    uid = me()
+    body = {"url": (url or "").strip()}
+    if path:
+        try:
+            body["path"] = _safe_ws_path(path)
+        except _BadPath as e:
+            return json.dumps({
+                "refused": "invalid_path", "path": path, "why": str(e),
+                "tell_your_person": "plainly, that the file name is not one a workspace can hold — "
+                                    "then offer a path inside it.",
+            })
+    if slug:
+        body["slug"] = slug
+    st, resp = _http("POST", f"{AGENT_API}/api/workspace/asset", {"X-User-Id": uid}, body)
+    if st != 200:
+        # A refusal here is a real answer — the URL is unreachable, or it points somewhere no
+        # workspace may fetch from. Say what it was; do not retry, and do not fall back to writing
+        # the remote URL onto the page, which is the failure this tool exists to prevent.
+        return json.dumps({"refused": "not_fetched", "status": st, "url": body["url"],
+                           "workspace": slug or "your own",
+                           "why": resp if isinstance(resp, (str, dict)) else "fetch refused",
+                           "never_hotlink": "do not put the remote URL on the page instead — say "
+                                            "plainly that the image could not be brought in"})
+    rel = resp.get("path") if isinstance(resp, dict) else ""
+    return json.dumps({"stored": rel, "source": resp.get("source") if isinstance(resp, dict) else "",
+                       "bytes": resp.get("bytes") if isinstance(resp, dict) else 0,
+                       "put_this_on_the_page": f"![{rel.rsplit('/', 1)[-1]}]({rel})",
+                       "url": _ws_url(rel, uid)})
 
 
 @mcp.tool()

@@ -8,6 +8,7 @@
 "use client";
 import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
+import { DocImage } from "./docImages";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -101,9 +102,13 @@ function inline(text: string): ReactNode[] {
   return out;
 }
 
-// bold / italic / links / wikilinks within a non-code segment
+// bold / italic / images / links / wikilinks within a non-code segment
 function emphasis(text: string, key: string, out: ReactNode[]): void {
-  const re = /(\[\[[^\]]+\]\])|(\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)/g;
+  // `!` BEFORE THE BRACKET IS THE WHOLE DIFFERENCE between a link and an image, and this renderer
+  // used to eat it: `![logo](assets/x.svg)` matched the LINK arm, so the page printed a stray `!`
+  // followed by a clickable "logo" and no picture at all (#1612). The alternation now takes the
+  // optional bang with the token, and the arm branches on it.
+  const re = /(\[\[[^\]]+\]\])|(!?\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -115,6 +120,10 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
       // title with no entity doc renders muted + tooltip instead of a dead click)
       out.push(<Wikilink key={`${key}-w${i}`} title={tok.slice(2, -2)} />);
     } else if (m[2]) {
+      // ![alt](src) — the SAME image component MdxDoc registers, so a doc that failed to compile as
+      // MDX shows the same picture and offers the same fetch (shared resolver, one behaviour).
+      const im = tok.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+      if (im) { out.push(<DocImage key={`${key}-img${i}`} src={im[2]} alt={im[1]} />); last = re.lastIndex; i++; continue; }
       // [text](url) — workspace-internal (schemeless) hrefs navigate in place, resolving
       // relative paths against the linking doc; external links open a browser tab
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;

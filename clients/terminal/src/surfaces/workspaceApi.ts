@@ -341,6 +341,36 @@ export async function renameWorkspace(slug: string, name: string): Promise<Attac
   });
 }
 
+// ── assets: the pictures a page carries (Vexa-ai/vexa#1612) ──────────────────────────────────────
+// A page's image is a FILE IN THE WORKSPACE, served by the same scoped door the page came through.
+// Never a hotlink: a document in a customer's workspace must not send that customer's browser to a
+// third party, and an image that lives somewhere else stops existing without telling us.
+
+// (the `src` an <img> points at is built in ui-kit/docImages.tsx — a pure URL template, kept beside
+//  the renderer that needs it synchronously rather than reached for through this module's async API)
+
+export interface StoredAsset { path: string; bytes: number; source: string; content_type: string }
+
+/** FETCH a remote image into the workspace — what the external-image placeholder offers. The SERVER
+ *  fetches: it is the only party that can (CORS aside, the bytes have to land in the workspace) and
+ *  the only one whose outbound traffic we can reason about. */
+export async function fetchWorkspaceAsset(url: string, opts?: { path?: string; slug?: string }): Promise<StoredAsset> {
+  return getJson(`/api/workspace/asset`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url, path: opts?.path, slug: opts?.slug }),
+  });
+}
+
+/** STORE a file the person dropped, pasted or attached — same directory, same index, same shape of
+ *  reference as the one the agent fetches. */
+export async function uploadWorkspaceAsset(file: File, opts?: { path?: string; slug?: string }): Promise<StoredAsset> {
+  const form = new FormData();
+  form.append("file", file, file.name || "upload");
+  if (opts?.path) form.append("path", opts.path);
+  if (opts?.slug) form.append("slug", opts.slug);
+  return getJson(`/api/workspace/asset`, { method: "PUT", body: form });
+}
+
 /** List a workspace's files. `slug` (Lane A) targets a SHARED workspace the caller is a member of;
  *  omitted → the caller's own (primary) workspace. */
 export async function listWorkspaceTree(opts?: { hidden?: boolean; slug?: string }): Promise<string[]> {

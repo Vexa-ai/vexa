@@ -157,6 +157,9 @@ const ATTACHMENT_ACCEPT = [
 type ComposerAttachment = { id: string; file: File; isImage: boolean; previewUrl?: string };
 type UploadedWorkspaceFile = { name: string; path: string };
 
+/** Where a workspace keeps the pictures its pages reference (agent-api `shared/asset_source.py`). */
+const ASSETS_DIR = "assets";
+
 function resizeComposerTextarea(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   const height = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
@@ -164,9 +167,16 @@ function resizeComposerTextarea(el: HTMLTextAreaElement) {
   el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
 }
 
+/** AN ATTACHED PICTURE IS A PICTURE, and the turn is told so (Vexa-ai/vexa#1612). The upload route
+ *  puts images in `assets/` — the directory a page's `![…](…)` reads from — so the line handed to
+ *  the agent is the markdown that would put it on a page, ready to paste. Everything else keeps the
+ *  `@file:` token it has always had: a spreadsheet is something to READ, not something to show. */
 function attachmentPrompt(prompt: string, files: UploadedWorkspaceFile[]): string {
   if (files.length === 0) return prompt.trim();
-  const attached = ["Attached files:", ...files.map((f) => `- @file:${f.path}`)].join("\n");
+  const line = (f: UploadedWorkspaceFile) => (f.path.startsWith(`${ASSETS_DIR}/`)
+    ? `- ![${f.name}](${f.path}) — already in this workspace; reference it like that on a page`
+    : `- @file:${f.path}`);
+  const attached = ["Attached files:", ...files.map(line)].join("\n");
   return prompt.trim() ? `${prompt.trim()}\n\n${attached}` : attached;
 }
 

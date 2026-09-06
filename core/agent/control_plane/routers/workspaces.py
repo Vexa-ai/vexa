@@ -38,10 +38,11 @@ from control_plane.workspace_membership import MembershipError
 from control_plane.workspace_publish import (
     PublishError, RepoExistsError, publish_workspace, published_remote_url)
 from control_plane.workspace_purpose import read_purpose, write_purpose
-from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Request, Response, UploadFile
 from pathlib import Path
 from workspaces.shared import entities as entities_mod
 from workspaces.shared import workspace_paths as wpaths
+from shared import asset_source as assets_mod
 from shared.git_redaction import redact as redact_secrets
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional
@@ -86,8 +87,6 @@ def build(**d) -> APIRouter:
             ws = wsr.workspace_dir(subject)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
-        uploads = ws / "uploads"
-        uploads.mkdir(parents=True, exist_ok=True)
         pending: list[tuple[Path, bytes, str, str]] = []
         for file in files:
             try:
@@ -99,15 +98,172 @@ def build(**d) -> APIRouter:
             safe_name = _upload_filename(file.filename)
             digest = hashlib.sha256(content).hexdigest()
             stored_name = f"{digest[:16]}-{safe_name}"
-            target = (uploads / stored_name).resolve()
-            if uploads.resolve() not in target.parents:
+            # A PICTURE GOES WHERE PICTURES GO (#1612). `uploads/` is the attachment drawer — a
+            # thing the turn reads once; `assets/` is what a page REFERENCES, and a reference has to
+            # keep working after the conversation that produced it is over. So an attached image
+            # lands beside the ones the agent fetches, and everything else keeps its drawer.
+            folder = assets_mod.ASSETS_DIR if assets_mod.is_image_path(safe_name) else "uploads"
+            into = ws / folder
+            into.mkdir(parents=True, exist_ok=True)
+            target = (into / stored_name).resolve()
+            if into.resolve() not in target.parents:
                 raise HTTPException(status_code=400, detail="invalid filename")
-            pending.append((target, content, stored_name, f"uploads/{stored_name}"))
+            pending.append((target, content, stored_name, f"{folder}/{stored_name}"))
         uploaded: list[dict[str, str]] = []
         for target, content, stored_name, path in pending:
             target.write_bytes(content)
             uploaded.append({"name": stored_name, "path": path})
         return {"files": uploaded}
+    def _write_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
+        """WHICH workspace dir a write to ``rel`` lands in, or the refusal. The mount rules, in one
+        place: own baseline/_system always; a shared workspace needs contributor+; `_global` only
+        the admin allowlist; `kg/templates/` never.
+
+        Extracted from ``ws_file_write`` unchanged when the ASSET writes arrived, because the
+        alternative was a second copy of an authorization rule — and a permission check that exists
+        twice is a permission check that will disagree with itself. One caller was already enough
+        to make it worth a name; three is not a choice."""
+        try:
+            wpaths.relative_parts(rel)   # absolute · `..` · `.git`/`.vexa` — one rule, every route
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
+        # can only be open on it deliberately — and a save from that tab would silently rewrite the
+        # shape every future entity is copied from.
+        if rel.startswith("kg/templates/"):
+            raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
+        if slug == system_mounts.GLOBAL_SLUG:
+            if not global_layer.is_admin(settings, str(subject)):
+                raise HTTPException(status_code=403, detail="only an org admin may edit _global")
+            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
+                          Path(settings.global_system_workspace_path or "/nonexistent")]
+            target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            if target is None:
+                raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
+            return target
+        if slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
+            try:
+                membership_mod.require_role(wsr.root, slug, subject, "contributor")
+            except MembershipError:
+                pass  # not shared — fall through; _read_target 403s anything outside the active set
+        return _read_target(request, slug, write=True)
+
+    def _commit(target: Path, paths: list[str], message: str) -> None:
+        """Commit exactly the paths named, so history stays honest and a concurrent write in the
+        same workspace is not swept into somebody else's message (the index is a shared surface)."""
+        import subprocess as _sp
+        if not (target / ".git").is_dir():
+            return
+        _sp.run(["git", "-C", str(target), "add", "--", *paths], check=False, capture_output=True)
+        _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal",
+                 "-c", "user.email=terminal@vexa.local", "commit", "-m", message, "--", *paths],
+                check=False, capture_output=True)
+
+    def _store_asset(request: Request, rel: str, slug: Optional[str], content: bytes,
+                     source: str) -> dict:
+        """Put BYTES in a workspace under ``assets/`` and record where they came from.
+
+        The source index is written in the same commit as the file: an asset and the answer to
+        "where is this from" are one fact, and a crash between two commits would leave a picture in
+        a customer's workspace with no provenance at all."""
+        subject = subject_of(request)
+        target = _write_dir(request, subject, rel, slug)
+        if len(content) > assets_mod.MAX_ASSET_BYTES:
+            raise HTTPException(status_code=413,
+                                detail=f"{rel} exceeds {assets_mod.MAX_ASSET_BYTES // (1024 * 1024)}MB")
+        try:
+            f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
+            index = wpaths.resolve_inside(target, assets_mod.SOURCES_INDEX)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(content)
+        existing = index.read_text(encoding="utf-8") if index.is_file() else ""
+        index.parent.mkdir(parents=True, exist_ok=True)
+        index.write_text(assets_mod.record_source(existing, rel, source), encoding="utf-8")
+        _commit(target, [rel, assets_mod.SOURCES_INDEX], f"asset {rel} ({source or 'uploaded'})")
+        return {"path": rel, "bytes": len(content), "source": source,
+                "content_type": assets_mod.media_type_for(rel)}
+
+    @router.get("/api/workspace/asset")
+    def ws_asset(request: Request, path: str, slug: Optional[str] = None,
+                 if_none_match: Optional[str] = Header(default=None, alias="If-None-Match")):
+        """SERVE one workspace file AS ITSELF — the route `![logo](assets/oenb-logo.svg)` renders
+        through (Vexa-ai/vexa#1612).
+
+        The scoping is `ws_file`'s, deliberately and to the letter: a page and the pictures in it
+        come through the same owner- and membership-scoped door, so an image can never be readable
+        where the document that references it is not. What differs is the ANSWER — bytes with the
+        media type the extension names, rather than JSON with text in it.
+
+        THREE HEADERS EARN THEIR PLACE. `nosniff` so the browser executes the file as what the
+        workspace calls it and not as what it looks like; a `default-src 'none'` sandbox so a
+        workspace `.svg` opened directly is a picture and not a script running on our origin; and an
+        ETag over (size, mtime) with a short max-age, because agents rewrite workspace files under a
+        stable path — a long cache would show yesterday's chart on today's page, and no cache at all
+        would re-download every logo on every scroll."""
+        try:
+            base = _read_target(request, slug)
+            f = wpaths.resolve_inside(base, path)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not (f.exists() and f.is_file()):
+            raise HTTPException(status_code=404, detail="not found")
+        stat = f.stat()
+        etag = f'"{stat.st_size:x}-{stat.st_mtime_ns:x}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "private, max-age=60",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": f'inline; filename="{_upload_filename(f.name)}"',
+        }
+        if if_none_match and etag in [t.strip() for t in if_none_match.split(",")]:
+            return Response(status_code=304, headers=headers)
+        return Response(content=f.read_bytes(), media_type=assets_mod.media_type_for(path),
+                        headers=headers)
+
+    @router.post("/api/workspace/asset")
+    def ws_asset_fetch(request: Request, body: dict = Body(...)):
+        """FETCH a remote image INTO the workspace — the act behind the external-image placeholder,
+        and behind the rig's `fetch_asset`.
+
+        The server fetches, never the reader's browser: that is the whole rule (#1612). It is also
+        the only place that CAN — a page in a bank's workspace must not make that browser talk to a
+        third party, and a browser cannot store the result in a workspace anyway."""
+        url = str(body.get("url") or "").strip()
+        slug = str(body.get("slug") or "").strip() or None
+        try:
+            content, ctype, final_url = assets_mod.fetch_asset(url)
+        except assets_mod.AssetFetchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        rel = assets_mod.asset_path_for(url, ctype, str(body.get("path") or ""))
+        return _store_asset(request, rel, slug, content, final_url or url)
+
+    @router.put("/api/workspace/asset")
+    async def ws_asset_upload(request: Request, file: UploadFile = File(...),
+                              path: str = Form(default=""), slug: str = Form(default="")):
+        """A PERSON'S image, dropped or pasted onto a page — stored exactly where the agent's is.
+
+        One directory for pictures, whoever put them there: a reader who drops a chart into a page
+        and an agent that fetches a logo into it must produce references of the same shape, or the
+        page has two kinds of image and only one of them survives being moved.
+
+        PUT on the same path as the read rather than a `/asset/upload` of its own, because the
+        terminal's proxy for this route is a STATIC App-Router segment that shadows its sibling
+        catch-all: a deeper path under it would need a second proxy file to exist at all, and a
+        route whose reachability depends on a directory nobody remembers is a 405 waiting to
+        happen (the comment at the top of `[...seg]/route.ts` is that lesson already learned once)."""
+        try:
+            content = await file.read()
+        finally:
+            await file.close()
+        rel = assets_mod.asset_path_for(file.filename or "", file.content_type or "",
+                                        path or _upload_filename(file.filename))
+        return _store_asset(request, rel, slug.strip() or None, content, "uploaded here")
+
     @router.get("/api/workspace/file")
     def ws_file(request: Request, path: str, slug: Optional[str] = None):
         try:
@@ -130,30 +286,7 @@ def build(**d) -> APIRouter:
         content = body.get("content")
         if not isinstance(content, str):
             raise HTTPException(status_code=400, detail="need a relative path and string content")
-        try:
-            wpaths.relative_parts(rel)   # absolute · `..` · `.git`/`.vexa` — one rule, every route
-        except wpaths.PathRefused as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
-        # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
-        # can only be open on it deliberately — and a save from that tab would silently rewrite the
-        # shape every future entity is copied from.
-        if rel.startswith("kg/templates/"):
-            raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
-        if slug == system_mounts.GLOBAL_SLUG:
-            if not global_layer.is_admin(settings, str(subject)):
-                raise HTTPException(status_code=403, detail="only an org admin may edit _global")
-            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                          Path(settings.global_system_workspace_path or "/nonexistent")]
-            target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
-            if target is None:
-                raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
-        else:
-            if slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
-                try:
-                    membership_mod.require_role(wsr.root, slug, subject, "contributor")
-                except MembershipError:
-                    pass  # not shared — fall through; _read_target 403s anything outside the active set
-            target = _read_target(request, slug, write=True)
+        target = _write_dir(request, subject, rel, slug)
         try:
             f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
         except wpaths.PathRefused as exc:

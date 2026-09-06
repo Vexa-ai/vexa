@@ -27,6 +27,9 @@ not ask which direction they meant — they pressed a button on an open page, wh
 instruction. Keep the page's own voice and its own shape; you are continuing something, not
 replacing it.
 
+If the page wants a picture, `fetch_asset` it into the workspace first and reference it relatively
+(`![OeNB logo](assets/oenb-logo.svg)`) — a page never links an image straight off someone else's site.
+
 Say ONE line about what you added. The page is the deliverable and they are looking at it; a
 paragraph describing the paragraph you just wrote is the product reading its own work back to the
 person who asked for it.

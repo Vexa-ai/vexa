@@ -19,9 +19,11 @@
  *      &dark/&light rules (selection layer, drop cursor, tooltips, panels). It was hardcoded
  *      `true`, so day mode got the dark variants. It now tracks the live theme.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
+import { filesFromTransfer, insertAt, storeDropped } from "./assetDrop";
+import { uploadWorkspaceAsset } from "../surfaces/workspaceApi";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -79,13 +81,59 @@ function useDocumentTheme(): Theme {
   return theme;
 }
 
-export function MarkdownEditor(p: { value: string; onChange: (v: string) => void }) {
+/** DROP AND PASTE PUT THE FILE IN THE WORKSPACE (#1612). Dragging a chart onto a page, or pasting a
+ *  screenshot into it, stores the bytes under `assets/` in the doc's own workspace and writes a
+ *  relative reference at the cursor — the same directory and the same shape of reference the agent's
+ *  `fetch_asset` produces. The browser's own default for both events is the opposite of that: a drop
+ *  inserts a `file://` path only this machine can resolve, and a paste of an image inserts nothing
+ *  at all, which reads as the editor being broken.
+ *
+ *  The handler is thin ON PURPOSE — it reads the selection, calls `assetDrop` and writes the result
+ *  back through the same `onChange` a keystroke uses. Everything that DECIDES anything is in
+ *  `./assetDrop`, where a test can reach it without a live CodeMirror view. */
+function useAssetInsert(value: string, onChange: (v: string) => void, slug?: string) {
+  // The extension is built ONCE and lives as long as the editor, so everything it reads has to come
+  // through a ref. The editor's `value` is state one level up and an upload resolves LATER: reading
+  // it out of the closure would insert into whatever the text was when the drop started and
+  // silently discard every keystroke since.
+  const latest = useRef(value);
+  const emit = useRef(onChange);
+  const where = useRef(slug);
+  useEffect(() => { latest.current = value; }, [value]);
+  useEffect(() => { emit.current = onChange; }, [onChange]);
+  useEffect(() => { where.current = slug; }, [slug]);
+  return useMemo(() => {
+    const handle = (event: Event, data: DataTransfer | null, view: EditorView): boolean => {
+      const files = filesFromTransfer(data);
+      if (!files.length) return false;       // plain text — let CodeMirror do what it always does
+      event.preventDefault();
+      const sel = view.state.selection.main;
+      void (async () => {
+        const { assets } = await storeDropped(files, async (file, name) =>
+          uploadWorkspaceAsset(file, { slug: where.current, path: name }));
+        if (!assets.length) return;
+        const { value: next } = insertAt(latest.current, sel.from, sel.to,
+                                         assets.map((a) => a.reference).join("\n"));
+        latest.current = next;
+        emit.current(next);
+      })();
+      return true;
+    };
+    return EditorView.domEventHandlers({
+      drop: (event, view) => handle(event, event.dataTransfer, view),
+      paste: (event, view) => handle(event, event.clipboardData, view),
+    });
+  }, []);
+}
+
+export function MarkdownEditor(p: { value: string; onChange: (v: string) => void; slug?: string }) {
   const theme = useDocumentTheme();
+  const assetInsert = useAssetInsert(p.value, p.onChange, p.slug);
   // New identity on a theme flip → @uiw reconfigures the live view, so the switch repaints the
   // editor in place instead of only on the next mount.
   const extensions = useMemo(
-    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), syntaxHighlighting(mdHighlight), editorTheme(theme === "dark"), EditorView.lineWrapping],
-    [theme],
+    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), syntaxHighlighting(mdHighlight), editorTheme(theme === "dark"), EditorView.lineWrapping, assetInsert],
+    [theme, assetInsert],
   );
   return (
     <CodeMirror

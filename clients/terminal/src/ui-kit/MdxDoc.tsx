@@ -16,6 +16,7 @@ import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
 import { Markdown, stripHtmlComments } from "./Markdown";
+import { DocImage } from "./docImages";
 import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
@@ -101,6 +102,11 @@ const h = (lvl: number) => ({ children }: { children?: ReactNode }) => (
 
 const htmlComponents = {
   h1: h(1), h2: h(2), h3: h(3), h4: h(4),
+  // A PAGE'S PICTURE IS A WORKSPACE FILE (#1612). Left as a bare <img>, `![logo](assets/x.svg)`
+  // resolves against the TERMINAL's URL and breaks, and `![logo](https://…)` hotlinks a third party
+  // out of a customer's document. DocImage does neither: workspace paths load through the scoped
+  // asset route, remote ones render as an offer to fetch them in.
+  img: DocImage,
   p: ({ children }: { children?: ReactNode }) => <p style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{children}</p>,
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
     // Meeting deep-link (`?meeting=<id>`, relative or absolute) → open the meeting canvas (transcript +
