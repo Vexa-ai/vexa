@@ -372,9 +372,10 @@ function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undef
   const { slug, prefix } = p.listing;
   const at = (name: string) => (prefix ? `${prefix}/${name}` : name);
   // HUMAN FILES ONLY (decision 27.2) — and from the same list `./machinery` gives the navigator,
-  // so a folder walked here and the same folder expanded there can never disagree.
-  const dirs = p.listing.dirs.filter((d) => !isMachineryEntry(prefix, d));
-  const files = p.listing.files.filter((f) => !isMachineryEntry(prefix, f));
+  // so a folder walked here and the same folder expanded there can never disagree. The listing's
+  // own `slug` goes with the question, because the answer differs by workspace (#1626).
+  const dirs = p.listing.dirs.filter((d) => !isMachineryEntry(prefix, d, slug));
+  const files = p.listing.files.filter((f) => !isMachineryEntry(prefix, f, slug));
   if (!dirs.length && !files.length) {
     return <div style={{ ...ty.body, color: "var(--t3)" }}>Nothing in this folder.</div>;
   }

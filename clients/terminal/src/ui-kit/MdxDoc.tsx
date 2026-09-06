@@ -27,7 +27,7 @@ import {
 import { OPEN_MEETING_EVENT } from "../canvas/actions";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
-import { POLICY_KIND, PolicyRules, ViewSource, declaredKind, splitFrontmatter } from "./policyDoc";
+import { ViewSource, docHeader, splitFrontmatter } from "./policyDoc";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
@@ -301,11 +301,14 @@ type CompileState =
   | { status: "fallback"; error: string };
 
 // FRONTMATTER IS STILL STRIPPED FROM THE BODY — it is metadata for the agent, never body copy —
-// but it is no longer DISCARDED: `splitFrontmatter` (./policyDoc) hands back both halves. One file
-// needs the block itself. `_global/POLICIES.md` declares `kind: policies`, and there the front
-// matter IS the content — it is what this deployment answers, and the prose under it is the
-// argument for each answer. Throwing it away would render the reasoning for a set of choices
-// without ever showing the choices.
+// but it is no longer DISCARDED: `splitFrontmatter` (./policyDoc) hands back both halves. Two
+// kinds of page need the block itself. `_global/POLICIES.md` declares `kind: policies`, and there
+// the front matter IS the content — it is what this deployment answers, and the prose under it is
+// the argument for each answer. Throwing it away would render the reasoning for a set of choices
+// without ever showing the choices. A generated flow page declares `kind: flow`, and there the
+// block is the summary — trigger, steps, the rules it honours — which is what the reader of
+// `_global/flows/` came for (Vexa-ai/vexa#1626). `docHeader` decides which, by what the page says
+// it is; every other page still renders exactly as it did.
 
 /** THE WIDGET A DOC DECLARES, resolved through the tab REGISTRY rather than imported.
  *
@@ -350,18 +353,16 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   // therefore moved down into `MdxBody`, which sees only text segments.
   const { attrs, body } = splitFrontmatter(children ?? "");
   const segments = splitTranscriptSlots(body);
-  // THE ONE PAGE WHOSE FRONT MATTER IS THE POINT (Vexa-ai/vexa#1615). Recognised by what it
-  // DECLARES, never by its path: a page is not the policy page because somebody named the file
-  // right. The rules render above the prose that argues for them.
-  const rules = declaredKind(attrs) === POLICY_KIND
-    ? <PolicyRules attrs={attrs} body={body} />
-    : null;
-  if (!rules && segments.length === 1 && segments[0].kind === "text") {
+  // THE PAGES WHOSE FRONT MATTER IS THE POINT (Vexa-ai/vexa#1615, #1626). Recognised by what they
+  // DECLARE, never by their path: a page is not the policy page because somebody named the file
+  // right. The policy rules — and a flow's trigger, steps and rules — render above the prose.
+  const head = docHeader(attrs, body);
+  if (!head && segments.length === 1 && segments[0].kind === "text") {
     return <MdxBody style={style}>{segments[0].text}</MdxBody>;
   }
   return (
     <div style={{ color: "var(--t1)", ...style }}>
-      {rules}
+      {head}
       {segments.map((seg, i) => (seg.kind === "transcript"
         ? <TranscriptSlot key={`w${i}`} meeting={seg.meeting} />
         : <MdxBody key={`t${i}`}>{seg.text}</MdxBody>))}

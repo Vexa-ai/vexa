@@ -186,3 +186,90 @@ export function ViewSource({ step, children }: { step?: string; children?: React
     </details>
   );
 }
+
+// ── a generated flow page, headed by what it declares ─────────────────────────────────────────
+// Founder, 2026-09-06: *"flows live in global, right?"* (Vexa-ai/vexa#1626). `_global/flows/*.md`
+// is one page per flow, generated from the code that runs it (#1615): what fires it, the steps in
+// order, what each one mails, and the rules it honours. Every renderer stripped its front matter,
+// so the reader met the prose and had to walk down into a table to learn what the page even was.
+//
+// SAME RULE AS THE POLICY PAGE, AND THE SAME REASON: the block is the page's own declaration of
+// what it is, so it is rendered rather than discarded — here as one header line above the prose,
+// because a flow page's front matter is a summary and the policy page's IS the content.
+//
+// AND LIKE `PolicyRules`, NOTHING HERE KNOWS THE FLOWS. There is no list of triggers, no table of
+// steps, no copy of a rule name: every word comes out of the file being rendered. A flow added to
+// the code gets its page from `make flow-pages` and its header from this, with nothing edited here.
+
+export const FLOW_KIND = "flow";
+
+/** The rules a flow page says it honours, read off its own summary table.
+ *
+ *  The generator writes them as links into the policy page (``[`key`](../POLICIES.md#key)``), and
+ *  that anchor is the one `policyRuleDocs` above splits on — so the two halves of #1615 agree by
+ *  construction: a rule reachable from a flow page is a rule with a section to reach. A flow that
+ *  honours none writes `none` in that cell, which yields an empty list, not a missing row. */
+export function flowRules(body: string): string[] {
+  const row = /^\|\s*\*\*rules it honours\*\*\s*\|(.*?)\|[ \t]*$/m.exec(body ?? "");
+  if (!row) return [];
+  const seen = new Set<string>();
+  for (const m of row[1].matchAll(/POLICIES\.md#([a-z0-9_]+)/g)) seen.add(m[1]);
+  return [...seen];
+}
+
+const flowBit = (label: string, value: ReactNode): ReactNode => (
+  <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5, minWidth: 0 }}>
+    <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</span>
+    <span style={{ color: "var(--t2)", fontSize: 12.5, minWidth: 0 }}>{value}</span>
+  </span>
+);
+
+const mono: CSSProperties = { fontFamily: "var(--mono)", fontSize: 12, color: "var(--t1)" };
+
+/** Trigger · steps · rules, on one line, from the page's own front matter and summary table.
+ *
+ *  A field the page does not declare is simply absent — the header degrades a bit at a time rather
+ *  than rendering `undefined`, which is the same rule the policy rows follow. */
+export function FlowHeader({ attrs, body }: { attrs: Attr[]; body: string }): ReactNode {
+  const at = (k: string) => attrs.find(([key]) => key === k)?.[1]?.trim() ?? "";
+  const flow = at("flow");
+  const trigger = at("trigger");
+  const steps = at("steps");
+  const version = at("version");
+  const generated = at("generated");
+  const rules = flowRules(body);
+  return (
+    <div data-flow-header={flow} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "10px 14px", margin: "0 0 16px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", rowGap: 4 }}>
+        <span style={chip("var(--blue)", "var(--bluebg)")}>flow</span>
+        {flow ? <span style={{ ...mono, fontSize: 13, fontWeight: 600 }}>{flow}</span> : null}
+        {trigger ? flowBit("trigger", <code style={mono}>{trigger}</code>) : null}
+        {steps ? flowBit("steps", steps) : null}
+        {version ? flowBit("version", version) : null}
+        {flowBit("rules", rules.length
+          ? <span>{rules.map((r, i) => (
+              <span key={r} data-flow-rule={r}>{i ? ", " : ""}<code style={mono}>{r}</code></span>
+            ))}</span>
+          : <span style={{ color: "var(--t3)" }}>none</span>)}
+      </div>
+      {generated ? (
+        <div style={{ color: "var(--t3)", fontSize: 11.5, lineHeight: 1.5, marginTop: 6 }}>{generated}</div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── which header a page gets ──────────────────────────────────────────────────────────────────
+
+/** THE HEADER A PAGE DECLARES, or nothing. Recognised by `kind:` and never by path — a page is not
+ *  the policy page because somebody named the file right, and a page in `flows/` that does not say
+ *  it is a flow is a page somebody wrote there.
+ *
+ *  One function, so the renderer has one branch instead of one per kind, and so a new kind is a
+ *  line here rather than an edit inside `MdxDoc`. */
+export function docHeader(attrs: Attr[], body: string): ReactNode {
+  const kind = declaredKind(attrs);
+  if (kind === POLICY_KIND) return <PolicyRules attrs={attrs} body={body} />;
+  if (kind === FLOW_KIND) return <FlowHeader attrs={attrs} body={body} />;
+  return null;
+}

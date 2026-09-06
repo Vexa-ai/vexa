@@ -17,7 +17,7 @@
  */
 import type { ActiveMount, Membership } from "../surfaces/workspaceApi";
 import { listSharedMemberships, listWorkspaceTree, readActiveSet, readWorkspaceById } from "../surfaces/workspaceApi";
-import { humanPaths } from "./machinery";
+import { GLOBAL_SLUG, humanPaths } from "./machinery";
 
 /** Desk first, then `_global`, then the groups — decision 27.1's order, and it is not alphabetical
  *  by accident: the reader's own desk is where they write, `_global` is what the company shares. */
@@ -36,7 +36,10 @@ export interface NavWorkspace {
  *  for it. `name` absent → the id is the only name we have, and it is still the reader's to open. */
 export interface NavMembership { workspace_id: string; name?: string | null }
 
-export const GLOBAL_SLUG = "_global";
+/** Re-exported from `./machinery`, which owns the literal: the hide list is the one module that
+ *  HAS to know which workspace `_global` is (its `flows/` is content there, machinery everywhere
+ *  else), so it holds the constant and this one borrows it rather than keeping a second copy. */
+export { GLOBAL_SLUG };
 /** Always mounted, never listed as a place to read files (PRD §7: per-user private machinery). */
 const SYSTEM_SLUG = "_system";
 
@@ -103,11 +106,15 @@ export interface TreeNode {
 
 /** A flat path list → a tree, machinery dropped. Directories before files, each alphabetical:
  *  the same order the panel's folder listing already uses, so walking one and reading the other
- *  never re-sorts under the reader. */
-export function treeFrom(paths: readonly string[]): TreeNode[] {
+ *  never re-sorts under the reader.
+ *
+ *  `slug` says WHICH workspace these paths came from, because the hide list is not the same in all
+ *  of them: `_global/flows/` is the generated flow pages, which is reading, and a desk's `flows/`
+ *  is the agent's own playbooks, which is not. Omitted = the desk's answer. */
+export function treeFrom(paths: readonly string[], slug?: string): TreeNode[] {
   const roots: TreeNode[] = [];
   const dirs = new Map<string, TreeNode>();
-  for (const path of humanPaths(paths)) {
+  for (const path of humanPaths(paths, slug)) {
     const segs = path.split("/").filter(Boolean);
     if (!segs.length) continue;
     let parent: TreeNode[] = roots;
@@ -178,7 +185,7 @@ export function filterByName(
   let shown = 0;
   let truncated = false;
   for (const ws of workspaces) {
-    const paths = humanPaths(trees[ws.key] ?? []);
+    const paths = humanPaths(trees[ws.key] ?? [], ws.slug);
     const hits = paths
       .filter((p) => (p.split("/").pop() ?? p).toLowerCase().includes(needle))
       .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));

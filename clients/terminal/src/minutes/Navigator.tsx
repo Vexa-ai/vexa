@@ -238,7 +238,7 @@ export function Navigator(p: {
                     </button>
                     {open && (
                       trees[ws.key]
-                        ? nodes(ws, treeFrom(trees[ws.key]), 1)
+                        ? nodes(ws, treeFrom(trees[ws.key], ws.slug), 1)
                         : <div style={{ ...ty.meta, padding: "3px 6px 3px 17px" }}>…</div>
                     )}
                   </div>
