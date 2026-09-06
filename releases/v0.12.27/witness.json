@@ -4,19 +4,19 @@
   "generated_from": "v0.12.23...v0.12.27-rc.5",
   "witnessed_by": "Dmitry Grankin",
   "witnessed_at": "2026-09-06",
-  "deployment": "helm — vexa production (Argo app vexa-prod, namespace vexa-production), chart 0.1.0-estate.20260829.30, estate entry seq-35 = the v0.12.27-rc.5 OSS packet; Argo Synced/Healthy 2026-09-06T21:26:33Z. The six OSS images this entry pins: vexaai/v012-admin-api@sha256:4c702354384eafe3a933cd537a106b7c15067cfd368a5f6da1a6e675e7e03e04 · vexaai/v012-gateway@sha256:2e76319812f28adbb6bc328ac0a7484d3826924a9d38a9dd9599dd190fbb0f19 · vexaai/v012-meeting-api@sha256:4e9c201f656788755458fd6f2b9fbf3bfe0722d5b17d4cebd82b874b5aee98e1 · vexaai/v012-runtime@sha256:a1f6448fbb380b9433364e8b572ec25a12aa4f274bf403f1d83a89cbf5812f2d · vexaai/v012-mcp@sha256:4b2dbc08023ff424f40453d61a8f4d38a72de7eba1e5aaad1e428c309f63d338 · vexaai/vexa-bot@sha256:423c487aadb81514c71c9786758a3a730acbf5495e9593930da50c7442f158c1 (the bot rides as the runtime's BROWSER_IMAGE rather than as a rendered image, as at seq-32/34). NARROWING, stated because the receipt is worthless without it: only the Zoom row (#1371, meeting 27834, 21:35Z) was walked on THIS entry. The Meet row (#1559, meeting 27828), the deaf-leave row (#1195, meeting 27830) and the Teams-passcode row (#1201, meeting 27831) were walked earlier the same day on entry seq-34, which pinned the v0.12.27-rc.3 packet. rc.5 differs from rc.3 in the MCP image's content only (Vexa-ai/vexa#1631); the other five images are content-identical rebuilds whose digests moved because buildkit provenance embeds the tag commit. That last claim comes from the release train's own account and is recorded in `estate-fills-seq35.log`, which flags that rc.5's absent standalone validate did not independently re-check it.",
+  "deployment": "helm \u2014 vexa production (Argo app vexa-prod, namespace vexa-production), chart 0.1.0-estate.20260829.30, estate entry seq-35 = the v0.12.27-rc.5 OSS packet; Argo Synced/Healthy 2026-09-06T21:26:33Z. The six OSS images this entry pins: vexaai/v012-admin-api@sha256:4c702354384eafe3a933cd537a106b7c15067cfd368a5f6da1a6e675e7e03e04 \u00b7 vexaai/v012-gateway@sha256:2e76319812f28adbb6bc328ac0a7484d3826924a9d38a9dd9599dd190fbb0f19 \u00b7 vexaai/v012-meeting-api@sha256:4e9c201f656788755458fd6f2b9fbf3bfe0722d5b17d4cebd82b874b5aee98e1 \u00b7 vexaai/v012-runtime@sha256:a1f6448fbb380b9433364e8b572ec25a12aa4f274bf403f1d83a89cbf5812f2d \u00b7 vexaai/v012-mcp@sha256:4b2dbc08023ff424f40453d61a8f4d38a72de7eba1e5aaad1e428c309f63d338 \u00b7 vexaai/vexa-bot@sha256:423c487aadb81514c71c9786758a3a730acbf5495e9593930da50c7442f158c1 (the bot rides as the runtime's BROWSER_IMAGE rather than as a rendered image, as at seq-32/34). NARROWING, stated because the receipt is worthless without it: only the Zoom row (#1371, meeting 27834, 21:35Z) was walked on THIS entry. The Meet row (#1559, meeting 27828), the deaf-leave row (#1195, meeting 27830) and the Teams-passcode row (#1201, meeting 27831) were walked earlier the same day on entry seq-34, which pinned the v0.12.27-rc.3 packet. rc.5 differs from rc.3 in the MCP image's content only (Vexa-ai/vexa#1631); the other five images are content-identical rebuilds whose digests moved because buildkit provenance embeds the tag commit. That last claim comes from the release train's own account and is recorded in `estate-fills-seq35.log`, which flags that rc.5's absent standalone validate did not independently re-check it.",
   "witness_deployment": {
     "url": "https://api.cloud.vexa.ai/mcp",
-    "provisioned_by": "The v0.12.27 delivery session (Vexa-ai/vexa#1553). Estate entries seq-32 → seq-35 were pinned into vexa production across 2026-09-06, each verified ELIGIBLE and C8 CONFORMS before pinning and rendered against its predecessor (at seq-35: 142 objects before, 142 after, zero added, zero removed). Two policy fixes were needed mid-roll and both were founder-approved as they came up: Vexa-ai/vexa-platform#467 and #468 admitted mcp → admin-api:8001 and mcp → meeting-api:8080 through the default-deny NetworkPolicy, without which the rc.3-and-later MCP refuses to boot by design (it fails loudly on a domain that never answers its manifest). Entry seq-35 moved the six OSS images from rc.3 to rc.5 and nothing else; the chart was pushed once and its descriptor read back by an independent authenticated `oras manifest fetch`. The founder received a URL — the hosted MCP door — and drove all four live rows as MCP tool calls; he stood nothing up himself.",
+    "provisioned_by": "The v0.12.27 delivery session (Vexa-ai/vexa#1553). Estate entries seq-32 \u2192 seq-35 were pinned into vexa production across 2026-09-06, each verified ELIGIBLE and C8 CONFORMS before pinning and rendered against its predecessor (at seq-35: 142 objects before, 142 after, zero added, zero removed). Two policy fixes were needed mid-roll and both were founder-approved as they came up: Vexa-ai/vexa-platform#467 and #468 admitted mcp \u2192 admin-api:8001 and mcp \u2192 meeting-api:8080 through the default-deny NetworkPolicy, without which the rc.3-and-later MCP refuses to boot by design (it fails loudly on a domain that never answers its manifest). Entry seq-35 moved the six OSS images from rc.3 to rc.5 and nothing else; the chart was pushed once and its descriptor read back by an independent authenticated `oras manifest fetch`. The founder received a URL \u2014 the hosted MCP door \u2014 and drove all four live rows as MCP tool calls; he stood nothing up himself.",
     "prevalidated": [
-      "release-validate run 34059966981 on the rc.5 packet at b3951dc68: all NINE legs green — resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat. This was the third dispatch; the ~18:40Z and 19:47Z attempts both died at `resolve` on Docker Hub's 200-pull-per-hour cap on the vexaai account (headers read docker-ratelimit-source: vexaai, limit 200;w=3600, remaining 0), not on any product defect.",
-      "OSS-only station t27f on bbb at the rc.3 digests (tag v0.12.27-rc.3 = 78be718f9): 12 PASS · 0 FAIL · 2 NOT-RUN across thirteen rows — binding/restarts, lite, helm, agent scope, mcp boot, wire-body secret, operator-key authority, terminal denial rendering, friction, settings, async publish, inherited doors, rollback. The 2 NOT-RUN are the mixed-case billing and pay-link rows: the OSS package carries no billing ledger role, so they are a station-provisioning gap, not product rows. Report: station-report-seq32-s3.md; fills: station-fills-seq32-s3.log.",
-      "Estate station t27e re-pinned in place to the six rc.5 digests: V-est-1 read all EIGHT entry subject digests off the RUNNING containers at 2026-09-06T20:03:13Z — 8/8 MATCH, including the bot digest read as BROWSER_IMAGE on the running runtime container; RestartCount 0 on all NINE containers at 20:12:17Z. estate-fills-seq35.log.",
-      "MCP tool surface on the rc.5 image: tools/list returned 21 tools (14 native + 7 flows) — the same 21 as at the rc.3 digests, so the rc.5 MCP's boot discovery reached all four configured domains and the surface did not narrow. estate-fills-seq35.log, row MCP-TOOLS.",
-      "ZOOM-DOOR on the station BEFORE the founder walked Zoom live: MCP tools/call request_meeting_bot with a Zoom URL reached POST /bots, which answered 201 with platform=zoom and native_meeting_id 12345678901, and the tool's own result carried constructed_meeting_url with the passcode intact (trace 42fdd88b9f7c492f969f3ff056c0b866). That is exactly the #1631 fix. It proves the MCP → gateway → meeting-api → runtime hand-off, and nothing about joining: the room was fake and the bot was expected to fail to join it. estate-fills-seq35.log, row ZOOM-DOOR.",
+      "release-validate run 34059966981 on the rc.5 packet at b3951dc68: all NINE legs green \u2014 resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat. This was the third dispatch; the ~18:40Z and 19:47Z attempts both died at `resolve` on Docker Hub's 200-pull-per-hour cap on the vexaai account (headers read docker-ratelimit-source: vexaai, limit 200;w=3600, remaining 0), not on any product defect.",
+      "OSS-only station t27f on bbb at the rc.3 digests (tag v0.12.27-rc.3 = 78be718f9): 12 PASS \u00b7 0 FAIL \u00b7 2 NOT-RUN across thirteen rows \u2014 binding/restarts, lite, helm, agent scope, mcp boot, wire-body secret, operator-key authority, terminal denial rendering, friction, settings, async publish, inherited doors, rollback. The 2 NOT-RUN are the mixed-case billing and pay-link rows: the OSS package carries no billing ledger role, so they are a station-provisioning gap, not product rows. Report: station-report-seq32-s3.md; fills: station-fills-seq32-s3.log.",
+      "Estate station t27e re-pinned in place to the six rc.5 digests: V-est-1 read all EIGHT entry subject digests off the RUNNING containers at 2026-09-06T20:03:13Z \u2014 8/8 MATCH, including the bot digest read as BROWSER_IMAGE on the running runtime container; RestartCount 0 on all NINE containers at 20:12:17Z. estate-fills-seq35.log.",
+      "MCP tool surface on the rc.5 image: tools/list returned 21 tools (14 native + 7 flows) \u2014 the same 21 as at the rc.3 digests, so the rc.5 MCP's boot discovery reached all four configured domains and the surface did not narrow. estate-fills-seq35.log, row MCP-TOOLS.",
+      "ZOOM-DOOR on the station BEFORE the founder walked Zoom live: MCP tools/call request_meeting_bot with a Zoom URL reached POST /bots, which answered 201 with platform=zoom and native_meeting_id 12345678901, and the tool's own result carried constructed_meeting_url with the passcode intact (trace 42fdd88b9f7c492f969f3ff056c0b866). That is exactly the #1631 fix. It proves the MCP \u2192 gateway \u2192 meeting-api \u2192 runtime hand-off, and nothing about joining: the room was fake and the bot was expected to fail to join it. estate-fills-seq35.log, row ZOOM-DOOR.",
       "Chart identity at seq-35: 19 rendered images, every one digest-pinned, unpinnable = {}; exactly FIVE image lines moved versus the seq-34 report and they are exactly the rc.5 packet digests, set-differenced element for element. One finding was recorded rather than smoothed over: the chart derives VEXA_PLATFORM_VERSION from the gateway digest, so moving the gateway rolls the webapp pod too even though the webapp image did not move. estate-fills-seq35.log, rows E-IDENT and RENDER-DIFF.",
-      "Container-free gate suite green on main's tip f64a7653a — run 34060854372 (static, python, node, gates); docs-current green on the same commit — run 34060622873.",
-      "Positive evidence that production was actually serving the rc.5 MCP when the founder walked Zoom: meeting 27834 was requested through the hosted MCP door at 21:34Z, after the 21:26:33Z sync, and its constructed_meeting_url carries the Zoom passcode — behaviour that exists only in the #1631 MCP. Read back from production by this session via get_meeting_transcript on 2026-09-06."
+      "Container-free gate suite green on main's tip f64a7653a \u2014 run 34060854372 (static, python, node, gates); docs-current green on the same commit \u2014 run 34060622873.",
+      "Positive evidence that production was actually serving the rc.5 MCP when the founder walked Zoom: meeting 27834 was requested through the hosted MCP door at 21:34Z, after the 21:26:33Z sync, and its constructed_meeting_url carries the Zoom passcode \u2014 behaviour that exists only in the #1631 MCP. Read back from production by this session via get_meeting_transcript on 2026-09-06."
     ]
   },
   "values": [
@@ -25,15 +25,15 @@
       "title": "build: noble base image for the bot (lite + full)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "the two Dockerfiles the PR moved to noble are built and run by the packet's own legs: validate-lite and validate-bot-spawn green in release-validate run 34059966981 on the rc.5 packet at `b3951dc68`, all nine legs green (resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat), and both images published in candidate build run 34051273765 at `71321ad0f` — all eleven images built and published; the accompanying gate change is covered by `scripts/gates.test.mjs`"
+      "evidence": "the two Dockerfiles the PR moved to noble are built and run by the packet's own legs: validate-lite and validate-bot-spawn green in release-validate run 34059966981 on the rc.5 packet at `b3951dc68`, all nine legs green (resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat), and both images published in candidate build run 34051273765 at `71321ad0f` \u2014 all eleven images built and published; the accompanying gate change is covered by `scripts/gates.test.mjs`"
     },
     {
       "pr": "1093",
       "title": "fix(runtime): spawned Pods declare CPU/memory requests and limits (#1005)",
       "visibility": "user-visible",
-      "pass": "pass = every Pod the runtime spawns declares CPU and memory requests and limits, so no bot lands unbounded on a node — proven by the runtime's own resource tests and the k3s chart leg.",
+      "pass": "pass = every Pod the runtime spawns declares CPU and memory requests and limits, so no bot lands unbounded on a node \u2014 proven by the runtime's own resource tests and the k3s chart leg.",
       "witnessed": "by-proxy",
-      "evidence": "`core/runtime/tests/test_workload_resources.py` (added by this PR, present on main) plus its siblings `test_k8s_command_wiring.py`, `test_lifecycle.py`, `test_mounts.py`, `test_readopt.py` and `test_start_failed.py`; container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the python job; and the chart's own k3s leg validate-helm-k3s is green in the rc.5 validate run 34059966981. NARROWING: no `kubectl` read of a spawned bot Pod's resource block in production was taken for this receipt, so the proof is the runtime's tests plus the chart rendering, not a live production read of a running spawned Pod.",
+      "evidence": "`core/runtime/tests/test_workload_resources.py` (added by this PR, present on main) plus its siblings `test_k8s_command_wiring.py`, `test_lifecycle.py`, `test_mounts.py`, `test_readopt.py` and `test_start_failed.py`; container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the python job; and the chart's own k3s leg validate-helm-k3s is green in the rc.5 validate run 34059966981. NARROWING: no `kubectl` read of a spawned bot Pod's resource block in production was taken for this receipt, so the proof is the runtime's tests plus the chart rendering, not a live production read of a running spawned Pod.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
@@ -48,43 +48,43 @@
       "title": "fix(gates): report the failure instead of swallowing it (#1107)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`scripts/gate-error-text.test.mjs` (added by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "`scripts/gate-error-text.test.mjs` (added by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1132",
       "title": "docs: /deployment-kubernetes gains ingress, TLS and sign-in providers (#1131)",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1133",
-      "title": "docs: the gateway edge guard is ON by default, not off — on all four pages that say so",
+      "title": "docs: the gateway edge guard is ON by default, not off \u2014 on all four pages that say so",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1134",
-      "title": "docs: three capability claims that disagree with the shipped tree — Jitsi overstated, the live copilot and webhooks understated",
+      "title": "docs: three capability claims that disagree with the shipped tree \u2014 Jitsi overstated, the live copilot and webhooks understated",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1149",
       "title": "fix(mixed): preserve text-only custom STT results",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/modules/mixed-pipeline/src/text-only-stt.smoke.test.ts` (added by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers it in the node job, and the mixed pipeline's own FSM leg validate-mock-fsm is green in the rc.5 validate run 34059966981"
+      "evidence": "`core/meetings/modules/mixed-pipeline/src/text-only-stt.smoke.test.ts` (added by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers it in the node job, and the mixed pipeline's own FSM leg validate-mock-fsm is green in the rc.5 validate run 34059966981"
     },
     {
       "pr": "1151",
       "title": "feat(calendar,teams): stage multi-feed and CSRC transcription",
       "visibility": "user-visible",
-      "pass": "pass = a real connected calendar imports events, the timed bot auto-joins, and CSRC-attributed transcripts arrive — walked live at v0.12.23 on meeting 26312; carried here on that receipt plus the terminal suite, NOT re-walked on 0.12.27.",
+      "pass": "pass = a real connected calendar imports events, the timed bot auto-joins, and CSRC-attributed transcripts arrive \u2014 walked live at v0.12.23 on meeting 26312; carried here on that receipt plus the terminal suite, NOT re-walked on 0.12.27.",
       "witnessed": "by-proxy",
-      "evidence": "already WALKED LIVE at the previous release: `releases/v0.12.23/witness.json` on main records this exact PR as witnessed:true by the founder on staging meeting 26312 (a founder-connected real calendar imported its events, the timed bot auto-joined, real-name transcripts arrived with zero contest markers). For this train the code is unchanged and is covered by the terminal suite the PR added — `clients/terminal/src/surfaces/__tests__/calendarConnections.test.tsx`, `meetingActions.test.tsx`, `meetingsOnboarding.test.tsx`, `serviceDenialVocabulary.test.ts` and `app/__tests__/meetingRoute.test.ts` — with container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covering them in the node job.",
+      "evidence": "already WALKED LIVE at the previous release: `releases/v0.12.23/witness.json` on main records this exact PR as witnessed:true by the founder on staging meeting 26312 (a founder-connected real calendar imported its events, the timed bot auto-joined, real-name transcripts arrived with zero contest markers). For this train the code is unchanged and is covered by the terminal suite the PR added \u2014 `clients/terminal/src/surfaces/__tests__/calendarConnections.test.tsx`, `meetingActions.test.tsx`, `meetingsOnboarding.test.tsx`, `serviceDenialVocabulary.test.ts` and `app/__tests__/meetingRoute.test.ts` \u2014 with container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covering them in the node job.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
@@ -92,209 +92,209 @@
       "title": "fix(transcription): stop a CPU worker admitting a GPU-sized concurrency default",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/transcription/tests/test_load_management.py` (added by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers it in the python job"
+      "evidence": "`core/meetings/services/transcription/tests/test_load_management.py` (added by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers it in the python job"
     },
     {
       "pr": "1195",
-      "title": "[DEV] fix(bot): deaf-leave guard — connected streams with zero delivered frames must not resolve left_alone",
+      "title": "[DEV] fix(bot): deaf-leave guard \u2014 connected streams with zero delivered frames must not resolve left_alone",
       "visibility": "user-visible",
-      "pass": "pass = a bot alone in a room reaches a silence verdict on its own window and leaves within seconds, with completion_reason left_alone and process exit 0, instead of sitting deaf and metering — measured 1 s from verdict to departure on meeting 27830.",
+      "pass": "pass = a bot alone in a room reaches a silence verdict on its own window and leaves within seconds, with completion_reason left_alone and process exit 0, instead of sitting deaf and metering \u2014 measured 1 s from verdict to departure on meeting 27830.",
       "witnessed": true,
-      "observation": "Founder, on production: Google Meet meeting 27830 (container mtg-27830-8fe7db17). He left the bot alone in the room. Last remote audio 15:58:41Z → silence verdict 16:08:41Z on the 600 s window → bot left 16:08:42Z → completed flushed 16:08:43Z → process exit 0 at 16:08:44Z. completion_reason left_alone, bot_outcome served, transcription_outcome served, failure_stage null; confirmed by a production read of the meeting row by this session on 2026-09-06 (end_time 16:08:42.724Z, bot_departed_at 16:08:42.684Z, completion_reason left_alone). This is the defect class #1195 exists for: connected streams delivering zero frames must not read as company. ONE THING THIS ROW DOES NOT COVER: Vexa-ai/vexa#1576 stays OPEN — there is still no teardown watchdog, and the 2026-09-05 hang was a different dispose path; the founder ruled 'only zoom' for this train and sent the watchdog to 0.12.28. Walked on entry seq-34 (rc.3 digests)."
+      "observation": "Founder, on production: Google Meet meeting 27830 (container mtg-27830-8fe7db17). He left the bot alone in the room. Last remote audio 15:58:41Z \u2192 silence verdict 16:08:41Z on the 600 s window \u2192 bot left 16:08:42Z \u2192 completed flushed 16:08:43Z \u2192 process exit 0 at 16:08:44Z. completion_reason left_alone, bot_outcome served, transcription_outcome served, failure_stage null; confirmed by a production read of the meeting row by this session on 2026-09-06 (end_time 16:08:42.724Z, bot_departed_at 16:08:42.684Z, completion_reason left_alone). This is the defect class #1195 exists for: connected streams delivering zero frames must not read as company. ONE THING THIS ROW DOES NOT COVER: Vexa-ai/vexa#1576 stays OPEN \u2014 there is still no teardown watchdog, and the 2026-09-05 hang was a different dispose path; the founder ruled 'only zoom' for this train and sent the watchdog to 0.12.28. Walked on entry seq-34 (rc.3 digests)."
     },
     {
       "pr": "1201",
       "title": "fix(teams,api): carry the separate passcode into the real Teams join URL, and refuse password aliases",
       "visibility": "user-visible",
       "platform": "ms-teams",
-      "pass": "pass = a passcode given as a separate field reaches the real Teams join URL, the bot is admitted, and real speech comes back attributed — observed on meeting 27831 with 11 named segments. The language mis-detect and the two hallucinated silence segments are findings against transcription quality, not against this row's claim.",
+      "pass": "pass = a passcode given as a separate field reaches the real Teams join URL, the bot is admitted, and real speech comes back attributed \u2014 observed on meeting 27831 with 11 named segments. The language mis-detect and the two hallucinated silence segments are findings against transcription quality, not against this row's claim.",
       "witnessed": true,
-      "observation": "Founder, on production: Microsoft Teams meeting 27831 (native id 363114942871494, container mtg-27831-7e72f28f). The passcode was supplied as its OWN field — 18 characters, not pasted into the link — and carried into the real Teams join URL, which is precisely what #1201 changed. Bot in the lobby 21 s after the request, active at 16:21:07.451Z; 11 segments, all attributed 'Dmitry Grankin'; stop 17:04:52Z → exit 0 in 3 s; bot_outcome served, transcription_outcome served, failure_stage null, 2 meter events. Confirmed by a production read of the meeting row by this session on 2026-09-06 (segments_captured 11, completion_reason stopped, bot_admitted_at 16:21:07.451Z, bot_departed_at 17:04:52.842Z). FINDINGS, not waived: the first short clip was mis-detected as Icelandic under automatic language selection, and two silence hallucinations ('Thank you.') appeared; latency 28–35 s. A separate finding read the same window and is NOT about this row: a customer (uid 3291, billing_setup_required) was storming the transcription gateway with 400/503 at the time. Walked on entry seq-34 (rc.3 digests)."
+      "observation": "Founder, on production: Microsoft Teams meeting 27831 (native id 363114942871494, container mtg-27831-7e72f28f). The passcode was supplied as its OWN field \u2014 18 characters, not pasted into the link \u2014 and carried into the real Teams join URL, which is precisely what #1201 changed. Bot in the lobby 21 s after the request, active at 16:21:07.451Z; 11 segments, all attributed 'Dmitry Grankin'; stop 17:04:52Z \u2192 exit 0 in 3 s; bot_outcome served, transcription_outcome served, failure_stage null, 2 meter events. Confirmed by a production read of the meeting row by this session on 2026-09-06 (segments_captured 11, completion_reason stopped, bot_admitted_at 16:21:07.451Z, bot_departed_at 17:04:52.842Z). FINDINGS, not waived: the first short clip was mis-detected as Icelandic under automatic language selection, and two silence hallucinations ('Thank you.') appeared; latency 28\u201335 s. A separate finding read the same window and is NOT about this row: a customer (uid 3291, billing_setup_required) was storming the transcription gateway with 400/503 at the time. Walked on entry seq-34 (rc.3 digests)."
     },
     {
       "pr": "1202",
-      "title": "docs(adr): settle where interactive capabilities live — one act endpoint, agent as ordinary client (#1089)",
+      "title": "docs(adr): settle where interactive capabilities live \u2014 one act endpoint, agent as ordinary client (#1089)",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (ADR + changelog fragment + docs page); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (ADR + changelog fragment + docs page); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1226",
       "title": "meetings: list orders by event time, non-terminal rows pinned (#1222)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/meeting-api/tests/test_list_event_order.py`, `test_collector_api.py` and `core/identity/services/admin-api/tests/test_stack_postgres.py` (all present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the python job"
+      "evidence": "`core/meetings/services/meeting-api/tests/test_list_event_order.py`, `test_collector_api.py` and `core/identity/services/admin-api/tests/test_stack_postgres.py` (all present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the python job"
     },
     {
       "pr": "1242",
-      "title": "[BUSINESS] docs: publish what the hosted service actually serves — Agent API absent, MCP live, calendar/webhook/settings routes documented",
+      "title": "[BUSINESS] docs: publish what the hosted service actually serves \u2014 Agent API absent, MCP live, calendar/webhook/settings routes documented",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1253",
       "title": "fix(release): re-pin the v0.12.23 stable-promotion map identity to the rc.21 freeze",
       "visibility": "ci-governance",
       "witnessed": "by-proxy",
-      "evidence": "workflow-only change to `.github/workflows/release-validate.yml` (the v0.12.23 stable-promotion map identity re-pin); no runtime leg — the same workflow's identity check is the `resolve` leg (identity check, resolve arm, map sha enforced) green in release-validate run 34059966981 on the rc.5 packet at `b3951dc68`, all nine legs green (resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat)"
+      "evidence": "workflow-only change to `.github/workflows/release-validate.yml` (the v0.12.23 stable-promotion map identity re-pin); no runtime leg \u2014 the same workflow's identity check is the `resolve` leg (identity check, resolve arm, map sha enforced) green in release-validate run 34059966981 on the rc.5 packet at `b3951dc68`, all nine legs green (resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat)"
     },
     {
       "pr": "1257",
       "title": "release(0.12.23): founder witness sign-off recorded",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only record — `releases/v0.12.23/witness.json`, the previous release's own witness receipt, which this receipt is modelled on; no runtime leg — container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only record \u2014 `releases/v0.12.23/witness.json`, the previous release's own witness receipt, which this receipt is modelled on; no runtime leg \u2014 container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1259",
       "title": "fix(terminal): honor DEFAULT_BOT_NAME without a terminal rebuild",
       "visibility": "user-visible",
-      "pass": "pass = changing DEFAULT_BOT_NAME in the environment changes the bot name the terminal sends, with no terminal rebuild — proven by the terminal suite, not on a running terminal.",
+      "pass": "pass = changing DEFAULT_BOT_NAME in the environment changes the bot name the terminal sends, with no terminal rebuild \u2014 proven by the terminal suite, not on a running terminal.",
       "witnessed": "by-proxy",
-      "evidence": "`clients/terminal/src/surfaces/__tests__/defaultBotName.test.ts` (added by this PR, present on main) plus `meetingActions.test.tsx` and `meetingCookbook.test.ts`; container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the node job. NARROWING: the terminal is an oss_only image (vexaai/v012-terminal) and is not part of the six OSS images this production entry pins, so no production surface exercises this value at all.",
+      "evidence": "`clients/terminal/src/surfaces/__tests__/defaultBotName.test.ts` (added by this PR, present on main) plus `meetingActions.test.tsx` and `meetingCookbook.test.ts`; container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the node job. NARROWING: the terminal is an oss_only image (vexaai/v012-terminal) and is not part of the six OSS images this production entry pins, so no production surface exercises this value at all.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
       "pr": "1262",
-      "title": "docs: front door leads with the wedge — meeting bots + real-time transcription",
+      "title": "docs: front door leads with the wedge \u2014 meeting bots + real-time transcription",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1263",
       "title": "docs: send-a-bot and quickstart open with the hosted on-ramp",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1264",
-      "title": "docs: Settings API reference — the account-scoped config surface agents keep asking for",
+      "title": "docs: Settings API reference \u2014 the account-scoped config surface agents keep asking for",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1265",
       "title": "[DOCS] Correct three over-claims: video recording, Jitsi status, speaker attribution",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1266",
-      "title": "docs(comparison): Attendee is ELv2 source-available, not Apache-2.0 — and the resell/embed row that follows from it",
+      "title": "docs(comparison): Attendee is ELv2 source-available, not Apache-2.0 \u2014 and the resell/embed row that follows from it",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1267",
       "title": "docs(mcp): the MCP server is live on hosted, Kubernetes and compose (#888)",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1268",
       "title": "docs: name the hosted dashboard's URL where pages send readers to it",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1269",
       "title": "docs(changelog): fold the 0.12.23 fragments; correct the #499 contested-words claim",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1270",
       "title": "docs: an architecture-review page for the evaluator, and an operability row on /comparison",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1271",
       "title": "docs(llms): ask agents what they came for, not only what broke",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1272",
-      "title": "mcp: report_issue — let the calling agent tell us what broke",
+      "title": "mcp: report_issue \u2014 let the calling agent tell us what broke",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/mcp/tests/test_app.py` and `test_mcp_surface.py` (both touched by the PR, present on main); and the tool it adds is served in production's own MCP image — `report_issue` is one of the 21 tools tools/list returned on the rc.5 MCP (estate-fills-seq35.log, row MCP-TOOLS)"
+      "evidence": "`core/meetings/services/mcp/tests/test_app.py` and `test_mcp_surface.py` (both touched by the PR, present on main); and the tool it adds is served in production's own MCP image \u2014 `report_issue` is one of the 21 tools tools/list returned on the rc.5 MCP (estate-fills-seq35.log, row MCP-TOOLS)"
     },
     {
       "pr": "1274",
       "title": "docs(support): a human-and-agent door for 'tell us what you came for'",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1275",
-      "title": "feat(meeting-api): read a meeting's participants — labelled by source, honest about the gap (#451)",
+      "title": "feat(meeting-api): read a meeting's participants \u2014 labelled by source, honest about the gap (#451)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/meeting-api/tests/test_meeting_participants.py` plus the gateway's `tests/test_proxy.py` and `tests/test_scope_matrix.py` for the new route's scope (all present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the python job"
+      "evidence": "`core/meetings/services/meeting-api/tests/test_meeting_participants.py` plus the gateway's `tests/test_proxy.py` and `tests/test_scope_matrix.py` for the new route's scope (all present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the python job"
     },
     {
       "pr": "1277",
-      "title": "docs: the 3-day triage SLA is a target we are not hitting — publish the real number",
+      "title": "docs: the 3-day triage SLA is a target we are not hitting \u2014 publish the real number",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (issue template, AGENTS.md, docs page publishing the real triage number); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (issue template, AGENTS.md, docs page publishing the real triage number); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1278",
-      "title": "docs: give this week's new pages a way in — six inbound links from where the reader already is",
+      "title": "docs: give this week's new pages a way in \u2014 six inbound links from where the reader already is",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1280",
       "title": "fix(meetings): converge a stuck 'stopping' meeting on stop_grace (split of #1014)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/meeting-api/tests/test_lifecycle_seam.py` (touched by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers it in the python job"
+      "evidence": "`core/meetings/services/meeting-api/tests/test_lifecycle_seam.py` (touched by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers it in the python job"
     },
     {
       "pr": "1282",
-      "title": "docs(readme): the front door now says what the docs say — hosted first, and four claims the tree does not support",
+      "title": "docs(readme): the front door now says what the docs say \u2014 hosted first, and four claims the tree does not support",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (README + docs page); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (README + docs page); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1284",
-      "title": "docs: publish the meeting completion-reason taxonomy — all ten values, and whose side each points at",
+      "title": "docs: publish the meeting completion-reason taxonomy \u2014 all ten values, and whose side each points at",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1285",
       "title": "docs: publish our operability numbers with the command that reproduces them, and mark the field's uncited ones",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1293",
-      "title": "feat: delete completed meeting artifacts (successor to #1188 — rebased, DELETE scoped BOT)",
+      "title": "feat: delete completed meeting artifacts (successor to #1188 \u2014 rebased, DELETE scoped BOT)",
       "visibility": "user-visible",
-      "pass": "pass = a completed meeting's artifacts can be deleted through the API by a caller holding the BOT-scoped DELETE right, and by nobody else — proven by the deletion test plus the scope matrix, not on production data.",
+      "pass": "pass = a completed meeting's artifacts can be deleted through the API by a caller holding the BOT-scoped DELETE right, and by nobody else \u2014 proven by the deletion test plus the scope matrix, not on production data.",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/meeting-api/tests/test_completed_artifact_deletion.py` (added by this PR, present on main), the gateway's `tests/test_scope_matrix.py` for the DELETE scope, and the conformance suite's `core/gateway/services/conformance/tests/test_api_surface.py`; container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the python job. NARROWING: nothing was deleted on production for this receipt — deletion is irreversible and was not exercised live.",
+      "evidence": "`core/meetings/services/meeting-api/tests/test_completed_artifact_deletion.py` (added by this PR, present on main), the gateway's `tests/test_scope_matrix.py` for the DELETE scope, and the conformance suite's `core/gateway/services/conformance/tests/test_api_surface.py`; container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the python job. NARROWING: nothing was deleted on production for this receipt \u2014 deletion is irreversible and was not exercised live.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
@@ -302,50 +302,50 @@
       "title": "fix(mixed): the virtual-time speed check measured the runner, not the tier",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/modules/mixed-pipeline/src/virtual-time-equivalence.test.ts` (touched by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers it in the node job"
+      "evidence": "`core/meetings/modules/mixed-pipeline/src/virtual-time-equivalence.test.ts` (touched by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers it in the node job"
     },
     {
       "pr": "1301",
       "title": "docs: say where an API key comes from on the twelve pages that carry traffic",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1302",
       "title": "docs: say where an API key comes from on ChatGPT-User's top-fetched pages",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1304",
-      "title": "docs: \"air-gapped\" is not defensible on seven more pages — say self-hosted, no egress",
+      "title": "docs: \"air-gapped\" is not defensible on seven more pages \u2014 say self-hosted, no egress",
       "visibility": "docs",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (docs prose); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (docs prose); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1321",
       "title": "[DEV] chart: the minio-init Job was unpinnable and undeclared",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`scripts/gates.test.mjs` for the gate the PR added, plus the chart's own render at seq-35: 19 rendered images, every one digest-pinned, `unpinnable = {}` (estate-fills-seq35.log, row E-IDENT) — which is the minio-init Job actually being pinnable and declared"
+      "evidence": "`scripts/gates.test.mjs` for the gate the PR added, plus the chart's own render at seq-35: 19 rendered images, every one digest-pinned, `unpinnable = {}` (estate-fills-seq35.log, row E-IDENT) \u2014 which is the minio-init Job actually being pinnable and declared"
     },
     {
       "pr": "1332",
-      "title": "docs: 0.10 → 0.12.x upgrade runbook — DB pre-flight first, LimitRange floor, prod-migration provenance",
+      "title": "docs: 0.10 \u2192 0.12.x upgrade runbook \u2014 DB pre-flight first, LimitRange floor, prod-migration provenance",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (the 0.10 → 0.12.x upgrade runbook, the admin-api schema README and its MIGRATION-0001 note, the changelog); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (the 0.10 \u2192 0.12.x upgrade runbook, the admin-api schema README and its MIGRATION-0001 note, the changelog); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1337",
       "title": "Fix/claude code effort flag",
       "visibility": "user-visible",
-      "pass": "pass = the Claude-Code effort flag is passed through as configured rather than dropped or hard-coded — proven by the agent-api unit tests only.",
+      "pass": "pass = the Claude-Code effort flag is passed through as configured rather than dropped or hard-coded \u2014 proven by the agent-api unit tests only.",
       "witnessed": "by-proxy",
-      "evidence": "`core/agent/tests/test_llm_claude_code.py` and `core/agent/tests/test_unit_foundation.py` (both touched by this PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the python job. NARROWING: agent-api is an oss_only image (vexaai/v012-agent-api) and the hosted service does not serve the Agent API, so there is no production surface on which this value could have been walked.",
+      "evidence": "`core/agent/tests/test_llm_claude_code.py` and `core/agent/tests/test_unit_foundation.py` (both touched by this PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the python job. NARROWING: agent-api is an oss_only image (vexaai/v012-agent-api) and the hosted service does not serve the Agent API, so there is no production surface on which this value could have been walked.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
@@ -353,28 +353,28 @@
       "title": "transcription: negotiate JSON output for Voxtral-compatible STT",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/modules/whisper/src/model.test.ts` and `src/errors.test.ts` (both touched by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the node job"
+      "evidence": "`core/meetings/modules/whisper/src/model.test.ts` and `src/errors.test.ts` (both touched by the PR, present on main); container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the node job"
     },
     {
       "pr": "1345",
       "title": "docs: the MCP page exists and nothing an agent reads points at it",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (AGENTS.md + docs pages that point at the MCP page); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (AGENTS.md + docs pages that point at the MCP page); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1346",
       "title": "docs: list the Obsidian sink adapter, with a how-to page",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (README + a how-to docs page for the Obsidian sink); no runtime leg — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (README + a how-to docs page for the Obsidian sink); no runtime leg \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1358",
-      "title": "release: version → 0.12.25 (release-commit convention)",
+      "title": "release: version \u2192 0.12.25 (release-commit convention)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "release-commit convention only (package.json, chart appVersion, changelog fragments, docs) for 0.12.25; no runtime leg — the `docs-version` gate in `scripts/gates.mjs` is what covers it, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "release-commit convention only (package.json, chart appVersion, changelog fragments, docs) for 0.12.25; no runtime leg \u2014 the `docs-version` gate in `scripts/gates.mjs` is what covers it, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1364",
@@ -392,19 +392,19 @@
     },
     {
       "pr": "1371",
-      "title": "train 0.12.26 — one drain: Zoom per-track attribution, popup sweep, typed join evidence, probe + noble build fixes",
+      "title": "train 0.12.26 \u2014 one drain: Zoom per-track attribution, popup sweep, typed join evidence, probe + noble build fixes",
       "visibility": "user-visible",
       "platform": "zoom",
-      "pass": "pass = a Zoom meeting requested through the MCP door joins, and its transcript segments carry per-track speaker attribution rather than an unnamed channel — observed on meeting 27834: 3 of 3 segments named, on per-track ids, on the rc.5 packet in production. Multi-speaker Zoom separation is NOT witnessed and must not be read out of this row.",
+      "pass": "pass = a Zoom meeting requested through the MCP door joins, and its transcript segments carry per-track speaker attribution rather than an unnamed channel \u2014 observed on meeting 27834: 3 of 3 segments named, on per-track ids, on the rc.5 packet in production. Multi-speaker Zoom separation is NOT witnessed and must not be read out of this row.",
       "witnessed": true,
-      "observation": "Founder, on production AND on the rc.5 entry itself (seq-35, Argo synced 21:26:33Z): Zoom meeting 27834 (native id 87914358542, container mtg-27834-d2b2d84f), requested through the hosted MCP door. joining 21:34:47.909Z → active 21:35:03.888Z (16 s) → completed 21:36:41.788Z on stop. 3 segments, EVERY one attributed to the founder's Zoom display name 'Dmtiry Grankin' (his display name as Zoom reports it, typo included) and EVERY one carrying a per-track segment id on channel ch-2 — ch-2:1:1788730519564, ch-2:2:1788730522380, ch-2:2:1788730523660 — language ru, 21:35:19.564Z–21:35:25.964Z; bot_outcome served, transcription_outcome served; the audio recording completed (7 chunks, 870942 bytes, on S3). Read back from production by this session via get_meeting_transcript on 2026-09-06 — the segments above are quoted from that read. HONEST NARROWING: only SINGLE-SPEAKER attribution was exercised. One Zoom participant, one track. #1371's per-track attribution is shown to route a named track to a named speaker; it is NOT shown to separate two simultaneous Zoom speakers, and this walk never attempted that. The rest of the 0.12.26 drain that #1371 carries — the popup sweep and typed join evidence — is not covered by this row either; those rest on the PR's own tests named under evidence in the by-proxy rows."
+      "observation": "Founder, on production AND on the rc.5 entry itself (seq-35, Argo synced 21:26:33Z): Zoom meeting 27834 (native id 87914358542, container mtg-27834-d2b2d84f), requested through the hosted MCP door. joining 21:34:47.909Z \u2192 active 21:35:03.888Z (16 s) \u2192 completed 21:36:41.788Z on stop. 3 segments, EVERY one attributed to the founder's Zoom display name 'Dmtiry Grankin' (his display name as Zoom reports it, typo included) and EVERY one carrying a per-track segment id on channel ch-2 \u2014 ch-2:1:1788730519564, ch-2:2:1788730522380, ch-2:2:1788730523660 \u2014 language ru, 21:35:19.564Z\u201321:35:25.964Z; bot_outcome served, transcription_outcome served; the audio recording completed (7 chunks, 870942 bytes, on S3). Read back from production by this session via get_meeting_transcript on 2026-09-06 \u2014 the segments above are quoted from that read. HONEST NARROWING: only SINGLE-SPEAKER attribution was exercised. One Zoom participant, one track. #1371's per-track attribution is shown to route a named track to a named speaker; it is NOT shown to separate two simultaneous Zoom speakers, and this walk never attempted that. The rest of the 0.12.26 drain that #1371 carries \u2014 the popup sweep and typed join evidence \u2014 is not covered by this row either; those rest on the PR's own tests named under evidence in the by-proxy rows."
     },
     {
       "pr": "1375",
-      "title": "release: version → 0.12.26",
+      "title": "release: version \u2192 0.12.26",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "release-commit convention only (package.json, chart appVersion, changelog, docs) for 0.12.26; no runtime leg — the `docs-version` gate in `scripts/gates.mjs` covers it, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "release-commit convention only (package.json, chart appVersion, changelog, docs) for 0.12.26; no runtime leg \u2014 the `docs-version` gate in `scripts/gates.mjs` covers it, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1376",
@@ -418,7 +418,7 @@
       "title": "CLA: accept the ASWF 2020 v2 CCLA as an alternative corporate instrument",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only governance change (CLA/README.md, CLA/ccla-aswf2020.md, CONTRIBUTOR_RIGHTS.md); no runtime leg — the rights declaration these files govern is enforced by the `contribution-rights` gate, green on the packet PR Vexa-ai/vexa#1647 (check 101559884669)"
+      "evidence": "repo-only governance change (CLA/README.md, CLA/ccla-aswf2020.md, CONTRIBUTOR_RIGHTS.md); no runtime leg \u2014 the rights declaration these files govern is enforced by the `contribution-rights` gate, green on the packet PR Vexa-ai/vexa#1647 (check 101559884669)"
     },
     {
       "pr": "1380",
@@ -429,27 +429,27 @@
     },
     {
       "pr": "1418",
-      "title": "carve: manifest for the v0.12.26 train — governance files stay vexa-core-owned, 29-Jul refinements committed",
+      "title": "carve: manifest for the v0.12.26 train \u2014 governance files stay vexa-core-owned, 29-Jul refinements committed",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "repo-only change (carve manifest, sync/transform scripts, overrides, security-insights.yml) that governs what leaves for the public mirror; no runtime leg — container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "repo-only change (carve manifest, sync/transform scripts, overrides, security-insights.yml) that governs what leaves for the public mirror; no runtime leg \u2014 container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1539",
       "title": "agent-api: validate the workspace repository host and pin git transports",
       "visibility": "user-visible",
-      "pass": "pass = agent-api refuses a workspace repository whose host is not allow-listed, and git transports are pinned so a ref cannot smuggle a different transport — proven by the host-validation tests.",
+      "pass": "pass = agent-api refuses a workspace repository whose host is not allow-listed, and git transports are pinned so a ref cannot smuggle a different transport \u2014 proven by the host-validation tests.",
       "witnessed": "by-proxy",
-      "evidence": "`core/agent/tests/test_repo_ref_host.py` (added by this PR, present on main) plus `core/agent/tests/test_api.py` and `test_workspace_publish.py`; container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers them in the python job. NARROWING: agent-api is oss_only and absent from the hosted service, so this hardening has no production surface to walk; it protects self-hosted operators.",
+      "evidence": "`core/agent/tests/test_repo_ref_host.py` (added by this PR, present on main) plus `core/agent/tests/test_api.py` and `test_workspace_publish.py`; container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers them in the python job. NARROWING: agent-api is oss_only and absent from the hosted service, so this hardening has no production surface to walk; it protects self-hosted operators.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
       "pr": "1541",
       "title": "deps: clear the pnpm audit findings ahead of the FINOS CVE pass",
       "visibility": "user-visible",
-      "pass": "pass = the dependency floors named in the PR are present in the committed lockfile and the workspace still installs and builds from it — which is all the evidence available; the audit-clean claim itself is UNVERIFIED here and would need an audit gate (or a manual `pnpm audit` the founder trusts) to become a pass.",
+      "pass": "pass = the dependency floors named in the PR are present in the committed lockfile and the workspace still installs and builds from it \u2014 which is all the evidence available; the audit-clean claim itself is UNVERIFIED here and would need an audit gate (or a manual `pnpm audit` the founder trusts) to become a pass.",
       "witnessed": "by-proxy",
-      "evidence": "lockfile-only change (pnpm-lock.yaml, pnpm-workspace.yaml, clients/terminal/package.json and its package-lock). THE PR'S OWN CLAIM — that the pnpm audit findings are cleared — IS NOT PROVEN BY ANYTHING IN THIS REPOSITORY'S CI: there is no audit gate. `grep -rn 'pnpm audit|npm audit|audit --'` over `.github/workflows/` and `scripts/` on main returns 0 hits, and `scripts/gates.mjs`'s GATES registry has no audit entry. What IS proven is that the floored lockfile installs and builds: the node job in container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success, and every image in the rc.5 packet was built from this lock in candidate build run 34051273765 at `71321ad0f` — all eleven images built and published. Read this row as 'the floor is in the tree and the tree builds', never as 'the CVEs are cleared'.",
+      "evidence": "lockfile-only change (pnpm-lock.yaml, pnpm-workspace.yaml, clients/terminal/package.json and its package-lock). THE PR'S OWN CLAIM \u2014 that the pnpm audit findings are cleared \u2014 IS NOT PROVEN BY ANYTHING IN THIS REPOSITORY'S CI: there is no audit gate. `grep -rn 'pnpm audit|npm audit|audit --'` over `.github/workflows/` and `scripts/` on main returns 0 hits, and `scripts/gates.mjs`'s GATES registry has no audit entry. What IS proven is that the floored lockfile installs and builds: the node job in container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success, and every image in the rc.5 packet was built from this lock in candidate build run 34051273765 at `71321ad0f` \u2014 all eleven images built and published. Read this row as 'the floor is in the tree and the tree builds', never as 'the CVEs are cleared'.",
       "note": "converted from user-visible to by-proxy: NOT walked live on 0.12.27. If you would rather walk it, set witnessed:true and replace this note with what you saw."
     },
     {
@@ -457,50 +457,50 @@
       "title": "deps: clear the residual Dependabot alerts in the Python and transcript-rendering lockfiles",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "dependency-lock change only (three uv.lock files and the transcript-rendering package-lock); no runtime leg of its own — container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success covers install-and-build in the python and node jobs, and every image in the rc.5 packet was built from these locks in candidate build run 34051273765 at `71321ad0f` — all eleven images built and published"
+      "evidence": "dependency-lock change only (three uv.lock files and the transcript-rendering package-lock); no runtime leg of its own \u2014 container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success covers install-and-build in the python and node jobs, and every image in the rc.5 packet was built from these locks in candidate build run 34051273765 at `71321ad0f` \u2014 all eleven images built and published"
     },
     {
       "pr": "1544",
-      "title": "deps: floor undici to 7.29.0 — last five Dependabot alerts on the lockfile",
+      "title": "deps: floor undici to 7.29.0 \u2014 last five Dependabot alerts on the lockfile",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "dependency-lock change only (pnpm-lock.yaml floor on undici); no runtime leg of its own — the node job in container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success, and every image in the rc.5 packet was built from this lock in candidate build run 34051273765 at `71321ad0f` — all eleven images built and published"
+      "evidence": "dependency-lock change only (pnpm-lock.yaml floor on undici); no runtime leg of its own \u2014 the node job in container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success, and every image in the rc.5 packet was built from this lock in candidate build run 34051273765 at `71321ad0f` \u2014 all eleven images built and published"
     },
     {
       "pr": "1559",
-      "title": "[DEV] Release train v0.12.27 — byte-identical to production (#1553)",
+      "title": "[DEV] Release train v0.12.27 \u2014 byte-identical to production (#1553)",
       "visibility": "user-visible",
-      "pass": "pass = a bot requested through the hosted MCP door joins a real meeting on production, is admitted, produces attributed segments of real speech, and departs on stop — observed end-to-end on meeting 27828. The 5 s first-segment latency bound was MISSED (35–42 s) and one hallucinated silence segment was recorded; both are carried forward as findings, and neither is claimed as passed.",
+      "pass": "pass = a bot requested through the hosted MCP door joins a real meeting on production, is admitted, produces attributed segments of real speech, and departs on stop \u2014 observed end-to-end on meeting 27828. The 5 s first-segment latency bound was MISSED (35\u201342 s) and one hallucinated silence segment was recorded; both are carried forward as findings, and neither is claimed as passed.",
       "witnessed": true,
-      "observation": "Founder walked the train's own value — a bot into a real meeting through the hosted MCP door — on production: Google Meet meeting 27828 (uid 4152, container mtg-27828-681384de). Request 15:34:59Z → lobby 15:35:29Z (30 s, against a 20 s bound) → active 15:36:28Z, the same second as admission, so the status path that hung on 27819/27820 holds. 7 segments captured, all attributed to the founder's Meet display name; stop 15:39:07Z → bot_departed_at 15:39:08.460Z (1.5 s); completion_reason stopped, bot_outcome served, transcription_outcome served, failure_stage null, 2 meter events. Confirmed by a production read of the meeting row by this session on 2026-09-06 (segments_captured 7, the three status transitions, the provenance block). TWO FINDINGS, neither waived: speech→stored-segment latency measured 35–42 s against the row's 5 s bound (Cloudflare answers in 1–3 s, so the window is inside our pipeline), and one silence hallucination — 'Vielen Dank.' — was attributed to the founder, i.e. the #617 gate did not fire. Walked on entry seq-34 (rc.3 digests), not on the rc.5 entry this receipt witnesses."
+      "observation": "Founder walked the train's own value \u2014 a bot into a real meeting through the hosted MCP door \u2014 on production: Google Meet meeting 27828 (uid 4152, container mtg-27828-681384de). Request 15:34:59Z \u2192 lobby 15:35:29Z (30 s, against a 20 s bound) \u2192 active 15:36:28Z, the same second as admission, so the status path that hung on 27819/27820 holds. 7 segments captured, all attributed to the founder's Meet display name; stop 15:39:07Z \u2192 bot_departed_at 15:39:08.460Z (1.5 s); completion_reason stopped, bot_outcome served, transcription_outcome served, failure_stage null, 2 meter events. Confirmed by a production read of the meeting row by this session on 2026-09-06 (segments_captured 7, the three status transitions, the provenance block). TWO FINDINGS, neither waived: speech\u2192stored-segment latency measured 35\u201342 s against the row's 5 s bound (Cloudflare answers in 1\u20133 s, so the window is inside our pipeline), and one silence hallucination \u2014 'Vielen Dank.' \u2014 was attributed to the founder, i.e. the #617 gate did not fire. Walked on entry seq-34 (rc.3 digests), not on the rc.5 entry this receipt witnesses."
     },
     {
       "pr": "1570",
       "title": "docs-current gate: raise the API read buffer so a large train evaluates",
       "visibility": "ci-governance",
       "witnessed": "by-proxy",
-      "evidence": "`scripts/docs-current-gate.mjs` — the buffer raise itself, proven by the gate it unblocked: `docs-current` went from a deterministic ENOBUFS failure on the 100-file train PR Vexa-ai/vexa#1559 to green on the same head once #1570 landed on main (recorded in the delivery PRD), and it is green on main's tip today — `docs-current` gate green on main's tip `f64a7653a` — run 34060622873"
+      "evidence": "`scripts/docs-current-gate.mjs` \u2014 the buffer raise itself, proven by the gate it unblocked: `docs-current` went from a deterministic ENOBUFS failure on the 100-file train PR Vexa-ai/vexa#1559 to green on the same head once #1570 landed on main (recorded in the delivery PRD), and it is green on main's tip today \u2014 `docs-current` gate green on main's tip `f64a7653a` \u2014 run 34060622873"
     },
     {
       "pr": "1571",
-      "title": "release: version → 0.12.27",
+      "title": "release: version \u2192 0.12.27",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "release-commit convention only (package.json, chart appVersion, changelog, docs) for 0.12.27; no runtime leg — the `docs-version` gate in `scripts/gates.mjs` covers it, and container-free gate suite green on main's tip `f64a7653a` — run 34060854372, jobs static + python + node + gates all success"
+      "evidence": "release-commit convention only (package.json, chart appVersion, changelog, docs) for 0.12.27; no runtime leg \u2014 the `docs-version` gate in `scripts/gates.mjs` covers it, and container-free gate suite green on main's tip `f64a7653a` \u2014 run 34060854372, jobs static + python + node + gates all success"
     },
     {
       "pr": "1572",
       "title": "release-images: build the gateway from the repository root, as its Dockerfile requires",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`release/candidate-image-map.test.mjs` (touched by the PR, present on main) — and the fix is proven by the build itself: `build gateway` failed on its first COPY in run 33981148748 before it, and the gateway image built and published in candidate build run 34051273765 at `71321ad0f` — all eleven images built and published after it"
+      "evidence": "`release/candidate-image-map.test.mjs` (touched by the PR, present on main) \u2014 and the fix is proven by the build itself: `build gateway` failed on its first COPY in run 33981148748 before it, and the gateway image built and published in candidate build run 34051273765 at `71321ad0f` \u2014 all eleven images built and published after it"
     },
     {
       "pr": "1575",
       "title": "release packet: vexaai/v012-flows is the eleventh image (packet schema 2)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`release/candidate-image-map.test.mjs` (packet schema 2 with the eleventh image) — and proven by the legs it unblocked: validate-mock-fsm and validate-bot-spawn failed deterministically with `No such image` for vexaai/v012-flows on rc.2 and are green on rc.5 in run 34059966981"
+      "evidence": "`release/candidate-image-map.test.mjs` (packet schema 2 with the eleventh image) \u2014 and proven by the legs it unblocked: validate-mock-fsm and validate-bot-spawn failed deterministically with `No such image` for vexaai/v012-flows on rc.2 and are green on rc.5 in run 34059966981"
     },
     {
       "pr": "1578",
@@ -511,19 +511,20 @@
     },
     {
       "pr": "1631",
-      "title": "mcp: forward the Zoom join URL to the bots API — request_meeting_bot could never start a Zoom bot (#1630)",
+      "title": "mcp: forward the Zoom join URL to the bots API \u2014 request_meeting_bot could never start a Zoom bot (#1630)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`core/meetings/services/mcp/tests/test_app.py` (touched by the PR, present on main); the station's ZOOM-DOOR row on the rc.5 MCP (constructed_meeting_url forwarded with the passcode, POST /bots 201, trace 42fdd88b9f7c492f969f3ff056c0b866 — estate-fills-seq35.log); and, decisively, the live production Zoom meeting 27834 whose constructed_meeting_url carries the passcode — witnessed under #1371 below"
+      "evidence": "`core/meetings/services/mcp/tests/test_app.py` (touched by the PR, present on main); the station's ZOOM-DOOR row on the rc.5 MCP (constructed_meeting_url forwarded with the passcode, POST /bots 201, trace 42fdd88b9f7c492f969f3ff056c0b866 \u2014 estate-fills-seq35.log); and, decisively, the live production Zoom meeting 27834 whose constructed_meeting_url carries the passcode \u2014 witnessed under #1371 below"
     },
     {
       "pr": "1633",
-      "title": "release: unbind the v0.12.27-rc.3 packet — superseded by #1631; rc.5 rebuilds the set",
+      "title": "release: unbind the v0.12.27-rc.3 packet \u2014 superseded by #1631; rc.5 rebuilds the set",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "`release/candidate-image-map.test.mjs` (touched by the PR, present on main) — the un-bind, proven by what it unblocked: release-images' preflight refused the rc.4 respin against the bound rc.3 map (run 34050271135) and planned the full set once the map was gone (candidate build run 34051273765 at `71321ad0f` — all eleven images built and published)"
+      "evidence": "`release/candidate-image-map.test.mjs` (touched by the PR, present on main) \u2014 the un-bind, proven by what it unblocked: release-images' preflight refused the rc.4 respin against the bound rc.3 map (run 34050271135) and planned the full set once the map was gone (candidate build run 34051273765 at `71321ad0f` \u2014 all eleven images built and published)"
     }
   ],
-  "signed_off": false,
-  "signed_off_note": "DRAFTED BY AN AGENT, NOT SIGNED. witnessed_by names the human who walked the four live rows; the signature itself is his to give. Set signed_off:true only after you have read this receipt and corrected anything you disagree with."
+  "signed_off": true,
+  "signed_off_note": "DRAFTED BY AN AGENT, NOT SIGNED. witnessed_by names the human who walked the four live rows; the signature itself is his to give. Set signed_off:true only after you have read this receipt and corrected anything you disagree with.",
+  "signature_note": "Signed on the founder's explicit instruction in the delivery session, 2026-09-06 ~22:0xZ: he walked the four live rows on production himself (Meet 27828, deaf-leave 27830, Teams 27831, Zoom 27834) with the session instrumenting each read, and directed the delivery session to record his sign-off rather than edit the file by hand."
 }
