@@ -13,7 +13,12 @@
  *
  *  It renders in the transcript, never in the composer: the input field is for typing, and a
  *  running act is told once, where the step rows are (founder ruling 2026-09-06, Vexa-ai/vexa#1587).
+ *
+ *  …AND ONCE MORE WHERE IT WAS PRESSED (Vexa-ai/vexa#1604). The control that started a job shows the
+ *  same state in place; `surfaces/actState.ts` holds that, keyed by the target `actTarget` spells
+ *  below. This file stays the place where a job is NAMED, so the row and the control name it alike.
  */
+import type { ChatIntent, ChatIntentKind } from "./chatIntent";
 
 export type JobRec = {
   id: string;
@@ -56,6 +61,45 @@ export function jobTarget(i: { workspace?: string; path?: string }): string {
   return ws && path ? `${ws}/${path}` : (path || ws);
 }
 
+/** THE ACTS THAT RUN AS JOBS. Mirrors `chat_intents.JOB_KINDS`, and closed for the same reason it is
+ *  closed there: whether an act runs in the background is a property of the act, never a flag. */
+export const JOB_KINDS: ReadonlySet<ChatIntentKind> = new Set<ChatIntentKind>(["create", "extend", "extend_transcript"]);
+
+export const isJobIntent = (i: ChatIntent): boolean => JOB_KINDS.has(i.kind);
+
+/** How much of a selected passage NAMES the act it started. Mirrors
+ *  `chat_intents.TARGET_SELECTION_MAX` — the number has to be the same one, because this is the
+ *  string the control matches its job by. */
+export const TARGET_SELECTION_MAX = 60;
+
+/** A selected passage as a target can carry it — the client's copy of `chat_intents._passage`.
+ *  `]` closes the job mark server-side and is dropped there, so it is dropped here too: a target
+ *  that differs by one character is a control that never finds its own job. Sliced by CODE POINT,
+ *  which is what Python's `[:60]` does. */
+function passage(selection: string): string {
+  const flat = String(selection ?? "").replace(/]/g, "").split(/\s+/).filter(Boolean).join(" ");
+  const cp = [...flat];
+  return cp.slice(0, TARGET_SELECTION_MAX).join("").trim() + (cp.length > TARGET_SELECTION_MAX ? "…" : "");
+}
+
+/** THE NAME AN ACT AND ITS JOB SHARE (Vexa-ai/vexa#1604) — the client's spelling of
+ *  `chat_intents.job_target`, for every kind that runs as a job.
+ *
+ *  The control that was pressed has an intent; the `job-started` event that comes back has a target
+ *  string and nothing else in common with it. This is the only thing that joins them, so it is
+ *  written once and spelled exactly as the server spells it — including the transcript form, where
+ *  what the person acted on is the meeting and the words, because a passage has no path. */
+export function actTarget(intent: ChatIntent): string {
+  if (intent.kind === "extend_transcript") {
+    const meeting = String(intent.meeting ?? "").trim();
+    const quote = passage(intent.selection);
+    if (meeting && quote) return `meeting ${meeting} · “${quote}”`;
+    return meeting ? `meeting ${meeting}` : quote;
+  }
+  if (intent.kind === "extend" || intent.kind === "create") return jobTarget(intent);
+  return "";
+}
+
 export function stepJob(jobs: JobRec[], id: string, label: string): JobRec[] {
   return jobs.map((j) => (j.id === id ? { ...j, steps: j.steps + 1, label } : j));
 }
@@ -63,6 +107,10 @@ export function stepJob(jobs: JobRec[], id: string, label: string): JobRec[] {
 export function endJob(jobs: JobRec[], id: string): JobRec[] {
   return jobs.filter((j) => j.id !== id);
 }
+
+/** HOW FAR ALONG, IN WORDS. One spelling, because the chat's row and the control that was pressed
+ *  both count steps and a person reading both must not have to notice they agree. */
+export const stepsPhrase = (steps: number): string => (steps ? `${steps} step${steps === 1 ? "" : "s"}` : "");
 
 /** What the CHAT says while jobs run — one line per job, at the foot of the transcript where the
  *  turn's own step rows are.
@@ -78,7 +126,7 @@ export function jobLine(jobs: JobRec[]): string {
       // is the reason it has not, which is the only thing the person needs while they wait.
       (j.queued
         ? ["job", j.target || j.kind, QUEUED_LINE]
-        : ["job", j.target || j.kind, j.steps ? `${j.steps} step${j.steps === 1 ? "" : "s"}` : "", j.label])
+        : ["job", j.target || j.kind, stepsPhrase(j.steps), j.label])
         .filter(Boolean)
         .join(" · "),
     )

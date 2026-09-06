@@ -25,7 +25,8 @@ import { presentError } from "./apiClient";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import { isPageIntent, type ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
-import { endJob, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "./jobs";
+import { actEnded, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
+import { actTarget, endJob, isJobIntent, jobLine, jobTarget, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
@@ -429,6 +430,10 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
     </div>
   );
 }
+
+/** A job whose stream died with it unaccounted for. One spelling: the chat says it in a turn and the
+ *  control that was pressed says it in place (Vexa-ai/vexa#1604), and they must not disagree. */
+const LOST_JOB_LINE = "Lost the connection to that background job";
 
 /** WHAT A BACKGROUND JOB IS DOING — in the chat, beside the step rows, never in the composer
  *  (Vexa-ai/vexa#1587). A job is not `busy` (Vexa-ai/vexa#1584): the composer stays free while it
@@ -954,10 +959,17 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     const state = getChatState(key);
     if (!v || !basePrompt || state.busy) {
       // NOTHING IS BEING SENT, so a row saying this act is queued would spin over a press that will
-      // never fire — the same lie as a spinner that outlives its turn, one object along.
+      // never fire — the same lie as a spinner that outlives its turn, one object along. The
+      // CONTROL that was pressed is the same lie in the same instant (Vexa-ai/vexa#1604), so it
+      // stops here too.
       if (queuedRowId) updateChatState(key, (s) => ({ ...s, jobs: endJob(s.jobs, queuedRowId) }));
+      if (opts.intent && isJobIntent(opts.intent)) actSettled(actTarget(opts.intent));
       return;
     }
+    // …AND THIS ONE IS ON THE WIRE (Vexa-ai/vexa#1604). An act that waited for the turn in front of
+    // it stops saying it is queued at the moment it stops being queued — a control that goes on
+    // saying it is the same defect as one that says nothing, a minute later.
+    if (opts.intent && isJobIntent(opts.intent)) actSending(actTarget(opts.intent));
     const n = state.nextId;
     const agentId = `a-${n}`;
     const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
@@ -1090,14 +1102,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               jobs: startJob(queuedRowId ? endJob(s.jobs, queuedRowId) : s.jobs,
                              { id: j.jobId, kind: j.kind, target: j.target }),
             }));
+            // …AND THE CONTROL THAT WAS PRESSED LEARNS THE SAME ID (Vexa-ai/vexa#1604). It has been
+            // saying "Creating…" since the press; from here it can count the job's own steps.
+            actStarted({ job: j.jobId, kind: j.kind, target: j.target });
           },
-          onJobStep: (jobId, tool) => updateChatState(key, (s) => ({
-            ...s, jobs: stepJob(s.jobs, jobId, toolOp(tool).label.split(" · ").pop() ?? ""),
-          })),
+          onJobStep: (jobId, tool) => {
+            const step = toolOp(tool).label.split(" · ").pop() ?? "";
+            actStepped(jobId, step);
+            updateChatState(key, (s) => ({ ...s, jobs: stepJob(s.jobs, jobId, step) }));
+          },
           // ONE LINE, ALWAYS — landed or died. A job that finishes in silence is indistinguishable
           // from one that is still running, and the chip has just gone.
-          onJobEnd: ({ jobId, line }) => {
+          onJobEnd: ({ jobId, ok, line }) => {
             startedJobs.delete(jobId);
+            // THE CONTROL LANDS OR SHOWS WHY (Vexa-ai/vexa#1604). Landed → its state goes and it is
+            // a control again; the page it wrote is already on screen, put there by the commit.
+            // Died → it keeps the one line and offers the act again.
+            actEnded(jobId, ok, line);
             updateChatState(key, (s) => ({
               ...s,
               jobs: endJob(s.jobs, jobId),
@@ -1148,11 +1169,17 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       // its turn. `onJobEnd` removes each one as it lands, so anything still in this set means the
       // stream died with that job unaccounted for — say so, and stop spinning.
       for (const lost of startedJobs) {
+        actEnded(lost, false, LOST_JOB_LINE);
         updateChatState(key, (s) => ({
           ...s, jobs: endJob(s.jobs, lost),
-          turns: [...s.turns, { id: `j-${lost}`, role: "agent" as const, text: "_Lost the connection to that background job — it may still have finished; reopen the page to see._", ops: [] }],
+          turns: [...s.turns, { id: `j-${lost}`, role: "agent" as const, text: `_${LOST_JOB_LINE} — it may still have finished; reopen the page to see._`, ops: [] }],
         }));
       }
+      // THE TURN IS OVER AND NO JOB EVER CLAIMED THIS ACT (Vexa-ai/vexa#1604) — a refusal, an error,
+      // or a deployment whose worker still runs the act inline. Whatever happened, nothing is
+      // running, so the control must not go on saying it is. A FAILURE is left standing: it is not
+      // waiting for anything, it is telling the person something.
+      if (opts.intent && isJobIntent(opts.intent)) actSettled(actTarget(opts.intent));
     }
   };
 
@@ -1207,6 +1234,13 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           updateChatState(chatKey, (s) => ({
             ...s, jobs: queueJob(s.jobs, { id: rowId, kind: act.kind, target: jobTarget(act) }),
           }));
+        }
+        // …AND IN PLACE, ON THE CONTROL THAT WAS PRESSED (Vexa-ai/vexa#1604), in the row's own
+        // words. EVERY job act, not only the page ones: a transcript passage names no file so it
+        // draws no row in the chat, but it was pressed on a control standing under the reader's
+        // cursor, and that control is owed the same answer.
+        if (detail?.intent && isJobIntent(detail.intent)) {
+          actQueued({ target: actTarget(detail.intent), kind: detail.intent.kind });
         }
         askQueue.current.push({ display, prompt, opts, rowId });
         return;

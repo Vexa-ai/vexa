@@ -35,6 +35,7 @@ import { MeetingCanvasView } from "../MeetingCanvasView";
 import { ASK_CHAT_EVENT } from "../actions";
 import { LINE_PLACEHOLDER } from "../../minutes/ExtendAction";
 import { INSTRUCTION_LEAD, clearPending, pendingLanding } from "../../minutes/extend";
+import { resetActs } from "../../surfaces/actState";
 import { ServicesProvider, createContainer, reg } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 import type { ChatIntent } from "../../surfaces/chatIntent";
@@ -72,6 +73,7 @@ beforeEach(() => {
   liveState = {};
   asks.length = 0;
   clearPending();
+  resetActs();   // the act store outlives an unmount — one test's running act is not the next one's
   window.addEventListener(ASK_CHAT_EVENT, onAsk);
 });
 
@@ -117,6 +119,16 @@ function highlight(host: HTMLElement, phrase: string): boolean {
 
 const control = () => container.querySelector('[data-doc-act="extend-transcript"]') as HTMLElement | null;
 const field = () => container.querySelector("[data-act-field]") as HTMLInputElement | null;
+
+/** The ROOM'S OWN WORDS, with the control that floats over them taken out. The control is inside the
+ *  transcript's box — it has to be, it points at a passage — and since Vexa-ai/vexa#1604 it stays
+ *  there while its act runs, saying what the act is doing. That text is the ACT reporting itself,
+ *  never the record, and the claim below is about the record. */
+const roomText = () => {
+  const main = container.querySelector("main")?.cloneNode(true) as HTMLElement | undefined;
+  main?.querySelector('[data-doc-act="extend-transcript"]')?.remove();
+  return main?.textContent;
+};
 
 /** the whole gesture as the reader performs it: highlight, press, then a key. */
 function extend(phrase: string, line?: string) {
@@ -180,12 +192,12 @@ describe("the Extend control on a transcript selection", () => {
 
   it("leaves the transcript exactly as it was — the act writes pages, never the record", async () => {
     await renderRoom();
-    const before = container.querySelector("main")?.textContent;
+    const before = roomText();
 
     extend(PASSAGE);
 
-    expect(container.querySelector("main")?.textContent).toBe(before);
-    expect(container.querySelector("main")?.textContent).toContain(SAID);
+    expect(roomText()).toBe(before);
+    expect(roomText()).toContain(SAID);
   });
 
   it("navigates nowhere on the reply — the pages it writes have paths nobody can predict", async () => {
@@ -218,11 +230,26 @@ describe("the Extend control on a transcript selection", () => {
     elsewhere.remove();
   });
 
-  it("closes on the act — the highlight is spent", async () => {
+  /** REPLACED 2026-09-06 (Vexa-ai/vexa#1604). This used to read "closes on the act — the highlight is
+   *  spent" and required the control to be GONE after a press. The founder's ruling on the page form
+   *  of the same act — *"this thing should indicate it's actually working"* — reverses that half: the
+   *  highlight is still spent and the field still closes, but the control stays where it was pressed
+   *  and becomes the act. Vanishing was the defect, one surface along. */
+  it("the field closes and the control BECOMES the act — working, in place", async () => {
     await renderRoom();
     extend(PASSAGE);
 
-    expect(control()).toBeNull();
+    expect(field()).toBeNull();          // the line is spent with the press that fired it
+    expect(asks).toHaveLength(1);
+    expect(control()?.getAttribute("data-act-state")).toBe("working");
+    expect(control()?.textContent).toContain("Extending…");
+  });
+
+  it("a second press while it runs is inert — never a second act", async () => {
+    await renderRoom();
+    extend(PASSAGE);
+
+    fireEvent.mouseDown(control() as HTMLElement);
     expect(field()).toBeNull();
     expect(asks).toHaveLength(1);
   });

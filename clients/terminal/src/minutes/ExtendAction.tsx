@@ -14,6 +14,14 @@
  *  too**. The click already said "extend" — the field is a refinement offered after the decision,
  *  never a second confirmation of it, and an empty line is today's behaviour to the byte.
  *
+ *  AND THEN IT SHOWS ITS OWN STATE (Vexa-ai/vexa#1604). Founder, 2026-09-06, having pressed "Create
+ *  this page": *"this thing should indicate it's actually working"* — the act ran in the background
+ *  and the control it was pressed on did not move. Every control below now becomes the act while the
+ *  act runs: working with the job's step count, queued when a turn is in front of it, one line when
+ *  it fails, and back to a control when the page lands. The state itself lives in
+ *  `surfaces/actState`, keyed by the target the press and the job both name — this file only wears
+ *  it.
+ *
  *  The panel supplies `workspace` and `path` from THE RESOLVED VIEW SLOT — never from a tab label,
  *  a crumb, or the document header's rendered name (F63). Those are display strings; two of them
  *  have already been wrong on this screen (a folder listing renaming the document behind it), and
@@ -22,6 +30,9 @@
 import type { CSSProperties, RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
+import { actCleared, actWords, useActState } from "../surfaces/actState";
+import type { ChatIntent } from "../surfaces/chatIntent";
+import { actTarget, isJobIntent } from "../surfaces/jobs";
 import { Icon } from "../ui-kit";
 import { landPending, postIntent, sourceRange } from "./extend";
 import { type as ty, surface } from "./tokens";
@@ -74,6 +85,42 @@ export function ActLine(p: { onFire: (instruction?: string) => void; label: stri
   );
 }
 
+/** THE ACT THIS CONTROL FIRED, or nothing (Vexa-ai/vexa#1604).
+ *
+ *  A control shows the state of ITS OWN press — the target it fired, held here — rather than of
+ *  whatever the store happens to know about that page. Two Extends can name the same page (the one
+ *  under the body and the one over a selection), the server refuses the second job on that ground,
+ *  and a control lighting up for an act nobody pressed on it would be the panel guessing.
+ *
+ *  It clears itself when the record does. The record's disappearance IS the landing: the file was
+ *  written, the commit event has already refreshed the page under this control, and what is left
+ *  for the control to do is stop saying anything. */
+function useFiredAct(slot: string) {
+  const [fired, setFired] = useState<string | null>(null);
+  const state = useActState(fired);
+  useEffect(() => { if (fired && !state) setFired(null); }, [fired, state]);
+  // A NEW SLOT IS A NEW SUBJECT: whatever was running belonged to the page (or the room) that was
+  // here before, and its state must not be worn by the one that replaced it.
+  useEffect(() => { setFired(null); }, [slot]);
+  const remember = useCallback((posted: ChatIntent | null) => {
+    setFired(posted && isJobIntent(posted) ? actTarget(posted) : null);
+  }, []);
+  /** the person is asking for the act again — the failure line goes with the press that answers it.
+   *  The store write happens HERE and not inside a `setFired` updater: an updater runs during
+   *  render, and a store that notifies its subscribers from inside one sets state on components
+   *  that are mid-render. */
+  const forget = useCallback(() => {
+    if (fired) actCleared(fired);
+    setFired(null);
+  }, [fired]);
+  return { fired, state, remember, forget };
+}
+
+const spinner = (size: number): CSSProperties => ({
+  width: size, height: size, borderRadius: "50%", border: "1.5px solid var(--line2)",
+  borderTopColor: "var(--accent)", flex: "none",
+});
+
 /** ONE CONTROL SHAPE FOR THE TWO ACTS (founder ruling 2026-09-06: *"create this page should also
  *  work in the background and should probably look like extend — same thing, but also creates
  *  file"*).
@@ -93,7 +140,10 @@ export function ActLine(p: { onFire: (instruction?: string) => void; label: stri
  *  …AND SO DOES THE LINE (#1593). The optional field opens INSIDE this box rather than beside it,
  *  keeping the frame the eye is already on so the page does not move under the cursor at the moment
  *  somebody is about to type. One shape, one gesture, both acts — *"the same line belongs on
- *  Create"*. */
+ *  Create"*.
+ *
+ *  …AND SO DOES THE WORKING STATE (#1604). Same box again, in place, for the same reason: the answer
+ *  to "is it doing anything?" belongs where the question was asked. */
 const actBox: CSSProperties = {
   display: "flex", alignItems: "center", gap: 10, width: "100%", marginTop: 28,
   padding: "10px 13px", textAlign: "left", background: surface.raised,
@@ -110,16 +160,20 @@ function PageAct(p: {
   hint: string;
   /** what the field is FOR, for a reader who cannot see the box it opened in */
   fieldLabel: string;
-  /** fires the act, with the person's line or without it */
-  onFire: (instruction?: string) => void;
+  /** fires the act, and hands back the intent that went — the control needs it to recognise its own
+   *  job. `null` when nothing was posted (see `normalizeIntent`: an act it cannot honour is refused,
+   *  and a control must not spin over a refusal). */
+  onFire: (instruction?: string) => ChatIntent | null;
   /** the resolved slot this control belongs to — a page that changes under an open field closes
    *  it, because a line typed about the page you were reading must never fire against the page
    *  that replaced it. */
   slot: string;
 }) {
   const [asking, setAsking] = useState(false);
+  const { state, remember, forget } = useFiredAct(p.slot);
   useEffect(() => { setAsking(false); }, [p.slot]);
-  const fire = (instruction?: string) => { setAsking(false); p.onFire(instruction); };
+  const fire = (instruction?: string) => { setAsking(false); remember(p.onFire(instruction)); };
+  const open = () => { forget(); setAsking(true); };
   const icon = <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name={p.icon} size={15} /></span>;
 
   if (asking) {
@@ -133,14 +187,41 @@ function PageAct(p: {
       </div>
     );
   }
+
+  // WHILE THE ACT RUNS, THE CONTROL IS THE ACT (#1604). Not a disabled button and not a button with
+  // a guard in its handler: there is nothing a second press could ask for that is not already
+  // happening, so the control stops being pressable at all. The handle stays, so the thing the
+  // reader (and every test) reaches for is still there — it simply does nothing.
+  if (state && state.phase !== "failed") {
+    const w = actWords(state, p.title);
+    return (
+      <div data-doc-act={p.act} data-act-state={state.phase} role="status" aria-live="polite" aria-busy="true"
+        title={p.hint} style={{ ...actBox, cursor: "default" }}>
+        <span className="vx-op-spin" aria-hidden="true" style={spinner(14)} />
+        <span style={{ minWidth: 0 }}>
+          <span data-act-title style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>{w.head}</span>
+          {/* the line is empty for the first moment of a job — hold its room rather than let the box
+              jump the instant the first step arrives */}
+          <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2, minHeight: 14 }}>{w.line}</span>
+        </span>
+      </div>
+    );
+  }
+
+  // IT FAILED: the same control, offered again, carrying one line of what went wrong. The act is
+  // still the obvious next move — what changed is that the person now knows why it has not happened.
+  const failed = state?.phase === "failed" ? actWords(state, p.title).line : null;
   return (
-    <button data-doc-act={p.act} title={p.hint} onClick={() => setAsking(true)} style={actBox}
+    <button data-doc-act={p.act} {...(failed ? { "data-act-state": "failed" } : {})} title={p.hint}
+      onClick={open} style={actBox}
       onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; e.currentTarget.style.borderColor = "var(--accent)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; e.currentTarget.style.borderColor = "var(--line)"; }}>
-      {icon}
+      {failed
+        ? <span style={{ flex: "none", display: "flex", color: "var(--danger)" }}><Icon name="alert" size={15} /></span>
+        : icon}
       <span style={{ minWidth: 0 }}>
         <span data-act-title style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>{p.title}</span>
-        <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2 }}>{p.line}</span>
+        <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2, ...(failed ? { color: "var(--danger)" } : {}) }}>{failed ?? p.line}</span>
       </span>
     </button>
   );
@@ -208,12 +289,20 @@ interface Hit { text: string; top: number; left: number }
  *  stands down: the collapse it caused is not news about what the reader wanted. Same reason the
  *  button below reads `onMouseDown` rather than `onClick`, one step further along.
  *
+ *  …AND THE ACT OUTLIVES THE SELECTION IT WAS ABOUT (#1604). Firing used to end this component: the
+ *  highlight collapsed, the button vanished, and the reader was left looking at the paragraph they
+ *  had just acted on with nothing to say the act existed. So the hit is KEPT while its act runs, and
+ *  the box stands where the button stood — working, queued, or one line of why it failed. For the
+ *  same reason the listener stands down here too: while an act of this control's is alive, a fresh
+ *  highlight must not draw a second button over the one reporting it.
+ *
  *  ONE CONTROL, TWO SURFACES (Vexa-ai/vexa#1596). The founder asked for the SAME Extend on a
  *  meeting transcript — *"we also want extend on transcript when i can select some text and push the
  *  button"* — so the transcript wears this component (`canvas/TranscriptExtend.tsx`) rather than a
  *  look-alike beside it. Everything above is the same problem in both places, and the half that
  *  differs is only what the press MEANS, which is why that half is the callback: `onFire` gets the
- *  selected text and the person's optional line, and the caller decides what act they name. */
+ *  selected text and the person's optional line, decides what act they name, and hands back the
+ *  intent it posted. */
 export function SelectionAct(p: {
   containerRef: RefObject<HTMLElement | null>;
   /** the `data-doc-act` handle for the button; the field it opens carries `<act>-line` */
@@ -225,15 +314,18 @@ export function SelectionAct(p: {
   /** whatever makes a captured selection stale — a new page, a new meeting. A line typed about one
    *  must never fire against the thing that replaced it. */
   slot: string;
-  onFire: (selection: string, instruction?: string) => void;
+  onFire: (selection: string, instruction?: string) => ChatIntent | null;
 }) {
   const [hit, setHit] = useState<Hit | null>(null);
   /** the hit a press captured — the field is open on THIS text, whatever the document's live
    *  selection has become since */
   const [asking, setAsking] = useState<Hit | null>(null);
+  /** where the act that is running was fired, so its state can stand exactly there */
+  const [pin, setPin] = useState<Hit | null>(null);
+  const { fired, state, remember, forget } = useFiredAct(p.slot);
 
   const read = useCallback(() => {
-    if (asking) return;         // a field is open on a captured hit; the DOM's selection is stale news
+    if (asking || fired) return;   // a field is open, or an act of ours is running: the DOM's selection is stale news
     const host = p.containerRef.current;
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
     if (!host || !sel || sel.isCollapsed || sel.rangeCount === 0) { setHit(null); return; }
@@ -250,7 +342,7 @@ export function SelectionAct(p: {
     const top = r && hostRect ? r.top - hostRect.top + host.scrollTop - 34 : 0;
     const left = r && hostRect ? r.left - hostRect.left : 0;
     setHit({ text, top: Math.max(0, top), left: Math.max(0, left) });
-  }, [p.containerRef, asking]);
+  }, [p.containerRef, asking, fired]);
 
   useEffect(() => {
     // `selectionchange` is the only event that fires for a keyboard selection and for a
@@ -261,16 +353,19 @@ export function SelectionAct(p: {
 
   // A new document — or a new meeting — is a new selection context: never carry the last one's
   // highlight, or a field opened over it, onto it.
-  useEffect(() => { setHit(null); setAsking(null); }, [p.slot]);
+  useEffect(() => { setHit(null); setAsking(null); setPin(null); }, [p.slot]);
+  // The act is over (it landed, or it was never posted): the place it stood is not a fact any more.
+  useEffect(() => { if (!state) setPin(null); }, [state]);
 
   const fire = (instruction?: string) => {
     const h = asking;
     setAsking(null); setHit(null);
     if (!h) return;
-    p.onFire(h.text, instruction);
+    setPin(h);
+    remember(p.onFire(h.text, instruction));
   };
 
-  /** the floating box, worn by the button and by the field it opens */
+  /** the floating box, worn by the button, by the field it opens, and by the act it fires */
   const floating: CSSProperties = {
     ...ty.chip, position: "absolute", zIndex: 4, display: "inline-flex", alignItems: "center",
     gap: 5, color: "var(--t1)", background: surface.raisedHi, border: "1px solid var(--line)",
@@ -286,6 +381,34 @@ export function SelectionAct(p: {
       </span>
     );
   }
+
+  if (state && pin) {
+    const w = actWords(state, "Extend");
+    // FAILED — the act offered again, on the passage it was fired on, with the reason under it. The
+    // captured hit is still in hand, so pressing this re-opens the field on the same words rather
+    // than asking the reader to find and highlight them a second time.
+    if (state.phase === "failed") {
+      return (
+        <button data-doc-act={p.act} data-act-state="failed" title={p.hint}
+          onMouseDown={(e) => { e.preventDefault(); forget(); setAsking(pin); }}
+          style={{ ...floating, top: pin.top, left: pin.left, alignItems: "flex-start", flexDirection: "column", gap: 1, maxWidth: 280, cursor: "pointer" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--danger)" }}>
+            <Icon name="alert" size={12} /> Extend
+          </span>
+          <span data-act-line style={{ ...ty.meta, color: "var(--danger)" }}>{w.line}</span>
+        </button>
+      );
+    }
+    return (
+      <span data-doc-act={p.act} data-act-state={state.phase} role="status" aria-live="polite" aria-busy="true"
+        style={{ ...floating, top: pin.top, left: pin.left, maxWidth: 280, cursor: "default" }}>
+        <span className="vx-op-spin" aria-hidden="true" style={spinner(11)} />
+        <span data-act-title>{w.head}</span>
+        {w.line && <span data-act-line style={{ ...ty.meta }}>{w.line}</span>}
+      </span>
+    );
+  }
+
   if (!hit) return null;
   return (
     <button data-doc-act={p.act} title={p.hint}

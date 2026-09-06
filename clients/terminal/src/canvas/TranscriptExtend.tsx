@@ -40,6 +40,8 @@ export function TranscriptExtend(p: {
       // A NEW MEETING IS A NEW ROOM: a line typed about one transcript must never fire against the
       // one that replaced it in the same pane.
       slot={p.meeting}
+      // The intent goes BACK to the control (Vexa-ai/vexa#1604): the state it shows while the act
+      // runs is keyed by the act's target, and only the posted intent knows what that is.
       onFire={(selection, instruction) => postIntent({
         kind: "extend_transcript", meeting: p.meeting, selection,
         // WHERE IT WAS SAID, or nothing. `segmentRef` returns `{}` rather than a guess when the

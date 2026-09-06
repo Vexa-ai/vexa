@@ -20,7 +20,9 @@
  *  sentence — the two say the same thing.
  */
 import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { actPressed } from "../surfaces/actState";
 import { isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
+import { actTarget, isJobIntent } from "../surfaces/jobs";
 import { navigateView } from "./roomView";
 
 /** How much of a selection the BUBBLE shows. The intent carries up to 2000 characters; a bubble is
@@ -176,6 +178,12 @@ export function postIntent(raw: RawIntent): ChatIntent | null {
   // commit event. `highlight` writes nothing at all, and `extend_transcript` may write SEVERAL
   // pages (Vexa-ai/vexa#1596): landing on one of them would pick a winner nobody chose.
   pending = isPageIntent(intent) ? { workspace: intent.workspace, path: intent.path } : null;
+  // THE PRESS RAISES THE ACT'S STATE (Vexa-ai/vexa#1604). Here, because this is the single door
+  // every act goes through — the four controls, two surfaces and both families all end up on this
+  // line — and because the founder's complaint is about the moment of the press itself: the state
+  // has to exist before the wire does. Only the kinds that run as jobs; an `explore` or a
+  // `highlight` is answered inline by the turn it starts, and has no control waiting on it.
+  if (isJobIntent(intent)) actPressed({ target: actTarget(intent), kind: intent.kind });
   window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
     detail: {
       prompt: fallbackText(intent),
