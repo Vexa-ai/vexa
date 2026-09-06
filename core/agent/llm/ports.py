@@ -142,20 +142,98 @@ def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
 _CONTINUITY_DIR = ".claude"
 
 # The platform-write-only subtree of every workspace repo. Agent turns must NEVER modify it
-# (membership/invites live here — see control_plane.workspace_membership). Kept as a bare string so
+# (membership lives here — see control_plane.workspace_membership). Kept as a bare string so
 # this module stays product-import-free (it is liftable into a standalone brick). The control plane's
 # membership writer commits policy/ directly; a turn that touches it is reverted here before the commit.
 _POLICY_DIR = "policy"
+
+# ⚠ THE PLATFORM WRITES policy/ WHILE THE TURN IS RUNNING, AND THIS GUARD USED TO DELETE THAT WRITE.
+#
+# Founder, 2026-09-07, opening an invite the agent had minted a minute earlier: *"This invite link is
+# not valid. Ask whoever sent it for a new one."* The workspace's own history said why, twice an hour:
+#
+#     8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c
+#     1a452f9 19:28:09  oenb-b5e60c: policy/invites.json — removed
+#
+# The mint is agent-api, writing its own store during the turn. The removal one second later is THIS
+# file: the guard captured HEAD before the turn, rebuilt the whole `policy/` subtree from it after,
+# and `_commit_mount` then committed the deletion. `policy/` is one write surface with two writers,
+# and the second one deleted what the first had just put there — the exact failure `Operating-Loops`
+# names, and it failed silently and plausibly, as that class always does.
+#
+# Two changes, and they are different in kind:
+#   * the ANCHOR is no longer "HEAD before the turn". It is advanced over every commit made DURING
+#     the turn that carries the platform's own signature (`_is_platform_policy_commit`), so the
+#     platform's mid-turn writes are the baseline rather than the thing being reverted;
+#   * the RESTORE is no longer a purge-and-rebuild of the directory. It touches only the paths that
+#     actually differ from the anchor, so a turn that changed nothing under `policy/` — which is
+#     nearly all of them — does not delete and re-checkout a directory another process is writing.
+#
+# WHAT THE SIGNATURE IS AND IS NOT. It is positive evidence — a shape the platform always emits —
+# rather than a comparison against a remembered value, because a remembered baseline goes stale the
+# moment the other writer moves, which is the whole bug above. It is NOT a boundary against a hostile
+# shell: the agent toolset includes Bash inside this very mount, so an agent that wants to forge a
+# commit can forge this one too. Nothing in-tree can stop that, and nothing in-tree ever could. The
+# boundary is the MOUNT TABLE, which is why the invite store — the only capability material policy/
+# ever held — now lives at `<store-root>/.invites/`, outside every workspace bind
+# (`runtime_kernel.mounts.workspace_binds` emits one subpath bind per mounted workspace and never the
+# store root). What is left here is the member roster, which travels with the workspace on purpose,
+# and for it this guard remains what it always was: a heal that undoes a turn's writes.
+_PLATFORM_COMMITTER_EMAIL = "platform@vexa.ai"
+_POLICY_SUBJECT_PREFIX = "policy: "
 
 
 def _policy_head_sha(work: Path) -> Optional[str]:
     """The current HEAD sha, or ``None`` if the repo has no commit yet (freshly-init'd workspace).
     Captured BEFORE a turn runs — while HEAD still reflects the PLATFORM's last policy commit and no
-    agent tool has had a chance to move it — so the post-turn guard has a trustworthy baseline."""
+    agent tool has had a chance to move it — so the post-turn guard has a starting anchor."""
     try:
         return _git(work, "rev-parse", "HEAD")
     except subprocess.CalledProcessError:
         return None
+
+
+def _is_platform_policy_commit(work: Path, sha: str) -> bool:
+    """Does ``sha`` carry the signature ``workspace_membership._policy_commit`` always emits?
+
+    Three properties together, all of them things the platform writer does BY CONSTRUCTION and the
+    turn-commit path does not: the committer is the platform identity, the subject opens with
+    ``policy: ``, and the commit touches NOTHING outside ``policy/`` (it is made with an explicit
+    ``-- policy`` pathspec). The turn commit fails the third on any turn that wrote a file, and the
+    second on every turn — its subject is ``<workspace>: <path> — <verb>``."""
+    try:
+        meta = _git(work, "show", "-s", "--format=%ce%n%s", sha)
+        names = _git(work, "show", "--name-only", "--format=", sha)
+    except subprocess.CalledProcessError:
+        return False
+    lines = meta.splitlines()
+    if len(lines) < 2:
+        return False
+    committer, subject = lines[0].strip(), lines[1].strip()
+    if committer != _PLATFORM_COMMITTER_EMAIL or not subject.startswith(_POLICY_SUBJECT_PREFIX):
+        return False
+    paths = [p.strip() for p in names.splitlines() if p.strip()]
+    return bool(paths) and all(p.startswith(_POLICY_DIR + "/") for p in paths)
+
+
+def _policy_anchor(work: Path, base_sha: Optional[str]) -> Optional[str]:
+    """The sha whose ``policy/`` tree the guard restores to: ``base_sha``, advanced over the platform's
+    OWN policy commits made since the turn started.
+
+    Walked oldest-first and stopped at the first commit that is not the platform's, so an agent
+    self-commit can never become the anchor even when a platform commit lands after it."""
+    if not base_sha:
+        return base_sha
+    try:
+        walk = _git(work, "rev-list", "--reverse", f"{base_sha}..HEAD")
+    except subprocess.CalledProcessError:
+        return base_sha
+    anchor = base_sha
+    for sha in (ln.strip() for ln in walk.splitlines()):
+        if not sha or not _is_platform_policy_commit(work, sha):
+            break
+        anchor = sha
+    return anchor
 
 
 def _list_policy_paths_at(work: Path, ref: str) -> set[str]:
@@ -178,7 +256,8 @@ def _current_policy_entries(work: Path) -> set[str]:
                 entries.add(ln.strip())
     except subprocess.CalledProcessError:
         pass
-    # Untracked (incl. would-be-ignored is out of scope; policy/ is not ignored) entries under policy/.
+    # Untracked entries under policy/ (ignored ones are enumerated separately — see
+    # ``_excluded_policy_entries``, which is what keeps an ATTACHED workspace's member list alive).
     try:
         for ln in _git(work, "ls-files", "--others", "--exclude-standard", "--", _POLICY_DIR).splitlines():
             if ln.strip():
@@ -197,56 +276,98 @@ def _current_policy_entries(work: Path) -> set[str]:
     return entries
 
 
+def _excluded_policy_entries(work: Path) -> set[str]:
+    """``policy/`` paths git is deliberately IGNORING in this clone — the platform's untracked store.
+
+    ⚠ THE ACCESS WIPE THIS PREVENTS (found working Vexa-ai/vexa#1645). An ATTACHED shared workspace —
+    a group whose tree is somebody's cloned GitHub repo — keeps its member list untracked on purpose:
+    ``workspace_attach.carry_policy`` copies ``policy/`` across the swap and adds it to the clone's
+    ``.git/info/exclude``, because committing our subject ids into their repository would push them,
+    and because one local commit diverges the fresh clone. ``read_members`` reads the WORKING TREE, so
+    the grant is real and authority is unaffected.
+
+    To a baseline-diffing guard, that file is indistinguishable from an agent's untracked add: absent
+    from every commit, present on disk. Deleting it drops every member of that workspace — ``is_member``
+    answers None for all of them and the group disappears from every active set — which is the exact
+    outcome ``carry_policy`` exists to prevent, undone one turn later by the guard. An agent's own add
+    is never ignored (nothing puts ``policy/`` in a seeded workspace's ``.gitignore``), so the ignore
+    bit separates the two."""
+    try:
+        raw = _git(work, "ls-files", "--others", "--ignored", "--exclude-standard", "--", _POLICY_DIR)
+    except subprocess.CalledProcessError:
+        return set()
+    return {ln.strip() for ln in raw.splitlines() if ln.strip()}
+
+
+def _policy_paths_differing_from(work: Path, anchor: str) -> set[str]:
+    """Tracked ``policy/`` paths whose working-tree or index state differs from ``anchor``."""
+    out: set[str] = set()
+    for args in (("diff", "--name-only", anchor, "--", _POLICY_DIR),
+                 ("diff", "--name-only", "--cached", anchor, "--", _POLICY_DIR)):
+        try:
+            raw = _git(work, *args)
+        except subprocess.CalledProcessError:
+            continue
+        out |= {ln.strip() for ln in raw.splitlines() if ln.strip()}
+    return out
+
+
 def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
-    """Make ``policy/`` HEAD-AUTHORITATIVE, not working-tree-scanned — the Q3 write-guard (default:
-    post-turn validation + revert). policy/ is PLATFORM-WRITE-ONLY; the platform's last policy commit is
-    ``base_sha`` (HEAD captured BEFORE the turn, before any agent tool ran). The agent toolset includes
-    ``Bash``, so an agent turn can ``git add policy/ && git commit`` its OWN tamper mid-turn — a
-    working-tree scan then sees a clean tree and the forgery survives in HEAD. This guard instead
-    RESTORES the whole ``policy/`` subtree to its ``base_sha`` state, discarding ANY agent change to
-    policy/ whether COMMITTED (self-commit), staged, uncommitted, a symlink, or a brand-new policy/ in a
-    freshly-seeded workspace. Returns the affected paths so the caller can flag them.
+    """Restore ``policy/`` to the PLATFORM's own state — the Q3 write-guard (post-turn validation +
+    revert). ``policy/`` is PLATFORM-WRITE-ONLY; the agent toolset includes ``Bash``, so a turn can
+    ``git add policy/ && git commit`` its own tamper and a working-tree scan would then see a clean
+    tree with the forgery living in HEAD. So the guard is anchor-based, not scan-based.
 
-    Mechanism: (1) delete everything currently under policy/ from index + disk; (2) restore the baseline
-    policy/ files from ``base_sha`` (a no-op if the baseline had no policy/). The subsequent turn commit
-    therefore records the PLATFORM's policy tree, never the agent's."""
-    import shutil
+    THE ANCHOR IS ``_policy_anchor``, NOT ``base_sha`` — see the note above ``_PLATFORM_COMMITTER_EMAIL``.
+    ``base_sha`` is HEAD as captured before the turn; the anchor is that sha advanced over the platform's
+    own policy commits made since, so an invite or a membership the platform wrote WHILE the turn ran is
+    the baseline rather than the thing being deleted. Restoring to ``base_sha`` is what removed every
+    minted invite one second after it was minted.
 
-    baseline = _list_policy_paths_at(work, base_sha) if base_sha else set()
+    AND IT NEVER SYNCS A TREE. Only the paths that actually differ from the anchor are touched:
+    tracked paths are checked out from it, and untracked entries — which the platform never leaves
+    behind, since ``_policy_commit`` commits by pathspec as part of the write — are removed as
+    agent-authored. A turn that did not touch ``policy/`` (nearly every turn) returns ``[]`` having
+    written nothing at all, so this guard can no longer delete a file it never had.
+
+    Returns the affected paths so the caller can flag them."""
+    anchor = _policy_anchor(work, base_sha)
+    baseline = _list_policy_paths_at(work, anchor) if anchor else set()
     current = _current_policy_entries(work)
-    # Anything present now that is not identical-to-baseline is suspect; but rather than diff contents,
-    # we unconditionally rebuild policy/ from the baseline (cheap, and content tamper of a baselined file
-    # via self-commit would otherwise slip a working-tree scan). affected = union of what we touch.
-    affected = set(current) | set(baseline)
+
+    # AGENT-AUTHORED ADDITIONS: present now, absent from the anchor, and NOT the platform's
+    # deliberately-untracked store (an attached workspace's carried member list — see
+    # `_excluded_policy_entries`). Includes the whole subtree of a `policy/` that did not exist at the
+    # anchor at all (a freshly-seeded workspace).
+    added = {p for p in current if p not in baseline} - _excluded_policy_entries(work)
+    # AGENT-AUTHORED EDITS: a baselined path whose content or index entry moved off the anchor.
+    changed = _policy_paths_differing_from(work, anchor) & baseline if anchor else set()
+
+    affected = added | changed
     if not affected:
         return []
 
-    # 1) Purge the current policy/ subtree from index + working tree (handles committed, staged,
-    #    untracked, symlink, and directory cases uniformly).
-    try:
-        _git(work, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", _POLICY_DIR)
-    except subprocess.CalledProcessError:
-        pass
-    policy_root = work / _POLICY_DIR
-    try:
-        if policy_root.is_symlink() or (policy_root.exists() and not policy_root.is_dir()):
-            policy_root.unlink(missing_ok=True)
-        elif policy_root.is_dir():
-            shutil.rmtree(policy_root, ignore_errors=True)
-    except OSError:
-        pass
-
-    # 2) Restore the baseline policy/ from base_sha (checkout writes both index + working tree).
-    if baseline and base_sha:
+    # 1) Drop the agent's additions from index + working tree, path by path. `policy` itself appears
+    #    in `current` only when it is a symlink or a plain file (never a directory), so unlinking is
+    #    always the right verb here — there is no tree to walk and none to remove.
+    for path in sorted(added):
         try:
-            _git(work, "checkout", base_sha, "--", _POLICY_DIR)
+            _git(work, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path)
         except subprocess.CalledProcessError:
-            # Path-by-path fallback if the bulk checkout is refused for any single entry.
-            for path in sorted(baseline):
-                try:
-                    _git(work, "checkout", base_sha, "--", path)
-                except subprocess.CalledProcessError:
-                    pass
+            pass
+        target = work / path
+        try:
+            if target.is_symlink() or target.is_file():
+                target.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # 2) Restore every edited baseline path from the anchor (checkout writes index + working tree).
+    for path in sorted(changed):
+        try:
+            _git(work, "checkout", anchor, "--", path)
+        except subprocess.CalledProcessError:
+            pass
 
     return sorted(affected)
 def _commit_env(author: Optional[tuple[str, str]]) -> dict:
@@ -306,10 +427,24 @@ def _change_subject(work: Path, env: dict) -> str:
     return f"{slug}: {head}{rest} — {len(names)} files changed"[:_SUBJECT_MAX]
 
 
-def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]) -> Optional[str]:
+def _staged_policy_deletions(work: Path, env: dict) -> set[str]:
+    """``policy/`` paths staged as DELETED in the index (empty when the repo has no commit yet)."""
+    try:
+        raw = _git(work, "diff", "--cached", "--name-only", "--diff-filter=D", "--", _POLICY_DIR,
+                   env=env)
+    except subprocess.CalledProcessError:
+        return set()
+    return {ln.strip() for ln in raw.splitlines() if ln.strip()}
+
+
+def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]],
+                  policy_removed: Iterable[str] = ()) -> Optional[str]:
     """Commit ``work`` if its tree changed, attributed to ``author`` (committer = platform). Returns the
     new HEAD sha, or None on a clean tree. A path with no ``.git`` is skipped (a mount not yet seeded).
-    Best-effort per mount: one mount failing to commit must not abort the others."""
+    Best-effort per mount: one mount failing to commit must not abort the others.
+
+    ``policy_removed`` is what the policy guard removed in THIS turn — the only ``policy/`` deletions
+    this commit is entitled to record. See the un-staging step below."""
     if not (work / ".git").exists():
         return None
     # Harness continuity is private runtime plumbing, never workspace knowledge. Not every legacy
@@ -332,6 +467,22 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     env = _commit_env(author)
     _git(work, "add", "-A", "--", ".", env=env)
     _git(work, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", _CONTINUITY_DIR, env=env)
+    # NEVER RECORD A DELETION OF A `policy/` PATH THIS TURN DID NOT MAKE (Vexa-ai/vexa#1645).
+    # `git add -A` stages the tree AS IT FINDS IT, so anything another writer's file happened not to
+    # be at that instant is committed as a deletion by whichever turn runs next — which is exactly how
+    # `oenb-b5e60c: policy/invites.json — removed` came to sit one second after every mint. The policy
+    # guard is the only thing here entitled to remove a `policy/` path and it says which ones it did;
+    # every other staged deletion under `policy/` is put back, in the index and on disk, so the commit
+    # carries the platform's tree and the next turn does not re-stage the same removal.
+    unentitled = _staged_policy_deletions(work, env) - set(policy_removed)
+    for path in sorted(unentitled):
+        for restore in (("reset", "-q", "HEAD", "--", path), ("checkout", "HEAD", "--", path)):
+            try:
+                _git(work, *restore, env=env)
+            except subprocess.CalledProcessError:
+                pass
+    if unentitled and not _git(work, "diff", "--cached", "--name-only", env=env):
+        return None  # the only "change" was a deletion this turn had no business recording
     # SUBJECT from the tree; the agent's sentence, if there is one, as the BODY. Two `-m` flags is
     # git's own subject/body split, so `--oneline` shows the change and `git show` still carries
     # what the agent said about it — nothing is lost, it is filed where a reader expects it.
@@ -395,16 +546,19 @@ def run_harness_turn(
     (WP-A1.2: one commit per changed mount). Attribution (D4): the ``author`` (the dispatch principal)
     authors each commit; the committer is always the platform.
 
-    COMPOSED with the policy guard (Lane M / Q3): ``policy/`` is PLATFORM-WRITE-ONLY (membership/invites
-    live there; see ``control_plane.workspace_membership``). Each mount is a separate workspace repo that
+    COMPOSED with the policy guard (Lane M / Q3): ``policy/`` is PLATFORM-WRITE-ONLY (the member roster
+    lives there; see ``control_plane.workspace_membership``). Each mount is a separate workspace repo that
     may carry its own ``policy/`` subtree, so the guard runs PER MOUNT: we capture that mount's HEAD
-    policy tree BEFORE the turn (the platform's last policy commit, before any agent tool — Bash included
-    — can move it), and AFTER the turn we rebuild that mount's ``policy/`` from its baseline BEFORE its
-    commit (emitting ``{"type":"policy-reverted","paths":[…]}``). Net invariant: no agent-authored change
-    to ANY mount's ``policy/`` can ever be committed — on the private baseline OR any shared workspace —
-    while every other change commits, authored by the principal. ``_global`` (read-only) is never in the
-    commit set. A mount with no ``policy/`` makes the guard a no-op. (Hard enforcement is available
-    upstream via ``shared.governance`` if it needs to come back.)
+    BEFORE the turn (before any agent tool — Bash included — can move it), and AFTER the turn we restore
+    that mount's ``policy/`` to its ANCHOR before its commit (emitting
+    ``{"type":"policy-reverted","paths":[…]}``), where the anchor is that pre-turn sha advanced over the
+    platform's own policy commits made while the turn ran. Net invariant, and it is two-sided now: no
+    agent-authored change to ANY mount's ``policy/`` is ever committed, AND no write the PLATFORM made to
+    ``policy/`` during the turn is ever deleted (Vexa-ai/vexa#1645 — the second half was missing, and it
+    removed every invite one second after it was minted). Every other change commits, authored by the
+    principal. ``_global`` (read-only) is never in the commit set. A mount whose ``policy/`` nobody
+    touched makes the guard a no-op that writes nothing. (Hard enforcement is available upstream via
+    ``shared.governance`` if it needs to come back.)
 
     ``commit=False`` is the propose-only path (e.g. a read-only turn): NO git is touched — never
     contend on a workspace another agent may be committing to (the index.lock collision).
@@ -461,7 +615,8 @@ def run_harness_turn(
         if reverted:
             yield {"type": "policy-reverted", "paths": reverted}
         try:
-            sha = _commit_mount(mount, message=msg, author=author)
+            # The guard's own removals are the ONLY `policy/` deletions this commit may record.
+            sha = _commit_mount(mount, message=msg, author=author, policy_removed=reverted)
         except subprocess.CalledProcessError:
             continue  # one mount's commit failing must not abort the rest of the set
         if sha:

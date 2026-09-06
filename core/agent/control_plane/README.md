@@ -16,9 +16,11 @@ invitable** — `INVITABLE_ROLES = ("contributor",)`.
 
 **Two stores, written together (git is authoritative, the index is derived):**
 - **Authoritative** — the workspace's OWN git repo at `policy/members.json`
-  (`[{subject, role: owner|contributor|viewer, added_by, added_at}]`) and `policy/invites.json`
-  (only the sha256 **hash** of each invite token, with `{id, role, mode, allowed_emails, expires_at,
-  max_uses, uses, revoked, …}`). Auditable, travels with the workspace, survives a DB loss.
+  (`[{subject, role: owner|contributor|viewer, added_by, added_at}]`). Auditable, travels with the
+  workspace, survives a DB loss. **Invites are not here** — they are at
+  `<store-root>/.invites/<workspace_id>.json` (only the sha256 **hash** of each token, with
+  `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked, …}`), outside every workspace
+  mount; see the write-guard section below for what moved and why.
 - **Index** — `users.data.memberships[]` (`[{workspace_id, role, added_at}]`) for "workspaces shared
   with me". agent-api has no DB, so this is reached through the injected `MembershipIndex` port
   (real adapter → identity admin-api `/internal/users/{id}/memberships`; an in-memory fake in tests,
@@ -67,11 +69,31 @@ touch the mount set / dispatch.
 
 ### policy/ is PLATFORM-WRITE-ONLY (the write-guard mechanism, Q3)
 
-`policy/` (members.json, invites.json) is written ONLY by the control plane
+`policy/` (members.json) is written ONLY by the control plane
 (`workspace_membership.policy_commit` — stages + commits just `policy/` with the platform identity as
 committer, never sweeping the agent's tree). An **agent turn must never modify `policy/`**. Enforcement
 lives in the worker's turn-commit path (`llm/ports.run_harness_turn`): `_revert_policy_writes(work)`
-runs right before `git add -A` — it reverts any tracked `policy/` change back to HEAD and deletes any
-untracked `policy/` add, emitting `{"type":"policy-reverted","paths":[…]}`. So a turn's legitimate
-(non-policy) writes still commit while a policy tamper is reverted before it can land. (Chosen default
-per plan Q3: post-turn validation + revert.)
+runs right before `git add -A` — it restores any changed `policy/` path and deletes any untracked
+`policy/` add, emitting `{"type":"policy-reverted","paths":[…]}`. So a turn's legitimate (non-policy)
+writes still commit while a policy tamper is reverted before it can land. (Chosen default per plan Q3:
+post-turn validation + revert.)
+
+**It restores to an ANCHOR, not to the pre-turn HEAD (Vexa-ai/vexa#1645).** The anchor is the sha
+captured before the turn, advanced over the platform's own policy commits made *while the turn ran*
+(`llm/ports._policy_anchor` — committer is the platform, subject opens `policy: `, nothing outside
+`policy/` touched). Restoring to the pre-turn sha instead deleted every membership and invite the
+platform wrote during a turn: the founder minted an invite, the turn's write-back removed it one
+second later, and the join page said the link was not valid. The guard also no longer purges and
+re-checks-out the whole subtree — it touches only the paths that actually differ, so a turn that never
+went near `policy/` writes nothing there at all.
+
+### Invites do NOT live in `policy/` — they live outside every workspace mount
+
+`<store-root>/.invites/<workspace_id>.json`, resolved through the single door
+`workspace_membership.invites_path`. The roster is workspace knowledge (auditable, portable, survives a
+DB loss — Q6) and stays in the tree; an invite is capability material (a token hash, an expiry, a use
+count), it is never read in the workspace, and it must not travel when a workspace is published to
+GitHub or attached to somebody else's repo. The runtime binds one subpath per mounted workspace and
+never the store root (`runtime_kernel.mounts.workspace_binds`), so no worker container can see this
+path. `mint` / `preview` / `accept` / `list` / `revoke` all resolve it through the same function, and
+`find_invite` is the one token→workspace resolver both `preview` and `accept` call.

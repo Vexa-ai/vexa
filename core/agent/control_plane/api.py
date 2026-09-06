@@ -932,9 +932,10 @@ def create_app(
 
 
     # ── workspace membership + invites + roles (Lane M) ───────────────────────────────────────────
-    # The access layer for SHARED workspaces. Authoritative store = policy/members.json + policy/
-    # invites.json in the workspace's OWN git repo (PLATFORM-WRITE-ONLY, committed via
-    # membership_mod.policy_commit); mirror = users.data.memberships[] over the injected index.
+    # The access layer for SHARED workspaces. Authoritative store = policy/members.json in the
+    # workspace's OWN git repo (PLATFORM-WRITE-ONLY, committed via membership_mod.policy_commit);
+    # mirror = users.data.memberships[] over the injected index. INVITES are NOT in the tree — they
+    # live at <root>/.invites/<workspace_id>.json, outside every workspace mount (Vexa-ai/vexa#1645).
     # is_member(workspace_id, subject) -> role|None is the seam Lane A calls for mount/subscribe authz.
     def _pc(ws, message):
         return membership_mod.policy_commit(ws, message)

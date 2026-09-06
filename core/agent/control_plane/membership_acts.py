@@ -34,7 +34,7 @@ tiers are three different KINDS of thing and not three settings of one:
 
 ── WHAT THE ACTS ACTUALLY DO ────────────────────────────────────────────────────────────────────
 ``invite`` mints the invite the existing ``POST /api/workspace/invites`` route mints — the same
-``mint_invite``, the same ``policy/invites.json``, the same hash-only storage — and then answers the
+``mint_invite``, the same invite store, the same hash-only storage — and then answers the
 question that route never had to: **this invite is for a named person, so how does it reach them?**
 
   * an address this instance already knows (``resolve_subject`` answers) is INTERNAL: the link is
@@ -239,12 +239,31 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
     where = ("mailed to them" if mailed
              else "yours to give them — this deployment sends no mail" if not subject
              else "theirs to open — they already have an account here")
+    said = f"Invited {address} to {slug} as a {word} — {role_sentence(word)}. The link is {where}."
+
+    # AND SAY THAT THE OLD LINKS ARE DEAD, WHEN THEY ARE (Vexa-ai/vexa#1645). The founder opened a
+    # link the agent had handed him and read *"This invite link is not valid"* — the store had been
+    # reset under it by the turn's own write-back. When that has happened, a person is holding links
+    # that will never work, and the one moment they can be told is the moment a new one is minted.
+    # Said only when the workspace's own history proves it (`voided_invite_ids`), so a normal mint
+    # into a healthy store carries no ominous sentence about nothing.
+    try:
+        voided = membership_mod.voided_invite_ids(root, slug, now=now)
+    except Exception as exc:  # noqa: BLE001 — a history read must never fail an invite that worked
+        log.warning("could not check %s for voided invite links: %s", slug, exc)
+        voided = []
+    if voided:
+        said += (f" Any earlier link for {slug} is void — the invite store was reset, so the "
+                 f"{len(voided)} link{'s' if len(voided) != 1 else ''} minted before it can no longer "
+                 f"be redeemed; this is the only one that works.")
+
     return {
         "workspace": slug, "email": address, "role": word, "role_sentence": role_sentence(word),
         "already_member": False, "invited": True,
         "internal": bool(subject), "delivery": delivery, "link": link,
         "invite_id": minted.id, "expires_at": int(minted.expires_at),
-        "said": f"Invited {address} to {slug} as a {word} — {role_sentence(word)}. The link is {where}.",
+        "voided_earlier_links": voided,
+        "said": said,
     }
 
 

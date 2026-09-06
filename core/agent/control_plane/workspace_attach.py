@@ -927,7 +927,9 @@ def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[s
 # ``_park``, ``_reseed``, ``_slug``, the state file — is the same code in both.
 #
 # ONE thing is genuinely different, and it is load-bearing: a shared workspace's MEMBER LIST lives
-# INSIDE its git tree (``policy/members.json``, ``policy/invites.json`` — see workspace_membership).
+# INSIDE its git tree (``policy/members.json`` — see workspace_membership; its INVITES do not, they
+# live outside every workspace since Vexa-ai/vexa#1645 and so survive an attach without being
+# carried anywhere).
 # Replacing that tree with somebody's repo would therefore delete everyone's access along with it:
 # ``is_member`` would answer None for every member, the workspace would vanish from every active set,
 # and the only person who could still reach it would be nobody. So the policy directory is CARRIED
@@ -936,7 +938,7 @@ def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[s
 # surprise either, because it arrives as an ordinary commit the group can see.
 
 SHARED_STORE_DIRNAME = ".attached-shared"   # <root>/.attached-shared/<workspace_id>/<slug> (dot ⇒ skipped by every scan)
-POLICY_DIRNAME = "policy"                   # the member list + invites — travels across an attach
+POLICY_DIRNAME = "policy"                   # the member list — travels across an attach
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 
 

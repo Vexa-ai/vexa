@@ -218,7 +218,7 @@ def test_an_address_this_instance_knows_gets_the_link_and_no_mail(tmp_path):
 
 
 def test_a_publish_that_did_not_land_says_the_link_is_still_ours_to_give(tmp_path):
-    """A dropped publish is not an error and must not be reported as a mail. `policy/invites.json`
+    """A dropped publish is not an error and must not be reported as a mail. The invite store
     holds only the hash, so the plaintext link exists exactly once — in this answer."""
     idx = _owned(tmp_path)
     out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="reader", inviter=OWNER, index=idx,
@@ -235,23 +235,49 @@ def test_the_invite_is_restricted_to_the_address_it_names(tmp_path):
     acts.invite(tmp_path, WS, email=NEW_MAIL, role="reader", inviter=OWNER, index=idx,
                 ui_url="https://app.example.test", commit_fn=m.policy_commit,
                 resolve_subject=lambda a: None)
-    rec = json.loads((tmp_path / WS / m.INVITES_FILE).read_text())[0]
+    rec = json.loads(m.invites_path(tmp_path, WS).read_text())[0]
     assert rec["mode"] == "restricted" and rec["allowed_emails"] == [NEW_MAIL]
     assert rec["max_uses"] == 1 and rec["role"] == "viewer"      # stored spelling
     assert "token" not in rec                                    # still hash-only
 
 
-def test_the_act_is_a_commit_in_the_workspace_authored_by_the_inviter(tmp_path):
+def test_the_invite_leaves_the_workspace_repo_alone(tmp_path):
+    """THE STORE IS NOT IN THE TREE (Vexa-ai/vexa#1645). Minting used to write and commit
+    `policy/invites.json` inside the workspace — the same directory the worker's turn runs in — and
+    the turn's write-back deleted it a second later. A mint now touches no path under the workspace
+    at all, so no writer of that tree can take it away again."""
     idx = _owned(tmp_path)
-    acts.invite(tmp_path, WS, email=NEW_MAIL, role="reader", inviter=OWNER,
-                inviter_email=OWNER_MAIL, index=idx, ui_url="https://app.example.test",
-                commit_fn=m.policy_commit_as(OWNER, OWNER_MAIL),
-                resolve_subject=lambda a: None)
+    ws = tmp_path / WS
+    head_before = _git(ws, "rev-parse", "HEAD")
+
+    out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="reader", inviter=OWNER,
+                      inviter_email=OWNER_MAIL, index=idx, ui_url="https://app.example.test",
+                      commit_fn=m.policy_commit_as(OWNER, OWNER_MAIL),
+                      resolve_subject=lambda a: None)
+
+    assert out["invited"] is True
+    assert _git(ws, "rev-parse", "HEAD") == head_before, "a mint must not commit to the workspace"
+    assert _git(ws, "status", "--porcelain") == "", "a mint must not dirty the workspace tree"
+    assert not (ws / m.LEGACY_INVITES_FILE).exists()
+    # and it IS persisted — outside every workspace mount, where preview and accept read it
+    assert m.invites_path(tmp_path, WS).exists()
+    assert m.preview_invite(tmp_path, out["link"].split("i=")[1])["workspace_id"] == WS
+
+
+def test_the_membership_change_is_a_commit_authored_by_the_actor(tmp_path):
+    """The #1632 authorship property, on the write that still lands in the workspace: the ROSTER.
+    `policy/members.json` is workspace knowledge and stays in the tree, so *who changed who is here*
+    is answerable from `git log --format=%an` rather than by reading a JSON diff."""
+    idx = _owned(tmp_path)
+    m.grant_membership(tmp_path, WS, "u_them", "viewer", added_by=OWNER, index=idx, email=NEW_MAIL,
+                       commit_fn=m.policy_commit)
+    acts.set_membership(tmp_path, WS, email=NEW_MAIL, role="contributor", actor=OWNER, index=idx,
+                        commit_fn=m.policy_commit_as(OWNER, OWNER_MAIL))
     ws = tmp_path / WS
     assert _git(ws, "log", "-1", "--format=%an") == OWNER
     assert _git(ws, "log", "-1", "--format=%ae") == OWNER_MAIL
     assert _git(ws, "log", "-1", "--format=%cn") == "vexa-platform"   # committer stays the platform
-    assert "policy/invites.json" in _git(ws, "show", "--name-only", "--format=", "HEAD")
+    assert "policy/members.json" in _git(ws, "show", "--name-only", "--format=", "HEAD")
 
 
 def test_an_address_that_is_not_one_is_refused_before_a_token_exists(tmp_path):
@@ -261,7 +287,7 @@ def test_an_address_that_is_not_one_is_refused_before_a_token_exists(tmp_path):
             acts.invite(tmp_path, WS, email=bad, role="reader", inviter=OWNER, index=idx,
                         ui_url="https://app.example.test", resolve_subject=lambda a: None)
         assert e.value.status == 400
-    assert not (tmp_path / WS / m.INVITES_FILE).exists()
+    assert not m.invites_path(tmp_path, WS).exists()
 
 
 def test_no_ui_url_means_no_invite_rather_than_a_link_to_nowhere(tmp_path):
@@ -280,7 +306,7 @@ def test_inviting_somebody_already_here_says_what_they_are_instead(tmp_path):
                       ui_url="https://app.example.test", resolve_subject=lambda a: "u_them")
     assert out["already_member"] is True and out["invited"] is False
     assert out["role"] == "contributor"
-    assert not (tmp_path / WS / m.INVITES_FILE).exists()
+    assert not m.invites_path(tmp_path, WS).exists()
 
 
 # ── the membership change ────────────────────────────────────────────────────────────────────────
@@ -362,6 +388,78 @@ def test_the_invite_route_is_owner_only_and_answers_what_it_did(tmp_path, monkey
     assert c.post("/api/workspace/invite",
                   json={"slug": WS, "email": "someone@example.test", "role": "reader"},
                   headers=_h("u_stranger")).status_code == 403
+
+
+def test_mint_then_preview_then_accept_through_the_three_routes(tmp_path, monkeypatch):
+    """THE WALK THE FOUNDER TOOK, END TO END (Vexa-ai/vexa#1645 point 3). He minted through
+    `POST /api/workspace/invite`, opened `/join?i=…` — which is `GET /api/workspace/invites/preview`
+    — and read *"This invite link is not valid."*: 404, because the mint wrote a store the preview
+    did not read. The three routes are asserted in one test, in that order, on the link the mint
+    actually hands back, so "persisted somewhere else" cannot pass again."""
+    idx = _owned(tmp_path)
+    monkeypatch.setattr(publish_mod, "publish_invite", lambda fact, **kw: True)
+    c = _client(tmp_path, index=idx)
+
+    minted = c.post("/api/workspace/invite",
+                    json={"slug": WS, "email": NEW_MAIL, "role": "contributor"},
+                    headers=_h(OWNER, OWNER_MAIL))
+    assert minted.status_code == 200, minted.text
+    link = minted.json()["link"]
+    assert "/join?i=" in link
+    token = link.split("i=", 1)[1]
+
+    # 2 — the join page's read, BEFORE any login: the same token the mint handed over resolves
+    preview = c.get("/api/workspace/invites/preview", params={"token": token})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["workspace_id"] == WS
+    assert preview.json()["valid"] is True
+    assert preview.json()["role"] == "contributor"
+    assert preview.json()["restricted_to"] == [NEW_MAIL]
+
+    # 3 — redeemed by the address it names → membership, in both stores
+    accepted = c.post("/api/workspace/invites/accept", json={"token": token},
+                      headers=_h("u_jsmith", NEW_MAIL))
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json() == {"workspace_id": WS, "role": "contributor", "already_member": False}
+    assert m.is_member(tmp_path, WS, "u_jsmith") == "contributor"
+    # and the link is spent: one address, one use
+    assert c.get("/api/workspace/invites/preview", params={"token": token}).json()["valid"] is False
+
+
+def test_a_fresh_mint_says_the_earlier_links_are_void_when_the_store_was_reset(tmp_path):
+    """Point 4. The founder is holding links that can never be redeemed — the store was reset under
+    them — and the one moment to tell him is when a new one is minted. Proven from the evidence that
+    SURVIVED the loss: the workspace's own `policy: mint invite <id>` commits, which are still there
+    after the file they described was deleted."""
+    idx = _owned(tmp_path)
+    ws = tmp_path / WS
+    # the world as the founder found it: history says an invite was minted, the store has nothing
+    (ws / "policy").mkdir(exist_ok=True)
+    (ws / m.LEGACY_INVITES_FILE).write_text("[]\n")
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-q", "-m", "policy: mint invite 41cdb3b6a5841ffc (contributor) for " + WS)
+    (ws / m.LEGACY_INVITES_FILE).unlink()
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-q", "-m", f"{WS}: policy/invites.json — removed")
+
+    out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="reader", inviter=OWNER, index=idx,
+                      ui_url="https://app.example.test", resolve_subject=lambda a: None)
+
+    assert out["voided_earlier_links"] == ["41cdb3b6a5841ffc"]
+    assert "void" in out["said"] and "this is the only one that works" in out["said"]
+
+
+def test_a_mint_into_a_healthy_store_says_nothing_about_void_links(tmp_path):
+    """The other half, and the reason the sentence is evidence-driven rather than always-on: a
+    workspace that never lost an invite must not be told it did."""
+    idx = _owned(tmp_path)
+    first = acts.invite(tmp_path, WS, email=NEW_MAIL, role="reader", inviter=OWNER, index=idx,
+                        ui_url="https://app.example.test", resolve_subject=lambda a: None)
+    second = acts.invite(tmp_path, WS, email="other@example.com", role="reader", inviter=OWNER,
+                         index=idx, ui_url="https://app.example.test",
+                         resolve_subject=lambda a: None)
+    assert first["voided_earlier_links"] == [] and second["voided_earlier_links"] == []
+    assert "void" not in second["said"]
 
 
 def test_the_membership_route_removes_by_address(tmp_path):

@@ -1566,7 +1566,8 @@ def build(**d) -> APIRouter:
     def ws_invite_create(request: Request, body: InviteCreateBody = Body(...)):
         """Mint a scoped invite token for a shared workspace. Auth: owner OR contributor of the target.
         The workspace must be shareable (reserved/own-private refused). The token is returned ONCE; only
-        its hash is persisted in policy/invites.json."""
+        its hash is persisted, in the invite store at <root>/.invites/<workspace_id>.json — the one
+        file `invites/preview` and `invites/accept` read (Vexa-ai/vexa#1645)."""
         subject = subject_of(request)
         # AN ADDRESS BINDS THE INVITE (Vexa-ai/vexa#1635). `allowed_emails` names who this is for, so
         # it decides the mode — it is not a hint that a separate flag has to agree with. Asking for
@@ -1658,22 +1659,14 @@ def build(**d) -> APIRouter:
         # is gateway-fronted (Stage 4). VEXA_REQUIRE_GATEWAY_IDENTITY (checked in subject_of) lets a
         # hardened deploy reject non-gateway callers. See the TOPOLOGY BOUNDARY note in create_app.
         subject_email = request.headers.get("x-user-email")
-        h = membership_mod.hash_token(body.token)
-        # Resolve which shared workspace this token belongs to by hash (never trust a client-declared id).
-        target_ws = None
-        root = wsr.root
-        for child in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
-            slug = child.name
-            if slug.startswith(".") or slug in membership_mod.RESERVED_SLUGS:
-                continue
-            for inv in membership_mod._read_json_list(child, membership_mod.INVITES_FILE):
-                if inv.get("hash") == h:
-                    target_ws = slug
-                    break
-            if target_ws:
-                break
-        if target_ws is None:
+        # Resolve which shared workspace this token belongs to by hash (never trust a client-declared
+        # id) — through `find_invite`, the SAME resolver `invites/preview` uses. It used to be a second
+        # copy of the scan here, and a token that resolves for one route and not the other is exactly
+        # the shape of failure #1645 was reported as.
+        found = membership_mod.find_invite(wsr.root, body.token)
+        if found is None:
             raise HTTPException(status_code=404, detail="invalid invite")
+        target_ws = found[0]
         try:
             result = membership_mod.accept_invite(
                 wsr.root, target_ws, token=body.token, subject=subject, subject_email=subject_email,

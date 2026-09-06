@@ -106,7 +106,7 @@ def test_is_member_and_require_role_lattice(tmp_path):
 def test_mint_stores_only_hash_and_returns_token_once(tmp_path):
     _init_ws(tmp_path, "wsA")
     minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="owner1")
-    invites = json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())
+    invites = json.loads(m.invites_path(tmp_path, "wsA").read_text())
     assert len(invites) == 1
     assert invites[0]["hash"] == m.hash_token(minted.token)
     assert "token" not in invites[0]  # only the hash is persisted
@@ -126,7 +126,7 @@ def test_accept_grants_membership_both_stores(tmp_path):
     assert m.is_member(tmp_path, "wsA", "u2") == "contributor"
     assert idx.list("u2")[0]["workspace_id"] == "wsA"
     # a use was consumed
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 1
 
 
 def test_member_records_carry_verified_email(tmp_path):
@@ -174,7 +174,7 @@ def test_preview_invite_reads_terms_without_granting(tmp_path):
     assert pv["created_by"] == "owner1"
     # no membership was created and no use consumed
     assert m.is_member(tmp_path, "wsA", "someone") is None
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 0
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 0
     # unknown token → None (never enumerates workspaces)
     assert m.preview_invite(tmp_path, "not-a-real-token") is None
 
@@ -215,14 +215,14 @@ def test_double_accept_is_idempotent(tmp_path):
     assert res["already_member"] is True
     members = json.loads((tmp_path / "wsA" / m.MEMBERS_FILE).read_text())
     assert [x["subject"] for x in members].count("u2") == 1
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 1
 
 
 def test_revoked_invite_rejected(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
     minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o")
-    invite_id = json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["id"]
+    invite_id = json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["id"]
     m.revoke_invite(tmp_path, "wsA", invite_id)
     with pytest.raises(m.MembershipError) as e:
         m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
@@ -411,7 +411,7 @@ def test_restricted_refuses_non_listed_admits_listed(tmp_path):
                         subject_email="bob@vexa.ai", index=idx)
     assert e.value.status == 403
     # the use was NOT consumed by the refused attempt
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 0
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 0
     # a listed user (case-insensitive match) is admitted
     res = m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u_alice",
                           subject_email="alice@vexa.ai", index=idx)
@@ -494,7 +494,7 @@ def test_concurrent_accept_max_uses_one_grants_exactly_one(tmp_path):
     members = json.loads((tmp_path / "wsA" / m.MEMBERS_FILE).read_text())
     non_owner = [x for x in members if x["role"] != "owner"]
     assert len(non_owner) == 1, f"members.json over-granted: {members}"
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 1
 
 
 # ── ATTACK: agent SELF-COMMITS a policy tamper mid-turn (vector 3, the guard bypass) ──────────────

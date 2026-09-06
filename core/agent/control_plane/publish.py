@@ -40,7 +40,7 @@ EVENT_CLAIM_PROPOSED = "claim.proposed"
 
 # THE THIRD CARRIER (Vexa-ai/vexa#1632) — somebody was invited to a workspace and the address is not
 # one this instance knows. Same shape as the two above and one difference worth naming: this fact is
-# not re-derivable from a desk. `policy/invites.json` holds only the token's HASH, so a publish that
+# not re-derivable from a desk. The invite store holds only the token's HASH, so a publish that
 # never lands cannot be replayed from disk — the plaintext link existed once, in the answer the verb
 # gave the agent. That is why `membership_acts.invite` REPORTS which way the link went (`delivery`)
 # instead of assuming: a dropped publish means the person who asked still has the link in front of
