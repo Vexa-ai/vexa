@@ -65,6 +65,18 @@ const dimIcon = (on: boolean) => (e: { currentTarget: HTMLElement }) => {
   e.currentTarget.style.background = on ? surface.raisedHi : "transparent";
 };
 
+/** WHAT A WORKSPACE SEGMENT IS CALLED WHEN A PERSON READS IT. A desk's slug is its owner's user
+ *  number and the private system workspace lives under `.system/<number>`; both are addresses, not
+ *  names, and the crumb was printing them raw — "173 › identity.md" — so the reader met a number
+ *  where their own desk should be. Founder, twice in one walk: "what is 171?", "173 is unhelpful".
+ *  A bare number here is only ever the reader's own desk (nobody else's desk is mounted in this
+ *  panel), so it reads "personal"; `.system` reads "private" and the number under it collapses. */
+function crumbLabel(seg: string, i: number, all: string[]): string | null {
+  if (seg === ".system") return "private";
+  if (/^\d+$/.test(seg)) return i === 1 && all[0] === ".system" ? null : "personal";
+  return seg;
+}
+
 /** A directory listing the breadcrumb navigated to: the folders and files directly under `prefix`. */
 export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[] };
 
@@ -118,9 +130,10 @@ export function PagesPanel(p: {
   const crumbs = listing
     ? [listing.slug ?? "personal", ...listing.prefix.split("/").filter(Boolean)]
     : [p.docSlug ?? "personal", ...p.docPath.split("/").filter(Boolean)];
-  const leaf = crumbs[crumbs.length - 1];
-  const trail = crumbs.slice(0, -1);
-  const fullPath = crumbs.join(SEP);
+  const shown = crumbs.map((c, i) => ({ i, c, label: crumbLabel(c, i, crumbs) })).filter((x) => x.label !== null);
+  const leaf = shown[shown.length - 1]?.label ?? crumbs[crumbs.length - 1];
+  const trail = shown.slice(0, -1);
+  const fullPath = shown.map((x) => x.label).join(SEP);
   const slug = listing ? listing.slug : p.docSlug;
   // segment i (0 = the workspace root) addresses the folder made of segments 1..i
   const nav = (i: number) => p.onNavigate?.(slug, crumbs.slice(1, i + 1).join("/"));
@@ -165,7 +178,7 @@ export function PagesPanel(p: {
             <span key={`${pg.slug ?? ""}|${pg.path}`} style={{ ...chipBase, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
               <button data-tab onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
                 style={{ ...ty.chip, ...chipBase, color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: p.onClose && p.pages.length > 1 ? "3px 3px 3px 10px" : "3px 10px", cursor: "pointer" }}>
-                {pg.label}
+                {/^\d+$/.test(pg.label) ? "personal" : pg.label}
               </button>
               {p.onClose && p.pages.length > 1 && (
                 <button aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
@@ -248,7 +261,7 @@ export function PagesPanel(p: {
         {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
             address: its `path` is a row id, and the canvas names the meeting in its own header. */}
         {!canvas && <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
-          {trail.map((c, i) => (
+          {trail.map(({ i, label: c }) => (
             <span key={i} style={{ flex: "none" }}>
               {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
               <button style={crumbBtn} title={i === 0 ? `List ${c}` : `List ${crumbs.slice(1, i + 1).join("/")}`}
