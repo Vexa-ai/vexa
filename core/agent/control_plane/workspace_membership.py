@@ -42,6 +42,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Protocol
@@ -629,6 +630,24 @@ def _normalize_email(email: Optional[str]) -> str:
     return (email or "").strip().lower()
 
 
+# WHERE AN INVITE IS REDEEMED — the terminal's page, and the ONE spelling of it (Vexa-ai/vexa#1635).
+# The founder minted an invite, opened the link and read *"not found"*: the base was the MCP host and
+# no page served the path. The base is now the deployment's declared public app URL and the path is
+# this constant, in ONE place, because a link is composed by two callers (the mint route and the
+# invite act) and two spellings of a path is the same defect one layer in.
+JOIN_PATH = "/join"
+
+
+def invite_link(ui_url: str, token: str) -> str:
+    """The link a person opens to redeem ``token``, on ``ui_url`` (VEXA_UI_URL — the deployment's
+    declared public app URL). Empty ``ui_url`` ⇒ empty string: a link with no origin is not a link,
+    and every caller refuses rather than handing one over."""
+    base = str(ui_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}{JOIN_PATH}?i={urllib.parse.quote(token, safe='')}"
+
+
 def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
                 expires_in_sec: int = DEFAULT_EXPIRES_IN_SEC, max_uses: int = DEFAULT_MAX_USES,
                 mode: str = DEFAULT_INVITE_MODE, allowed_emails: Optional[list[str]] = None,
@@ -703,6 +722,12 @@ def preview_invite(root: Path, token: str, *, now: Optional[float] = None) -> Op
                 "workspace_id": slug,
                 "role": rec.get("role", "viewer"),
                 "mode": rec.get("mode", DEFAULT_INVITE_MODE),
+                # The addresses the invite is BOUND to. Surfaced because the join page has to put the
+                # bound address into the sign-in field and lock it (Vexa-ai/vexa#1635): a person who
+                # types a different one gets refused at redeem with nothing on screen explaining why.
+                # It is a disclosure to whoever holds the token — which is the person the link was
+                # sent to — of the address it was sent to. Empty for an open invite.
+                "allowed_emails": list(rec.get("allowed_emails") or []),
                 "expires_at": rec.get("expires_at"),
                 "created_by": rec.get("created_by"),
                 "valid": reason is None,

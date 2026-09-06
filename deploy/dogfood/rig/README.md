@@ -67,7 +67,7 @@ edit to the source. `rig.sh config` prints what the current environment resolves
 | `VEXA_RIG_VENV` | the control server's own venv, built from `pyproject.toml` on `up` | `./.venv` beside this README |
 | `VEXA_RIG_RUN_DIR` | where the pidfile `down` stops by is written | `$HOME/.storm/run` |
 | `VEXA_PUBLIC_MCP_URL` | the name the server PUBLISHES — sign-in links, the `/connect` bootstrap, and the transport's host guard at once | `https://rig.dev.vexa.ai/mcp` |
-| `VEXA_UI_URL` | the terminal `deeplink()` sends people to | `https://app.dev.vexa.ai` |
+| `VEXA_UI_URL` | the terminal `deeplink()` sends people to. **Not** where an invite link comes from: agent-api composes that one (`workspace_membership.invite_link`, on its own `VEXA_UI_URL`) and `workspace_invite` hands back what the route returned — this server used to build `<VEXA_PUBLIC_MCP_URL>/join?i=…`, its own address, and every link it gave out went nowhere (Vexa-ai/vexa#1635) | `https://app.dev.vexa.ai` |
 | `VEXA_MCP_DELEGATION_SECRET` | the HMAC key `vxd_` delegation tokens are verified against; read from `$HOME/.storm/delegation-secret` and never echoed | unset → every delegated token is refused, none admitted unverified |
 
 The same block with its reasoning is in [`../env.dogfood.example`](../env.dogfood.example).

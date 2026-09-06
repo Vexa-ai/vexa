@@ -866,7 +866,12 @@ class InviteCreateBody(BaseModel):
     role: str = "viewer"                 # viewer | contributor (never owner)
     expires_in_sec: int = 604800         # 7 days
     max_uses: int = 1
-    mode: str = "open"                   # open (anyone-with-link) | restricted (allowed_emails only)
+    # UNSTATED by default, and the route derives it (Vexa-ai/vexa#1635). It used to default to
+    # "open", which meant a caller that named `allowed_emails` and said nothing else got a link
+    # ANYONE holding it could redeem — the addresses were stored and never checked, because
+    # accept_invite only enforces them in "restricted". A default that silently discards the one
+    # thing the caller said about who the invite is for is not a default, it is a trap.
+    mode: Optional[str] = None           # open (anyone-with-link) | restricted (allowed_emails only)
     allowed_emails: Optional[list[str]] = None  # restricted mode: the verified emails permitted to redeem
 
 

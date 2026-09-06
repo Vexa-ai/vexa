@@ -63,7 +63,6 @@ from __future__ import annotations
 
 import logging
 import re
-import urllib.parse
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -217,7 +216,10 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
         # this act exists.
         mode="restricted", allowed_emails=[address],
         commit_fn=commit_fn, now=now)
-    link = f"{str(ui_url).rstrip('/')}/?invite={urllib.parse.quote(minted.token, safe='')}"
+    # ONE COMPOSER (Vexa-ai/vexa#1635). This used to build `<ui>/?invite=<token>` here; the path
+    # that serves an invite is `/join?i=<token>`, and it is `workspace_membership.invite_link` for
+    # both callers — this act and the older mint route — so the link and the page cannot drift apart.
+    link = membership_mod.invite_link(ui_url, minted.token)
 
     delivery = "link"
     mailed = False

@@ -201,7 +201,7 @@ def test_an_external_address_is_mailed_through_the_carrier(tmp_path):
     assert out["role_sentence"] == m.ROLE_SENTENCES["contributor"]
     fact = sent[0]
     assert fact["email"] == NEW_MAIL and fact["workspace"] == WS
-    assert fact["link"] == out["link"] and fact["link"].startswith("https://app.example.test/?invite=")
+    assert fact["link"] == out["link"] and fact["link"].startswith("https://app.example.test/join?i=")
     assert fact["uid"] == OWNER and fact["inviter"] == OWNER_MAIL
 
 
@@ -214,7 +214,7 @@ def test_an_address_this_instance_knows_gets_the_link_and_no_mail(tmp_path):
                       mail=lambda fact: (sent.append(fact), True)[1])
     assert sent == []                       # nothing published for somebody already here
     assert out["delivery"] == "link" and out["internal"] is True
-    assert out["link"].startswith("https://app.example.test/?invite=")
+    assert out["link"].startswith("https://app.example.test/join?i=")
 
 
 def test_a_publish_that_did_not_land_says_the_link_is_still_ours_to_give(tmp_path):
@@ -402,7 +402,7 @@ def test_the_route_body_is_a_named_model_so_the_verb_could_be_bound(tmp_path):
 def test_the_published_fact_carries_everything_the_mail_step_reads():
     fact = {"uid": OWNER, "email": NEW_MAIL, "workspace": WS, "workspace_name": "Pilot",
             "role": "contributor", "role_sentence": m.ROLE_SENTENCES["contributor"],
-            "inviter": OWNER_MAIL, "link": "https://app.example.test/?invite=t",
+            "inviter": OWNER_MAIL, "link": "https://app.example.test/join?i=t",
             "expires_at": 1, "invite_id": "abc"}
     refs = publish_mod.invite_refs(fact)
     assert refs["uid"] == OWNER and refs["email"] == NEW_MAIL and refs["link"].endswith("=t")

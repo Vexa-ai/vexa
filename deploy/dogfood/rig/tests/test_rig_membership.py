@@ -67,7 +67,7 @@ THEM = "jsmith@example.com"
 MAILED = {"workspace": WS, "email": THEM, "role": "contributor",
           "role_sentence": "a contributor writes this group",
           "invited": True, "already_member": False, "internal": False, "delivery": "mailed",
-          "link": "https://app.example.test/?invite=tok", "invite_id": "abc", "expires_at": 1,
+          "link": "https://app.example.test/join?i=tok", "invite_id": "abc", "expires_at": 1,
           "said": "Invited jsmith@example.com to pilot as a contributor."}
 
 HANDED = dict(MAILED, internal=True, delivery="link")
@@ -124,7 +124,7 @@ def test_the_verb_composes_no_link_of_its_own(monkeypatch):
     assert "/join?i=" not in body and "CANONICAL" not in body
     _http, out = _invite(monkeypatch, routes={"/api/workspace/invite": (200, MAILED)},
                          slug=WS, email=THEM, role="reader")
-    assert out["link"] == "https://app.example.test/?invite=tok"
+    assert out["link"] == "https://app.example.test/join?i=tok"
 
 
 def test_the_answer_says_which_way_the_link_went(monkeypatch):

@@ -30,6 +30,20 @@ invitable** — `INVITABLE_ROLES = ("contributor",)`.
   `allowed_emails[]` (AMENDMENT 5). `open` = anyone-with-link (authenticated) redeems; `restricted`
   = only an authenticated user whose VERIFIED email (`X-User-Email`, gateway-injected from the
   resolved key) is in `allowed_emails`.
+  **ADDRESSES BIND** (Vexa-ai/vexa#1635): `mode` is unstated by default and `allowed_emails` decides
+  it — naming addresses used to store them and then ignore them unless `mode="restricted"` came too,
+  which turned a mint for one person into a link anyone holding it could redeem. Asking for both at
+  once is refused (400) rather than resolved in a direction the caller cannot see.
+  The response also carries `invite_url` — the whole link, composed HERE on the deployment's declared
+  public app URL (`VEXA_UI_URL`) plus `join_path` (`/join`), because only the deployment knows where
+  the person's terminal is. A client that composed it from its OWN host is what sent the founder to
+  `rig.dev.vexa.ai/join?i=…` and a *"not found"*. Unset ⇒ `invite_url` is null and
+  `invite_url_refused` names the key.
+- `GET /invites/preview?token=` — NO SUBJECT, deliberately: the consent card renders before sign-in,
+  gated by the token itself. Answers the workspace's name + id, the role, `shared_by`, validity and
+  reason, and — for a bound invite — `restricted_to`, the address the terminal's `/join` page
+  prefills and locks. Read-only (no registry sync, no use consumed); 404 for a token matching
+  nothing, so it never enumerates workspaces.
 - `POST /invites/accept` (any logged-in user; POST-AUTH redeem, no anonymous/guest) → validate
   (hash lookup, not expired/revoked, uses<max_uses, AND mode==open OR verified email listed) → grant
   membership (both stores) → increment uses. Idempotent per user (double-accept = one membership).

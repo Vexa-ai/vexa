@@ -241,6 +241,14 @@
       "from": "terminal",
       "to": "meetings",
       "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's /api/stt route calls the transcription service directly; the entry closes when that route is bound at the gateway."
+    },
+    {
+      "path": "clients/terminal/src/app/api/join/preview/route.ts",
+      "door": "AGENT_API_URL",
+      "line": 33,
+      "from": "terminal",
+      "to": "agent",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer, and this call has no bearer BY DESIGN. The invite card at /join renders for somebody with no account on this instance (Vexa-ai/vexa#1635): agent-api’s GET /api/workspace/invites/preview takes no subject because it is capability-gated by the invite token itself, and every /agent/{path} row in core/agent/routes.v1.json carries scopes, so the edge answers 401 to a visitor who just clicked a colleague’s link. Asking a stranger to sign in to find out what they are signing in FOR is the wrong order and reads as a phish. The entry closes when the edge can carry a scope-free, capability-gated route — the preview bound in routes.v1 with no scopes — and the client reads only GATEWAY_URL. Siblings: the admin, auth and version routes above."
     }
   ]
 }

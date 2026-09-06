@@ -1512,21 +1512,46 @@ def build(**d) -> APIRouter:
         The workspace must be shareable (reserved/own-private refused). The token is returned ONCE; only
         its hash is persisted in policy/invites.json."""
         subject = subject_of(request)
+        # AN ADDRESS BINDS THE INVITE (Vexa-ai/vexa#1635). `allowed_emails` names who this is for, so
+        # it decides the mode — it is not a hint that a separate flag has to agree with. Asking for
+        # both at once ("these addresses, and also anyone") is a contradiction and is refused rather
+        # than resolved in one direction the caller cannot see.
+        emails = [e for e in (body.allowed_emails or []) if str(e).strip()]
+        mode = body.mode
+        if emails and mode == "open":
+            raise HTTPException(status_code=400,
+                                detail="an invite that names addresses is bound to them — drop "
+                                       "allowed_emails for an open link, or drop mode=open")
+        if mode is None:
+            mode = "restricted" if emails else "open"
         try:
             membership_mod.require_role(wsr.root, body.workspace_id, subject, "contributor")
             minted = membership_mod.mint_invite(
                 wsr.root, body.workspace_id, role=body.role, created_by=subject,
                 expires_in_sec=body.expires_in_sec, max_uses=body.max_uses,
-                mode=body.mode, allowed_emails=body.allowed_emails, commit_fn=_pc,
+                mode=mode, allowed_emails=emails or None, commit_fn=_pc,
             )
         except MembershipError as exc:
             raise _member_error(exc)
-        # The client composes the accept URL; we hand back the token + id + terms once.
+        # THE LINK IS COMPOSED HERE, on the deployment's declared public app URL — `VEXA_UI_URL`, the
+        # same one variable every scaffold link is built on, because two spellings of the host is how
+        # a link ends up naming somewhere the person cannot reach. The rig used to compose it from
+        # the MCP host it publishes ITSELF under, and the founder opened `rig.dev.vexa.ai/join?i=…`
+        # and got *"not found"*: a client knows where it is, only the deployment knows where the
+        # person's terminal is. Unset ⇒ `invite_url` is null and the caller is told which key names
+        # it, rather than being handed a url with no origin.
+        ui = settings.ui_url if settings is not None else ""
+        url = membership_mod.invite_link(ui, minted.token)
         return {
             "id": minted.id, "token": minted.token, "role": minted.role,
             "workspace_id": body.workspace_id, "expires_at": minted.expires_at,
-            "max_uses": minted.max_uses, "mode": body.mode,
+            "max_uses": minted.max_uses, "mode": mode,
             "accept_path": "/api/workspace/invites/accept",
+            "join_path": membership_mod.JOIN_PATH,
+            "invite_url": url or None,
+            "invite_url_refused": None if url else
+                "VEXA_UI_URL is not set on agent-api — this deployment has not declared where its "
+                "terminal is, so there is no link to give anyone",
         }
     @router.get("/api/workspace/invites/preview")
     def ws_invite_preview(request: Request, token: str):
@@ -1547,9 +1572,17 @@ def build(**d) -> APIRouter:
             if m.get("subject") == info.get("created_by") and m.get("email"):
                 shared_by = m["email"]
                 break
+        # THE WORKSPACE'S NAME, not its directory. The join card's whole job is one sentence a person
+        # recognises — *"Dmitry invited you to OeNB as a contributor"* — and `oenb-a1b2c3` is not a
+        # name anybody was told. Read-only: `by_slug` alone, never the `_ws_sync` fallback the id
+        # routes use, because this route is reachable without a session and must not write.
+        rec = workspace_registry.by_slug(wsid) or {}
         return {
-            "workspace_id": wsid, "name": wsid, "purpose": purpose,
+            "workspace_id": wsid, "id": rec.get("id"), "name": rec.get("name") or wsid,
+            "purpose": purpose,
             "role": info["role"], "mode": info["mode"], "expires_at": info["expires_at"],
+            # Only for a bound invite: an open one has nothing to prefill and nothing to disclose.
+            "restricted_to": (info.get("allowed_emails") or []) if info["mode"] == "restricted" else [],
             "shared_by": shared_by, "valid": info["valid"], "reason": info["reason"],
         }
     @router.post("/api/workspace/invites/accept")
