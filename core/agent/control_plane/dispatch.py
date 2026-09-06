@@ -132,8 +132,7 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
 
 def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None,
                     room: Optional[dict] = None,
-                    scaffold_workspaces: Optional[list[str]] = None,
-                    target: str = "") -> list[dict]:
+                    scaffold_workspaces: Optional[list[str]] = None) -> list[dict]:
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
@@ -210,18 +209,19 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     chat restores what was in focus and never a sandbox. The hard isolation axis is ``room``,
     above, and it is a different argument on purpose so the two can never be confused.
 
-    ── THE TARGET (Vexa-ai/vexa#1611) ──────────────────────────────────────────────────────────────
-    ``target`` is the chat's target workspace — the one its writes go to. Here it does exactly ONE
-    thing: it makes that mount ``primary``, which is how ``_worker_cwd`` picks it, which is how a
-    bare ``Write`` lands in the place the person is working rather than on their desk. Founder,
-    2026-09-06: *"it creates files in the wrong workspace, we need so that the thing knew the
-    workspace of writing"*.
+    ── AND THE CHAT'S TARGET IS NOT HERE (Vexa-ai/vexa#1611), deliberately ─────────────────────────
+    A chat's target workspace — the one its writes go to — changes the turn's CWD and nothing about
+    this stack: every workspace in the focus is mounted either way, with the role and the write bit
+    membership already decided. It is applied in ``_worker_cwd``, which is the one thing the cwd is
+    a function of.
 
-    It grants NOTHING and removes nothing. A target that is not mounted, or is mounted read-only,
-    moves no cwd — naming a slug is not a grant here for the same reason it is not in the scaffold
-    clause above. And it is IGNORED IN ROOM MODE: decision 22 already decides that run's cwd (the
-    group desk, or the writable ``_system`` tier), and a chat's target must never be able to talk a
-    room run into writing a desk."""
+    It was written here first, as ``primary`` on the target's mount, and that was WRONG in a way
+    that would have looked right: ``primary`` already means *"which of these is the person's own
+    desk"* — ``worker/engine.desk_mounts`` reads it to decide whose README the end-of-turn refresh
+    maintains, and ``_tier_label`` renders it to the model as *"your DESK — your private baseline,
+    durable personal memory"*. Pointing it at a customer's shared workspace would have told the
+    agent that workspace was the person's private desk and moved the desk README onto it. One field,
+    one meaning."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
@@ -318,20 +318,6 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
         active = sorted(active, key=_rank)
         logger.info("dispatch SCAFFOLD MOUNTS subject=%s wanted=%s mounted=%s",
                     subject, wanted, [m.get("slug") for m in active])
-    # THE TARGET TAKES THE CWD (Vexa-ai/vexa#1611) — see the docstring. After the scaffold's
-    # ordering, because a scaffold says what to MOUNT and the target says where to WRITE, and the
-    # second is the later, more specific answer. Never in room mode, and never onto a mount this
-    # turn may not write: a read-only cwd is F59, and a cwd nobody asked for is decision 22.
-    _want = str(target or "").strip()
-    if _want and not room:
-        _tm = next((m for m in active
-                    if m.get("slug") == _want and m.get("write") and m.get("path")), None)
-        if _tm is not None:
-            for m in active:
-                m["primary"] = m is _tm
-        else:
-            logger.info("dispatch TARGET %s is not a writable mount for subject=%s — the cwd stays "
-                        "where it was", _want, subject)
     stack.extend(active)
 
     # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
@@ -485,10 +471,23 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
         env["VEXA_LLM_EXTRA_BODY"] = extra_body
 
 
-def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
+def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -> str:
     """The worker's CWD — the workspace it 'lives in', whose ``CLAUDE.md`` auto-loads as project memory.
 
-    Normally the private baseline (the primary mount). But the baseline can be switched OFF, in which case
+    ⚠ THE CHAT'S TARGET COMES FIRST (Vexa-ai/vexa#1611). It is where this conversation writes, so it
+    is where a plain ``Write`` with no absolute path has to land — the founder's *"it creates files
+    in the wrong workspace, we need so that the thing knew the workspace of writing, if it's
+    specified"*. Only when it is actually a WRITABLE NORMAL mount: naming a slug is not a grant, and
+    a read-only cwd is F59 all over again. Never on a room run — ``build_unit_env`` passes no target
+    there, because decision 22 already decides that run's cwd and a chat's target must not be able
+    to talk a room run into writing a desk.
+
+    It is applied HERE rather than as ``primary`` on the mount, and that distinction is load-bearing:
+    ``primary`` means *"the person's own desk"* to ``engine.desk_mounts`` and to ``_tier_label``,
+    which renders it as *"your DESK — your private baseline"*. See ``build_mount_set``'s last
+    section for what stamping it would have done.
+
+    Otherwise the private baseline (the primary mount). But the baseline can be switched OFF, in which case
     it is absent from the mount set — the cwd must then FOLLOW the active set (the first NORMAL writable
     workspace, never a system tier), not stay pinned to the disconnected baseline home (which would make the
     agent describe/read a workspace the user turned off).
@@ -501,6 +500,15 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
     first. F59's property is "the cwd the runtime is handed is writable"; this is where that is
     bought. The baseline home stays as the degenerate last resort (a dispatch with no mounts at all),
     where it is the only answer there is."""
+    want = str(target or "").strip()
+    if want:
+        aimed = next((m for m in mounts
+                      if m.get("slug") == want and m.get("write")
+                      and m.get("role") not in ("global", "system") and m.get("path")), None)
+        if aimed is not None:
+            return aimed["path"]
+        logger.info("dispatch TARGET %s is not a writable mount for subject=%s — the cwd stays "
+                    "where it was", want, subject)
     primary = next((m for m in mounts if m.get("primary") and m.get("path")), None)
     if primary:
         return primary["path"]
@@ -539,7 +547,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
     # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
     mounts = build_mount_set(settings, subject, memberships, room=room,
-                             scaffold_workspaces=scaffold_workspaces, target=target)
+                             scaffold_workspaces=scaffold_workspaces)
+    # THE CHAT'S TARGET, AND NEVER ON A ROOM RUN (Vexa-ai/vexa#1611). Decision 22 already decides a
+    # room run's cwd — the group desk when the subject may write it, the `_system` tier otherwise —
+    # and a chat's target must never be able to talk that run into writing a desk. Dropped HERE, in
+    # one place, rather than inside `_worker_cwd`, which is a function of its arguments.
+    cwd_target = "" if room else str(target or "").strip()
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -556,7 +569,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_START": json.dumps(_start_with_nonce(invocation["start"], entry_nonce)),
         "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
         "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
-        "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts),  # the worker's cwd — the primary baseline, or (if it's switched off) the first active normal workspace
+        "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts, cwd_target),  # the worker's cwd — the chat's target, else the primary baseline, or (if it's switched off) the first active normal workspace
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,

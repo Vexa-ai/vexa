@@ -225,43 +225,62 @@ def store(tmp_path):
     return root
 
 
+def _owned(store, name="Austrian National Bank"):
+    wid = create_shared_workspace_dir(store, name)
+    ensure_owner(store, wid, "175", index=InMemoryMembershipIndex())
+    return wid, [{"workspace_id": wid, "role": "owner"}]
+
+
 def test_the_turns_cwd_is_the_target_so_a_plain_Write_lands_there(store):
     """`Write` into the mounted target path is the natural default — the founder's failure was a
     turn whose cwd was his desk while the conversation was about a customer."""
     settings = _settings(store)
-    wid = create_shared_workspace_dir(store, "Austrian National Bank")
-    ensure_owner(store, wid, "175", index=InMemoryMembershipIndex())
-    members = [{"workspace_id": wid, "role": "owner"}]
+    wid, members = _owned(store)
+    mounts = build_mount_set(settings, "175", members)
+    assert _worker_cwd(str(store), "175", mounts) == f"{store}/175", "the desk, as it always was"
+    assert _worker_cwd(str(store), "175", mounts, wid).endswith(wid)
 
-    without = build_mount_set(settings, "175", members)
-    assert _worker_cwd(str(store), "175", without) == f"{store}/175", "the desk, as it always was"
 
-    with_target = build_mount_set(settings, "175", members, target=wid)
-    assert _worker_cwd(str(store), "175", with_target).endswith(wid)
-    # …and NOTHING ELSE MOVED: the desk is still mounted, still writable, still readable.
-    desk = next(m for m in with_target if m["path"] == f"{store}/175")
-    assert desk["write"] is True and desk["primary"] is False
+def test_the_target_moves_the_CWD_and_nothing_else_about_the_stack(store):
+    """⚠ THE TRAP, PINNED. This was first written as `primary` on the target's mount — and `primary`
+    already means *"which of these is the person's own desk"*: `engine.desk_mounts` reads it to
+    decide whose README the end-of-turn refresh maintains, and `_tier_label` renders it to the model
+    as "your DESK — your private baseline, durable personal memory". A customer's shared workspace
+    wearing that flag would have been described to the agent as the person's private desk and taken
+    the desk README with it. One field, one meaning."""
+    settings = _settings(store)
+    wid, members = _owned(store)
+    mounts = build_mount_set(settings, "175", members)
+    desk = next(m for m in mounts if m["path"] == f"{store}/175")
+    theirs = next(m for m in mounts if m["slug"] == wid)
+    assert desk["primary"] is True and theirs.get("primary") is False
+    assert engine.desk_mounts(mounts)[0]["path"] == f"{store}/175"
+    assert "your DESK" in engine._tier_label(desk)
+    assert "your DESK" not in engine._tier_label(theirs)
 
 
 def test_a_target_that_is_not_a_writable_mount_moves_no_cwd(store):
     """Naming a slug is not a grant — the same rule the scaffold clause states one branch up. A
     read-only cwd is F59 and a cwd nobody asked for is decision 22; neither is bought here."""
     settings = _settings(store)
-    mounts = build_mount_set(settings, "175", [], target="a-workspace-nobody-mounted")
-    assert _worker_cwd(str(store), "175", mounts) == f"{store}/175"
+    mounts = build_mount_set(settings, "175", [])
+    assert _worker_cwd(str(store), "175", mounts, "a-workspace-nobody-mounted") == f"{store}/175"
+    # …nor onto a system tier, whichever way it is named
+    assert _worker_cwd(str(store), "175", mounts, "_global") == f"{store}/175"
+    assert _worker_cwd(str(store), "175", mounts, "_system") == f"{store}/175"
 
 
 def test_a_room_run_ignores_the_chats_target(store):
     """Decision 22 already decides that run's cwd. A chat's target must never be able to talk a room
-    run into writing a desk — the failure Vexa-ai/vexa#1606 moved into the mount table."""
+    run into writing a desk — the failure Vexa-ai/vexa#1606 moved into the mount table. The drop
+    happens in `build_unit_env`, so this asserts the ENV a room dispatch actually gets."""
     settings = _settings(store)
-    wid = create_shared_workspace_dir(store, "Austrian National Bank")
-    ensure_owner(store, wid, "175", index=InMemoryMembershipIndex())
-    mounts = build_mount_set(settings, "175", [{"workspace_id": wid, "role": "owner"}],
-                             room={"meeting_id": "150", "ordered": []}, target=wid)
-    assert not any(m.get("primary") for m in mounts)
-    assert all(m["write"] is False for m in mounts
-               if m.get("role") not in ("system",) and m["slug"] != "_global")
+    wid, members = _owned(store)
+    room = {"meeting_id": "150", "ordered": []}
+    env = _env(settings, target=wid, room=room, memberships=members)
+    assert not env["VEXA_WORKSPACE_PATH"].endswith(wid)
+    assert all(m["write"] is False for m in json.loads(env["VEXA_MOUNTS"])
+               if m.get("role") not in ("system", "global"))
 
 
 def _env(settings, *, target="", **kw):
@@ -269,6 +288,13 @@ def _env(settings, *, target="", **kw):
                               start=units.entrypoint(inline="hi"),
                               context={"kind": "none", "session": "pchat-abc"})
     return build_unit_env(settings, inv, unit_id="u1", token="t", target=target, **kw)
+
+
+def test_the_env_hands_the_worker_the_target_as_its_cwd(store):
+    settings = _settings(store)
+    wid, members = _owned(store)
+    assert _env(settings, target=wid, memberships=members)["VEXA_WORKSPACE_PATH"].endswith(wid)
+    assert _env(settings, memberships=members)["VEXA_WORKSPACE_PATH"] == f"{store}/175"
 
 
 def test_the_worker_is_told_the_target_and_only_when_there_is_one(store):
