@@ -6,10 +6,13 @@
  *  with one line, and the job reports its own progress on the same event channel tagged with a job
  *  id (`core/agent/llm/JOBS.md`).
  *
- *  This file is the CHIP: the small record the composer renders while a job runs, and the three
- *  pure transitions over it. It is a function boundary rather than component state because that is
- *  the part worth testing — the rendering of "job · kg/plan.md · 3 steps · Write" is exactly the
- *  kind of string that goes quietly wrong.
+ *  This file is the CHIP: the small record the CHAT renders while a job runs, and the three pure
+ *  transitions over it. It is a function boundary rather than component state because that is the
+ *  part worth testing — the rendering of "job · kg/plan.md · 3 steps · Write" is exactly the kind
+ *  of string that goes quietly wrong.
+ *
+ *  It renders in the transcript, never in the composer: the input field is for typing, and a
+ *  running act is told once, where the step rows are (founder ruling 2026-09-06, Vexa-ai/vexa#1587).
  */
 
 export type JobRec = {
@@ -34,12 +37,13 @@ export function endJob(jobs: JobRec[], id: string): JobRec[] {
   return jobs.filter((j) => j.id !== id);
 }
 
-/** What the composer says while jobs run — one line per job, beside the turn's own live state.
+/** What the CHAT says while jobs run — one line per job, at the foot of the transcript where the
+ *  turn's own step rows are.
  *
- *  The shape mirrors the turn line on purpose (`working · 18 steps · entity_upsert`): a person
- *  watching the bottom of the chat should not have to learn a second vocabulary to read what the
- *  agent is doing when it happens to be doing it in the background. What differs is the NAME of the
- *  thing — a job is about one target, and that is the only way to tell two of them apart. */
+ *  The shape mirrors the step row on purpose (`Reading · plan.md · 3 steps`): a person watching the
+ *  bottom of the chat should not have to learn a second vocabulary to read what the agent is doing
+ *  when it happens to be doing it in the background. What differs is the NAME of the thing — a job
+ *  is about one target, and that is the only way to tell two of them apart. */
 export function jobLine(jobs: JobRec[]): string {
   return jobs
     .map((j) =>

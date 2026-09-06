@@ -7,8 +7,15 @@
  *  green TICK from the first tool call and never moved again — an eighteen-step turn looked
  *  finished eighteen times. These pin the corrected reducer end to end against a scripted stream:
  *  what the ops look like WHILE it runs, and what they look like when it stops.
+ *
+ *  F66's OTHER half — the same line repeated in the composer — was REVERSED on 2026-09-06
+ *  (Vexa-ai/vexa#1587). Its pin is the last block in this file, and it is the opposite assertion:
+ *  the input field says nothing while a turn runs.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { joinInterim, streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
 import type { Op } from "../../workbench/agent-window";
 
@@ -137,28 +144,63 @@ describe("an artifact navigates DURING the turn", () => {
   });
 });
 
-describe("the composer's state line", () => {
-  // the exact string the founder will read beside the stop button
-  const line = (busy: boolean, ops: Op[]) => {
-    const step = ops.length ? ops[ops.length - 1] : null;
-    const label = step ? (step.label.split(" · ").pop() ?? step.label) : "";
-    return busy
-      ? ["working", ops.length ? `${ops.length} step${ops.length === 1 ? "" : "s"}` : "", label].filter(Boolean).join(" · ")
-      : "";
-  };
+/** NO STATUS TEXT IN THE COMPOSER WHILE A TURN RUNS (Vexa-ai/vexa#1587).
+ *
+ *  Founder, 2026-09-06, on a screenshot of the input field reading
+ *  `working · 1 step · james-spadafora.md` while the chat above already showed
+ *  `Reading · james-spadafora.md · 1 step` and `Working…`:
+ *
+ *      "working · 2 steps · whats_waiting — remove that from the input field"
+ *
+ *  The composer cannot be mounted on its own — it is JSX inside `Chat`, which needs the whole
+ *  service registry — so this pins the SOURCE, in the idiom of `errorPresentation.guard.test.ts`:
+ *  the composer's own JSX may not contain a status string, and the transcript must still carry
+ *  one. A grep guard is what stops the 46th site landing silently; it is what stops the second
+ *  return of a line the founder has now asked to remove once.
+ */
+const SURFACES = join(dirname(fileURLToPath(import.meta.url)), "..");
+const CHAT_TSX = readFileSync(join(SURFACES, "chat.tsx"), "utf8");
+const AGENT_WINDOW_TSX = readFileSync(join(SURFACES, "..", "workbench", "agent-window.tsx"), "utf8");
 
-  it("reads `working · 18 steps · entity_upsert`", () => {
-    const ops = Array.from({ length: 18 }, (_, i) =>
-      ({ icon: "zap", label: i === 17 ? "entity_upsert" : "Read · x.md", status: "done" }) as Op);
-    expect(line(true, ops)).toBe("working · 18 steps · entity_upsert");
+/** The composer's JSX: `const composer = (` through the `);` that closes it (column 2 — every
+ *  line inside is indented deeper). Everything the input field renders is in here. */
+function composerJsx(src: string): string {
+  const start = src.indexOf("const composer = (");
+  expect(start, "chat.tsx no longer declares `const composer = (`").toBeGreaterThan(-1);
+  const end = src.indexOf("\n  );", start);
+  expect(end, "could not find the end of the composer JSX").toBeGreaterThan(start);
+  return src.slice(start, end);
+}
+
+describe("the composer while a turn runs", () => {
+  const composer = composerJsx(CHAT_TSX);
+
+  it("renders no working/step/tool status string", () => {
+    for (const forbidden of [/\bworking\b/i, /\bstep\b/i, /liveState/, /turnState/, /jobLine/, /data-live-state/]) {
+      expect(composer, `the composer still renders ${forbidden}`).not.toMatch(forbidden);
+    }
   });
 
-  it("says `working` before any tool has run, and one STEP is singular", () => {
-    expect(line(true, [])).toBe("working");
-    expect(line(true, [{ icon: "zap", label: "Read · x.md", status: "running" }])).toBe("working · 1 step · x.md");
+  it("keeps the stop control — a handle is not narration", () => {
+    expect(composer).toMatch(/aria-label="Stop"/);
+    expect(composer).toMatch(/onClick=\{stop\}/);
   });
 
-  it("is CLEARED the moment the turn completes", () => {
-    expect(line(false, [{ icon: "zap", label: "entity_upsert", status: "done" }])).toBe("");
+  it("the live-state span is gone from the surface entirely", () => {
+    expect(CHAT_TSX).not.toMatch(/data-live-state/);
+  });
+});
+
+describe("the chat's own step rows are the one place status is told", () => {
+  it("the turn's status line and step count still render in the transcript", () => {
+    expect(AGENT_WINDOW_TSX).toMatch(/data-turn-status/);
+    expect(AGENT_WINDOW_TSX).toMatch(/t\.ops\.length\} step/);
+  });
+
+  it("a background job's line renders there too — it moved, it did not disappear", () => {
+    expect(CHAT_TSX).toMatch(/data-job-line/);
+    // and it is inside the conversation, not the composer
+    expect(composerJsx(CHAT_TSX)).not.toMatch(/data-job-line/);
+    expect(CHAT_TSX).toMatch(/<JobRows jobs=\{jobs\} \/>/);
   });
 });

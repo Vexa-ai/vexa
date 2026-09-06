@@ -429,8 +429,28 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
   );
 }
 
-function ChatConversation({ turns, busy, empty, surface }: { turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface }) {
-  if (turns.length === 0 && empty) return <>{empty}</>;
+/** WHAT A BACKGROUND JOB IS DOING — in the chat, beside the step rows, never in the composer
+ *  (Vexa-ai/vexa#1587). A job is not `busy` (Vexa-ai/vexa#1584): the composer stays free while it
+ *  runs, which is the whole point — so its line cannot hang off a turn, and sits at the foot of the
+ *  transcript instead. `jobLine` is the same shape the turn's own step row reads in, so nobody has
+ *  to learn a second vocabulary; the job's TARGET is what tells two of them apart. */
+function JobRows({ jobs }: { jobs: JobRec[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, margin: "0 0 14px 5px" }}>
+      {jobs.map((j) => (
+        <div key={j.id} data-job-line title={jobLine([j])}
+          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: "var(--t2)" }}>
+          <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: "var(--accent)", flex: "none" }} />
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{jobLine([j])}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChatConversation({ turns, busy, empty, surface, jobs = [] }: { turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface; jobs?: JobRec[] }) {
+  if (turns.length === 0 && empty && jobs.length === 0) return <>{empty}</>;
   return (
     <>
       {turns.map((t, i) => t.role === "user"
@@ -442,6 +462,7 @@ function ChatConversation({ turns, busy, empty, surface }: { turns: Turn[]; busy
         : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
             <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} />
           </ReportTurn>)}
+      <JobRows jobs={jobs} />
     </>
   );
 }
@@ -1242,22 +1263,13 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const slash = value.startsWith("/");
   const skills = slash ? commands.querySkills(value) : [];
 
-  // F66 · THE COMPOSER SAYS WHAT IS HAPPENING. The step line lives up in the transcript, which
-  // scrolls away on a long turn — so the state also sits beside the stop button, where the reader's
-  // hand already is: "working · 18 steps · entity_upsert". Cleared the moment the turn completes.
-  const liveOps = busy ? (turns[turns.length - 1] as AgentTurn | undefined)?.ops ?? [] : [];
-  const liveStep = liveOps.length ? liveOps[liveOps.length - 1] : null;
-  const liveLabel = liveStep ? (liveStep.label.split(" · ").pop() ?? liveStep.label) : "";
-  const turnState = busy
-    ? ["working", liveOps.length ? `${liveOps.length} step${liveOps.length === 1 ? "" : "s"}` : "", liveLabel]
-        .filter(Boolean).join(" · ")
-    : "";
-  // …AND WHATEVER IS RUNNING IN THE BACKGROUND (Vexa-ai/vexa#1584). A job is not `busy` — the
-  // composer is free while it runs, which is the whole point — so it needs its own half of this
-  // line, or a person who pressed Extend and carried on typing has no way to tell it is still
-  // happening. Rendered in the same place and the same shape as the turn's own state; the job's
-  // TARGET is what tells two of them apart.
-  const liveState = [turnState, jobLine(chatState.jobs)].filter(Boolean).join("   ");
+  // THE INPUT FIELD IS FOR TYPING. F66's second half — "working · 18 steps · entity_upsert" beside
+  // the stop button — is GONE (founder ruling 2026-09-06, Vexa-ai/vexa#1587, on a screenshot of the
+  // composer reading `working · 1 step · james-spadafora.md` while the chat above already said
+  // `Reading · james-spadafora.md · 1 step` and `Working…`): *"working · 2 steps · whats_waiting —
+  // remove that from the input field"*. A running turn — and a running job — is told ONCE, in the
+  // chat, where the step rows are (`JobRows` below, and the turn's own op line in agent-window).
+  // The stop control stays: that is a handle, not narration.
 
   const composer = (
     <>
@@ -1376,16 +1388,6 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
               : <Icon name="mic" size={15} />}
           </button>
-          {/* The live line sits OUTSIDE the busy branch it used to live in: a background job runs
-              with the composer free, so the one place that says what the agent is doing has to be
-              able to say it beside a Send button as well as beside a Stop one. */}
-          {liveState && (
-            <span data-live-state title={liveState}
-              style={{ flex: "0 1 auto", minWidth: 0, marginRight: 8, fontFamily: "var(--mono)", fontSize: 11,
-                color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {liveState}
-            </span>
-          )}
           {busy
             ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
             : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
@@ -1403,7 +1405,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           it in a chat he never made — *"I explain this as stale code."*
           What is left renders the meeting greeting when there IS a meeting, and otherwise renders
           nothing but whatever the host put in `emptyExtra`. */}
-      <ChatConversation turns={turns} busy={busy || loading} surface={surfaceOf(session, activeTab)} empty={
+      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} empty={
         <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
               ? minutesEmptyGreeting(session)
