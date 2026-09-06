@@ -362,11 +362,34 @@ export async function hasHistory(email: string): Promise<{ has: boolean; probed:
  *  IT FAILS TOWARDS NOT MINTING, and that costs almost nothing: a probe that cannot answer is
  *  talking to the same agent-api the mint itself needs one line later, so an outage lands the person
  *  on `/` either way. What it buys is that a blip can never re-commit the reported defect — a
- *  returning person told, again, that we have never met. */
+ *  returning person told, again, that we have never met.
+ *
+ *  …AND FOR A SIGN-IN THAT MINTED NO OTHER ARRIVAL (Vexa-ai/vexa#1607). The administrator's first
+ *  sign-in on a blank instance claims the instance, and the claim opens the setup conversation —
+ *  that IS their arrival. A first visit minted beside it put two chats in the rail at the same
+ *  minute: *"this is the first chat, but i see two"*. One sign-in, one arrival.
+ *
+ *  THE CONDITION IS THE COMPANY LAYER, not "did this request claim the role". While `_global` is
+ *  missing, the only address admin-api lets through any sign-in door is the administrator's
+ *  (`signinAllowed`), and the setup conversation is where they are going — through the claim's own
+ *  `admin-setup` scaffold, or through SetupGate's `?setup=global` hand-off. So "the layer is
+ *  missing" is exactly the set of sign-ins that already have an arrival, and it is one fact every
+ *  door has read by the time it gets here: pass it in and the rule costs no round-trip; omit it and
+ *  it asks for itself, so a fifth door cannot skip the guard by forgetting to. */
 export async function mintFirstVisitScaffold(
   email: string,
   userId: string | number,
+  known?: { globalSetup?: GlobalSetupState },
 ): Promise<AdminResult<MintedScaffold>> {
+  const globalSetup = known?.globalSetup ?? (await instanceState()).global_setup;
+  if (globalSetup === "missing") {
+    return {
+      ok: false,
+      status: 409,
+      error: `no arrival minted — ${email} arrives in the administrator's setup conversation `
+        + `(this Vexa's company layer is not written yet)`,
+    };
+  }
   const history = await hasHistory(email);
   if (history.has || !history.probed) {
     return {

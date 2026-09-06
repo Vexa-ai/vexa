@@ -86,7 +86,9 @@ export async function POST(request: NextRequest) {
   // redirected to, because this door answers a fetch() and its caller owns the navigation. A failed
   // mint is logged and omitted: the sign-in itself is not held hostage to it, and a caller with no
   // `url` lands where it always did.
-  const minted = await mintFirstVisitScaffold(user.email, user.id);
+  // …and no arrival at all while the company layer is missing: that sign-in is the administrator's
+  // and the setup conversation is its arrival (#1607). The gate verdict above already says which.
+  const minted = await mintFirstVisitScaffold(user.email, user.id, { globalSetup: gate.global_setup });
   if (!minted.ok || !minted.data?.url) {
     console.error(`[terminal-auth] first-visit scaffold mint failed for ${user.email}: ${minted.ok ? "no url" : minted.error}`);
   }

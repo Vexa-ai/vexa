@@ -19,7 +19,7 @@
  *  a mail, and a raw error body is a dead end for them.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed } from "../adminApi";
+import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed, type GlobalSetupState } from "../adminApi";
 import { redeemMagicToken, safeNext, verifyMagicToken } from "../magicToken";
 
 export const dynamic = "force-dynamic";
@@ -86,11 +86,19 @@ function page(title: string, detail: string, status: number, cta = "Ask for a ne
  *  The opposite trade from the admin claim, where the role had already changed and a silent failure
  *  would strand the new administrator — here the only thing that has happened is that they are
  *  signed in, which is what they came for. */
-async function arrival(target: string, email: string, userId: string | number): Promise<string> {
+async function arrival(
+  target: string,
+  email: string,
+  userId: string | number,
+  globalSetup?: GlobalSetupState,
+): Promise<string> {
   // `?s=` inside the destination means an arrival already exists for this click — minting a second
   // would open a conversation over the one they were sent.
   if (target !== "/" || /[?&]s=/.test(target)) return target;
-  const minted = await mintFirstVisitScaffold(email, userId);
+  // The OTHER arrival that counts is the administrator's setup conversation (#1607). That rule
+  // lives in `mintFirstVisitScaffold` with the history one, so all four doors carry it; this door
+  // only hands it the gate state it read a few lines above rather than making it ask again.
+  const minted = await mintFirstVisitScaffold(email, userId, { globalSetup });
   if (minted.ok && minted.data?.url) return minted.data.url;
   // 409 is the DELIBERATE no-arrival — a returning person, or a probe that could not answer. It is
   // the ordinary path for everybody who has been here before, so it is not an error and must not be
@@ -131,9 +139,14 @@ export async function GET(request: NextRequest) {
   // property (a replay can never win a race against a slow admin-api round-trip) is untouched. Two
   // concurrent clicks both pass the gate and then both call redeemMagicToken(); consumeJti still
   // lets exactly one through.
+  //
+  // The verdict also carries whether this instance has its company layer yet, and that decides
+  // whether an arrival may be minted below at all (#1607) — read once, here, used there.
+  let globalSetup: GlobalSetupState | undefined;
   const preflight = verifyMagicToken(token);
   if (preflight.ok) {
     const gate = await signinAllowed(preflight.email);
+    globalSetup = gate.global_setup;
     if (!gate.allowed) {
       // A person who clicked a mail must never get a JSON body — they arrived from an inbox, not
       // from a fetch(). Same HTML card every other refusal here uses, carrying the sentence verbatim.
@@ -167,7 +180,10 @@ export async function GET(request: NextRequest) {
   }
 
   const { user, token: apiToken } = result;
-  const res = new NextResponse(null, { status: 302, headers: { Location: await arrival(target, user.email, user.id), ...NO_STORE } });
+  const res = new NextResponse(null, {
+    status: 302,
+    headers: { Location: await arrival(target, user.email, user.id, globalSetup), ...NO_STORE },
+  });
   const opts = { httpOnly: true, secure: isSecureRequest(), sameSite: "lax" as const, maxAge: 60 * 60 * 24 * 30, path: "/" };
   res.cookies.set(AUTH_COOKIE, apiToken, opts);
   res.cookies.set(

@@ -129,7 +129,9 @@ export const authOptions: AuthOptions = {
       // lands them exactly where it always did. Returning `false` here would refuse an authenticated
       // person over a missing conversation, which is not the trade — see mintFirstVisitScaffold.
       try {
-        const minted = await mintFirstVisitScaffold(result.user.email, result.user.id);
+        // Same two conditions as the other doors, decided in the same place: nothing to return to,
+        // and no other arrival for this sign-in — the setup conversation is one (#1607).
+        const minted = await mintFirstVisitScaffold(result.user.email, result.user.id, { globalSetup: gate.global_setup });
         if (minted.ok && minted.data?.url) {
           cookieStore.set(ARRIVAL_COOKIE, minted.data.url, { ...opts, httpOnly: true, maxAge: 120 });
         } else {

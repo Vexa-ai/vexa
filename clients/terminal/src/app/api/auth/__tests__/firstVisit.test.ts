@@ -35,12 +35,20 @@ let minted: { url: string; body: Record<string, unknown> }[] = [];
 /** Every has-history probe, so a test can assert the arrival ASKED before it minted. */
 let probed: string[] = [];
 
-function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down" } = {}) {
-  const { mint = "ok", history = "none" } = opts;
+function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down";
+                       setup?: "completed" | "missing" } = {}) {
+  const { mint = "ok", history = "none", setup = "completed" } = opts;
   minted = [];
   probed = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
+    // The setup gate, which every door asks before it creates anything. `missing` is a blank
+    // instance whose administrator has not written the company layer yet (#1607).
+    if (u.includes("/internal/signin-allowed") || u.includes("/internal/instance")) {
+      return new Response(JSON.stringify({
+        allowed: true, reason: "", admin_exists: setup === "completed", global_setup: setup, company: null,
+      }), { status: 200 });
+    }
     if (u.includes("/internal/has-history")) {
       probed.push(u);
       if (history === "down") return new Response("agent-api is down", { status: 503 });
@@ -187,5 +195,41 @@ describe("the arrival asks first", () => {
     stubs({ history: "none" });
     await redeem(makeReq({ t: link(), next: "/?ask=catch-up" }));
     expect(probed).toHaveLength(0);
+  });
+});
+
+/** #1607 — ONE SIGN-IN, ONE ARRIVAL.
+ *
+ *  The administrator's first sign-in on a blank instance minted two: the setup conversation the
+ *  claim opens, and a first visit beside it, because nothing had been shared with this brand-new
+ *  address and #1591's probe answered honestly that there was nothing to return to. Both landed in
+ *  the rail at the same minute — *"this is the first chat, but i see two"*.
+ *
+ *  The claim IS an arrival, so the sign-in that makes it does not get a second one. The condition
+ *  is the company layer: while it is missing, the only person any door lets in is the administrator
+ *  and the setup conversation is where they are going. */
+describe("the administrator's first sign-in on a blank instance", () => {
+  it("mints NO first visit — the setup conversation is this sign-in's arrival", async () => {
+    stubs({ setup: "missing", history: "none" });
+    const res = await redeem(makeReq({ t: link() }));
+    expect(minted).toHaveLength(0);
+    // …and they are signed in and land on `/`, where SetupGate opens the one chat they should have
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/");
+    expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
+  });
+
+  it("…and does not even ask what they have to return to — that answer could not change it", async () => {
+    stubs({ setup: "missing", history: "none" });
+    await redeem(makeReq({ t: link() }));
+    expect(probed).toHaveLength(0);
+  });
+
+  it("a first sign-in on an instance that IS set up still gets exactly one", async () => {
+    stubs({ setup: "completed", history: "none" });
+    const res = await redeem(makeReq({ t: link() }));
+    expect(minted).toHaveLength(1);
+    expect(minted[0].body.kind).toBe("first-visit");
+    expect(res.headers.get("location")).toBe("https://terminal.test/?s=SC1");
   });
 });

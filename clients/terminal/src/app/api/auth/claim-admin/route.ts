@@ -89,7 +89,10 @@ export async function POST() {
   // claim, and the company layer is not something claiming a role changes.
   const setUpAlready = state.global_setup === "completed";
   const scaffold = setUpAlready
-    ? await mintFirstVisitScaffold(who.email, who.userId)
+    // This branch's condition IS the #1607 guard's condition, so passing the state read above keeps
+    // the route to the one instance probe it already makes — and says out loud that the first visit
+    // here is deliberate, not a second arrival slipping past the rule.
+    ? await mintFirstVisitScaffold(who.email, who.userId, { globalSetup: state.global_setup })
     : await mintAdminSetupScaffold(who.email, who.userId);
   if (!scaffold.ok || !scaffold.data?.url) {
     // The role IS claimed — that write already happened and is not undone by this. Say both facts,
