@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
+from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import routines as routines_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import workspace_routines as workspace_routines_mod
@@ -38,6 +39,8 @@ def build(**d) -> APIRouter:
     """The chats routes, bound to one app's dependencies."""
     router = APIRouter()
     _global_root = d['_global_root']
+    _meeting_note_recorder = d['_meeting_note_recorder']
+    _meeting_owner_lookup = d['_meeting_owner_lookup']
     _resolve_room = d['_resolve_room']
     _scaffold_is_for = d['_scaffold_is_for']
     _scaffold_view = d['_scaffold_view']
@@ -131,6 +134,36 @@ def build(**d) -> APIRouter:
                 scaffold_label=_preset_label(chat_label_mod.preset_kind(title), cache))})
         return out
 
+    def _mint_meeting_page(subject: str, meeting_id: str) -> None:
+        """THE MEETING DOC EXISTS FROM THE SEND (Vexa-ai/vexa#1601).
+
+        Founder, 2026-09-06, in a live Meet he had started from a chat, transcript pinned beside it
+        and nothing on the right: *"where is it?"*. The page was written when the call ENDED
+        (`drop_to_attendees`), so #1598's one-page room had no page to be for the whole meeting.
+
+        BEFORE THE EVENT IS YIELDED, and that ordering is the feature. The client binds off this
+        same `artifact` and immediately asks `/api/meeting/note` where the page is; minting after
+        the yield would race its own consumer and answer `null` on the send that just created it.
+
+        IT COSTS ONE ROW LOOKUP INSIDE A LIVE SSE, which `_binding_watch` declines to spend on
+        re-checking ownership — and the difference is what is being bought. A session-index write
+        needs no facts; a page on a DESK needs the meeting's title, day and native id, and there is
+        nowhere else to read them. The lookup fails closed and this returns.
+
+        NEVER FATAL, exactly as the binding is: the turn is what the person is waiting for."""
+        try:
+            row = _meeting_owner_lookup(subject, meeting_id)
+            if row is None:
+                logger.warning("meeting %s not readable for subject=%s — its page is not minted "
+                               "here; the flow writes one when the meeting ends", meeting_id, subject)
+                return
+            out = meeting_mint_mod.mint(wsr.root, subject, row, record=_meeting_note_recorder)
+            logger.info("meeting %s page for subject=%s: %s (%s)", meeting_id, subject,
+                        out.get("path"), "minted" if out.get("created") else "already there")
+        except Exception:  # noqa: BLE001 — the turn outranks its own furniture
+            logger.exception("minting the page for meeting %s (subject=%s) failed",
+                             meeting_id, subject)
+
     def _binding_watch(events, subject: str, session: str):
         """Pass the turn's events through, and BIND the meeting any send in it created
         (Vexa-ai/vexa#1597).
@@ -151,6 +184,10 @@ def build(**d) -> APIRouter:
         regardless — `/api/meeting/note` and `/api/meeting/stream` both refuse a row this caller does
         not own, whatever a session record says.
 
+        AND THE MEETING'S PAGE IS MINTED HERE TOO (Vexa-ai/vexa#1601) — see `_mint_meeting_page`.
+        The chat is the meeting's chat from this event, so the meeting's document exists from it as
+        well: one send, one row, one page, and the room opens it pinned in the same turn.
+
         NEVER FATAL. The binding is furniture; the turn is what the person is waiting for, so a
         failed index write is logged and the stream goes on."""
         for item in events:
@@ -162,6 +199,7 @@ def build(**d) -> APIRouter:
                 except Exception:  # noqa: BLE001 — the turn outranks its own bookkeeping
                     logger.exception("binding meeting %s to subject=%s session=%s failed",
                                      bound[0], subject, session)
+                _mint_meeting_page(subject, bound[0])
             yield item
 
     @router.post("/invocations", status_code=202)

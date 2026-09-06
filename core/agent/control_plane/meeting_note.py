@@ -21,8 +21,14 @@ changed; `_note_path`'s own docstring is about exactly that. So `None` is a real
 "nothing on this desk names this meeting" — the caller shows one document fewer, never a tab onto a
 path nobody wrote.
 
-THE MATCH IS POSITIVE EVIDENCE, in two tiers:
+THE MATCH IS POSITIVE EVIDENCE, in three tiers:
 
+  0. `note_path` ON THE MEETING ROW ITSELF (Vexa-ai/vexa#1601). The page is minted now — at bot-send
+     from a chat, or at row creation for a meeting that arrives from the mailbox — and whoever mints
+     RECORDS the path it chose. So this tier is not a match at all: it is the writer telling the
+     reader where it wrote, and the two tiers below are what answers for every meeting whose page
+     predates the record. The file still has to BE THERE, which is why this is a tier of the same
+     scan rather than a shortcut around it.
   1. the entity's own `meeting:` / `native:` frontmatter — the identity the writer stamps. Exact,
      and the only tier that can tell two occurrences of a RECURRING meeting apart.
   2. its `title:`, against the row's. Every report written before tier 1 existed is on somebody's
@@ -40,6 +46,20 @@ import re
 #: flow's (`drop_to_attendees` writes here and maintains `index.md` beside the files); this module
 #: only reads it.
 MEETING_DIR = "kg/entities/meeting"
+
+#: The key a meeting ROW carries its page's path under, inside the owner-scoped `data.metadata` blob
+#: the meetings domain already keeps for its owner's own annotations (Vexa-ai/vexa#1601).
+#:
+#: ONE SPELLING, AND THE ROW IS WHERE IT LIVES. The path is a function of a day rendered in somebody
+#: else's timezone and a slug through an allow-list, so it is not a thing two services can each be
+#: trusted to compose — that is the whole of #1588. Whoever MINTS the page records it here; every
+#: other side READS it: this module, and `core/flows`' `_note_path` when it drops the report.
+NOTE_PATH_KEY = "note_path"
+
+#: A page name we could have minted: one path segment, `.md`, no dot-leader, no separators. The
+#: recorded value arrives from a row an account's own API key can annotate, and it is used to NAME A
+#: FILE ON EVERY DESK IN THE ROOM — so it is checked against the alphabet rather than trusted.
+_NOTE_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.md\Z")
 
 _FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 _KV = re.compile(r"\A([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*)\Z")
@@ -78,6 +98,31 @@ def front_matter(text: str) -> dict:
     return out
 
 
+def is_note_path(path) -> bool:
+    """Is this one of ours — `kg/entities/meeting/<name>.md`, and not the folder's index?
+
+    The guard is the ALPHABET, not a check somebody has to remember to run: no `/` after the folder,
+    no leading dot, no `..`, nothing that can walk out of a desk."""
+    p = str(path or "").strip()
+    prefix = MEETING_DIR + "/"
+    if not p.startswith(prefix):
+        return False
+    name = p[len(prefix):]
+    return name != "index.md" and bool(_NOTE_NAME.match(name))
+
+
+def recorded_path(row) -> str:
+    """The page path THIS ROW carries, or `""` — tier 0 (see the module header).
+
+    `""` for every meeting minted before the record existed, and that is the ordinary answer rather
+    than a failure: the scan below is what has always answered for those and still does."""
+    r = row if isinstance(row, dict) else {}
+    data = r.get("data") if isinstance(r.get("data"), dict) else {}
+    meta = (data or {}).get("metadata")
+    p = str((meta or {}).get(NOTE_PATH_KEY) or "").strip() if isinstance(meta, dict) else ""
+    return p if is_note_path(p) else ""
+
+
 def _day(value) -> str:
     """The `YYYY-MM-DD` at the front of a timestamp, or "". Never parsed into a datetime: the two
     sides are rendered in different zones by construction (see the module docstring), so a
@@ -103,6 +148,17 @@ def resolve(workspaces_root, subject: str, row) -> "str | None":
 
     None is the ordinary answer for a meeting whose report has not been written yet, and the caller
     must treat it as one: it is "nothing here names this meeting", never "something failed"."""
+    # TIER 0 — the row says where its page is (Vexa-ai/vexa#1601). Still conditional on the file
+    # being on THIS desk: the record is one fact about the meeting, shared by everybody in the room,
+    # and an attendee whose drop has not run yet has no such file. A tab onto a path nobody wrote on
+    # this desk is exactly the failure this module exists to refuse.
+    recorded = recorded_path(row)
+    if recorded:
+        try:
+            if (Path(workspaces_root) / str(subject) / recorded).is_file():
+                return recorded
+        except OSError:
+            pass
     facts = row_facts(row)
     if not (facts["id"] or facts["native"] or facts["title"]):
         return None

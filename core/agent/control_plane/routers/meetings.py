@@ -8,6 +8,7 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
 from control_plane.api_shared import (
@@ -20,6 +21,7 @@ import json
 def build(**d) -> APIRouter:
     """The meetings routes, bound to one app's dependencies."""
     router = APIRouter()
+    _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
     live = d['live']
     redis_url = d['redis_url']
@@ -63,6 +65,32 @@ def build(**d) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_note_mod.describe(wsr.root, subject, row)
+    @router.post("/api/meeting/note")
+    def mint_meeting_note(request: Request, body: dict = Body(default={})):
+        """MINT this meeting's page on the caller's desk if it is not there — `{"path", "created"}`.
+
+        The same act `_binding_watch` performs in-process when a chat sends a bot (Vexa-ai/vexa#1601);
+        this is the door for the caller that is not that chat — `core/flows`' upcoming step, which
+        mints the page for the organiser at the moment their meeting's row is created, so a meeting
+        that arrives from the mailbox has a document before anybody opens it.
+
+        IDEMPOTENT: a page already there is returned untouched, never refreshed. It is written by
+        three hands after this — the person, their Expand, and the flow's report — so re-minting
+        would delete somebody's writing at the moment the room got busy.
+
+        `path` is a PROPOSAL, not an instruction: the caller may name the page it already knows
+        about, and it is honoured only if it is a meeting page (`meeting_note.is_note_path`).
+
+        Owner-scoped before anything is written, exactly as the read above — row ids are sequential
+        ints and this creates a file on a DESK."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
+        row = _meeting_owner_lookup(subject, meeting_id)
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        return meeting_mint_mod.mint(wsr.root, subject, row,
+                                     path=str((body or {}).get("path") or ""),
+                                     record=_meeting_note_recorder)
     @router.get("/api/meeting/terms")
     def meeting_terms(meeting_id: str, request: Request):
         """THIS MEETING'S ANNOTATION LAYER — `{"meeting", "cursor", "terms"}` (Vexa-ai/vexa#1595).

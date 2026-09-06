@@ -151,6 +151,36 @@ def workspace_init(uid: str) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+def mint_meeting_note(uid: str, meeting_id, path: str = "") -> str:
+    """THIS MEETING'S PAGE ON THIS PERSON'S DESK, minted if it is not there — the path, or `""`.
+
+    Vexa-ai/vexa#1601: *"the meeting doc exists from the moment the meeting exists for this
+    person"*. A chat that sends a bot gets its page inside the turn, from agent-api itself; a
+    meeting that arrives from the mailbox has no chat, so the flow asks for the same act here at the
+    moment the row is created — and agent-api records the path on that row, which is what
+    `_note_path` reads back instead of composing a second spelling.
+
+    IDEMPOTENT on the far side: a page already there comes back untouched, never refreshed.
+
+    DEGRADES, NEVER RAISES. A page that could not be minted costs the reader a document that
+    appears when the meeting ends, exactly as it does today — it is not worth failing a prepare
+    mail over, and every caller here is a step whose real work is the mail."""
+    body = {"meeting_id": str(meeting_id)}
+    if str(path or "").strip():
+        body["path"] = str(path).strip()
+    try:
+        code, out = http("POST", f"{agent_door()}/api/meeting/note", {"X-User-Id": str(uid)}, body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.mint_meeting_note", "the meeting's page was not minted", e,
+                  uid=uid, meeting=str(meeting_id))
+        return ""
+    if not _ok(code) or not isinstance(out, dict):
+        swallowed("flows_steps.agent.mint_meeting_note", "the meeting's page was not minted", None,
+                  uid=uid, meeting=str(meeting_id), http=code)
+        return ""
+    return str(out.get("path") or "")
+
+
 def head_sha(uid: str) -> str:
     """The current HEAD commit of ONE subject's desk, or "" if it has no repo (or cannot be read).
 

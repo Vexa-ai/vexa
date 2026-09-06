@@ -39,7 +39,7 @@ import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { pendingArrival, useScaffoldArrival } from "./arrival";
-import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutSeparateTranscript, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -930,10 +930,15 @@ export function MinutesShell() {
    *  A LATCH, exactly as `bindMeeting` and the server's index are: a chat already about a meeting is
    *  not rebound by a second send. Its identity is what the reader is looking at.
    *
-   *  The note is looked up ONCE, here, and is usually absent — a meeting that started a second ago
-   *  has no report yet. That is `pagesForPhase`'s own rule (no path ⇒ one document fewer, never a tab
-   *  onto a guess), and the report joins the strip at the next open of the chat, which is where every
-   *  meeting chat has always got it. */
+   *  THE NOTE IS NO LONGER USUALLY ABSENT (Vexa-ai/vexa#1601). It used to be — *"a meeting that
+   *  started a second ago has no report yet"* — and that is precisely what the founder hit: he sent
+   *  the bot, the transcript opened, and he asked *"where is it?"*. agent-api mints the page on this
+   *  same event now, before it relays it, so this lookup finds one; and when that page declares the
+   *  widget (#1598) it IS the room, so it comes to the front and the transcript tab the send pinned a
+   *  moment ago gives way to it. A note that carries no widget keeps today's two-page room exactly.
+   *
+   *  A path that is still absent stays `pagesForPhase`'s own rule: one document fewer, never a tab
+   *  onto a guess. */
   const bindMeetingHere = useCallback(async (meetingId: string) => {
     const id = selRef.current.chatId;
     if (!id || selRef.current.meetingId) return;
@@ -949,8 +954,15 @@ export function MinutesShell() {
     const note = await fetchMeetingNote(meetingId);
     const room = meetingPages(phase, meetingId, note.path, null,
                               { noteHasTranscript: !!note.transcript });
-    setPages((prev) => withMeetingPages(prev as Artifact[], room) as Page[]);
-  }, [persist]);
+    // THE PAGE IS THE ROOM, so it goes in FRONT — never over a focus the reader chose in the
+    // meantime, which is the same rule `artifactViewEffect` keeps one effect down.
+    const front = boundMeetingView(room, note);
+    if (front && !readerChoseFocus.current) openPage(front);
+    setPages((prev) => {
+      const merged = withMeetingPages(prev as Artifact[], room) as Page[];
+      return front ? (withoutSeparateTranscript(merged as Artifact[], meetingId) as Page[]) : merged;
+    });
+  }, [persist, openPage]);
 
   // ── F41, AS AMENDED BY DECISION 28: A FILE THE TURN WROTE NAVIGATES THE VIEW ────────────────
   //

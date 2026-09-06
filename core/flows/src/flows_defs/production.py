@@ -376,9 +376,71 @@ def _merge_meeting_doc(existing: "str | None", fresh: str, report: str) -> str:
             + existing[j:])
 
 
-def _note_path(ctx, uid, title) -> str:
+#: The folder every meeting's page lives in, on every desk — named once because the two functions
+#: below both need it and `drop_to_attendees` writes into it.
+_NOTE_DIR = "kg/entities/meeting"
+
+
+def _is_note_path(path) -> bool:
+    """Is this a page this product could have minted — one segment, `.md`, and not the index?
+
+    The recorded path below is READ OFF A MEETING ROW that an account's own API key can annotate,
+    and it names a file written onto EVERY DESK IN THE ROOM. So it is checked against the ALPHABET
+    rather than trusted — the same rule, and the same reason, as `_slug`'s allow-list one screen up:
+    `/`, `..` and a leading dot are gone by construction, not by a blacklist somebody maintains."""
+    import re as _re
+    p = str(path or "").strip()
+    if not p.startswith(_NOTE_DIR + "/"):
+        return False
+    name = p[len(_NOTE_DIR) + 1:]
+    return name != "index.md" and bool(_re.match(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.md\Z", name))
+
+
+def _recorded_note_path(ctx, uid, meeting_id=None) -> str:
+    """WHERE THIS MEETING'S PAGE ALREADY IS, according to the meeting row — or `""`.
+
+    Vexa-ai/vexa#1601. The page is minted before this step ever runs now: at bot-send when a chat
+    made the meeting, at row creation when it came from the mailbox. Whoever minted it RECORDED the
+    path on the row (`data.metadata.note_path`), and reading that back is what makes the report land
+    in the page the person has had open for the whole meeting instead of in a second file beside it.
+
+    `""` is the ordinary answer for every meeting nobody minted — which is every meeting that
+    predates this — and the caller composes as it always has.
+
+    ONE READ PER REACTION, cached in `ctx.scratch` for the reason `_meeting_stamp` gives two screens
+    up: several moments ask for this path (`_scaffold_refs` at every mail, the drop itself) and the
+    lookup can fail and later succeed, which would name two different files inside one run."""
+    scratch = getattr(ctx, "scratch", None)
+    key = f"_note_path:{uid}"
+    if isinstance(scratch, dict) and key in scratch:
+        return str(scratch[key] or "")
+    mid = meeting_id if meeting_id is not None else ctx.refs.get("meeting_id")
+    native = ctx.refs.get("native")
+    found = ""
+    if mid or native:
+        try:
+            row = mt.meeting_row(uid, mid, native)
+        except Exception:  # noqa: BLE001 — a lookup we cannot make is not a recorded path
+            row = None
+        if isinstance(row, dict):
+            data = row.get("data") if isinstance(row.get("data"), dict) else {}
+            meta = (data or {}).get("metadata")
+            cand = str((meta or {}).get("note_path") or "").strip() if isinstance(meta, dict) else ""
+            if _is_note_path(cand):
+                found = cand
+    if isinstance(scratch, dict):
+        scratch[key] = found
+    return found
+
+
+def _note_path(ctx, uid, title, meeting_id=None) -> str:
     """THE ONE RECIPE for where a meeting's record lands on a desk:
     `kg/entities/meeting/<meeting-day>-<title-slug>.md`.
+
+    IT ASKS BEFORE IT COMPOSES (Vexa-ai/vexa#1601). The page now exists before the meeting does
+    anything — minted at bot-send, or at row creation for a meeting that arrived by mail — and the
+    minter records the path on the meeting row. So the recipe below is the FALLBACK: it answers for
+    a meeting nobody minted, and it is still the only description anywhere of the shape.
 
     It exists because the recipe had TWO implementations in two languages. This one — inlined
     in `drop_to_attendees`, which actually WRITES the file — and a second in the terminal's
@@ -396,6 +458,9 @@ def _note_path(ctx, uid, title) -> str:
     # prevent — a recurring meeting keeps ONE title and ONE native across occurrences, so the
     # afternoon's record silently overwrote the morning's on every desk in the room. Nothing
     # failed; the morning simply stopped existing. (F58, 2026-09-02.)
+    recorded = _recorded_note_path(ctx, uid, meeting_id)
+    if recorded:
+        return recorded
     return f"kg/entities/meeting/{_meeting_stamp(ctx, uid)}-{_slug(str(title or 'meeting'))}.md"
 
 
@@ -541,7 +606,7 @@ def _their_clock(uid, epoch):
         epoch, datetime.timezone.utc).strftime("%H:%M") + " UTC"
 
 
-def _scaffold_refs(ctx, uid) -> dict:
+def _scaffold_refs(ctx, uid, meeting_id=None) -> dict:
     """THE FACTS A SCAFFOLD CARRIES — what the invite already knew, and nothing derived.
 
     Every line here is something the agent otherwise has to go and find, and on a small model
@@ -571,11 +636,17 @@ def _scaffold_refs(ctx, uid) -> dict:
     # that does not exist yet is the documented, tested behaviour ("it appears when the
     # conversation (or a meeting) writes one"). What was NOT survivable was naming a file
     # nothing would ever write.
-    if ctx.refs.get("title"):
-        try:
-            refs["note_path"] = _note_path(ctx, uid, ctx.refs["title"])
-        except Exception:  # noqa: BLE001 — a path we cannot compute is not a reason to fail a mint
-            pass
+    #
+    # `meeting_id` IS AN ARGUMENT because the caller sometimes holds the row and `refs` does not:
+    # `prepare_meeting` plans the row itself, moments before it mints this scaffold, and without
+    # being told it the read-back has nothing to ask about (Vexa-ai/vexa#1601).
+    try:
+        carried = (_note_path(ctx, uid, ctx.refs["title"], meeting_id) if ctx.refs.get("title")
+                   else _recorded_note_path(ctx, uid, meeting_id))
+    except Exception:  # noqa: BLE001 — a path we cannot compute is not a reason to fail a mint
+        carried = ""
+    if carried:
+        refs["note_path"] = carried
     return refs
 
 

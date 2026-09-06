@@ -117,6 +117,18 @@ def build(reg: Registry, db, home=None) -> None:
         if not ref:
             raise StepError("nothing to link to — refs carry neither meeting_id nor url",
                             retryable=False)
+        # THE MEETING'S PAGE EXISTS FROM THE MOMENT ITS ROW DOES (Vexa-ai/vexa#1601).
+        #
+        # A meeting that arrives from the MAILBOX has no chat, so nothing sends a bot from a
+        # conversation and nothing binds one — the route agent-api mints on. This is that moment for
+        # this half of the product: the row was just planned above (`ensure_meeting_row`), and the
+        # organiser's document is minted onto their desk before the mail that links to it goes out.
+        # agent-api records the path on the row, which is why `_scaffold_refs` below now CARRIES the
+        # real path rather than composing one that nothing had yet written.
+        #
+        # It never raises (`ag.mint_meeting_note` swallows and returns ""), because a prepare mail
+        # with a link is worth more than a page, and the page still arrives when the meeting ends.
+        p.ag.mint_meeting_note(uid, ref)
         subject, body = p.mailtext.render("prepare", uid, {
             "title": title, "when": p._their_clock(uid, ctx.refs["start"]),
             "organizer": ctx.refs.get("organizer") or "",
@@ -125,7 +137,7 @@ def build(reg: Registry, db, home=None) -> None:
         # the mint is the last check that the chat behind the button will hold the meeting, and it
         # RAISES rather than mailing a prepare note whose button opens a chat that knows nothing.
         link = p.mint_scaffold("prep", to, opening="prep", meeting_id=ref,
-                               refs=p._scaffold_refs(ctx, uid),
+                               refs=p._scaffold_refs(ctx, uid, meeting_id=ref),
                                provenance={"flow": "meeting_prep", "step": "prepare_meeting",
                                            "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                            "minted_by": str(uid)})

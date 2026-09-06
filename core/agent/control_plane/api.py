@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
+from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_room
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
@@ -128,6 +129,7 @@ def create_app(
     meeting_owner_lookup: "Optional[object]" = None,
     schedule_source: "Optional[Callable[[str], list]]" = None,
     email_subject_lookup: "Optional[object]" = None,
+    meeting_note_recorder: "Optional[object]" = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -264,6 +266,11 @@ def create_app(
     )
     _schedule_source = schedule_source or schedule_digest_mod.digest_source(
         settings.meeting_api_url if settings is not None else "", mindex.list)
+    # WHERE A MEETING'S PAGE IS, PUT ON THE ROW ITSELF (Vexa-ai/vexa#1601): default = an owner-scoped
+    # annotate on meeting-api; injectable for L2 tests, the same seam style as the two above. The
+    # path stops being a thing two services each compose — whoever mints records, everybody reads.
+    _meeting_note_recorder = meeting_note_recorder or meeting_mint_mod.http_recorder(
+        settings.meeting_api_url if settings is not None else "")
 
     # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
     # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
@@ -1000,6 +1007,7 @@ def create_app(
         _entity_mounts=_entity_mounts, _friction_subject=_friction_subject,
         _global_root=_global_root, _global_store=_global_store,
         _internal_caller=_internal_caller, _manage_dir=_manage_dir,
+        _meeting_note_recorder=_meeting_note_recorder,
         _meeting_owner_lookup=_meeting_owner_lookup, _member_error=_member_error, _pc=_pc,
         _read_target=_read_target, _repo=_repo, _require_shared_write=_require_shared_write,
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,

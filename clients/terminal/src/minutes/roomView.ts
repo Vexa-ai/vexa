@@ -316,6 +316,41 @@ export function withMeetingPages(strip: Artifact[], pages: Page[]): Artifact[] {
   return orderHistory(out);
 }
 
+/** THE PAGE A FRESHLY BOUND MEETING OPENS — its own document, or nothing (Vexa-ai/vexa#1601).
+ *
+ *  The founder sent a bot from a chat, watched the transcript open beside it, and asked *"where is
+ *  it?"* — the meeting doc. It did not exist: it was written when the call ENDED. It is minted at
+ *  bot-send now, so the send has a page to put in front, and this says which.
+ *
+ *  ONLY WHEN THE PAGE CARRIES THE WIDGET. `note.transcript` is the meeting the page's own slot
+ *  names, read off the file by the server (#1598) — so a non-empty value means the live transcript
+ *  renders INSIDE this document and the document is the whole room. A note without it is a report
+ *  written before the widget existed: those rooms keep the transcript tab they have today, and
+ *  fronting a static report over a live transcript would be the exact regression that guards. */
+export function boundMeetingView(
+  pages: Page[],
+  note: { path?: string | null; transcript?: string },
+): Page | null {
+  const path = String(note?.path ?? "").trim();
+  if (!path || !String(note?.transcript ?? "").trim()) return null;
+  return pages.find((p) => p.kind !== "meeting" && p.path === path) ?? null;
+}
+
+/** The strip WITHOUT the separate transcript tab for one meeting (Vexa-ai/vexa#1601).
+ *
+ *  The `bot_send` artifact pins and fronts `meeting:<row>` — the transcript canvas — because until
+ *  the page existed that was the only way to see the room. A moment later the page arrives carrying
+ *  the widget, and then the canvas is the same words in a second tab: *"we want this doc to open
+ *  alongside transcript as a single thing in the right side"* (#1598). So the tab the send pinned
+ *  gives way to the page, and `meetingPages`' own `noteHasTranscript` rule is what decides.
+ *
+ *  It removes ONE identity and nothing else — never the desk, never a page the reader opened. */
+export function withoutSeparateTranscript(strip: Artifact[], meetingId: string): Artifact[] {
+  const id = String(meetingId ?? "").trim();
+  if (!id) return strip;
+  return strip.filter((a) => !(a.kind === "meeting" && a.path === id && !a.desk));
+}
+
 /** THE RETIRED SPELLING — `kg/entities/meeting/<native>.md`, the path this client used to compose
  *  for a meeting's own document and which nothing has ever written.
  *
