@@ -14,6 +14,10 @@ import { CHATS_KEY, artifactKey, loadChats, type Artifact } from "../chats";
 
 const labels = (ps: { label: string }[]) => ps.map((p) => p.label);
 
+/** The meeting's own document, at the path `drop_to_attendees` writes and `/api/meeting/note`
+ *  names. It ARRIVES — this client cannot spell it (Vexa-ai/vexa#1588). */
+const NOTE = "kg/entities/meeting/2026-03-02-0000-dna-tsc.md";
+
 describe("pagesForPhase — a real meeting's transcript is a canvas tab", () => {
   it("binds the transcript to the ROW ID, not to a workspace path", () => {
     const [transcript] = pagesForPhase("post", "abc-native", "1234");
@@ -28,20 +32,23 @@ describe("pagesForPhase — a real meeting's transcript is a canvas tab", () => 
   });
 
   it("Brief, Minutes and the personal page stay DOCUMENTS — they are real files", () => {
-    const post = pagesForPhase("post", "abc-native", "1234");
+    // The meeting doc is a real file at the path the SERVER names — `<native>.md` was this
+    // client's own spelling and nothing writes it (Vexa-ai/vexa#1588). What this test is about is
+    // unchanged: it is a document, not a canvas.
+    const post = pagesForPhase("post", "abc-native", "1234", NOTE);
     expect(labels(post)).toEqual(["Transcript", "Minutes", "Personal page"]);
     expect(post.slice(1).every((p) => p.kind === undefined)).toBe(true);
-    expect(post[1].path).toBe("kg/entities/meeting/abc-native.md");
+    expect(post[1].path).toBe(NOTE);
   });
 
   it("a meeting with no row behind it (`?mock=1`) keeps the canned markdown page", () => {
-    const [transcript] = pagesForPhase("post", "mock-post");
+    const [transcript] = pagesForPhase("post", "mock-post", null, "kg/entities/meeting/mock-post.md");
     expect(transcript.kind).toBeUndefined();
     expect(transcript.path).toBe("kg/entities/meeting/mock-post.transcript.md");
   });
 
   it("prep has no transcript at all, with or without a row", () => {
-    expect(labels(pagesForPhase("prep", "abc-native", "1234"))).toEqual(["Brief", "Personal page"]);
+    expect(labels(pagesForPhase("prep", "abc-native", "1234", NOTE))).toEqual(["Brief", "Personal page"]);
   });
 
   it("nothing captured under the row → still just the personal page", () => {

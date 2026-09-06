@@ -1702,7 +1702,7 @@ def build(reg: Registry, db) -> None:
         return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     def _drop_entity(*, title, day, entity_id, date_prose, organizer, participants, report,
-                     link) -> str:
+                     link, meeting_id="", native="") -> str:
         """THE ARTEFACT ITSELF, in the shape `kg/templates/meeting.md` defines — not a pointer to
         somebody else's copy of it (founder decision 22, 2026-09-02).
 
@@ -1730,6 +1730,17 @@ def build(reg: Registry, db) -> None:
             "---",
             "type: meeting",
             f"id: {entity_id}",
+            # WHICH MEETING THIS IS, said in the ids the meetings domain owns rather than only in
+            # the name a human gave it. `id` above is the FILENAME's stem — the flow's own recipe,
+            # unguessable from outside — so without these the only way back from a desk file to its
+            # row was its title, which a recurring meeting repeats every week. agent-api answers
+            # "where is meeting N's report on this desk" off exactly these two lines
+            # (`control_plane/meeting_note.py`), which is what lets the Minutes tab ask instead of
+            # spell (Vexa-ai/vexa#1588). Omitted when unknown rather than written empty: a blank
+            # identity that matches nothing is worse than an absent one, which matches nothing and
+            # says so.
+            *([f"meeting: {meeting_id}"] if str(meeting_id or "").strip() else []),
+            *([f"native: {native}"] if str(native or "").strip() else []),
             f"title: {_yaml(title)}",
             f"date: {day}",
             f"organizer: {_yaml(organizer)}",
@@ -1901,8 +1912,10 @@ def build(reg: Registry, db) -> None:
         room += [{"to": a, "link": links.get(a, "")}
                  for a in roster if a != organizer.lower()]
         entity_id = filename[:-3] if filename.endswith(".md") else filename
+        native = str(ctx.refs.get("native") or "").strip()
         body = _drop_entity(title=title, day=day, entity_id=entity_id, date_prose=date_prose,
-                            organizer=organizer, participants=roster, report=report, link="")
+                            organizer=organizer, participants=roster, report=report, link="",
+                            meeting_id=str(mid or ""), native=native)
         done = list(ctx.scratch.setdefault("dropped", []))
         failed = list(ctx.scratch.setdefault("drop_failed", []))
         for d in room:
@@ -1915,7 +1928,7 @@ def build(reg: Registry, db) -> None:
                 _write_if_changed(their_uid, entity_path, _drop_entity(
                     title=title, day=day, entity_id=entity_id, date_prose=date_prose,
                     organizer=organizer, participants=roster, report=report,
-                    link=d.get("link") or ""))
+                    link=d.get("link") or "", meeting_id=str(mid or ""), native=native))
                 _write_if_changed(their_uid, index_path, _index_entry(
                     ws_file(their_uid, index_path), title, filename, day))
                 done.append(a)

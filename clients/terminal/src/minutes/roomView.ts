@@ -216,23 +216,45 @@ export const personalPage = (): Page => ({ path: "README.md", label: "Personal p
  *
  *  `meetingId` is the ROW ID that canvas binds to. Absent = there is no row behind this meeting,
  *  which today means exactly one thing: a `?mock=1` fixture. Those keep the canned markdown page,
- *  because a fabricated meeting has nothing for the canvas to fetch. Brief and Minutes are
- *  documents in both cases — they are real files the agent writes. */
-export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null): Page[] {
+ *  because a fabricated meeting has nothing for the canvas to fetch.
+ *
+ *  ⚠ `notePath` IS AN INPUT, and this function cannot know it (Vexa-ai/vexa#1588). The meeting's
+ *  own document is `kg/entities/meeting/<meeting-day>-<title-slug>.md`, where the day is rendered
+ *  in the ORGANISER's timezone and the slug through a server-side allow-list — neither is derivable
+ *  here. This used to build `kg/entities/meeting/<native>.md` and hand it back as Brief/Minutes: a
+ *  second spelling of one path, in a second language, and it matched nothing `drop_to_attendees`
+ *  writes. The room read "No page here yet" on every meeting whose report HAD been written, mailed
+ *  and dropped — which is the same defect `artifactFromToken` fixed for `meeting:note` while this
+ *  path kept composing. It arrives from `/api/meeting/note` (or, for a chat born from a link, off
+ *  the scaffold), and ABSENT it drops the page rather than guessing one: a tab pointing at a
+ *  guessed path opens a document that can never load. */
+export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null,
+                              notePath?: string | null): Page[] {
   if (!native) return [personalPage()];
-  const doc = `kg/entities/meeting/${native}.md`;
+  // The meeting doc is the SAME file in every phase — it is the brief while the room is running and
+  // the minutes once it is not, so only its NAME moves. That half was always right.
+  const doc: Page[] = notePath ? [{ path: notePath, label: phase === "post" ? "Minutes" : "Brief" }] : [];
   // prep: no transcript yet. The one page that matters before the room — what you walk in to decide.
-  if (phase === "prep") return [{ path: doc, label: "Brief" }, personalPage()];
-  // live or post: a transcript exists and it leads. The meeting doc is the SAME file either way —
-  // it is the brief while the room is running and the minutes once it is not, so only its name moves.
+  if (phase === "prep") return [...doc, personalPage()];
+  // live or post: a transcript exists and it leads.
   const transcript: Page = meetingId
     ? { kind: "meeting", path: meetingId, label: "Transcript" }
     : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" };
-  return [
-    transcript,
-    { path: doc, label: phase === "post" ? "Minutes" : "Brief" },
-    personalPage(),
-  ];
+  return [transcript, ...doc, personalPage()];
+}
+
+/** THE RETIRED SPELLING — `kg/entities/meeting/<native>.md`, the path this client used to compose
+ *  for a meeting's own document and which nothing has ever written.
+ *
+ *  It is here to be RECOGNISED, not to be produced: a chat opened before the fix stored it in its
+ *  `artifacts[]`, and a stored strip is replayed verbatim on every later open (deliberately — a
+ *  reader owns their tabs). So the one tab nobody chose, pointing at a file nobody writes, would
+ *  outlive the fix on exactly the desks that hit the bug. `openChat` heals that one entry against
+ *  this predicate and touches nothing else — positive evidence about a path we know we minted,
+ *  never a tidy-up of somebody's panel. */
+export function isRetiredNotePath(path: string, native?: string | null): boolean {
+  const n = String(native ?? "").trim();
+  return !!n && path === `kg/entities/meeting/${n}.md`;
 }
 
 /** A label reduced to the words a link may name: "Transcript · live" → ["transcript", "live"]. */

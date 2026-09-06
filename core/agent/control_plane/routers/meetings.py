@@ -8,6 +8,7 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane import meeting_note as meeting_note_mod
 from control_plane.api_shared import (
     MEETING_STREAM_TRANSCRIPT_REPLAY, _decode_sse_cursor, _encode_sse_cursor, _sse)
 from fastapi import APIRouter, HTTPException, Request
@@ -22,6 +23,7 @@ def build(**d) -> APIRouter:
     live = d['live']
     redis_url = d['redis_url']
     subject_of = d['subject_of']
+    wsr = d['wsr']
 
     @router.get("/api/meeting/relay-health")
     def meeting_relay_health(request: Request):
@@ -30,6 +32,30 @@ def build(**d) -> APIRouter:
         `native_resolve: {ok:false, kind:'unauthorized', detail:…}` instead of silent dead air."""
         from control_plane import transcription_watcher as _txw
         return _txw.relay_health()
+    @router.get("/api/meeting/note")
+    def meeting_note(meeting_id: str, request: Request):
+        """WHERE THIS MEETING'S REPORT LIVES ON THE CALLER'S DESK — `{"path": … | null}`.
+
+        The client asks; it does not spell. `kg/entities/meeting/<meeting-day>-<title-slug>.md` is
+        written by `core/flows`' `drop_to_attendees`, the day in the organiser's zone and the slug
+        through an allow-list, and the terminal used to point its Minutes tab at
+        `kg/entities/meeting/<native>.md` instead — one path, two spellings, in two languages, and
+        they never matched. The founder opened a meeting whose report had been written, mailed and
+        dropped an hour earlier and was told there was no page there (Vexa-ai/vexa#1588). A chat
+        born from a mailed link already gets the path on its scaffold (`refs.note_path`); this is
+        the same answer for the chat opened from the rail, which is every meeting after the first.
+
+        `null` IS AN ANSWER, and the ordinary one before the report lands: nothing on this desk
+        names this meeting yet. The caller opens one document fewer — never a tab onto a guess.
+
+        OWNER-SCOPED BEFORE ANYTHING IS READ, exactly as `/api/meeting/stream` is one route down and
+        for the same reason: row ids are sequential ints, and this answers with a path on a DESK.
+        `_meeting_owner_lookup` returns None for an absent row and for another tenant's."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        row = _meeting_owner_lookup(subject, meeting_id)
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        return {"path": meeting_note_mod.resolve(wsr.root, subject, row)}
     @router.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
         """SSE feed for a LIVE meeting: the transcript Stream (`tc:meeting:{id}`), and only that.

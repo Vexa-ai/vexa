@@ -37,7 +37,8 @@ import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { useScaffoldArrival } from "./arrival";
-import { artifactsFromTokens, artifactViewEffect, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
@@ -302,8 +303,14 @@ export function MinutesShell() {
         // A `?mock=1` meeting has no row behind it, so its transcript stays the canned markdown
         // page; every real meeting gets the canvas, bound to its row id.
         const fake = mock && MOCK_MEETINGS.some((x) => String(x.id) === c.meeting);
-        return pagesForPhase(m ? meetingPhase(m) : "post", (m as { native_id?: string } | undefined)?.native_id,
-          fake ? null : c.meeting);
+        const native = (m as { native_id?: string } | undefined)?.native_id;
+        // THE SERVER SAYS WHERE THE MEETING'S DOCUMENT IS (Vexa-ai/vexa#1588). A `?mock=1` fixture
+        // has no server to ask and its canned pages ARE keyed on the composed path
+        // (`mockPhases.ts`), so the mock composes — and only the mock.
+        const notePath = fake
+          ? (native ? `kg/entities/meeting/${native}.md` : null)
+          : await fetchMeetingNotePath(c.meeting);
+        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, notePath);
       }
       // THE DESK IS THE DEFAULT PAGE (PRD decision 26.4). This used to open the ORGANISATION's
       // README for a chat with no focus — the company's document, the same for everybody, and not
@@ -320,9 +327,29 @@ export function MinutesShell() {
     // laid them out, and with one preview slot an unpinned one would be evicted by the reader's
     // first click. A STORED strip keeps its own pin state instead: last session's preview page was
     // not a tab then and re-pinning it on load would put back the accumulation by the back door.
+    // A STORED STRIP THAT HOLDS THE RETIRED NOTE PATH IS HEALED, ONCE (Vexa-ai/vexa#1588). Every
+    // meeting chat opened before the fix pinned `kg/entities/meeting/<native>.md` — the spelling
+    // this client composed — and a stored strip is otherwise replayed verbatim forever, so the
+    // desks that hit the bug are exactly the ones the fix would never reach on its own.
+    //
+    // IT ONLY EVER REPLACES. When the server names a report, that entry points at it; when the
+    // server names none, the strip is left exactly as the reader had it. Dropping the tab on a null
+    // would be deciding, from an ABSENCE, that nothing is there — and `<native>.md` is a path an
+    // agent turn can legitimately have written to on some desk. Nothing else in the strip is
+    // touched either way: a reader owns their tabs, and this is the one entry no reader chose.
+    const hasStrip = c.artifacts.length > 0;
+    let strip = c.artifacts.map((a) => ({ ...a }));
+    if (hasStrip && c.meeting) {
+      const native = (m as { native_id?: string } | undefined)?.native_id;
+      const stale = strip.findIndex((a) => a.kind !== "meeting" && isRetiredNotePath(a.path, native));
+      if (stale >= 0) {
+        const real = await fetchMeetingNotePath(c.meeting);
+        if (real) strip = strip.map((a, k) => (k === stale ? { ...a, path: real } : a));
+      }
+    }
     const base: Page[] = withHome(
-      (c.artifacts.length
-        ? c.artifacts.map((a) => ({ ...a }))
+      (hasStrip
+        ? strip
         : (await roomPages()).map((pg) => ({ ...pg, pinned: true }))) as Artifact[],
       c.workspaces,
     ) as Page[];

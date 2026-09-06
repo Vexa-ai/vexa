@@ -11,39 +11,59 @@ import { labelMatches, pagesForPhase, resolveView } from "../../minutes/roomView
 
 const labels = (pages: { label: string }[]) => pages.map((p) => p.label);
 
+/** THE MEETING'S OWN DOCUMENT ARRIVES; IT IS NEVER SPELLED HERE (Vexa-ai/vexa#1588). Every call
+ *  below used to pass two arguments and get `kg/entities/meeting/abc.md` back — a path in this
+ *  client's own vocabulary that nothing in `core/flows` writes, which is how a meeting whose report
+ *  had been written, mailed and dropped opened on "No page here yet". This is the shape
+ *  `drop_to_attendees` actually produces, and it comes from `/api/meeting/note`. */
+const NOTE = "kg/entities/meeting/2026-03-02-0000-dna-tsc-2026-03-02.md";
+
 describe("pagesForPhase — two shapes, keyed on whether a transcript exists", () => {
   it("prep has no transcript, so it opens the brief you are walking in with", () => {
-    expect(labels(pagesForPhase("prep", "abc"))).toEqual(["Brief", "Personal page"]);
+    expect(labels(pagesForPhase("prep", "abc", null, NOTE))).toEqual(["Brief", "Personal page"]);
   });
 
   it("live leads with the transcript, brief behind it", () => {
-    expect(labels(pagesForPhase("live", "abc"))).toEqual(["Transcript", "Brief", "Personal page"]);
+    expect(labels(pagesForPhase("live", "abc", null, NOTE))).toEqual(["Transcript", "Brief", "Personal page"]);
   });
 
   it("post leads with the transcript, minutes behind it", () => {
-    expect(labels(pagesForPhase("post", "abc"))).toEqual(["Transcript", "Minutes", "Personal page"]);
+    expect(labels(pagesForPhase("post", "abc", null, NOTE))).toEqual(["Transcript", "Minutes", "Personal page"]);
   });
 
   it("live and post are the SAME shape — same paths, same order, same focused page", () => {
-    const live = pagesForPhase("live", "abc"), post = pagesForPhase("post", "abc");
+    const live = pagesForPhase("live", "abc", null, NOTE), post = pagesForPhase("post", "abc", null, NOTE);
     expect(live.map((p) => p.path)).toEqual(post.map((p) => p.path));
     expect(live[0].label).toBe(post[0].label);          // the transcript leads in both
   });
 
   it("only the meeting doc's NAME moves between live and post — it is one file", () => {
-    expect(pagesForPhase("live", "abc")[1].path).toBe(pagesForPhase("post", "abc")[1].path);
-    expect(pagesForPhase("live", "abc")[1].label).toBe("Brief");
-    expect(pagesForPhase("post", "abc")[1].label).toBe("Minutes");
+    expect(pagesForPhase("live", "abc", null, NOTE)[1].path).toBe(pagesForPhase("post", "abc", null, NOTE)[1].path);
+    expect(pagesForPhase("live", "abc", null, NOTE)[1].label).toBe("Brief");
+    expect(pagesForPhase("post", "abc", null, NOTE)[1].label).toBe("Minutes");
   });
 
   it("prep is the one shape that differs — no transcript in it at all", () => {
-    expect(labels(pagesForPhase("prep", "abc"))).not.toContain("Transcript");
-    expect(labels(pagesForPhase("prep", "abc")).join("|"))
-      .not.toBe(labels(pagesForPhase("live", "abc")).join("|"));
+    expect(labels(pagesForPhase("prep", "abc", null, NOTE))).not.toContain("Transcript");
+    expect(labels(pagesForPhase("prep", "abc", null, NOTE)).join("|"))
+      .not.toBe(labels(pagesForPhase("live", "abc", null, NOTE)).join("|"));
   });
 
-  it("the meeting doc and its transcript address the same native id", () => {
-    expect(pagesForPhase("post", "mock-post").map((p) => p.path)).toEqual([
+  it("the meeting doc is the one the SERVER named — never `<native>.md`", () => {
+    expect(pagesForPhase("post", "abc", null, NOTE)[1].path).toBe(NOTE);
+    expect(pagesForPhase("post", "abc", null, NOTE).map((p) => p.path))
+      .not.toContain("kg/entities/meeting/abc.md");
+  });
+
+  it("opens one document fewer when the server names none", () => {
+    expect(labels(pagesForPhase("post", "abc", null, null))).toEqual(["Transcript", "Personal page"]);
+  });
+
+  it("a `?mock=1` room is the one place both pages are keyed on the native id", () => {
+    // The fixture has no server to ask and no row for the canvas to bind to, so `mockPhases.ts`
+    // keys its canned markdown on `kg/entities/meeting/<native>{,.transcript}.md` and the shell
+    // composes that path for a mock and only for a mock. A real room is told (see the suite above).
+    expect(pagesForPhase("post", "mock-post", null, "kg/entities/meeting/mock-post.md").map((p) => p.path)).toEqual([
       "kg/entities/meeting/mock-post.transcript.md",
       "kg/entities/meeting/mock-post.md",
       "README.md",
@@ -72,9 +92,12 @@ describe("labelMatches — a link names a page by the label's first word", () =>
 });
 
 describe("resolveView — the link decides what is in front", () => {
-  const post = pagesForPhase("post", "m1");
-  const live = pagesForPhase("live", "m1");
-  const prep = pagesForPhase("prep", "m1");
+  // The meeting's own document, at the path `drop_to_attendees` writes and the server names — a
+  // link re-orders attention inside a room, and it never has an opinion about where a file lives.
+  const M1_NOTE = "kg/entities/meeting/2026-03-02-0000-m1-sync.md";
+  const post = pagesForPhase("post", "m1", null, M1_NOTE);
+  const live = pagesForPhase("live", "m1", null, M1_NOTE);
+  const prep = pagesForPhase("prep", "m1", null, M1_NOTE);
 
   it("no spec leaves the phase's default in front", () => {
     expect(resolveView(null, post).focus).toBeNull();
@@ -94,7 +117,7 @@ describe("resolveView — the link decides what is in front", () => {
   });
 
   it("`brief` reaches the meeting doc of a RUNNING meeting — the second artifact, not the first", () => {
-    expect(resolveView("brief", live).focus?.path).toBe("kg/entities/meeting/m1.md");
+    expect(resolveView("brief", live).focus?.path).toBe(M1_NOTE);
   });
 
   it("a name the phase did not produce is ignored — the default stands, the panel never blanks", () => {
