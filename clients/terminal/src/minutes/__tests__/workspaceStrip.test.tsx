@@ -321,6 +321,23 @@ describe("the acts are conversations, and they are this viewer's", () => {
   });
 });
 
+describe("the title never repeats the eyebrow", () => {
+  it("a desk whose README opens `# Your desk` shows the eyebrow once and no title", async () => {
+    // Seen in a browser on the seeded desk: `Your desk` on one line and `Your desk` again in 19px
+    // under it. A title that repeats the label above it is not a title.
+    vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "Desk", kind: "desk", slug: "personal", access: "readable", writable: true });
+    const { container } = panel({
+      pages: [{ path: "README.md", slug: undefined, label: "Desk" }], docSlug: undefined,
+      body: "# Your desk\n\nWhat you are working on.",
+    });
+
+    await waitFor(() => expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Your desk"));
+    expect(container.querySelector("[data-ws-title]")).toBeNull();
+    // …and the body does not get it back either — it was lifted, not hidden
+    expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual([]);
+  });
+});
+
 describe("the company layer names its writer, to everybody (Vexa-ai/vexa#1642)", () => {
   const asGlobal = asCompanyLayer;
 

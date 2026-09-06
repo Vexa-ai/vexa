@@ -462,8 +462,14 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   // THE TITLE. The README's own first heading, lifted by the pane that renders the body so it is
   // not printed twice (#1634's design spec, point 2); a README with no heading falls back to what
   // this place is called — the company's name on the company layer, the workspace's on a group.
-  const heading = (p.title || "").trim()
+  //
+  // …AND NEVER THE EYEBROW AGAIN. The seeded desk README opens `# Your desk`, which is the word the
+  // eyebrow already says, and the header rendered it twice in a row — seen in a browser, on the
+  // desk. A title that repeats the label above it is not a title.
+  const eye = eyebrow(facts.kind);
+  const named = (p.title || "").trim()
     || (facts.kind === "global" ? facts.company : facts.kind === "group" ? facts.name : null);
+  const heading = named && named.toLowerCase() !== eye.toLowerCase() ? named : null;
 
   /** OPENING THE DETAILS. History is the door, so History is what it opens — and closing it leaves
    *  the section it opened remembered, which is what brings a reader back where they were. */
@@ -533,7 +539,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           reason and scrolling rather than clipping for its reason too: a control a person can see
           the top of and cannot click is the one thing this panel refuses to render. */}
       <div data-ws-strip style={stripS}>
-        <div data-ws-eyebrow style={eyebrowS}>{eyebrow(facts.kind)}</div>
+        <div data-ws-eyebrow style={eyebrowS}>{eye}</div>
         {heading && <h1 data-ws-title style={titleS}>{heading}</h1>}
 
         <div data-ws-rows style={rowsS}>
