@@ -360,6 +360,16 @@ def email_minutes(ctx: StepCtx):
                     "minted_by": str(ctx.refs["uid"])})
     mid = notify(organizer, f"Minutes: {_mail_title(ctx)}", body, link=link)
     mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
+    # AND EVERYONE ELSE IN THE WORKSPACE THIS MEETING BELONGS TO. A meeting bound to a workspace
+    # is the GROUP's, so its write-up is the group's too — mailing it to the requester alone is
+    # the founder's *"it was mailed to <the admin> not to <the member>"*: the subject line named
+    # the workspace and exactly one person received it.
+    #
+    # AFTER the organiser's mail and never in place of it. That one is this step's contract — its
+    # message id is the receipt — so the fan-out cannot fail it, and each member is mailed inside
+    # its own guard: one bad address must not cost the rest of the group their notes.
+    _mail_group_members(ctx, row, subject=f"Minutes: {_mail_title(ctx)}", body=body,
+                        already=organizer, row_id=row_id)
     return Done({"message_id": mid, "link": link}, provider_ref=mid)
 ```
 

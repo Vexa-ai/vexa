@@ -359,3 +359,24 @@ def test_a_fact_with_no_link_ends_terminal_and_mails_nobody(monkeypatch):
     assert st["status"] == "failed"
     assert "asks somebody to do nothing" in (st["reason"] or "")
     assert ch.sent == []
+
+
+# ── 6 · the invite goes to the INVITEE, and never to the inviter (Vexa-ai/vexa#1648) ─────────
+def test_the_invite_is_addressed_to_the_invitee_and_never_to_the_inviter(monkeypatch):
+    """The failure this rules out was suspected on 2026-09-06, when a founder reported an invite as
+    having reached his own mailbox instead of the person's. It had not — the mail sink showed the
+    invitee in both the `To` header and the SMTP envelope, and the real defect was one surface
+    further on, in the MEETING WRITE-UP. But the failure mode is a real one and nothing pinned it:
+    the refs carry an address AND a uid, `uid` IS THE INVITER, and a step that mailed `uid` would
+    mail the sender their own invitation (`publish.invite_refs` says exactly that in prose).
+
+    So: the recipient is `email` and it tracks `email`, while `uid` and `inviter` move under it
+    without ever becoming the address."""
+    reg, ch = _rig(monkeypatch)
+    refs = dict(REFS, email="marvin@example.test", uid="176", inviter="admin@example.test")
+    reg.steps["mail_workspace_invite"](_ctx(refs))
+
+    assert [m["to"] for m in ch.sent] == ["marvin@example.test"]
+    # the inviter appears in the SUBJECT (it is their invitation) and nowhere in the addressing
+    assert "admin@example.test" in ch.sent[0]["subject"]
+    assert ch.sent[0]["to"] != refs["inviter"] and ch.sent[0]["to"] != refs["uid"]

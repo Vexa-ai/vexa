@@ -57,7 +57,7 @@ vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
 }));
 
 import { PagesPanel } from "../PagesPanel";
-import { boundSeries, countPages, isWorkspaceReadme, policySentence } from "../workspaceReadme";
+import { boundSeries, countPages, isWorkspaceReadme, policySentence, workspaceMeetings } from "../workspaceReadme";
 import type { Page } from "../types";
 
 /** The three sentences the panel lifts out of the seeded `behavior/global/POLICIES.md`, in the
@@ -177,6 +177,48 @@ describe("the counts and the bindings", () => {
       { key: "cal:u1", title: "Tuesday sync", recurring: true, runs: 2, latest: "2026-09-08" },
       { key: "row:3", title: "One-off review", recurring: false, runs: 1, latest: "2026-08-30" },
     ]);
+  });
+});
+
+// A bot requested inside a workspace makes the WORKSPACE's meeting (Vexa-ai/vexa#1648), so the front
+// page lists the group's calls rather than the reader's own — and says which one is on RIGHT NOW.
+describe("the workspace's own meetings", () => {
+  const ROWS = [
+    { id: 1, status: "completed", data: { workspace_id: "w", title: "Last week's review" }, start_time: "2026-09-01" },
+    { id: 2, status: "active", shared: true, data: { workspace_id: "w", title: "Group call" }, start_time: "2026-09-06" },
+    { id: 3, status: "scheduled", data: { workspace_id: "w", title: "Next Tuesday" }, start_time: "2026-09-30" },
+    { id: 4, status: "active", data: { workspace_id: "other", title: "Another group's" }, start_time: "2026-09-06" },
+  ];
+
+  it("lists only this workspace's meetings, live ones first", () => {
+    // #3 is SCHEDULED for the 30th — the furthest-future start_time in the set. It must still sort
+    // BELOW the live call, which is the whole reason the live lift is its own sort key and not a
+    // time comparison: on a pure time sort the meeting that has not happened wins the top row.
+    expect(workspaceMeetings(ROWS, "w").map((m) => [m.title, m.live])).toEqual([
+      ["Group call", true],
+      ["Next Tuesday", false],
+      ["Last week's review", false],
+    ]);
+  });
+
+  it("marks a colleague's meeting as reaching this reader through the workspace", () => {
+    const [live] = workspaceMeetings(ROWS, "w");
+    expect(live).toMatchObject({ id: "2", shared: true, when: "2026-09-06" });
+  });
+
+  it("treats every phase of the bot arriving and leaving as live", () => {
+    for (const status of ["requested", "joining", "awaiting_admission", "active", "stopping"]) {
+      const rows = [{ id: 9, status, data: { workspace_id: "w", title: "x" } }];
+      expect(workspaceMeetings(rows, "w")[0].live).toBe(true);
+    }
+    for (const status of ["completed", "failed", "idle", "scheduled"]) {
+      const rows = [{ id: 9, status, data: { workspace_id: "w", title: "x" } }];
+      expect(workspaceMeetings(rows, "w")[0].live).toBe(false);
+    }
+  });
+
+  it("answers with nothing when no slug is named, rather than everything", () => {
+    expect(workspaceMeetings(ROWS, "")).toEqual([]);
   });
 });
 
