@@ -109,11 +109,22 @@ const detailsBox: CSSProperties = {
  *  the founder's "1/8 screen at max" with the rounding in the reader's favour. */
 export const STRIP_MAX_VH = 12;
 const stripS: CSSProperties = {
-  display: "flex", flexDirection: "column", alignItems: "stretch", gap: 3,
-  // The cap is the founder's; `auto` rather than `hidden` is this file's own rule 1 applied to the
-  // cap itself. A 384px panel can wrap six summaries past 12vh, and clipping them would leave a
-  // disclosure a person can see the top of and cannot click — a control that is present and does
-  // not work, which is the thing this panel refuses to render.
+  display: "flex", flexDirection: "column", alignItems: "stretch", gap: 3, minWidth: 0,
+};
+/** WHAT THE CAP IS MEASURED AGAINST — the two grey rows, and not the eyebrow and title above them.
+ *
+ *  #1628's ruling (*"the workspace panel should take only the header, 1/8 screen at max"*) is about
+ *  the FURNITURE this panel adds to a page. The title is not furniture: it is the README's own first
+ *  heading, which was already on the page as the body's `# `, and #1634's design spec moved it up
+ *  here rather than adding it — so counting it against the cap would shrink the two rows to pay for
+ *  a line the reader already had. Measured on the real 384px panel the rows come to ~100px against
+ *  a 108px cap on a 900px viewport, which is what this split is worth: without it the last-change
+ *  sentence was clipped out of reach on the founder's own screen.
+ *
+ *  `auto` rather than `hidden` is this file's own rule 1 applied to the cap itself: a control a
+ *  person can see the top of and cannot click is the one thing this panel refuses to render. */
+const rowsS: CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 3, minWidth: 0,
   maxHeight: `${STRIP_MAX_VH}vh`, overflowY: "auto", overflowX: "hidden",
 };
 const sectionS: CSSProperties = { borderTop: "1px solid var(--line)", marginTop: 8, paddingTop: 8 };
@@ -133,11 +144,18 @@ const titleS: CSSProperties = {
   fontFamily: "var(--sans)", fontSize: 19, fontWeight: 600, letterSpacing: "-0.01em",
   color: "var(--t1)", margin: "1px 0 5px", lineHeight: 1.25, wordBreak: "break-word",
 };
-/** The two grey rows. `baseline` so the icons and the initials sit on the sentence rather than
- *  above it, and the acts are pushed to the right edge by `marginLeft: auto` on their own span. */
+/** The two grey rows: a fixed thing on the left (the faces, the clock), the sentence, and — on the
+ *  people row — the acts at the right edge.
+ *
+ *  THE SENTENCE, THE COUNT AND THE PILL ARE ONE INLINE FLOW, not three flex items. As three they
+ *  each began a new LINE the moment the first of them wrapped, and on the real 384px panel that
+ *  made the people row 80px of four stacked fragments. As one flow they wrap like the sentence they
+ *  are. `flex: 1 1 180px` lets the acts sit beside them while they fit and drop to their own line
+ *  when they do not. */
 const rowFlow: CSSProperties = {
-  display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", minWidth: 0,
+  display: "flex", alignItems: "flex-start", gap: "4px 8px", flexWrap: "wrap", minWidth: 0,
 };
+const saidS: CSSProperties = { flex: "1 1 180px", minWidth: 0 };
 /** ONE FACE — 22px, initials, `-6px` overlap, a ring in the surface colour so the stack reads as
  *  cards rather than as a smear (#1634's design spec, point 3). */
 const avatarS: CSSProperties = {
@@ -518,25 +536,27 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
         <div data-ws-eyebrow style={eyebrowS}>{eyebrow(facts.kind)}</div>
         {heading && <h1 data-ws-title style={titleS}>{heading}</h1>}
 
-        {/* WHO IS HERE — faces, the sentence, the count, the one pill, and this viewer's acts at
-            the right edge. One accessible name for the whole row (`lineOne`), because it is one
-            claim however many elements it takes to draw. */}
+        <div data-ws-rows style={rowsS}>
+        {/* WHO IS HERE — faces, then the sentence, the count and the one pill as ONE flow, then
+            this viewer's acts at the right edge. */}
         <div data-ws-people-row style={{ ...lineS, ...rowFlow }}>
           <Avatars people={faces} />
-          {people && <span data-ws-line="where" style={{ minWidth: 0 }}>{people}</span>}
-          {pageCount(facts.pages) && <>
-            {people && <span aria-hidden style={{ color: "var(--t3)" }}>·</span>}
-            <span data-ws-pages>{pageCount(facts.pages)}</span>
-          </>}
-          {pill && <span data-ws-pill style={pillS}>
-            <Icon name={facts.kind === "global" ? "shield" : "cal"} size={11} style={{ opacity: 0.75 }} />
-            {pill}
-          </span>}
+          <span style={saidS}>
+            {people && <span data-ws-line="where">{people}</span>}
+            {pageCount(facts.pages) && <>
+              {people && <span aria-hidden style={{ color: "var(--t3)" }}>{" · "}</span>}
+              <span data-ws-pages>{pageCount(facts.pages)}</span>
+            </>}
+            {pill && <>{" "}<span data-ws-pill style={pillS}>
+              <Icon name={facts.kind === "global" ? "shield" : "cal"} size={11} style={{ opacity: 0.75 }} />
+              {pill}
+            </span></>}
+          </span>
           {/* THE ACTS. Each queues a same-target act on the open chat and none opens a form
               (#1632). History is the disclosure — it opens the sections #1628 built, it is the only
               one a reader gets, and it is the icon alone: it is the act nobody needs a word for,
               and its name is in `aria-label` and the tooltip where a word costs no room. */}
-          <span data-ws-acts style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginLeft: "auto" }}>
+          <span data-ws-acts style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", flex: "none", marginLeft: "auto" }}>
             {acts.map((a) => {
               const isHistory = a.id === "history";
               return (
@@ -560,8 +580,8 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
             (nothing written yet · several pages · a commit that touched none) is the same sentence
             `lastChangeSentence` composes, so there is one place the words are decided. */}
         <div data-ws-line="changed" style={{ ...lineS, ...rowFlow, gap: 6 }}>
-          <Icon name="clock" size={12} style={{ color: "var(--t3)", alignSelf: "center" }} />
-          <span data-ws-changed style={{ minWidth: 0 }}>
+          <Icon name="clock" size={12} style={{ color: "var(--t3)", flex: "none", marginTop: 3 }} />
+          <span data-ws-changed style={saidS}>
             {!changed?.page ? lastChangeSentence(facts.change) : <>
               {changed.who ? `${changed.who === "you" ? "You" : changed.who} changed ` : "Changed "}
               <button data-ws-changed-page={changed.page.path} style={quietLink}
@@ -572,6 +592,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               {` ${changed.when}`}
             </>}
           </span>
+        </div>
         </div>
       </div>
 

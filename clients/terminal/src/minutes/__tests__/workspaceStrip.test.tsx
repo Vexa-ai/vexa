@@ -101,7 +101,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); window.localStorage.clear(); });
 
 describe("the strip takes the header and no more", () => {
-  it("caps itself against the VIEWPORT, and the cap is inside the founder's 1/8", async () => {
+  it("caps the two ROWS against the viewport, and the cap is inside the founder's 1/8", async () => {
     // A viewport this test states rather than inherits: the claim is a fraction of the screen, so a
     // jsdom default of 768 would be measuring a coincidence.
     Object.defineProperty(window, "innerHeight", { value: 900, configurable: true });
@@ -109,9 +109,16 @@ describe("the strip takes the header and no more", () => {
     const { container } = panel();
     await waitFor(() => expect(strip(container)).toBeTruthy());
 
-    const s = strip(container)!;
-    expect(s.style.maxHeight).toBe(`${STRIP_MAX_VH}vh`);      // the cap is in the style, not in luck
-    expect(s.style.overflowY).toBe("auto");                   // …and nothing is clipped out of reach
+    // WHAT IS MEASURED is the furniture — the people row and the last-change row — and NOT the
+    // eyebrow and title above them (#1642). The title is the README's own first heading, which was
+    // already on the page as the body's `# `; counting a line the reader already had against a cap
+    // on what this panel ADDS shrank the rows to pay for it, and on the founder's own 384px panel
+    // the last-change sentence ended up clipped out of reach.
+    const rows = container.querySelector("[data-ws-rows]") as HTMLElement;
+    expect(rows).toBeTruthy();
+    expect(rows.style.maxHeight).toBe(`${STRIP_MAX_VH}vh`);   // the cap is in the style, not in luck
+    expect(rows.style.overflowY).toBe("auto");                // …and nothing is clipped out of reach
+    expect(strip(container)!.style.maxHeight).toBe("");       // the head of the page is not capped
     // …and the cap the style names is inside "1/8 screen at max" on the viewport above
     expect((STRIP_MAX_VH / 100) * window.innerHeight).toBeLessThanOrEqual(window.innerHeight / 8);
   });
