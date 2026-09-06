@@ -4,7 +4,7 @@
 # A validate-harness fix re-runs release-validate alone (~minutes, dispatchable from any
 # branch) instead of rebuilding 10 unchanged images.
 #
-#   tag push v0.12.* (or workflow_dispatch with an explicit version) →
+#   tag push v0.12.* / v0.13.* (or workflow_dispatch with an explicit version) →
 #     preflight       secrets present (fail fast + loud) · tag ↔ package.json ↔ Chart.yaml
 #                     appVersion consistency · helm static gates · pinned-render assertions
 #     build (matrix)  the uniform images — buildx, amd64+arm64, registry :buildcache cache
@@ -32,7 +32,9 @@ name: release-images
 
 on:
   push:
-    tags: ["v0.12.*"]
+    # v0.13.* admitted alongside v0.12.*: the minutes line is tagged v0.13.0 and a tag that
+    # matches nothing here builds nothing at all — silently, with no failing job to notice.
+    tags: ["v0.12.*", "v0.13.*"]
   workflow_dispatch:
     inputs:
       version:
