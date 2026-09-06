@@ -50,6 +50,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re as _re
 import sys as _sys
 import time
 from pathlib import Path
@@ -374,6 +375,136 @@ def _merge_meeting_doc(existing: "str | None", fresh: str, report: str) -> str:
         return fresh
     return (existing[: i + len(MEETING_REPORT_START)] + "\n" + (report or "").strip() + "\n"
             + existing[j:])
+
+
+# ── the report's commitments, per person (Vexa-ai/vexa#1614) ─────────────────────────────────────
+#
+# Founder, 2026-09-06: the empty chat shows *"a short list that is updated by other agents when they
+# see something as JTBD"*, and the post-meeting turn is the first agent that sees one. What it sees
+# is the report it just wrote: `behavior/prompts/process-meeting.md` tells it to write *"sections
+# Decided / Committed / Open, each item attributed, people as [[wikilinks]]"*, so a commitment for
+# this person is a bullet under `Committed` whose OWNER is them.
+#
+# PLAIN CODE, NO MODEL. `drop_to_attendees` is the step this runs in and it is deliberately
+# LLM-free (decision 22 addendum: *"a desk nobody talks to is a flat pile of reports: complete, and
+# free"*). A second turn per person per meeting to decide what to put on a chip would be exactly the
+# per-person cost that decision refuses.
+#
+# IT READS THE OWNER POSITION, NOT THE WHOLE BULLET, and that asymmetry is the point: a chip that
+# tells you to do somebody else's work is worse than no chip, while a commitment we failed to notice
+# costs a chip nobody misses. So a name must appear BEFORE the bullet's separator — the `- Ben — the
+# migration doc` shape the prompt produces — never merely somewhere in the sentence.
+_COMMITTED_HEADING = _re.compile(r"\A#{1,6}\s*committed\b", _re.I)
+_ANY_HEADING = _re.compile(r"\A#{1,6}\s")
+_BULLET = _re.compile(r"\A\s*(?:[-*+]|\d+[.)])\s+(.*)\Z")
+#: What separates the owner from the job in an attributed bullet. Em dash, en dash, hyphen, colon —
+#: the four a model reaches for.
+_OWNER_SPLIT = _re.compile(r"\s+[—–-]\s+|:\s+")
+#: How many of one person's commitments from one meeting reach their list. Three, because the list
+#: holds ten in total and one meeting must not be able to fill it.
+COMMITMENTS_PER_MEETING = 3
+
+
+def committed_bullets(report: str) -> list:
+    """The bullets under the report's `Committed` heading, in order.
+
+    The section ends at the next heading of any level or at the `---` the prompt asks for above the
+    action points — both mean "the Committed section is over", and a reader that knew about only one
+    of them would swallow the action points as commitments."""
+    out, inside = [], False
+    for line in str(report or "").splitlines():
+        stripped = line.strip()
+        if _COMMITTED_HEADING.match(stripped):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if _ANY_HEADING.match(stripped) or stripped in ("---", "***", "___"):
+            break
+        m = _BULLET.match(line)
+        if m and m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def _who(address: str, name: str) -> list:
+    """The spellings that mean this person, longest first.
+
+    The display name the invite carried, its first word, the address, and the address's local part
+    with its dots and dashes opened out — those are what a model writes into an attribution. Longest
+    first, so `Ben Smith` is not matched as `Ben` when both would match. Nothing shorter than three
+    characters, because an initial is not an attribution."""
+    forms = set()
+    a = str(address or "").strip().lower()
+    if a:
+        forms.add(a)
+        local = a.split("@")[0]
+        if local:
+            forms.add(local)
+            head = _re.split(r"[._-]", local)[0]
+            forms.add(head)
+    n = str(name or "").strip().lower()
+    if n:
+        forms.add(n)
+        words = n.split()
+        if words:
+            forms.add(words[0])
+    return sorted((f for f in forms if len(f) > 2), key=len, reverse=True)
+
+
+def commitments_for(report: str, address: str, name: str = "") -> list:
+    """What THIS person committed to in this report — the job, in the report's own words.
+
+    One entry per bullet whose owner is them, the owner prefix removed and the first letter raised,
+    capped at `COMMITMENTS_PER_MEETING`. The words are never rewritten: the chip says what the
+    report said, so a person who opens the meeting's page reads the same sentence they clicked."""
+    forms = _who(address, name)
+    if not forms:
+        return []
+    out = []
+    for bullet in committed_bullets(report):
+        text = bullet.replace("[[", "").replace("]]", "").strip()
+        parts = _OWNER_SPLIT.split(text, maxsplit=1)
+        owner = parts[0].strip().lower() if len(parts) > 1 else ""
+        job = parts[1].strip() if len(parts) > 1 else ""
+        if not owner:
+            # No separator: the bullet is this person's only if it OPENS with their name.
+            low = text.lower()
+            hit = next((f for f in forms if low.startswith(f)), "")
+            if not hit:
+                continue
+            job = text[len(hit):].lstrip(" ,;:-—–").strip()
+        elif not any(_re.search(rf"(?<![\w.@+-]){_re.escape(f)}(?![\w.@+-])", owner) for f in forms):
+            continue
+        if not job:
+            continue
+        out.append(job[0].upper() + job[1:])
+        if len(out) >= COMMITMENTS_PER_MEETING:
+            break
+    return out
+
+
+def propose_commitments(their_uid, address: str, name: str, report: str,
+                        title: str, meeting_id) -> int:
+    """File this person's commitments onto their short list. Returns how many were filed.
+
+    `source` is the MEETING, not the report: the store dedups on source + act, so the same
+    commitment seen again by a re-run of this step updates the row it already wrote — and a person
+    who dismissed it does not get it back the next time the reaction retries.
+
+    IT NEVER RAISES INTO THE DROP. `ag.propose` swallows its own failures, and this does not depend
+    on that: by the time it runs, the meeting's record is already written to this person's desk, and
+    a chip that did not appear must not turn a completed drop into a failed one."""
+    try:
+        acts = commitments_for(report, address, name)
+        for act in acts:
+            ag.propose(their_uid, source=f"meeting:{meeting_id}", act=act,
+                       source_label=title, by="post-meeting")
+        return len(acts)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        _common.swallowed("flows_defs.production.propose_commitments",
+                          "the short-list items were not filed", e, uid=str(their_uid))
+        return 0
 
 
 #: The folder every meeting's page lives in, on every desk — named once because the two functions
@@ -1995,15 +2126,20 @@ def build(reg: Registry, db) -> None:
         second share capability is minted). The organiser is not special: they get the same entity,
         with the link `email_minutes` already built for them.
 
-        PER PERSON, three effects and no others:
+        PER PERSON, four effects and no others:
           1. their platform user (`ensure_platform_user`) and their desk
              (`POST /api/workspace/init` AS THEM — the same seeding the click does). Nothing else
              is built: no chat, no session, no scaffolding.
           2. `kg/entities/meeting/<date>-<slug>.md` — the report, with the meeting's title, date,
              organiser and roster as frontmatter, and their own link at the foot.
           3. `kg/entities/meeting/index.md` gains one line, once.
-        Both writes go through `PUT /api/workspace/file`, which commits, so each lands in that
-        desk's history rather than as an untracked file.
+          4. ONE SHORT-LIST ITEM PER COMMITMENT THE REPORT NAMED FOR THEM (Vexa-ai/vexa#1614) —
+             `POST /api/proposals`, so their next empty chat offers the job in one click. Plain
+             text matching over the report's own `Committed` section (`commitments_for`), no model,
+             and never raising: see the call site.
+        The two file writes go through `PUT /api/workspace/file`, which commits, so each lands in
+        that desk's history rather than as an untracked file; the short list is a queue, not a fact
+        about the workspace, and is git-excluded on the far side.
 
         IT IS ENTITY-FREE, AND THAT IS AN ECONOMIC BOUND, NOT AN OVERSIGHT (founder, decision 22
         addendum). No person entity, no company entity, no decision entity, no README rewrite, and
@@ -2034,7 +2170,7 @@ def build(reg: Registry, db) -> None:
         write above is safe to repeat.
 
         Prior: process_meeting{report}, email_attendees{drops}, email_minutes{link}
-        Effect: N desk writes · Result: {dropped, to, failed, entity}."""
+        Effect: N desk writes · Result: {dropped, to, failed, entity, proposed}."""
         pm = ctx.prior.get("process_meeting") or {}
         report = _readable(pm.get("report") or "").strip()
         if not report:
@@ -2095,6 +2231,11 @@ def build(reg: Registry, db) -> None:
                             meeting_id=str(mid or ""), native=native)
         done = list(ctx.scratch.setdefault("dropped", []))
         failed = list(ctx.scratch.setdefault("drop_failed", []))
+        # WHO EACH ADDRESS IS, for the commitment read below — the invite's own names, lower-cased
+        # on the address so the lookup matches the roster this step already lower-cases.
+        names = {str(k).strip().lower(): str(v or "")
+                 for k, v in (ctx.refs.get("participant_names") or {}).items()}
+        proposed = int(ctx.scratch.get("proposed") or 0)
         for d in room:
             a = str((d or {}).get("to") or "").strip()
             if not a or a in done:
@@ -2111,6 +2252,12 @@ def build(reg: Registry, db) -> None:
                     report=report)
                 _write_if_changed(their_uid, index_path, _index_entry(
                     ws_file(their_uid, index_path), title, filename, day))
+                # AND WHAT THEY OWE, ONTO THEIR SHORT LIST (Vexa-ai/vexa#1614). The report is the
+                # first place an agent sees a job for this person; the empty chat is where they
+                # meet it. Never raises and never counts against the drop: a chip that did not
+                # appear must not cost somebody the meeting's record.
+                proposed += propose_commitments(their_uid, a, names.get(a.lower(), ""),
+                                                report, title, mid)
                 done.append(a)
                 failed = [f for f in failed if not f.startswith(a + ":")]
             except Exception as e:  # noqa: BLE001 — one person never costs the rest theirs
@@ -2118,10 +2265,11 @@ def build(reg: Registry, db) -> None:
                 failed.append(f"{a}: {type(e).__name__}: {e}"[:240])
             ctx.scratch["dropped"] = done
             ctx.scratch["drop_failed"] = failed
+            ctx.scratch["proposed"] = proposed
             ctx.checkpoint()      # same shape as the fan-out above: N round trips, one lease
         if done:
             return Done({"dropped": len(done), "to": done, "failed": failed,
-                         "entity": entity_path, "meeting_id": mid,
+                         "entity": entity_path, "meeting_id": mid, "proposed": proposed,
                          # every copy is these bytes plus that person's own link
                          "bytes": len(body)})
         raise StepError(

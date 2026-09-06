@@ -44,6 +44,7 @@ import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
+import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
@@ -184,6 +185,25 @@ export function MinutesShell() {
   // chip (`proposals.needsSetup` fails closed).
   const [desk, setDesk] = useState<DeskFacts | null>(null);
   useEffect(() => { void readDeskFacts().then(setDesk).catch(() => undefined); }, []);
+  // THE DESK'S SHORT LIST — the jobs other agents filed for this person (Vexa-ai/vexa#1614). One
+  // plain read, on mount: `GET /api/proposals` is a file behind an identity check, not a turn, so
+  // the row costs nothing to show and never asks a model what to offer. An empty answer (no desk, a
+  // backend that did not reply) degrades to exactly the row this surface had before the store
+  // existed — `listProposals` never throws, deliberately.
+  const [deskItems, setDeskItems] = useState<DeskProposal[]>([]);
+  useEffect(() => { void listProposals().then(setDeskItems); }, []);
+  // Can this deployment CREATE a Google Meet? It decides which of the two standing acts is offered
+  // — the Meet itself, or "connect Google" said plainly (`app/api/googleMeet.ts` names what is
+  // missing). False until the config answers, so the honest branch is the one that flickers in.
+  const [googleMeet, setGoogleMeet] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void fetch("/api/config", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live) setGoogleMeet(!!(d?.google as { meet?: boolean } | undefined)?.meet); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, []);
   // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
   // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
   const [email, setEmail] = useState<string | null>(null);
@@ -539,6 +559,13 @@ export function MinutesShell() {
     const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? draftRef.current ?? null;
     const eff = applyProposal(p, current, meetings);
     if (!eff) return;
+    // A JOB LEAVES THE LIST WHEN ITS ACT RUNS (#1614). Locally first, so the row cannot re-offer it
+    // while the close is in flight, and the close itself is fire-and-forget: a failed one costs a
+    // chip that comes back on the next load, never a click that did nothing.
+    if (p.itemId) {
+      setDeskItems((prev) => prev.filter((i) => i.id !== p.itemId));
+      void resolveProposal(p.itemId, "ran");
+    }
     // The offer is spent the moment it is taken. A kick is hidden AND settle-delayed, so without
     // this the row would sit there for another 1.2 seconds, live, offering to do the same thing.
     setSpent(sel.chatId);
@@ -562,9 +589,19 @@ export function MinutesShell() {
     if (eff.kick) fireKick(eff.chat.id, eff.kick, eff.say);
   };
 
-  /** Up to three chips, recomputed from the two lists already in hand plus one marker. Pure, so
-   *  the row is decided in the render that draws it — no fetch, no model call, no effect. */
-  const chips = useMemo(() => proposals(meetings, allChats, desk, Date.now(), email), [meetings, allChats, desk, email]);
+  /** Up to ten chips, recomputed from the two lists already in hand, the desk's own facts, its short
+   *  list and one capability flag. Pure, so the row is decided in the render that draws it — no model
+   *  call and no effect; the one fetch this needs (`listProposals`) is a plain file read done once. */
+  const chips = useMemo(
+    () => proposals(meetings, allChats, desk, Date.now(), email, deskItems, googleMeet),
+    [meetings, allChats, desk, email, deskItems, googleMeet]);
+  /** THE PERSON SAYING NO. It closes the row on the server and drops it here, and — unlike a pick —
+   *  it does NOT spend the offer: the rest of the list is still worth having. */
+  const dismissProposal = (p: Proposal) => {
+    if (!p.itemId) return;
+    setDeskItems((prev) => prev.filter((i) => i.id !== p.itemId));
+    void resolveProposal(p.itemId, "dismissed");
+  };
   /** THE STANDING ROW IS GONE (Vexa-ai/vexa#1600). #1586 put "Open transcript" · "Open note" above
    *  the composer of every meeting chat, because `×` on the transcript tab had left the founder with
    *  no way back to it. Shown that row, he ruled on the cause instead: *"just keep a tab that can't
@@ -1378,7 +1415,8 @@ export function MinutesShell() {
             onDismiss={() => setScaffoldRefusal(null)} />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
+          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips}
+            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
         </div>
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that

@@ -1,25 +1,37 @@
-/** PROPOSALS — what an empty chat offers, derived from state the client already holds.
+/** PROPOSALS — what an empty chat offers: the person's SHORT LIST.
+ *
+ *  Founder, 2026-09-06 (Vexa-ai/vexa#1614), on the new-chat empty state:
+ *
+ *      *"let's see what we want to have here: create ad hoc google meet meeting; whatever, that is
+ *      a short list that is updated by other agents when they see something as JTBD, can have up to
+ *      10 items"*
  *
  *  A chat with nothing in it is a blank page, and a blank page asks the reader to invent the first
- *  move. These chips make it instead: up to three, read straight off the meetings list, the chat
- *  list and one workspace marker. **No model call and no fetch of its own** — `proposals()` is a
- *  pure function over data the shell has in hand, so the row is decided in the same render that
- *  draws it and can be unit-tested without a browser, a backend or a clock.
+ *  move. The row makes it instead, from three different KINDS of truth:
  *
- *  The rules are a PRIORITY ORDER, not a menu: what is happening right now beats what is about to,
- *  which beats what just happened, which beats the pile nobody has read. The top three win. If
- *  fewer than three fire the row is padded with ONE standing suggestion, because an empty row is
- *  the blank page again.
+ *  1. **Derived** — what is true of this account right now, read straight off the meetings list, the
+ *     chat list and the server's answer about this desk. Pure, no fetch, no clock of its own.
+ *  2. **Written by other agents** — the desk's short list (`.vexa/proposals.json`, via
+ *     `surfaces/proposalsApi`): a job an agent SAW while doing something else and filed with its
+ *     source. Newest first, and rendered from state — the fetch is one plain file read, never a turn.
+ *  3. **Standing** — always there, true of everybody: create a Meet, paste a meeting link. They are
+ *     appended LAST and are never crowded out by the cap, because "always there" is what standing
+ *     means.
+ *
+ *  The derived rules are a PRIORITY ORDER, not a menu: what is happening right now beats what is
+ *  about to, which beats what just happened, which beats the pile nobody has read. Ten, not three
+ *  (#1614), and the cap is applied to 1 + 2 so that 3 always fits.
  *
  *  Every chip carries the whole of its own behaviour: which meeting to open (`meetingId`) and the
  *  one line to say on arrival (`kick`). The shell reads those; it never re-derives them. */
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
+import type { DeskProposal } from "../surfaces/proposalsApi";
 import type { DeskFacts } from "../surfaces/workspaceApi";
 import { isPlaceholderLabel, meetingTitle, meetingWhen, railRows, visibleRows, type Chat } from "./chats";
 
 /** What a chip DOES, which is also what the shell switches on. */
-export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup";
+export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup" | "jtbd" | "meet" | "link";
 
 export type Proposal = {
   id: string;           // stable across renders — the React key, and what a test names
@@ -31,7 +43,13 @@ export type Proposal = {
                         // so the turn renders as their message instead of arriving hidden
   title?: string;       // the name this chat takes if nobody has named it yet (see isUnlabeled)
   count?: number;       // review — how many rows the rail is hiding
+  source?: string;      // jtbd — WHERE the job was seen, in human words. Rendered beside the act,
+                        // because an item somebody else wrote has to say what it came from.
+  itemId?: string;      // jtbd — the store row this chip is, so a click or a dismiss can close it
 };
+
+/** The whole row, at most this many. The founder's number: *"can have up to 10 items"* (#1614). */
+export const PROPOSALS_MAX = 10;
 
 /** "Starting soon" is two hours. Long enough that a chip appears before you go looking, short
  *  enough that it is about the next thing rather than the day. */
@@ -73,20 +91,94 @@ function startsAt(m: MeetingMock): number {
   return Number.isFinite(planned) ? planned : 0;
 }
 
+/** THE STANDING ACTS — always there, true of everybody (#1614: *"standing — always there"*).
+ *
+ *  `meet` HAS TWO BRANCHES AND ONLY ONE OF THEM EXISTS TODAY. The founder's shape: *"when a Google
+ *  account is connected it creates the Meet and sends the bot in one act; when not, the act is
+ *  'connect Google' first, said plainly"*. Nothing in this product can create a Meet yet — there is
+ *  no Google API client in the repository and the OAuth client is a sign-in provider with no
+ *  calendar scope (`app/api/googleMeet.ts` names the three missing pieces) — so `googleMeet` is
+ *  false everywhere and the connect branch is what ships. SAID PLAINLY is the whole requirement: the
+ *  chip does not offer to make a Meet and then explain that it cannot.
+ *
+ *  `link` is the act that already works: `request_meeting_bot` puts the bot in any meeting whose
+ *  link you hand it, so the chip opens that conversation rather than pretending to be a form. */
+export function standingProposals(googleMeet: boolean): Proposal[] {
+  const meet: Proposal = googleMeet
+    ? {
+        id: "meet", kind: "meet", label: "Create a Google Meet and put Vexa in it",
+        say: "Create an ad hoc Google Meet and put Vexa in it.",
+        kick: "Create an ad hoc Google Meet for me now and send the Vexa bot into it. Give me the "
+          + "link when it is in.",
+        title: "New meeting",
+      }
+    : {
+        id: "meet", kind: "meet", label: "Connect Google, so I can create meetings for you",
+        say: "Connect my Google account so you can create meetings for me.",
+        kick: "I want you to be able to create an ad hoc Google Meet and put Vexa in it. That needs "
+          + "a Google account connected first. Tell me what is missing and what I have to do.",
+        title: "Connect Google",
+      };
+  return [
+    meet,
+    {
+      id: "link", kind: "link", label: "Paste a meeting link",
+      say: "Put Vexa in a meeting — I'll paste the link.",
+      kick: "I want Vexa in a meeting. Ask me for the link, then send the bot in and tell me when "
+        + "it has been admitted.",
+      title: "Put Vexa in a meeting",
+    },
+  ];
+}
+
+/** One row of the desk's short list, as a chip.
+ *
+ *  THE ACT IS THE WRITER'S OWN WORDS, and it is what the person SAYS — `say` renders the turn as
+ *  their message rather than as machinery arriving from nowhere, the same rule the setup chip is
+ *  built on. The `kick` adds the one thing the act cannot carry and the agent needs: where it came
+ *  from, and the instruction to read before writing. `source` is rendered beside the act, because an
+ *  item somebody else put on your list has to say what it came from. */
+export function jtbdProposal(item: DeskProposal): Proposal {
+  const from = (item.source_label || "").trim();
+  return {
+    id: `jtbd:${item.id}`,
+    itemId: item.id,
+    kind: "jtbd",
+    label: item.act,
+    source: from,
+    say: item.act,
+    kick: `${item.act}\n\n(This came out of ${from || item.source}. Read what exists first, then `
+      + `help me do it.)`,
+    title: item.act.slice(0, 60),
+  };
+}
+
 /**
  *  1. a meeting running RIGHT NOW              → catch me up on it
  *  2. a meeting starting inside two hours      → prep me for it
  *  3. the newest held meeting nobody wrote in  → what came out of it
  *  4. rows the rail's filter is hiding         → review them (flip the chip, create nothing)
  *  5. a desk with nothing ever written in it   → set it up
+ *  6. the short list other agents wrote        → the job, newest first, with its source
+ *  …then the standing acts, which the cap never crowds out.
  *
  *  …and NOTHING is padded in behind them (F36). Every rule above reads live state; a chip that
  *  appeared only because the row had space left was a default, and defaults are what the founder
- *  ruled out. An empty row is the honest answer when nothing is true.
+ *  ruled out. What stands at the end stands for a different reason: #1614 asks for those two on
+ *  every empty chat, by name.
  *
  *  `desk` is the server's answer about this person's desk (`GET /api/workspace/desk`), `null` until
  *  it arrives. `needsSetup` below is the whole of rule 5 and says why it is not the `.scaffolded`
  *  probe this used to be. `email` is the signed-in address, and it only ever reaches rule 5's chip.
+ *  `items` is the desk's short list, already ordered by the store. `googleMeet` picks the standing
+ *  Meet act's branch.
+ *
+ *  ⚠ ON RULE 5 AND #1614. The founder's #1614 text says the setup chip *"goes (it belongs to the
+ *  arrival, #1613's third part)"*. #1613's third part landed first and kept the chip here with its
+ *  derivation repaired: `needsSetup` now reads the FILES, so the stale offer he actually met — over
+ *  a desk that had been running for forty minutes — cannot happen again. Both intents are kept: the
+ *  defect is fixed where #1613 fixed it, and this row is the short list #1614 asked for. Deleting
+ *  the chip outright is a founder call, not a merge decision — it is asked on the issue.
  */
 export function proposals(
   meetings: MeetingMock[],
@@ -94,6 +186,8 @@ export function proposals(
   desk: DeskFacts | null,
   now: number = Date.now(),
   email?: string | null,
+  items: DeskProposal[] = [],
+  googleMeet: boolean = false,
 ): Proposal[] {
   const out: Proposal[] = [];
 
@@ -140,7 +234,15 @@ export function proposals(
   // 5 — nothing has ever been written in this person's desk. The chip is their own first sentence.
   if (needsSetup(desk)) out.push(setupProposal(email));
 
-  return out.slice(0, 3);
+  // 6 — what other agents put on this desk. Newest first is the store's own order; nothing here
+  // re-sorts it, because `since` is the FIRST sighting and the server is the one that knows it.
+  for (const item of items) out.push(jtbdProposal(item));
+
+  // THE STANDING ACTS SURVIVE THE CAP. Everything above is what happens to be true today; these two
+  // are what this product is for, and a row that dropped them because a busy week filled it would
+  // be a product hiding its own front door on exactly the days somebody needs it.
+  const standing = standingProposals(googleMeet);
+  return [...out.slice(0, Math.max(0, PROPOSALS_MAX - standing.length)), ...standing];
 }
 
 /** MAY WE OFFER TO SET THIS PERSON UP? (Vexa-ai/vexa#1613.)

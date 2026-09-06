@@ -1,19 +1,22 @@
 /** The empty chat's proposal chips, tested at the ONE function that decides them.
  *
- *  `proposals()` is pure — meetings in, chats in, one workspace marker in, chips out — so every
- *  rule, the priority between them and the padding are decidable here without a browser, a backend
- *  or a real clock. That is the whole reason the rule lives in a function instead of in JSX.
+ *  `proposals()` is pure — meetings in, chats in, the desk's facts and its short list in, chips out
+ *  — so every rule, the priority between them and the cap are decidable here without a browser, a
+ *  backend or a real clock. That is the whole reason the rule lives in a function instead of in JSX.
  *
- *  Covered: each of the five rules alone · the priority order when they collide · the three-chip
- *  cap · the two ways a rule declines to fire (an unknown desk, a meeting already written
- *  about) · and, since 2026-09-02, that NOTHING is padded in behind them (F36 — the standing
- *  "Create a group for daily meetings" suggestion is deleted; a button is a scaffolded intent, not
- *  a default, and an empty row is the honest answer for an account with nothing to say about). */
+ *  Covered: each derived rule alone · the priority order when they collide · the TEN-chip cap
+ *  (Vexa-ai/vexa#1614: *"can have up to 10 items"*) · the two ways a rule declines to fire (an
+ *  unknown desk, a meeting already written about) · the items other agents wrote, with their
+ *  sources · the two STANDING acts, which the cap never crowds out and whose Meet half has a
+ *  "connect Google" branch because nothing here can create a Meet yet · and that NOTHING is padded
+ *  in behind the rules (F36 — the standing "Create a group for daily meetings" suggestion is
+ *  deleted; a button is a scaffolded intent, not a default). */
 import { describe, expect, it } from "vitest";
 import type { MeetingMock } from "../../surfaces/meetingModel";
+import type { DeskProposal } from "../../surfaces/proposalsApi";
 import type { DeskFacts } from "../../surfaces/workspaceApi";
 import type { Chat } from "../chats";
-import { applyProposal, isUnlabeled, KICK, needsSetup, PREP_WINDOW_MS, proposals, setupProposal } from "../proposals";
+import { applyProposal, isUnlabeled, jtbdProposal, KICK, needsSetup, PREP_WINDOW_MS, PROPOSALS_MAX, proposals, setupProposal, standingProposals } from "../proposals";
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../canvas/actions";
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);            // a fixed "now" — nothing here reads the clock
@@ -45,6 +48,16 @@ const FINISHED: DeskFacts = { state: "warm", scaffolded: true };   // a setup co
 const run = (m: MeetingMock[], c: Chat[], desk: DeskFacts | null = FINISHED) => proposals(m, c, desk, NOW);
 const labels = (ps: { label: string }[]) => ps.map((p) => p.label);
 const kinds = (ps: { kind: string }[]) => ps.map((p) => p.kind);
+/** THE TWO STANDING ACTS ARE ALWAYS AT THE END (#1614), so the rules above are read without them.
+ *  They get their own describe below; every other test here is about what this account makes true. */
+const STANDING_KINDS = ["meet", "link"];
+const derived = <T extends { kind: string }>(ps: T[]): T[] =>
+  ps.filter((p) => !STANDING_KINDS.includes(p.kind));
+
+/** One row of the desk's short list, as the store hands it over. */
+const item = (id: string, act: string, label = "Pilot sync"): DeskProposal =>
+  ({ id, source: `meeting:${id}`, source_label: label, act, since: "2026-09-01T09:00:00Z",
+     status: "open", by: "post-meeting" });
 
 describe("rule 1 — a meeting running right now", () => {
   it("offers a catch-up naming the meeting, bound to it, with the read-first kick", () => {
@@ -204,43 +217,124 @@ describe("rule 5 — the workspace has never been set up", () => {
 });
 
 describe("priority + the cap", () => {
-  it("the top three win, in rule order, when everything fires at once", () => {
-    const ps = run([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK);
-    expect(ps).toHaveLength(3);
-    expect(kinds(ps)).toEqual(["catch-up", "prep", "outcome"]);
+  it("the derived rules come first, in rule order, when everything fires at once", () => {
+    // ALL of them now that the row holds ten (#1614). Under the old three-chip cap `review` and the
+    // setup chip were cut here — which is exactly the thing a cap should not silently decide.
+    const ps = derived(run([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK));
+    expect(kinds(ps)).toEqual(["catch-up", "prep", "outcome", "review", "setup"]);
   });
 
   it("a rule that does not fire promotes the ones below it", () => {
-    const ps = run([LIVE, HELD], [touched("main"), untouched("a")], BLANK);
+    const ps = derived(run([LIVE, HELD], [touched("main"), untouched("a")], FINISHED));
     expect(kinds(ps)).toEqual(["catch-up", "outcome", "review"]);
   });
 
-  it("never more than three, whatever the state", () => {
-    expect(run([LIVE, SOON, HELD], [untouched("a"), untouched("b")], BLANK)).toHaveLength(3);
+  it("never more than ten, whatever the state", () => {
+    const desk = Array.from({ length: 12 }, (_, n) => item(`i${n}`, `Job ${n}`));
+    const ps = proposals([LIVE, SOON, HELD], [untouched("a"), untouched("b")], BLANK, NOW, null, desk);
+    expect(ps).toHaveLength(PROPOSALS_MAX);
+  });
+
+  it("the standing acts SURVIVE the cap — that is what standing means", () => {
+    const desk = Array.from({ length: 30 }, (_, n) => item(`i${n}`, `Job ${n}`));
+    const ps = proposals([LIVE, SOON, HELD], [untouched("a")], BLANK, NOW, null, desk);
+    expect(ps).toHaveLength(PROPOSALS_MAX);
+    expect(kinds(ps).slice(-2)).toEqual(["meet", "link"]);
   });
 
   it("every chip carries a distinct key", () => {
-    const ps = run([LIVE, SOON, HELD], [touched("main")], BLANK);
+    const desk = [item("a", "The migration doc"), item("b", "Brief the board")];
+    const ps = proposals([LIVE, SOON, HELD], [touched("main")], BLANK, NOW, null, desk);
     expect(new Set(ps.map((p) => p.id)).size).toBe(ps.length);
   });
 });
 
+describe("rule 6 — the short list other agents wrote", () => {
+  const DESK = [item("a", "The migration doc, by Friday"), item("b", "Brief the board", "TSC")];
+  const withDesk = (d: DeskProposal[]) => proposals([], [touched("main")], FINISHED, NOW, null, d);
+
+  it("offers each item as its own chip, in the order the store gave them", () => {
+    expect(labels(derived(withDesk(DESK)))).toEqual(["The migration doc, by Friday", "Brief the board"]);
+  });
+
+  it("a chip says WHERE the job came from — an item somebody else wrote has to", () => {
+    const [p] = derived(withDesk(DESK));
+    expect(p.kind).toBe("jtbd");
+    expect(p.source).toBe("Pilot sync");
+    expect(p.itemId).toBe("a");                        // …and names the row a click or a x closes
+  });
+
+  it("the act is what the person SAYS, and the kick carries the source and read-first", () => {
+    const p = jtbdProposal(item("a", "The migration doc"));
+    expect(p.say).toBe("The migration doc");           // shown as their own words, not as machinery
+    expect(p.kick).toContain("The migration doc");
+    expect(p.kick).toContain("Pilot sync");
+    expect(p.kick).toContain("Read what exists first");
+  });
+
+  it("an item whose source has no name still says where it came from", () => {
+    const p = jtbdProposal({ id: "z", source: "page:kg/entities/company/oenb.md", act: "Find a source" });
+    expect(p.kick).toContain("page:kg/entities/company/oenb.md");
+  });
+
+  it("an empty list changes nothing — the row is what it was before the store existed", () => {
+    expect(derived(withDesk([]))).toEqual([]);
+  });
+});
+
+describe("the standing acts — always there", () => {
+  it("both of them close every row, whatever this account looks like", () => {
+    for (const c of [[], [touched("main")], [untouched("a"), untouched("b")]]) {
+      for (const m of [[], [LIVE], [LIVE, SOON, HELD]]) {
+        expect(kinds(proposals(m, c, null, NOW)).slice(-2)).toEqual(["meet", "link"]);
+      }
+    }
+  });
+
+  it("with Google connected the act creates the Meet and sends the bot in one go", () => {
+    const [meet] = standingProposals(true);
+    expect(meet.label).toBe("Create a Google Meet and put Vexa in it");
+    expect(meet.kick).toContain("send the Vexa bot into it");
+  });
+
+  it("without it the act is CONNECT GOOGLE, said plainly — never a Meet it cannot make", () => {
+    const [meet] = standingProposals(false);
+    expect(meet.label).toBe("Connect Google, so I can create meetings for you");
+    expect(meet.label).not.toContain("Create a Google Meet");
+    expect(meet.kick).toContain("Tell me what is missing");
+  });
+
+  it("the deployment default is the honest branch — nothing here can create a Meet yet", () => {
+    expect(labels(proposals([], [], null, NOW))).toContain("Connect Google, so I can create meetings for you");
+  });
+
+  it("pasting a link is the act that already works", () => {
+    const link = standingProposals(false)[1];
+    expect(link.label).toBe("Paste a meeting link");
+    expect(link.say).toContain("I'll paste the link");
+  });
+});
+
 describe("F36 — nothing is padded in behind the rules", () => {
-  it("an account with nothing to say about is offered NOTHING", () => {
-    // It used to be offered "Create a group for daily meetings" — a standing suggestion that
-    // appeared because the row looked short. The founder met it under a chat he had never created.
-    expect(run([], [touched("main")])).toEqual([]);
+  it("an account with nothing to say about is offered nothing but the standing acts", () => {
+    // It used to be offered "Create a group for daily meetings" — a suggestion that appeared
+    // because the row looked short. The founder met it under a chat he had never created. What
+    // stands here now stands for a different reason: #1614 asks for those two by name.
+    expect(derived(run([], [touched("main")]))).toEqual([]);
   });
 
   it("two rules firing stay two — the row is not filled up", () => {
-    expect(kinds(run([LIVE], [touched("main"), untouched("a")]))).toEqual(["catch-up", "review"]);
+    expect(kinds(derived(run([LIVE], [touched("main"), untouched("a")])))).toEqual(["catch-up", "review"]);
   });
 
-  it("every chip that IS offered comes from live state, never from a constant", () => {
-    // the whole offered set, over a rich account: each kind is produced by a rule that read
-    // something real (a meeting's phase, the rail's hidden count, the desk's own state).
-    const ps = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW, "ada@example.com");
-    for (const p of ps) expect(["catch-up", "prep", "outcome", "review", "setup"]).toContain(p.kind);
+  it("every chip that IS offered comes from live state or is standing, never from a pad", () => {
+    // the whole offered set, over a rich account: each derived kind is produced by a rule that read
+    // something real (a meeting's phase, the rail's hidden count, the desk's own state, the store).
+    const ps = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW,
+                         "ada@example.com", [item("a", "The migration doc")]);
+    for (const p of ps) {
+      expect(["catch-up", "prep", "outcome", "review", "setup", "jtbd", "meet", "link"]).toContain(p.kind);
+    }
   });
 
   it("the deleted suggestion is not reachable under any state", () => {
@@ -343,8 +437,18 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
     expect(applyProposal(p, null, [], NOW)).toEqual({ act: "create", label: "Workspace setup", kick: p.kick, say: p.say });
   });
 
+  it("an item another agent wrote fires IN this chat, as the person's own words", () => {
+    const e = applyProposal(jtbdProposal(item("a", "The migration doc")), NEW, [], NOW);
+    expect(e?.act).toBe("run");
+    if (e?.act !== "run") return;
+    expect(e.chat.id).toBe(NEW.id);
+    expect(e.say).toBe("The migration doc");
+    expect(e.kick).toContain("Pilot sync");
+  });
+
   it("NOTHING a live row can offer ever appends a chat", () => {
-    const offered = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW, "ada@example.com");
+    const offered = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW,
+                              "ada@example.com", [item("a", "The migration doc")]);
     expect(offered.length).toBeGreaterThan(0);
     for (const p of [...offered, setupProposal("ada@example.com")]) {
       const e = applyProposal(p, NEW, [LIVE, SOON, HELD], NOW);

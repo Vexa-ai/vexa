@@ -100,6 +100,7 @@ from control_plane.routers import admin as routers_admin
 from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
 from control_plane.routers import friction as routers_friction
+from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
     MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
@@ -1018,7 +1019,7 @@ def create_app(
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
         settings=settings, stream_reader=stream_reader, subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_workspaces):
+    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces):
         app.include_router(_r.build(**_deps))
 
     return app

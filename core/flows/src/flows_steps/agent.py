@@ -197,6 +197,33 @@ def mint_meeting_note(uid: str, meeting_id, path: str = "") -> str:
     return str(out.get("path") or "")
 
 
+def propose(uid: str, *, source: str, act: str, source_label: str = "", by: str = "") -> dict:
+    """APPEND ONE JOB to this person's short list — the empty chat's proposals (Vexa-ai/vexa#1614).
+
+    Founder, 2026-09-06: the empty chat shows *"a short list that is updated by other agents when
+    they see something as JTBD, can have up to 10 items"*. This is the door a flow writes one
+    through. `source` + `act` are together the identity, so a re-run of the same step over the same
+    meeting updates the row it already wrote instead of adding a second — the far side owns that,
+    and the cap, and the ordering.
+
+    DEGRADES, NEVER RAISES, exactly like `mint_meeting_note` and for the same reason: every caller
+    is a step whose real work is something else, and a chip that did not appear is not worth losing
+    a meeting's record over. The swallow is logged, so it is not silent."""
+    body = {"source": str(source), "act": str(act),
+            "source_label": str(source_label or ""), "by": str(by or "")}
+    try:
+        code, out = http("POST", f"{agent_door()}/api/proposals", {"X-User-Id": str(uid)}, body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.propose", "the proposal was not filed", e,
+                  uid=uid, source=str(source))
+        return {}
+    if not _ok(code) or not isinstance(out, dict):
+        swallowed("flows_steps.agent.propose", "the proposal was not filed", None,
+                  uid=uid, source=str(source), http=code)
+        return {}
+    return out
+
+
 def head_sha(uid: str) -> str:
     """The current HEAD commit of ONE subject's desk, or "" if it has no repo (or cannot be read).
 
