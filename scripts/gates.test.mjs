@@ -12,7 +12,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, mkdirSync, mkdtempSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -123,8 +124,10 @@ test("a test-only create_async_engine does not invent a service in the budget", 
 // is green (a red there would invalidate the fixture below it).
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-function runGate(name) {
-  try { return { green: true, out: execFileSync("node", ["scripts/gates.mjs", name], { cwd: ROOT, encoding: "utf8" }) }; }
+// `cwd` IS the gate's root — gates.mjs takes `ROOT = process.cwd()` — so a caller can point a gate
+// at a fixture tree instead of at the checkout. The script path is absolute for that reason.
+function runGate(name, cwd = ROOT) {
+  try { return { green: true, out: execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), name], { cwd, encoding: "utf8" }) }; }
   catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
 }
 // Temporarily replace `find`→`repl` in a tracked file, run fn, always restore the exact original bytes.
@@ -276,9 +279,25 @@ test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caug
 // red package stopped the run and every later package was never even invoked. This is the
 // mechanism behind #1434's "CI never executed core/flows, lite or the rig": #1473 fixed the
 // package that happened to be red, not the loop that stopped after it. Real uv-backed Python
-// packages are planted under scripts/ — walkDirs() reads the whole tree from ROOT, so a package
-// planted here is a real input, not a stub — and the real gate runs as a subprocess, same
-// plant-and-run discipline as the fixtures above.
+// packages are planted, a real `uv run pytest` decides each one, and the real gate runs as a
+// subprocess — same plant-and-run discipline as the fixtures above.
+//
+// THE POPULATION IS THE FIXTURE TREE, NOT THE CHECKOUT (Vexa-ai/vexa#1625). `gates.mjs` takes its
+// root from `process.cwd()`, so these rows run the gate over a temp tree holding only the planted
+// packages. Two reasons, and neither is about making the test easier:
+//
+//   · COST. Over the checkout the gate is 16 packages and ~5 min a run (measured in the `python`
+//     job, run 34047177138); these five rows would be ~25 min of the `static` leg, which exists to
+//     be the fast one, re-proving what the `python` job proves once and authoritatively. It would
+//     also drag core/runtime's docker-socket fixture into a job that has no pre-pulled image.
+//   · MEANING. The defect under test is the LOOP — collect every package, name every red one — and
+//     a fixture tree states that population exactly, instead of leaving each assertion at the mercy
+//     of 16 unrelated packages' health. The vacuity control moves with it: it now asserts the
+//     fixture harness is green when nothing is planted red, which is the claim the rows below
+//     actually depend on.
+//
+// Planting outside the checkout also closes the hazard `withPlanted` above documents at length: a
+// crashed run cannot leave a stray package dir inside the repo for a sibling gate to trip over.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
 const PY_PYPROJECT = (name) => `[project]
@@ -296,57 +315,58 @@ testpaths = ["tests"]
 const PY_TEST_PASS = "def test_zz_planted():\n    assert True\n";
 const PY_TEST_FAIL = "def test_zz_planted():\n    assert False, \"planted failure\"\n";
 
-// Plants N fixture Python packages (each { dir, pass }), runs fn, then removes every planted
-// directory whole — each dir is fully owned by this helper (created here, nothing pre-existing
-// under it), so a plain recursive rm cannot eat a sibling's files the way a partial-path prune
-// could.
+// Plants N fixture Python packages (each { dir, pass }) in a fresh temp tree, runs the gate with
+// that tree as its root, then removes the tree whole — it is owned entirely by this helper
+// (created here, nothing pre-existing under it), so a recursive rm cannot eat anything else.
 function withPlantedPyPkgs(specs, fn) {
-  for (const { dir, pass } of specs) {
-    const abs = join(ROOT, dir);
-    mkdirSync(join(abs, "tests"), { recursive: true });
-    writeFileSync(join(abs, "pyproject.toml"), PY_PYPROJECT(dir.replace(/[^a-z0-9]+/gi, "-")));
-    writeFileSync(join(abs, "tests", "test_zz_planted.py"), pass ? PY_TEST_PASS : PY_TEST_FAIL);
-  }
+  const tree = mkdtempSync(join(tmpdir(), "vexa-gatepy-"));
   try {
-    return fn();
+    for (const { dir, pass } of specs) {
+      const abs = join(tree, dir);
+      mkdirSync(join(abs, "tests"), { recursive: true });
+      writeFileSync(join(abs, "pyproject.toml"), PY_PYPROJECT(dir.replace(/[^a-z0-9]+/gi, "-")));
+      writeFileSync(join(abs, "tests", "test_zz_planted.py"), pass ? PY_TEST_PASS : PY_TEST_FAIL);
+    }
+    return fn(tree);
   } finally {
-    for (const { dir } of specs) rmSync(join(ROOT, dir), { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
   }
 }
 
-const PKG_A = "scripts/zz-gatepy-fixture-a";
-const PKG_B = "scripts/zz-gatepy-fixture-b";
+const PKG_A = "zz-gatepy-fixture-a";
+const PKG_B = "zz-gatepy-fixture-b";
+const rxPkg = (p) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
-test("gate:python vacuity: the committed tree is green (a red here invalidates every row below)", () => {
-  const r = runGate("python");
-  assert.equal(r.green, true, `the clean tree already reds — these fixtures prove nothing:\n${r.out}`);
+test("gate:python vacuity: a fixture tree of passing packages is green (a red here invalidates every row below)", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }], (tree) => runGate("python", tree));
+  assert.equal(r.green, true, `the harness itself reds — uv/pytest cannot run here, so the fixtures below prove nothing:\n${r.out}`);
 });
 
 test("gate:python RED (#209): a single failing package still fails the gate", () => {
-  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }], () => runGate("python"));
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }], (tree) => runGate("python", tree));
   assert.equal(r.green, false, `a planted failing package did not red the gate:\n${r.out}`);
-  assert.match(r.out, new RegExp(PKG_A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(r.out, rxPkg(PKG_A));
 });
 
 test("gate:python RED (#209): two failing packages are BOTH named in the one failure — the loop must not stop at the first", () => {
-  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }, { dir: PKG_B, pass: false }], () => runGate("python"));
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }, { dir: PKG_B, pass: false }], (tree) => runGate("python", tree));
   assert.equal(r.green, false, `two planted failing packages did not red the gate:\n${r.out}`);
   // both packages must appear — a `return` inside the loop would report only PKG_A (the first
   // walked) and PKG_B would never even be run, let alone named.
-  assert.match(r.out, new RegExp(PKG_A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `PKG_A missing from output:\n${r.out}`);
-  assert.match(r.out, new RegExp(PKG_B.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `PKG_B missing — the gate stopped after the first red package:\n${r.out}`);
+  assert.match(r.out, rxPkg(PKG_A), `PKG_A missing from output:\n${r.out}`);
+  assert.match(r.out, rxPkg(PKG_B), `PKG_B missing — the gate stopped after the first red package:\n${r.out}`);
   // the failure names how many of the population went red, not just that "a" package did
   assert.match(r.out, /2\/\d+ package\(s\) failed pytest/, `no failing-package count in the output:\n${r.out}`);
 });
 
 test("gate:python: one red package alongside a green one still runs (and names) both — green does not mask red, red does not skip green", () => {
-  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: false }], () => runGate("python"));
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: false }], (tree) => runGate("python", tree));
   assert.equal(r.green, false, `a genuinely red package among green ones did not red the gate:\n${r.out}`);
-  assert.match(r.out, new RegExp(PKG_B.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `the red package (PKG_B) is not named:\n${r.out}`);
-  assert.doesNotMatch(r.out, new RegExp(PKG_A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `the green package (PKG_A) was wrongly named as a failure:\n${r.out}`);
+  assert.match(r.out, rxPkg(PKG_B), `the red package (PKG_B) is not named:\n${r.out}`);
+  assert.doesNotMatch(r.out, rxPkg(PKG_A), `the green package (PKG_A) was wrongly named as a failure:\n${r.out}`);
 });
 
 test("gate:python GREEN: multiple passing planted packages do not red the gate", () => {
-  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: true }], () => runGate("python"));
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: true }], (tree) => runGate("python", tree));
   assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
 });

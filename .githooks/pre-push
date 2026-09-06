@@ -2,7 +2,17 @@
 # pre-push — the gate suite is the bar (ARCHITECTURE.md P9): no push that isn't
 # gate-green. Zero-dependency by design (P17) — a committed hook activated via
 # `core.hooksPath` (the root package.json `prepare` script wires it on install),
-# not husky. Emergency bypass: `git push --no-verify` (then fix it).
+# not husky.
+#
+# This hook does not print a bypass instruction, and that is deliberate
+# (Vexa-ai/vexa#1625) — scripts/pre-push-hook.test.mjs holds the whole file to it. Every
+# failure used to end by naming git's own hook-skipping flag, which three workers hit on
+# 2026-09-06 for a reason that was not a code defect at all: `uv` was installed in
+# ~/.local/bin and the hook's PATH did not contain it, so gate:contract-conformance died
+# on `uv: not found` and the hook's own message taught the move that also skips a REAL
+# conformance break. An environment gap and a broken contract produced the identical
+# instruction. So: resolve the tools first (below), and when one is genuinely absent say
+# how to install it.
 root="$(git rev-parse --show-toplevel)" || exit 1
 cd "$root" || exit 1
 # Git exports GIT_DIR (and sometimes GIT_WORK_TREE/GIT_INDEX_FILE) into hook processes. Anything
@@ -12,16 +22,65 @@ cd "$root" || exit 1
 # junk commits). The library scrubs its own git envs (core/agent/shared/gitenv.py); this unset is
 # the belt-and-braces hook layer.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_ALTERNATE_OBJECT_DIRECTORIES
+
+# ── the tools the gates shell out to ────────────────────────────────────────────────── (#1625)
+# A hook does not run under the user's login shell: it inherits whatever PATH the caller had, and
+# for a GUI git client, an editor's built-in terminal or an agent shell that is often little more
+# than /usr/bin:/bin. Every user-scoped install therefore goes missing — astral's uv installer
+# writes ~/.local/bin, `cargo install` writes ~/.cargo/bin, pnpm writes ~/Library/pnpm or
+# ~/.local/share/pnpm — while the same command works perfectly in the terminal one window over.
+# Look there BEFORE concluding a tool does not exist. Appended, never prepended: a PATH the user
+# arranged on purpose keeps winning.
+#
+# Every entry is under $HOME on purpose. A system dir absent from PATH is a broken machine and not
+# ours to repair; a user-scoped install dir is absent from a hook's PATH BY DEFAULT, which is the
+# whole defect. It is also what makes this block testable: with $HOME pointed at a fixture, the
+# search is fully determined, so scripts/pre-push-hook.test.mjs can prove the resolution instead of
+# asserting against whatever the test machine happens to have installed.
+# ── HOOK-TOOL-RESOLUTION-START (extracted verbatim by scripts/pre-push-hook.test.mjs) ──
+for d in "$HOME/.local/bin" "$HOME/.cargo/bin" "$HOME/.local/share/pnpm" "$HOME/Library/pnpm" \
+         "$HOME/.local/share/uv/tools/bin" "$HOME/.bun/bin"; do
+  case ":$PATH:" in
+    *":$d:"*) ;;
+    *) [ -d "$d" ] && PATH="$PATH:$d" ;;
+  esac
+done
+export PATH
+# ── HOOK-TOOL-RESOLUTION-END ──
+# The fast set below shells out to exactly these three. Naming what is missing, and how to get it,
+# is the whole difference between "this environment is not set up" and "your change is broken".
+HOOK_TOOLS="node pnpm uv"
+missing=""
+for t in $HOOK_TOOLS; do
+  command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+if [ -n "$missing" ]; then
+  echo "✗ pre-push: the static gates shell out to tools this environment cannot resolve:$missing"
+  for t in $missing; do
+    case "$t" in
+      uv)   echo "  install uv (https://docs.astral.sh/uv/getting-started/installation/):" ;
+            echo "      curl -LsSf https://astral.sh/uv/install.sh | sh" ;;
+      pnpm) echo "  install pnpm (https://pnpm.io/installation):" ;
+            echo "      corepack enable pnpm" ;;
+      node) echo "  install node 22+ (https://nodejs.org/en/download)" ;;
+    esac
+  done
+  echo "  (already installed? this hook's PATH is $PATH — add the install dir to it and push again.)"
+  exit 1
+fi
+
 # FAST STATIC SUBSET only (wall-clock law): CI owns the full suite — the local hook exists to
 # catch cheap structural mistakes before they burn a CI round-trip, not to re-prove what CI
 # will prove authoritatively on the same sha. The stack/python/build classes cost 5-10 min per
 # push and once blocked a release tag on a LOCAL stale-docker flake. Full suite on demand:
-# `pnpm gates`. Bypass: `git push --no-verify`.
+# `pnpm gates`.
 FAST_GATES="readme dataflow isolation isolation-py exports graph graph-py schema contract-version config-contract domain-doors fact-parity licenses execution-env test-isolation contract-conformance"
 echo "▶ pre-push → static gates ($(echo $FAST_GATES | wc -w | tr -d ' ') fast checks; CI runs the full suite)…"
 for g in $FAST_GATES; do
   node scripts/gates.mjs "$g" || {
-    echo "✗ pre-push: gate:$g FAILED — push aborted (fix it, or bypass with: git push --no-verify)."
+    echo "✗ pre-push: gate:$g FAILED — push aborted."
+    echo "  re-run just this one: node scripts/gates.mjs $g"
+    echo "  full suite:           pnpm gates"
     exit 1
   }
 done

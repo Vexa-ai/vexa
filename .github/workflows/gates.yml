@@ -28,6 +28,15 @@ jobs:
       - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
+      # The `gate script tests` step below drives gate:python over its own planted fixture packages,
+      # and that gate shells out to `uv run pytest`. With no uv on this job every planted package
+      # died on `/bin/sh: 1: uv: not found` — the vacuity control included, so the four rows that
+      # give the F209 loop fix its meaning proved nothing and said so, on every run this branch has
+      # ever had (Vexa-ai/vexa#1625). A stub uv would be worse than none: those rows exist to prove
+      # the gate tells a passing pytest from a failing one, the one distinction a stub cannot make.
+      # Same action and pin as the `python` job; seconds here, because the fixture tree is two
+      # one-test packages rather than the checkout's sixteen.
+      - uses: astral-sh/setup-uv@v5
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
       # each gate its own step so a failure is unambiguous

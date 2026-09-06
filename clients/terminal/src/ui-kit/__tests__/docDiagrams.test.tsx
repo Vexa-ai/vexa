@@ -38,12 +38,22 @@ vi.mock("../../surfaces/workspaceApi", () => ({
   listSharedMemberships: vi.fn(async () => []),
 }));
 
-beforeAll(() => {
+beforeAll(async () => {
   const svg = (globalThis as unknown as { SVGElement: { prototype: Record<string, unknown> } }).SVGElement.prototype;
   svg.getBBox = () => ({ x: 0, y: 0, width: 100, height: 20 });
   svg.getComputedTextLength = () => 100;
   svg.getScreenCTM = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) });
-});
+  // Pay the library's one-time load HERE (Vexa-ai/vexa#1625). `docDiagrams` reaches mermaid through
+  // a lazy `import("mermaid")` cached at module scope — property 2 of the module, and the reason a
+  // page without a diagram downloads nothing — so the FIRST render in this file pays ~1 MB of
+  // parser, layout and renderer and every later one resolves against it. On this laptop that first
+  // render lands in ~690 ms and the 1 s default of `waitFor` covers it; on a CI runner carrying 137
+  // other suites it does not, and the row below failed on every run of this branch with a DOM that
+  // was the still-loading SOURCE block — no `data-mermaid-error`, nothing wrong with the product,
+  // just a machine-speed difference read as a defect. A hook may take as long as it needs, so
+  // hoisting the import leaves each assertion below measuring the render it is actually about.
+  await import("mermaid");
+}, 120_000);
 
 afterEach(() => { cleanup(); document.documentElement.removeAttribute("data-theme"); });
 
@@ -52,13 +62,16 @@ const BROKEN = ["```mermaid", "flowchart TB", "  Gateway -->", "```", ""].join("
 const SHELL = ["```bash", "docker compose up -d", "```", ""].join("\n");
 
 /** The drawn diagram. `waitFor` retries a callback that THROWS, so this asserts inside rather than
- *  returning a null the runner would accept — mermaid loads and renders across several ticks. */
+ *  returning a null the runner would accept — mermaid renders across several ticks. The budget is
+ *  raised off the 1 s default because it is not a deadline anyone is asserting: `waitFor` returns
+ *  the moment the SVG exists (~40 ms once the library is loaded in `beforeAll`), so the number only
+ *  decides how slow a machine may be before a passing render is called a failure. */
 const drawn = async (root: HTMLElement): Promise<SVGElement> =>
   waitFor(() => {
     const el = root.querySelector<SVGElement>("[data-mermaid-diagram] svg");
     expect(el).toBeTruthy();
     return el!;
-  });
+  }, { timeout: 4_000 });
 
 describe("the fence, in every renderer", () => {
   it("MdxDoc — the renderer the pages panel opens every page with — draws it", async () => {
