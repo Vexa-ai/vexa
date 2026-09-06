@@ -85,13 +85,35 @@ async function press(w: Which) {
   if (field) await flush(() => { fireEvent.keyDown(field, { key: "Escape" }); });
 }
 
+/** agent-api's INBOX, faked (Vexa-ai/vexa#1610): `/api/chat/submit` appends, `/api/chat/pending`
+ *  reads back. An act pressed mid-turn goes there instead of into a list in this tab, so a control
+ *  that says "queued" is now saying something the SERVER agrees with. */
+const inbox: { items: { entry: string; id: string; kind: string; target: string; display: string; at: number }[] } = { items: [] };
+
 beforeEach(() => {
   stream.calls.length = 0;
+  inbox.items.length = 0;
   resetActs();
   clearPending();
-  globalThis.fetch = vi.fn(async () => ({
-    ok: true, status: 200, json: async () => ({ turns: [], sessions: [] }),
-  }) as unknown as Response) as unknown as typeof fetch;
+  try { localStorage.clear(); } catch { /* jsdom always has one */ }
+  globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (u.startsWith("/api/chat/submit")) {
+      const b = JSON.parse(String(init?.body ?? "{}")) as {
+        prompt?: string; turn_id?: string; intent?: { kind: string; workspace?: string; path?: string };
+      };
+      inbox.items.push({
+        entry: `${inbox.items.length + 1}-0`, id: b.turn_id ?? "", kind: b.intent?.kind ?? "",
+        target: b.intent ? [b.intent.workspace, b.intent.path].filter(Boolean).join("/") : "",
+        display: b.prompt ?? "", at: Date.now() / 1000,
+      });
+      return { ok: true, status: 200, json: async () => ({ ok: true, pending: [...inbox.items], cursor: "9-0" }) };
+    }
+    if (u.startsWith("/api/chat/pending")) {
+      return { ok: true, status: 200, json: async () => ({ pending: [...inbox.items], cursor: "9-0" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ turns: [], sessions: [] }) };
+  }) as unknown as typeof fetch;
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -132,11 +154,20 @@ describe("an act control while its job runs", () => {
     await press("create");
     expect(state("create")).toBe("queued");
     expect(line("create")).toBe(QUEUED_LINE);
-    // the act has NOT been sent yet — it fires when the turn in front of it ends
+    // …and it is ON THE SERVER already (Vexa-ai/vexa#1610). It does not go down THIS stream — the
+    // turn in front of it is untouched — and it is not held in this tab either: the control says
+    // "queued" about something the server is holding.
+    await waitFor(() => expect(inbox.items).toHaveLength(1));
     expect(stream.calls.length).toBe(1);
 
+    // the turn ends → the chat ATTACHES to watch the queued act run, and the control learns it is
+    // working from the job's own `job-started`, not from a second send.
     await flush(() => { stream.calls[0].finish(); });
     await waitFor(() => expect(stream.calls.length).toBe(2));
+    inbox.items.shift();   // the worker took it
+    await flush(() => {
+      stream.calls[1].cb.onJobStarted?.({ jobId: "j-4", kind: "create", target: PATH, line: "on it" } as never);
+    });
     // …and it is working now, not queued: one control, one act, one line running through both
     await waitFor(() => expect(state("create")).toBe("working"));
     expect(head("create")).toBe("Creating…");

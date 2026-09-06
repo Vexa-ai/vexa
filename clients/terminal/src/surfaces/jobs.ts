@@ -27,11 +27,21 @@ export type JobRec = {
   steps: number;
   /** the last step's short label — the same tail the turn's own live line shows */
   label: string;
-  /** PRESSED, BUT NOT SENT YET (Vexa-ai/vexa#1594) — the chat is mid-turn and this act is waiting
-   *  for it. A row and not silence: the founder pressed Extend while a turn was running and nothing
-   *  happened at all — *"extend this page button does not work when chat is working"*. Not a
-   *  disabled control either: the act still fires, it just fires next. */
+  /** PRESSED, BUT NOT RUNNING YET — the chat is mid-turn and this act is waiting for it. A row and
+   *  not silence: the founder pressed Extend while a turn was running and nothing happened at all —
+   *  *"extend this page button does not work when chat is working"* (Vexa-ai/vexa#1594). Not a
+   *  disabled control either: the act still fires, it just fires next.
+   *
+   *  Since Vexa-ai/vexa#1610 a queued row is also what a SERVER-HELD submission looks like, and what
+   *  a same-target act waiting behind another looks like — three ways to be waiting, one row. */
   queued?: boolean;
+  /** THIS ROW IS THE SERVER'S (Vexa-ai/vexa#1610) — it came from the session's pending list, not
+   *  from a job this connection watched start. It is what `inbox.reconcileInbox` replaces wholesale
+   *  on every refresh, and the reason a reload shows the same queue: nothing here is remembered. */
+  inbox?: boolean;
+  /** WHAT THIS ROW IS, in one word — `job` for an act, `queued` for a sentence somebody typed. A
+   *  message is not a job and a row that called it one would be the only thing on screen saying so. */
+  noun?: string;
 };
 
 export function startJob(jobs: JobRec[], j: { id: string; kind: string; target: string }): JobRec[] {
@@ -47,9 +57,20 @@ export const QUEUED_LINE = "queued behind the current turn";
 /** The row a PRESS puts on screen before there is a job id to put on it (Vexa-ai/vexa#1594). Its
  *  `id` is the client's own — the real `job-started` hands the row its server id, so one line runs
  *  from the press to the page landing rather than one line stopping and another starting. */
-export function queueJob(jobs: JobRec[], j: { id: string; kind: string; target: string }): JobRec[] {
+export function queueJob(jobs: JobRec[], j: { id: string; kind: string; target: string; inbox?: boolean }): JobRec[] {
   if (!j.id || jobs.some((x) => x.id === j.id)) return jobs;
-  return [...jobs, { id: j.id, kind: j.kind, target: j.target, steps: 0, label: "", queued: true }];
+  return [...jobs, { id: j.id, kind: j.kind, target: j.target, steps: 0, label: "", queued: true,
+                     ...(j.inbox ? { inbox: true } : {}) }];
+}
+
+/** THE QUEUED ROW BECOMES THE RUNNING ONE (Vexa-ai/vexa#1610), in place.
+ *
+ *  A same-target act now WAITS for the one in front of it instead of being refused, and it is given
+ *  its job id while it waits — so when it finally starts, the row already on screen is the row that
+ *  starts. Two rows for one act would read as two acts, which is the same lie #1594 removed one
+ *  step earlier in the act's life. */
+export function promoteJob(jobs: JobRec[], id: string): JobRec[] {
+  return jobs.map((j) => (j.id === id && j.queued ? { ...j, queued: undefined } : j));
 }
 
 /** THE ONE THING AN ACT IS ABOUT — the workspace-qualified page path, spelled exactly as the server
@@ -133,8 +154,8 @@ export function jobLine(jobs: JobRec[]): string {
       // A QUEUED act has no steps to count and no label to show — it has not started. What it has
       // is the reason it has not, which is the only thing the person needs while they wait.
       (j.queued
-        ? ["job", j.target || j.kind, QUEUED_LINE]
-        : ["job", j.target || j.kind, stepsPhrase(j.steps), j.label])
+        ? [j.noun || "job", j.target || j.kind, QUEUED_LINE]
+        : [j.noun || "job", j.target || j.kind, stepsPhrase(j.steps), j.label])
         .filter(Boolean)
         .join(" · "),
     )

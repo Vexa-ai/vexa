@@ -820,8 +820,14 @@ class Dispatcher:
 
     def dispatch(self, invocation: dict, *, room: Optional[dict] = None,
                  scaffold_workspaces: Optional[list[str]] = None,
-                 target: str = "") -> str:
+                 target: str = "", inbox: Optional[dict] = None) -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
+
+        ``inbox`` — WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610). The pre-delivered stream entry IS
+        the chat's inbox record, so the few facts a person needs to read while it waits (their own
+        words, the act's kind and target, when they submitted it, the id their client gave it) ride
+        on the entry rather than in a second store that could disagree with it. The worker reads
+        `type`, `prompt` and `nonce` and ignores this, so an older worker is unaffected.
 
         ``room`` is the post-meeting MEETING ROOM — ``{meeting_id, subjects[], source}`` — already
         RESOLVED AND AUTHORISED by the caller (``api._resolve_room``). It is a dispatcher argument
@@ -887,7 +893,7 @@ class Dispatcher:
         # exited in the XADD↔idle-exit race window without taking the message.
         # The mount must exist before the runtime is asked to bind it (see the helper).
         _ensure_workspace_exists(self._settings, identity["subject"])
-        delivery = (self._predeliver(uid, invocation, entry_nonce)
+        delivery = (self._predeliver(uid, invocation, entry_nonce, inbox=inbox)
                     if invocation["trigger"] == "message" else None)
         if delivery is _DELIVERY_FAILED:
             # The XADD failed. If the worker is GONE the spawn below re-runs this prompt as its
@@ -941,7 +947,8 @@ class Dispatcher:
         self._warm_stream = None
         self._warm_retry_at = time.monotonic() + 60.0
 
-    def _predeliver(self, uid: str, invocation: dict, nonce: str) -> Optional[str]:
+    def _predeliver(self, uid: str, invocation: dict, nonce: str,
+                    *, inbox: Optional[dict] = None) -> Optional[str]:
         """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
         out-stream TAIL id the watchdog reads the ack from.
 
@@ -973,7 +980,10 @@ class Dispatcher:
         try:
             entries = r.xrevrange(output_topic(uid), count=1)
             tail = entries[0][0] if entries else "0-0"
-            r.xadd(input_topic(uid), {"turn": json.dumps({"type": "message", "prompt": prompt, "nonce": nonce})})
+            entry = {"type": "message", "prompt": prompt, "nonce": nonce}
+            if inbox:
+                entry["inbox"] = inbox
+            r.xadd(input_topic(uid), {"turn": json.dumps(entry)})
         except Exception as exc:  # noqa: BLE001
             # WHETHER THIS LOSES THE TURN DEPENDS ON THE UNIT, so the decision is the caller's.
             # Cold unit: the spawn carries this same prompt as its entrypoint and nothing is lost —

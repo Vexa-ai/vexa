@@ -67,6 +67,8 @@ export type ChatStreamEvent = {
   /** `job-progress` only — the window that just ended and the job's running step count. */
   window?: number;
   calls?: number;
+  /** `job-queued` only (Vexa-ai/vexa#1610) — how many acts are in front of this one on its page. */
+  ahead?: number;
 };
 
 /** IS THIS JOB THIS CHAT'S? (Vexa-ai/vexa#1613.)
@@ -140,6 +142,10 @@ export type ChatStreamCallbacks = {
   onError: (message: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
   onStarting: () => void;
+  /** THE WORKER HAS TAKEN A TURN — its liveness ack (Vexa-ai/vexa#1610 reads it for a second
+   *  reason: a turn being taken is exactly the moment something LEAVES the session's inbox, so this
+   *  is when the queued rows are worth re-reading). Optional; existing callers need not implement it. */
+  onAccepted?: () => void;
   /** the live phase changed (or a heartbeat fired while quiet) — drive a verbose status line. `null`
    *  clears it. Optional so existing callers/tests need not implement it. */
   onStatus?: (phase: ChatPhase | null) => void;
@@ -166,6 +172,13 @@ export type ChatStreamCallbacks = {
    *  chat is free NOW, not when this connection closes. Everything carrying this job id from here
    *  on belongs to the job, not to the turn, so none of it touches the turn's own steps. */
   onJobStarted?: (j: { jobId: string; kind: string; target: string; line: string }) => void;
+  /** THE ACT IS QUEUED BEHIND ANOTHER ON THE SAME PAGE (Vexa-ai/vexa#1610). It used to be REFUSED
+   *  here — the founder read *"There is already something running on … — I'll finish that one
+   *  first"* twice, with his instruction lines gone — and it now waits its turn instead, carrying
+   *  the id it will run under. For this connection it is a job from this moment: the turn that asked
+   *  is over (so the composer is free), and the view stays open until it has started, run and
+   *  landed. */
+  onJobQueued?: (j: { jobId: string; kind: string; target: string; line: string; ahead: number }) => void;
   /** one tool call the JOB made — the job's own step count, kept apart from the turn's */
   onJobStep?: (jobId: string, tool: string) => void;
   /** THE JOB IS STILL GOING, in a fresh window (Vexa-ai/vexa#1613). A long act reaches its
@@ -226,6 +239,13 @@ export type ChatStreamOptions = {
   /** injected for tests so a fake clock/no real wait is possible */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** WATCH, DON'T SEND (Vexa-ai/vexa#1610). The cursor to attach from — the last event this chat
+   *  saw on its own output Stream, or the tail the pending route reported on a cold load. It seeds
+   *  `Last-Event-ID` on the FIRST attempt, and agent-api never dispatches a turn on a request that
+   *  carries one: the submission is already on the server's inbox, so re-sending it is the one thing
+   *  that must not happen. Exact by construction — the next events after that cursor ARE the queued
+   *  turn's, so nothing replays and nothing is missed. */
+  attachFrom?: string;
 };
 
 export type ChatStreamResult = {
@@ -235,6 +255,10 @@ export type ChatStreamResult = {
   terminal: boolean;
   /** aborted by the caller (stop button / unmount) */
   aborted: boolean;
+  /** WHERE THIS CHAT HAS READ TO on its output Stream (Vexa-ai/vexa#1610) — the last SSE `id:`. The
+   *  next thing the person submitted starts after exactly this point, so it is what the follow-on
+   *  attach resumes from: no gap, and no replay of the turn that just finished. */
+  cursor: string | null;
 };
 
 const DEFAULT_HARD_TIMEOUT_MS = 90000;   // >> a normal cold start
@@ -270,7 +294,7 @@ export async function streamChatTurn(
 
   let sawVisibleOutput = false;
   let terminal = false;
-  let lastEventId: string | null = null;
+  let lastEventId: string | null = opts.attachFrom ?? null;
   const turnId = mintTurnId();
   const startedAt = now();
   // THE JOBS THIS CONNECTION STARTED (Vexa-ai/vexa#1584). A SET, not one id: a marked act spawns
@@ -311,7 +335,11 @@ export async function streamChatTurn(
 
   const drainOnce = async (): Promise<"closed" | "terminal"> => {
     // On a RECONNECT, Last-Event-ID makes agent-api re-attach to the SAME warm unit and resume from the
-    // cursor — NO second turn is dispatched. The first attempt sends no cursor (fresh dispatch).
+    // cursor — NO second turn is dispatched. The first attempt sends no cursor (fresh dispatch)…
+    // …UNLESS THIS IS AN ATTACH (Vexa-ai/vexa#1610), where the whole point is that no turn is
+    // dispatched: the submission is already on the server's inbox and this call is here to WATCH it
+    // run. `opts.attachFrom` seeds the cursor, so the very first request carries the header and the
+    // server takes its resume branch.
     let r: Response;
     try {
       r = await fetchImpl("/api/chat", {
@@ -384,10 +412,35 @@ export async function streamChatTurn(
           // …AND ONLY A JOB THIS CHAT OWNS IS EVER ADOPTED (Vexa-ai/vexa#1613). Adoption is the
           // one decision that matters: every later event is gated on `myJobs`, so a job never
           // taken here can never render, step a row, or post a line in this conversation.
-          if (jid && !myJobs.has(jid) && ownsJob(ev, req.session)) {
+          //
+          // A job ALREADY in the set was QUEUED here a moment ago (Vexa-ai/vexa#1610) and is now
+          // starting: it was adopted then, by the same rule, so the callback fires again and the
+          // row it owns learns it is running rather than a second row appearing beside it.
+          // Idempotent on both sides — `startJob` ignores an id it already has, and `promoteJob`
+          // only clears the queued flag.
+          if (jid && (myJobs.has(jid) || ownsJob(ev, req.session))) {
             myJobs.add(jid);
             sawVisibleOutput = true;
             cb.onJobStarted?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "", line: ev.line ?? "" });
+          }
+          continue;
+        }
+        // QUEUED, NOT REFUSED. The act is this connection's from here: it owns the row and holds its
+        // view open, exactly as it does for one that started immediately — the whole point being
+        // that the person still gets the start, the steps and the landing line.
+        //
+        // `job-collapsed` deliberately has NO branch: nothing new is running, so nothing new is
+        // watched, and the line saying where the press went already arrives as this turn's own
+        // `message-delta` (the worker composes it once, in `run_message`).
+        if (ev.type === "job-queued") {
+          // …ADOPTED BY THE SAME RULE AS `job-started` (Vexa-ai/vexa#1613): a queued act is a job
+          // this connection is going to render, so a job belonging to another chat must not be
+          // taken here either.
+          if (jid && !myJobs.has(jid) && ownsJob(ev, req.session)) {
+            myJobs.add(jid);
+            sawVisibleOutput = true;
+            cb.onJobQueued?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "",
+                               line: ev.line ?? "", ahead: typeof ev.ahead === "number" ? ev.ahead : 1 });
           }
           continue;
         }
@@ -426,6 +479,7 @@ export async function streamChatTurn(
           case "turn-accepted":
             sawVisibleOutput = true;
             cb.onStatus?.("working");
+            cb.onAccepted?.();
             break;
           case "message-delta":
             if (ev.text) { sawVisibleOutput = true; cb.onDelta(ev.text); }
@@ -536,5 +590,5 @@ export async function streamChatTurn(
   }
 
   cb.onStatus?.(null);  // turn ended (or gave up) — drop the live indicator
-  return { sawVisibleOutput, terminal, aborted: signal.aborted };
+  return { sawVisibleOutput, terminal, aborted: signal.aborted, cursor: lastEventId };
 }

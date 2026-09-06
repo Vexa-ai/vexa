@@ -15,6 +15,13 @@ than a feature written three times that stays right in one of them. `claude-code
 tool was considered and rejected for the same reason it cannot be the contract: it runs to
 completion inside the turn, which is the behaviour this file exists to remove.
 
+AND NOTHING SUBMITTED IS REFUSED (Vexa-ai/vexa#1610). The first shape of this file declined a second
+act on a page one was already running on. The founder then dropped several Extend acts, each with its
+own instruction line, onto one page — and read *"There is already something running on … — I'll
+finish that one first"* twice, with the instructions gone. Same-target acts now QUEUE, in press
+order, each running its own brief; only an identical press (same target, same composed brief)
+collapses into the job in flight, and it says so.
+
 The whole contract — the event vocabulary, the reader that stays open, what a job does and does not
 share with its chat — is `llm/JOBS.md`.
 """
@@ -25,7 +32,7 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import Callable, Iterator, NamedTuple, Optional
 
 log = logging.getLogger("agent_api.worker")
 
@@ -47,6 +54,13 @@ def _verbs(kind: str) -> tuple[str, str]:
     return _VERBS.get((kind or "").strip().lower(), _DEFAULT_VERBS)
 
 
+def _new_id() -> str:
+    """A job's id, minted at the PRESS — a queued act carries the id it will run under, so the row
+    the chat drew when the person pressed is the row that later starts, rather than one row stopping
+    and another appearing in its place."""
+    return f"j-{uuid.uuid4().hex[:8]}"
+
+
 def started_line(kind: str, target: str) -> str:
     return f"{_verbs(kind)[0]} {target} — I'll say when it's there."
 
@@ -60,16 +74,44 @@ def failed_line(kind: str, target: str, why: str) -> str:
     return f"{_verbs(kind)[0]} {target} failed{f': {detail}' if detail else '.'}"
 
 
-def refused_line(kind: str, target: str) -> str:
-    return f"There is already something running on {target} — I'll finish that one first."
+def queued_line(kind: str, target: str, ahead: int) -> str:
+    """A SECOND ACT ON THE SAME PAGE IS QUEUED, NEVER REFUSED (Vexa-ai/vexa#1610).
+
+    The founder dropped several Extend acts with their own instruction lines onto one page while a
+    job ran and read *"There is already something running on oenb-b5e60c/README.md — I'll finish
+    that one first"* twice. That sentence was true and the instruction it declined was gone: nothing
+    held it, so pressing again was the only way to get it done, and only the person knew that."""
+    behind = "the one running" if ahead <= 1 else f"{ahead} on the same page"
+    return f"{_verbs(kind)[0]} {target} — queued behind {behind}."
+
+
+def collapsed_line(kind: str, target: str) -> str:
+    """THE ONE PRESS THAT IS ALLOWED TO NOT RUN — an identical duplicate.
+
+    Same target, same composed brief, so the same instruction over the same state: running it twice
+    would write the same page twice for one answer. It joins the job in flight and SAYS SO, which is
+    the whole difference from the refusal it replaces — a refusal ends the press, this one reports
+    where it went."""
+    return f"Already {_verbs(kind)[0].lower()} {target} — same press, so it joins the one running."
 
 
 def restarted_line(kind: str, target: str) -> str:
     return f"{_verbs(kind)[0]} {target} stopped when the agent restarted — ask again and I'll redo it."
 
 
+class _Job(NamedTuple):
+    """One act, from the press to the line it posts. ``brief`` is kept because it is the ONLY thing
+    that separates a person asking for something else on the same page from the same press twice."""
+    job_id: str
+    kind: str
+    target: str
+    brief: str
+    turn_id: str
+
+
 class JobRunner:
-    """The worker's background jobs: spawn, refuse a duplicate, emit progress, tell the chat.
+    """The worker's background jobs: spawn, queue a second act on the same page, emit progress, tell
+    the chat.
 
     ``emit`` is the worker's own XADD onto ``unit:<id>:out`` — jobs ride the channel turns already
     ride, which is what makes progress reach the terminal with no second relay. ``turn`` is the
@@ -101,7 +143,8 @@ class JobRunner:
         self._dir = Path(register_dir) if register_dir else None
         self._session = str(session or "")
         self._lock = threading.Lock()
-        self._running: dict[str, str] = {}          # target → job_id
+        self._running: dict[str, _Job] = {}          # target → the job in flight
+        self._waiting: dict[str, list[_Job]] = {}    # target → the acts behind it, in press order
         self._threads: list[threading.Thread] = []
 
     def _own(self, ev: dict) -> dict:
@@ -113,30 +156,69 @@ class JobRunner:
 
     # -- lifecycle ---------------------------------------------------------------------------
     def spawn(self, kind: str, target: str, brief: str, *, turn_id: str = "") -> dict:
-        """Start a job and return the event that was emitted — ``job-started`` or ``job-refused``.
+        """Take an act and return the event that was emitted — ``job-started``, ``job-queued`` or
+        ``job-collapsed``. NEVER a refusal (Vexa-ai/vexa#1610).
 
-        ONE JOB PER TARGET, refused rather than queued: two agents writing one file is the failure
-        `graph/sg/Operating-Loops.md` names in a line, and a queue would mean pressing Extend twice
-        costs four minutes before the first answer."""
+        ONE JOB PER TARGET AT A TIME still holds — two agents writing one file is the failure
+        `graph/sg/Operating-Loops.md` names in a line — but the second act is now QUEUED behind the
+        first rather than declined. The founder dropped several Extend acts, each carrying its own
+        instruction line, onto one page while a job ran; each was answered *"There is already
+        something running on … — I'll finish that one first"*, and each instruction was then held by
+        nobody. A queue costs the second press its wait; a refusal costs it the whole instruction,
+        and only the person who typed it knows it is gone.
+
+        The one press that legitimately does not run again is the IDENTICAL one — same target, same
+        composed brief, therefore the same instruction over the same state. It collapses into the
+        job in flight and says so."""
         key = (target or "").strip() or (kind or "job")
         with self._lock:
-            if key in self._running:
-                ev = self._own({"type": "job-refused", "kind": kind, "target": target,
-                                "line": refused_line(kind, target)})
+            running = self._running.get(key)
+            if running is not None:
+                waiting = self._waiting.setdefault(key, [])
+                # SAME PRESS, NOTHING CHANGED. The composed brief is the whole submission — the
+                # person's instruction line, the preset and the grounding it was composed against —
+                # so equality here is exactly "the same act over the same state". A different
+                # instruction, or the same one over a page that has moved on, is a different brief
+                # and runs on its own turn.
+                twin = running if brief == running.brief else next(
+                    (q for q in waiting if brief == q.brief), None)
+                if twin is not None:
+                    ev = self._own({"type": "job-collapsed", "job_id": twin.job_id, "kind": kind,
+                                    "target": target, "line": collapsed_line(kind, target)})
+                    if turn_id:
+                        ev["turn_id"] = turn_id
+                    self._emit(ev)
+                    return ev
+                job = _Job(_new_id(), kind, target, brief, turn_id)
+                waiting.append(job)
+                ahead = len(waiting)          # the one running, plus everyone already waiting
+                ev = self._own({"type": "job-queued", "job_id": job.job_id, "kind": kind,
+                                "target": target, "ahead": ahead,
+                                "line": queued_line(kind, target, ahead)})
                 if turn_id:
                     ev["turn_id"] = turn_id
+                # NOTED WHILE IT WAITS, for the same reason a running job is: a restart kills a
+                # queued act just as dead, and a row that spins forever is what the register exists
+                # to stop.
+                self._note(job.job_id, kind, target)
                 self._emit(ev)
                 return ev
-            job_id = f"j-{uuid.uuid4().hex[:8]}"
-            self._running[key] = job_id
-        self._note(job_id, kind, target)
-        ev = self._own({"type": "job-started", "job_id": job_id, "kind": kind, "target": target,
-                        "line": started_line(kind, target)})
-        if turn_id:
-            ev["turn_id"] = turn_id
+            job = _Job(_new_id(), kind, target, brief, turn_id)
+            self._running[key] = job
+        return self._begin(key, job)
+
+    def _begin(self, key: str, job: _Job) -> dict:
+        """Announce a job and put it on its own thread. Called for the act that found the page free,
+        and again by ``_run`` for whichever act was waiting behind it — one place, so a queued act
+        starts exactly as a first one does."""
+        self._note(job.job_id, job.kind, job.target)
+        ev = self._own({"type": "job-started", "job_id": job.job_id, "kind": job.kind,
+                        "target": job.target, "line": started_line(job.kind, job.target)})
+        if job.turn_id:
+            ev["turn_id"] = job.turn_id
         self._emit(ev)
-        th = threading.Thread(target=self._run, args=(job_id, key, kind, target, brief),
-                              daemon=True, name=f"job-{job_id}")
+        th = threading.Thread(target=self._run, args=(job, key),
+                              daemon=True, name=f"job-{job.job_id}")
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]
             self._threads.append(th)
@@ -144,14 +226,19 @@ class JobRunner:
         return ev
 
     def busy(self) -> bool:
-        """Is any job still running? The serve loop asks before it lets an idle read reap the
-        container — a job is a thread in THIS process, so exiting under one is killing it."""
+        """Is any job still running OR waiting to? The serve loop asks before it lets an idle read
+        reap the container — a job is a thread in THIS process, so exiting under one is killing it,
+        and exiting over a queue kills every act still in it."""
         with self._lock:
-            return bool(self._running)
+            return bool(self._running or self._waiting)
 
     def join_all(self) -> None:
         """Block until every job has finished — called on every way ``serve`` can return, the same
-        discipline ``_join_trailers`` already applies to the write-back trailer."""
+        discipline ``_join_trailers`` already applies to the write-back trailer.
+
+        A QUEUE DRAINS THROUGH THIS LOOP WITHOUT BEING MENTIONED IN IT: the successor's thread is
+        started inside its predecessor's ``finally``, so it is already in ``_threads`` by the time
+        that ``join`` returns and the next pass finds it."""
         while True:
             with self._lock:
                 th = next((t for t in self._threads if t.is_alive()), None)
@@ -200,10 +287,11 @@ class JobRunner:
         return out
 
     # -- the job itself ----------------------------------------------------------------------
-    def _run(self, job_id: str, key: str, kind: str, target: str, brief: str) -> None:
+    def _run(self, job: _Job, key: str) -> None:
+        job_id, kind, target = job.job_id, job.kind, job.target
         ok, why = True, ""
         try:
-            for ev in self._turn(brief):
+            for ev in self._turn(job.brief):
                 # TAGGED WITH THE JOB, NEVER THE TURN. A job's tool calls are the JOB's step count;
                 # a consumer that keys on `turn_id` (the terminal's reducer does) must not fold them
                 # into the chat turn that has already been answered.
@@ -216,13 +304,26 @@ class JobRunner:
                         type(exc).__name__, exc)
             ok, why = False, f"{type(exc).__name__}: {exc}"
         finally:
+            # THE NEXT ACT ON THIS PAGE IS ALREADY DECIDED, HERE, UNDER THE LOCK — the target moves
+            # from this job to its successor in one step, so a press arriving in the gap queues
+            # behind the successor instead of finding the page free and starting a third writer.
             with self._lock:
                 self._running.pop(key, None)
+                queue = self._waiting.get(key) or []
+                nxt = queue.pop(0) if queue else None
+                if not queue:
+                    self._waiting.pop(key, None)
+                if nxt is not None:
+                    self._running[key] = nxt
             self._forget(job_id)
             self._emit(self._own(
                 {"type": "job-done" if ok else "job-failed", "job_id": job_id,
                  "kind": kind, "target": target, "ok": ok,
                  "line": done_line(kind, target) if ok else failed_line(kind, target, why)}))
+            # …and only then does the queued one announce itself: its line arrives after the line of
+            # the job it was waiting for, which is the order the person pressed and read them in.
+            if nxt is not None:
+                self._begin(key, nxt)
 
     # -- the on-disk register ----------------------------------------------------------------
     def _note(self, job_id: str, kind: str, target: str) -> None:

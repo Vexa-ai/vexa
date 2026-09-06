@@ -423,7 +423,12 @@ class RedisStreamReader(StreamReader):
                     # `turn-complete` is the worker's terminal marker — it comes AFTER `done` + `commit`,
                     # so stopping on `done` would drop the commit. Close the view only on turn-complete.
                     kind = ev.get("type")
-                    if kind == "job-started" and ev.get("job_id"):
+                    # `job-queued` opens a job for the same reason `job-started` does
+                    # (Vexa-ai/vexa#1610): a second act on the same page now WAITS for the first
+                    # instead of being refused, so closing the view on its turn's `turn-complete`
+                    # would drop the very thing the person is waiting to see — the moment it starts,
+                    # its steps, and the line it posts when it lands.
+                    if kind in ("job-started", "job-queued") and ev.get("job_id"):
                         open_jobs.add(str(ev["job_id"]))
                     elif kind in ("job-done", "job-failed"):
                         open_jobs.discard(str(ev.get("job_id") or ""))

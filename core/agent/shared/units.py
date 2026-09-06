@@ -143,13 +143,23 @@ def dispatch_id(inv: dict) -> str:
         # ABSENT MEANS THE ID IT ALWAYS HAD. Generation 0 — every chat that has never made a
         # workspace, and every session record written before the field existed — is byte-identical
         # to the previous id, so a deploy does not re-spawn a single live conversation.
-        gen = str((ctx.get("mount_gen") or "")).strip()
-        base = f"agent-{subject}-chat-{chat_session(inv)}"
-        return f"{base}-g{gen}" if gen and gen != "0" else base
+        return chat_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
     digest = hashlib.sha1(
         f"{subject}|{inv['trigger']}|{json.dumps(inv['start'], sort_keys=True)}".encode()
     ).hexdigest()[:10]
     return f"agent-{subject}-{inv['trigger']}-{digest}"
+
+
+def chat_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm chat unit for a (person, conversation thread) — the id ``dispatch_id`` derives above.
+
+    SPELLED ONCE so a reader holding no invocation can address the same unit (Vexa-ai/vexa#1610: the
+    inbox route answers "what is still queued for this chat" and has only a subject and a session).
+    Two spellings of a unit id is the one-writer-per-fact failure with a stream on the end of it —
+    the reader would look in a topic nobody writes and honestly report an empty inbox."""
+    gen = str(mount_gen or "").strip()
+    base = f"agent-{subject}-chat-{session or DEFAULT_CHAT_SESSION}"
+    return f"{base}-g{gen}" if gen and gen != "0" else base
 
 
 def output_topic(unit_id: str) -> str:
@@ -160,3 +170,28 @@ def output_topic(unit_id: str) -> str:
 def input_topic(unit_id: str) -> str:
     """The per-dispatch input Stream — interactive messages to a live dispatch (the duplex evolution)."""
     return f"unit:{unit_id}:in"
+
+
+def unit_of_topic(topic: str) -> str:
+    """The unit id inside ``unit:<id>:in`` / ``unit:<id>:out`` — the inverse of the two above.
+
+    The worker is handed its topics and never its unit id, and it is the one process that knows how
+    far it has read. Deriving the id back out of the topic keeps that fact addressable without a new
+    environment variable for something both sides can already compute."""
+    t = str(topic or "")
+    if t.startswith("unit:") and (t.endswith(":in") or t.endswith(":out")):
+        return t[len("unit:"):t.rindex(":")]
+    return ""
+
+
+def inbox_cursor_key(unit_id: str) -> str:
+    """WHERE THE WORKER SAYS HOW FAR IT HAS READ ITS INBOX (Vexa-ai/vexa#1610).
+
+    The in-topic is the chat's inbox: everything submitted is XADD'd to it the moment it is
+    submitted, and the worker takes entries off it in order. "What is still queued" is therefore
+    exactly "the entries after this cursor", and this key is how the worker publishes it — one
+    writer (the worker, which owns the cursor), one reader (the pending route, which owns nothing).
+
+    A key rather than an event on the out-topic because it has to be answerable on a cold load, when
+    nobody is streaming anything and the answer is the first thing the chat needs."""
+    return f"unit:{unit_id}:cursor"

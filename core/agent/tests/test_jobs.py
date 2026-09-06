@@ -211,7 +211,11 @@ def test_a_turn_that_ends_not_ok_is_a_failed_job(tmp_path):
     assert end["type"] == "job-failed" and "tool-call budget" in end["line"]
 
 
-def test_a_second_job_on_the_same_target_is_refused_with_a_reason(tmp_path):
+def test_a_second_act_on_the_same_target_is_queued_not_refused(tmp_path):
+    """Vexa-ai/vexa#1610 REVERSED THE #1584 RULE HERE, and the founder's own session is why: he
+    dropped several Extend acts with their own instruction lines onto one page and read *"There is
+    already something running on … — I'll finish that one first"* twice. Each refusal was true and
+    each instruction was then held by nobody."""
     gate = threading.Event()
     sink = _Sink()
     runner = JobRunner(emit=sink, turn=_slow_turn(gate), register_dir=tmp_path / "jobs")
@@ -220,17 +224,69 @@ def test_a_second_job_on_the_same_target_is_refused_with_a_reason(tmp_path):
     second = runner.spawn("extend", "kg/plan.md", "Extend it again.")
     other = runner.spawn("extend", "kg/other.md", "A different page.")
 
-    assert second["type"] == "job-refused" and "job_id" not in second
-    assert "already something running on kg/plan.md" in second["line"]
+    assert second["type"] == "job-queued" and second["job_id"] != first["job_id"]
+    assert second["ahead"] == 1 and "queued behind the one running" in second["line"]
+    # the queued act is on the register too — a restart kills it just as dead as a running one
+    assert (tmp_path / "jobs" / f"{second['job_id']}.json").exists()
     # a DIFFERENT page runs concurrently — several jobs at once is the normal case
     assert other["type"] == "job-started" and other["job_id"] != first["job_id"]
 
     gate.set()
     runner.join_all()
-    # …and once it has landed the same page can be asked for again
-    assert runner.spawn("extend", "kg/plan.md", "again")["type"] == "job-started"
+
+    # BOTH RAN, in press order, each posting its own line.
+    ran = [e for e in sink.events if e["type"] in ("job-started", "job-done")
+           and e["target"] == "kg/plan.md"]
+    assert [e["type"] for e in ran] == ["job-started", "job-done", "job-started", "job-done"]
+    assert [e["job_id"] for e in ran] == [first["job_id"], first["job_id"],
+                                          second["job_id"], second["job_id"]]
+    assert runner.busy() is False
+
+
+def test_ten_acts_on_one_page_all_run_in_press_order_each_with_its_own_line(tmp_path):
+    """The acceptance on the issue, at the runner level: nothing is refused and nothing is merged
+    away — ten presses, ten briefs, ten jobs, in the order they were pressed."""
+    seen: list[str] = []
+
+    def turn(brief):
+        seen.append(brief)
+        yield {"type": "done", "reply": "ok", "sessionId": "s", "ok": True}
+
+    sink = _Sink()
+    runner = JobRunner(emit=sink, turn=turn, register_dir=tmp_path / "jobs")
+    ids = [runner.spawn("extend", "kg/plan.md", f"line {i}")["job_id"] for i in range(10)]
+    runner.join_all()
+
+    assert seen == [f"line {i}" for i in range(10)]
+    started = [e["job_id"] for e in sink.events if e["type"] == "job-started"]
+    done = [e["job_id"] for e in sink.events if e["type"] == "job-done"]
+    assert started == ids and done == ids
+    assert [e["type"] for e in sink.events if e["type"] == "job-refused"] == []
+    assert list((tmp_path / "jobs").glob("*.json")) == []
+
+
+def test_an_identical_press_joins_the_running_job_and_says_so(tmp_path):
+    """The ONE press that is allowed not to run again. Same target and the same composed brief is
+    the same instruction over the same state, so a second run writes the page twice for one answer
+    — but it is reported, never swallowed: the row says where the press went."""
+    gate = threading.Event()
+    sink = _Sink()
+    runner = JobRunner(emit=sink, turn=_slow_turn(gate), register_dir=tmp_path / "jobs")
+
+    first = runner.spawn("extend", "kg/plan.md", "Extend it.")
+    twin = runner.spawn("extend", "kg/plan.md", "Extend it.", turn_id="t9")
+
+    assert twin["type"] == "job-collapsed" and twin["job_id"] == first["job_id"]
+    assert twin["turn_id"] == "t9"
+    assert "same press, so it joins the one running" in twin["line"]
+
+    # …and a press carrying a DIFFERENT instruction on the same page is not a duplicate at all
+    other = runner.spawn("extend", "kg/plan.md", "Extend it, but only the risks section.")
+    assert other["type"] == "job-queued"
+
     gate.set()
     runner.join_all()
+    assert [e["type"] for e in sink.events].count("job-done") == 2   # the twin ran ONCE
 
 
 def test_a_restart_cancels_every_job_and_tells_the_chat(tmp_path):
@@ -397,8 +453,9 @@ def test_an_unmarked_turn_is_untouched_by_the_job_machinery(tmp_path):
     assert [e["type"] for e in s.events()] == ["turn-accepted", "message-delta", "turn-complete"]
 
 
-def test_the_spawn_job_tool_reaches_the_same_runner_and_the_same_refusal(tmp_path):
-    """`spawn_job` (the openai-agent builtin) and a marked act are ONE mechanism, not two."""
+def test_the_spawn_job_tool_reaches_the_same_runner_and_the_same_queue(tmp_path):
+    """`spawn_job` (the openai-agent builtin) and a marked act are ONE mechanism, not two — which
+    now includes not being refused: the model's second call on a busy target queues like a press."""
     from llm import jobs as llm_jobs
     from llm.openai_agent import BUILTIN_SPECS, _Sandbox, run_builtin
 
@@ -422,7 +479,11 @@ def test_the_spawn_job_tool_reaches_the_same_runner_and_the_same_refusal(tmp_pat
     assert ok is True and "background job" in text
     ok2, text2 = run_builtin("spawn_job", {"kind": "research", "target": "Acme",
                                            "brief": "again"}, box)
-    assert ok2 is False and "already something running on Acme" in text2
+    assert ok2 is True and "queued behind the job already running on Acme" in text2
+    # …and asking for the SAME thing again joins the one in flight rather than doing it twice
+    ok3, text3 = run_builtin("spawn_job", {"kind": "research", "target": "Acme",
+                                           "brief": "again"}, box)
+    assert ok3 is True and "already running on Acme" in text3 and "joined it" in text3
     # a brief-less call is refused before anything is started — the job cannot see the conversation
     assert run_builtin("spawn_job", {"kind": "research", "target": "Other", "brief": ""}, box)[0] is False
 

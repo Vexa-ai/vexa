@@ -159,6 +159,72 @@ def _stream_tail_id(redis_url: str | None, stream: str) -> str | None:
         return None
 
 
+# ── THE CHAT'S INBOX (Vexa-ai/vexa#1610) ────────────────────────────────────────────────────────
+#
+# The founder, dropping several acts onto one page while a job ran: *"i drop new tasks to that chat,
+# can i be sure everything submitted there is actually processed?"* The honest answer was no, and one
+# of the two reasons was that a message typed mid-turn lived in ONE BROWSER's localStorage until that
+# turn ended — another device never saw it, and a cleared browser never sent it.
+#
+# So the in-topic is the inbox: every submission is XADD'd to it the moment it is submitted, and the
+# worker takes entries off it in order. What is still QUEUED is therefore exactly "the entries after
+# the worker's cursor", which the worker publishes (`shared/units.inbox_cursor_key`). This reads it.
+#
+# Two filters, and each one is about not lying:
+#   · an entry with no `inbox` stamp is skipped — it was written by a build that had no inbox, and
+#     showing an old consumed message as pending would invent a queue nobody is in;
+#   · an entry older than the cap is skipped — a worker that died without ever writing a cursor would
+#     otherwise leave a chat permanently claiming to be behind.
+
+#: An act runs 30-120s and ten of them queue, so an hour is generous by design: the cap is here to
+#: bound a WORKER THAT NEVER RAN, not to hurry a queue that is working through itself.
+INBOX_PENDING_MAX_AGE_SEC = 3600
+
+#: How many queued entries a reader will enumerate. Past this the count is what matters, not the row.
+INBOX_PENDING_MAX_ROWS = 200
+
+
+def inbox_pending(redis_url: "str | None", unit_id: str) -> list[dict]:
+    """Everything submitted to this chat that its worker has not taken yet, oldest first.
+
+    Best-effort by construction: no redis, an unreachable one, a stream that has never existed — all
+    answer "nothing queued". A chat that cannot read its inbox shows no queued rows, which is what it
+    showed before this existed; it must never fail the surface that is asking."""
+    if not redis_url:
+        return []
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        cursor = r.get(units.inbox_cursor_key(unit_id))
+        # INCLUSIVE + DROP, rather than the `(id` exclusive form: exclusive ranges need Redis 6.2 and
+        # this reader must not be the thing that pins the deployment's server version.
+        rows = r.xrange(units.input_topic(unit_id), min=cursor or "-", max="+",
+                        count=INBOX_PENDING_MAX_ROWS + 1)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read the inbox for unit=%s: %s", unit_id, exc)
+        return []
+    out: list[dict] = []
+    now = time.time()
+    for entry_id, fields in rows or []:
+        if cursor and entry_id == cursor:
+            continue                      # the entry the worker is on — taken, not queued
+        try:
+            msg = json.loads(fields.get("turn", "{}"))
+        except (TypeError, ValueError):
+            continue
+        meta = msg.get("inbox")
+        if not isinstance(meta, dict):
+            continue
+        at = float(meta.get("at") or 0)
+        if at and now - at > INBOX_PENDING_MAX_AGE_SEC:
+            continue
+        out.append({"entry": entry_id, "id": str(meta.get("id") or entry_id),
+                    "kind": str(meta.get("kind") or ""), "target": str(meta.get("target") or ""),
+                    "display": str(meta.get("display") or ""), "at": at})
+    return out
+
+
 # How long a turn's start-cursor record lives — covers the client's whole resume window (its hard
 # timeout is minutes); after this a stale nonce simply falls back to the fresh-dispatch path.
 CHAT_TURN_HEAD_TTL_SEC = 900

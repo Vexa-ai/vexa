@@ -58,6 +58,10 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
 # Whoever composes that block appends what this returns.
 from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
+# THE STREAM NAMES (Vexa-ai/vexa#1610). The worker is handed its two topics and never its unit id;
+# `unit_of_topic` reads it back out and `inbox_cursor_key` spells the one key this loop writes, so
+# the reader that answers "what is still queued for this chat" is looking where the writer wrote.
+from shared import units as shared_units
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
@@ -1565,7 +1569,8 @@ def start_prompt(start: dict) -> str | None:
 def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
           tools: "list[str] | None" = None, job: TurnFn | None = None,
-          jobs_dir: "Path | None" = None, jobs_session: str = "") -> None:
+          jobs_dir: "Path | None" = None, jobs_session: str = "",
+          inbox_cursor: "str | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -1603,6 +1608,15 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     chat that never asked for one — and deleted the records on the way. Every job event now says
     which session owns it and the boot scan takes only its own; see `worker/jobs.JobRunner`.
 
+    `inbox_cursor` — HOW FAR THIS WORKER HAS READ, PUBLISHED (Vexa-ai/vexa#1610). The in-topic is the
+    chat's INBOX: everything submitted is XADD'd to it the moment it is submitted, whether or not a
+    turn is running, and this loop takes entries off it in order. So "what is still queued" is
+    exactly "the entries after my cursor" — and the chat has to be able to ask that on a cold load,
+    from another device, after a reload, with nobody streaming anything. This is the key the answer
+    is written to (`shared/units.inbox_cursor_key`), by the one process that owns the cursor. Written
+    through `stream.set` when the stream has one, so every fake in the tests is unaffected and a
+    deployment whose stream cannot hold a key simply keeps the previous behaviour with no inbox view.
+
     `job` — BACKGROUND JOBS (Vexa-ai/vexa#1584), the same idea taken one step further and applied to
     the WORK rather than to its paperwork. A prompt carrying the job mark never runs here at all:
     `JobRunner` takes it, this loop emits one line and completes the turn, and the act runs on its
@@ -1614,6 +1628,22 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     _desk_lock = threading.Lock()
     _trailers: list[threading.Thread] = []
 
+    def _took(cursor: list, entry_id: str) -> None:
+        """Advance the cursor AND say where it now is (Vexa-ai/vexa#1610).
+
+        ONE CALL, THREE SITES — the outer loop, the job drain and the injection drain each move the
+        cursor, and a site that moved it without publishing would leave the chat showing a queued row
+        for something that had already run. Fail-soft: the inbox VIEW is furniture, the turn is what
+        the person is waiting for."""
+        cursor[0] = entry_id
+        setter = getattr(stream, "set", None) if inbox_cursor else None
+        if setter is None:
+            return
+        try:
+            setter(inbox_cursor, entry_id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not publish the inbox cursor (%s: %s) — queued rows may lag", type(e).__name__, e)
+
     # BACKGROUND JOBS (Vexa-ai/vexa#1584). A marked act — Create, Extend, or anything the model
     # hands to `spawn_job` — does not run here at all: the runner takes it, this loop emits one line
     # and moves straight on to the next message. Off entirely when the caller injects no job turn,
@@ -1623,11 +1653,18 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         turn=job, register_dir=jobs_dir, session=jobs_session)
 
     def _spawn_from_tool(kind: str, target: str, brief: str) -> "tuple[bool, str]":
-        """`spawn_job`'s answer to the model — an accepted job, or the refusal in words it can
-        repeat. A refusal is not an error: the person asked twice for the same page."""
+        """`spawn_job`'s answer to the model — and since Vexa-ai/vexa#1610 it is always an ACCEPTED
+        one: an act on a busy target queues behind it, an identical brief joins it. The model is
+        told which of the three happened so it can say so; none of them is a failure."""
         ev = _jobs.spawn(kind, target, brief)          # type: ignore[union-attr]
-        if ev.get("type") == "job-refused":
-            return False, ev.get("line") or "that job is already running"
+        t = ev.get("type")
+        if t == "job-collapsed":
+            return True, (f"that exact job is already running on {target} ({ev.get('job_id')}) — "
+                          f"this joined it rather than doing the same work twice; it posts one line "
+                          f"when it lands")
+        if t == "job-queued":
+            return True, (f"queued behind the job already running on {target} ({ev.get('job_id')}). "
+                          f"It runs next, on its own brief, and posts its own line.")
         return True, (f"started as a background job ({ev.get('job_id')}). Answer whatever else the "
                       f"person asked — the job posts its own line when it lands.")
 
@@ -1676,7 +1713,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     return
                 if not inject(text):
                     return  # no active stdin — leave queued
-                cursor[0] = entry_id
+                _took(cursor, entry_id)
                 # satisfy the dispatcher's warm-delivery watchdog: the injected message WAS taken
                 if msg.get("nonce"):
                     stream.xadd(out_topic, {"event": json.dumps({"type": "turn-accepted", "nonce": msg["nonce"], "injected": True})})
@@ -1718,7 +1755,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                         return          # stopping is the outer loop's, and so is everything after it
                     if read_job_mark(msg.get("prompt", "")) is None:
                         return          # an ordinary message — the outer loop's turn to take it
-                    cursor[0] = entry_id
+                    _took(cursor, entry_id)
                     took = True
                     n += 1
                     # `cursor=None`: this call takes the job branch below and returns without
@@ -1912,6 +1949,12 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             last = "$"
 
     cursor = [last]  # shared with _drain_inject: mid-turn-consumed entries advance it
+    # THE BOOT ANCHOR IS A TAKE (Vexa-ai/vexa#1610). Everything at or before it either ran as the
+    # entrypoint or is queued below as `pending` — either way this worker has it, so the inbox view
+    # must not go on calling it pending. Published before the first turn runs, so a chat that loads
+    # while the entrypoint is still working already reads the truth.
+    if last not in ("$", "0-0"):
+        _took(cursor, last)
     first = start_prompt(start)
     n = 0
     if first:
@@ -1936,7 +1979,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             return  # idle → exit 0 → container reaped
         for _name, entries in resp:
             for entry_id, fields in entries:
-                cursor[0] = entry_id
+                _took(cursor, entry_id)
                 msg = json.loads(fields.get("turn", "{}"))
                 if msg.get("type") == "stop":
                     _join_trailers()
@@ -2060,6 +2103,12 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # each record and each event carries the session that owns it.
         jobs_dir=_continuity_root(work) / ".claude" / "jobs",
         jobs_session=session,
+        # WHERE THIS WORKER SAYS HOW FAR IT HAS READ (Vexa-ai/vexa#1610). Derived from the in-topic
+        # rather than handed in as a second environment variable: both sides can already compute it,
+        # and a fact spelled in two places is one rename away from a reader looking at a key nobody
+        # writes and honestly reporting an empty inbox.
+        inbox_cursor=shared_units.inbox_cursor_key(
+            shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
         start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
         harness=chat_harness,
         # What this session can actually call — the F70 detector's third condition, and the

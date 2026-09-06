@@ -8,6 +8,8 @@ single identifier changed.
 """
 from __future__ import annotations
 
+import time
+
 from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
@@ -18,7 +20,7 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    logger, meeting_binding, target_preamble, workspace_focus)
+    inbox_pending, logger, meeting_binding, target_preamble, workspace_focus)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -293,10 +295,61 @@ def build(**d) -> APIRouter:
         drop) reconnects with ``Last-Event-ID`` — we then RE-ATTACH to the SAME warm unit and resume the
         read from that cursor (gapless) WITHOUT dispatching a second turn. The turn was never lost (the
         worker completes + commits regardless); resume just re-shows the output the client missed."""
+        return _chat(body, request, stream=True)
+
+    @router.post("/api/chat/submit")
+    def chat_submit(body: ChatBody, request: Request):
+        """SUBMIT WITHOUT WATCHING — the same turn, delivered, with no SSE (Vexa-ai/vexa#1610).
+
+        The founder, dropping acts onto a page while a job ran: *"i drop new tasks to that chat, can
+        i be sure everything submitted there is actually processed?"* One half of why the answer was
+        no: the terminal could open exactly one stream, so anything typed or pressed mid-turn was
+        held in THAT BROWSER's localStorage until the turn ended. Another device never saw it; a
+        cleared browser never sent it; and nothing anywhere recorded that it existed.
+
+        This route is the fix, and it is deliberately not a new pipeline: it runs the identical
+        composition and dispatch `/api/chat` runs — the same presets, the same marks, the same
+        grounding, the same session index, the same pre-delivery onto the in-topic — and then
+        returns instead of streaming. The submission is on the server from the moment it is made,
+        the worker will take it in order like any other, and the answer carries the session's PENDING
+        LIST so the chat draws its queued rows from the server's view rather than from what one
+        browser remembers.
+
+        The browser keeps at most an unsent copy across the POST itself, for a network gap, and
+        clears it on this response."""
+        return _chat(body, request, stream=False)
+
+    @router.get("/api/chat/pending")
+    def chat_pending(request: Request, session: str | None = None):
+        """WHAT THIS CHAT HAS SUBMITTED AND ITS AGENT HAS NOT TAKEN YET (Vexa-ai/vexa#1610).
+
+        The inbox is the in-topic and the worker publishes how far it has read, so this is a read of
+        two facts neither of which this route owns. That is what makes a reload, a second device and
+        a swapped terminal container show the SAME pending list: none of them is remembering it.
+
+        `cursor` is the output Stream's tail right now — where a client with nothing open should
+        attach to watch the queue run. A client that already has a stream has an exact cursor of its
+        own and should use that one instead."""
+        subject = subject_of(request)
+        session = session or units.DEFAULT_CHAT_SESSION
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
+            gen = 0
+        unit_id = units.chat_unit_id(subject, session, gen)
+        return {"pending": inbox_pending(redis_url, unit_id),
+                "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+
+    def _chat(body: ChatBody, request: Request, *, stream: bool):
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         session = body.session or units.DEFAULT_CHAT_SESSION
+        # THE PERSON'S OWN WORDS, CAPTURED BEFORE ANYTHING COMPOSES OVER THEM (Vexa-ai/vexa#1610).
+        # Every branch below may replace `body.prompt` — with a scaffold's opening, a preset's ask, a
+        # mark — and a queued row has to say what the person submitted, not what the server made of
+        # it. One read, at the top, where the sentence still exists.
+        _submitted = body.prompt
         # THE MEETING ROOM (post-meeting run). Resolved and AUTHORISED here, before anything else
         # happens on this request — a refusal must cost the caller a 403, never a partially-run turn.
         # ``room`` never comes from the body: the body names a MEETING (and may PROPOSE a narrowing);
@@ -388,6 +441,11 @@ def build(**d) -> APIRouter:
         # is exactly as long to run as the preset's. The mark rides whichever words won.
         # A deployment whose WORKER is older simply runs a marked prompt inline, as it does today.
         _job_mark = chat_intents.job_prefix(body.intent)
+        # …AND THE TWO FACTS A QUEUED ROW NEEDS ABOUT AN ACT (Vexa-ai/vexa#1610): what was pressed
+        # and on what. Read from the SAME functions the mark is composed from, so the row a person
+        # counts and the job the worker refuses-or-queues name the same thing by construction.
+        _intent_kind = str((body.intent or {}).get("kind") or "").strip().lower()
+        _intent_target = chat_intents.act_target(body.intent) if body.intent else ""
         # AND A TURN NOBODY TYPED NEVER RENDERS AS THEIR WORDS (Vexa-ai/vexa#1605). The founder
         # opened a held meeting's chat and read the whole `process-meeting` kick back as his own
         # grey bubble: a FLOW composed that turn, in another process, and it reached this route
@@ -407,7 +465,10 @@ def build(**d) -> APIRouter:
             body = body.model_copy(update={"prompt": _turn_mark + body.prompt})
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
-        resume = request.headers.get("last-event-id") or None
+        #
+        # A SUBMISSION IS NEVER A RECONNECT (Vexa-ai/vexa#1610): it exists to put something new on
+        # the server, so it takes the dispatch path whatever a stale header says.
+        resume = (request.headers.get("last-event-id") or None) if stream else None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
         # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the live view renders) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
@@ -502,6 +563,12 @@ def build(**d) -> APIRouter:
                 if capability_state("model_inference") == NOT_CONFIGURED:
                     cfg = dispatcher.resolve_model_config(subject)
                     if cfg is not None and not _has_custom_model_endpoint(cfg):
+                        if not stream:
+                            # A SUBMISSION THAT CANNOT RUN IS REFUSED OUT LOUD. It has no stream to
+                            # fold the frame into, and answering 200 would put a queued row on
+                            # screen for work nothing will ever take.
+                            raise HTTPException(status_code=503,
+                                                detail=_model_creds_error_message())
                         return StreamingResponse(
                             _sse([{"type": "error", "message": _model_creds_error_message()},
                                   {"type": "turn-complete"}]),
@@ -577,7 +644,15 @@ def build(**d) -> APIRouter:
                         # `room` and `scaffold_workspaces`, never a field of the sealed unit.v1
                         # envelope, and never anything a request body asserted. It decides the
                         # turn's cwd and rides the delegation token as the tools' default `slug`.
-                        target=_target)
+                        target=_target,
+                        # WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610), stamped on the inbox entry
+                        # itself so the record a person reads and the record the worker takes are
+                        # the same object. Written for every turn, not only a submission: a chat
+                        # open on a second device has to be able to see the turn this one is about
+                        # to run, and the row disappears the moment the worker takes it.
+                        inbox={"id": body.turn_id or "", "display": _submitted,
+                               "kind": _intent_kind, "target": _intent_target,
+                               "at": round(time.time(), 3)})
                 except dispatch_mod.WarmDeliveryFailed as exc:
                     # THE TURN IS REFUSED, NOT DROPPED. For a warm unit the pre-delivery is the only
                     # delivery, so a failure here means the person's words reached nobody. Answering
@@ -591,9 +666,23 @@ def build(**d) -> APIRouter:
                         status_code=503,
                         detail="That message did not reach your agent — nothing was lost on your "
                                "side, please send it again.") from exc
-                if body.turn_id and start is not None:
+                # ONLY A WATCHED TURN RECORDS THE HEAD. The record is one key per unit meaning "the
+                # turn currently being streamed", and a submission is by definition not that — the
+                # person is watching something else. Overwriting it would leave the streaming turn's
+                # own no-cursor retry unable to recognise itself, and a retry that does not
+                # recognise itself DISPATCHES A SECOND COPY. That is the failure this whole issue is
+                # about, arriving from the other direction.
+                if stream and body.turn_id and start is not None:
                     _record_chat_turn_head(redis_url, unit_id, body.turn_id, start)
                 resume = start
+        if not stream:
+            # A SUBMISSION'S WHOLE ANSWER IS "IT IS ON THE SERVER NOW", plus the server's own view of
+            # what is still queued — including this one until a worker takes it. The client draws its
+            # rows from this list rather than from what it remembers, which is what makes a reload,
+            # another device and a swapped container agree.
+            return {"ok": True, "id": body.turn_id or "", "session": session, "unit": unit_id,
+                    "pending": inbox_pending(redis_url, unit_id),
+                    "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
         return StreamingResponse(
             _sse(_binding_watch(stream_reader.read(unit_id, resume=resume), subject, session)),
             media_type="text/event-stream",

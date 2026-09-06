@@ -45,12 +45,13 @@ TypeScript copy and nothing for `gate:fact-parity` to keep honest.
 ## The event vocabulary
 
 Jobs ride the channel turns already ride: `XADD unit:<id>:out`, one field `event`, relayed verbatim
-by `RedisStreamReader` → `_sse` → the browser. Four new types, additive to the frozen five:
+by `RedisStreamReader` → `_sse` → the browser. Six types, additive to the frozen five:
 
 | event | emitted by | fields |
 |---|---|---|
-| `job-started` | the turn that asked | `job_id`, `kind`, `target`, `line`, `turn_id` |
-| `job-refused` | the turn that asked | `kind`, `target`, `line`, `turn_id` — **no** `job_id` |
+| `job-started` | the turn that asked, or the job in front of it as it ends | `job_id`, `kind`, `target`, `line`, `turn_id` |
+| `job-queued` | the turn that asked | `job_id`, `kind`, `target`, `line`, `ahead`, `turn_id` |
+| `job-collapsed` | the turn that asked | `job_id` (**the running one**), `kind`, `target`, `line`, `turn_id` |
 | `job-progress` | the job's thread | `job_id`, `window`, `calls`, `line` — a window ended and a fresh one opened |
 | `job-done` | the job's thread | `job_id`, `kind`, `target`, `line`, `ok: true` |
 | `job-failed` | the job's thread, or `serve()` at boot | `job_id`, `kind`, `target`, `line` (+ `ok: false` when a job produced it) |
@@ -58,16 +59,20 @@ by `RedisStreamReader` → `_sse` → the browser. Four new types, additive to t
 **Every one of them carries `session`** — the chat that owns the job (`Vexa-ai/vexa#1613`). See
 *A job belongs to one chat* below for why that is not decoration.
 
+`job-refused` is **gone** (Vexa-ai/vexa#1610). It was the answer to a second act on a busy target;
+that act is now queued, so nothing produces the event and nothing may start doing so again — see
+*Same target: a queue, not a refusal* below for what replaced it and why.
+
 and **every event the job's own turn yields is tagged `{**ev, "job_id": …}` and carries no
 `turn_id`.** That is the whole of "progress reaches the terminal tagged with a job id": a job's
 `tool-call`s are the job's step count, and a consumer that keys on `turn_id` cannot mistake them for
 the chat turn's.
 
-The turn that spawns a job emits, in order: `turn-accepted` · `job-started` (or `job-refused`) ·
-`message-delta` carrying that event's own `line` · `turn-complete`. **It runs no model call at
-all** — the acknowledgement is composed by the runner, not asked for. A turn that had to ask a model
-for its own *"I'll say when it's there"* would be the wait it exists to remove, at a tenth of the
-length.
+The turn that spawns a job emits, in order: `turn-accepted` · `job-started` (or `job-queued`, or
+`job-collapsed`) · `message-delta` carrying that event's own `line` · `turn-complete`. **It runs no
+model call at all** — the acknowledgement is composed by the runner, not asked for. A turn that had
+to ask a model for its own *"I'll say when it's there"* would be the wait it exists to remove, at a
+tenth of the length.
 
 ## The connection stays open
 
@@ -75,11 +80,14 @@ length.
 now closes on `turn-complete` **only when no job it saw start is still open**:
 
 ```python
-if t == "job-started":            open_jobs.add(job_id)
-elif t in ("job-done","job-failed"): open_jobs.discard(job_id)
-elif t == "turn-complete":        turn_done = True
-if turn_done and not open_jobs:   return
+if t in ("job-started", "job-queued"):  open_jobs.add(job_id)
+elif t in ("job-done","job-failed"):    open_jobs.discard(job_id)
+elif t == "turn-complete":              turn_done = True
+if turn_done and not open_jobs:         return
 ```
+
+`job-queued` opens a job for the same reason `job-started` does: a queued act is one this view is
+going to see start, step and land, and closing on its turn's `turn-complete` would drop all three.
 
 With no job in play this is byte-for-byte today's behaviour. The client half matches, in the same
 two lines: `chatStream` keeps a SET of the jobs it started (a marked act spawns one, a turn calling
@@ -134,11 +142,12 @@ working"*. Two independent halves, and each one alone was enough to lose the pre
 
 **The terminal dropped it.** `postIntent` → `ASK_CHAT_EVENT` → `Chat`'s `onAsk` → `send`, whose first
 line returns on `state.busy`. No bubble, no row, no error, nothing on the wire, under a control that
-looked exactly as it does when it works. Now an ask that arrives mid-turn **queues whole** — display,
-prompt, intent, every option — and fires as its own turn the moment the current one ends; a page act
-also puts a job row at the foot of the transcript **at once**, reading `queued behind the current
-turn`, and that row is handed its job id on `job-started` rather than being replaced by a second one.
-Never a silent drop, and never a disabled control.
+looked exactly as it does when it works. Now an ask that arrives mid-turn is **submitted to the
+server at once** (`Vexa-ai/vexa#1610` — #1594's fix queued it whole in this tab, which is a queue no
+other device can see); a page act also puts a job row at the foot of the transcript **at once**,
+reading `queued behind the current turn`, and that row is reconciled against the server's own pending
+list and then handed over on `job-started` rather than being replaced by a second one. Never a silent
+drop, and never a disabled control.
 
 **The worker read it late.** `serve()` is one thread and `run_message` holds it for the whole of a
 chat turn, so a marked act that landed in `unit:<id>:in` behind an ordinary turn was not *read* until
@@ -160,6 +169,28 @@ Two rules the drain keeps, both about not owning what it is walking over:
 
 With no `job` turn wired the drain does nothing at all and a marked prompt still runs inline, exactly
 as before.
+
+## The in-topic is the chat's INBOX (Vexa-ai/vexa#1610)
+
+The other half of *"can i be sure everything submitted there is actually processed?"* was not about
+jobs at all. A message typed mid-turn was queued **in the browser** (`vexa.pendingAsk.<session>` in
+`localStorage`) and sent when the turn ended — a queue with one reader, in one tab. Another device
+never saw it. A cleared browser never sent it. Nothing anywhere recorded that it had existed.
+
+**The rule: everything submitted is on the server the moment it is submitted, and everything on the
+server is processed, in order, once.**
+
+| | |
+|---|---|
+| **Where it lands** | `unit:<id>:in`, the stream `_predeliver` already writes. `POST /api/chat/submit` runs the *identical* composition and dispatch `/api/chat` runs — the same presets, marks, grounding and session index — and then returns instead of streaming. One pipeline, not two. |
+| **What a row shows** | the entry carries an `inbox` stamp: `{id, display, kind, target, at}`. The worker reads `type`/`prompt`/`nonce` and ignores it, so an older worker is unaffected. |
+| **How far it has been drained** | `serve()` publishes its in-topic cursor to `unit:<id>:cursor` (`shared/units.inbox_cursor_key`) as it takes each entry — the boot anchor included. One writer, and it is the process that owns the cursor. |
+| **What is still pending** | `GET /api/chat/pending` = the entries after that cursor, minus two: an entry with no `inbox` stamp (written by a build that had no inbox) and one older than an hour (a worker that never ran). Both filters exist to avoid inventing a queue nobody is in. |
+| **What the browser keeps** | at most an UNSENT copy, across the POST itself, cleared on the ack (`surfaces/inbox.ts`). It is not a queue — it is the answer to "the network dropped between the press and the ack", the one gap the server cannot see. |
+| **How the answer is watched** | when the current turn ends the terminal **attaches** — `POST /api/chat` with `Last-Event-ID`, which never dispatches — from the cursor its own stream ended on. It never re-sends: the worker already holds the words. |
+
+So a reload, a second window, another machine and a swapped terminal container all show the same
+pending list, because none of them is remembering it.
 
 ## Completion
 
@@ -206,14 +237,35 @@ same time, so a process-wide flag would hand the chat turn the job's budget at r
 Only `openai-agent` reads it. `claude-code` and `codex` drive a vendor CLI with its own limits;
 there is nothing here for them to honour.
 
-## Refusal
+## Same target: a queue, not a refusal
 
-One job per `target` (the workspace-qualified page path). A second act on the same page while one
-runs is refused — `job-refused` with a reason — rather than queued. Two agents writing one file is
-the failure `graph/sg/Operating-Loops.md` names in a line, and a queue here would mean the person
-presses Extend twice and waits four minutes for an answer to the first press.
+> **This section reverses the original #1584 rule, and the founder's own session is why.**
+> `Vexa-ai/vexa#1610`, 2026-09-06 13:50Z: he dropped several Extend acts — **each carrying its own
+> instruction line** — onto one page while a job ran, and the chat answered *"There is already
+> something running on `oenb-b5e60c/README.md` — I'll finish that one first"* twice. Every refusal
+> was true. Every instruction it declined was then held by nobody, and only the person who typed it
+> knew that. *"i drop new tasks to that chat, can i be sure everything submitted there is actually
+> processed?"*
 
-Different pages run concurrently; several jobs at once is the normal case.
+**One job per `target` at a time — but the second act waits, in press order, and runs its own brief.**
+The half of the old rule that was right is still enforced: two agents writing one file is the failure
+`graph/sg/Operating-Loops.md` names in a line, so the writer of a page is one job at a time. The half
+that was wrong was making the person the queue. `job-queued` carries the id the act will run under,
+so the row that says it is waiting is the row that later starts.
+
+**The one press that legitimately does not run again is the IDENTICAL one.** Same target and the
+same *composed brief* — the person's instruction line, the preset and the grounding it was composed
+against — is the same act over the same state, and running it twice writes one page twice for one
+answer. It collapses into the job in flight and **says so** (`job-collapsed`, carrying the running
+job's id): that is the whole difference from the refusal it replaces. A refusal ends the press; this
+reports where it went. A different instruction, or the same one over a page that has moved on, is a
+different brief and gets its own turn.
+
+The original objection — *"a queue would mean the person presses Extend twice and waits four minutes
+for an answer to the first press"* — is answered by the collapse: a **double press** is the case that
+objection was about, and it no longer queues anything. A second *instruction* is not a double press.
+
+Different pages still run concurrently; several jobs at once is the normal case.
 
 ## Jobs survive nothing
 
@@ -260,8 +312,9 @@ The `spawn_job` TOOL — the agent choosing to background its own long act — i
 
 - **`openai-agent`** implements its own tool loop in-process, so `spawn_job` is a builtin
   (`BUILTIN_SPECS`) whose execution is a request into `llm/jobs.py` — a register the worker installs
-  a spawner into at boot. Accept or refuse is decided at tool-call time, in the same process, and the
-  model reads the refusal as an ordinary failed tool result and can say so.
+  a spawner into at boot. The answer is decided at tool-call time, in the same process, so the model
+  reads back which of the three happened — started, queued behind the job on that target, or joined
+  to an identical one — and can say so. None of them is a failure any more (Vexa-ai/vexa#1610).
 - **`claude-code`** drives a CLI subprocess whose tool list is the CLI's own; a Python builtin is
   unreachable from it. **The native subagent (`Task`) was considered and rejected**: it runs to
   completion INSIDE the turn, so the turn does not return early, there is no job id on our event
@@ -276,10 +329,16 @@ The `spawn_job` TOOL — the agent choosing to background its own long act — i
 `core/agent/tests/test_jobs.py` — a fake stream, a fake turn, and a real FastAPI app over fakes:
 what the worker is actually told for a Create/Extend press, the spawn returning at once, progress
 carrying the job id and never the turn id, completion and failure each posting one line, a second
-job on the same target refused, a restart telling the chat, `spawn_job` reaching the same runner and
-the same refusal, and the relay holding its view open for the job it watched start — plus, since
-`#1613`, that a boot never reports another chat's job, still reports its own, cleans a pre-owner
-record in silence, and that every event names its session.
+act on the same target **queued** (and ten of them all running, in press order, each with its own
+brief), an identical press collapsing into the one in flight and saying so, a restart telling the
+chat, `spawn_job` reaching the same runner and the same queue, and the relay holding its view open
+for the job it watched start — plus, since `#1613`, that a boot never reports another chat's job,
+still reports its own, cleans a pre-owner record in silence, and that every event names its session.
+
+`core/agent/tests/test_inbox.py` — the inbox: a submission on the server before any worker takes it,
+the pending list identical from anywhere, a row retired by the worker's cursor and not by a reader's
+memory, the two filters that refuse to call something pending, ten submissions during a running job
+all executing in order, and a stream that cannot hold a key still serving every turn.
 
 `core/agent/tests/test_llm_openai_agent.py` — a job's own tool-call budget, the floor under it, a
 window that ends becoming a fresh one over the same brief (and not a failure), a window that made no
@@ -289,3 +348,10 @@ progress ending the job, and a plain turn untouched by any of it.
 job lane in `streamChatTurn` (past `turn-complete`, the shared `commit`, a foreign job ignored), the
 failure line, **a job event from session A never rendering in chat B**, and a `job-progress` note
 changing what the row says without changing what it counts.
+
+`clients/terminal/src/surfaces/__tests__/inbox.test.ts` — the rows come from the server's pending
+list and replace nothing else; a dropped POST is kept and re-sent, so a reload loses nothing.
+
+`clients/terminal/src/surfaces/__tests__/actWhileBusy.test.tsx` — the whole `Chat` mounted: a press
+mid-turn reaches `/api/chat/submit` at once and draws its row, the chat then ATTACHES rather than
+sending again, and a `job-queued` row becomes the row that starts.
