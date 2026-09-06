@@ -52,16 +52,18 @@ by `RedisStreamReader` → `_sse` → the browser. Four new types, additive to t
 | `job-started` | the turn that asked | `job_id`, `kind`, `target`, `line`, `turn_id` |
 | `job-refused` | the turn that asked | `kind`, `target`, `line`, `turn_id` — **no** `job_id` |
 | `job-done` | the job's thread | `job_id`, `kind`, `target`, `line`, `ok: true` |
-| `job-failed` | the job's thread | `job_id`, `kind`, `target`, `line` |
+| `job-failed` | the job's thread, or `serve()` at boot | `job_id`, `kind`, `target`, `line` (+ `ok: false` when a job produced it) |
 
 and **every event the job's own turn yields is tagged `{**ev, "job_id": …}` and carries no
 `turn_id`.** That is the whole of "progress reaches the terminal tagged with a job id": a job's
 `tool-call`s are the job's step count, and a consumer that keys on `turn_id` cannot mistake them for
 the chat turn's.
 
-The turn that spawns a job emits, in order: `turn-accepted` · `message-delta` (the one short line) ·
-`job-started` · `turn-complete`. It runs no model call at all — the acknowledgement is composed by
-the worker, not asked for.
+The turn that spawns a job emits, in order: `turn-accepted` · `job-started` (or `job-refused`) ·
+`message-delta` carrying that event's own `line` · `turn-complete`. **It runs no model call at
+all** — the acknowledgement is composed by the runner, not asked for. A turn that had to ask a model
+for its own *"I'll say when it's there"* would be the wait it exists to remove, at a tenth of the
+length.
 
 ## The connection stays open
 
