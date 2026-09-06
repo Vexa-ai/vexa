@@ -511,7 +511,7 @@ from shared.marks import WRITEBACK_MARK  # noqa: E402 — re-export; see shared/
 # THE THIRD MARK (Vexa-ai/vexa#1584): this act runs as a background JOB, not on this turn. Written
 # by `control_plane/chat_intents.job_prefix`, read here in `run_message`. Same module, same reason
 # — a decision that changes how a prompt is run has to be legible in the prompt.
-from shared.marks import read_job_mark  # noqa: E402 — see shared/marks.py
+from shared.marks import act_label, read_job_mark  # noqa: E402 — see shared/marks.py
 
 # ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
 # dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,
@@ -1443,8 +1443,15 @@ def run_turn_over_workspace(
     # the harness runs, because a turn that dies mid-stream still leaves its user turn in the
     # transcript, and that turn is exactly the one that would render as the machinery prompt.
     # `session_continuity=False` writes nothing: such a turn is not a conversation anybody reads back.
+    #
+    # AN ACT IS NOT A SENTENCE (Vexa-ai/vexa#1588). `human_half` cuts at the sentinel, which on a
+    # turn somebody TYPED leaves their words and on a turn they PRESSED leaves the whole composed
+    # preset — so Extend recorded its own instruction block as the person's speech and the chat
+    # painted it back at them in a grey bubble. `act_label` reads the mark the control plane
+    # already wrote and returns the short label instead; the PROMPT is untouched either way.
     if session and session_continuity:
-        record_user_text(chat_root, session, turn_prompt, human_half(prompt))
+        record_user_text(chat_root, session, turn_prompt,
+                         act_label(prompt) or human_half(prompt))
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)

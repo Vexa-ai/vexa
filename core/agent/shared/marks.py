@@ -81,3 +81,37 @@ def read_job_mark(text: str) -> "tuple[str, str, str] | None":
     if not m:
         return None
     return m.group(1), m.group(2).strip(), (text[:m.start()] + text[m.end():])
+
+
+#: How each act reads to the person who pressed it. The verb is the BUTTON's, not the preset's — a
+#: label is what the reader recognises as the thing they just did.
+_ACT_VERBS = {"create": "Create", "extend": "Extend"}
+
+
+def act_label(text: str) -> "str | None":
+    """THE ONE LINE AN ACT RENDERS AS — ``Extend: kg/entities/person/james-spadafora.md`` — or None
+    when this prompt is not one.
+
+    THE PERSON SEES THE LABEL, NEVER THE MACHINERY (Vexa-ai/vexa#1588). Pressing Extend sends an
+    INTENT; the control plane turns it into the admin-owned preset in ``_global/asks/extend.md``,
+    and that composed block is what reaches the transcript as the turn's prompt. The worker records
+    the person's half of a turn by cutting at the context sentinel (``human_half``) — a machine
+    boundary that is exactly right for a sentence somebody typed and exactly wrong here, because on
+    an act there is no sentence: everything after the sentinel is the preset. So the founder pressed
+    Extend and read the whole ``[extend]`` body back — its "Expand means EVERY direction" section
+    and all — as a grey bubble in his own voice. An earlier Extend, before the intent carried a
+    preset, had shown the short label; the words changed and the display followed them.
+
+    The mark the control plane already writes is what makes the label derivable rather than guessed:
+    it names the KIND the button was and the TARGET it acts on, in the record, where a reader can
+    find it without knowing any English. Nothing here reads the preset.
+
+    Same rule as ``human_half``: this is the DISPLAY half. The prompt is untouched — the agent still
+    gets every word of the preset, which is the half that has to be complete."""
+    m = _JOB_RE.search(text or "")
+    if not m:
+        return None
+    kind = m.group(1).strip().lower()
+    target = m.group(2).strip()
+    verb = _ACT_VERBS.get(kind) or (kind[:1].upper() + kind[1:])
+    return f"{verb}: {target}" if target else verb

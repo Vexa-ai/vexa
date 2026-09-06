@@ -106,7 +106,7 @@ _TURNS_SIDECAR = "{session}.turns.jsonl"
 # ``shared/marks.py``; the worker reads the same constant under its historical name WRITEBACK_MARK.
 # Everything from a marked prompt until the next thing a person actually said is bookkeeping the
 # founder was never meant to read back as his own conversation.
-from shared.marks import PHASE_MARK  # noqa: E402 — re-export under this module's long-standing name
+from shared.marks import PHASE_MARK, act_label  # noqa: E402 — re-export under this module's long-standing name
 
 # The harness's own auto-continue. It is a user line nobody typed — the runner nudging a turn that
 # stopped early — and it rendered as a grey USER bubble reading "Continue from where you left off."
@@ -436,7 +436,13 @@ class WorkspaceReader:
                 turn: dict = {"role": "user", "text": text}
                 # `user_text` is the person's own words as a FIELD; `text` stays the stored prompt so
                 # a record written before the field existed still reaches the terminal's fallback.
-                said = human_words(text)
+                #
+                # AN ACT IS ITS LABEL, WHATEVER WAS RECORDED (Vexa-ai/vexa#1588). A marked act's
+                # `user_text` was the composed preset until the worker learned better, and those
+                # records are in people's own transcripts and are not ours to rewrite. The mark is
+                # in the stored prompt, so the label is derivable here on every read — which also
+                # covers a worker one release behind a terminal that already sends intents.
+                said = act_label(text) or human_words(text)
                 if said is not None:
                     turn["user_text"] = said
                 turns.append(turn)
