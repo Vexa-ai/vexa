@@ -265,7 +265,10 @@ def test_a_target_that_is_not_a_writable_mount_moves_no_cwd(store):
     settings = _settings(store)
     mounts = build_mount_set(settings, "175", [])
     assert _worker_cwd(str(store), "175", mounts, "a-workspace-nobody-mounted") == f"{store}/175"
-    # …nor onto a system tier, whichever way it is named
+    # …nor onto a system tier. `_system` is refused by ROLE, for everybody, always. `_global` is
+    # refused here for the reason the rest of this test is about — subject 175 is not the instance
+    # admin, so his global mount is read-only (Vexa-ai/vexa#1616 lets the ADMIN aim a chat there and
+    # the mount's write bit is the whole difference; `tests/test_global_target.py` pins both sides).
     assert _worker_cwd(str(store), "175", mounts, "_global") == f"{store}/175"
     assert _worker_cwd(str(store), "175", mounts, "_system") == f"{store}/175"
 

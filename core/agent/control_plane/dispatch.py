@@ -477,10 +477,32 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -
     ⚠ THE CHAT'S TARGET COMES FIRST (Vexa-ai/vexa#1611). It is where this conversation writes, so it
     is where a plain ``Write`` with no absolute path has to land — the founder's *"it creates files
     in the wrong workspace, we need so that the thing knew the workspace of writing, if it's
-    specified"*. Only when it is actually a WRITABLE NORMAL mount: naming a slug is not a grant, and
-    a read-only cwd is F59 all over again. Never on a room run — ``build_unit_env`` passes no target
+    specified"*. Only when it is actually a WRITABLE mount: naming a slug is not a grant, and a
+    read-only cwd is F59 all over again. Never on a room run — ``build_unit_env`` passes no target
     there, because decision 22 already decides that run's cwd and a chat's target must not be able
     to talk a room run into writing a desk.
+
+    ⚠ AND FOR THE ADMIN, ``_global`` IS ONE OF THOSE WORKSPACES (Vexa-ai/vexa#1616). Founder,
+    2026-09-06 15:20Z: *"as admin i should just have global as option to choose here as workspace to
+    write to"*. A workspace you may CHOOSE to write to is one an unqualified ``Write`` lands in.
+    #1611's rule refused ``global`` here, so a chat aimed at the company layer moved the prompt's
+    sentence and the tools' default while the file still appeared on the desk — the same split
+    #1611 existed to close, one tier up, and the harder half of it: a turn TOLD it is writing to the
+    organisation has no reason left to qualify its paths. So the target clause refuses ``system``
+    and no longer refuses ``global``, and the ``write`` bit carries the rest.
+
+    That is NOT a weaker test than the route's, and this is why the bit is enough on its own:
+    ``build_mount_set`` sets the global mount read-write from ``global_layer.is_admin`` — the very
+    call ``POST /api/chat/target`` makes before it will store ``_global`` as a target at all. One
+    question, asked once, arriving here as a mount-table fact instead of as a second lookup that
+    could answer differently. A non-admin's global mount is read-only, so it cannot become a cwd
+    even if a target reached here by some other road: two locks on one door, and this is the inner.
+
+    ``_system`` stays refused for EVERYBODY, the admin included. It is chats, sessions, settings and
+    identity, it is writable BY CONTRACT rather than by anyone's decision, and nobody aims a
+    conversation at it. THE FALLBACKS BELOW STILL EXCLUDE ``global`` AS WELL — a target is a choice
+    somebody made, a fallback is not, and drifting a turn into the organisation tier because no desk
+    happened to be writable is precisely the accident this thin tier must not have.
 
     It is applied HERE rather than as ``primary`` on the mount, and that distinction is load-bearing:
     ``primary`` means *"the person's own desk"* to ``engine.desk_mounts`` and to ``_tier_label``,
@@ -502,9 +524,12 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -
     where it is the only answer there is."""
     want = str(target or "").strip()
     if want:
+        # `system` ONLY — see the docstring. `global` is admissible for whoever holds it READ-WRITE,
+        # which is the instance admin and nobody else (`build_mount_set`, via `global_layer.is_admin`,
+        # the same call the target route makes). The `write` bit IS the admin test here.
         aimed = next((m for m in mounts
                       if m.get("slug") == want and m.get("write")
-                      and m.get("role") not in ("global", "system") and m.get("path")), None)
+                      and m.get("role") != "system" and m.get("path")), None)
         if aimed is not None:
             return aimed["path"]
         logger.info("dispatch TARGET %s is not a writable mount for subject=%s — the cwd stays "

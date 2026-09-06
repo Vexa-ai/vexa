@@ -11,7 +11,12 @@ Two things have to be true here, and they are the two sections below:
   2. only an admin can aim a chat there. `_read_target` cannot make that call: it answers `_global`
      to every subject on purpose, because the tier is mounted read-only into every worker and the
      read API mirrors that — `write=True` never narrowed it. So the target route asks the same
-     question the file and entity routes ask, and asks it here rather than at the first write.
+     question the file and entity routes ask, and asks it here rather than at the first write;
+  3. and the turn's CWD follows the target there, so a bare relative `Write` lands in the company
+     layer too. This was the gap the first pass left pinned rather than moved: `_worker_cwd` refused
+     a `global` mount outright, so the prompt's sentence and the tools' default said `_global` while
+     the file appeared on the desk. "as workspace to write to" is the whole ask, and half of it was
+     the half nobody types a slug for.
 
 The client half — the `+` menu entry, the chip and its click — is pinned in
 `clients/terminal/src/minutes/__tests__/globalTarget.test.tsx`.
@@ -27,7 +32,7 @@ from fastapi.testclient import TestClient
 
 from control_plane.api import _Sessions, create_app
 from control_plane.api_shared import GLOBAL_TARGET_NOTE, target_preamble
-from control_plane.dispatch import Dispatcher
+from control_plane.dispatch import Dispatcher, _worker_cwd, build_mount_set
 from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
 
@@ -99,14 +104,17 @@ def stack(tmp_path, monkeypatch):
     return {"root": root, "sessions": _Sessions(), "runtime": _FakeRuntime()}
 
 
-def _client(stack, *, admins: str = ""):
+def _settings(stack, *, admins: str = ""):
     """`global_admin_subjects` is the operator override `global_layer.is_admin` consults first — the
     one door into that answer that does not need an admin-api on the other end of a socket."""
-    settings = load_settings(workspaces_dir=str(stack["root"]),
-                             global_system_workspace_path=str(stack["root"] / "_global"),
-                             global_admin_subjects=admins,
-                             internal_api_secret="s", ui_url="https://app.example.test", redis_url="")
-    app = create_app(Dispatcher(settings, stack["runtime"], _FakeIdentity()),
+    return load_settings(workspaces_dir=str(stack["root"]),
+                         global_system_workspace_path=str(stack["root"] / "_global"),
+                         global_admin_subjects=admins,
+                         internal_api_secret="s", ui_url="https://app.example.test", redis_url="")
+
+
+def _client(stack, *, admins: str = ""):
+    app = create_app(Dispatcher(_settings(stack, admins=admins), stack["runtime"], _FakeIdentity()),
                      stream_reader=_Reader(QUIET_TURN),
                      reader=WorkspaceReader(str(stack["root"])),
                      sessions=stack["sessions"])
@@ -232,16 +240,55 @@ def test_the_worker_is_handed_the_company_layer_as_its_tools_default(stack):
     assert stack["runtime"].envs[-1]["VEXA_TARGET_WORKSPACE"] == "_global"
 
 
-def test_the_turns_cwd_still_stays_off_the_system_tiers(stack):
-    """THE BOUNDARY, PINNED RATHER THAN MOVED. `_worker_cwd` refuses a `global`/`system` mount as a
-    cwd (Vexa-ai/vexa#1611) — so a target of `_global` moves the tools' default and the prompt's
-    sentence, and a bare relative `Write` still lands on the desk. That is one commit's deliberate
-    rule and not this issue's to rewrite; #1616 asked for the menu, the chip and the target."""
+def test_the_turns_cwd_IS_the_company_layer_when_the_admin_aims_a_chat_there(stack):
+    """THE BOUNDARY, MOVED — and the founder moved it. #1611 refused `global` and `system` alike as a
+    turn's cwd, so a chat aimed at the company layer moved the prompt's sentence and the tools'
+    default while a bare relative `Write` still landed on the desk. *"as admin i should just have
+    global as option to choose here as workspace to write to"*: a workspace you may CHOOSE to write
+    to is one an unqualified `Write` lands in, and a turn told it is writing to the organisation has
+    no reason left to qualify its paths. The split this closes is #1611's own, one tier up."""
     client = _client(stack, admins=ADMIN)
     _turn(client, ADMIN, "pchat-admin")
     _aim(client, ADMIN, "pchat-admin")
     _turn(client, ADMIN, "pchat-admin", prompt="write the company's principles")
-    assert not stack["runtime"].envs[-1]["VEXA_WORKSPACE_PATH"].endswith("_global")
+    assert stack["runtime"].envs[-1]["VEXA_WORKSPACE_PATH"].endswith("/_global")
+
+
+def test_a_chat_the_admin_has_NOT_aimed_there_still_works_on_his_desk(stack):
+    """EVERYTHING ELSE IS UNCHANGED. The cwd moves on the TARGET, never on the mount — `_global` is
+    mounted read-write in every one of the admin's turns, and only the chat he aimed writes there.
+    Without this the change would read as "the admin now always works in the company layer", which
+    is the thin tier filling up by default rather than by a decision."""
+    client = _client(stack, admins=ADMIN)
+    _turn(client, ADMIN, "pchat-plain", prompt="hello")
+    assert not stack["runtime"].envs[-1]["VEXA_WORKSPACE_PATH"].endswith("/_global")
+
+
+def test_a_non_admin_can_never_have_the_company_layer_as_a_cwd(stack):
+    """THE INNER LOCK, PINNED ON ITS OWN. The route already answers 403 (above), so a member's chat
+    cannot carry the target at all — but `_worker_cwd` is reached from every dispatch path and must
+    refuse it without help. It has no `settings` to ask, and it does not need one: the mount's
+    `write` bit IS the answer `global_layer.is_admin` gave at `build_mount_set`, the same call the
+    route makes. One question asked once, arriving here as a fact instead of as a second lookup that
+    could answer differently.
+
+    And `_system` stays refused for BOTH of them: it is chats, sessions, settings and identity,
+    writable by contract rather than by anyone's decision, and nobody aims a conversation at it."""
+    settings = _settings(stack, admins=ADMIN)
+    root = str(stack["root"])
+    admin_mounts = build_mount_set(settings, ADMIN, [])
+    member_mounts = build_mount_set(settings, MEMBER, [])
+
+    assert next(m for m in admin_mounts if m["role"] == "global")["write"] is True
+    assert next(m for m in member_mounts if m["role"] == "global")["write"] is False
+
+    assert _worker_cwd(root, ADMIN, admin_mounts, "_global") == f"{root}/_global"
+    assert _worker_cwd(root, MEMBER, member_mounts, "_global") == f"{root}/{MEMBER}", \
+        "a read-only tier is not a cwd — F59, and the member's own desk is where the turn stays"
+
+    system = next(m for m in admin_mounts if m["role"] == "system")["path"]
+    assert _worker_cwd(root, ADMIN, admin_mounts, "_system") != system
+    assert _worker_cwd(root, MEMBER, member_mounts, "_system") != system
 
 
 def test_a_chat_that_is_not_aimed_there_carries_no_rule_about_it(stack):
