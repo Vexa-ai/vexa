@@ -55,7 +55,7 @@ def _rig(monkeypatch, *, head_after, reset=None):
                         lambda uid, limit=3: ["a1b2c3d4e 175: README.md — updated",
                                               "9f8e7d6c5 175: README.md — updated"])
 
-    def fake_dispatch(uid, session, prompt, room=None):
+    def fake_dispatch(uid, session, prompt, room=None, **kw):
         seen["dispatched"].append(prompt)
         return 0
 

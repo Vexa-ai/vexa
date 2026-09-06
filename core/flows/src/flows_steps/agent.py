@@ -19,7 +19,8 @@ def history(uid: str, session: str) -> list:
     return hist if isinstance(hist, list) else []
 
 
-def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None) -> int:
+def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
+                  flow: str = "", step: str = "") -> int:
     """Fire an agent turn; returns the history length BEFORE it (the collect baseline).
     /api/chat is an SSE STREAM that stays open for the whole turn — a client timeout while
     the stream runs is SUCCESS, not failure (the double-dispatch bug of 2026-08-23 evening).
@@ -58,10 +59,25 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
     `collect_reply` waited for a reply that was never coming, for as long as its caller allowed.
     A dispatch that did not happen, reported as one that did, is the exact shape P21 names.
 
-    So: the status is checked, and only a TIMEOUT is treated as success."""
+    So: the status is checked, and only a TIMEOUT is treated as success.
+
+    ``flow`` / ``step`` SAY WHO COMPOSED THIS TURN (Vexa-ai/vexa#1605). Nobody typed it, and on
+    2026-09-06 the founder opened a held meeting's chat and read the whole `process-meeting` kick
+    back as his own grey bubble — because the post carried nothing that said a machine wrote it.
+    They travel as HEADERS, not body fields, and that is deliberate: `ChatBody` is `extra="forbid"`,
+    so a field this side invents 422s the whole dispatch against an agent-api that predates it,
+    while an unread header costs the turn its label and nothing else. agent-api composes the mark
+    (`shared/marks.flow_mark`) — the marks are its vocabulary, and a caller able to compose one
+    could compose any of them.
+
+    Omitted when the caller names neither, so every dispatch that does not identify itself sends
+    exactly the body and headers it has always sent."""
     base = len(history(uid, session))
     body = {"prompt": prompt, "session": session}
     headers = {"X-User-Id": uid}
+    if flow and step:
+        headers["X-Vexa-Flow"] = str(flow)
+        headers["X-Vexa-Flow-Step"] = str(step)
     if room and room.get("meeting_id"):
         headers["X-Internal-Secret"] = require_internal_secret()
         body["room_meeting_id"] = str(room["meeting_id"])

@@ -52,7 +52,8 @@ SILENT_KINDS = frozenset({"highlight"})
 # two literals rather than one flag.
 # ONE SOURCE, three images (shared/marks.py). Re-exported under the names this module has always
 # published, so every reader of `chat_intents.MACHINERY_MARK` is unmoved.
-from shared.marks import MACHINERY_MARK, PHASE_MARK, job_mark  # noqa: E402 — re-export, see above
+from shared.marks import (MACHINERY_MARK, PHASE_MARK, act_mark,  # noqa: E402 — re-export, see above
+                          job_mark)
 SILENT_PREFIX = MACHINERY_MARK + " " + PHASE_MARK + " "
 
 
@@ -116,6 +117,38 @@ def job_prefix(intent) -> str:
     if not is_job(intent):
         return ""
     return job_mark(str(intent.get("kind") or "").strip().lower(), job_target(intent))
+
+
+def act_target(intent) -> str:
+    """What an act that runs INLINE is named after — the page, or for a transcript chip the TERM.
+
+    ``job_target`` answers for the acts that run as jobs, and every one of those acts on a page. The
+    chip does not: `explore` carries a meeting, a segment and the clicked word, so ``job_target``
+    would answer `""` and the label would read `Explore` with nothing after it."""
+    d = intent if isinstance(intent, dict) else {}
+    if str(d.get("kind") or "").strip().lower() == "explore":
+        return _passage(d.get("term"))
+    return job_target(intent)
+
+
+def act_prefix(intent) -> str:
+    """The DISPLAY mark an inline composed act carries, or ``""`` (Vexa-ai/vexa#1605).
+
+    THE GAP #1588 LEFT, named on its own issue. `explore` composes a whole preset — "[explore] They
+    clicked **X** in the transcript of meeting 41 … Write its page with `entity_upsert` …" — and
+    carried no mark, because it is not a job and it is not silent, so the person read their own chip
+    back as a paragraph they had written. A job kind rides ``job_prefix`` and a silent one rides
+    SILENT_PREFIX; this is every other kind of the closed vocabulary, which today is exactly one.
+
+    NEVER THE JOB MARK for these: the worker reads that one to decide whether to run the turn on a
+    background thread, and a chip that took itself off the chat because it wanted a label would be a
+    strange bug to have to explain."""
+    if not isinstance(intent, dict):
+        return ""
+    kind = str(intent.get("kind") or "").strip().lower()
+    if kind not in INTENT_PRESETS or is_job(intent) or is_silent(intent):
+        return ""
+    return act_mark(kind, act_target(intent))
 
 
 def is_silent(intent) -> bool:

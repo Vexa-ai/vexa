@@ -108,6 +108,11 @@ _TURNS_SIDECAR = "{session}.turns.jsonl"
 # founder was never meant to read back as his own conversation.
 from shared.marks import PHASE_MARK, act_label  # noqa: E402 — re-export under this module's long-standing name
 
+# …and the salvage for a turn dispatched BEFORE any of those marks existed (Vexa-ai/vexa#1605):
+# a flow's composed kick names its own kind in its first bracket, which is the only thing a
+# record with no mark still carries.
+from shared.chat_label import composed_label  # noqa: E402 — see shared/chat_label.py
+
 # The harness's own auto-continue. It is a user line nobody typed — the runner nudging a turn that
 # stopped early — and it rendered as a grey USER bubble reading "Continue from where you left off."
 # Dropping it WITHOUT flushing the open agent turn also re-joins the answer it interrupted, which is
@@ -442,7 +447,17 @@ class WorkspaceReader:
                 # records are in people's own transcripts and are not ours to rewrite. The mark is
                 # in the stored prompt, so the label is derivable here on every read — which also
                 # covers a worker one release behind a terminal that already sends intents.
-                said = act_label(text) or human_words(text)
+                said = act_label(text)
+                if said is None:
+                    said = human_words(text)
+                    # …AND A RECORD WRITTEN BEFORE THE MARK IS STILL NOT SPEECH (#1605). A flow
+                    # dispatched the founder's post-meeting turn; the worker recorded the whole
+                    # composed kick as his half, because on a turn nobody typed there IS no other
+                    # half to record. `composed_label` reads the kind that kick opens with — the one
+                    # thing left in the record that says a machine wrote it — and answers "" for
+                    # everything else, so a sentence somebody typed stays their sentence.
+                    if said is not None:
+                        said = composed_label(said) or said
                 if said is not None:
                     turn["user_text"] = said
                 turns.append(turn)

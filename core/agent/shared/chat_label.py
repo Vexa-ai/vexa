@@ -50,7 +50,8 @@ from __future__ import annotations
 
 import re
 
-from shared.marks import JOB_MARK, MACHINERY_MARK, PHASE_MARK, act_label, job_mark
+from shared.marks import (JOB_MARK, MACHINERY_MARK, PHASE_MARK, act_label,
+                          composed_kind_label, job_mark)
 
 #: How long a label may be. The rail is 248px wide and cuts at 48 of its own; this is the index's
 #: long-standing 60 (`api_shared._truncate_title`), kept so a stored title and a computed label are
@@ -124,6 +125,27 @@ def act_from_title(text: str) -> str:
     # `act_label` on a REPAIRED mark, so the verb table stays in one place: a kind this build does
     # not know renders the same way there as it does for a mark that arrived whole.
     return act_label(job_mark(kind, target)) or ""
+
+
+def composed_label(human: str) -> str:
+    """The label for a turn NOBODY TYPED whose mark is not there to read (Vexa-ai/vexa#1605).
+
+    The salvage half of the discipline ``act_from_title`` carries above, and for the same reason:
+    the mark is the record and ``marks.act_label`` is its reader, but the founder's held-meeting
+    chat was dispatched before the mark existed, and those turns are in his own transcript. What is
+    still in them is the composed body's first bracket — `[post-meeting]`, `[email-reply]` — which
+    is how every ask in `_global/asks/` and every prompt in `behavior/prompts/` opens; ``preset_kind``
+    above depends on the same convention one surface along.
+
+    READ THE PERSON'S HALF, NEVER THE WHOLE PROMPT. The caller passes what the worker recorded as
+    the person's words (or ``human_half`` of the composed prompt), not the grounded prompt — whose
+    folded-in workspace and transcript text could carry a line opening with a bracket that is
+    nobody's kind, and a label that overwrote somebody's sentence would be a worse defect than the
+    one this fixes.
+
+    CLOSED, through ``composed_kind_label``: a bracket we do not compose is a person typing one."""
+    m = _KIND_PREFIX.match((human or "").lstrip())
+    return composed_kind_label(m.group(1)) if m else ""
 
 
 def human_head(text: str) -> str:

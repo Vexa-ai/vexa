@@ -210,7 +210,7 @@ def test_the_cap_is_sent_to_agent_api_and_applied_nowhere_else(monkeypatch):
     monkeypatch.setattr(production.mt, "room_order", note_cap)
     monkeypatch.setattr(production.mt, "meeting_row", lambda uid, m, native=None: {"id": 97})
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, s, p, room=None: seen.update(room=room) or 0)
+                        lambda uid, s, p, room=None, **kw: seen.update(room=room) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
 
     def run(flow):
@@ -296,7 +296,7 @@ def test_the_room_addresses_the_ROW_not_the_native_id(monkeypatch):
     monkeypatch.setattr(production.mt, "room_order",
                         lambda uid, mid, participants, names, cap=12: list(participants))
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, s, p, room=None: seen.update(room=room, prompt=p) or 0)
+                        lambda uid, s, p, room=None, **kw: seen.update(room=room, prompt=p) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
     r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": "96088138284", "native": "",
                                      "organizer": "a@x.test", "title": "T",
@@ -319,7 +319,7 @@ def test_the_kick_names_the_desks_it_may_read(monkeypatch):
                         lambda uid, mid, participants, names, cap=12: ["anna.smith@bank.test",
                                                                        "ben@bank.test"])
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, s, p, room=None: seen.update(prompt=p) or 0)
+                        lambda uid, s, p, room=None, **kw: seen.update(prompt=p) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
     r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": 97, "native": "abc",
                                      "organizer": "a@x.test", "title": "T",

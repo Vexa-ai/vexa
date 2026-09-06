@@ -513,6 +513,11 @@ from shared.marks import WRITEBACK_MARK  # noqa: E402 — re-export; see shared/
 # — a decision that changes how a prompt is run has to be legible in the prompt.
 from shared.marks import act_label, read_job_mark  # noqa: E402 — see shared/marks.py
 
+# AND THE SALVAGE FOR A TURN NOBODY TYPED THAT CARRIES NO MARK (Vexa-ai/vexa#1605): a flow's
+# composed kick names its own kind in its first bracket. One implementation, so what this
+# records and what `workspace_reader.history` serves cannot answer differently.
+from shared.chat_label import composed_label  # noqa: E402 — see shared/chat_label.py
+
 # ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
 # dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,
 # [])`), so a phase whose only instruction names `entity_upsert` would be a wasted model call on
@@ -1459,9 +1464,16 @@ def run_turn_over_workspace(
     # preset — so Extend recorded its own instruction block as the person's speech and the chat
     # painted it back at them in a grey bubble. `act_label` reads the mark the control plane
     # already wrote and returns the short label instead; the PROMPT is untouched either way.
+    #
+    # AND A FLOW-DISPATCHED TURN IS NOT A SENTENCE EITHER (Vexa-ai/vexa#1605). Same failure, another
+    # caller: `process_meeting` posts a whole instruction block to `/api/chat`, and `human_half`
+    # hands all of it back as the person's speech. agent-api now marks such a turn with its flow and
+    # step, which `act_label` reads; `composed_label` covers the older shape, where the only thing
+    # naming the composer is the `[kind]` its body opens with.
     if session and session_continuity:
+        _half = human_half(prompt)
         record_user_text(chat_root, session, turn_prompt,
-                         act_label(prompt) or human_half(prompt))
+                         act_label(prompt) or composed_label(_half) or _half)
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)

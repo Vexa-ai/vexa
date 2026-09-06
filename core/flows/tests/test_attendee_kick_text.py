@@ -39,7 +39,7 @@ def test_the_kick_asks_for_one_shared_report_and_no_per_person_file(monkeypatch)
     production.build(reg, _StubDB())
     kicks = []
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, session, prompt, room=None: kicks.append(prompt) or 0)
+                        lambda uid, session, prompt, room=None, **kw: kicks.append(prompt) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
     monkeypatch.setattr(production.mt, "room_order",
                         lambda uid, mid, participants, names, cap=12: [])
@@ -70,7 +70,7 @@ def test_a_group_meeting_asks_the_turn_to_MAINTAIN_the_group_desk(monkeypatch):
     production.build(reg, _StubDB())
     kicks = []
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, session, prompt, room=None: kicks.append(prompt) or 0)
+                        lambda uid, session, prompt, room=None, **kw: kicks.append(prompt) or 0)
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
     monkeypatch.setattr(production.mt, "room_order",
                         lambda uid, mid, participants, names, cap=12: [])

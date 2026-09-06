@@ -214,7 +214,10 @@ def build(reg: Registry, db, home=None) -> None:
                 f"them. DELIVERY CONTRACT: write your answer to the file mail_outbox/{session}.md "
                 "(overwrite fully) — that file is emailed verbatim, plain text."
                 + _untrusted_mail(ctx.refs.get("from_addr") or ctx.refs.get("organizer") or "",
-                                  ctx.refs["text"]))
+                                  ctx.refs["text"]),
+                # NOBODY TYPED THIS EITHER (Vexa-ai/vexa#1605): the person wrote an EMAIL, and the
+                # instruction block wrapped around it is ours. agent-api marks it from these two.
+                flow=ctx.reaction.flow, step=ctx.reaction.step)
             ctx.scratch["dispatched"] = True
             return Wait(seconds=10)
         reply, h = p.ag.collect_outbox(uid, session, ctx.scratch.get("prev_hash"))

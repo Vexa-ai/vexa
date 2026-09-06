@@ -66,7 +66,14 @@ import re as _re
 #: Opens the job mark; the kind and target follow, closed by ``]``.
 JOB_MARK = "[vexa-job:"
 
-_JOB_RE = _re.compile(r"\[vexa-job:([a-z0-9_-]{1,32}):([^\]]{0,512})\]\s*")
+#: THE SHAPE EVERY MARK BELOW SHARES: two ``:``-separated fields, closed by ``]``. Written once so a
+#: reader added later cannot read the fields differently from the writer that composed them.
+_MARK_FIELDS = r"([a-z0-9_-]{1,32}):([^\]]{0,512})\]\s*"
+
+#: THE JOB READER, and it stays job-only. ``_TURN_RE`` below reads three namespaces because "what
+#: does the person read instead of this" is one question for all of them; "does this spawn a
+#: background job" is not, and a display mark able to answer it would run somebody's chip as a job.
+_JOB_RE = _re.compile(_re.escape(JOB_MARK) + _MARK_FIELDS)
 
 
 def job_mark(kind: str, target: str) -> str:
@@ -87,7 +94,132 @@ def read_job_mark(text: str) -> "tuple[str, str, str] | None":
 #: label is what the reader recognises as the thing they just did. `extend_transcript` is a separate
 #: KIND only because its target is a room and not a file (Vexa-ai/vexa#1596); the person pressed the
 #: same Extend and must read the same word back.
-_ACT_VERBS = {"create": "Create", "extend": "Extend", "extend_transcript": "Extend"}
+#: ``explore`` is here and not in JOB_KINDS on purpose: the chip runs INLINE (it is a lookup, not a
+#: 30-120s write), so it never carried a job mark — and therefore carried no mark at all, and the
+#: founder read his own chip back as a paragraph he had written (Vexa-ai/vexa#1605).
+_ACT_VERBS = {"create": "Create", "extend": "Extend", "extend_transcript": "Extend",
+              "explore": "Explore"}
+
+
+# ── the fourth and fifth marks: NOBODY TYPED THIS TURN EITHER (Vexa-ai/vexa#1605) ────────────────
+#
+# The founder, 2026-09-06 13:15Z, opening a held meeting's chat from the rail: the whole
+# `process-meeting` kick — "1) the body — frontmatter-free prose … WRITE NO FILES FOR THIS REPORT …
+# Your REPLY is the artefact …" — painted as HIS OWN grey bubble, above the agent's report. Nobody
+# was at the keyboard: a FLOW dispatched that turn.
+#
+# It is #1588's defect one caller along, and #1588's fix could not reach it. An ACT is marked because
+# this control plane composed it from a button it was told about; a flow turn is composed in another
+# process entirely (`core/flows`), arrives over HTTP at `/api/chat`, and carried nothing that said
+# so. `human_half` then did on it exactly what it does on an act — cut at the context sentinel and
+# hand back everything after it, which here is the whole instruction — and the chat rendered that as
+# speech.
+#
+# THE RULE IS THE ONE ON THE ISSUE: *a turn nobody typed never renders as the person's words*. So
+# every machine-composed turn carries a mark, and there are now three namespaces of ONE shape,
+# because the three answer three different questions about the same turn:
+#
+#   [vexa-job:<kind>:<target>]   this act runs as a BACKGROUND JOB     (#1584 — `read_job_mark`)
+#   [vexa-act:<kind>:<target>]   this act runs inline and DISPLAYS as its label          (#1605)
+#   [vexa-flow:<flow>:<step>]    a FLOW dispatched this turn, and this is which step      (#1605)
+#
+# WHO WRITES THE FLOW MARK: agent-api, on the way past, out of the caller's own identity — flows
+# already knows its flow and its step (`Reaction.flow` / `Reaction.step`) and now says so in two
+# headers. Not flows itself, for the reason the opening of an intent is a NAME and never a string:
+# the marks are this control plane's vocabulary, and a caller able to compose one could compose any.
+#
+# THE MARK IS FURNITURE AND CARRIES NO AUTHORITY — it changes what a bubble reads and nothing else:
+# no mount, no job, no permission. That is why it is not gated on the internal-tier secret the ROOM
+# is. What IS enforced is the SHAPE: both fields are reduced to `[a-z0-9_-]` before they enter a
+# mark, so neither can carry the `]` that would close it early and spill the rest of itself into the
+# prompt as instructions — the hazard `chat_intents._passage` names for a selected passage.
+
+#: Opens the display-only act mark; the kind and target follow, closed by ``]``.
+ACT_MARK = "[vexa-act:"
+
+#: Opens the flow mark; the flow and the step follow, closed by ``]``.
+FLOW_MARK = "[vexa-flow:"
+
+#: Every mark that says NOBODY TYPED THIS — the namespace, then the two fields.
+_TURN_RE = _re.compile(r"\[vexa-(job|act|flow):" + _MARK_FIELDS)
+
+
+def _token(value: str, limit: int = 32) -> str:
+    """One field of a mark, reduced to what a mark may carry — see the block above for why."""
+    return _re.sub(r"[^a-z0-9_-]+", "-", str(value or "").strip().lower()).strip("-")[:limit]
+
+
+def act_mark(kind: str, target: str) -> str:
+    """The prefix an act that runs INLINE carries. The same two fields as ``job_mark`` and
+    deliberately not that mark: this one must never make the worker take the turn off the chat."""
+    return f"{ACT_MARK}{kind}:{target}] "
+
+
+def flow_mark(flow: str, step: str) -> str:
+    """The prefix a flow-dispatched turn carries — or ``""`` when the caller named neither half.
+
+    ``""`` rather than half a mark: a mark with nothing to name is a bracket on somebody's screen,
+    which is the thing this file exists to stop."""
+    f, s = _token(flow), _token(step, 64)
+    return f"{FLOW_MARK}{f}:{s}] " if f and s else ""
+
+
+#: WHAT A MACHINE-COMPOSED TURN IS CALLED — the small table the issue asks for, in one place because
+#: three surfaces (the bubble, the record the worker writes, the reader that serves old records)
+#: must answer the same way or the founder sees the label change when he reloads.
+#:
+#: Keyed THREE ways, and each key earns its place:
+#:   `<flow>:<step>` — the specific answer;
+#:   `<step>`        — because one step runs under more than one flow (`post_meeting` and the gated
+#:                     rehearsal flow both run `process_meeting`) and the label is the STEP's;
+#:   `<kind>`        — the bracket a composed body opens itself with, which is the ONLY thing left
+#:                     to read in a turn dispatched before the marks existed. Those turns are in
+#:                     people's transcripts already and are not ours to rewrite.
+_TURN_LABELS = {
+    # flow steps
+    "post_meeting:process_meeting": "Meeting processed",
+    "process_meeting": "Meeting processed",
+    "feedback_turn": "Email reply",
+    "open_person": "Getting you set up",
+    "open_group": "Setting up the group",
+    # composed bodies, by the kind their first bracket names
+    "post-meeting": "Meeting processed",
+    "email-reply": "Email reply",
+    "prep": "Prepared",
+    "minutes-review": "Minutes reviewed",
+}
+
+
+def turn_label(key: str) -> str:
+    """The label for a flow step — the pair, else the step alone, else the step's own words.
+
+    THE FALLBACK IS THE REASON THIS NEVER RENDERS A BRACKET. A step this build's table has not met
+    reads `Process meeting` rather than nothing, so a flow somebody adds next month is legible on
+    the day it ships instead of on the day someone remembers to come back here."""
+    k = str(key or "").strip().lower()
+    if not k:
+        return ""
+    hit = _TURN_LABELS.get(k)
+    if hit:
+        return hit
+    tail = k.rsplit(":", 1)[-1]
+    hit = _TURN_LABELS.get(tail) or _ACT_VERBS.get(tail)
+    if hit:
+        return hit
+    words = " ".join(tail.replace("-", " ").replace("_", " ").split())
+    return words[:1].upper() + words[1:]
+
+
+def composed_kind_label(kind: str) -> str:
+    """The label for a composed body that names its own kind in its first bracket — CLOSED, with no
+    fallback, and that is the whole difference from ``turn_label``.
+
+    Who wrote the bracket is what separates them. A flow mark was written by this control plane, so
+    an unknown step is still ours and humanising it is safe. A `[kind]` at the head of a prompt was
+    written by whoever composed that prompt — and a PERSON may type `[note] remember this`, whose
+    words are the one thing that must never be replaced by a label. So this answers only for the
+    kinds we know we compose; everything else is somebody's own sentence and stays it."""
+    return _TURN_LABELS.get(str(kind or "").strip().lower(), "")
 
 
 def act_label(text: str) -> "str | None":
@@ -109,11 +241,17 @@ def act_label(text: str) -> "str | None":
     find it without knowing any English. Nothing here reads the preset.
 
     Same rule as ``human_half``: this is the DISPLAY half. The prompt is untouched — the agent still
-    gets every word of the preset, which is the half that has to be complete."""
-    m = _JOB_RE.search(text or "")
+    gets every word of the preset, which is the half that has to be complete.
+
+    AND EVERY OTHER TURN NOBODY TYPED (Vexa-ai/vexa#1605). "What does the person read instead of
+    this" is one question, so this reads all three namespaces. A FLOW's answer is not a verb and a
+    target — nobody pressed anything — but the step's own name for itself, out of ``_TURN_LABELS``:
+    ``[vexa-flow:post_meeting:process_meeting]`` renders *Meeting processed*."""
+    m = _TURN_RE.search(text or "")
     if not m:
         return None
-    kind = m.group(1).strip().lower()
-    target = m.group(2).strip()
-    verb = _ACT_VERBS.get(kind) or (kind[:1].upper() + kind[1:])
-    return f"{verb}: {target}" if target else verb
+    namespace, first, second = m.group(1), m.group(2).strip().lower(), m.group(3).strip()
+    if namespace == "flow":
+        return turn_label(f"{first}:{second}") or None
+    verb = _ACT_VERBS.get(first) or (first[:1].upper() + first[1:])
+    return f"{verb}: {second}" if second else verb

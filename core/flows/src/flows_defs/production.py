@@ -934,7 +934,8 @@ def build(reg: Registry, db) -> None:
             except PromptAbsent as absent:
                 return NotPresent("behavior", detail=str(absent))
             ag.workspace_init(uid)
-            base = ag.dispatch_turn(uid, session_of(ctx), kick)
+            base = ag.dispatch_turn(uid, session_of(ctx), kick,
+                                    flow=ctx.reaction.flow, step=ctx.reaction.step)
             return Done({"baseline": base})
         _open.__name__ = f"open_{prefix}"
         reg.rename_step("_open", f"open_{prefix}")
@@ -1102,7 +1103,10 @@ def build(reg: Registry, db) -> None:
                 uid, session, kick,
                 room={"meeting_id": row_id, "read": room_read,
                       "names": ctx.refs.get("participant_names") or {},
-                      "read_max": read_max} if row_id else None)
+                      "read_max": read_max} if row_id else None,
+                # NOBODY TYPED THIS KICK (Vexa-ai/vexa#1605) — agent-api marks the turn with these
+                # two and the chat shows "Meeting processed" where the instruction block was.
+                flow=ctx.reaction.flow, step=ctx.reaction.step)
             # THE BEFORE WITNESS for the no-desk-write detector below. Taken here, once, rather
             # than at the check: the regrounding branch re-dispatches, and a witness re-read after
             # a stray commit would have already absorbed it.
@@ -1139,7 +1143,8 @@ def build(reg: Registry, db) -> None:
                         f"meeting. You did not read it. Call mcp__vexa__meeting_transcript with "
                         f"meeting_id={ctx.refs['meeting_id']} and tail=0 NOW, read every segment, "
                         "then write it again from what it returns — quoting one verbatim "
-                        "sentence with its speaker. If you cannot call that tool, say so.")
+                        "sentence with its speaker. If you cannot call that tool, say so.",
+                        flow=ctx.reaction.flow, step=ctx.reaction.step)
                     return Wait(seconds=12)
                 raise StepError(
                     "the report is not grounded in the transcript — the agent did not read the "
@@ -1186,7 +1191,8 @@ def build(reg: Registry, db) -> None:
                             f"committed: {landed}. Those commits have been removed. Write the "
                             "report again as your REPLY and nothing else — create no file, update "
                             "no index, update no README. The reply is mailed verbatim, so no "
-                            "preamble and no meta-commentary.")
+                            "preamble and no meta-commentary.",
+                            flow=ctx.reaction.flow, step=ctx.reaction.step)
                         return Wait(seconds=12)
                     landed += f" · reset refused: {undo.get('detail') or 'no detail'}"
                 raise StepError(

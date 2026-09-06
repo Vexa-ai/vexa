@@ -39,7 +39,7 @@ def prompt_for_mail(monkeypatch, text, sender="casey@example.test", **env):
     seen = {}
     monkeypatch.setattr(production.ag, "collect_outbox", lambda uid, s, h: (None, "h0"))
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, s, p, room=None: seen.update(prompt=p) or 0)
+                        lambda uid, s, p, room=None, **kw: seen.update(prompt=p) or 0)
     r = Reaction("rid", "sid", "mail.reply",
                  {"uid": "7", "session": "main", "text": text, "from_addr": sender,
                   "subject": "Re: Minutes", "orig_msgid": "<m1@example.test>"},

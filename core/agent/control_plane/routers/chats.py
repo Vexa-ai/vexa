@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 from jsonschema.exceptions import ValidationError
 from shared import chat_label as chat_label_mod
 from shared import units
+from shared.marks import flow_mark
 
 #: How the terminal names a meeting's own agent session — `meet-<row id>`. The `/api/sessions`
 #: docstring below has always said so; #1602 is the first thing on this side to READ it, because a
@@ -334,8 +335,23 @@ def build(**d) -> APIRouter:
         # is exactly as long to run as the preset's. The mark rides whichever words won.
         # A deployment whose WORKER is older simply runs a marked prompt inline, as it does today.
         _job_mark = chat_intents.job_prefix(body.intent)
-        if _job_mark:
-            body = body.model_copy(update={"prompt": _job_mark + body.prompt})
+        # AND A TURN NOBODY TYPED NEVER RENDERS AS THEIR WORDS (Vexa-ai/vexa#1605). The founder
+        # opened a held meeting's chat and read the whole `process-meeting` kick back as his own
+        # grey bubble: a FLOW composed that turn, in another process, and it reached this route
+        # carrying nothing that said so. The mark is what makes the label derivable from the RECORD
+        # instead of guessed from prose, and it is written HERE for the same reason the job mark and
+        # SILENT_PREFIX are — a caller able to compose the marks could compose any of them.
+        #
+        # THE ORDER IS THE PRECEDENCE. A job mark already says everything an act mark would and
+        # #1588 ruled what it renders as. A SCAFFOLDED opening is machinery-marked by
+        # `scaffolds.turn_prompt` and the client hides that bubble whole, so it is left alone: two
+        # marks on one turn would be two answers to one question.
+        _turn_mark = _job_mark or ("" if scaffold_view is not None else (
+            chat_intents.act_prefix(body.intent)
+            or flow_mark(request.headers.get("x-vexa-flow") or "",
+                         request.headers.get("x-vexa-flow-step") or "")))
+        if _turn_mark:
+            body = body.model_copy(update={"prompt": _turn_mark + body.prompt})
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None
