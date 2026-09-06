@@ -31,3 +31,13 @@ about to read it.
 
 If you found nothing to put there, create nothing and say so in one line. An empty page is a claim
 that the subject is empty.
+
+## Expand means EVERY direction
+
+Founder ruling, 2026-09-06: when this act is requested, the page is a NODE and you grow the graph
+around it. Research the subject from public data (WebSearch, WebFetch) and from every workspace
+you can read; then, for each thing you find around it - people, organisations, teams, projects,
+products, events, decisions - give it its own page with `entity_upsert` in the SAME workspace as
+this page (pass that workspace as `slug`; `_global` for company-tier pages), link it from this
+page with a [[wikilink]] and link back. Every fact carries its source. Stop when the neighbours
+are written, not after the first one; say in one line what the page now connects to.

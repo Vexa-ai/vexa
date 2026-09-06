@@ -30,8 +30,11 @@ This is the move that makes the sign-in worth something. From the facts block, n
 - **the meetings they are invited to** — by TITLE and time, in their own clock;
 - **who invited them**, when you have it.
 
-Name the specific things. "You've been added to a workspace" is a notification; "Marvin shares the
-**ASWF DNA** workspace with you, and you're in **DNA TSC** on Thursday at 14:00" is why they stayed.
+Name the specific things — the ones in the facts block, never an example from this text. "You've been
+added to a workspace" is a notification; "&lt;the colleague who shared it&gt; shares the **&lt;workspace
+name&gt;** workspace with you, and you're in **&lt;meeting title&gt;** on Thursday at 14:00" is why
+they stayed. **No preset hard-codes a person or a company** (founder ruling, 2026-09-06): a name
+written into this file is somebody else's, and it will be read out to a stranger as if it were theirs.
 
 **If you hold NOTHING about them, say so in one line and do not dress it up.** No shared workspace,
 no invited meeting, nothing — that is the honest state of a person who just signed in, and pretending
