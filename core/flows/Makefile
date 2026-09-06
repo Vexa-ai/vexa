@@ -27,6 +27,9 @@ schema: ## regenerate schema.sql from flows_schema models (the SSOT)
 vocab-docs: ## regenerate docs/flows/vocabulary.mdx from step docstrings
 	$(PY) scripts/gen_vocab_docs.py
 
+flow-pages: ## regenerate behavior/global/flows/*.md from the registry (seeded into every _global)
+	$(PY) scripts/gen_flow_pages.py
+
 run-worker: ## the production loop (durable Postgres; VEXA_FLOWS_* env)
 	cd $(SRC) && VEXA_FLOWS_FIXTURE_TRANSCRIPT=$${VEXA_FLOWS_FIXTURE_TRANSCRIPT:-1} \
 	  nohup $(PY) -m flows_worker >/tmp/flows-worker.log 2>&1 & echo "worker → /tmp/flows-worker.log"

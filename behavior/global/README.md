@@ -22,7 +22,7 @@ meeting notes, customer records or documents.
 | [`POLICIES.md`](POLICIES.md) | the rules: who may do what to what, with this deployment's answers |
 | `asks/` | the presets a link opens a chat on. The image tops them up; an admin edits them here |
 | `mail/` | the words this deployment mails, as files. Edit one and the next mail carries it |
-| `flows/` | one page per flow, generated from the code that runs it — trigger, steps, mails, writes |
+| [`flows/`](flows/README.md) | one page per flow, generated from the code that runs it — trigger, steps, mails, writes, the rules it honours, and the Python at the foot |
 
 ## How this file gets written
 

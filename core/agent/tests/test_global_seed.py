@@ -59,6 +59,25 @@ def test_the_seed_carries_the_whole_layer():
     names = {p.name for p in SEED_IN_REPO.iterdir() if p.is_file()}
     for required in global_layer.LAYER_FILES:
         assert required in names, f"behavior/global/{required} is missing from the seed"
+    assert "POLICIES.md" in names, "behavior/global/POLICIES.md is the admin's rule set — it seeds"
+
+
+def test_the_seed_carries_the_generated_flow_pages():
+    """The pages are generated in `core/flows` (`make flow-pages`) and SEEDED from here — that is
+    how a flow's own explanation reaches an instance without anybody carrying it across."""
+    pages = SEED_IN_REPO / "flows"
+    assert pages.is_dir(), "behavior/global/flows/ is missing — run `make flow-pages` in core/flows"
+    assert (pages / "README.md").is_file()
+    assert any(p.name.endswith(".md") and p.name != "README.md" for p in pages.iterdir())
+
+
+def test_the_policy_file_and_the_flow_pages_reach_a_fresh_global(tmp_path):
+    root = tmp_path / "_global"
+    root.mkdir()
+    added = global_seed.top_up(root, [(SEED_IN_REPO, "")])
+    assert "POLICIES.md" in added
+    assert any(a.startswith("flows/") for a in added), \
+        "the flow pages did not reach _global — the copy-in is not walking subdirectories"
 
 
 # ── additive copy-in ─────────────────────────────────────────────────────────────────────────────
