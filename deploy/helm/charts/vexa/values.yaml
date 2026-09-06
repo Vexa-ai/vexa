@@ -321,8 +321,16 @@ agentApi:
     port: 8100
   defaultSubject: "u_live"      # VEXA_AGENT_DEFAULT_SUBJECT single-user fallback until gateway fronts agent-api
   logLevel: "info"
-  # Workspace store the worker mounts and agent-api reads. On k3s (local-path = RWO) keep agentApi at
-  # replicaCount 1; full agent-worker dispatch on k8s needs RWX storage (see README — follow-up).
+  # ONE workspace store with TWO mounters, which is the whole reason accessMode is a value.
+  # agent-api holds this claim for its entire lifetime (deployment-agent-api.yaml volumes:
+  # persistentVolumeClaim), and every worker Pod the runtime spawns mounts the SAME claim —
+  # agent-api passes its name down as VEXA_WORKSPACE_MOUNT_SOURCE and runtime_kernel/k8s_backend.py
+  # builds the worker Pod around it. ReadWriteOnce binds a volume to one NODE, so a worker scheduled
+  # onto any other node fails Multi-Attach and the dispatch never starts; it is also why agent-api's
+  # own rollout is Recreate rather than RollingUpdate (deployment-agent-api.yaml).
+  # Single-node (k3s local-path) is correct on RWO. MULTI-NODE NEEDS ReadWriteMany, which also needs
+  # a storageClassName that supports it (NFS/Longhorn; ODF CephFS on OpenShift) — set both, or pin
+  # every worker to agent-api's node. See deploy/helm/README.md.
   workspaces:
     size: 5Gi
     storageClassName: ""
