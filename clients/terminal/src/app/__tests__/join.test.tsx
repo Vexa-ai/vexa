@@ -159,8 +159,11 @@ describe("the sentence a person reads", () => {
     expect(boundAddress(preview({ restricted_to: ["a@example.com", "b@example.com"] }))).toBeNull();
   });
 
-  it("lands on the workspace's front page, and on the terminal when the id did not resolve", () => {
+  it("lands on the workspace's front page — by id, else by the slug the route now takes", () => {
     expect(landingPath("abcdefghij")).toBe("/w/abcdefghij");
+    // Vexa-ai/vexa#1643: `accept` always returns the slug and the id lookup can fail; the route
+    // takes both, so a join lands IN the workspace rather than on the terminal's front door.
+    expect(landingPath("", "pilot-b5e60c")).toBe("/w/pilot-b5e60c");
     expect(landingPath("")).toBe("/");
     expect(returnPath("t o k")).toBe("/join?i=t%20o%20k");
   });

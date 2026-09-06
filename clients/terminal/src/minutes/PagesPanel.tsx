@@ -109,6 +109,13 @@ export function PagesPanel(p: {
   canBack?: boolean; canForward?: boolean; onBack?: () => void; onForward?: () => void;
   docKind?: "doc" | "meeting";
   body: string | null; onSaved?: () => void;
+  /** WHY THERE IS NO DOCUMENT — one sentence, in the panel, where the page a link named would have
+   *  been (Vexa-ai/vexa#1643). It replaces the body rather than sitting above it, because the whole
+   *  defect it answers is a panel that showed the reader the USUAL page and said nothing: somebody
+   *  who followed a link and met the desk's README cannot tell a spent link from a broken product,
+   *  and the second reading is the one they take. Set only by a refusal; cleared by opening
+   *  anything at all. */
+  notice?: string | null;
   onCollapse?: () => void;
 }) {
   // THE TRANSCRIPT TAB IS NOT A DOCUMENT. It renders the meeting canvas the workbench registers —
@@ -116,7 +123,9 @@ export function PagesPanel(p: {
   // segments while the bot is in the room. Reached through the tab REGISTRY rather than by
   // importing the surface, so this panel keeps the dependency direction the registry exists for:
   // surfaces register, shells render what is registered.
-  const canvas = p.docKind === "meeting" && !p.listing;
+  // A NOTICE OUTRANKS THE CANVAS: the sentence is about the link, not about whatever tab the
+  // chat happened to open with, and the canvas is a whole surface that would render over it.
+  const canvas = p.docKind === "meeting" && !p.listing && !p.notice;
   const MeetingCanvas = canvas ? registry.tabComponent("meeting") : undefined;
   // THE NAVIGATOR'S DOOR (PRD decision 27.4). Default hidden, remembered per browser — the boolean
   // lives here rather than in the shell because the rail is part of this panel, and the panel is
@@ -271,7 +280,7 @@ export function PagesPanel(p: {
               question a reader of a document does not ask, and Edit already shows the source to
               anyone who does. EXTEND moved under the content, where it is a labelled control rather
               than the sixth spark-shaped glyph in a row. */}
-          {p.body !== null && (mode === "view"
+          {!p.notice && p.body !== null && (mode === "view"
             ? <>
                 <button data-doc-act="copy" onClick={() => { void copyText(p.body ?? ""); setCopied(true); }}
                   title={copied ? "Copied" : "Copy contents"} aria-label="Copy contents"
@@ -320,7 +329,9 @@ export function PagesPanel(p: {
           </>}
         </div>}
         <div ref={docBox} data-doc-body style={{ ...ty.body, position: "relative", flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
-          {canvas
+          {p.notice
+            ? <div data-pages-notice style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.6 }}>{p.notice}</div>
+            : canvas
             // the canvas owns its own scrolling, header and padding — it is a whole surface, not a body
             ? (MeetingCanvas
                 ? <MeetingCanvas id={`meeting:${p.docPath}`} params={{ meetingId: p.docPath }} active />
@@ -357,12 +368,12 @@ export function PagesPanel(p: {
           {/* EXTEND, UNDER THE CONTENT (decision 32.1, as ruled 2026-09-06). Only while READING a
               document that exists: an empty page offers Create instead, and a canvas has no page to
               extend at all. */}
-          {doc && p.body !== null && mode === "view" && (
+          {doc && !p.notice && p.body !== null && mode === "view" && (
             <ExtendPageButton workspace={p.docSlug} path={p.docPath} meeting={docMeeting} />
           )}
           {/* PRD decision 32.1's second trigger. Only while READING — an editor's selection is
               being edited, not asked about. */}
-          {doc && p.body !== null && mode === "view" && (
+          {doc && !p.notice && p.body !== null && mode === "view" && (
             <SelectionExtend containerRef={docBox} workspace={p.docSlug} path={p.docPath} body={p.body} meeting={docMeeting} />
           )}
         </div>

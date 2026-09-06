@@ -46,6 +46,32 @@ const panel = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
 beforeEach(() => { onTogglePin.mockClear(); onOpen.mockClear(); asks.length = 0; window.addEventListener(ASK_CHAT_EVENT, onAsk); });
 afterEach(() => { window.removeEventListener(ASK_CHAT_EVENT, onAsk); cleanup(); vi.restoreAllMocks(); });
 
+describe("a link that could not open says ONE SENTENCE, and the document stands down", () => {
+  /** Vexa-ai/vexa#1643. The admin opened a shared workspace's page by URL and the panel showed him
+   *  HIS DESK's README — the ordinary default standing in for an answer. So a refusal replaces the
+   *  body rather than sitting above it: somebody who followed a link and met the usual page cannot
+   *  tell a spent link from a broken product, and the second reading is the one they take. */
+  const SENTENCE = "That page is in Pilot, a workspace you do not have access to.";
+
+  it("renders the sentence where the page would have been", () => {
+    const { container } = panel({ notice: SENTENCE });
+    expect(container.querySelector("[data-pages-notice]")?.textContent).toBe(SENTENCE);
+    expect(container.querySelector("[data-mdx]")).toBeNull();
+  });
+
+  it("offers nothing to do to a document that is not there", () => {
+    const { container } = panel({ notice: SENTENCE });
+    // copy / report / edit are document controls, and Extend has no content to extend
+    expect(container.querySelector("[data-doc-act]")).toBeNull();
+  });
+
+  it("and stands down the moment a document is in front again", () => {
+    const { container } = panel({ notice: null });
+    expect(container.querySelector("[data-pages-notice]")).toBeNull();
+    expect(container.querySelector("[data-mdx]")).not.toBeNull();
+  });
+});
+
 describe('the pin is ON the tab (founder: "tab icon is on tab")', () => {
   it("gives every tab its own, naming the page it is about", () => {
     const { container } = panel();

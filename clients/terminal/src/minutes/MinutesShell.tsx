@@ -19,7 +19,7 @@ import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
   readActiveSet, setSharedActive, setChatTarget, deactivateWorkspace, readWorkspaceFile, readDeskFacts, type DeskFacts,
-  listSharedMemberships, listWorkspaceTree, type Membership,
+  listSharedMemberships, listWorkspaceTree, readWorkspaceById, readWorkspaceBySlug, type Membership,
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
@@ -39,6 +39,8 @@ import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { pendingArrival, useScaffoldArrival } from "./arrival";
+import { chatForDeepLink, resolveWorkspaceDeepLink, type DeepLinkOutcome } from "./deepLink";
+import { workspaceRouteFromPath, type WorkspaceRoute } from "../app/workspaceRoute";
 import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutSeparateTranscript, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
@@ -155,9 +157,32 @@ export function MinutesShell() {
     try { return localStorage.getItem(VIEW_KEY); } catch { return null; }
   });
   const viewSpent = useRef(false);
+  // ── `/w/<workspace>/<path>` — A LINK NAMES A PAGE (Vexa-ai/vexa#1643) ──────────────────────
+  //
+  //  Read from the ADDRESS BAR, once, in the first render — the same reason every other deeplink
+  //  key is read here: the effects below would otherwise race the boot for the first room. Unlike
+  //  the others it is not a localStorage stash and it is not cleaned off the URL, because this
+  //  route does not reload and the URL IS the durable statement: a refresh opens the same page.
+  const [wsLink] = useState<WorkspaceRoute | null>(() => {
+    try { return workspaceRouteFromPath(window.location.pathname); } catch { return null; }
+  });
+  /** The SERVER's answer about `wsLink` — open this page, or say this sentence. Null until it
+   *  answers; the URL grants nothing on its own (`app/w/README.md`). */
+  const [wsOutcome, setWsOutcome] = useState<DeepLinkOutcome | null>(null);
+  const wsLanded = useRef(false);
+  /** WHAT THE PANEL SAYS INSTEAD OF A DOCUMENT — a refusal's one sentence, and nothing else ever.
+   *  The defect it answers is a link that opened the desk's README and said nothing at all. */
+  const [notice, setNotice] = useState<string | null>(null);
+  /** Has the chat list SETTLED — the server's sessions merged, or the attempt over? The landing
+   *  waits for it, so a link can never open in a fresh draft while the reader's own chats are
+   *  still in flight ("without starting a new chat when the viewer has chats"). */
+  const [railSettled, setRailSettled] = useState(false);
   // Is a deeplink about to choose the first room? Read ONCE, here, before the effects that consume
   // these keys run — otherwise the boot below would race them and steal the room they were opening.
   const [deeplinkPending] = useState<boolean>(() => {
+    // A `/w/` link is one of them: it chooses the chat AND the page, in `wsLink`'s own effects
+    // below, so neither the boot nor the sessions landing may open a chat in front of it.
+    if (wsLink) return true;
     try {
       return !!localStorage.getItem("vexa.openMeetingRef") || !!localStorage.getItem("vexa.pendingPreset") || !!localStorage.getItem(VIEW_KEY);
     } catch { return false; }
@@ -211,8 +236,15 @@ export function MinutesShell() {
     let live = true;
     void fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (live) setEmail(((d?.user as { email?: string } | undefined)?.email) ?? null); })
-      .catch(() => undefined);
+      .then((d) => {
+        if (!live) return;
+        const who = ((d?.user as { email?: string } | undefined)?.email) ?? null;
+        setEmail(who);
+        // No identity means no server rail to wait for: the stored one is all there is, so the
+        // list has settled. Without this a `/w/` link would wait forever for a fetch never made.
+        if (!who) setRailSettled(true);
+      })
+      .catch(() => { if (live) setRailSettled(true); });
     return () => { live = false; };
   }, []);
 
@@ -523,6 +555,9 @@ export function MinutesShell() {
       const fromServer = chatsFromSessions(rows);
       const hidden = loadHidden();
       persist((prev) => mergeChats(prev, fromServer, hidden));
+      // The rail is now as complete as it is going to get — what a `/w/` link waits on before it
+      // picks the chat to land in. Same tick as the merge, so the landing reads the merged list.
+      setRailSettled(true);
       // The same pure merge over what is in hand, read-only, so the landing choice below is not an
       // assignment smuggled out of a state updater React may run twice.
       const newest = [...mergeChats(chatsRef.current, fromServer, hidden)]
@@ -538,7 +573,7 @@ export function MinutesShell() {
       if (deeplinkPending || pendingArrival() || !draftRef.current || !newest) return;
       setDraft(null);
       void openChatRef.current(newest);
-    }).catch(() => undefined);
+    }).catch(() => { if (live) setRailSettled(true); });
     return () => { live = false; };
   }, [email, persist, deeplinkPending]);
 
@@ -768,6 +803,8 @@ export function MinutesShell() {
     if (pg.kind === "meeting") ensureMeetingKnown(pg.path);
     setDocPath(pg.path); setDocSlug(pg.slug); setDocKind(pg.kind === "meeting" ? "meeting" : "doc");
     setListing(null); setDocNonce((n) => n + 1);
+    // A sentence about a link that would not open is answered by a document that did.
+    setNotice(null);
   }, []);
 
   /** PIN A PAGE. The amendment folded "open in tab" into this: the strip is history, so everything
@@ -807,6 +844,57 @@ export function MinutesShell() {
     window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
     return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
   }, [openPage]);
+
+  // ── `/w/<workspace>/<path>`: RESOLVE, THEN LAND (Vexa-ai/vexa#1643) ─────────────────────────
+  //
+  //  **The admin opened a shared workspace's README by URL and got a new chat and his own desk's
+  //  README.** Two effects and one ordering rule replace that, and the rule is the fix: *the link
+  //  lands ONCE, after the reader's own chats are known.* Nothing in the old arrival waited for
+  //  anything, so the terminal's default — a draft chat, the desk's page — won every race it
+  //  entered, and a URL that had been understood perfectly well produced no visible effect.
+  //
+  //  FIRST, ASK THE SERVER what the ref means FOR THIS READER: `readWorkspaceById` for a canonical
+  //  id, `readWorkspaceBySlug` for the slug a person pastes. Nothing is rendered from the answer
+  //  here — an answer that arrived before the chat list would open a page into a conversation that
+  //  is about to be replaced.
+  useEffect(() => {
+    if (!wsLink) return;
+    let live = true;
+    void resolveWorkspaceDeepLink(wsLink, { byId: readWorkspaceById, bySlug: readWorkspaceBySlug })
+      .then((out) => { if (live) setWsOutcome(out); });
+    return () => { live = false; };
+  }, [wsLink]);
+
+  //  THEN LAND IT: the chat this link belongs in — never a new one when the reader has any — and
+  //  then the page. `readerChoseFocus` is set for the same reason `open_page` sets it: a person
+  //  asked for this page, so the next quiet write from a turn must not push it aside.
+  //
+  //  A REFUSAL LANDS TOO. The chat still opens (their conversations are still theirs) and the
+  //  panel says the one sentence instead of a document — never the desk's README standing in for
+  //  an answer, which is the half of #1643 that made the link look like a broken product.
+  //
+  //  The chat's MOUNT SET is deliberately untouched: reading a page somebody linked is not a
+  //  statement about where this conversation works, and widening the set would quietly re-aim the
+  //  next turn (Vexa-ai/vexa#1611). The page is readable because the reader is, which is the
+  //  server's answer on `_read_target`, not something this client arranges by mounting.
+  useEffect(() => {
+    if (!wsLink || !wsOutcome || !railSettled || wsLanded.current) return;
+    wsLanded.current = true;
+    void (async () => {
+      // The boot yielded to this link (`deeplinkPending`), so the chat in front has never actually
+      // been laid out — which is why this opens it whether or not it is already the selection. The
+      // draft is the last resort and only when there is genuinely nothing else: F35's draft is a
+      // chat in the sense that you can type in it, and in no other, because it writes no record.
+      const chosen = chatForDeepLink(chatsRef.current, wsOutcome.kind === "open" ? wsOutcome.workspace : undefined)
+        ?? draftRef.current;
+      if (chosen) await openChatRef.current(chosen);
+      if (wsOutcome.kind === "refused") { setNotice(wsOutcome.sentence); return; }
+      readerChoseFocus.current = true;
+      // A LINK'S PAGE IS A TAB, not the preview slot: it is the reason this window is open, and
+      // the reader's first click elsewhere would otherwise evict it (the Obsidian rule).
+      openPinned(wsOutcome.page);
+    })();
+  }, [wsLink, wsOutcome, railSettled, openPinned]);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
    *  tab — going back to somewhere you have been should never fail because you tidied up. */
@@ -1469,7 +1557,7 @@ export function MinutesShell() {
             onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
             listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
             canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
-            body={docBody} onSaved={() => setDocNonce((n) => n + 1)}
+            body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
             onCollapse={() => collapsePages(true)} />}
     </div>
   );

@@ -70,7 +70,11 @@ describe("the canonical URL", () => {
     expect(workspaceRouteFromPath(`/w/${ID}/kg/INDEX.md`)).toEqual({ workspace: ID, path: "kg/INDEX.md" });
     expect(workspaceRouteFromPath(`/w/${ID}/`)).toEqual({ workspace: ID, path: "" });
     expect(workspaceRouteFromPath(`/w/${ID}/../126/kg/INDEX.md`)).toBeNull();
-    expect(workspaceRouteFromPath("/w/NOTANID/x")).toBeNull();
+    // …AND A SLUG, which is not the canonical form and IS what a person pastes (#1643). It used to
+    // parse as nothing at all, so the address bar's own statement produced no effect whatsoever.
+    expect(isWorkspaceRouteId("pilot-b5e60c")).toBe(false);
+    expect(workspaceRouteFromPath("/w/pilot-b5e60c/x")).toEqual({ workspace: "pilot-b5e60c", path: "x" });
+    expect(workspaceRouteFromPath("/w/.system/x")).toBeNull();   // machinery is not addressable
     expect(workspaceRouteFromPath("/meetings/12")).toBeNull();
     expect(isWorkspacePath(`/w/${ID}`)).toBe(true);
     expect(isWorkspacePath("/")).toBe(false);
@@ -78,7 +82,7 @@ describe("the canonical URL", () => {
   it("formats a path with spaces and refuses to build a traversal", () => {
     expect(workspacePath(ID, "kg/a b.md")).toBe(`/w/${ID}/kg/a%20b.md`);
     expect(workspacePath(ID, "../secrets")).toBe(`/w/${ID}`);
-    expect(workspacePath("nope", "x")).toBe("/");
+    expect(workspacePath("../etc", "x")).toBe("/");
   });
 });
 

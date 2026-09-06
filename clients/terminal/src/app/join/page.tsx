@@ -22,7 +22,9 @@
  *    3. REDEEM, `POST /api/workspace/invites/accept` — the route that already existed. It is the
  *       authenticated edge, so it sees the gateway's verified email and enforces the binding
  *       itself; nothing here is a security check, it is the same answer rendered early.
- *    4. LAND on the workspace's front page, `/w/<id>` — resolved from the slug `accept` returns.
+ *    4. LAND on the workspace's front page, `/w/<id>` — resolved from the slug `accept` returns,
+ *       and on `/w/<slug>` when that resolution failed: the route takes either (#1643), so a join
+ *       lands on the workspace it joined rather than on the terminal's front door.
  *
  *  A NEW PERSON TAKES THE SAME PATH. The magic-link door creates the account on redeem exactly as
  *  it does for any other destination, and the first-visit arrival keeps the rule it already has:
@@ -130,7 +132,9 @@ export default function JoinPage() {
       /* the id is a nicety; membership is the thing that happened */
     }
     setPhase("joined");
-    window.location.assign(landingPath(id));
+    // The slug is what `accept` answered with and it always resolved; the id is the nicety that may
+    // not have. Either one addresses the workspace's front page through the one `/w/…` route.
+    window.location.assign(landingPath(id, slug));
   }, [refuse]);
 
   useEffect(() => {

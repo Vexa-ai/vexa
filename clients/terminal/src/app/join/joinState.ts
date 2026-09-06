@@ -143,11 +143,17 @@ export function refusalForAcceptStatus(status: number): RefusalKind {
   return "unreachable";
 }
 
-/** Where a redeemed invite lands: the workspace's own front page when the id resolved, else the
- *  terminal. Landing on `/` is a degradation, not a failure — they ARE in the workspace by then. */
-export function landingPath(workspaceId?: string | null): string {
-  const id = (workspaceId || "").trim();
-  return id ? `/w/${encodeURIComponent(id)}` : "/";
+/** Where a redeemed invite lands: the workspace's own front page, `/w/<ref>` — the SAME route a
+ *  link in a mail or a chat takes (Vexa-ai/vexa#1643), so the invitee's first page and every later
+ *  one are opened by one piece of code rather than two that drift.
+ *
+ *  The id is preferred because it survives a rename; the SLUG is the fallback, and it is a real one
+ *  now that the route accepts both — `accept` always returns the slug, while the id needs a second
+ *  lookup that can fail without the join failing. Landing on `/` is the last resort and a
+ *  degradation, not a failure: they ARE in the workspace by then. */
+export function landingPath(workspaceId?: string | null, slug?: string | null): string {
+  const ref = (workspaceId || "").trim() || (slug || "").trim();
+  return ref ? `/w/${encodeURIComponent(ref)}` : "/";
 }
 
 /** The `next=` a sign-in carries so the round trip comes back to THIS invite and redeems it. */

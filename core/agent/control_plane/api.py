@@ -402,9 +402,18 @@ def create_app(
         """Resolve which workspace dir a read or write targets, returning its ABSOLUTE PATH. Default (no
         slug) = the caller's primary baseline. A `slug` addresses ANOTHER mount in the caller's active set —
         their own non-primary private workspaces (which live under .attached, NOT <root>/<slug>) OR a SHARED
-        workspace they're a member of. Authorization is by construction: the set is built for THIS subject
-        (own actives + shared_active_mounts over their memberships), so a slug not in it → 403. This is what
-        lets the KNOWLEDGE panel render one section per active mount without leaking arbitrary workspaces.
+        workspace they're a member of. The set is built for THIS subject (own actives +
+        shared_active_mounts over their memberships), which is what lets the KNOWLEDGE panel render one
+        section per active mount without leaking arbitrary workspaces.
+
+        THE MOUNT SET IS NOT THE AUTHORIZATION, and both fall-throughs below exist because it was
+        mistaken for one. It is a per-session DISPLAY state — a workspace switched off, an index row gone
+        stale, a chat whose own mount set parked everything else — while the GRANT is a member row in the
+        workspace's own git. So a read reaches, beyond the mount set: any signed-in subject to another
+        person's DESK (the ruling below), and any MEMBER to the shared workspace they belong to
+        (Vexa-ai/vexa#1643). Both are exactly what `access_for` already answers `readable` for, which is
+        the point — a resolver that says you may open something and an endpoint that refuses it is worse
+        than either answer alone.
 
         ``write=True`` STOPS THERE, and that asymmetry is the founder's ruling of 2026-09-02: a desk is
         **readable by any signed-in member of this instance and writable by its owner**. So a read may fall
@@ -456,6 +465,31 @@ def create_app(
             rec = workspace_registry.by_slug(target)
             if rec and rec.get("kind") == "desk":
                 d = Path(str(rec.get("dir") or ""))
+                if d.is_dir():
+                    return d
+        # …AND A SHARED WORKSPACE THIS CALLER IS A MEMBER OF, MOUNTED OR NOT (Vexa-ai/vexa#1643).
+        # The READ twin of the write fix directly below, and the same divergence: the mount set is a
+        # per-session DISPLAY state, membership is the grant, and a page is readable because of the
+        # grant. A member who had switched a workspace off — or, far more commonly, whose CHAT
+        # switched it off for them, since `mountSet` parks every shared workspace outside the chat's
+        # own set on every open — met the identical 403 a stranger gets, on a page the link resolver
+        # had already told them was `readable`.
+        #
+        # That mismatch is not a cosmetic one and this function's own docstring says so about the
+        # desk fall-through immediately above: "a chip that says you may open something and an
+        # endpoint that refuses it is worse than either answer alone". `access_for` answers off
+        # `policy/members.json`; so, now, does this.
+        #
+        # ANY ROLE READS — viewer included, which is the whole of "readable by everyone it is shared
+        # with". WRITE does not come through here: it is the branch below, still gated on
+        # `require_role(..., "contributor")`, so a viewer reads and does not write.
+        if not write and target and subject:
+            try:
+                member_role = membership_mod.is_member(wsr.root, target, subject)
+            except MembershipError:
+                member_role = None      # a slug that is not addressable is not a membership question
+            if member_role is not None:
+                d = membership_mod._ws_dir(wsr.root, target)
                 if d.is_dir():
                     return d
         # OWNERSHIP, NOT MOUNT STATE (F196/F198/F200). The active set built above is a per-session
