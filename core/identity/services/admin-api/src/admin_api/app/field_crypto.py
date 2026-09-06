@@ -198,6 +198,24 @@ class SecretCipher:
         data[DEK_FIELD] = self.wrap_dek(dek, user_id)
         return UserSecretBox(dek, user_id)
 
+    def open_user(self, user_id: int | str, data: Mapping[str, Any]) -> Optional[UserSecretBox]:
+        """This user's box for READING — ``None`` when there is nothing readable. Never mints.
+
+        ``for_user`` is the write path: it creates a DEK when none exists and mutates ``data``. A
+        read path must do neither, and it must not raise on one bad row. A sweep that reads many
+        users' secrets should skip the user whose DEK will not unwrap — a rotated KEK, a row
+        restored from an older backup — rather than fail the whole pass and take every other user's
+        sync down with it. The caller can tell ``None`` from an empty result and surface "reconnect"
+        for that one user.
+        """
+        wrapped = data.get(DEK_FIELD)
+        if not (isinstance(wrapped, str) and wrapped.startswith(DEK_PREFIX)):
+            return None
+        try:
+            return UserSecretBox(self.unwrap_dek(wrapped, user_id), user_id)
+        except SecretCryptoError:
+            return None
+
 
 def require_readable(cipher: Optional[SecretCipher], data: Mapping[str, Any],
                      fields: tuple[str, ...]) -> None:
