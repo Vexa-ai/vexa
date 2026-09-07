@@ -20,7 +20,10 @@ import { createHash } from "node:crypto";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
-const skippable = (name) => name.startsWith(".") || SKIP.has(name);
+// The one population every walker in this file reads. A skippable name is build residue, never a
+// module: dot-dirs (.venv, .pytest_cache, …), the SKIP set, and setuptools' *.egg-info — the same
+// set .gitignore keeps out of the tree.
+const skippable = (name) => name.startsWith(".") || SKIP.has(name) || name.endsWith(".egg-info");
 const rel = (p) => p.slice(ROOT.length + 1) || ".";
 // Every gate's errors print through here, so the missing-dependency hint lives here too: it is
 // appended AFTER each caller's .slice(), so the one line that tells the operator what to actually
@@ -839,7 +842,11 @@ function gateDataflow() {
   // (a2) completeness — the model covers EVERY real service/module/contract/client (no drift), and no
   // node points at a path that no longer exists (no phantom). This is the anti-drift guard: add a module
   // without registering it here and CI goes red.
-  const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
+  // Same population as walkDirs(): a skippable name is never a module, so the bytecode a pytest run
+  // writes under core/<dom>/src (or a .venv, or an *.egg-info) is not an unregistered node.
+  const lsdirs = (p) => existsSync(join(ROOT, p))
+    ? readdirSync(join(ROOT, p)).filter((n) => !skippable(n) && (() => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } })())
+    : [];
   const required = new Set();
   const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const dom of lsdirs("core")) {
