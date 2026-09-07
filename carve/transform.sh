@@ -10,7 +10,7 @@ set -euo pipefail
 if [ -f architecture.calm.json ]; then
   python3 - <<'PY'
 import json
-DROP_PATHS = ("clients/dashboard", "clients/extension")
+DROP_PATHS = ("clients/dashboard", "clients/extension", "clients/claude-plugin")  # claude-plugin: excluded from the carve, founder ruling 2026-09-07
 d = json.load(open("architecture.calm.json"))
 nodes = d.get("nodes", [])
 dropped = set()
