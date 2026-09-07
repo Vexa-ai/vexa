@@ -25,4 +25,5 @@ MCP does not yet verify delegation tokens.
 
 Published from candidate `v0.13.1-alpha.2` (build run 34096619850 at `036911efa`) and aliased to
 `v0.13.1` without a rebuild: eleven images, 21 platform identities — the bot is amd64-only.
-The packet is `releases/v0.13.1/candidate-images.json`.
+The packet is `releases/v0.13.1/candidate-images.json`, validated against the published bytes by
+run 34104704881 with every leg green.
