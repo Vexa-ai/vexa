@@ -130,6 +130,42 @@ env:
   # identical to the demo the pilot was shown at app.dev.vexa.ai. A line that ships the full
   # workbench sets this to `default` (the Dockerfile's spelling for "no mode arg was passed").
   EXPECTED_TERMINAL_MODE: minutes
+  # ── where the legs that RUN our images pull them from (#715) ────────────────────────────────
+  # A full validate is ~150 Docker Hub reads against a measured 200/hour account ceiling
+  # (docker-ratelimit-source: vexaai, ratelimit-limit: 200;w=3600), and the run-the-images legs
+  # are ~60 of them — NOT ONE of which is an identity read. Run 34104704881 died proving it:
+  # validate-compose failed on its FIRST `docker pull "$BOT_REF"` with Hub's unauthenticated
+  # rate-limit text while the account read 0 remaining — the run had spent its own bucket.
+  #
+  # Those legs now pull each image from Google's public pull-through cache and re-tag it to the
+  # canonical Hub name, so every later `docker run` / `compose up` / `make -C deploy/lite up`
+  # finds the image ALREADY LOCAL and reaches no registry at all.
+  #
+  # Reached ANONYMOUSLY, and that is exactly why this is a per-reference mirror and not a
+  # daemon-wide `registry-mirrors` entry. The docker CLI resolves credentials by the hostname in
+  # the reference, finds none for mirror.gcr.io, and sends no Authorization header. dockerd's
+  # classic pull path does the opposite — distribution/registry.go builds a
+  # NewStaticCredentialStore whose Basic(*url.URL) returns the configured credential IGNORING the
+  # URL — so a daemon-wide mirror would hand the push-capable vexaai token to Google's token
+  # endpoint for nothing (the mirror serves our images anonymously). That exposure is why
+  # 036911efa mirrored buildkitd and containerd but deliberately left these legs on Hub; a
+  # per-reference pull closes the remaining half with zero exposure.
+  #
+  # Verified 2026-09-07 from a laptop at zero Hub cost: mirror.gcr.io answers anonymous manifest
+  # GETs with 200 for every reference these legs pull — the whole vexaai/* release set,
+  # postgres:17-alpine, valkey/valkey:8-alpine, minio/minio:latest, minio/mc:latest,
+  # node:20-slim — and the digests it returns for the vexaai set are byte-identical to the
+  # human-reviewed packet at releases/v0.13.0/candidate-images.json (checked against the file,
+  # not against Hub).
+  #
+  # IDENTITY reads never come here. resolve's manifest floor, image-identity, validate-arm64,
+  # the alias/promote jobs and every crane/imagetools read stay on Docker Hub, because those legs
+  # exist to read the source of truth and a cache is not it.
+  #
+  # To drop the mirror, blank this value: `mirror_pull` then pulls straight from Docker Hub with
+  # no warning, which is the pre-#715 behaviour exactly. A mirror MISS does the same per image,
+  # with a warning — so a Google outage degrades instead of reddening a release.
+  PULL_MIRROR: mirror.gcr.io
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────────────────────
@@ -585,6 +621,25 @@ jobs:
           BOT_REF: vexaai/vexa-bot:${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
+          # Pull through $PULL_MIRROR and re-tag to the canonical Hub name (#715 — the rationale is
+          # on PULL_MIRROR in this workflow's top-level env). It has to happen INSIDE this step and
+          # not in the pre-pull below, because the red control needs $BOT_REF absent from the
+          # daemon at the moment `docker create --pull=never` runs.
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
           RED_NAME="vexa-bot-preload-red-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           GREEN_NAME="vexa-bot-preload-green-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           trap 'docker rm -f "$RED_NAME" "$GREEN_NAME" >/dev/null 2>&1 || true' EXIT
@@ -603,19 +658,59 @@ jobs:
 
           # GREEN: pull once, create with pull still disabled, and assert Docker attached the
           # container to the exact local image ID resolved from the published reference.
-          docker pull "$BOT_REF"
+          mirror_pull "$BOT_REF"
           EXPECTED_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$BOT_REF")"
+          # `docker tag` copies no repo digest, so after a mirror pull RepoDigests names the MIRROR
+          # repo — mirror.gcr.io/vexaai/vexa-bot@sha256:… — not the Hub one. The sha256 after the @
+          # is the same value Hub serves for this tag (verified 2026-09-07 against the reviewed
+          # packet). This line is a receipt, not an assertion; the assertion that the published
+          # bytes are the reviewed bytes lives in resolve's floor and image-identity, both of which
+          # read Docker Hub directly and are deliberately NOT mirrored.
           REPO_DIGEST="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BOT_REF")"
           GREEN_CID="$(docker create --pull=never --name "$GREEN_NAME" "$BOT_REF")"
           ACTUAL_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$GREEN_CID")"
           test "$ACTUAL_IMAGE_ID" = "$EXPECTED_IMAGE_ID" \
             || { echo "::error title=bot-preload-green::spawn imageID $ACTUAL_IMAGE_ID != pulled imageID $EXPECTED_IMAGE_ID"; exit 1; }
           echo "✓ green control: $REPO_DIGEST preloaded; Docker create used imageID $ACTUAL_IMAGE_ID"
-      # The compose agent-worker service is a build-only profile — `up`/`pull` skip it, and the
-      # runtime spawns workers through the docker socket API. Pre-pull the PUBLISHED worker image so
-      # the runtime's presence check finds it and this leg exercises the published worker bytes.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
+      # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
+      # Two classes, and both have to be listed or the leg still bills Hub:
+      #   · explicit — the compose agent-worker service is a build-only profile, so `up`/`pull`
+      #     skip it, and the runtime spawns workers through the docker socket API, which does not
+      #     implicit-pull. It must be resident for the runtime's presence check to find it and for
+      #     this leg to exercise the PUBLISHED worker bytes.
+      #   · implicit — `docker compose up --no-build` pulls every other default-profile image
+      #     itself, and those pulls are invisible in this file. The list below is that default
+      #     profile enumerated from deploy/compose/docker-compose.yml on 2026-09-07. A service
+      #     missing from it is an implicit Hub pull — the exact failure this step exists to remove.
+      # Excluded on purpose: vexaai/vexa-bot (the red/green step above owns it — its red control
+      # needs the image ABSENT), and the mailbox / llm-shim / dashboard / search profiles, which
+      # this leg never starts.
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+            mirror_pull "vexaai/$img:$VERSION"
+          done
+          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — compose will pull nothing"
       - name: stack-test (always-on subset) from published images
         working-directory: deploy/compose
         env:
@@ -646,11 +741,40 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
         run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
+      # Same two classes as validate-compose (see its note for the full reasoning): the build-only
+      # agent-worker profile compose never pulls, plus every default-profile image `compose up
+      # --no-build` pulls implicitly. One addition here — the mock bot is built locally FROM
+      # node:20-slim (core/meetings/services/bot/Dockerfile.mock:13), and `docker build` without
+      # --pull uses a resident base, so mirroring it removes one more Hub read and changes nothing
+      # about what gets built. No vexa-bot: this leg's BROWSER_IMAGE is the mock.
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+            mirror_pull "vexaai/$img:$VERSION"
+          done
+          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — compose will pull nothing"
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
-      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
       - name: stack-test + MOCK_BOT scenarios from published images
         working-directory: deploy/compose
         env:
@@ -685,11 +809,37 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
         run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
+      # Same set as validate-mock-fsm (see its note): the build-only agent-worker, every
+      # default-profile image `compose up --no-build` pulls implicitly, and node:20-slim for the
+      # locally-built mock bot.
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+            mirror_pull "vexaai/$img:$VERSION"
+          done
+          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — compose will pull nothing"
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
-      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
       - name: 0.10 backward-compat suite (V010_COMPAT=1) from published images
         working-directory: deploy/compose
         env:
@@ -722,13 +872,38 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Seed compose .env
         run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
-      # The runtime spawns bots through the docker socket API, which does NOT implicit-pull —
-      # the published bot image must already be on the daemon.
-      - name: Pre-pull the published bot image
-        run: docker pull "vexaai/vexa-bot:$VERSION"
-      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
+      # See validate-compose for the full note. This leg needs the widest set of the three: the
+      # runtime spawns bots AND agent-workers through the docker socket API, which does NOT
+      # implicit-pull, so both must already be on the daemon; and `compose up --no-build` pulls
+      # every default-profile image itself. Unlike validate-compose there is no red/green control
+      # here, so vexa-bot is pre-pulled with everything else.
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          mirror_pull "vexaai/vexa-bot:$VERSION"
+          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+            mirror_pull "vexaai/$img:$VERSION"
+          done
+          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — compose will pull nothing"
       - name: stack-test + real bot spawn (COMPOSE_BOT=1) from published images
         working-directory: deploy/compose
         env:
@@ -757,6 +932,37 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
+      # See validate-compose for the full note. Lite's implicit set is not compose's: `make -C
+      # deploy/lite up` runs `docker run` for a postgres and a minio sidecar and a one-shot
+      # minio/mc, and `docker run` implicit-pulls each one (deploy/lite/Makefile § up, read
+      # 2026-09-07). The app image itself is explicit — the bake VERIFY below needs it resident
+      # anyway, and `up` then finds it locally instead of pulling it a second time.
+      # Not here: the LOCAL_STT whisper image (this leg never sets LOCAL_STT) and the bot image
+      # (lite's process backend spawns bots in-process; concurrent-bots.sh only `docker exec`s).
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          mirror_pull "vexaai/vexa-lite:$VERSION"
+          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
       # CI Gap 3 (the #593 analysis): the lite HF-cache bake is BEST-EFFORT —
       # deploy/lite/Dockerfile.lite warms /opt/hf-cache with `… || echo "skipped"`, so an
       # HF rate-limit at build time ships a lite image with an EMPTY cache that would stall
@@ -765,9 +971,9 @@ jobs:
       # published image (--network none, VEXA_HF_OFFLINE=1 → allowRemoteModels=false) and go
       # red if it is missing. warm-hf-cache.mjs + its @huggingface/transformers dep both ship
       # in the lite image at /app (Dockerfile.lite copies /build/core + /build/node_modules).
+      # The image is already resident from the pre-pull above, so this step no longer pulls (#715).
       - name: Offline pyannote bake VERIFY (the baked HF cache must be non-empty)
         run: |
-          docker pull "vexaai/vexa-lite:$VERSION"
           docker run --rm --network none --entrypoint "" \
             -e VEXA_HF_OFFLINE=1 -e VEXA_HF_CACHE=/opt/hf-cache \
             "vexaai/vexa-lite:$VERSION" \
@@ -776,7 +982,9 @@ jobs:
       - name: Point lite at the published image
         run: |
           printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
-      - name: Bring lite up (pulls vexaai/vexa-lite:$VERSION)
+      # Pulls nothing any more — the pre-pull step above left vexaai/vexa-lite:$VERSION and the
+      # three sidecar images resident (#715).
+      - name: Bring lite up (from the pre-pulled vexaai/vexa-lite:$VERSION)
         run: make -C deploy/lite up init-db
       - name: Probe the front doors (make test exits non-zero on failure)
         run: |
