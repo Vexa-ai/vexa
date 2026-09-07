@@ -25,6 +25,7 @@ export CARVE_INCLUDE=(
   Makefile
   clients/terminal
   clients/slim
+  clients/claude-plugin   # Claude Code plugin: manifest + skills, no code; the CALM model names it (v0.12.27)
   # packages/transcript-rendering: shared transcript state library (published as
   # @vexaai/transcript-rendering, dist/ tracked). core/meetings/modules/mixed-pipeline's
   # eval-ui serves its dist at runtime and its test suite lstat()s the path — absent from
