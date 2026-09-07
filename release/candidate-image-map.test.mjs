@@ -399,3 +399,33 @@ test("v0.13.0 canonical packet binds the alpha.3 train candidate (schema 2, elev
     21,
   );
 });
+
+test("v0.13.1 canonical packet binds the alpha.2 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.13.1/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "4e36b694573ed445e7aab6a6b01cae257d3fd938471f66e224ee6e7bcc82ef1c",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.13.1");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.13.1-alpha.2");
+  assert.equal(map.build_source, "036911efa92dc1e97f597926fbbbe7ea09f337c5");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/34096619850",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:e9a9876ed7c2ccfd140c61624d7e471a10aabf22647f5a48d3ceb986b12f1ce4",
+  );
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
+  );
+});
