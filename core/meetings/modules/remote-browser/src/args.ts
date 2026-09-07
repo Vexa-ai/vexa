@@ -38,7 +38,12 @@ export function getAuthenticatedBrowserArgs(): string[] {
     '--disable-site-isolation-trials',
     '--in-process-gpu',
     '--use-fake-ui-for-media-stream',
-    '--use-file-for-fake-video-capture=/dev/null',
+    // --use-file-for-fake-video-capture belongs to the join lane alone (browser-args.ts),
+    // which resolves it from BOT_FAKE_VIDEO_FILE. Setting it here too would place it TWICE on
+    // the launched command line, because capture-bridge.ts composes
+    // [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()] — and a duplicated flag is
+    // only visible on a running bot's /proc/<pid>/cmdline, never in either source file.
+    // One flag, one owner.
     '--disable-features=VizDisplayCompositor',
     '--password-store=basic',
   ];
