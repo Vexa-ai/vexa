@@ -13,9 +13,10 @@ This file is the actor contract: intake, claim, and how a session behaves in the
 
 ## Researching Vexa? Start here
 
-- **Found something** (bug, gap, docs lie)? **File a GitHub issue** — every report enters
-  `state: incoming` and waits for triage — three days is our target and we are not hitting it
-  (measured 2026-08-20: 26 waiting, median 13 days). Findings are contributions.
+- **Found something** (bug, gap, docs lie)? Record a concrete, reviewable finding. If the
+  current request authorizes a public contribution, **file a GitHub issue**; otherwise return the
+  finding to the requester. Published reports enter `state: incoming` and await triage; consult
+  the live queue for current timing. Research or audit alone does not authorize publication.
 - **Want to contribute?** The whole roadmap comes back in one public GraphQL call:
 
 ```bash
@@ -65,7 +66,8 @@ Full page: https://docs.vexa.ai/vexa-mcp
 A prepared issue is a worked delivery spec — read it end to end before touching code:
 
 - **Where we are (honest)** — code-grounded claims (`file:line`), era notes where a report
-  predates the tree. Spot-check them; a wrong claim is a finding, report it on the issue.
+  predates the tree. Spot-check them; a wrong claim is a finding. Report it to the requester, or
+  on the issue when that activity is authorized.
 - **Components** — your waypoints: one module/seam each, with the existing harness + fixtures
   you compose (you don't invent scaffolding).
 - **Prepared solution + forks** — the mechanism and the branches you may actually hit.
@@ -77,6 +79,11 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
   until its docs move with it and someone is named to witness it.
 
 ## Claiming — and say hello on Discord
+
+This workflow applies only when the current request authorizes the public contribution and its
+issue activity. An agent sends Discord messages only with explicit authorization for that channel;
+it must not speak as the human. If outreach is not authorized, prepare the claim or update locally
+and report the pending step. The rights declaration and maintainer gates below remain unchanged.
 
 1. **Comment on the issue** to claim it (D14b).
 2. **Announce it on [Discord](https://discord.gg/Ga9duGkVz9)** — strongly recommended: one line,
@@ -98,9 +105,9 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
   SHA. Before an amend/rebase/force-push, show the exact rewrite and obtain explicit approval;
   prefer the DCO App's individual remediation commit on a shared branch.
 
-- **Discord is the working channel** — blockers, steering, quick questions live there while you
-  work. One rule keeps the record honest: **anything decided lands back on the issue**, or it
-  didn't happen. The issue is the source of truth; Discord is the speed.
+- **Discord is the working channel for authorized outreach** — blockers, steering, and quick
+  questions may go there when the human has authorized messages to that channel. One rule keeps
+  the record honest: **anything decided lands back on the issue**, or it didn't happen. The issue is the source of truth; Discord is the speed.
 - **Your own worktree BEFORE your first edit — always.** A session's opening move on any work
   that will touch files is `git worktree add ../vexa-<slug> -b <your-branch>`; only then edit.
   You do not own `main`, the primary checkout, or any tree you did not create this session —
