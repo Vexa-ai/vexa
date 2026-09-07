@@ -25,6 +25,7 @@ export CARVE_INCLUDE=(
   Makefile
   clients/terminal
   clients/slim
+  behavior                # public behaviour showcase (queue/mail words) baked into the flows image; core/flows reads it
   # packages/transcript-rendering: shared transcript state library (published as
   # @vexaai/transcript-rendering, dist/ tracked). core/meetings/modules/mixed-pipeline's
   # eval-ui serves its dist at runtime and its test suite lstat()s the path — absent from

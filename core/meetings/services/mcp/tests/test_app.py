@@ -90,6 +90,20 @@ def test_request_meeting_bot_with_url_parses_teams(client, gateway, auth):
     assert "meeting_url" not in body  # only legacy long Teams links forward the raw URL
 
 
+def test_request_meeting_bot_with_url_forwards_zoom_join_url(client, gateway, auth):
+    # #1630: meeting-api refuses a zoom request without meeting_url (the join URL carries its host),
+    # and the parser keeps meeting_url only for long Teams links and Jitsi — so the MCP must
+    # forward the caller's Zoom URL verbatim, or no agent can ever start a Zoom bot.
+    url = "https://us05web.zoom.us/j/87914358542?pwd=fdqOBxbHLR80RmXAPIvVhZVfnyROP1.1"
+    r = client.post("/request-meeting-bot", headers=auth, json={"meeting_url": url})
+    assert r.status_code == 200
+    body = gateway.last_json()
+    assert body["platform"] == "zoom"
+    assert body["native_meeting_id"] == "87914358542"
+    assert body["passcode"] == "fdqOBxbHLR80RmXAPIvVhZVfnyROP1.1"
+    assert body["meeting_url"] == url
+
+
 def test_request_meeting_bot_url_and_id_rejected(client, auth):
     r = client.post(
         "/request-meeting-bot",

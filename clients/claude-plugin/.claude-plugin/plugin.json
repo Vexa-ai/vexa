@@ -1,0 +1,34 @@
+{
+  "name": "vexa",
+  "displayName": "Vexa",
+  "version": "0.1.0",
+  "description": "Send a bot to a Google Meet, Teams or Zoom call and read the transcript, live or after, with speakers labelled. Hosted at api.cloud.vexa.ai, or point it at your own self-hosted Vexa.",
+  "author": { "name": "Vexa", "url": "https://github.com/Vexa-ai" },
+  "homepage": "https://docs.vexa.ai/vexa-mcp",
+  "repository": "https://github.com/Vexa-ai/vexa",
+  "license": "Apache-2.0",
+  "keywords": ["meetings", "transcription", "google-meet", "microsoft-teams", "zoom", "meeting-bot", "mcp"],
+  "userConfig": {
+    "vexa_api_key": {
+      "type": "string",
+      "title": "Vexa API key",
+      "description": "From https://vexa.ai/account (hosted) or printed by `make all` on a self-hosted stack. Or open https://vexa.ai/connect and paste the prompt into Claude Code instead of installing this plugin.",
+      "sensitive": true,
+      "required": true
+    },
+    "vexa_mcp_url": {
+      "type": "string",
+      "title": "Vexa MCP URL",
+      "description": "Hosted: https://api.cloud.vexa.ai/mcp. Self-hosted: your gateway's /mcp, e.g. http://localhost:18056/mcp.",
+      "default": "https://api.cloud.vexa.ai/mcp",
+      "required": false
+    }
+  },
+  "mcpServers": {
+    "vexa": {
+      "type": "http",
+      "url": "${user_config.vexa_mcp_url}",
+      "headers": { "Authorization": "Bearer ${user_config.vexa_api_key}" }
+    }
+  }
+}
