@@ -74,6 +74,8 @@ spec:
               value: {{ .Values.runtime.speakerStream.maxBufferSec | default "" | quote }}
             - name: BOT_SPEAKER_IDLE_TIMEOUT_SEC
               value: {{ .Values.runtime.speakerStream.idleTimeoutSec | default "" | quote }}
+            - name: VEXA_CSRC_INACTIVE_MS
+              value: {{ .Values.runtime.csrcInactiveMs | default "" | quote }}
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:

@@ -85,7 +85,11 @@ const receiver = (sources: () => ContributingSourceLike[]) => ({
   check('past inactiveMs the deactivation is SYNTHESIZED (the transport never sends this edge)',
     out.length === 2 && out[1].active === false && out[1].csrc === 7 && out[1].tMs === t,
     JSON.stringify(out));
-  check('the default inactivity window is 400ms', CSRC_INACTIVE_MS === 400);
+  // The module's own default spans a PACKET gap (jitter, DTX), not a speech PAUSE. It is only a
+  // default: the measured production window is longer and is passed in by the composition root,
+  // so what this file owns is the SEAM, not the number production runs on.
+  check('the built-in window is the packet-gap default, and nothing more than a default',
+    CSRC_INACTIVE_MS === 400, String(CSRC_INACTIVE_MS));
 
   // Speaking again is a NEW activation — turns are edges, not a level.
   speaking = true; lastSpoke = t; poll.poll();
@@ -98,6 +102,59 @@ const receiver = (sources: () => ContributingSourceLike[]) => ({
   const after = out.length;
   poll.poll();
   check('a poll after destroy() emits nothing', out.length === after);
+}
+
+// ── the inactivity window is a PARAMETER, not a constant ─────────────────────────────────
+// A caller with a MEASURED window must be able to hand it over instead of forking this file —
+// the seam, not a copied constant, is the contract.
+{
+  let t = 1_900_000_000_000;
+  const out: CsrcTransition[] = [];
+  let speaking = true;
+  let lastSpoke = t;
+  const poll = createCsrcPoll({
+    onTransition: (x) => out.push(x),
+    now: () => t,
+    timeOrigin: () => 0,
+    inactiveMs: 800,
+    receivers: () => [receiver(() => [{ source: 9, timestamp: speaking ? t : lastSpoke, audioLevel: 0.4 }])],
+  });
+  poll.poll();
+  check('override: the source opens a turn', out.length === 1 && out[0].active === true, JSON.stringify(out));
+  speaking = false;
+  t += 500; poll.poll();
+  check('override: 500ms of silence — past the 400ms default, inside the caller\'s 800ms — holds the turn OPEN',
+    out.length === 1, JSON.stringify(out));
+  t += 400; poll.poll();   // 900ms > 800ms
+  check('override: past the caller\'s window the deactivation is synthesized',
+    out.length === 2 && out[1].active === false, JSON.stringify(out));
+  poll.destroy();
+}
+
+// ── an unusable window never reaches the comparisons ────────────────────────────────────────
+// NaN makes both liveness comparisons false: every source would re-activate and re-deactivate on
+// every poll. The sensor is the point of introduction, so it is the sensor that refuses it.
+{
+  for (const bad of [Number.NaN, 50, Number.POSITIVE_INFINITY]) {
+    let t = 1_900_000_000_000;
+    const out: CsrcTransition[] = [];
+    const logs: string[] = [];
+    const poll = createCsrcPoll({
+      onTransition: (x) => out.push(x),
+      now: () => t,
+      timeOrigin: () => 0,
+      inactiveMs: bad,
+      log: (m) => logs.push(m),
+      // always 200 ms stale: inside the 400 ms default, so a healthy sensor holds ONE activation
+      receivers: () => [receiver(() => [{ source: 11, timestamp: t - 200, audioLevel: 0.4 }])],
+    });
+    poll.poll(); t += 100; poll.poll(); t += 100; poll.poll();
+    check(`unusable inactiveMs=${String(bad)}: falls back to the default — one activation, no flip-flop`,
+      out.length === 1 && out[0].active === true, JSON.stringify(out));
+    check(`unusable inactiveMs=${String(bad)}: is said through log`,
+      logs.some((m) => m.includes('not a usable window')), JSON.stringify(logs));
+    poll.destroy();
+  }
 }
 
 // ── two concurrent sources ──────────────────────────────────────────────────────────────────────

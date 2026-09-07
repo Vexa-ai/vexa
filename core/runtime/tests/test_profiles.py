@@ -61,12 +61,16 @@ def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
     monkeypatch.setenv("BOT_ALONE_SILENCE_WINDOW_MS", "60000")
     monkeypatch.setenv("BOT_SPEAKER_MIN_AUDIO_SEC", "1")
     monkeypatch.setenv("BOT_SPEAKER_CONFIRM_THRESHOLD", "1")
+    monkeypatch.setenv("VEXA_CSRC_INACTIVE_MS", "1200")
     monkeypatch.delenv("BOT_SPEAKER_SUBMIT_INTERVAL_SEC", raising=False)
     reg = default_registry()
     assert reg.get("meeting-bot").base_env == {
         "BOT_ALONE_SILENCE_WINDOW_MS": "60000",
         "BOT_SPEAKER_MIN_AUDIO_SEC": "1",
         "BOT_SPEAKER_CONFIRM_THRESHOLD": "1",
+        # the CSRC window override must actually reach the spawned bot's process env —
+        # capture-bridge guards the value; the kernel's job is only to carry it
+        "VEXA_CSRC_INACTIVE_MS": "1200",
     }
 
 

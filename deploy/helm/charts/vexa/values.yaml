@@ -250,6 +250,8 @@ runtime:
     idleTimeoutSec: ""
   # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
   aloneSilenceWindowMs: ""
+  # Teams CSRC transport-sensor inactivity window (ms). Empty uses the bot's measured 800 ms.
+  csrcInactiveMs: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
