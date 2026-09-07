@@ -1,0 +1,9 @@
+{
+  "event": "invite.received",
+  "owner": "flows",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "subject"
+  ],
+  "description": "An invitation arrived at the shared mailbox; triggers invite_intake. Recorded here from core/flows/mcp.tools.v1.json `publishes_events`, on the same terms as meeting.completed."
+}

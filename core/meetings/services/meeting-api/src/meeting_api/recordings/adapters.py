@@ -202,6 +202,36 @@ class SqlAlchemyRecordingRepo:
             m = (await db.execute(select(Meeting).where(Meeting.id == meeting_id))).scalars().first()
             return m.user_id if m else None
 
+    async def prepare_recording_deletion(self, user_id, recording_id):
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            meetings = (await db.execute(
+                select(Meeting).where(Meeting.user_id == user_id).with_for_update()
+            )).scalars().all()
+            for meeting in meetings:
+                data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+                recordings = list(data.get("recordings") or [])
+                recording = next((r for r in recordings if r.get("id") == recording_id), None)
+                if recording is None:
+                    continue
+                if meeting.status not in ("completed", "failed"):
+                    return {"error": "conflict"}
+                prepared = {
+                    **recording, "deletion_pending": True, "meeting_id": meeting.id,
+                }
+                data["recordings"] = [
+                    prepared if r.get("id") == recording_id else r for r in recordings
+                ]
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+                return prepared
+            return None
+
     async def list_meeting_recordings(self, user_id):
         from sqlalchemy import select
 

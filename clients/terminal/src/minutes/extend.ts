@@ -1,0 +1,330 @@
+/** "EXTEND" — send the open chat to explore the page, or a piece of it (PRD decision 32).
+ *
+ *  Founder: *"an extend button that would request the same chat that is open now — just go explore
+ *  the page in question or a highlighted text from a file, so the agent would go explore that
+ *  further following the logic of the context and the chat and the focus."*
+ *
+ *  THE SAME CHAT, NOT A NEW ONE. It posts a turn into whatever chat is open, through the same
+ *  `ASK_CHAT_EVENT` seam a canvas chip already uses — so the turn inherits that conversation's
+ *  context, focus and mount set by construction rather than by re-composing them here.
+ *
+ *  WHAT THE PERSON SEES IS THE COMPACT FORM. `Extend: kg/plan.md — "…"`, never the prompt. The
+ *  preset text is the agent's business; a bubble that renders it puts words in the person's mouth
+ *  they did not write, and then their next message argues with a paragraph they never said. The ask
+ *  seam has carried a separate `display` since the canvas chips — this is the same rule, and when
+ *  F47's `user_text` lands on the record it is the same rule again, one layer down.
+ *
+ *  UNTIL THE SERVER HALF LANDS, BOTH TRAVEL. The typed `intent` is what the `extend` preset will
+ *  read; the prompt is the plain sentence that works today. A build where the server ignores the
+ *  intent still does the right thing, and a build where it reads it is not confused by the
+ *  sentence — the two say the same thing.
+ */
+import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { actPressed } from "../surfaces/actState";
+import { isMemberIntent, isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
+import { actTarget, isJobIntent } from "../surfaces/jobs";
+import { navigateView } from "./roomView";
+
+/** How much of a selection the BUBBLE shows. The intent carries up to 2000 characters; a bubble is
+ *  a label, and a paragraph rendered as one is the composed-text failure wearing a quotation mark. */
+export const PREVIEW_MAX = 80;
+
+const VERB: Record<ChatIntentKind, string> = {
+  extend: "Extend", create: "Create", explore: "Explore", highlight: "Highlight",
+  // Extend on a transcript passage is EXTEND to the person who pressed it — the same word on the
+  // same control (Vexa-ai/vexa#1596). Only the kind differs, because only the server needs to know
+  // that this one names a room rather than a file. `shared/marks._ACT_VERBS` says the same thing on
+  // the server side, for the label a reload rebuilds from the record.
+  extend_transcript: "Extend",
+  // Vexa-ai/vexa#1627 — the page's own act. `shared/marks._ACT_VERBS` carries the same words
+  // for the label a reload rebuilds from the record.
+  policies_wizard: "Set up policies",
+  // Vexa-ai/vexa#1632 — the workspace front page's three membership acts. `shared/marks._ACT_VERBS`
+  // carries the same three words for the label a reload rebuilds from the record.
+  member_add: "Add a member", member_role: "Change role", member_remove: "Remove a member",
+  // Vexa-ai/vexa#1639 — writing a flow, and sending the step proposal writing one produced. ONE
+  // verb for both halves: the label says what the conversation is, and the page it was pressed on
+  // says which half. `shared/marks._ACT_VERBS` carries the same word.
+  flow_author: "Write a flow",
+};
+
+/** WHAT EACH ROLE MEANS, IN THE WORDS THE PERSON IS ASKED TO AGREE TO (Vexa-ai/vexa#1632). Derived
+ *  from the seed `POLICIES.md` — *"a member reads a group; an owner or contributor writes it"* — and
+ *  written once, here, because all three membership acts say them and three spellings of one
+ *  permission is three chances to describe the same grant differently. */
+export const ROLE_SENTENCES =
+  "an owner writes this group and can add or remove its members; " +
+  "a contributor writes this group; a reader reads this group and does not write it";
+
+/** HOW THE PERSON'S OWN LINE IS INTRODUCED to the agent (Vexa-ai/vexa#1593). One sentence, and the
+ *  same one the server writes when a preset carries no `{{instruction}}` token
+ *  (`chat_intents.INSTRUCTION_LEAD`) and the same one the two asks put above it — three spellings
+ *  of one thing would be three ways for the agent to read it differently. It says WHOSE words
+ *  follow, because that is the whole point: the preset is ours, this line is theirs. */
+export const INSTRUCTION_LEAD = "They typed this on the button, in their own words — what to do with it:";
+
+/** Collapse the whitespace a rendered selection carries — a highlight dragged across a paragraph
+ *  break arrives with newlines in it, and they belong in the intent, never in a one-line label. */
+const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** The quotation a label carries: one line, and short enough to stay a label. */
+function preview(selection: string): string {
+  const flat = oneLine(selection);
+  return flat.length > PREVIEW_MAX ? `${flat.slice(0, PREVIEW_MAX).trimEnd()}…` : flat;
+}
+
+/** THE BUBBLE. Compact by construction: a verb, the page, and — when there is one — a short
+ *  quotation of what was highlighted. */
+export function compactLabel(intent: ChatIntent): string {
+  // A CHIP CLICKED IN A TRANSCRIPT SHOWS THE WORDS, not the meeting it was said in: the person is
+  // looking at the room already, and "Explore: Kaar Tech (meeting 41, segment …)" spends the whole
+  // label on the two facts they can see.
+  if (intent.kind === "explore") return `Explore: ${intent.term}`;
+  // Highlight is silent (decision 35.2) and never reaches a bubble; the label exists only so a
+  // caller that logs one has something honest to log.
+  if (intent.kind === "highlight") return "Highlight";
+  // A TRANSCRIPT PASSAGE HAS NO PAGE TO NAME (Vexa-ai/vexa#1596), so the label names the room and
+  // quotes the words — the same two facts, in the same order and with the same separator, that the
+  // server writes into the job mark (`chat_intents.job_target`). The bubble the person watches and
+  // the label a reload rebuilds from the record therefore read alike.
+  if (intent.kind === "extend_transcript") {
+    return `${VERB[intent.kind]}: meeting ${intent.meeting} · “${preview(intent.selection)}”`;
+  }
+  // The wizard names the file it walks and nothing else — it has no selection to quote and the
+  // same path every time it is pressed.
+  if (intent.kind === "policies_wizard") return `${VERB[intent.kind]}: ${intent.path}`;
+  // The flow act names the page it was pressed on and nothing else — the index, or the proposal it
+  // is about to send. There is no selection to quote (Vexa-ai/vexa#1639).
+  if (intent.kind === "flow_author") return `${VERB[intent.kind]}: ${intent.path}`;
+  // A MEMBERSHIP ACT NAMES THE WORKSPACE, and the person when the row it was pressed on had one
+  // (Vexa-ai/vexa#1632). `Add a member` has nobody yet — that is the act, not a missing field — so
+  // its label stops at the workspace rather than padding itself with an empty slot.
+  if (isMemberIntent(intent)) {
+    const head = `${VERB[intent.kind]}: ${intent.workspace}`;
+    return intent.member ? `${head} · ${intent.member}` : head;
+  }
+  const head = `${VERB[intent.kind]}: ${intent.path}`;
+  if (!intent.selection) return head;
+  return `${head} — “${preview(intent.selection)}”`;
+}
+
+/** THE PROMPT, until the server turns the intent into the `extend` preset. The whole selection,
+ *  not the preview: this is what the agent reads, and truncating it here would lose the half of a
+ *  paragraph the person actually cared about. */
+export function fallbackText(intent: ChatIntent): string {
+  if (intent.kind === "explore") {
+    return `Explore \`${intent.term}\` (said in meeting ${intent.meeting}` +
+      (intent.segment ? `, segment ${intent.segment}` : "") +
+      `): find out what it is in the logic of this chat and this meeting — workspace first, ` +
+      `research where it runs out — write its page with sources, then two lines on what it is.`;
+  }
+  if (intent.kind === "highlight") {
+    return `Call transcript_terms(meeting_id="${intent.meeting}", since="${intent.since ?? ""}"), ` +
+      `pick the terms that matter to this person in this meeting, then call it again with ` +
+      `keep="<those terms>" to publish them as chips. Say nothing back — this is machinery.`;
+  }
+  // WITHOUT THE ASK (Vexa-ai/vexa#1627). `_global/asks/` is admin-owned and top-up is additive, so
+  // an instance whose library predates `policies-wizard.md` runs this instead. What must survive the
+  // gap is the SHAPE, because its absence is invisible: five questions rather than thirteen rules,
+  // one at a time, the reasoning taken from the file rather than composed, and a decision APPENDED
+  // — a wizard that rewrote the last decision would destroy the only record of why a deployment
+  // started where it started, and nobody would ever see that it had.
+  if (intent.kind === "policies_wizard") {
+    return `Run the policies wizard on \`${intent.workspace ?? "_global"}/${intent.path}\`. Read that ` +
+      `file in full first; every reason you give for a rule comes out of its own section there, ` +
+      `never from memory. Then ask FIVE questions, ONE AT A TIME, each naming the risk it assesses: ` +
+      `who is in their meetings; where the words must stay; whether they need to re-listen or the ` +
+      `transcript is enough; who decides when the bot joins; whether agents may reach the open web. ` +
+      `Then ONE message: the front-matter block you would write, the three lenses from that file for ` +
+      `every rule that departs from the default, the sentence attendees will read, and which of ` +
+      `those rules are declared and not yet enforced. Only if they say yes: write the block, leave ` +
+      `the body alone, and APPEND a \`## Decision\` section at the foot of the file with the date, ` +
+      `who decided, the five answers in their words, the profile and the overrides. Never rewrite an ` +
+      `older decision.`;
+  }
+  // WITHOUT THE ASK (Vexa-ai/vexa#1639). Same gap as the wizard's, one issue on.
+  //
+  // WHAT MUST SURVIVE THE GAP IS THE REFUSAL TO GUESS AND THE ONE CONFIRMATION. The failure this act
+  // exists to end was an agent that answered a granted authorization with *"I still don't have the
+  // instruction"* and then asked to be told which flow to write — so the fallback names the tool
+  // that lists the vocabulary, forbids composing a step name, and puts exactly one question between
+  // the sentence and the submit.
+  if (intent.kind === "flow_author") {
+    const ws = intent.workspace ?? "_global";
+    if (/(^|\/)flows\/proposals\//.test(intent.path)) {
+      return `Read \`${ws}/${intent.path}\` — a step this deployment does not carry, written out as ` +
+        `a proposal. Confirm in ONE sentence that it goes to the people who maintain Vexa. Only if ` +
+        `they say yes, file it with report_issue (report_friction if that is not configured here): ` +
+        `the step's code fence verbatim, the flow that would use it, the tests it needs, and NO ` +
+        `names — not the administrator's, not a colleague's, not a customer's, no address, no ` +
+        `domain, no meeting title. Then say where it landed and edit the page's Send section to say ` +
+        `it was sent. Never send the same proposal twice.`;
+    }
+    return `The administrator wants to write a flow. Call flows_list first and read it: a flow is a ` +
+      `TRIGGER and an ordered list of STEP NAMES from that vocabulary, and a name that is not in it ` +
+      `does not exist here. Map what they said onto one trigger and one step list — never a ` +
+      `questionnaire; if one fact is genuinely missing ask for that one fact. Then show it as the ` +
+      `page it will become: trigger, the steps in order with each step's own description, what it ` +
+      `mails, the rules it honours. Then ask ONE question — activate it? — and stop. Only if they ` +
+      `say yes, call flows_submit and link \`${ws}/flows/<name>@<version>.md\`, which appears within ` +
+      `about ten seconds. Editing is a NEW version: show the step diff, one confirmation, submit, ` +
+      `then retire the old one. If their sentence needs something no step does, say so plainly and ` +
+      `write it as a proposal page under \`${ws}/flows/proposals/\` — never executed.`;
+  }
+  // WITHOUT THE ASK (Vexa-ai/vexa#1632), for the three membership acts. Same gap as the wizard's —
+  // `_global/asks/` is admin-owned and top-up is additive, so an instance whose library predates
+  // these presets runs the sentences below instead.
+  //
+  // WHAT MUST SURVIVE THE GAP IS THE VERB. A fallback that described the act without naming the tool
+  // would leave the agent to reach for whatever membership-shaped thing it could find — and the
+  // whole reason this act exists is that the page's own route answered `invite role must be one of
+  // ('contributor',)`. An act that asks nicely and then invites through the wrong door is worse than
+  // the button it replaced, because it looks like it worked.
+  //
+  // The other two are the founder's shape (*"asking their emails etc."*): ONE question, then ONE
+  // sentence to say yes to. Two questions is a form with the fields asked one at a time.
+  if (isMemberIntent(intent)) {
+    const ws = intent.workspace;
+    const who = intent.member ? `\`${intent.member}\`` : "them";
+    if (intent.kind === "member_add") {
+      return `Add one or more members to the workspace \`${ws}\`. Ask ONE question: which address ` +
+        `or addresses, and which role — \`owner\`, \`contributor\` or \`reader\`. Then confirm in ONE ` +
+        `sentence, saying what that role means (${ROLE_SENTENCES}) — ` +
+        `*Invite jsmith@example.com as a contributor to ${ws} — yes?* Only if they say yes, call ` +
+        `workspace_invite(slug="${ws}", email=..., role=...) ONCE PER ADDRESS. Then say in ONE line ` +
+        `what you did. Never write a page for this.`;
+    }
+    if (intent.kind === "member_role") {
+      return `Change ${who}'s role in the workspace \`${ws}\`. Name them, and ask ONE question: which ` +
+        `role — \`owner\`, \`contributor\` or \`reader\` (${ROLE_SENTENCES}). Then confirm in ONE ` +
+        `sentence — *Make ${intent.member ?? "jsmith@example.com"} a contributor in ${ws} — yes?* ` +
+        `Only if they say yes, call workspace_membership(slug="${ws}", email=..., role=...). Then ` +
+        `say in ONE line what you did. Never write a page for this.`;
+    }
+    return `Remove ${who} from the workspace \`${ws}\`. Ask nothing else: confirm in ONE sentence ` +
+      `that this person will be removed and will no longer read or write it — whatever they are ` +
+      `there now, \`owner\`, \`contributor\` or \`reader\` (${ROLE_SENTENCES}) — ` +
+      `*Remove ${intent.member ?? "jsmith@example.com"} from ${ws} — yes?* Only if they say yes, ` +
+      `call workspace_membership(slug="${ws}", email=..., role="remove"). Then say in ONE line what ` +
+      `you did. Never write a page for this.`;
+  }
+  // The two page kinds name a FILE and the transcript one names a ROOM (Vexa-ai/vexa#1596); past
+  // that they are the same act, and the person's own line rides all three identically — so it is
+  // appended once, below, rather than in each branch.
+  const where = intent.kind === "extend_transcript" ? transcriptFallback(intent)
+    : `${VERB[intent.kind]}: ${intent.path}` + (intent.selection ? ` — '${intent.selection}'` : "");
+  // A MEETING'S PAGE, WITHOUT THE PRESET (Vexa-ai/vexa#1598). The `extend-meeting` ask says all of
+  // this properly; this is the floor for an instance whose library predates it — and the two rules
+  // that must survive that gap are the two whose absence is INVISIBLE: re-reading the whole room
+  // costs a second write-up of the same ten minutes in a different voice, and a lost widget slot
+  // takes the live transcript off the person's screen while they are still in the meeting.
+  //
+  // PAGE KINDS ONLY. `extend_transcript` (#1596) already names the room and carries its own
+  // sentence; this one is about a FILE that has a transcript embedded in it.
+  const room = (intent.kind === "extend" || intent.kind === "create") && intent.meeting
+    ? `\n\nThis is meeting ${intent.meeting}'s own page and the transcript is embedded in it. ` +
+      "Read the page first: its frontmatter carries `transcript_cursor`. Read the transcript with " +
+      `meeting_transcript(meeting_id="${intent.meeting}", since="<that cursor>") — only what is new — ` +
+      "then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
+      "(about · decisions · commitments · people · questions), leave every word outside them alone, " +
+      "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the cursor " +
+      "that read returned."
+    : "";
+  // THE LINE RIDES THE FALLBACK TOO. This sentence is what runs when the preset library is behind
+  // the client (the header says why both travel), and a fallback that dropped the one thing the
+  // person typed would be the worst of the two failures: the act still runs, on the wrong subject,
+  // with nothing to say it ignored them.
+  const said = where + room;
+  return intent.instruction ? `${said}\n\n${INSTRUCTION_LEAD}\n\n${intent.instruction}` : said;
+}
+
+/** The plain sentence for an act on a transcript passage — what runs when this deployment's preset
+ *  library has no `extend-transcript.md` yet. It says the same things that ask says: where the words
+ *  were said, that the pages are the deliverable, that the terms go back onto the transcript, and
+ *  that the transcript itself is never rewritten. */
+function transcriptFallback(intent: ExtendTranscriptIntent): string {
+  const said = [intent.speaker ? `said by ${intent.speaker}` : "", intent.at ? `at ${intent.at}` : "",
+    intent.segment ? `segment ${intent.segment}` : ""].filter(Boolean).join(", ");
+  return `Extend on what was said in meeting ${intent.meeting}${said ? ` (${said})` : ""}: ` +
+    `'${intent.selection}' — research it in the logic of this chat and this meeting, write what ` +
+    `you find as pages with their sources and link both ways, then publish the terms it named ` +
+    `onto the transcript with transcript_terms(meeting_id="${intent.meeting}", keep="<those terms>"). ` +
+    `Never rewrite the transcript. Then say ONE line about what you wrote.`;
+}
+
+/** WHERE A SELECTION SITS IN THE FILE SOURCE — or nothing.
+ *
+ *  The rendered document is not the file: a heading loses its `#`, a link loses its target, and an
+ *  offset into what the reader highlighted is an offset into neither. So the range is established
+ *  by finding the selection in the SOURCE, and only when it occurs there exactly ONCE. Two
+ *  occurrences is not a near-miss, it is an unknown answer (F63), and an unknown answer is omitted.
+ */
+export function sourceRange(body: string | null | undefined, selection: string): { start: number; end: number } | null {
+  const src = body ?? "";
+  const needle = selection.trim();
+  if (!src || !needle) return null;
+  const first = src.indexOf(needle);
+  if (first < 0) return null;
+  if (src.indexOf(needle, first + 1) >= 0) return null;   // ambiguous → no range
+  return { start: first, end: first + needle.length };
+}
+
+// ── posting, and where the reply lands ───────────────────────────────────────────────────────────
+
+/** The page an in-flight intent will bring into view once the turn commits. Module-level because
+ *  the button that posts and the listener that lands are two different components with one fact
+ *  between them — and it is a POINTER, not state: one intent is pending at a time, the newest wins,
+ *  which is exactly what a second press of Extend means. */
+let pending: { workspace?: string; path: string } | null = null;
+
+/** For tests and for a panel that unmounts mid-turn. */
+export const pendingLanding = (): { workspace?: string; path: string } | null => pending;
+export const clearPending = (): void => { pending = null; };
+
+/** Post an intent into the OPEN chat. Returns the intent that went, or `null` when there was
+ *  nothing honest to send (see `normalizeIntent` — an unnamed page is never guessed at). */
+export function postIntent<K extends ChatIntentKind>(raw: Omit<RawIntent, "kind"> & { kind: K }): IntentOf<K> | null;
+export function postIntent(raw: RawIntent): ChatIntent | null;
+export function postIntent(raw: RawIntent): ChatIntent | null {
+  const intent = normalizeIntent(raw);
+  if (!intent) return null;
+  // ONLY A PAGE INTENT HAS A LANDING. `explore` writes a page whose path nobody can predict — the
+  // agent picks the kind and the slug — so navigating on its commit would land the panel on a
+  // guess. Its visible result is the chip going solid, which the terms layer does on the same
+  // commit event. `highlight` writes nothing at all, and `extend_transcript` may write SEVERAL
+  // pages (Vexa-ai/vexa#1596): landing on one of them would pick a winner nobody chose.
+  pending = isPageIntent(intent) ? { workspace: intent.workspace, path: intent.path } : null;
+  // THE PRESS RAISES THE ACT'S STATE (Vexa-ai/vexa#1604). Here, because this is the single door
+  // every act goes through — the four controls, two surfaces and both families all end up on this
+  // line — and because the founder's complaint is about the moment of the press itself: the state
+  // has to exist before the wire does. Only the kinds that run as jobs; an `explore` or a
+  // `highlight` is answered inline by the turn it starts, and has no control waiting on it.
+  if (isJobIntent(intent)) actPressed({ target: actTarget(intent), kind: intent.kind });
+  window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+    detail: {
+      prompt: fallbackText(intent),
+      display: compactLabel(intent),
+      intent,
+      // `hidden` suppresses the user bubble for a machinery turn. The chat's own MACHINERY_MARK
+      // keeps it hidden on RELOAD too, which is the half `hidden` alone has never covered.
+      ...(isSilent(intent) ? { hidden: true } : {}),
+    },
+  }));
+  return intent;
+}
+
+/** THE LANDING (decision 32.3): after the reply, the page the intent named becomes the view.
+ *
+ *  It fires on the turn's COMMIT, not on the last token — for `create` the file does not exist
+ *  until then, and navigating to it a moment early is how the panel ends up saying "no page here
+ *  yet" about a page that was just written. A turn that commits nothing lands nothing, which is
+ *  the honest answer: the page did not change.
+ *
+ *  It NAVIGATES, it does not open a tab (decision 28). */
+export function landPending(): boolean {
+  if (!pending) return false;
+  const { workspace, path } = pending;
+  pending = null;
+  navigateView(workspace, path);
+  return true;
+}

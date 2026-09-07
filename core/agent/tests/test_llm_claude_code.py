@@ -93,7 +93,7 @@ def test_parse_stream_json_rewrites_cli_auth_failure():
     assert done["type"] == "done" and done["ok"] is False
     assert "Not logged in" not in done["reply"] and "/login" not in done["reply"]
     for key in ("HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-                "CLAUDE_CODE_OAUTH_TOKEN", "VEXA_LLM_API_KEY"):
+                "CLAUDE_CODE_OAUTH_TOKEN"):
         assert key in done["reply"]
     assert "Settings → Models" in done["reply"]
     assert done["detail"] == "Not logged in · Please run /login"
@@ -118,7 +118,14 @@ def test_build_argv_core_flags_and_session_model():
     assert "--allowedTools" in argv and "Read" in argv
     assert "--resume" in argv and "s1" in argv
     assert "--model" in argv and "m1" in argv
+    # unset effort ⇒ NO --effort flag (the CLI's own default behaviour is preserved byte-for-byte)
+    assert "--effort" not in argv
 
+
+def test_build_argv_effort_pin():
+    argv = build_argv("hi", effort="medium")
+    assert "--effort" in argv and "medium" in argv
+    assert argv[argv.index("--effort") + 1] == "medium"
 
 # ── the untrusted-subprocess env scrub (data-plane tenancy) ──────────────────
 # The model-driven harness CLI exposes a Bash tool. It must NOT inherit the worker's REDIS_URL (which
@@ -183,8 +190,15 @@ def test_run_harness_turn_commits_conformant(tmp_path: Path):
     evs = list(run_harness_turn(repo, "create jane", ClaudeCodeHarness(exec_fn=fake_exec)))
     assert any(e["type"] == "commit" for e in evs)
     assert (repo / "kg/entities/person/jane-liu.md").exists()
+    # THE SUBJECT NAMES THE CHANGE, and the reply is the body. This asserted `"wrote jane" in log`
+    # — the agent's reply as the subject — which is the defect the founder found in `_global`'s own
+    # history on 2026-09-02: `git log --oneline` read as truncated half-sentences and never said
+    # which file a commit touched.
     log = subprocess.run(["git", "log", "--oneline"], cwd=str(repo), capture_output=True, text=True).stdout
-    assert "wrote jane" in log
+    assert "kg/entities/person/jane-liu.md — added" in log
+    assert "wrote jane" not in log
+    body = subprocess.run(["git", "log", "-1", "--format=%b"], cwd=str(repo), capture_output=True, text=True).stdout
+    assert "wrote jane" in body   # kept, where a sentence belongs
 
 
 def test_run_harness_turn_commits_nonconformant_free_zone(tmp_path: Path):
@@ -218,6 +232,24 @@ def test_run_harness_turn_propose_only_touches_no_git(tmp_path: Path):
     assert [e["type"] for e in evs] == ["done"]  # no commit event on the propose-only path
 
 
+def test_run_harness_turn_never_commits_continuity_plumbing(tmp_path: Path):
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _init_repo(repo)
+
+    def fake_exec(argv, cwd):
+        continuity = Path(cwd) / ".claude" / "codex" / "sessions" / "rollout.jsonl"
+        continuity.parent.mkdir(parents=True)
+        continuity.write_text("private transcript")
+        yield json.dumps({"type": "result", "subtype": "success",
+                          "result": "no workspace change", "session_id": "s1"})
+
+    events = list(run_harness_turn(repo, "chat", ClaudeCodeHarness(exec_fn=fake_exec)))
+    assert [event["type"] for event in events] == ["done"]
+    assert ".claude" not in subprocess.run(
+        ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True).stdout
+
+
 # ── per-mount commit + attribution (WP-A1.2 / D4) ────────────────────────────
 
 def _author_of(repo: Path) -> tuple[str, str, str, str]:
@@ -245,8 +277,15 @@ def test_run_harness_turn_commits_each_changed_mount_independently(tmp_path: Pat
     assert len(commits) == 2, "one commit per changed mount"
     # each mount got its OWN commit (distinct repos, distinct HEADs)
     assert (private / "note.md").exists() and (shared / "doc.md").exists()
-    assert "wrote both" in subprocess.run(["git", "log", "--oneline"], cwd=str(private), capture_output=True, text=True).stdout
-    assert "wrote both" in subprocess.run(["git", "log", "--oneline"], cwd=str(shared), capture_output=True, text=True).stdout
+    # Each mount's subject names ITS OWN change — which is the second thing the old shape lost:
+    # both repos carried the same sentence, so neither said what had happened in it.
+    priv_log = subprocess.run(["git", "log", "--oneline"], cwd=str(private), capture_output=True, text=True).stdout
+    shar_log = subprocess.run(["git", "log", "--oneline"], cwd=str(shared), capture_output=True, text=True).stdout
+    assert "note.md — added" in priv_log and "doc.md — added" in shar_log
+    assert "wrote both" not in priv_log and "wrote both" not in shar_log
+    for repo_dir in (private, shared):
+        body = subprocess.run(["git", "log", "-1", "--format=%b"], cwd=str(repo_dir), capture_output=True, text=True).stdout
+        assert "wrote both" in body
 
 
 def test_run_harness_turn_only_commits_the_mount_that_changed(tmp_path: Path):

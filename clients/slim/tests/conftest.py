@@ -23,18 +23,8 @@ class FakeAgent(_Recorder):
     # canned live events the agent "emits" during a watch window (mixed types, vocabulary-agnostic)
     WATCH_EVENTS = [
         {"type": "transcript", "text": "hello"},
-        {"type": "note", "note": {"text": "a note"}},
-        {"type": "card", "card": {"kind": "decision", "title": "ship it"}},
-        {"type": "card", "card": {"kind": "action", "title": "follow up"}},
+        {"type": "transcript", "text": "there"},
     ]
-
-    async def start_processing(self, native, *, platform="google_meet"):
-        self._record("start_processing", native=native, platform=platform)
-        return {"ok": True, "on": True, "native": native}
-
-    async def stop_processing(self, native, *, platform="google_meet"):
-        self._record("stop_processing", native=native, platform=platform)
-        return {"ok": True, "on": False, "native": native}
 
     async def watch(self, native, *, seconds, on_event):
         self._record("watch", native=native, seconds=seconds)

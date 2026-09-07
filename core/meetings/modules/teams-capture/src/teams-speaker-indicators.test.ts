@@ -10,7 +10,8 @@
  *   2. a tile found WITHOUT an outline is reported `signal-absent` and never hinted
  *   3. `indicator-silent` fires once per window when observable > 0 and nothing speaks
  *   4. coverage accounting (found / observable / named / transitions) is correct
- *   5. REGRESSION — today's live production failure, pinned: 4 tiles, 1 outline,
+ *   5. direct outline/stream anchors remain discoverable without a matching outer tile
+ *   6. REGRESSION — today's live production failure, pinned: 4 tiles, 1 outline,
  *      no indicator ever fires ⇒ 0 hints, 3 signal-absent, indicator-silent fires
  *
  * Run: npx tsx src/teams-speaker-indicators.test.ts
@@ -102,21 +103,46 @@ const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 5));
 
 /** One participant tile: `[data-stream-type][data-tid="<name>"]` wrapper (Teams'
  *  stable name attribute) around an optional voice-level outline. */
-function makeTile(id: string, name: string, opts: { outline: boolean }): { tile: FakeEl; outline: FakeEl | null } {
+function makeTile(
+  id: string,
+  name: string,
+  opts: { outline: boolean },
+): { tile: FakeEl; stream: FakeEl; outline: FakeEl | null } {
   const outline = opts.outline
     ? new FakeEl('div', { 'data-tid': 'voice-level-stream-outline', style: 'height: 0px;' })
     : null;
-  const inner = new FakeEl('div', { 'data-tid': name, 'data-stream-type': 'Video' }, outline ? [outline] : []);
-  const tile = new FakeEl('div', { 'data-tid': `participant-tile-${id}`, 'data-participant-id': id }, [inner]);
-  return { tile, outline };
+  const stream = new FakeEl('div', { 'data-tid': name, 'data-stream-type': 'Video' }, outline ? [outline] : []);
+  const tile = new FakeEl('div', { 'data-tid': `participant-tile-${id}`, 'data-participant-id': id }, [stream]);
+  return { tile, stream, outline };
 }
 
-function installDocument(tiles: FakeEl[]): FakeEl {
-  const body = new FakeEl('body', {}, tiles);
+function installDocument(
+  tiles: FakeEl[],
+  panelRows: FakeEl[] = [],
+  opts: { streamWrappersOnly?: boolean; outlineAtomsOnly?: boolean } = {},
+): FakeEl {
+  const panel = panelRows.length ? new FakeEl('div', { 'data-tid': 'roster' }, panelRows) : null;
+  const body = new FakeEl('body', {}, panel ? [...tiles, panel] : tiles);
   g.document = {
     body,
     querySelector: (s: string) => (s === '[role="main"]' ? body : null),
-    querySelectorAll: (s: string) => (s === '[data-tid*="participant"]' ? tiles : []),
+    querySelectorAll: (s: string) => {
+      if (s === '[data-tid="voice-level-stream-outline"]') {
+        if (opts.streamWrappersOnly) return [];
+        return tiles.map((tile) => tile.matches(s) ? tile : tile.querySelector(s))
+          .filter((el): el is FakeEl => !!el);
+      }
+      if (s === '[data-stream-type][data-tid]') {
+        if (opts.outlineAtomsOnly) return [];
+        return tiles.map((tile) => tile.matches(s) ? tile : tile.querySelector(s))
+          .filter((el): el is FakeEl => !!el);
+      }
+      if (s === '[data-tid*="participant"]') {
+        return opts.streamWrappersOnly || opts.outlineAtomsOnly ? [] : tiles;
+      }
+      if (panel && compile(s)(panel)) return [panel];
+      return [];
+    },
   };
   return body;
 }
@@ -129,7 +155,14 @@ interface Harness {
   advance: (ms: number) => void;
 }
 function start(tiles: FakeEl[], overrides: Record<string, unknown> = {}): Harness {
-  installDocument(tiles);
+  const {
+    panelRows = [], streamWrappersOnly = false, outlineAtomsOnly = false, ...watcherOverrides
+  } = overrides as {
+    panelRows?: FakeEl[];
+    streamWrappersOnly?: boolean;
+    outlineAtomsOnly?: boolean;
+  };
+  installDocument(tiles, panelRows, { streamWrappersOnly, outlineAtomsOnly });
   rafQueue = [];
   let clock = 1_700_000_000_000;
   const hints: Array<{ name: string; id: string; isEnd: boolean }> = [];
@@ -143,7 +176,7 @@ function start(tiles: FakeEl[], overrides: Record<string, unknown> = {}): Harnes
     log: (m) => logs.push(m),
     onSpeaking: (name, id, isEnd) => hints.push({ name, id, isEnd }),
     onObservation: (o) => observations.push(o),
-    ...overrides,
+    ...watcherOverrides,
   } as any);
   return { watcher, hints, observations, logs, advance: (ms) => { clock += ms; } };
 }
@@ -206,6 +239,25 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
   check('animation: END carries the same name', h.hints[1]?.name === 'Alpha Example');
   check('animation: health reports one speaking transition', h.watcher.health().transitions === 1,
     JSON.stringify(h.watcher.health()));
+  h.watcher.destroy();
+}
+
+// ── 1a. A human whose name contains the configured bot name is still a human ─
+{
+  const { tile, outline } = makeTile('vexa-human', 'Vexa Petrova', { outline: true });
+  const h = start([tile], { selfName: 'Vexa' });
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('exact self filtering preserves a real human whose name contains the bot name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Vexa Petrova' && !h.hints[0]?.isEnd,
+    JSON.stringify(h.hints));
   h.watcher.destroy();
 }
 
@@ -285,6 +337,10 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
   check('signal-absent: carries no display name and no DOM text',
     !!absent[0] && !JSON.stringify(absent[0]).includes('Beta') && Object.keys(absent[0]).length === 5,
     JSON.stringify(absent[0]));
+  check('signal-absent: logs a value-free structural fingerprint',
+    h.logs.some((line) => line.includes('stream=descendant stable-root=yes'))
+      && h.logs.every((line) => !line.includes('Beta Example')),
+    JSON.stringify(h.logs));
   check('signal-absent: produces no hint', h.hints.length === 0, JSON.stringify(h.hints));
 
   // Even when the blind tile's markup churns, it stays unobservable and unhinted.
@@ -352,6 +408,139 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
   h.watcher.destroy();
 }
 
+// ── 4a. The exact speaking atom is independently discoverable ────────────────
+// The outline itself is the strongest layout-independent anchor. Its ancestor
+// stream wrapper supplies the name even when no outer tile selector matches.
+{
+  const { tile, outline } = makeTile('outline-dmitry', 'Dmitry Grankin', { outline: true });
+  const h = start([tile], { outlineAtomsOnly: true });
+  await settle();
+
+  const health = h.watcher.health();
+  check('outline-only layout: canonical participant is found once',
+    health.found === 1 && health.observable === 1 && health.named === 1,
+    JSON.stringify(health));
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('outline-only layout: speaking atom joins to the stream-wrapper name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Dmitry Grankin' && !h.hints[0]?.isEnd,
+    JSON.stringify(h.hints));
+  h.watcher.destroy();
+}
+
+// The outline can also survive a layout that omits the stream wrapper. In that
+// shape, climb to a stable participant root and use the guarded visible-name
+// leaf fallback; the speaking atom still must never become a nameless hint.
+{
+  const nameLeaf = new FakeEl('div', {}, [], 'Dmitry Grankin');
+  const outline = new FakeEl('div', {
+    'data-tid': 'voice-level-stream-outline', style: 'height: 0px;',
+  });
+  const stableRoot = new FakeEl('div', { 'data-participant-id': 'dmitry-no-stream' }, [
+    nameLeaf, outline,
+  ]);
+  const h = start([stableRoot], { outlineAtomsOnly: true });
+  await settle();
+
+  check('outline-only fallback: stable root supplies the guarded visible name',
+    h.watcher.health().found === 1 && h.watcher.health().named === 1,
+    JSON.stringify(h.watcher.health()));
+  h.advance(250);
+  outline.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('outline-only fallback: speaking evidence emits the visible human name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Dmitry Grankin', JSON.stringify(h.hints));
+  h.watcher.destroy();
+}
+
+// ── 4b. The stable stream wrapper is independently discoverable ──────────────
+// Teams can render the visible name and active-speaker outline inside a stream
+// wrapper while the surrounding participant tile no longer matches any of the
+// broad layout selectors. The wrapper is sufficient evidence by itself.
+{
+  const { tile, outline } = makeTile('dmitry', 'Dmitry Grankin', { outline: true });
+  const h = start([tile], { streamWrappersOnly: true });
+  await settle();
+
+  const health = h.watcher.health();
+  check('stream-only layout: canonical wrapper is found once',
+    health.found === 1 && health.observable === 1 && health.named === 1,
+    JSON.stringify(health));
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  check('stream-only layout: stable data-tid yields the human name',
+    rosterNames.some((o) => o.name === 'Dmitry Grankin'), JSON.stringify(rosterNames));
+
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('stream-only layout: speaking evidence emits the resolved name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Dmitry Grankin' && !h.hints[0]?.isEnd,
+    JSON.stringify(h.hints));
+  h.watcher.destroy();
+}
+
+// Two stream wrappers may legitimately expose the same display name. Without a
+// participant ID, their element identity remains distinct; the human-readable
+// data-tid must never collapse their speaking state into one participant.
+{
+  const outlineA = new FakeEl('div', {
+    'data-tid': 'voice-level-stream-outline', style: 'height: 0px;',
+  });
+  const outlineB = new FakeEl('div', {
+    'data-tid': 'voice-level-stream-outline', style: 'height: 0px;',
+  });
+  const streamA = new FakeEl('div', {
+    'data-tid': 'Alex Smith', 'data-stream-type': 'Video',
+  }, [outlineA]);
+  const streamB = new FakeEl('div', {
+    'data-tid': 'Alex Smith', 'data-stream-type': 'Video',
+  }, [outlineB]);
+  const h = start([streamA, streamB], { streamWrappersOnly: true });
+  await settle();
+
+  check('same-name streams: both canonical participants are retained',
+    h.watcher.health().found === 2 && h.watcher.health().observable === 2,
+    JSON.stringify(h.watcher.health()));
+  h.advance(250);
+  outlineA.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outlineA.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  h.advance(250);
+  outlineB.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outlineB.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  const starts = h.hints.filter((hint) => !hint.isEnd);
+  check('same-name streams: speaking state uses two distinct IDs',
+    starts.length === 2 && starts[0]?.name === 'Alex Smith' && starts[1]?.name === 'Alex Smith'
+    && starts[0]?.id !== starts[1]?.id,
+    JSON.stringify(starts));
+  h.watcher.destroy();
+}
+
 // ── 5. REGRESSION — the measured production failure, pinned ──────────────────
 // Live 13-minute Teams meeting on v0.12.18: "Scanned 4 participants, observing 1
 // with signal" ×127, SPEAKER_START 0, all 37 transcript rows labelled "Speaker".
@@ -391,6 +580,127 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
     ofType(h.observations, 'indicator-silent').length === 1,
     JSON.stringify(ofType(h.observations, 'indicator-silent')));
   check('regression: diagnostics never crossed into the hint stream', h.hints.length === 0);
+  h.watcher.destroy();
+}
+
+// ── 5b. ROSTER COMPLETENESS — meeting 26218's false 1/1 is forbidden ─────────
+{
+  // Teams can render one participant on more than one DOM surface. Every surface resolves a name,
+  // so four elements representing two people are complete 2/2 rather than the old broken 2/4.
+  const tiles = [
+    makeTile('alpha-tile', 'Alpha Example', { outline: true }).tile,
+    makeTile('alpha-row', 'Alpha Example', { outline: false }).tile,
+    makeTile('beta-tile', 'Beta Example', { outline: true }).tile,
+    makeTile('beta-row', 'Beta Example', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'Vexa' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('coverage dedupes named duplicate surfaces into two complete participants',
+    last?.named === 2 && last?.participants === 2, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  const panelRows = [
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'Dmitry Grankin')]),
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'mic_off')]),
+  ];
+  const h = start([], { selfName: 'Vexa', panelRows });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('an unresolved roster-panel row keeps one readable name at incomplete 1/2',
+    last?.named === 1 && last?.participants === 2, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  const tiles = [
+    makeTile('p1', 'Dmitry Grankin', { outline: true }).tile,
+    makeTile('p2', 'video-stream-2', { outline: false }).tile,
+    makeTile('p3', 'participant-tile-3', { outline: false }).tile,
+    makeTile('p4', 'voice-level-stream-outline', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'Vexa' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('m26218 coverage: one resolved name across four matched participants is 1/4, never 1/1',
+    last?.named === 1 && last?.participants === 4, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  const tiles = [
+    makeTile('p1', 'VexaBot-8f264c (Unverified)', { outline: true }).tile,
+    makeTile('p2', 'video-stream-2', { outline: false }).tile,
+    makeTile('p3', 'participant-tile-3', { outline: false }).tile,
+    makeTile('p4', 'voice-level-stream-outline', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'Vexa' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('m26218 generated bot: it never enters the roster-name stream',
+    rosterNames.every((o) => o.name !== 'VexaBot-8f264c (Unverified)'), JSON.stringify(rosterNames));
+  check('m26218 generated bot: unresolved four-surface scan reports 0/4 and cannot eliminate',
+    last?.named === 0 && last?.participants === 4, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  // WHEN THE BOT NAME IS THE GENERATED ONE, THE BOT IS STILL THE BOT. `VexaBot-<hex>` is what
+  // meeting-api mints when the caller omits bot_name, and the candidate guard refuses that shape by
+  // design — so self must be decided before the guard runs. Decided after it, our own tile resolves
+  // to no name, counts as one unresolved participant, and holds the room at named < participants
+  // forever, which is exactly the condition that switches elimination off for the humans.
+  const tiles = [
+    makeTile('self', 'VexaBot-a1b2c3 (Unverified)', { outline: true }).tile,
+    makeTile('p1', 'Dmitry Grankin', { outline: true }).tile,
+    makeTile('p2', 'Priya Nair', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'VexaBot-a1b2c3' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('generated self name: our own tile never enters the roster-name stream',
+    rosterNames.every((o) => !String(o.name).toLowerCase().startsWith('vexabot')),
+    JSON.stringify(rosterNames));
+  check('generated self name: our own tile is excluded from named AND from unresolved — 2/2 eliminates',
+    last?.named === 2 && last?.participants === 2, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  // The same bot, seen on the ROSTER PANEL rather than a tile: a self row is not a participant on
+  // either surface, and the row that cannot be resolved must not be counted as somebody unnamed.
+  const panelRows = [
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'VexaBot-a1b2c3 (Unverified)')]),
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'Dmitry Grankin')]),
+  ];
+  const h = start([], { selfName: 'VexaBot-a1b2c3', panelRows });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('generated self name: our own roster-panel row is neither named nor counted — 1/1',
+    last?.named === 1 && last?.participants === 1, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  // Roster corroboration end-to-end: a participant whose display name is genuinely bare lowercase
+  // enters the roster because the PANEL lists them, while a bare label present only on a tile does
+  // not. Both surfaces are read in one scan, and only one of them is name-authoritative.
+  const tiles = [
+    makeTile('p1', 'leo', { outline: true }).tile,
+    makeTile('p2', 'datenanalyse', { outline: false }).tile,
+  ];
+  const panelRows = [new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'leo')])];
+  const h = start(tiles, { selfName: 'Vexa', panelRows });
+  await settle();
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  check('roster corroboration: a roster-listed bare lowercase name reaches the roster stream',
+    rosterNames.some((o) => o.name === 'leo'), JSON.stringify(rosterNames));
+  check('roster corroboration: a bare label seen only on a tile is still refused',
+    rosterNames.every((o) => o.name !== 'datenanalyse'), JSON.stringify(rosterNames));
   h.watcher.destroy();
 }
 

@@ -4,7 +4,7 @@
 # A validate-harness fix re-runs release-validate alone (~minutes, dispatchable from any
 # branch) instead of rebuilding 10 unchanged images.
 #
-#   tag push v0.12.* (or workflow_dispatch with an explicit version) →
+#   tag push v0.12.* / v0.13.* (or workflow_dispatch with an explicit version) →
 #     preflight       secrets present (fail fast + loud) · tag ↔ package.json ↔ Chart.yaml
 #                     appVersion consistency · helm static gates · pinned-render assertions
 #     build (matrix)  the uniform images — buildx, amd64+arm64, registry :buildcache cache
@@ -32,7 +32,9 @@ name: release-images
 
 on:
   push:
-    tags: ["v0.12.*"]
+    # v0.13.* admitted alongside v0.12.*: the minutes line is tagged v0.13.0 and a tag that
+    # matches nothing here builds nothing at all — silently, with no failing job to notice.
+    tags: ["v0.12.*", "v0.13.*"]
   workflow_dispatch:
     inputs:
       version:
@@ -49,6 +51,17 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # Where the delta legs that RUN our images pull them from (#715) — the same switch, and the same
+  # reasoning, as release-validate.yml's PULL_MIRROR, which carries the full note: a per-reference
+  # mirror pull is anonymous (the docker CLI keys credentials by the hostname in the reference), so
+  # unlike a daemon-wide `registry-mirrors` entry it never offers the push-capable vexaai token to
+  # Google. Only the three bot-lite-delta validation legs read it. The build jobs already reach the
+  # mirror through their buildkitd and QEMU config (036911efa), and alias-candidate,
+  # candidate-delta-receipt and every imagetools/manifest identity read stay on Docker Hub because
+  # they exist to read the source of truth. Blank this value to go back to Hub pulls.
+  PULL_MIRROR: mirror.gcr.io
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────────────────────
@@ -187,10 +200,17 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # flows is opt-in (values.yaml: flows.enabled=false) but it is a RELEASE image, so the
+          # pinned-render assertion has to see it: rendered with the tier on, its six containers
+          # must follow global.imageTag like every other component. Until 2026-09-03 flows.image
+          # was a flat string that ignored global.imageTag entirely and defaulted to :dev.
           RENDER="$(helm template vexa deploy/helm/charts/vexa -n vexa \
-            -f deploy/helm/charts/vexa/values-test.yaml --set global.imageTag="$VERSION")"
+            -f deploy/helm/charts/vexa/values-test.yaml --set flows.enabled=true \
+            --set global.imageTag="$VERSION")"
           N="$(grep -cE "image: \"vexaai/v012-[a-z-]+:$VERSION\"" <<<"$RENDER" || true)"
-          [ "$N" -ge 6 ] || { echo "::error ::expected >=6 v012 component images pinned to $VERSION, got $N"; exit 1; }
+          [ "$N" -ge 12 ] || { echo "::error ::expected >=12 v012 component images pinned to $VERSION, got $N"; exit 1; }
+          F="$(grep -cE "image: \"vexaai/v012-flows:$VERSION\"" <<<"$RENDER" || true)"
+          [ "$F" -eq 6 ] || { echo "::error ::expected the 6 flows containers pinned to $VERSION, got $F"; exit 1; }
           grep -q "vexaai/vexa-bot:$VERSION" <<<"$RENDER" \
             || { echo "::error ::bot image (runtime BROWSER_IMAGE) does not follow global.imageTag"; exit 1; }
           grep -q "vexaai/v012-agent-worker:$VERSION" <<<"$RENDER" \
@@ -216,12 +236,43 @@ jobs:
       - name: Free runner disk (large image)
         if: matrix.free_disk == true
         uses: jlumbroso/free-disk-space@v1.3.1
+      # ── reads that can go somewhere other than Docker Hub, do (#715) ────────────────────────────
+      # binfmt is pulled onto the runner's daemon by this action. Naming mirror.gcr.io EXPLICITLY
+      # (rather than configuring a daemon-wide registry mirror) is deliberate: the docker CLI
+      # resolves credentials by the hostname in the reference, finds none for mirror.gcr.io, and
+      # the pull goes out anonymous — the vexaai Docker Hub token is never offered to Google.
       - uses: docker/setup-qemu-action@v3
+        with:
+          image: mirror.gcr.io/tonistiigi/binfmt:latest
+      # Every `FROM` this builder resolves — python:3.12-slim in eight of the ten matrix images,
+      # node:22-slim in the terminal — is a Docker Hub read, and on 2026-09-06 that is exactly what
+      # killed the v0.13.1-alpha.1 publish: all nine build jobs died on
+      # `HEAD .../library/node/manifests/22-slim: 429 Too Many Requests` (run 34065711294), the
+      # vexaai account being at its measured 200-pulls/hour ceiling. Google's public pull-through
+      # cache serves those manifests with no Docker Hub quota at all; BuildKit tries the mirror
+      # first and falls back to the canonical registry, authenticated, for anything it cannot serve.
+      # BuildKit keys credentials by the host it is CONTACTING (unlike dockerd's classic pull path,
+      # which offers the image's index credential to whatever endpoint it talks to), so the mirror
+      # is reached anonymously. Verified 2026-09-07 from a laptop, at zero Hub cost: mirror.gcr.io
+      # answers anonymous manifest GETs 200 for library/node:22-slim AND for vexaai/* — and the
+      # digests it returns for the vexaai set are byte-identical to the human-reviewed packet at
+      # releases/v0.13.0/candidate-images.json.
       - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # The layer cache moved off the registry too (#715): `type=registry` cost one authenticated
+      # Docker Hub manifest read per image per run just to look the buildcache up. `type=gha` is the
+      # runner-local GitHub Actions cache — no registry, no quota, scoped per image so the ten
+      # builds cannot evict each other's entries by accident. `use_registry_cache` keeps its name and
+      # its meaning — "this build may reuse the shared layer cache" — and a replacement candidate
+      # still builds with no cache at all. `ignore-error` on the EXPORT only: a cache write must
+      # never be the thing that reds a release publish (a cache read miss is already harmless).
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -230,8 +281,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: vexaai/${{ matrix.repository }}:${{ needs.preflight.outputs.version }}
           build-args: ${{ matrix.build_args }}
-          cache-from: ${{ matrix.use_registry_cache && format('type=registry,ref=vexaai/{0}:buildcache', matrix.repository) || '' }}
-          cache-to: ${{ matrix.use_registry_cache && format('type=registry,ref=vexaai/{0}:buildcache,mode=max', matrix.repository) || '' }}
+          cache-from: ${{ matrix.use_registry_cache && format('type=gha,scope=release-{0}', matrix.repository) || '' }}
+          cache-to: ${{ matrix.use_registry_cache && format('type=gha,mode=max,ignore-error=true,scope=release-{0}', matrix.repository) || '' }}
 
   # The bot builds FROM the locally-built vexa/meet-join-env:dev base image, which the buildx
   # docker-container driver cannot see — so this job stays on the classic docker driver
@@ -252,6 +303,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Free runner disk (the bot build needs ~10 GB of layers)
         uses: jlumbroso/free-disk-space@v1.3.1
+      # No registry mirror here, on purpose (#715). This job's two builds are already almost free of
+      # Docker Hub: Dockerfile.env is FROM mcr.microsoft.com/playwright (Microsoft's registry, not
+      # Hub) and the bot is FROM the vexa/meet-join-env:dev image this job just built locally. The
+      # only Hub read left is the `--cache-from vexaai/vexa-bot:v012` below. It is not worth a
+      # daemon-wide `registry-mirrors` entry — and a daemon-wide mirror would be the WRONG tool
+      # anyway: dockerd's classic pull path hands the image's index credential to whatever endpoint
+      # it contacts, so it would present the vexaai Read&Write token to the mirror's token endpoint.
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -306,6 +364,45 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every registry read bills the vexaai account, never the runner's IP (#715) ────────────
+      # This job reads Docker Hub entirely through CLIENT-SIDE tools — `docker buildx imagetools
+      # inspect|create` and `docker manifest inspect` — which resolve their own credential out of
+      # the docker CLI config keyed by REGISTRY HOSTNAME, not through the daemon that
+      # docker/login-action authenticates. On 2026-09-06 that fell through to anonymous and killed
+      # the v0.13.0 publish twice (run 34057166572): attempt 1 died in `imagetools create` with
+      # "failed to copy: httpReadSeeker … 429" + "You have reached your UNAUTHENTICATED pull rate
+      # limit", after 53 reads had succeeded; attempt 2 died 35 min later on the very first
+      # `imagetools inspect` HEAD. Both after `Login Succeeded!`. Anonymous reads bill the runner's
+      # shared Azure NAT address at 100 pulls/hour, split with every other tenant on that IP;
+      # authenticated reads bill the vexaai account. Writing the same secret under every hostname
+      # spelling these clients can resolve removes the fall-through. Strictly additive — it changes
+      # no descriptor, no assertion and nothing about what is copied.
+      - name: Every client-side registry read carries the vexaai credential (#715)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+          CONFIG="$CONFIG_DIR/config.json"
+          mkdir -p "$CONFIG_DIR"
+          [ -s "$CONFIG" ] || echo '{}' > "$CONFIG"
+          if [ -n "$(jq -r '.credsStore // empty' "$CONFIG")" ]; then
+            echo "::warning title=registry-auth::the docker CLI config delegates to a credential helper, so these auths entries are ignored and client-side reads may still go out anonymous (#715)"
+          fi
+          VEXA_HUB_AUTH="$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 -w0)" \
+            jq '
+              .auths = ((.auths // {}) + {
+                "https://index.docker.io/v1/": { auth: env.VEXA_HUB_AUTH },
+                "index.docker.io":             { auth: env.VEXA_HUB_AUTH },
+                "registry-1.docker.io":        { auth: env.VEXA_HUB_AUTH },
+                "registry.docker.io":          { auth: env.VEXA_HUB_AUTH },
+                "docker.io":                   { auth: env.VEXA_HUB_AUTH }
+              })
+            ' "$CONFIG" > "$CONFIG.next"
+          mv "$CONFIG.next" "$CONFIG"
+          chmod 600 "$CONFIG"
+          echo "✓ Hub credential resolvable for: $(jq -r '.auths | keys | join(", ")' "$CONFIG")"
       - name: Copy descriptors without rebuilding or wrapping single-platform manifests
         run: |
           set -euo pipefail
@@ -456,11 +553,55 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
       - uses: astral-sh/setup-uv@v5
+      # #715 — this leg pulled the published images with NO login at all, so every pull billed the
+      # runner's shared Azure NAT address (100/hour, split with every other tenant on that IP)
+      # instead of the vexaai account (see the alias-candidate comment above for the field evidence).
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
+      # See release-validate.yml's validate-compose for the full note; this leg is the same shape.
+      # Two classes: the explicit bot + agent-worker pulls (the runtime spawns both through the
+      # docker socket API, which does not implicit-pull), and the default profile of
+      # deploy/compose/docker-compose.yml, which `compose up --no-build` pulls itself — enumerated
+      # 2026-09-07; a service missing here is an implicit Hub pull. Note the two tags: the frozen
+      # base candidate carries the stack, the NEW version carries only the replacement bot.
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          [ -n "$BASE_VERSION" ] || {
+            echo "::error ::Bot+Lite delta has no frozen base candidate tag"
+            exit 1
+          }
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          mirror_pull "vexaai/vexa-bot:$VERSION" --platform linux/amd64
+          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+            mirror_pull "vexaai/$img:$BASE_VERSION"
+          done
+          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — compose will pull nothing"
       - name: Published Bot has the promised identity
         run: |
           set -euo pipefail
           REF="vexaai/vexa-bot:$VERSION"
-          docker pull -q --platform linux/amd64 "$REF"
           docker run --rm --entrypoint "" "$REF" \
             bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js'
           echo "✓ $REF is runnable Bot content on linux/amd64"
@@ -478,8 +619,9 @@ jobs:
             exit 1
           }
           cp .env.example .env
-          docker pull "vexaai/v012-agent-worker:$BASE_VERSION"
-          docker pull "$BROWSER_IMAGE"
+          # The agent-worker and the replacement bot are already resident from the mirror pre-pull
+          # above (#715) — re-pulling here would re-check the manifest on Docker Hub and spend two
+          # more reads for images the daemon already has.
           ./bin/stack-test
       - name: Compose state on failure
         if: failure()
@@ -506,11 +648,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
+      # #715 — no login here either: the published-Lite pull AND `make -C deploy/lite up`'s
+      # implicit third-party pulls both went out anonymous, on the runner's shared IP quota.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
+      # See release-validate.yml's validate-lite for the full note. Lite's implicit set is not
+      # compose's: `make -C deploy/lite up` runs `docker run` for a postgres and a minio sidecar
+      # and a one-shot minio/mc, and each of those implicit-pulls (deploy/lite/Makefile § up).
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          mirror_pull "vexaai/vexa-lite:$VERSION" --platform linux/amd64
+          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
       - name: Published Lite has the promised identity and offline model
         run: |
           set -euo pipefail
           REF="vexaai/vexa-lite:$VERSION"
-          docker pull -q --platform linux/amd64 "$REF"
           docker run --rm --entrypoint "" "$REF" \
             bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh'
           docker run --rm --network none --entrypoint "" \
@@ -558,6 +732,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
+      # #715 — same gap on the arm64 leg: the published-Lite pull carried no credential.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
+      # Same set as the amd64 delta leg, pulled for linux/arm64. The sidecars are unqualified: a
+      # plain pull on a native aarch64 runner already selects the arm64 manifest.
+      - name: Pre-pull every image this leg runs, through the mirror (#715)
+        run: |
+          set -euo pipefail
+          mirror_pull() {   # mirror_pull <hub-ref> [extra docker-pull args…]
+            local ref="$1"; shift
+            local mref=""
+            if [ -n "${PULL_MIRROR:-}" ]; then
+              case "$ref" in */*) mref="$PULL_MIRROR/$ref" ;; *) mref="$PULL_MIRROR/library/$ref" ;; esac
+            fi
+            if [ -n "$mref" ] && docker pull -q "$@" "$mref" >/dev/null; then
+              docker tag "$mref" "$ref"
+              echo "   ✓ $ref ← $mref @ $(docker image inspect --format '{{index .RepoDigests 0}}' "$mref" 2>/dev/null | sed 's/.*@//')"
+              return 0
+            fi
+            [ -z "$mref" ] || echo "::warning title=pull-mirror::$mref could not be pulled — falling back to Docker Hub for $ref (#715)"
+            docker pull -q "$@" "$ref" >/dev/null
+            echo "   ✓ $ref ← Docker Hub"
+          }
+          mirror_pull "vexaai/vexa-lite:$VERSION" --platform linux/arm64
+          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+            mirror_pull "$ref"
+          done
+          echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
       - name: Published Lite is native arm64 content
         run: |
           set -euo pipefail
@@ -566,7 +771,6 @@ jobs:
             exit 1
           }
           REF="vexaai/vexa-lite:$VERSION"
-          docker pull -q --platform linux/arm64 "$REF"
           docker run --rm --entrypoint "" "$REF" \
             bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh'
           echo "✓ $REF identity green on native linux/arm64"
@@ -619,6 +823,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      # #715 — this receipt job reads Docker Hub with `imagetools inspect` + `manifest inspect` and
+      # had NO login at all, so every read was anonymous on the runner's shared IP quota. Log in for
+      # the daemon, then give the client-side readers the same credential explicitly (see the
+      # alias-candidate comment above). The readback assertions themselves are unchanged.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Every client-side registry read carries the vexaai credential (#715)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+          CONFIG="$CONFIG_DIR/config.json"
+          mkdir -p "$CONFIG_DIR"
+          [ -s "$CONFIG" ] || echo '{}' > "$CONFIG"
+          if [ -n "$(jq -r '.credsStore // empty' "$CONFIG")" ]; then
+            echo "::warning title=registry-auth::the docker CLI config delegates to a credential helper, so these auths entries are ignored and client-side reads may still go out anonymous (#715)"
+          fi
+          VEXA_HUB_AUTH="$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 -w0)" \
+            jq '
+              .auths = ((.auths // {}) + {
+                "https://index.docker.io/v1/": { auth: env.VEXA_HUB_AUTH },
+                "index.docker.io":             { auth: env.VEXA_HUB_AUTH },
+                "registry-1.docker.io":        { auth: env.VEXA_HUB_AUTH },
+                "registry.docker.io":          { auth: env.VEXA_HUB_AUTH },
+                "docker.io":                   { auth: env.VEXA_HUB_AUTH }
+              })
+            ' "$CONFIG" > "$CONFIG.next"
+          mv "$CONFIG.next" "$CONFIG"
+          chmod 600 "$CONFIG"
+          echo "✓ Hub credential resolvable for: $(jq -r '.auths | keys | join(", ")' "$CONFIG")"
       - name: Read back immutable Bot and Lite identities
         run: |
           set -euo pipefail
@@ -692,9 +930,11 @@ jobs:
           BOT="$(inspect_image vexaai/vexa-bot false linux/amd64)"
           LITE="$(inspect_image vexaai/vexa-lite true linux/amd64 linux/arm64)"
           RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          RELEASE="v${VERSION#v}"
+          RELEASE="${RELEASE%%-*}"
           jq -n \
             --arg schema_version "1" \
-            --arg release "v0.12.18" \
+            --arg release "$RELEASE" \
             --arg candidate_tag "$VERSION" \
             --arg base_candidate_tag "$BASE_VERSION" \
             --arg source "$GITHUB_SHA" \
@@ -734,6 +974,15 @@ jobs:
   # witness.json) and every batch change is accepted (release-value-gate), a maintainer dispatches
   # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
   # on the `release-promote` Environment for the owner's approval before :v012 moves.
+  #
+  # #1237 — what this nested call can and cannot prove at FREEZE time. release-validate's
+  # packet-bound candidate-map identity check reads a map that records the digests THIS build
+  # has only just published, so on a new rc the map cannot exist yet. release-validate defers
+  # that one check (with a notice in its run summary and a line in the guarantee block) and
+  # runs every other leg against the published bytes; a human then binds the packet and
+  # dispatches release-validate standalone, where the identity IS enforced. The consequence
+  # for this workflow's conclusion is the point: release-images is red when the build or the
+  # published artifacts are wrong, and green when they are not.
   validate:
     needs: [preflight, build, build-bot, alias-candidate, sbom]
     if: >-

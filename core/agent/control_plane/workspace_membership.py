@@ -4,25 +4,34 @@ The foundation for shared workspaces and shared meeting sessions. A workspace ow
 user **read (viewer)** or **read/write (contributor)** access; access is granted on the fly via scoped,
 single-use-by-default invite tokens (D2 in plans/shared-meeting-workspace.md).
 
-Two stores, written together on every change (the git file is authoritative, the index is derived):
+Two stores for MEMBERSHIP, written together on every change (the git file is authoritative, the index
+is derived), and a third, separate one for INVITES:
 
   1. **Authoritative** — the workspace's OWN git repo at ``policy/members.json``::
 
         [{"subject", "role": "owner"|"contributor"|"viewer", "added_by", "added_at"}]
 
-     Git is the source of truth: auditable, travels with the workspace, survives a DB loss (Q6). Invite
-     token HASHES live beside it in ``policy/invites.json`` (only the sha256 of the token, never the token)::
-
-        [{"id", "hash", "role", "expires_at", "max_uses", "uses", "created_by", "created_at", "revoked"}]
+     Git is the source of truth: auditable, travels with the workspace, survives a DB loss (Q6).
 
   2. **Index copy** — the user row's JSONB ``users.data.memberships[]`` = ``[{workspace_id, role, added_at}]``,
      for listing "workspaces shared with me". agent-api has no DB, so this is reached through the injected
      ``MembershipIndex`` port (real adapter → identity admin-api; a fake in tests).
 
+  3. **Invites** — ``<store-root>/.invites/<workspace_id>.json``, OUTSIDE every workspace mount, holding
+     only the sha256 of each token and never the token::
+
+        [{"id", "hash", "role", "expires_at", "max_uses", "uses", "created_by", "created_at", "revoked"}]
+
+     They used to live at ``policy/invites.json``, inside the workspace, and the worker's turn write-back
+     deleted every one of them a second after it was minted (Vexa-ai/vexa#1645). See ``INVITE_STORE_DIR``
+     for what moved, what did not, and why — the roster is workspace knowledge and stays; an invite is
+     capability material and does not belong in a tree that gets published, attached and reseeded.
+
 **policy/ is PLATFORM-WRITE-ONLY.** Agent turns must never modify ``policy/``. The membership module here IS
-the platform writer (it commits members.json/invites.json directly). The worker's turn-commit path
-(``llm/ports.run_harness_turn``) reverts any ``policy/`` change an agent turn produced before it commits —
-the enforcement seam. See ``POLICY_DIR`` (shared constant).
+the platform writer (it commits members.json directly). The worker's turn-commit path
+(``llm/ports.run_harness_turn``) reverts any ``policy/`` change an agent turn produced before it commits,
+and — since #1645 — never deletes a ``policy/`` write the platform made while the turn ran. That is the
+enforcement seam. See ``POLICY_DIR`` (shared constant).
 
 **Role enforcement** — ``require_role(root, workspace_id, subject, min_role)``: owner > contributor > viewer.
 The SYSTEM workspace and a user's own private workspaces are never shareable — ``assert_shareable`` refuses
@@ -42,6 +51,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Protocol
@@ -52,15 +62,137 @@ log = logging.getLogger(__name__)
 # guard (llm/ports imports the string, not this module — that module stays product-import-free).
 POLICY_DIR = "policy"
 MEMBERS_FILE = f"{POLICY_DIR}/members.json"
-INVITES_FILE = f"{POLICY_DIR}/invites.json"
 
-# Role lattice: owner > contributor > viewer. SINGLE-RANK model (owner ruling 2026-07-07): normal
-# workspaces have ONE member rank — every member is read/write and can share; the ``owner`` is just the
-# CREATOR (the only one who can unshare/delete). ``viewer`` (read-only) is retained in the lattice for
-# back-compat but is NO LONGER invitable — you never mint a read-only or owner invite, only a member.
+# ── WHERE INVITES LIVE, AND WHY IT IS NOT IN THE WORKSPACE (Vexa-ai/vexa#1645) ───────────────────
+#
+# Founder, 2026-09-07, opening an invite minted a minute earlier: *"This invite link is not valid.
+# Ask whoever sent it for a new one."* Invites lived at ``policy/invites.json`` INSIDE the workspace
+# repo, which is the same directory the worker's turn runs in — and the turn's write-back restored
+# ``policy/`` to its pre-turn state, deleting every invite that had been minted while the turn ran.
+# The workspace's own history said it out loud, once per mint:
+#
+#     policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c     19:28:08
+#     oenb-b5e60c: policy/invites.json — removed                             19:28:09
+#
+# The write-back is fixed (``llm/ports._policy_anchor``), and that fix alone would have been enough
+# to stop the deletion. It is not enough to stop the CLASS: a file inside a workspace mount is inside
+# the agent's own filesystem, and every process that syncs, reverts, publishes or reseeds that tree is
+# a second writer on it. So the invite store leaves the tree.
+#
+# THE THREE CANDIDATES, AND WHY THIS ONE:
+#
+#   * ``policy/`` — where it was. Inside the mount. The turn's write-back was only the writer we
+#     caught; ``workspace_publish``, the attach/carry paths and the reseed route all rewrite that
+#     tree too, and an agent with Bash can delete the file outright. Keeping capability material
+#     there means keeping a store whose contents any of them may drop.
+#   * ``.vexa/`` — the workspace's machinery dot-dir. Same tree, same sweep: the turn commit drops
+#     only ``.claude/`` from the index, and ``.vexa/workspace.json`` is deliberately committed
+#     (``workspace_ids._commit_identity``). Moving the file there changes which path the sweep
+#     deletes, not whether it does. Placement inside the mount was never the fix.
+#   * the memberships store — ``policy/members.json``. It STAYS where it is, and invites do not join
+#     it, because they are different things. The roster is workspace KNOWLEDGE: who is on this group,
+#     readable in the workspace, auditable in its history, portable with it (Q6 — it survives a DB
+#     loss because it travels with the repo). An invite is CAPABILITY MATERIAL: a token hash, an
+#     expiry, a use count. Nobody reads it in the workspace, and it must NOT travel when a workspace
+#     is published to GitHub or attached to somebody else's repository.
+#
+# So: ``<store-root>/.invites/<workspace_id>.json``, in the store's dot-namespace — the same
+# convention ``.attached/`` already uses, and one every enumerator here already skips. The runtime
+# binds ONE SUBPATH PER MOUNTED WORKSPACE and never the store root
+# (``runtime_kernel.mounts.workspace_binds``: *"a mount AT the root would re-expose the whole store —
+# never emit it"*), so this path is not merely unwritten by a worker, it is not present in one.
+INVITE_STORE_DIR = ".invites"
+
+#: Where invites lived before the move. READ-ONLY from here on: an invite minted before this change
+#: still previews and still redeems (``read_invites`` falls back to it), and the first write for that
+#: workspace carries the rows into the new store. Never written again.
+LEGACY_INVITES_FILE = f"{POLICY_DIR}/invites.json"
+INVITES_FILE = LEGACY_INVITES_FILE  # kept for callers/tests that name the legacy path
+
+# Role lattice: owner > contributor > viewer. The STORED spelling, unchanged: ``viewer`` is what every
+# ``policy/members.json`` on every running instance already says, and renaming a value on disk is a
+# migration nobody asked for.
 ROLES = ("viewer", "contributor", "owner")
 _RANK = {r: i for i, r in enumerate(ROLES)}
-INVITABLE_ROLES = ("contributor",)  # single-rank: mint a read/write MEMBER (never viewer/owner)
+
+# ── THE THREE ROLES, IN THE WORDS THE PRODUCT USES (Vexa-ai/vexa#1632) ───────────────────────────
+#
+# ⚠ WHAT THIS REPLACED, AND WHAT IT COST. ``INVITABLE_ROLES`` was ``("contributor",)`` — the
+# single-rank model of the 2026-07-07 owner ruling, where every member is read/write and ``owner`` is
+# just the creator. On 2026-09-06 the founder pressed **Add a member…** on a workspace front page and
+# read this back:
+#
+#     invite role must be one of ('contributor',)
+#
+# The panel was minting a ``viewer`` invite against a set that held one value. Two defects in one
+# sentence: a control that could not work, and a python tuple repr shown to a person as an answer.
+#
+# THE SET IS THE PRIMITIVES' NOW, and it is not an invention — it is read off the seed
+# ``behavior/global/POLICIES.md``, under *What is not yours to choose*: **"a member reads a group; an
+# owner or contributor writes it"**. That sentence names exactly three ranks, so these are the three.
+#
+# `reader` IS `viewer`, one layer up. The lattice keeps its stored spelling and the product says
+# ``reader``, because that is the word the terminal has said since #1623 (`workspaceReadme.roleLabel`
+# maps `viewer` → `reader`) and the word a person recognises. Every value crossing this module's
+# boundary is normalised on the way IN (``normalize_role``) and worded on the way OUT
+# (``role_word``), so no caller has to know that the two spellings exist and no second reader of the
+# lattice can disagree with this one.
+ROLE_WORDS = ("owner", "contributor", "reader")
+
+#: The outward word → the lattice spelling. Both spellings of the read-only rank are accepted on the
+#: way in, because an existing record says ``viewer`` and a person says ``reader``.
+_ROLE_IN = {"owner": "owner", "contributor": "contributor", "reader": "viewer", "viewer": "viewer"}
+
+#: The lattice spelling → the outward word. The inverse, written out rather than derived, because a
+#: derived inverse of a many-to-one map picks a winner by dict order.
+_ROLE_OUT = {"owner": "owner", "contributor": "contributor", "viewer": "reader"}
+
+#: WHAT EACH ROLE MEANS, in one sentence, DERIVED from the POLICIES.md line quoted above and from
+#: nothing else. It is here rather than in the caller that shows it because three surfaces say it —
+#: the agent's confirmation before it acts, the verb's own answer, and the invite mail a stranger
+#: reads — and a person who is told one thing by the chat and another by the mail has been told
+#: nothing. Present tense, no "can": these are what the role IS.
+ROLE_SENTENCES = {
+    "owner": "an owner writes this group and can add or remove its members",
+    "contributor": "a contributor writes this group",
+    "reader": "a reader reads this group and does not write it",
+}
+
+#: Every role an invite may be minted for, and every role a membership may be set to. The three the
+#: product has, in rank order, in the words a person reads — so the refusal sentence this appears in
+#: names roles somebody can actually type.
+INVITABLE_ROLES = ROLE_WORDS
+
+
+def normalize_role(role) -> str:
+    """One role as the LATTICE spells it, or ``MembershipError`` naming the three that exist.
+
+    THE ONE DOOR a role comes through. Callers hand in whatever a person, a route body or an old
+    record said; everything below this line sees ``owner``/``contributor``/``viewer`` and nothing
+    else. Case and surrounding space are the caller's accident, not their meaning."""
+    word = str(role or "").strip().lower()
+    lattice = _ROLE_IN.get(word)
+    if not lattice:
+        raise MembershipError(
+            f"{role!r} is not a role here — the roles are "
+            + ", ".join(ROLE_WORDS)
+            + ". " + "; ".join(f"{r}: {ROLE_SENTENCES[r]}" for r in ROLE_WORDS),
+            status=400)
+    return lattice
+
+
+def role_word(role) -> str:
+    """One role as the PRODUCT says it — ``viewer`` on disk reads ``reader`` to a person.
+
+    Never raises: an unrecognised stored value is returned as it is. A roster that shows a strange
+    word is a finding; a roster that refuses to render because one row is odd is a bug."""
+    word = str(role or "").strip().lower()
+    return _ROLE_OUT.get(word, word)
+
+
+def role_sentence(role) -> str:
+    """The one sentence ``role`` means, or ``""`` for a role with no sentence to give."""
+    return ROLE_SENTENCES.get(role_word(role), "")
 
 DEFAULT_EXPIRES_IN_SEC = 604800  # 7 days
 DEFAULT_MAX_USES = 1
@@ -168,19 +300,67 @@ def policy_commit(ws: Path, message: str) -> None:
     tree) with the PLATFORM identity as committer. This is the control-plane commit path that policy/ is
     write-restricted TO — distinct from the agent turn-commit. Best-effort no-op on an empty policy diff.
     Scrubbed git env: a hook-exported GIT_DIR must never redirect this commit (see shared/gitenv)."""
+    _policy_commit(ws, message, author_name="vexa-platform", author_email="platform@vexa.ai")
+
+
+def policy_commit_as(author_name: str, author_email: str) -> CommitFn:
+    """A ``policy/`` writer whose AUTHOR is the person who asked for the change (Vexa-ai/vexa#1632).
+
+    THE COMMITTER STAYS THE PLATFORM AND THE AUTHOR BECOMES THE HUMAN — git's two identities, used
+    for the two things they are for. The platform is what physically made the commit (it holds the
+    only write on ``policy/``); the person is who decided. Before this, every membership change in
+    every workspace's history read ``vexa-platform``, so *who added this person* was answerable only
+    by reading the JSON diff and hoping ``added_by`` was still there. The issue asks for the act to
+    be recorded "with the inviter as author", and this is that, literally — `git log --format=%an`
+    on `policy/members.json` now names them.
+
+    ``_global.commit`` already does exactly this for the company layer, one directory over. Same
+    shape, same reason, and neither invented it: a workspace is a git repository and this is what git
+    authorship is.
+
+    A blank name or address falls back to the platform identity rather than committing with an empty
+    author, which git accepts and nobody can read."""
+    name = " ".join(str(author_name or "").split()) or "vexa-platform"
+    email = str(author_email or "").strip() or "platform@vexa.ai"
+
+    def _commit_as(ws: Path, message: str) -> None:
+        _policy_commit(ws, message, author_name=name, author_email=email)
+
+    return _commit_as
+
+
+def _policy_commit(ws: Path, message: str, *, author_name: str, author_email: str) -> None:
+    """The one commit body both writers share — extracted verbatim when the authored variant arrived,
+    because a second copy of a git-env-scrubbing commit path is a second place the scrub can be
+    forgotten."""
     import subprocess
     from shared.gitenv import scrubbed_git_env
 
     env = scrubbed_git_env(
-        GIT_AUTHOR_NAME="vexa-platform", GIT_AUTHOR_EMAIL="platform@vexa.ai",
+        GIT_AUTHOR_NAME=author_name, GIT_AUTHOR_EMAIL=author_email,
         GIT_COMMITTER_NAME="vexa-platform", GIT_COMMITTER_EMAIL="platform@vexa.ai",
     )
     ws = Path(ws)
     if not (ws / ".git").exists():
         subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True,
                        capture_output=True, text=True, env=env)
-    subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR], check=True,
-                   capture_output=True, text=True, env=env)
+    added = subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR],
+                           capture_output=True, text=True, env=env)
+    if added.returncode != 0:
+        # policy/ is EXCLUDED in this clone — the workspace has an ATTACHED external repo as its tree
+        # (workspace_attach.carry_policy), where the member list is deliberately untracked so it is
+        # never pushed to somebody else's repository. The write to disk already happened and
+        # ``read_members`` reads the working tree, so this is a legitimate state, not a failure.
+        #
+        # ⚠ AND THE OTHER REASON `git add` EXITS NON-ZERO IS NOT THAT (Vexa-ai/vexa#1645). An
+        # `index.lock` held by the worker's own turn commit lands here too, and a silent `return`
+        # reported it as the benign case — the write stayed on disk, uncommitted, and looked to
+        # everything downstream like a commit that never needed to happen. An anomaly is a finding:
+        # anything that is not the documented exclusion is logged with git's own words.
+        stderr = (added.stderr or "").strip()
+        if "ignored by one of your .gitignore" not in stderr and "excluded" not in stderr:
+            log.warning("policy commit could not stage %s in %s: %s", POLICY_DIR, ws, stderr)
+        return
     # commit only if policy/ actually changed (staged diff non-empty)
     staged = subprocess.run(["git", "-C", str(ws), "diff", "--cached", "--quiet", "--", POLICY_DIR],
                             capture_output=True, text=True, env=env)
@@ -225,6 +405,75 @@ def _write_json_list(ws: Path, rel: str, rows: list[dict]) -> None:
     f = ws / rel
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+
+
+# ── the invite store (outside every workspace mount — see INVITE_STORE_DIR above) ────────────────
+def invites_path(root: Path, workspace_id: str) -> Path:
+    """THE ONE DOOR to a workspace's invites: ``<root>/.invites/<workspace_id>.json``.
+
+    Every route that mints, previews, accepts, lists or revokes resolves the file through this
+    function and no other, so "persisted somewhere the preview does not read" is not a state this
+    code can be in. Traversal-guarded on the workspace id for the same reason ``_ws_dir`` is."""
+    slug = str(workspace_id or "").strip()
+    if not slug or "/" in slug or "\\" in slug or slug in (".", ".."):
+        raise MembershipError("invalid workspace id", status=400)
+    root = Path(root).resolve()
+    path = (root / INVITE_STORE_DIR / f"{slug}.json").resolve()
+    if root not in path.parents:
+        raise MembershipError("invalid workspace id", status=400)
+    return path
+
+
+def read_invites(root: Path, workspace_id: str) -> list[dict]:
+    """A workspace's invite records (``[]`` if none), from the store — falling back to the LEGACY
+    in-tree ``policy/invites.json`` while that workspace has no store file yet, so an invite minted
+    before the move still previews and still redeems."""
+    store = invites_path(root, workspace_id)
+    if store.exists():
+        try:
+            data = json.loads(store.read_text())
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            log.warning("could not parse the invite store for %s; treating as empty", workspace_id)
+            return []
+    return _read_json_list(_ws_dir(root, workspace_id), LEGACY_INVITES_FILE)
+
+
+def _write_invites(root: Path, workspace_id: str, rows: list[dict]) -> None:
+    """Persist a workspace's invites. Always to the store — never back to the legacy in-tree file —
+    so the first write after the move migrates whatever the fallback read."""
+    store = invites_path(root, workspace_id)
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+
+
+def workspaces_with_invites(root: Path) -> list[str]:
+    """Every shareable workspace id that has invites to look at — store files first, then any
+    workspace still on the legacy in-tree file. Sorted and de-duplicated; reserved and dot-prefixed
+    slugs are skipped exactly as ``assert_shareable`` refuses them."""
+    root = Path(root)
+    found: set[str] = set()
+    store_dir = root / INVITE_STORE_DIR
+    if store_dir.is_dir():
+        found |= {p.stem for p in store_dir.glob("*.json")}
+    if root.exists():
+        for child in root.iterdir():
+            if child.is_dir() and (child / LEGACY_INVITES_FILE).exists():
+                found.add(child.name)
+    return sorted(s for s in found if s and not s.startswith(".") and s not in RESERVED_SLUGS)
+
+
+def find_invite(root: Path, token: str) -> Optional[tuple[str, dict]]:
+    """``(workspace_id, record)`` for the invite ``token`` resolves to, or ``None``.
+
+    The ONE resolver: ``preview`` and ``accept`` both call it, so a token can never resolve for one
+    and not the other. Matched on the sha256 hash — the only form persisted."""
+    h = hash_token(token)
+    for slug in workspaces_with_invites(root):
+        for rec in read_invites(root, slug):
+            if rec.get("hash") == h:
+                return slug, rec
+    return None
 
 
 def _valid_subject(subject: str) -> bool:
@@ -283,17 +532,95 @@ def is_member(root: Path, workspace_id: str, subject: str) -> Optional[str]:
     return None
 
 
+def member_by_email(root: Path, workspace_id: str, email: str) -> Optional[dict]:
+    """The member record whose stored email is ``email``, or None (Vexa-ai/vexa#1632).
+
+    THE ROSTER IS ADDRESSED BY EMAIL NOW, because that is what a person says. Every route above takes
+    a ``subject`` — the opaque platform id — which is right for a panel that read the roster and has
+    the id in its hand, and useless to an agent whose person just typed a name out loud. So the acts
+    resolve an address here first, and only fall back to asking identity for a subject when this
+    workspace has never seen the address.
+
+    Compared normalised on both sides: a member added from a form and one added from a mail header
+    differ by case and nothing else, and matching them as strings would silently create a second
+    membership for one person."""
+    wanted = _normalize_email(email)
+    if not wanted:
+        return None
+    for m in read_members(root, workspace_id):
+        if _normalize_email(m.get("email")) == wanted:
+            return dict(m)
+    return None
+
+
 def require_role(root: Path, workspace_id: str, subject: str, min_role: str) -> str:
     """Assert ``subject`` holds AT LEAST ``min_role`` in ``workspace_id``; return their actual role.
 
     owner > contributor > viewer. Raises ``MembershipError(status=403)`` if the subject is not a member
     or ranks below ``min_role``. The ONE place every ``/api/workspace/*`` shared route gates through."""
+    # ``reader`` is what a person says and ``viewer`` is what the lattice stores (Vexa-ai/vexa#1632);
+    # a gate that took only one of them would refuse a rank that exists.
+    min_role = _ROLE_IN.get(str(min_role or "").strip().lower(), min_role)
     if min_role not in _RANK:
         raise MembershipError(f"unknown role {min_role!r}", status=400)
     role = is_member(root, workspace_id, subject)
     if role is None or _RANK.get(role, -1) < _RANK[min_role]:
         raise MembershipError("insufficient role for this workspace", status=403)
     return role
+
+
+def list_memberships(root: Path, subject: str) -> list[dict]:
+    """Every shareable workspace on this host whose AUTHORITATIVE ``policy/members.json`` names
+    ``subject``, in the row shape the index returns (``workspace_id``/``role``/``added_at``).
+
+    The RECOVERY read for the derived index (Q6). Grants are written to BOTH stores, but only the git
+    file is authoritative — so a listing that consults ONLY the mirror reports "no shared workspaces"
+    whenever the internal edge to the identity service is unreachable, losing a grant the system
+    demonstrably holds. Reserved slugs and the dot-namespace are skipped exactly as ``assert_shareable``
+    refuses them, so the SYSTEM/seed workspaces never surface as memberships."""
+    root = Path(root)
+    if not root.exists():
+        return []
+    out: list[dict] = []
+    for child in sorted(c for c in root.iterdir() if c.is_dir()):
+        slug = child.name
+        if slug.startswith(".") or slug in RESERVED_SLUGS:
+            continue
+        for member in _read_json_list(child, MEMBERS_FILE):
+            if member.get("subject") == subject:
+                out.append({"workspace_id": slug, "role": member.get("role"),
+                            "added_at": member.get("added_at")})
+                break
+    return out
+
+
+def reconciled_memberships(root: Path, subject: str,
+                           index_list: Callable[[str], list]) -> tuple[list[dict], bool]:
+    """The membership ENUMERATION for consumers that turn grants into MOUNTS (the active-set route, the
+    dispatch mount builder): the derived index UNIONed with the authoritative ``list_memberships`` scan.
+    Returns ``(rows, index_degraded)``.
+
+    Same reconciliation contract as the shared-workspace listing (Q6): a UNION, never a subtraction — an
+    index row with no local dir is a workspace on another host and must still be enumerated, so the git
+    store only ever ADDS rows the index is missing. NEVER raises: a dead index leg flips
+    ``index_degraded`` (the git rows still answer), a dead git leg still serves the index rows — so an
+    unreachable or incomplete index cannot silently drop a locally-held grant from the enumeration.
+    Consumers keep re-checking the role authoritatively per workspace (``is_member``); this feeds
+    CANDIDATES, never access."""
+    degraded = False
+    try:
+        rows = list(index_list(subject) or [])
+    except Exception as exc:  # noqa: BLE001 — the authoritative store still answers
+        log.warning("membership index list failed for subject=%s: %s — enumerating from policy/members.json only",
+                    subject, exc)
+        rows, degraded = [], True
+    seen = {r.get("workspace_id") for r in rows if isinstance(r, dict)}
+    try:
+        rows += [row for row in list_memberships(root, subject) if row["workspace_id"] not in seen]
+    except Exception as exc:  # noqa: BLE001 — enumeration must never break a mount path; the index rows still serve
+        log.warning("authoritative membership scan failed for subject=%s: %s — serving the index rows only",
+                    subject, exc)
+    return rows, degraded
 
 
 # ── membership writes (both stores) ─────────────────────────────────────────────────────────────
@@ -352,8 +679,7 @@ def grant_membership(root: Path, workspace_id: str, subject: str, role: str, *,
     an existing member is updated in place (accepting an invite twice = still one membership). ``email``
     is the grantee's VERIFIED email (from the redeem request), stored so the roster shows a human label
     rather than the opaque subject id; a re-grant refreshes it when a newer value is supplied."""
-    if role not in ROLES:
-        raise MembershipError(f"unknown role {role!r}", status=400)
+    role = normalize_role(role)
     if not _valid_subject(subject):
         raise MembershipError("invalid subject", status=400)
     ws = assert_shareable(root, workspace_id)
@@ -383,8 +709,7 @@ def set_role(root: Path, workspace_id: str, subject: str, role: str, *,
     """Flip a member's role (the "easily change read/write permissions" DoD item). Owner-only at the API
     layer. Refuses to demote/alter a non-member and refuses to strip the LAST owner (a workspace must
     always retain an owner)."""
-    if role not in ROLES:
-        raise MembershipError(f"unknown role {role!r}", status=400)
+    role = normalize_role(role)
     ws = assert_shareable(root, workspace_id)
     with _ws_lock(workspace_id):  # serialize the members.json read-modify-write (last-owner check + flip)
         members = _read_json_list(ws, MEMBERS_FILE)
@@ -437,6 +762,24 @@ def _normalize_email(email: Optional[str]) -> str:
     return (email or "").strip().lower()
 
 
+# WHERE AN INVITE IS REDEEMED — the terminal's page, and the ONE spelling of it (Vexa-ai/vexa#1635).
+# The founder minted an invite, opened the link and read *"not found"*: the base was the MCP host and
+# no page served the path. The base is now the deployment's declared public app URL and the path is
+# this constant, in ONE place, because a link is composed by two callers (the mint route and the
+# invite act) and two spellings of a path is the same defect one layer in.
+JOIN_PATH = "/join"
+
+
+def invite_link(ui_url: str, token: str) -> str:
+    """The link a person opens to redeem ``token``, on ``ui_url`` (VEXA_UI_URL — the deployment's
+    declared public app URL). Empty ``ui_url`` ⇒ empty string: a link with no origin is not a link,
+    and every caller refuses rather than handing one over."""
+    base = str(ui_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}{JOIN_PATH}?i={urllib.parse.quote(token, safe='')}"
+
+
 def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
                 expires_in_sec: int = DEFAULT_EXPIRES_IN_SEC, max_uses: int = DEFAULT_MAX_USES,
                 mode: str = DEFAULT_INVITE_MODE, allowed_emails: Optional[list[str]] = None,
@@ -448,8 +791,10 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
     ACCESS MODES (AMENDMENT 5): ``mode="open"`` = anyone-with-link (authenticated) redeems;
     ``mode="restricted"`` = redeem allowed only for an authenticated user whose VERIFIED email is in
     ``allowed_emails``. A restricted invite with an empty ``allowed_emails`` admits no one (fail-closed)."""
-    if role not in INVITABLE_ROLES:
-        raise MembershipError(f"invite role must be one of {INVITABLE_ROLES}", status=400)
+    # THE THREE ROLES, NOT THE ONE (Vexa-ai/vexa#1632). This line used to read
+    # ``if role not in INVITABLE_ROLES`` against ``("contributor",)`` and put the tuple's own repr in
+    # front of a person. ``normalize_role`` refuses with the three words and what each one means.
+    role = normalize_role(role)
     if max_uses < 1:
         raise MembershipError("max_uses must be >= 1", status=400)
     if expires_in_sec <= 0:
@@ -459,7 +804,7 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
     emails = sorted({_normalize_email(e) for e in (allowed_emails or []) if _normalize_email(e)})
     if mode == "restricted" and not emails:
         raise MembershipError("restricted invite requires allowed_emails", status=400)
-    ws = assert_shareable(root, workspace_id)
+    assert_shareable(root, workspace_id)
     t = now if now is not None else time.time()
     token = secrets.token_urlsafe(32)
     invite_id = secrets.token_hex(8)
@@ -476,10 +821,15 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
         "created_at": _now_iso(),
         "revoked": False,
     }
-    invites = _read_json_list(ws, INVITES_FILE)
-    invites.append(rec)
-    _write_json_list(ws, INVITES_FILE, invites)
-    _commit(commit_fn, ws, f"policy: mint invite {invite_id} ({role}) for {workspace_id}")
+    # ONE STORE, AND IT IS NOT THE WORKSPACE REPO (Vexa-ai/vexa#1645). ``commit_fn`` is deliberately
+    # not called here any more: there is nothing in the workspace tree to commit, and an invite is not
+    # workspace history — the audit of who was invited lands in ``members.json`` (``added_by``) the
+    # moment the link is redeemed. Callers still pass their writer because the same call grants
+    # memberships elsewhere in this module; here it has nothing to write.
+    with _ws_lock(workspace_id):
+        invites = read_invites(root, workspace_id)
+        invites.append(rec)
+        _write_invites(root, workspace_id, invites)
     return MintedInvite(id=invite_id, token=token, role=role,
                         expires_at=rec["expires_at"], max_uses=rec["max_uses"])
 
@@ -491,30 +841,29 @@ def preview_invite(root: Path, token: str, *, now: Optional[float] = None) -> Op
     needs (it renders before login). Returns ``None`` when no invite matches the token (never leaks which
     workspaces exist). Read-only: no writes, no use-count change, no membership."""
     t = now if now is not None else time.time()
-    h = hash_token(token)
-    if not root.exists():
+    found = find_invite(Path(root), token)
+    if found is None:
         return None
-    for child in sorted(p for p in root.iterdir() if p.is_dir()):
-        slug = child.name
-        if slug.startswith(".") or slug in RESERVED_SLUGS:
-            continue
-        for rec in _read_json_list(child, INVITES_FILE):
-            if rec.get("hash") != h:
-                continue
-            expired = int(rec.get("expires_at", 0)) < t
-            used_up = int(rec.get("uses", 0)) >= int(rec.get("max_uses", 1))
-            reason = ("revoked" if rec.get("revoked") else "expired" if expired
-                      else "used_up" if used_up else None)
-            return {
-                "workspace_id": slug,
-                "role": rec.get("role", "viewer"),
-                "mode": rec.get("mode", DEFAULT_INVITE_MODE),
-                "expires_at": rec.get("expires_at"),
-                "created_by": rec.get("created_by"),
-                "valid": reason is None,
-                "reason": reason,
-            }
-    return None
+    slug, rec = found
+    expired = int(rec.get("expires_at", 0)) < t
+    used_up = int(rec.get("uses", 0)) >= int(rec.get("max_uses", 1))
+    reason = ("revoked" if rec.get("revoked") else "expired" if expired
+              else "used_up" if used_up else None)
+    return {
+        "workspace_id": slug,
+        "role": rec.get("role", "viewer"),
+        "mode": rec.get("mode", DEFAULT_INVITE_MODE),
+        # The addresses the invite is BOUND to. Surfaced because the join page has to put the
+        # bound address into the sign-in field and lock it (Vexa-ai/vexa#1635): a person who
+        # types a different one gets refused at redeem with nothing on screen explaining why.
+        # It is a disclosure to whoever holds the token — which is the person the link was
+        # sent to — of the address it was sent to. Empty for an open invite.
+        "allowed_emails": list(rec.get("allowed_emails") or []),
+        "expires_at": rec.get("expires_at"),
+        "created_by": rec.get("created_by"),
+        "valid": reason is None,
+        "reason": reason,
+    }
 
 
 def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
@@ -534,12 +883,12 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
     N concurrent redeems of a max_uses=K invite grant AT MOST K memberships (no lost-update over-grant).
     The invites file is re-read from DISK inside the lock — never a copy captured before it — so the
     use-count check sees every prior redeem's increment. (Multi-replica: see ``_ws_lock``.)"""
-    ws = assert_shareable(root, workspace_id)
+    assert_shareable(root, workspace_id)
     t = now if now is not None else time.time()
     h = hash_token(token)
     with _ws_lock(workspace_id):
         # Fresh read UNDER the lock: the authoritative uses counter, not a value read before we waited.
-        invites = _read_json_list(ws, INVITES_FILE)
+        invites = read_invites(root, workspace_id)
         rec = next((i for i in invites if i.get("hash") == h), None)
         if rec is None:
             raise MembershipError("invalid invite", status=404)
@@ -566,31 +915,74 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
             # This write + commit lands the increment durably before the lock is released, so the next
             # waiter re-reads the bumped counter and a max_uses=1 invite refuses the second grant.
             rec["uses"] = int(rec.get("uses", 0)) + 1
-            _write_json_list(ws, INVITES_FILE, invites)
-            _commit(commit_fn, ws, f"policy: invite {rec.get('id')} used ({subject})")
+            _write_invites(root, workspace_id, invites)
         return {"workspace_id": workspace_id, "role": role, "already_member": already}
 
 
 def revoke_invite(root: Path, workspace_id: str, invite_id: str, *,
                   commit_fn: Optional[CommitFn] = None) -> None:
     """Revoke an invite by id (sets ``revoked``); a revoked invite fails ``accept`` with 410."""
-    ws = assert_shareable(root, workspace_id)
-    invites = _read_json_list(ws, INVITES_FILE)
-    rec = next((i for i in invites if i.get("id") == invite_id), None)
-    if rec is None:
-        raise MembershipError("unknown invite", status=404)
-    if not rec.get("revoked"):
-        rec["revoked"] = True
-        _write_json_list(ws, INVITES_FILE, invites)
-        _commit(commit_fn, ws, f"policy: revoke invite {invite_id} for {workspace_id}")
+    assert_shareable(root, workspace_id)
+    with _ws_lock(workspace_id):
+        invites = read_invites(root, workspace_id)
+        rec = next((i for i in invites if i.get("id") == invite_id), None)
+        if rec is None:
+            raise MembershipError("unknown invite", status=404)
+        if not rec.get("revoked"):
+            rec["revoked"] = True
+            _write_invites(root, workspace_id, invites)
 
 
 def list_invites(root: Path, workspace_id: str) -> list[dict]:
     """The workspace's invites WITHOUT the hash (never surface the stored capability material)."""
-    out = []
-    for i in _read_json_list(_ws_dir(root, workspace_id), INVITES_FILE):
-        out.append({k: v for k, v in i.items() if k != "hash"})
-    return out
+    return [{k: v for k, v in i.items() if k != "hash"} for i in read_invites(root, workspace_id)]
+
+
+def voided_invite_ids(root: Path, workspace_id: str, *, now: Optional[float] = None) -> list[str]:
+    """Invite ids this workspace's own history says were minted, that the store no longer holds and
+    that would still be live — the links a fresh mint has to warn about (Vexa-ai/vexa#1645 point 4).
+
+    POSITIVE EVIDENCE, from the record that survived the loss. Every mint used to leave
+    ``policy: mint invite <id> (<role>) for <ws>`` in the workspace's git log, and those commits are
+    still there after the invite file they described was deleted — it is how the founder's report was
+    diagnosed at all. An id in that log with no record in the store is a link somebody is holding that
+    can never be redeemed.
+
+    Bounded to the invite lifetime so it is self-limiting and truthful: a link minted more than
+    ``DEFAULT_EXPIRES_IN_SEC`` ago is expired on its own terms, and saying it is void adds nothing.
+    New mints leave no such commit, so this never counts an invite that is currently working."""
+    import subprocess
+    from shared.gitenv import scrubbed_git_env
+
+    ws = _ws_dir(root, workspace_id)
+    if not (ws / ".git").exists():
+        return []
+    t = now if now is not None else time.time()
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(ws), "log", "--format=%ct%x09%s", "--grep=^policy: mint invite "],
+            capture_output=True, text=True, timeout=10, env=scrubbed_git_env())
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if out.returncode != 0:
+        return []
+    held = {str(i.get("id")) for i in read_invites(root, workspace_id)}
+    lost: list[str] = []
+    for line in out.stdout.splitlines():
+        stamp, _, subject = line.partition("\t")
+        parts = subject.split()
+        if len(parts) < 4:
+            continue
+        invite_id = parts[3]
+        try:
+            when = int(stamp)
+        except ValueError:
+            continue
+        if t - when > DEFAULT_EXPIRES_IN_SEC:
+            continue
+        if invite_id not in held and invite_id not in lost:
+            lost.append(invite_id)
+    return lost
 
 
 # ── index helpers (best-effort; the git file is authoritative) ──────────────────────────────────

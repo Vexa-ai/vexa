@@ -58,6 +58,20 @@ export interface LifecycleEvent {
   /** The control-plane channels found unreachable when `infra_fault` is set (e.g. the
    *  meeting-api callback and/or redis). Additive; same liberal-ingestion rationale. */
   unreachable_channels?: string[];
+  /** TYPED join-failure evidence on a pre-active `failed` terminal (#1059, #1058): what happened,
+   *  who it belongs to, the stage timings, and the platform's own signal. See `join-evidence.ts`.
+   *  Additive on lifecycle.v1 exactly as `infra_fault`/`stt_fault` are — the sealed contract
+   *  ingests liberally, so no schema bump is needed to carry it. The control plane persists it at
+   *  `meeting.data.join_evidence`; a bot that omits it still gets a derived verdict there. */
+  join_evidence?: {
+    reason: string;
+    attribution: string;
+    source?: string;
+    stage?: FailureStage;
+    detail?: string;
+    timings?: { time_to_lobby_ms?: number; time_in_lobby_ms?: number; total_ms?: number };
+    lobby_budget_ms?: number;
+  };
 }
 
 /** The legal transitions — the machine the bot MUST obey (lifecycle.v1/README.md). */

@@ -13,3 +13,8 @@ path and the fake records each hop (method, path, headers, params, body).
 - **`test_app.py`** — L3 seam: every tool forwards to the right gateway path with the
   caller's `X-API-Key`; missing key fails closed (401); downstream status + detail pass
   through verbatim (incl. the 409 → `already_exists` shape).
+- **`test_standing_notices.py`** — the ride: a standing notice reaches an agent on the
+  result of the meeting tool it just called (field in the body, trailing line in the text,
+  once per result) — including when that result is a REFUSAL (#1549) — the tools that touch
+  no meeting carry none, and every way that hop can fail — domain absent, slow, refused,
+  malformed — leaves the result, or the refusal, exactly as it was.

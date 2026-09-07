@@ -70,6 +70,25 @@ test("does not attribute an orphaned marker to an earlier list item", () => {
   assert.equal(evaluatePullRequest(pr({ body: orphan }), [], config).ok, false);
 });
 
+test("a body that MENTIONS the markers can still declare", () => {
+  // Found by the PR that fixed the line-shape bug failing its own gate: explaining the bug
+  // required quoting the template, which put a marker occurrence above the declaration. Any
+  // PR documenting this gate could not declare anything. Parse the declaration section only.
+  const prose = [
+    "## What broke",
+    "The parser matched `<!-- rights:independent -->` wherever it appeared, including here:",
+    "",
+    "  <!-- rights:independent -->",
+    "",
+    "## Contribution rights",
+    "- [x] I own this contribution. <!-- rights:independent -->",
+    "- [ ] An employer or client owns or controls it. <!-- rights:corporate -->",
+    "- [ ] I am unsure. <!-- rights:uncertain -->",
+  ].join("\n");
+  assert.equal(evaluatePullRequest(pr({ body: prose }), [], config).ok, true,
+    "prose above the declaration swallowed the declaration");
+});
+
 test("independent path passes without a CLA", () => {
   const verdict = evaluatePullRequest(pr(), [], config);
   assert.equal(verdict.ok, true);

@@ -1,0 +1,43 @@
+{
+ "tape": "m34-final",
+ "platform": "teams",
+ "source": "local-harvest",
+ "image_version": "453d37c1",
+ "duration_s": 638.3,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "201": {
+   "name": "P1",
+   "instants": 83,
+   "purity": 0.8916,
+   "owner_share": 1.0
+  },
+  "414": {
+   "name": "P3",
+   "instants": 50,
+   "purity": 1.0,
+   "owner_share": 0.8475
+  }
+ },
+ "untruthed": {},
+ "ambiguous_hint_instants": 26,
+ "roster_first_seen_s": {
+  "P2": 0.0,
+  "P3": 30.0,
+  "P1": 555.0
+ },
+ "roster_coverage": [],
+ "judge": null,
+ "counts": {
+  "csrc": 199,
+  "hints": 220,
+  "roster": 9,
+  "ticks": 1239
+ }
+}

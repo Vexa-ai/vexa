@@ -6,8 +6,20 @@ import { normalizeDocPath, resolveDocRef, entitySlug, invalidateDocLinkCaches } 
 
 const trees: Record<string, string[]> = {};
 let active: { slug: string }[] = [];
+let treeReads = 0;
+/** Fires AFTER each tree read has captured its answer, carrying the slug that was read ("" = home)
+ *  — lets a test land a write between the two passes resolveDocRef makes, which is exactly what an
+ *  agent turn does. The slug is load-bearing: the search order now starts at the mandatory `_global`
+ *  tier, so a listener that writes on ANY read would land its write inside the FIRST pass and the
+ *  re-read it means to prove would never happen. */
+let onTreeRead: ((slug: string) => void) | null = null;
 vi.mock("../../surfaces/workspaceApi", () => ({
-  listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => trees[opts?.slug ?? ""] ?? []),
+  listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => {
+    const answer = trees[opts?.slug ?? ""] ?? [];
+    treeReads++;
+    onTreeRead?.(opts?.slug ?? "");
+    return answer;
+  }),
   readActiveSet: vi.fn(async () => ({ subject: "u", active })),
 }));
 
@@ -15,6 +27,8 @@ beforeEach(() => {
   invalidateDocLinkCaches();
   for (const k of Object.keys(trees)) delete trees[k];
   active = [];
+  treeReads = 0;
+  onTreeRead = null;
 });
 
 describe("normalizeDocPath", () => {
@@ -56,6 +70,31 @@ describe("resolveDocRef — wikilinks", () => {
   });
   it("returns undefined when no mounted workspace has the entity (renders the muted chip)", async () => {
     expect(await resolveDocRef({ wikilink: "Nobody" }, {})).toBeUndefined();
+  });
+
+  /** The defect the founder hit: these trees are cached for a minute, and the agent WRITES an
+   *  entity doc during the very turn whose reply names it. Every chip in that reply resolved to
+   *  "not found" against a tree read before the write — and a not-found chip did nothing at all
+   *  when clicked. A miss must therefore cost one fresh read before it is believed. */
+  it("re-reads the trees before declaring a title missing — the doc was written mid-turn", async () => {
+    trees[""] = [];
+    // write on the HOME read only: it is last in the search order, so the write lands after the
+    // first pass has already missed — which is the condition this test exists to prove.
+    onTreeRead = (slug) => { if (slug === "") trees[""] = ["kg/entities/company/openvdb-foundation.md"]; };
+    const r = await resolveDocRef({ wikilink: "OpenVDB Foundation" }, {});
+    expect(r).toEqual({ path: "kg/entities/company/openvdb-foundation.md", slug: undefined, type: "company" });
+    expect(treeReads).toBeGreaterThan(1);   // it did not trust the cached miss
+  });
+  it("resolves organisation entities from the mandatory _global tier even though it is not in /workspace/active", async () => {
+    trees["_global"] = ["kg/entities/company/oesterreichische-nationalbank.md"];
+    active = [{ slug: "personal" }];
+    trees["personal"] = [];
+    const r = await resolveDocRef({ wikilink: "Oesterreichische Nationalbank" }, {});
+    expect(r).toEqual({
+      path: "kg/entities/company/oesterreichische-nationalbank.md",
+      slug: "_global",
+      type: "company",
+    });
   });
 });
 

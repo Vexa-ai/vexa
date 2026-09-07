@@ -9,11 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from control_plane.api import create_app
+from tests import gitserve
 from shared.config import load_settings
 from control_plane.dispatch import Dispatcher
 
 _MODEL_CRED_KEYS = ("HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-                    "CLAUDE_CODE_OAUTH_TOKEN", "VEXA_LLM_API_KEY")
+                    "CLAUDE_CODE_OAUTH_TOKEN")
 
 
 @pytest.fixture(autouse=True)
@@ -91,15 +92,15 @@ def test_health_ok():
     assert r.status_code == 200 and r.json()["status"] == "ok"
 
 
-def test_models_reports_chat_and_workspace_streaming_model(tmp_path):
+def test_models_reports_the_one_model_and_no_second_one(tmp_path):
+    """PRD decision 34: there is ONE model, the agent's. The endpoint used to also report a
+    `streaming_model`/`meeting_model` — the copilot's dial, pinnable per workspace in
+    `agents/meeting.md` — and the terminal painted both as chips on the live meeting view."""
     from control_plane.workspace_reader import WorkspaceReader
 
-    meeting_cfg = tmp_path / "u_jane" / "agents" / "meeting.md"
-    meeting_cfg.parent.mkdir(parents=True)
-    meeting_cfg.write_text("---\nmodel: openrouter/free\n---\n")
     c = TestClient(create_app(
         Dispatcher(
-            load_settings(agent_model="deepseek/deepseek-v4-flash", meeting_model="deepseek/deepseek-v4-flash"),
+            load_settings(agent_model="deepseek/deepseek-v4-flash"),
             _FakeRuntime(),
             _FakeIdentity(),
         ),
@@ -109,8 +110,10 @@ def test_models_reports_chat_and_workspace_streaming_model(tmp_path):
     r = c.get("/api/models", params={"subject": "u_jane"})
 
     assert r.status_code == 200
-    assert r.json()["chat_model"] == "deepseek/deepseek-v4-flash"
-    assert r.json()["streaming_model"] == "openrouter/free"
+    body = r.json()
+    assert body["chat_model"] == "deepseek/deepseek-v4-flash"
+    assert body["agent_model"] == "deepseek/deepseek-v4-flash"
+    assert "streaming_model" not in body and "meeting_model" not in body
 
 
 def test_invocations_dispatches():
@@ -343,148 +346,43 @@ def test_chat_resume_reattaches_without_a_second_dispatch():
         "resume re-dispatched a turn — a reconnect must re-attach to the warm unit, not run it twice"
 
 
-def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):
-    import redis
-
-    class FakeRedis:
-        def xrevrange(self, stream, count=1):
-            assert stream == "tc:meeting:abc-defg-hij"
-            assert count == 1
-            return [("42-0", {})]
-
-    monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: FakeRedis())
-    runtime = _FakeRuntime()
-    c = TestClient(create_app(
-        Dispatcher(load_settings(), runtime, _FakeIdentity()), redis_url="redis://test",
-    ))
-
-    r = c.post("/api/meeting/start", json={"platform": "google_meet", "native_id": "abc-defg-hij", "subject": "u_jane"})
-
-    assert r.status_code == 202
-    env = runtime.spawned[0][2]
-    assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
-
-
-def test_meeting_process_on_sets_desired_state_only(monkeypatch):
-    """ADR 0027 (single dispatch arbiter): /api/meeting/process ON writes the opt-in flag and reports
-    the resume point (the frozen cursor) — it NEVER dispatches. The watcher arms from the same cursor
-    on the next segment; two dispatchers racing here (cursor vs tail) is how the backfill got lost."""
-    import redis
-
-    class FakeRedis:
-        def __init__(self):
-            self.kv = {"proc:meeting:m9:cursor": "37-0"}  # we cleaned up to 37-0 last time
-
-        def set(self, k, v, ex=None):
-            self.kv[k] = v
-            if ex is not None:
-                self.ttls = getattr(self, "ttls", {}); self.ttls[k] = ex
-
-        def get(self, k):
-            return self.kv.get(k)
-
-        def delete(self, k):
-            self.kv.pop(k, None)
-
-    fake = FakeRedis()
-    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
-    runtime = _FakeRuntime()
-    c = TestClient(create_app(
-        Dispatcher(load_settings(), runtime, _FakeIdentity()), redis_url="redis://test",
-    ))
-
-    r = c.post("/api/meeting/process", json={"native_id": "m9", "on": True, "subject": "u_jane"})
-
-    assert r.status_code == 202
-    assert r.json()["resumed_from"] == "37-0"           # where the watcher's arm WILL resume
-    assert fake.kv.get("proc:meeting:m9:on") == "1"     # desired state written
-    assert runtime.spawned == []                        # NO dispatch from the endpoint — watcher's job
-
-
-def test_meeting_process_no_cursor_reports_full_history(monkeypatch):
-    """A never-processed meeting has no cursor ⇒ the resume point is 0-0 (the watcher will backfill the
-    whole transcript once). Still no dispatch from the endpoint."""
-    import redis
-
-    class FakeRedis:
-        kv: dict = {}
-
-        def set(self, k, v, ex=None):
-            type(self).kv[k] = v
-
-        def get(self, k):
-            return None
-
-        def delete(self, k):
-            type(self).kv.pop(k, None)
-
-    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: FakeRedis())
-    runtime = _FakeRuntime()
-    c = TestClient(create_app(
-        Dispatcher(load_settings(), runtime, _FakeIdentity()), redis_url="redis://test",
-    ))
-
-    r = c.post("/api/meeting/process", json={"native_id": "m10", "on": True})
-
-    assert r.json()["resumed_from"] == "0-0"
-    assert runtime.spawned == []
-
-
-def test_meeting_process_off_freezes_cursor(monkeypatch):
-    """OFF clears the processing flag but LEAVES the cursor frozen for the next re-enable."""
-    import redis
-
-    class FakeRedis:
-        def __init__(self):
-            self.kv = {"proc:meeting:m9:on": "1", "proc:meeting:m9:cursor": "37-0"}
-
-        def set(self, k, v, ex=None):
-            self.kv[k] = v
-            if ex is not None:
-                self.ttls = getattr(self, "ttls", {}); self.ttls[k] = ex
-
-        def get(self, k):
-            return self.kv.get(k)
-
-        def delete(self, k):
-            self.kv.pop(k, None)
-
-    fake = FakeRedis()
-    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
+def test_the_retired_copilot_endpoints_are_gone(monkeypatch):
+    """PRD decision 34 fence. `/api/meeting/start` launched a per-meeting copilot dispatch and
+    `/api/meeting/process` was its on/off switch — the "Processing on — cleaned + copilot" toggle
+    the founder saw on the live view. Both are removed; a client that still calls one gets a 404,
+    never a silent no-op that looks like it armed something."""
     c = TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
     ))
-
-    r = c.post("/api/meeting/process", json={"native_id": "m9", "on": False})
-
-    assert r.json()["processing"] is False
-    assert "proc:meeting:m9:on" not in fake.kv          # flag cleared
-    assert fake.kv["proc:meeting:m9:cursor"] == "37-0"  # cursor frozen
+    assert c.post("/api/meeting/start",
+                  json={"platform": "google_meet", "native_id": "abc"}).status_code == 404
+    assert c.post("/api/meeting/process",
+                  json={"native_id": "m9", "on": True}).status_code == 404
 
 
 def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatch):
+    """One stream, one cursor (PRD decision 34). The feed used to MERGE three — the transcript, the
+    copilot's out-stream and the processed-notes stream — and resume each from its own part of a
+    composite SSE id. It now seeds the transcript's recent tail, resumes from that entry, and reads
+    nothing else."""
     import json
     import redis
 
     class FakeRedis:
         def __init__(self):
             self.first_xread = None
-            self.calls = 0
+            self.streams_seen = set()
 
         def xrevrange(self, stream, count=1):
+            self.streams_seen.add(stream)
             if stream == "tc:meeting:abc":
                 return [
                     ("9-0", {"payload": json.dumps({"type": "transcription", "segments": [{"speaker": "Recent", "text": "tail", "start": 9, "segment_id": "recent"}]})}),
                     ("8-0", {"payload": json.dumps({"type": "transcription", "segments": [{"speaker": "Older", "text": "still recent", "start": 8, "segment_id": "older"}]})}),
                 ]
-            if stream == "unit:agent-meet-abc:out":
-                return [
-                    ("4-0", {"event": json.dumps({"type": "note", "note": {"id": "n1", "text": "processed tail"}})}),
-                ]
             return []
 
         def xread(self, streams, count=500, block=15000):
-            self.calls += 1
             if self.first_xread is None:
                 self.first_xread = dict(streams)
                 return [("tc:meeting:abc", [("10-0", {"payload": json.dumps({"type": "session_end"})})])]
@@ -504,49 +402,37 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
     assert r.status_code == 200
     assert '"text": "still recent"' in body
     assert '"text": "tail"' in body
-    assert '"processed tail"' in body
     assert '"meeting-end"' in body
-    # transcript/output resume from their seeded tails; the proc stream from 0-0 (full replay —
-    # notes upsert by id client-side, and the whole processed view must render on connect).
-    assert fake.first_xread == {
-        "tc:meeting:abc": "9-0", "unit:agent-meet-abc:out": "4-0", "proc:meeting:abc": "0-0",
-    }
+    assert fake.first_xread == {"tc:meeting:abc": "9-0"}
+    assert fake.streams_seen == {"tc:meeting:abc"}
 
 
-def test_meeting_stream_relays_proc_notes_and_closes_on_view_end(monkeypatch):
-    """ADR 0027: the SSE tails proc:meeting:{row} directly — baseline cleaned notes arrive as `note`
-    events without waiting for an out-stream LLM beat — and it CLOSES on the worker's view_end
-    marker (evidence of completion, P21), not on a quiet-poll guess. The final beat's post-
-    session_end notes therefore reach the live view before meeting-end."""
+def test_meeting_stream_carries_no_copilot_lane(monkeypatch):
+    """The retired producers must not be reachable: whatever a legacy `proc:meeting:{row}` or
+    `unit:agent-meet-{sid}:out` still holds in redis, the feed neither reads nor relays it, and
+    session_end closes immediately — there is no final beat left to drain."""
     import json
     import redis
 
     class FakeRedis:
         def __init__(self):
+            self.reads = []
             self.calls = 0
 
         def xrevrange(self, stream, count=1):
+            self.reads.append(stream)
             return []
 
         def exists(self, key):
-            return 1  # the copilot wrote — the close must WAIT for view_end, not a quiet poll
+            self.reads.append(key)
+            return 1
 
         def xread(self, streams, count=500, block=15000):
+            self.reads.extend(streams)
             self.calls += 1
             if self.calls == 1:
-                return [
-                    ("tc:meeting:42", [("5-0", {"payload": json.dumps({"type": "transcription", "segments": [{"speaker": "J", "text": "um hi", "start": 1, "segment_id": "s1"}]})})]),
-                    ("proc:meeting:42", [("6-0", {"note": json.dumps({"id": "s1", "text": "Hi.", "speaker": "J"})})]),
-                ]
-            if self.calls == 2:
                 return [("tc:meeting:42", [("7-0", {"payload": json.dumps({"type": "session_end"})})])]
-            if self.calls == 3:
-                # the final beat lands AFTER session_end — still relayed, then the marker
-                return [("proc:meeting:42", [
-                    ("8-0", {"note": json.dumps({"id": "s1", "text": "Hi, polished."})}),
-                    ("9-0", {"type": "view_end", "cursor": "7-0"}),
-                ])]
-            return []  # the empty poll after the marker closes the stream
+            return []
 
     fake = FakeRedis()
     monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: fake)
@@ -559,10 +445,45 @@ def test_meeting_stream_relays_proc_notes_and_closes_on_view_end(monkeypatch):
                   headers={"X-User-Id": "u_owner"}) as r:
         body = "".join(r.iter_text())
 
-    assert '"Hi."' in body                       # baseline note straight off the proc stream
-    assert '"Hi, polished."' in body             # the final beat's note, AFTER session_end
     assert '"meeting-end"' in body
-    assert fake.calls == 4                       # closed ON the marker — no 45s cap, no early cut
+    assert '"note"' not in body and '"card"' not in body
+    assert not any(k.startswith("proc:meeting:") or k.startswith("unit:agent-meet-") for k in fake.reads)
+
+
+def test_meeting_stream_on_completed_meeting_never_crashes_xread(monkeypatch):
+    """F166: when the replay tail's LAST entry is session_end — i.e. the caller opened the stream for
+    an already-COMPLETED meeting, not one that just ended live — the handler used to `last.pop(tkey,
+    None)` on the ONLY key in `last`, leaving `{}`. The next `r.xread(last, ...)` then hit real
+    redis-py's `XREAD streams must be a non empty dict` DataError and crash-looped agent-api on every
+    re-poll of a completed meeting's stream. The two FakeRedis fixtures above don't validate emptiness
+    the way real redis-py does, so they passed even with the bug present — this one does, to catch it.
+    The feed must always answer a terminal event and close with 200, never blow up mid-stream."""
+    import json
+    import redis
+
+    class FakeRedis:
+        def xrevrange(self, stream, count=1):
+            # The whole replay tail is historical and ends in session_end: nothing live to seed.
+            return [("5-0", {"payload": json.dumps({"type": "session_end"})})]
+
+        def xread(self, streams, count=500, block=15000):
+            if not streams:  # real redis-py raises here — this fake does too, faithfully
+                raise redis.exceptions.DataError("XREAD streams must be a non empty dict")
+            return []
+
+    fake = FakeRedis()
+    monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: fake)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+        meeting_owner_lookup=_fake_owner_lookup({("u_owner", "done"): "done"}),
+    ))
+
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "done", "session_uid": "done"},
+                  headers={"X-User-Id": "u_owner"}) as r:
+        body = "".join(r.iter_text())
+
+    assert r.status_code == 200
+    assert '"meeting-end"' in body
 
 
 def test_workspace_read_and_traversal_guard(tmp_path):
@@ -789,22 +710,21 @@ def test_live_registry_demotes_silent_entries(monkeypatch):
 # ── live SSE resume (the real-time transcript-loss fix) ────────────────────────────────────────────
 
 def test_sse_cursor_encode_decode_roundtrip():
+    """ONE stream, ONE cursor (PRD decision 34). The id was `transcript|output|processed` while the
+    feed merged three streams; the other two are gone. A client reconnecting across the deploy still
+    holds a multi-part id, and its FIRST field was always the transcript cursor — so it must decode,
+    not drop the reader back to a fresh connect."""
     from control_plane.api import _decode_sse_cursor, _encode_sse_cursor
-    last = {"tc:meeting:m1": "12-0", "unit:agent-meet-m1:out": "5-0", "proc:meeting:m1": "7-0"}
-    sid = _encode_sse_cursor(last, "tc:meeting:m1", "unit:agent-meet-m1:out", "proc:meeting:m1")
-    assert sid == "12-0|5-0|7-0"
-    assert _decode_sse_cursor(sid) == ("12-0", "5-0", "7-0")
-    assert _decode_sse_cursor(None) == (None, None, None)          # fresh connect
-    assert _decode_sse_cursor("-|-|-") == (None, None, None)       # nothing read yet on any stream
-    assert _decode_sse_cursor("9-0|-|-") == ("9-0", None, None)
-    # PAD tolerance (ADR 0027 rollout): a pre-three-part id from an in-flight client decodes with
-    # processed_id None — the SSE then replays the proc stream from 0-0 (idempotent client upsert).
-    assert _decode_sse_cursor("12-0|5-0") == ("12-0", "5-0", None)
-    assert _decode_sse_cursor("9-0|-") == ("9-0", None, None)
-    # Resilience: a malformed Last-Event-ID must degrade to a fresh connect, never crash the SSE.
-    assert _decode_sse_cursor("") == (None, None, None)            # empty header
-    assert _decode_sse_cursor("garbage-no-pipe") == (None, None, None)   # no separator → fresh connect
-    assert _decode_sse_cursor("-|5-0") == (None, "5-0", None)      # only the output stream was read
+    assert _encode_sse_cursor({"tc:meeting:m1": "12-0"}, "tc:meeting:m1") == "12-0"
+    assert _encode_sse_cursor({}, "tc:meeting:m1") == "-"
+    assert _decode_sse_cursor("12-0") == "12-0"
+    assert _decode_sse_cursor(None) is None                # fresh connect
+    assert _decode_sse_cursor("-") is None                 # nothing read yet
+    assert _decode_sse_cursor("") is None                  # empty header
+    # Retired multi-part ids, still held by an in-flight client:
+    assert _decode_sse_cursor("12-0|5-0|7-0") == "12-0"
+    assert _decode_sse_cursor("9-0|-|-") == "9-0"
+    assert _decode_sse_cursor("-|5-0") is None             # only the retired output stream was read
 
 
 def _stream_client(fake_redis, monkeypatch):
@@ -849,7 +769,7 @@ def test_sse_resumes_from_last_event_id_no_reseed(monkeypatch):
         assert r.status_code == 200
         _ = r.read()
     assert fr.xread_last["tc:meeting:m1"] == "7-0"          # resumed from the cursor, NOT "$"
-    assert fr.xread_last["unit:agent-meet-m1:out"] == "3-0"
+    assert list(fr.xread_last) == ["tc:meeting:m1"]         # and from NOTHING else
     assert "tc:meeting:m1" not in fr.seeded                 # transcript tail NOT re-seeded on resume
 
 
@@ -1045,6 +965,37 @@ def test_workspace_init_seeds_from_template(tmp_path, monkeypatch):
     assert r2.json()["system_seeded"] is False
 
 
+def test_workspace_desk_reports_the_state_not_the_marker(tmp_path):
+    """Vexa-ai/vexa#1613 — the stale setup chip. The terminal asked `.scaffolded` whether this
+    person had ever been set up; that marker is written by ONE route (the personal onboarding
+    conversation) and `flows_defs/production.py` says of it *"it gates nothing"*. On 2026-09-06 the
+    founder's desk had existed for forty minutes, held company/person/project entities, and carried
+    no marker — so a brand-new chat offered him *"set up a workspace for me"*.
+
+    This route answers the question the chip is actually asking, off the FILES."""
+    from control_plane.workspace_reader import WorkspaceReader
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+
+    # nothing at all — the one state that may offer the chip
+    assert c.get("/api/workspace/desk", headers=h).json() == {
+        "subject": "u_jane", "state": "new", "scaffolded": False}
+
+    # THE FOUNDER'S CASE: a desk somebody has worked in, and no marker anywhere near it
+    (workspaces / "u_jane" / "kg" / "entities" / "company").mkdir(parents=True)
+    (workspaces / "u_jane" / "kg" / "entities" / "company" / "oenb.md").write_text("# OeNB\n")
+    body = c.get("/api/workspace/desk", headers=h).json()
+    assert body["state"] == "warm" and body["scaffolded"] is False
+
+    # and the marker is still reported when it IS there — a finished setup is a positive fact
+    (workspaces / "u_jane" / ".scaffolded").write_text("2026-09-06\n")
+    assert c.get("/api/workspace/desk", headers=h).json()["scaffolded"] is True
+
+
 def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatch):
     """POST /api/workspace/swap clones a custom external git repo as the subject's active workspace
     (parking the seed), then swapping back to seed restores the parked tree. The store dir never
@@ -1056,13 +1007,16 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     seed.mkdir()
     (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    # A scheme-less path is refused by default (it is a location on the SERVER, not a repository a
+    # caller may name — see control_plane/repo_ref). A self-hoster opts local roots back in; so does
+    # this fixture, which clones from a local bare repo to stay off the network.
+    monkeypatch.setenv("VEXA_ALLOW_LOCAL_REPO_ROOT", str(tmp_path))
 
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
-    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
-    (origin / "MARK").write_text("CUSTOM\n"); (origin / "CLAUDE.md").write_text("CUSTOM ROOT\n")
-    run("add", "-A"); run("commit", "-q", "-m", "x")
+    # A bare filesystem path is NO LONGER a repository reference (control_plane.repo_ref) — that is
+    # what let a caller name another user's directory in the shared store. The same local repo is
+    # served over git's real ssh transport instead, so the URL shape is one a person could type.
+    bare = gitserve.bare_repo(tmp_path, "custom", **{"MARK": "CUSTOM\n", "CLAUDE.md": "CUSTOM ROOT\n"})
+    origin_url = gitserve.serve(tmp_path, bare, monkeypatch, repo="custom")
 
     workspaces = tmp_path / "ws"
     c = TestClient(create_app(
@@ -1072,7 +1026,7 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     h = {"X-User-Id": "u_jane"}
     c.post("/api/workspace/init", headers=h)                      # seed the active workspace first
 
-    r = c.post("/api/workspace/swap", headers=h, json={"repo": str(origin)})
+    r = c.post("/api/workspace/swap", headers=h, json={"repo": origin_url})
     assert r.status_code == 200
     body = r.json()
     assert body["swapped"] is True and body["cloned"] is True and body["parked"] == "seed"
@@ -1088,6 +1042,53 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
 
 
+def test_workspace_swap_refuses_a_repo_this_server_alone_could_fetch(tmp_path, monkeypatch):
+    """``repo`` is an instruction to THIS SERVER to go and fetch something, so the route settles the
+    host and the transport before anything reaches git (see control_plane/repo_ref).
+
+    The assertion that matters is the REFUSAL and that no git process ran: ``subprocess.run`` is
+    replaced with a bomb for the duration, so a gate that fired after git started would fail the test
+    loudly instead of passing on the status code.
+
+    422, NOT 400 (0.12.27). This route's refusal for a repository field it will not accept is
+    ``_repo``'s, and ``_repo`` answers 422 on purpose — the body is well-formed JSON and
+    semantically wrong, and the detail is the sentence itself, which the terminal presents verbatim.
+    The transport and host gates this test drives were written against a route that answered 400;
+    they now run inside that one refusal, so they answer the way every other bad repository field
+    on this route already did."""
+    import subprocess as _sp
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    monkeypatch.delenv("VEXA_ALLOW_LOCAL_REPO_ROOT", raising=False)
+
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(tmp_path / "ws")),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: pytest.fail(f"git started despite the gate: {a!r}"))
+    monkeypatch.setattr(_sp, "Popen", lambda *a, **k: pytest.fail(f"git started despite the gate: {a!r}"))
+
+    refused = [
+        "http://169.254.169.254/latest/meta-data",   # the cloud metadata service
+        "http://admin-api:8001/owner/repo.git",      # a deployment neighbour (a bare label)
+        "http://127.0.0.1:8000/owner/repo.git",
+        "https://[::ffff:127.0.0.1]/owner/repo.git",
+        "ext::sh -c whoami",                         # a git URL that runs a command
+        "file:///etc",                               # …and one that reads this host's disk
+        "git://github.com/owner/repo.git",
+        str(tmp_path / "origin"),                    # a path on the server is not a caller's to name
+    ]
+    for route in ("/api/workspace/swap", "/api/workspace/activate"):
+        for repo in refused:
+            r = c.post(route, headers=h, json={"repo": repo})
+            assert r.status_code == 422, f"{route} accepted {repo!r}: {r.status_code} {r.text}"
+
+
 def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):
     """POST /api/workspace/activate ADDS a repo to the active set without parking the private baseline;
     GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline can be switched off."""
@@ -1096,10 +1097,10 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
 
     seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
-    origin = tmp_path / "origin"; origin.mkdir()
-    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
-    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
-    (origin / "CLAUDE.md").write_text("SHARED ROOT\n"); run("add", "-A"); run("commit", "-q", "-m", "x")
+    # served over ssh rather than named by path — a bare path is no longer a repository (repo_ref)
+    origin_url = gitserve.serve(
+        tmp_path, gitserve.bare_repo(tmp_path, "extra", **{"CLAUDE.md": "SHARED ROOT\n"}),
+        monkeypatch, repo="extra")
 
     workspaces = tmp_path / "ws"
     c = TestClient(create_app(
@@ -1109,7 +1110,7 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
     h = {"X-User-Id": "u_jane"}
     c.post("/api/workspace/init", headers=h)
 
-    r = c.post("/api/workspace/activate", headers=h, json={"repo": str(origin)})
+    r = c.post("/api/workspace/activate", headers=h, json={"repo": origin_url})
     assert r.status_code == 200
     body = r.json()
     assert body["changed"] is True and body["cloned"] is True

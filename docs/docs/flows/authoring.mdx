@@ -1,0 +1,147 @@
+---
+title: "Authoring workflows"
+description: "Flows are data: author them as typed Python, ship them as rows, manage them through flows-api — live in seconds, no image rebuild, and never any code over the wire."
+---
+
+A flow is an ordered list of **step names** plus a trigger. The steps — bot dispatch, agent turn,
+send mail — are reviewed Python shipped in the worker image: the slow-changing *vocabulary of
+capabilities*. The composition is **data**, and data doesn't need a deploy.
+
+## Author in Python, ship rows
+
+```python
+# digest_flow.py
+from flows_authoring import flow
+
+flow(name="post_meeting_digest", on="meeting.completed",
+     steps=["require_workspace", "process_meeting", "email_minutes"],
+     params={"style": "one-paragraph digest"})
+```
+
+```bash
+python3 flows_authoring.py check  digest_flow.py   # extract + validate against the vocabulary
+python3 flows_authoring.py submit digest_flow.py   # → flows-api → live in ~10 s
+python3 flows_authoring.py export                  # live registry → canonical Python, lossless
+```
+
+The file is imported **on the author's side only** — `flow(...)` is extraction, not execution. It
+compiles to exactly the row flows-api stores; the worker hot-loads active rows and never imports
+submitted files. Because the flow language carries no code, `row → Python` is a clean bijection:
+export the live registry any time and commit it for review.
+
+## The line that keeps this safe
+
+The API **never accepts code**. Step names are validated against the deployed vocabulary at
+submission — a typo is a 400, not a runtime error. When a flow needs behavior no step list can
+express, the logic goes to one of two sanctioned homes:
+
+- a **new reviewed step** — code, in the image: the capability and trust boundary;
+- **agent params and prompts** — data, runtime-editable, safe because the agent's power is bounded
+  by workspace mounts and authorization, not by the worker process.
+
+Most day-to-day iteration is the second kind: prompt and cadence changes, zero deploys.
+
+## flows-api
+
+| Endpoint | Does |
+|---|---|
+| `GET /flows` | every version (image + api), plus the step vocabulary |
+| `POST /flows` | submit `{name, on_event, steps, params, activate}` — validated, auto-versioned |
+| `POST /flows/{name}/{v}/activate` · `…/retire` | runtime activation — in-flight reactions keep their stamped version |
+| `GET /reactions?status=…` | the operator projection: what happened, why, what's waiting |
+| `POST /reactions/{id}/retry` · `resume` · `cancel` | the signal verbs — audited rows, never shell surgery |
+| `GET /queue/waiting` | what is waiting for **one person**, each item naming its flow and typed reason |
+| `GET /queue/notices` | the standing notices only — the sentences, and nothing else |
+| `POST /friction` | file a friction report: what did not work |
+| `GET /friction` | your own filed reports, newest first |
+
+Auth is two tiers, because two different callers reach this API:
+
+- **Reading and steering your own** — `GET /flows`, `GET /reactions`, `POST /reactions/{id}/{verb}`,
+  `GET /queue/waiting`, `GET /queue/notices`, `POST /friction`, `GET /friction` and `GET /timeline`
+  also take **your own Vexa credential** (`Authorization: Bearer …` or
+  `X-API-Key`). The subject is taken from that credential, so you see and steer your own reactions
+  and nobody else's — this is what makes those tools work from your own Claude Code over the MCP
+  endpoint. A `subject` argument naming somebody else is refused.
+- **Changing the machine** — `POST /flows`, `POST /flows/{name}/{v}/{action}`, `POST /events` and
+  `POST /events/batch` take the operator key `X-Flows-Operator-Key` and nothing else (`X-Flows-Admin-Key` still works for one release — it named admin-api's token, which it never was). The operator key
+  also opens everything above, unscoped, which is the admin console's view.
+
+New events always select the **newest active version** of each flow; running reactions are never
+migrated.
+
+## The person-scoped routes
+
+Four routes answer for **one person** rather than for the instance. The subject is the
+authenticated caller's: with your own Vexa credential it is derived from it and a `subject`
+argument naming anyone else is refused; with the operator key you pass `?subject=<uid|email>`, or
+the gateway stamps `X-User-Id`. No subject at all is a `400` — none of them ever answers with the
+whole instance.
+
+### `GET /queue/waiting`
+
+The queue: every pending reaction that concerns this person, each with its flow, version, step,
+status, typed `reason`, `since`, `next_run_at` and the `say` sentence behavior resolved for it.
+`quiet` counts the pending items behavior has no words for — a short queue is "nothing is
+happening" or "nobody wrote the copy", and those are different. `flows` lists what this deployment
+could ever react to, which is what makes an empty queue legible. `?limit=` defaults to 50, caps at
+200. Repeated `not_present` items of one flow collapse to the newest.
+
+### `GET /queue/notices`
+
+The **standing notices** only — the `say` text of each waiting item whose copy declared itself one
+(`notice: true` in the front-matter of its file under `behavior/queue/`). Deduped, in order.
+
+```json
+{ "subject": "u_42", "notices": ["…", "…"] }
+```
+
+Deliberately the smallest answer this surface has: no reaction ids, no flow names, no steps, no
+reasons. A standing notice is something that stays true *between* calls, so it is built to be asked
+on every call and to ride along with unrelated work — that is why it is a separate route and not a
+filter over `/queue/waiting`, which is what you want when you need any of the fields it drops.
+Which items are notices is an admin's file edit with no deploy on either side of it; no word of any
+notice is written in the image.
+
+### `POST /friction`
+
+File a report: a tool was missing, a tool refused, a page 404'd, the answer came from the wrong
+workspace, something claimed success and did not happen. JSON body, every field optional:
+
+```json
+{
+  "session": "the conversation this happened in",
+  "what_i_tried": "what you were attempting",
+  "what_happened": "what happened instead",
+  "severity": "blocker | annoyance | papercut | idea",
+  "kind": "missing-tool | refusal | no-page | wrong-workspace | unfulfilled | error | ux | other",
+  "meeting_id": "", "tool": "", "deployment": "", "worker_image": ""
+}
+```
+
+**No value a caller can send produces a `400`.** `severity` and `kind` are suggestions, not menus:
+your own word is stored exactly as you sent it. An absent `session` is stored as a genuine absence
+and reads back as "no session" — a missing join key is the deployment's problem, not the
+reporter's. Over-long values truncate (`session` at 128 characters, the two text fields at 900,
+the rest at 200) rather than refusing the call. Any key the route does not name is kept under
+`extra`, up to 40 of them, so a stack frame or a request id travels with the report instead of
+being dropped. The one refusal is `401`: the edge cannot attribute a report to nobody.
+
+The reply states what was stored, so a caller can see its own words came back unchanged:
+
+```json
+{ "id": "fr_9f2c…", "recorded": true, "kind": "…", "severity": "…", "session": "…",
+  "extra": ["request_id", "trace"] }
+```
+
+<Note>
+The same nine names were **query parameters** until 0.12.27, which put up to 900 characters of a
+person's own text into proxy logs and `414`'d a long report. They are still accepted for one
+release and then removed — send a JSON body.
+</Note>
+
+### `GET /friction`
+
+Your own filed reports, newest first. `?since=` takes an epoch or an ISO-8601 instant (empty means
+everything); `?limit=` defaults to 40 and caps at 200. Answers `{subject, count, reports}`. The
+whole-instance dump and the close-out verb stay operator-side.

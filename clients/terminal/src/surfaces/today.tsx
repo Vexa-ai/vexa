@@ -229,8 +229,7 @@ function PastLine({ m }: { m: MeetingMock }) {
     fetchDurableTranscript(m.id)
       .then((t) => {
         if (!on) return;
-        if (t.notes.length) setLine(`${t.notes.length} notes`);
-        else if (t.lines?.length) setLine(`${t.lines.length} lines`);
+        if (t.lines?.length) setLine(`${t.lines.length} lines`);
       })
       .catch(() => {});
     return () => { on = false; };

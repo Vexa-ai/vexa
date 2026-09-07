@@ -29,12 +29,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from . import bot_spawn as _bot_spawn
+from . import events as _flows_events
 from . import recordings as _recordings
 from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
@@ -258,10 +259,11 @@ def create_app(
     # id-sequence reset without a redis flush) would otherwise carry a prior generation's stale
     # session_end and the terminal would show "Meeting ended" before the first word. continue_meeting is
     # untouched (it keeps the reused row's stream). See bot_spawn.service.request_bot.
+    #
+    # No `fetch_bot_context` here: `request_bot` resolves this person's default bot name out of the
+    # spawn context it already fetches for the transcription backend and the capture-signal
+    # decision. Injecting a second fetcher made POST /bots ask identity for the same body twice.
     _stream_purge = None
-    if redis is not None and hasattr(redis, "delete"):
-        async def _stream_purge(meeting_id, _r=redis):
-            await _r.delete(f"tc:meeting:{meeting_id}")
     app.include_router(_bot_spawn.build_router(
         meeting_repo,
         runtime,
@@ -279,18 +281,27 @@ def create_app(
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
     app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
 
+    # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
+    # uses this same port to delete objects before its transcript/JSONB finalization.
+    if storage is None:
+        storage = _recordings_fakes().InMemoryStorage()
+
+    async def _delete_recording_objects(recording: dict) -> list[str]:
+        from .recordings.deletion import delete_recording_objects
+
+        return await delete_recording_objects(storage, recording)
+
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
     app.include_router(_build_collector_router(transcript_store, redis,
                                             calendar_sync_now=calendar_sync_now,
-                                            calendar_sync_status=calendar_sync_status))
+                                            calendar_sync_status=calendar_sync_status,
+                                            artifact_object_deleter=_delete_recording_objects))
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
-    if storage is None:
-        storage = _recordings_fakes().InMemoryStorage()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
     # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---
@@ -443,7 +454,18 @@ def _mount_lifecycle(
         connection_id = body.get("connection_id")
         if connection_id:
             existing = sink.store.get(connection_id)
-            if existing is None or existing.status is None:
+            # A TERMINAL event also re-reads the row, even for a record this process already
+            # advanced. The user-stop flag is written to the DB by the stop path and NEVER through
+            # this FSM, so an in-process record that has seen `joining` has no way to know a DELETE
+            # landed — and it is exactly at the terminal edge that the difference is written down
+            # (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
+            # `stop_requested=true` on the row). One extra read per meeting, at its last event.
+            terminal_event = body.get("status") in ("completed", "failed")
+            if (
+                existing is None
+                or existing.status is None
+                or (terminal_event and not existing.stop_requested)
+            ):
                 try:
                     persisted = await meeting_repo.get_lifecycle_state_by_session(
                         session_uid=connection_id
@@ -634,6 +656,54 @@ def _mount_lifecycle(
             )
             if typed_envelope is not None:
                 app.state.typed_webhooks.append(typed_envelope)
+        # THE MEETINGS→FLOWS PUBLISH EDGE (F168/F181, ADR-0037 / PRD 46 decision 42.2). An ad hoc
+        # bot — started via the MCP `request_meeting_bot`, never through a calendar invite — has no
+        # `invite_intake` reaction running for it, and that flow is the only thing that has ever
+        # told flows a meeting started or finished (`emit_started` / `emit_completed`, PRD decision
+        # 42.2). meeting-api's only outbound door used to be the operator webhook just above, which
+        # flows does not read. So this fires on exactly the two typed transitions that door already
+        # watches — one new domain telling flows a fact only meeting-api can know, alongside (never
+        # instead of) the webhook.
+        #
+        # THE SOURCE_EVENT_ID DELIBERATELY MATCHES flows' OWN SCHEME (`live-<id>` / `done-<id>`,
+        # `lifecycle/webhook.py` / `flows_defs/production.py`), not a meeting-api-flavoured one.
+        # Admission dedups on `(source_event_id, flow)` (flows/admission.py), so for a
+        # calendar-intake meeting — where `invite_intake` ALSO emits the same two facts from
+        # inside itself — whichever producer's HTTP call lands first admits and the other is a
+        # free no-op, rather than a second reaction (a second `post_meeting` run is a duplicate
+        # email, not a no-op). A different id here would double-fire every calendar meeting.
+        # See `events.py` for the ref-richness trade this same choice carries: meeting-api holds
+        # no invite (no `participants`/`group`), so on `meeting.completed` for a calendar meeting
+        # meeting-api's own publish typically WINS the race (it fires the instant the DB row goes
+        # `completed`; flows' own `emit_completed` only fires after its next poll tick), and
+        # `process_meeting`'s room-read degrades to empty rather than to invite order — see the
+        # filed issue for this deployment's disposition of that trade-off.
+        if typed_envelope is not None and isinstance(meeting_row, dict):
+            _meeting_block = (typed_envelope.get("data") or {}).get("meeting")
+            if isinstance(_meeting_block, dict):
+                _et = typed_envelope.get("event_type")
+                _uid = _meeting_block.get("user_id")
+                if _uid is not None and _et == "meeting.started":
+                    try:
+                        await _flows_events.publish_meeting_started(
+                            _meeting_block.get("id"),
+                            _meeting_block.get("native_meeting_id"),
+                            _meeting_block.get("platform"),
+                            _uid,
+                        )
+                    except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+                        pass
+                elif _uid is not None and _et == "meeting.completed":
+                    try:
+                        await _flows_events.publish_meeting_completed(
+                            _meeting_block.get("id"),
+                            _meeting_block.get("native_meeting_id"),
+                            _meeting_block.get("platform"),
+                            _uid,
+                            _meeting_block.get("completion_reason"),
+                        )
+                    except Exception:  # noqa: BLE001 — a publish edge is not a dependency
+                        pass
         # The operator callback is a separate trust boundary from a customer's
         # webhook. It receives terminal service facts only, through a destination
         # frozen by deployment config. A transient failure is retained by the
@@ -786,6 +856,12 @@ def _mount_lifecycle(
                 # terminal's list surface gets every bot-FSM transition over WS (superset of bm:; it
                 # also carries the pre-FSM idle/scheduled states). KEEP bm: above for the open-meeting
                 # tab. Best-effort: never fail the lifecycle callback.
+                #
+                # A meeting BOUND TO A WORKSPACE also goes to `w:{workspace_id}:meetings`, the channel
+                # every member's socket joins at connect. This is the transition members actually need
+                # — requested → joining → active is the bot arriving in THEIR call — and publishing it
+                # only to the owner is why a member's terminal showed nothing happening while the
+                # meeting ran.
                 user_id = meeting_row.get("user_id")
                 if user_id is not None:
                     user_frame = {
@@ -795,14 +871,17 @@ def _mount_lifecycle(
                         "status": rec.status.value,
                         "when": frame["ts"],
                     }
-                    try:
-                        await redis.publish(
-                            f"u:{user_id}:meetings", _json.dumps(user_frame)
-                        )
-                    except Exception as e:  # noqa: BLE001 — publish is best-effort
-                        log_event("user_meeting_status_publish_failed", audience="system",
-                                  level="warning", span="lifecycle.callback",
-                                  fields={"error": str(e)})
+                    workspace_id = (meeting_row.get("data") or {}).get("workspace_id")
+                    channels = [f"u:{user_id}:meetings"]
+                    if workspace_id:
+                        channels.append(f"w:{workspace_id}:meetings")
+                    for channel in channels:
+                        try:
+                            await redis.publish(channel, _json.dumps(user_frame))
+                        except Exception as e:  # noqa: BLE001 — publish is best-effort
+                            log_event("user_meeting_status_publish_failed", audience="system",
+                                      level="warning", span="lifecycle.callback",
+                                      fields={"error": str(e), "channel": channel})
         # COPILOT REAP (Bug 3): the moment a meeting lands TERMINAL, emit the `session_end` marker onto
         # the meeting copilot transcript feed — the EXACT stream the meeting copilot worker
         # (agent worker/meeting.py, via VEXA_TRANSCRIPT_STREAM) blocks on. The worker reaps immediately

@@ -7,8 +7,9 @@ export {
   bootstrapConfirmed,
   applyTranscriptTick,
   recomputeTranscripts,
+  retractSegments,
   addSegment,
   bootstrapSegments,
 } from './state';
-export type { TranscriptManager, TranscriptMessage } from './manager';
+export type { TranscriptManager, TranscriptMessage, TranscriptRetractMessage, TranscriptWireMessage } from './manager';
 export { createTranscriptManager } from './manager';

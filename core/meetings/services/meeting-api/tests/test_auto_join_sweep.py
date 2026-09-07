@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from meeting_api.bot_spawn.auto_join import auto_join_tick, due_rows
+from meeting_api.bot_spawn.auto_join import DEFAULT_LEAD_S, auto_join_tick, due_rows
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 
 USER = 7
@@ -53,11 +53,38 @@ async def test_due_row_spawns_and_claims_in_place():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo, at=NOW + timedelta(seconds=30))  # inside the 60s lead window
     counters = await _tick(repo, runtime)
-    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0, "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
     row = repo._meetings[mid]
     assert row["status"] == "requested"          # the SAME row was claimed
     assert row["data"]["title"] == "t"           # planned keys survive
     assert len(runtime.specs) == 1
+
+
+async def test_due_row_uses_user_calendar_bot_name():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo)
+
+    async def ctx(_uid):
+        return {"max_concurrent": 4, "bot_name": "Dmitry's Notes"}
+
+    counters = await _tick(repo, runtime, fetch_bot_context=ctx)
+    assert counters["spawned"] == 1
+    assert '"botName":"Dmitry\'s Notes"' in runtime.specs[0]["env"]["VEXA_BOT_CONFIG"]
+
+
+async def test_due_row_prefers_bot_name_from_auto_joining_calendar_source():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, data_extra={"calendar_sources": [
+        {"id": "work", "auto_join": False, "bot_name": "Work Bot"},
+        {"id": "personal", "auto_join": True, "bot_name": "Personal Bot"},
+    ]})
+
+    async def ctx(_uid):
+        return {"max_concurrent": 4, "bot_name": "Legacy Default"}
+
+    counters = await _tick(repo, runtime, fetch_bot_context=ctx)
+    assert counters["spawned"] == 1
+    assert '"botName":"Personal Bot"' in runtime.specs[0]["env"]["VEXA_BOT_CONFIG"]
 
 
 async def test_not_yet_due_row_waits():
@@ -103,7 +130,7 @@ async def test_second_tick_is_a_noop():
     _seed(repo)
     await _tick(repo, runtime)
     counters = await _tick(repo, runtime)
-    assert counters == {"due": 0, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    assert counters == {"due": 0, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
     assert len(runtime.specs) == 1  # exactly one spawn ever
 
 
@@ -193,7 +220,7 @@ async def test_unreachable_identity_skips_fail_closed():
         return None  # configured but unreachable
 
     counters = await _tick(repo, runtime, fetch_bot_context=ctx)
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
     assert runtime.specs == []  # never spawns past a cap it could not read
 
 
@@ -203,7 +230,7 @@ async def test_no_admin_edge_fails_closed_refuses_uncapped_spawn():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo)
     counters = await _tick(repo, runtime, fetch_bot_context=None, allow_uncapped=False)
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 1}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 1, "skipped_live": 0, "stopped": 0}
     assert runtime.specs == []  # never spawns uncapped past a cap we cannot resolve
 
 
@@ -234,3 +261,135 @@ def test_due_rows_window_edges():
     # malformed / missing time → never due
     assert not due_rows([{"id": 2, "user_id": USER, "platform": PLAT,
                           "native_meeting_id": NID, "data": {}}], now=NOW)
+
+
+def test_default_lead_dispatches_two_minutes_before_the_start():
+    """#1208 — the PRODUCT default: a meeting starting in 119s is due, one starting in 121s is not.
+    Two minutes of lead is what puts the bot in the lobby AT the scheduled start rather than
+    starting its browser then."""
+    def row(at):
+        return {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
+                "data": {"scheduled_at": at.isoformat()}}
+
+    assert DEFAULT_LEAD_S == 120
+    assert due_rows([row(NOW + timedelta(seconds=119))], now=NOW)
+    assert not due_rows([row(NOW + timedelta(seconds=121))], now=NOW)
+
+
+def test_entrypoint_lead_default_matches_the_sweep_default(monkeypatch):
+    """One default, two readers: the entrypoint's env fallback IS ``DEFAULT_LEAD_S``, so the sweep's
+    own default and the deployed default can never drift apart. Deploy values still override."""
+    import os
+
+    monkeypatch.delenv("AUTO_JOIN_LEAD_S", raising=False)
+    assert float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S))) == 120.0
+    monkeypatch.setenv("AUTO_JOIN_LEAD_S", "60")
+    assert float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S))) == 60.0
+
+
+def test_lead_and_lobby_budget_together_cover_a_late_host():
+    """The pair, checked as one claim (#1208): dispatched at start-120s and permitted to wait 900s,
+    the bot is still knocking 13 minutes AFTER the scheduled start — and the reconcile floor it is
+    measured against outlasts that whole window, so nothing reaps it mid-wait."""
+    from meeting_api.bot_spawn.service import lobby_budget_ms
+    from meeting_api.lifecycle.reconcile import default_preactive_grace
+
+    waits_until_s_after_start = lobby_budget_ms() / 1000.0 - DEFAULT_LEAD_S
+    assert waits_until_s_after_start == 780.0
+    assert default_preactive_grace() > lobby_budget_ms() / 1000.0
+
+
+# ---- duplicate-dispatch guard (live 2026-08-17: two Vexa bots in mjm-dycn-qdp) --------
+
+async def test_live_row_on_same_link_blocks_the_sweep():
+    """Two rows, one native id, one of them LIVE → the sweep refuses, loudly.
+
+    The staging shape: user 23 sent a bot by hand (row 26237, admitted + transcribing) while the
+    connected calendar imported the same Meet as a second row (26251). At start time the sweep
+    dispatched a SECOND bot. A duplicate dispatch is never correct however the rows arose.
+    """
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, mid=26237, status="active", at=None)          # the manual bot, in the room
+    due = _seed(repo, mid=26251, status="scheduled", at=NOW)  # the un-adopted calendar import
+    counters = await _tick(repo, runtime)
+    assert counters["due"] == 1
+    assert counters["spawned"] == 0
+    assert counters["skipped_live"] == 1
+    assert runtime.specs == []                       # no second bot
+    assert repo._meetings[due]["status"] == "scheduled"
+    err = repo._meetings[due]["data"]["auto_join_error"]
+    assert "26237" in err and "already in this meeting" in err
+    assert repo._meetings[due]["data"]["auto_join_next_retry"]  # backoff stamped, not re-fired
+
+
+async def test_a_bot_still_waiting_for_admission_blocks_a_second_dispatch():
+    """#1185's guard, checked for the status #1208 makes LONG-LIVED. A bot dispatched at start-2min
+    sits in ``awaiting_admission`` for up to 15 minutes — longer than the auto-join grace window —
+    so the sweep must treat that status as the room being OWNED, or the very fix that lets the bot
+    wait becomes a duplicate-bot generator."""
+    from meeting_api.bot_spawn.auto_join import LIVE_STATUSES
+
+    assert "awaiting_admission" in LIVE_STATUSES
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, mid=1, status="awaiting_admission", at=None)   # dispatched, still knocking
+    due = _seed(repo, mid=2, status="scheduled", at=NOW)       # a sibling row for the same occurrence
+    counters = await _tick(repo, runtime)
+    assert counters["spawned"] == 0 and counters["skipped_live"] == 1
+    assert runtime.specs == []
+    assert repo._meetings[due]["status"] == "scheduled"
+
+
+async def test_live_row_for_another_user_does_not_block():
+    """The guard is per (user, platform, native) — a different tenant in the same room is theirs."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, mid=1, status="active", at=None, user_id=99)
+    _seed(repo, mid=2, status="scheduled", at=NOW)
+    counters = await _tick(repo, runtime)
+    assert counters["spawned"] == 1 and counters["skipped_live"] == 0
+
+
+async def test_live_keys_ignores_terminal_and_linkless_rows():
+    from meeting_api.bot_spawn.auto_join import live_keys
+
+    keys = live_keys([
+        {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID},
+        {"id": 2, "user_id": USER, "platform": "unknown", "native_meeting_id": None},
+        {"id": 3, "user_id": None, "platform": PLAT, "native_meeting_id": "x"},
+    ])
+    assert keys == {(USER, PLAT, NID): 1}
+
+
+# ---- the attempt stamp that outlives the row (live 2026-08-17: a bot every ~2.5 min) --------
+
+async def test_dispatch_records_the_attempt_before_making_it():
+    """``auto_join_last_attempt`` records the ATTEMPT, not its outcome — so it survives the two
+    outcomes that write nothing back to this row: a spawn that succeeds and a bot that then fails
+    to JOIN (the row goes terminal and calendar sync recreates it), and a death mid-spawn."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    mid = _seed(repo)
+    await _tick(repo, runtime)
+    assert repo._meetings[mid]["data"]["auto_join_last_attempt"] == NOW.isoformat()
+
+
+async def test_attempt_stamp_survives_a_failed_spawn_and_holds_the_next_tick():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient(fail=True)
+    mid = _seed(repo)
+    assert (await _tick(repo, runtime))["errors"] == 1
+    assert repo._meetings[mid]["data"]["auto_join_last_attempt"] == NOW.isoformat()
+    assert (await _tick(repo, runtime, now=NOW + timedelta(seconds=1)))["due"] == 0
+
+
+def test_due_rows_hold_a_row_carrying_a_spent_attempt_until_the_backoff_expires():
+    """The pure guard behind the storm fix: a row seeded with an attempt calendar sync carried
+    over from the terminal row it replaced is NOT due until one backoff interval has passed."""
+    def row(**extra):
+        return {"id": 26267, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
+                "data": {"scheduled_at": NOW.isoformat(), **extra}}
+
+    spent = (NOW - timedelta(seconds=10)).isoformat()
+    assert not due_rows([row(auto_join_last_attempt=spent)], now=NOW, retry_backoff_s=300)
+    assert due_rows([row(auto_join_last_attempt=spent)],
+                    now=NOW + timedelta(seconds=291), retry_backoff_s=300)
+    # a garbage stamp never silently pins a row out of the sweep forever
+    assert due_rows([row(auto_join_last_attempt="not-a-time")], now=NOW)
+    assert due_rows([row()], now=NOW)

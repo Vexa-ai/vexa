@@ -1,8 +1,7 @@
 # Terminal seam scenario catalog
 
 Behavior-named scenarios for the **terminal integration surface** — the client that couples the
-**meetings** domain (live transcript, bot actions) and the **agent** domain (processed notes, copilot
-cards, chat/research). These terminal↔{meetings,agent} seams are the most recently churned code
+**meetings** domain (live transcript, bot actions) and the **agent** domain (chat/research). These terminal↔{meetings,agent} seams are the most recently churned code
 (`catch-up cursor`, `1:1 buildProcessedNotes`, `Terminal Auth-A`) yet had no catalog row, so a
 regression there turned no row red. This catalog fixes that. Sibling of `meeting-seams.md` (the
 meetings-internal failure classes); see `README.md` for the split.
@@ -21,10 +20,9 @@ other is deterministic — no live meeting, no browser, and (for the floor) no m
 
 ```text
 RIG A — data-plane (deterministic, no UI):
-  INJECT   tc:meeting:{numeric}:mutable | transcription_segments | proc:meeting:{native} | unit:agent-meet-{sid}:out
-  VALIDATE agent-api /api/meeting/stream SSE bytes  +  tc:meeting:{native} / proc:meeting:{native} stream contents
-  HOME     core/agent/services/agent-api/tests/ (extends test_transcription_watcher.py, test_api.py,
-           test_meeting_postprocess_offline.py)
+  INJECT   tc:meeting:{numeric}:mutable | transcription_segments
+  VALIDATE agent-api /api/meeting/stream SSE bytes  +  tc:meeting:{native} stream contents
+  HOME     core/agent/services/agent-api/tests/ (extends test_transcription_watcher.py, test_api.py)
 
 RIG B — SSE → render (pure function):
   INJECT   synthetic SSE / ws.v1 frames
@@ -81,19 +79,19 @@ deferred to an L4 eval with a frozen transcript fixture.
     Distinct, late-resolve, AND never-resolve (held during RESOLVE_GRACE_SEC then keyed numeric, not
     swallowed) are all asserted — the last via a controllable monotonic clock.
 
-- id: terminal-processing-toggle-opt-in-copilot
+- id: terminal-live-view-is-the-raw-transcript
   status: green
-  seam: "proc:meeting:{key}:on flag -> watcher arm -> copilot dispatch (proc:meeting:{key} stream + :cursor)"
-  module_probe: core/agent/services/agent-api/tests/test_transcription_watcher.py  # test_copilot_processing_is_opt_in, test_proc_flag_get_never_hits_the_processed_stream
-  seam_probe: core/agent/services/agent-api/tests/test_api.py  # test_meeting_process_resumes_from_cursor_gap_fill, test_meeting_process_no_cursor_processes_full_history, test_meeting_process_off_freezes_cursor
+  seam: "tc:meeting:{row} -> agent-api /api/meeting/stream -> MeetingCanvasView"
+  module_probe: core/agent/services/agent-api/tests/test_api.py  # test_meeting_stream_carries_no_copilot_lane, test_the_retired_copilot_endpoints_are_gone
+  seam_probe: clients/terminal/src/canvas/__tests__/minutesLiveView.test.tsx
   expected:
-    off: raw_flows_no_dispatch
-    on: catchup_from_cursor_then_live              # no cursor => 0-0 full history
-    off_then_on: gapless_no_double_process         # cursor frozen on OFF
-    flag_stream_collision: none                    # GET :on flag never hits the proc:meeting:{key} STREAM (WRONGTYPE guard asserted)
+    feed: transcript_and_retract_only              # no note / card / model-error rides it
+    controls: none                                 # no processing toggle, no model chips
+    retired_endpoints: 404                         # /api/meeting/{start,process}
   note: >
-    Opt-in + cursor gap-fill + the :on-flag/processed-stream collision guard are all asserted — the last
-    via a fake redis that raises WRONGTYPE on a GET of a stream key, proving the arm-loop reads the flag.
+    PRD decision 34 replaced the row that stood here (terminal-processing-toggle-opt-in-copilot: the
+    proc:meeting:{key}:on flag -> watcher arm -> copilot dispatch). The product runs no model calls of
+    its own beside the agent, so the seam is one stream with one producer.
 
 - id: terminal-backseed-history-on-restart
   status: green
@@ -105,10 +103,10 @@ deferred to an L4 eval with a frozen transcript fixture.
     absolute_timestamp: carried                    # renderer skips segments without absolute_start_time
   note: An in-progress meeting (or an agent-api restart) shows its history immediately, exactly once (4-batch re-handle stays at 2 segments).
 
-- id: terminal-session-end-reaps-copilot
+- id: terminal-session-end-drops-the-live-row
   status: green
   seam: "session_end on transcription_segments -> _handle -> tc:meeting:{native} session_end + live.drop + keymap clear"
-  module_probe: core/agent/services/agent-api/tests/test_transcription_watcher.py  # test_session_end_reaps_copilot_and_clears_keymap
+  module_probe: core/agent/services/agent-api/tests/test_transcription_watcher.py  # test_session_end_drops_the_live_row_without_writing_the_carrier
   expected:
     fanned_frame: { type: session_end, uid: "{native}" }
     live_row: dropped
@@ -167,21 +165,6 @@ deferred to an L4 eval with a frozen transcript fixture.
     is a meetings-internal concern — see meeting-seams.md stop-active-bot reconcile row.)
 
 # ── Tier 3 — judge-based, deferred (L4 eval, frozen transcript fixture) ───────
-- id: terminal-processed-notes-1to1
-  status: open
-  seam: "transcription_segments -> worker buildProcessedNotes -> proc:meeting:{native}"
-  expected:
-    deterministic_half: every_source_segment_id_covered_no_drop
-    judge_half: cleaned_text_faithful_no_hallucination_no_dropped_meaning
-  note: 1:1 coverage is the deterministic floor; faithfulness is the judge tier (frozen fixture, L4).
-
-- id: terminal-copilot-card-surfacing
-  status: open
-  seam: "worker -> proactive-card.v1 -> unit:agent-meet-{sid}:out -> SSE card"
-  expected:
-    deterministic_half: { schema: proactive-card.v1 valid, kind: in_allowlist, actions: well_formed }
-    judge_half: card_relevant_and_correct_kind
-
 - id: terminal-tag-entity-selection
   status: open
   seam: "worker -> inline entity tags -> render contract"

@@ -1,0 +1,52 @@
+From: "Huber, Tobias" <Tobias.Huber@Example.test>
+To: vexa@example.com
+Subject: Planning
+Message-ID: <A1B2C3D4E5F6@example.test>
+Date: Wed, 03 Sep 2026 09:02:11 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="_000_A1B2C3_"
+
+--_000_A1B2C3_
+Content-Type: text/plain; charset="utf-8"
+
+Planning meeting. Join on Teams.
+
+--_000_A1B2C3_
+Content-Type: text/calendar; charset="utf-8"; method=REQUEST; name="meeting.ics"
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+PRODID:Microsoft Exchange Server 2010
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VTIMEZONE
+TZID:W. Europe Standard Time
+BEGIN:STANDARD
+DTSTART:16011028T030000
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010325T020000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+ORGANIZER;CN="Huber, Tobias":MAILTO:Tobias.Huber@Example.test
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN="Smith, An
+ na":MAILTO:Anna.Smith@Example.test
+ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Ben Meier:M
+ AILTO:ben.meier@example.test
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE;CN=Vexa Minutes:M
+ AILTO:vexa@example.com
+DESCRIPTION:Join the meeting: https://teams.microsoft.com/l/meetup-join/19%3
+ ameeting_ZmE0MjJkNmEt%40thread.v2/0
+UID:040000008200E00074C5B7101A82E00800000000A1B2C3D4E5F6
+SUMMARY:Planning
+DTSTART;TZID=W. Europe Standard Time:20300902T140000
+DTEND;TZID=W. Europe Standard Time:20300902T150000
+END:VEVENT
+END:VCALENDAR
+
+--_000_A1B2C3_--

@@ -126,6 +126,38 @@ vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
+{{/* The flows-tier image ref (flows-api + flows-worker + flows-mailbox + the ensure-db
+initContainer — one image, four entrypoints). Same shape as vexa.botImage: an explicit
+flows.image wins, otherwise global.imageTag pins the standard repo, otherwise the chart's own
+default tag. It used to be a bare `vexaai/v012-flows:dev` value — a MUTABLE tag, and one the
+release's build-once promotion could never pin, so the flows tier alone floated while every other
+service moved to the release digest (A12). */}}
+{{- define "vexa.flowsImage" -}}
+{{- /* BOTH SHAPES, on purpose (0.12.27). `flows.image` is the STRUCTURED {repository, tag} every
+other v0.12 component uses — it had to become one for #1537, because the publisher's pin injector
+merges {flows: {image: {tag: <version>@sha256:...}}} over these values and merging a map over a
+string drops the repository silently. It is ALSO still accepted as a FLAT REF string, which is how
+a publisher digest-pins the whole tier in one value; that override wins over everything. Otherwise
+the tag follows `global.imageTag` exactly like admin-api, gateway, meeting-api, runtime and
+terminal do, so the flows tier can no longer float on a mutable `:dev` while the rest of a release
+moves to its digest (A12). One resolver, six call sites. */}}
+{{- $img := .Values.flows.image -}}
+{{- if and (kindIs "string" $img) (ne ($img | toString) "") -}}
+{{- $img -}}
+{{- else -}}
+{{- $repo := "vexaai/v012-flows" -}}
+{{- $tag := "v012" -}}
+{{- if .Values.flows.imageRepository -}}{{- $repo = .Values.flows.imageRepository -}}{{- end -}}
+{{- if .Values.flows.imageTag -}}{{- $tag = .Values.flows.imageTag -}}{{- end -}}
+{{- if kindIs "map" $img -}}
+{{- if (get $img "repository") -}}{{- $repo = (get $img "repository") -}}{{- end -}}
+{{- if (get $img "tag") -}}{{- $tag = (get $img "tag") -}}{{- end -}}
+{{- end -}}
+{{- if .Values.global.imageTag -}}{{- $tag = .Values.global.imageTag -}}{{- end -}}
+{{- printf "%s:%s" $repo $tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.postgresCredentialsSecretName" -}}
 {{- if .Values.postgres.enabled -}}
 {{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}
@@ -213,5 +245,40 @@ become non-blocking. Industry-standard Redis-as-stream-buffer config.
 {{- $bgsaveBlocks := .Values.redis.durability.stopWritesOnBgsaveError | default "no" -}}
 {{- if and (eq $bgsaveBlocks "yes") (ne $aof "yes") -}}
 {{- required "INVALID redis.durability config: stopWritesOnBgsaveError=yes requires appendonly=yes (paired AOF + BGSAVE durability invariant — see v0.10.5 Pack C.5). Without AOF, blocking writes on BGSAVE failure means writes that arrive while BGSAVE is failing have no durable record anywhere." "" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod-level and container-level securityContext, both gated by `global.securityContext.deliver`.
+
+Emitted as the WHOLE key (`securityContext:` included) so that `deliver: false` renders no key at
+all rather than an empty map — on OpenShift the absence is the point: `restricted-v2` injects the
+context and rejects a spec that supplies a conflicting one. `deliver` is stripped from the rendered
+container context (it is our switch, not a Kubernetes field).
+
+A values file that replaces `global.securityContext` wholesale without naming `deliver` keeps the
+old behaviour: missing key == true, so no existing install changes shape on upgrade.
+
+Call with the root context and the indent of the key itself:
+    {{- include "vexa.podSecurityContext" . | nindent 6 }}          # under spec.template.spec
+    {{- include "vexa.containerSecurityContext" . | nindent 10 }}   # under a container
+*/}}
+{{- define "vexa.securityContextDeliver" -}}
+{{- $sc := .Values.global.securityContext | default dict -}}
+{{- if hasKey $sc "deliver" }}{{ $sc.deliver }}{{ else }}true{{ end }}
+{{- end -}}
+
+{{- define "vexa.podSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+securityContext:
+  {{- toYaml (.Values.global.podSecurityContext | default dict) | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.containerSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+{{- $sc := omit (.Values.global.securityContext | default dict) "deliver" -}}
+securityContext:
+  {{- toYaml $sc | nindent 2 }}
 {{- end -}}
 {{- end -}}

@@ -94,6 +94,10 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
         "text": raw.get("text") or "",
         "language": raw.get("language"),
         "speaker": raw.get("speaker"),
+        # transcript.v1 carries a stable machine identity independently from the mutable display
+        # name. Preserve it in the live hash so downstream policy can distinguish Teams CSRC rows
+        # without parsing human labels or widening behavior for every source='merged' producer.
+        "speaker_key": raw.get("speaker_key"),
         "completed": completed,
         "source": source,
         "absolute_start_time": raw.get("absolute_start_time"),

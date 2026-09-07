@@ -155,8 +155,15 @@ def test_dispatch_mount_set_includes_shared_read_only(tmp_path):
     from control_plane.dispatch import build_mount_set
 
     idx = _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    # NAMED `_global`, not "global". Inside the store the organisation tier must BE `_global`:
+    # the runtime derives the store subpath from the mount's `path`, which is always
+    # `<root>/_global`, so an in-store directory under any other name would mount something other
+    # than what the operator configured. global_mount refuses it rather than binding the wrong dir.
+    global_dir = tmp_path / "_global"
+    global_dir.mkdir()
     settings = SimpleNamespace(
-        workspaces_dir=str(tmp_path), global_system_workspace_path="", global_system_workspace_ref="",
+        workspaces_dir=str(tmp_path), global_system_workspace_path=str(global_dir),
+        global_system_workspace_ref="", global_admin_subjects="",
     )
 
     stack = build_mount_set(settings, "contrib1", idx.list("contrib1"))
@@ -200,6 +207,22 @@ def test_non_member_is_refused_shared_tree_and_file(tmp_path):
 
     assert tree.status_code == 403          # cannot enumerate a workspace you're not a member of
     assert file.status_code == 403          # ...nor read its files by slug
+
+
+def test_non_member_is_refused_a_shared_WRITE_by_slug(tmp_path):
+    """F96 — the write side, stated where the read side already is.
+
+    The rig's `workspace_write` bypassed this entirely: it wrote by `docker exec` into the volume,
+    and a volume has no membership. Now that it forwards here on the caller's identity, THIS is the
+    check that stops a stranger overwriting a shared workspace's files, so it is asserted rather
+    than assumed."""
+    _grant(tmp_path, "wsA", owner="owner1")          # stranger is NOT a member
+    client = _client(tmp_path, index=m.InMemoryMembershipIndex())
+
+    r = client.put("/api/workspace/file", headers=_h("stranger"),
+                   json={"path": "README.md", "content": "mine now", "slug": "wsA"})
+
+    assert r.status_code == 403
 
 
 # ── the full share flow: create shared ws (bootstrap) → mint → accept → appears for the new member ──
@@ -334,10 +357,143 @@ def test_dispatch_without_index_is_private_only(tmp_path):
     from control_plane.dispatch import build_mount_set
 
     _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    # NAMED `_global`, not "global". Inside the store the organisation tier must BE `_global`:
+    # the runtime derives the store subpath from the mount's `path`, which is always
+    # `<root>/_global`, so an in-store directory under any other name would mount something other
+    # than what the operator configured. global_mount refuses it rather than binding the wrong dir.
+    global_dir = tmp_path / "_global"
+    global_dir.mkdir()
     settings = SimpleNamespace(
-        workspaces_dir=str(tmp_path), global_system_workspace_path="", global_system_workspace_ref="",
+        workspaces_dir=str(tmp_path), global_system_workspace_path=str(global_dir),
+        global_system_workspace_ref="", global_admin_subjects="",
     )
 
     stack = build_mount_set(settings, "contrib1", None)   # no memberships passed → no shared mounts
 
     assert all(mount["role"] != SHARED_ROLE for mount in stack)
+
+
+# ── the MOUNT paths must not lose a grant when the derived index is dead or incomplete ────────────
+# (The 2026-09-01 dogfood incident: five membership writes 403'd against admin-api and were lost from
+# the index while policy/members.json kept the grants — the workspaces became unmountable because every
+# mount path enumerated candidates from the index ALONE. Sibling of
+# test_workspace_membership.test_api_shared_list_survives_a_dead_index, which covers the LISTING.)
+class _DeadIndex:
+    """A ``MembershipIndex`` whose remote edge is down — agent-api holding the wrong internal secret,
+    every call to admin-api answering 403."""
+
+    def add(self, subject, workspace_id, role, added_at):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    def remove(self, subject, workspace_id):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    def list(self, subject):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+
+class _SpyRuntime(_FakeRuntime):
+    """Records every spawn so a test can read the worker env a dispatch produced."""
+
+    def __init__(self):
+        self.spawned = []
+
+    def spawn(self, workload_id, profile, env):
+        self.spawned.append((workload_id, profile, env))
+        return workload_id
+
+
+def test_active_route_survives_a_dead_index(tmp_path):
+    """GET /api/workspace/active must still mount a locally-held grant when the index mirror is
+    unreachable — enumeration falls back to the authoritative policy/members.json instead of degrading
+    to private-only, and the degradation is SAID (``index_degraded``), never swallowed."""
+    _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    client = _client(tmp_path, index=_DeadIndex())
+
+    body = client.get("/api/workspace/active", headers=_h("contrib1")).json()
+
+    by_slug = {mount["slug"]: mount for mount in body["active"]}
+    assert "wsA" in by_slug, f"the grant is invisible with a dead index: {body}"
+    assert by_slug["wsA"]["write"] is True          # the role still comes from the authoritative re-check
+    assert body["index_degraded"] is True
+
+
+def test_active_route_mounts_a_grant_the_index_lost(tmp_path):
+    """The incident shape exactly: the index is HEALTHY but MISSING the row (the write 403'd and was
+    lost) while policy/members.json holds the grant. The union must still mount it — and a healthy
+    index is not reported degraded."""
+    _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    client = _client(tmp_path, index=m.InMemoryMembershipIndex())   # empty mirror — the rows were lost
+
+    body = client.get("/api/workspace/active", headers=_h("contrib1")).json()
+
+    assert "wsA" in {mount["slug"] for mount in body["active"]}, \
+        f"a grant the index lost was dropped from the mount set: {body}"
+    assert body["index_degraded"] is False
+
+
+def test_active_route_union_is_additive_and_deduped(tmp_path):
+    """A row in BOTH stores mounts exactly once, and an index row with no local dir (a workspace on
+    another host) keeps being enumerated without erroring — the git store only ever ADDS rows the
+    index is missing, it never subtracts."""
+    idx = _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    idx.add("contrib1", "wsElsewhere", "contributor", "2026-01-01T00:00:00Z")   # not materialized here
+    client = _client(tmp_path, index=idx)
+
+    body = client.get("/api/workspace/active", headers=_h("contrib1")).json()
+
+    slugs = [mount["slug"] for mount in body["active"]]
+    assert slugs.count("wsA") == 1                  # both stores hold the row — mounted exactly once
+    assert "wsElsewhere" not in slugs               # another host's workspace stays unmounted here (as before)
+    assert body["index_degraded"] is False
+
+
+def test_dispatch_mounts_survive_a_dead_index(tmp_path):
+    """Dispatch mount resolution: with the index edge down, a granted shared workspace still enters
+    VEXA_MOUNTS from the authoritative store — previously the dispatcher fell back to 'dispatching
+    private mounts only' and the workspace silently vanished from the worker."""
+    import json
+
+    _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    rt = _SpyRuntime()
+    d = Dispatcher(load_settings(workspaces_dir=str(tmp_path)), rt, _FakeIdentity(),
+                   membership_index=_DeadIndex())
+
+    d.dispatch({
+        "identity": {"subject": "contrib1", "launcher": "schedule:r1"},
+        "runner": "claude-code",
+        "workspaces": [{"id": "contrib1", "mode": "rw"}],
+        "trigger": "scheduled",
+        "context": {"kind": "none"},
+        "start": {"entrypoint": {"inline": "hi"}},
+    })
+
+    _, _profile, env = rt.spawned[0]
+    mounts = json.loads(env["VEXA_MOUNTS"])
+    shared = [mount for mount in mounts if mount["role"] == SHARED_ROLE]
+    assert [mount["slug"] for mount in shared] == ["wsA"], f"shared mount lost with a dead index: {mounts}"
+    assert shared[0]["write"] is True
+
+
+def test_build_active_set_unions_index_rows_with_the_git_store(tmp_path):
+    """The mount builder reconciles for itself: the rows a caller passes are the INDEX's view and may
+    be incomplete — the authoritative policy/members.json scan is unioned in ([] = the lost-writes
+    incident; a foreign-host row enumerates without error). None still means Lane A off."""
+    from types import SimpleNamespace
+    from control_plane.dispatch import build_active_set
+
+    _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    settings = SimpleNamespace(workspaces_dir=str(tmp_path))
+
+    # the incident: the index answered, but with no rows — the git store must still mount the grant
+    slugs = [mount["slug"] for mount in build_active_set(settings, "contrib1", [])]
+    assert "wsA" in slugs, f"a locally-held grant was dropped: {slugs}"
+
+    # additive: an index row for another host's workspace neither errors nor subtracts the local grant
+    rows = [{"workspace_id": "wsElsewhere", "role": "contributor"}]
+    slugs = [mount["slug"] for mount in build_active_set(settings, "contrib1", rows)]
+    assert "wsA" in slugs and "wsElsewhere" not in slugs
+
+    # Lane A off (no index wired anywhere) keeps meaning exactly that: no shared mounts
+    slugs = [mount["slug"] for mount in build_active_set(settings, "contrib1", None)]
+    assert "wsA" not in slugs

@@ -20,16 +20,14 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: terminal
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: "{{ .Values.terminal.image.repository }}:{{ .Values.global.imageTag | default .Values.terminal.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:

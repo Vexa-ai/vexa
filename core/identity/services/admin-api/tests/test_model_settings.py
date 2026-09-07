@@ -104,7 +104,7 @@ def test_platform_settings_crud_and_gate(client):
 def test_model_config_resolves_user_over_platform(client):
     uid, tok = _user_token(client, email="resolve@vexa.ai")
     client.put("/internal/settings/models", headers=_internal(),
-               json={"model": "global-model", "meeting_model": "global-meeting",
+               json={"model": "global-model", "effort": "medium",
                      "base_url": "https://global.example.com"})
     client.put("/user/models", headers={"X-API-Key": tok},
                json={"model": "my-model", "api_key": "sk-user-key"})
@@ -113,7 +113,7 @@ def test_model_config_resolves_user_over_platform(client):
     assert r.status_code == 200, r.text
     models = r.json()["models"]
     assert models["model"] == "my-model"                       # user beats platform
-    assert models["meeting_model"] == "global-meeting"         # platform fills the gap
+    assert models["effort"] == "medium"                        # platform fills the gap
     assert models["base_url"] == "https://global.example.com"  # field-by-field, not all-or-nothing
     assert models["api_key"] == "sk-user-key"                  # the secret crosses ONLY here
 

@@ -1,0 +1,65 @@
+# Grafana datasource provisioning for the adoption panel — TWO read-only Postgres connections.
+#
+# EVERY VALUE IS AN ENVIRONMENT PLACEHOLDER, on purpose. Grafana expands ${VAR} in provisioning
+# files at load, so this one file is correct both as the ConfigMap the chart emits and as a file
+# an operator drops into /etc/grafana/provisioning/datasources/ by hand — and the password never
+# has to exist inside a ConfigMap, a chart value, or this repository.
+#
+# The chart emits a companion ConfigMap (<release>-vexa-adoption-panel-env) carrying the four
+# NON-SECRET values resolved from the release — host, port, and the two database names — so the
+# operator wires Grafana up with an envFrom and one secretKeyRef:
+#
+#   envFrom:
+#     - configMapRef: { name: <release>-vexa-adoption-panel-env }
+#   env:
+#     - name: VEXA_DB_USER
+#       valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_USER } }
+#     - name: VEXA_DB_PASSWORD
+#       valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_PASSWORD } }
+#
+# GRANT THE ROLE SELECT AND NOTHING ELSE. The dashboard issues no writes, and a reporting
+# datasource holding write rights is a finding in any bank's review. `readOnly: true` below is
+# Grafana's own UI lock — it stops an editor changing the connection, it is NOT a database
+# grant, and it must not be mistaken for one.
+apiVersion: 1
+
+datasources:
+  - name: Vexa app DB
+    uid: vexa-app-db
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: ${VEXA_DB_HOST}:${VEXA_DB_PORT}
+    user: ${VEXA_DB_USER}
+    database: ${VEXA_APP_DB}
+    isDefault: false
+    editable: false
+    readOnly: true
+    jsonData:
+      sslmode: ${VEXA_DB_SSLMODE}
+      postgresVersion: 1600
+      timescaledb: false
+      maxOpenConns: 4
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${VEXA_DB_PASSWORD}
+
+  - name: Vexa flows DB
+    uid: vexa-flows-db
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: ${VEXA_DB_HOST}:${VEXA_DB_PORT}
+    user: ${VEXA_DB_USER}
+    database: ${VEXA_FLOWS_DB}
+    isDefault: false
+    editable: false
+    readOnly: true
+    jsonData:
+      sslmode: ${VEXA_DB_SSLMODE}
+      postgresVersion: 1600
+      timescaledb: false
+      maxOpenConns: 4
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${VEXA_DB_PASSWORD}

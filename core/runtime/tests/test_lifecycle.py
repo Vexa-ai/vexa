@@ -75,7 +75,7 @@ class _FakeBackend:
         self.envs: dict[str, dict[str, str]] = {}
         self.exit_codes: dict[str, int | None] = {}
 
-    def start(self, workload_id, runnable, env):
+    def start(self, workload_id, runnable, env, resources=None):
         self.starts.append(workload_id)
         self.envs[workload_id] = dict(env)
         self.exit_codes[workload_id] = None

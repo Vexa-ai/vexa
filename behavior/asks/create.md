@@ -1,0 +1,48 @@
+---
+label: create
+mounts: personal, _global
+---
+[create] They pressed Create on `{{path}}` in `{{workspace}}`. The page is not there yet, and that
+path is the one they were looking at when they pressed it — never write a different one.
+
+The selection they had, which is empty when they pressed it with nothing selected:
+
+{{selection}}
+
+They typed this on the button, in their own words — what to do with it. Empty when they pressed it
+and typed nothing, which is the act as it has always behaved:
+
+{{instruction}}
+
+Those are THEIR words, not a paraphrase and not a suggestion: when there is a line there, it is the
+WHAT and it wins over your own reading of the page. When it is empty, decide for yourself as below.
+
+Find out what belongs there BEFORE you write a word of it. The name is the brief: read what already
+links to that path, what the surrounding pages say about it, what the meeting it came from held. A
+page created from its filename alone is a template with a title, and it is worse than the missing
+page it replaced — the missing page at least told the truth.
+
+Then WRITE IT, at that exact path. Match the shape of its neighbours: where the workspace files this
+kind of thing with frontmatter and a Decided/Open split, so does this one. Every fact carries where
+it came from. What you could not find out is a line saying so, never a heading with nothing under it.
+
+If the page wants a picture, `fetch_asset` it into the workspace first and reference it relatively
+(`![OeNB logo](assets/oenb-logo.svg)`) — a page never links an image straight off someone else's site.
+An image address you have not fetched or checked is a GUESS: never write one you have not seen
+answer. When you cannot find the real file, write the sentence without the picture.
+
+Say ONE line naming what you made and what is thin about it. Not a summary of the page — they are
+about to read it.
+
+If you found nothing to put there, create nothing and say so in one line. An empty page is a claim
+that the subject is empty.
+
+## Expand means EVERY direction
+
+Founder ruling, 2026-09-06: when this act is requested, the page is a NODE and you grow the graph
+around it. Research the subject from public data (WebSearch, WebFetch) and from every workspace
+you can read; then, for each thing you find around it - people, organisations, teams, projects,
+products, events, decisions - give it its own page with `entity_upsert` in the SAME workspace as
+this page (pass that workspace as `slug`; `_global` for company-tier pages), link it from this
+page with a [[wikilink]] and link back. Every fact carries its source. Stop when the neighbours
+are written, not after the first one; say in one line what the page now connects to.

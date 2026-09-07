@@ -4,7 +4,7 @@
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
 import { minutesOnly } from "../app/mode";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
@@ -12,14 +12,16 @@ import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
-import { ApiError, presentError } from "./apiClient";
-import { useLiveMeetings, useLiveMeetingsConnection, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
+import { ApiError, presentError, readApiFailure } from "./apiClient";
+import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentation } from "./serviceDenial";
+import { ServiceDenialPanel } from "./ServiceDenialPanel";
+import { useLiveMeetings, useLiveMeetingsConnection, useLiveMeetingsLoaded, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
-import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
+import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
@@ -277,20 +279,18 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; k
 };
 const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "—", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" as BadgeKind };
 
-type MeetingActionFailure = { actionId: string; actionLabel: string; native: string; message: string };
+type MeetingActionFailure = {
+  actionId: string; actionLabel: string; native: string; message: string;
+  /** Set when the deciding service REFUSED (403 service_not_allowed / 503 authority-unavailable).
+   *  The row renders the panel instead of the one-line message, and does not auto-clear it. */
+  denial?: ServiceDenialPresentation | null;
+};
 type MeetingActionFailureHandler = (failure: MeetingActionFailure) => void;
 type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
 
-/** A non-ok action response as a STRUCTURED failure (status + backend detail), never a raw body. */
-async function readFailure(r: Response): Promise<ApiError> {
-  let detail = "";
-  try {
-    const b = (await r.json()) as { detail?: unknown; error?: unknown };
-    const d = b?.detail ?? b?.error;
-    detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
-  } catch { /* body wasn't JSON — the status alone is the signal */ }
-  return new ApiError(r.status, detail, r.url);
-}
+/** A non-ok action response as a STRUCTURED failure (status + backend detail + the intact body),
+ *  never a raw string. Shared with `getJson`'s error path so both edges produce the same object. */
+const readFailure = (r: Response): Promise<ApiError> => readApiFailure(r);
 
 /** User-truth message for a failed bot/row action (issue #674): a `404` means the backend no
  *  longer has this meeting — the list re-snapshot (runMeetingAction's `finally`) reconciles the
@@ -301,6 +301,10 @@ export function presentMeetingActionFailure(error: unknown): string {
     if (error.status === 404) return "This meeting is no longer active — refreshing the list.";
     if (error.status === 409) return "That meeting already has a bot.";
   }
+  // A refusal from the deciding service says WHY in its own words — "Your key doesn't have access
+  // to this." is a lie about a bot that was refused for some other reason entirely.
+  const denial = serviceDenialFromError(error);
+  if (denial) return denial.headline;
   return presentError(error).headline;
 }
 
@@ -311,7 +315,7 @@ async function runMeetingAction(action: Omit<MeetingActionFailure, "message">, r
   } catch (error) {
     // Operator channel keeps the full plumbing (P18); the UI channel gets the presented truth.
     console.warn("meeting action failed", { ...action, message: String(error instanceof Error ? error.message : error) });
-    onFailure?.({ ...action, message: presentMeetingActionFailure(error) });
+    onFailure?.({ ...action, message: presentMeetingActionFailure(error), denial: serviceDenialFromError(error) });
   } finally {
     refreshMeetings();
   }
@@ -457,6 +461,9 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   const isIntent = INTENT_STATUSES.has(m.live_status ?? "");
   useEffect(() => {
     if (!actionFailure) return;
+    // A service denial is a thing the user must ACT on (add funds, finish setup, raise the cap) —
+    // it must not evaporate on a 6s timer the way a transient "already has a bot" should.
+    if (actionFailure.denial) return;
     const t = window.setTimeout(() => setActionFailure(null), 6000);
     return () => window.clearTimeout(t);
   }, [actionFailure]);
@@ -475,7 +482,11 @@ function MeetingRow({ m }: { m: MeetingMock }) {
           ⚠ Auto-join failed: {m.auto_join_error}
         </div>
       )}
-      {actionFailure && (
+      {actionFailure?.denial ? (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ServiceDenialPanel presentation={actionFailure.denial} />
+        </div>
+      ) : actionFailure && (
         <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.35 }}>
           {actionFailure.actionLabel} failed: {actionFailure.message}
         </div>
@@ -524,50 +535,87 @@ function CalendarSyncStatusLine({ stamp }: { stamp: CalendarSyncStamp | null }) 
   );
 }
 
-// ── Calendar sync — the secret ICS URL + the GLOBAL auto-join default for imported meetings.
-//    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming.
+// ── Calendar sync — the QUICK view over the user's calendar CONNECTIONS (#1150 plural API).
+//    Per-calendar auto-join + Sync now live here because they are the two things you reach for
+//    mid-day; adding, renaming, replacing a feed and disconnecting live in Settings → Calendar
+//    (one manager, not two — the design-spec's "same list twice" anti-pattern). The feed address
+//    is write-only: it is typed once here for the FIRST calendar and never rendered back.
 //    Two skins over ONE popover: `icon` (the quiet header icon, always there) and `row` (a
-//    discoverable "Connect your calendar" row that hides itself once a feed is connected). ──
+//    discoverable "Connect your calendar" row that hides itself once a calendar exists). ──
 function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) {
+  const layout = useService(LayoutServiceId);
   const [open, setOpen] = useState(false);
-  const [cfg, setCfg] = useState<CalendarConfig | null>(null);
+  const [cals, setCals] = useState<CalendarConnection[] | null>(null);
+  const [stamps, setStamps] = useState<Record<string, CalendarSyncStamp>>({});
   const [url, setUrl] = useState("");
+  const [name, setName] = useState("My calendar");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [stamp, setStamp] = useState<CalendarSyncStamp | null>(null);
-  const [syncing, setSyncing] = useState(false);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  const syncNow = async () => {
-    setSyncing(true); setErr(null);
-    try { setStamp(await syncCalendarNow()); refreshMeetings(); }
+
+  const load = useCallback(async (withStamps: boolean) => {
+    try {
+      const list = await listCalendars();
+      setCals(list);
+      if (!withStamps) return;
+      const pairs = await Promise.all(list.map(async (c) => {
+        try { return [c.id, await getCalendarSyncStatus(c.id)] as const; }
+        catch { return [c.id, {} as CalendarSyncStamp] as const; }
+      }));
+      setStamps(Object.fromEntries(pairs));
+    } catch { setCals(null); }
+  }, []);
+
+  const syncOne = async (id: string) => {
+    setSyncing(id); setErr(null);
+    try { const st = await syncCalendar(id); setStamps((s) => ({ ...s, [id]: st })); refreshMeetings(); }
     catch (e) { setErr(presentError(e).headline); }
-    finally { setSyncing(false); }
+    finally { setSyncing(null); }
   };
-  // the row skin needs the connected-state up front (it hides once connected)
+
+  // the row skin needs the connected-state up front (it hides once a calendar exists)
   useEffect(() => {
     if (variant !== "row") return;
-    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
-  }, [variant]);
+    void load(false);
+  }, [variant, load]);
   useEffect(() => {
     if (!open) return;
-    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
-    void getCalendarSyncStatus().then(setStamp).catch(() => {});
+    void load(true);
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-  const save = async (body: { ics_url?: string | null; auto_join?: boolean }) => {
+  }, [open, load]);
+
+  const setAutoJoin = async (cal: CalendarConnection, autoJoin: boolean) => {
     setBusy(true); setErr(null);
     try {
-      setCfg(await setCalendarConfig(body));
-      setUrl(""); refreshMeetings();
-      if (body.ics_url) await syncNow();              // paste → an ANSWER, not a silent wait
-      if (body.ics_url === null) setStamp(null);
+      await updateCalendar(cal.id, { auto_join: autoJoin });
+      await load(false);
+      await syncOne(cal.id);   // PATCH does not reconcile already-imported meetings; the sync does
     }
     catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
-  if (variant === "row" && cfg?.ics_url_set) return null;   // connected → manage via the header icon
+
+  const connectFirst = async () => {
+    const u = url.trim();
+    if (!u) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await createCalendar({ name: name.trim() || "My calendar", ics_url: u, auto_join: true });
+      setUrl(""); refreshMeetings();
+      await load(false);
+      await syncOne(created.id);            // paste → an ANSWER, not a silent wait
+    }
+    catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+
+  const connected = (cals?.length ?? 0) > 0;
+  const openSettings = () => { setOpen(false); layout.openTab({ id: "settings", title: "Settings", kind: "settings", params: {} }); };
+
+  if (variant === "row" && connected) return null;   // has one → manage via the header icon / Settings
   return (
     <div ref={ref} style={{ position: "relative", flex: variant === "row" ? "initial" : "none" }}>
       {variant === "row" ? (
@@ -577,35 +625,40 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
           <Icon name="cal" size={12} /> Connect your calendar
         </button>
       ) : (
-        <button onClick={() => setOpen((v) => !v)} title="Calendar sync — import upcoming meetings from your calendar"
-          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: cfg?.ics_url_set ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
+        <button onClick={() => setOpen((v) => !v)} title="Calendars — import upcoming meetings from your calendars"
+          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: connected ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
           <Icon name="cal" size={13} />
         </button>
       )}
       {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Calendar sync</div>
-          {cfg?.ics_url_set ? (
+        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 300, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+            {connected ? `calendars · ${cals?.length ?? 0} of ${MAX_CALENDARS}` : "calendar sync"}
+          </div>
+          {connected ? (
             <>
-              <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
-                Connected: <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{cfg.ics_url_masked}</span>
-              </div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
-                <input type="checkbox" checked={cfg.auto_join} disabled={busy}
-                  onChange={(e) => void save({ auto_join: e.target.checked })} />
-                Auto-join imported meetings
-              </label>
-              <CalendarSyncStatusLine stamp={stamp} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <button disabled={busy || syncing} onClick={() => void syncNow()}
-                  style={{ flex: 1, fontSize: 12, padding: "4px 10px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
-                  {syncing ? "Syncing…" : "Sync now"}
-                </button>
-                <button disabled={busy || syncing} onClick={() => void save({ ics_url: null })}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 6, cursor: "pointer" }}>
-                  Disconnect
-                </button>
-              </div>
+              {cals?.map((c) => (
+                <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 5, borderBottom: "1px dashed var(--line)", paddingBottom: 7 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ flex: 1, fontSize: 12, color: c.enabled ? "var(--t1)" : "var(--t3)", fontWeight: 600 }}>{c.name}</span>
+                    {!c.enabled && <span style={{ fontSize: 10.5, color: "var(--t3)" }}>paused</span>}
+                    <button disabled={busy || syncing !== null} onClick={() => void syncOne(c.id)}
+                      style={{ fontSize: 11.5, padding: "3px 8px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
+                      {syncing === c.id ? "Syncing…" : "Sync"}
+                    </button>
+                  </div>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 11.5, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
+                    <input type="checkbox" checked={c.auto_join} disabled={busy || syncing !== null}
+                      onChange={(e) => void setAutoJoin(c, e.target.checked)} />
+                    Auto-join meetings from this calendar
+                  </label>
+                  <CalendarSyncStatusLine stamp={stamps[c.id] ?? null} />
+                </div>
+              ))}
+              <button onClick={openSettings}
+                style={{ fontSize: 11.5, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, cursor: "pointer" }}>
+                Add, rename or disconnect in Settings → Calendar
+              </button>
             </>
           ) : (
             <>
@@ -613,12 +666,16 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                 Paste your calendar&apos;s <b>secret ICS address</b> (Google Calendar → Settings → &quot;Secret address in iCal format&quot;).
                 Upcoming meetings with a Meet/Zoom/Teams link appear under Upcoming and auto-join at start.
               </div>
-              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
-                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void save({ ics_url: url.trim() }); }}
+              <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} maxLength={100}
+                aria-label="Calendar name" placeholder="Calendar name"
                 style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
-              <button disabled={busy || !url.trim()} onClick={() => void save({ ics_url: url.trim() })}
+              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
+                type="password" autoComplete="off" aria-label="Secret ICS address"
+                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void connectFirst(); }}
+                style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
+              <button disabled={busy || !url.trim()} onClick={() => void connectFirst()}
                 style={{ fontSize: 12, padding: "5px 10px", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", border: "none", borderRadius: 6, cursor: url.trim() ? "pointer" : "default" }}>
-                {busy || syncing ? "Connecting…" : "Connect"}
+                {busy || syncing !== null ? "Connecting…" : "Connect"}
               </button>
               <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45 }}>
                 Tip: the <i>public</i> address only carries events you made public — use the <b>secret</b> one for your full calendar.
@@ -650,13 +707,15 @@ function MeetingsList() {
   const [url, setUrl] = useState("");
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
   const addBot = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
     const parsed = parseMeetingInput(u, await getJitsiHosts());
-    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setTimeout(() => setSent(null), 5000); return; }
-    setSent("sending"); setErrMsg(null);
+    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setDenial(null); setTimeout(() => setSent(null), 5000); return; }
+    setSent("sending"); setErrMsg(null); setDenial(null);
+    let refused = false;
     try {
       // POST /bots through the authed gateway proxy (X-API-Key injected server-side from the cookie token).
       const r = await fetch("/api/bots", {
@@ -672,15 +731,21 @@ function MeetingsList() {
       } else {
         // Surface the REAL reason, not a generic "bad link" (the cap/dup/auth cases are common).
         setSent("err");
-        setErrMsg(
-          r.status === 429 ? "You're at your meeting limit — stop one first."
-            : r.status === 409 ? "That meeting already has a bot."
-              : r.status === 401 ? "Not signed in — sign in and retry."
-                : presentError(await readFailure(r)).headline,
-        );
+        if (r.status === 429) { setErrMsg("You're at your meeting limit — stop one first."); }
+        else if (r.status === 409) { setErrMsg("That meeting already has a bot."); }
+        else if (r.status === 401) { setErrMsg("Not signed in — sign in and retry."); }
+        else {
+          // 403 service_not_allowed / 503 service_authority_unavailable are the deciding service
+          // refusing, not an access fault: they get their own words and their own fix.
+          const state = resolveJoinError(await readFailure(r));
+          if (state.kind === "denial") { setDenial(state.presentation); setErrMsg(null); refused = true; }
+          else setErrMsg(state.headline);
+        }
       }
     } catch { setSent("err"); setErrMsg("Couldn't reach the server."); }
-    setTimeout(() => setSent(null), 5000);
+    // The transient flash clears itself; a denial panel is sticky until the next attempt — a
+    // paywall the user has to act on must not vanish on a 5s timer.
+    if (!refused) setTimeout(() => setSent(null), 5000);
   };
   return (
     <div style={{ padding: "8px" }}>
@@ -706,7 +771,9 @@ function MeetingsList() {
           </button>
         </div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
-        {sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
+        {denial
+          ? <ServiceDenialPanel presentation={denial} onRetry={() => void addBot()} />
+          : sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
         <div style={{ marginTop: 8 }}>
           <PlanMeetingButton />
           <CalendarSyncButton variant="row" />
@@ -723,44 +790,9 @@ function MeetingsList() {
   );
 }
 
-// ── Meeting COPILOT tab (center) — meeting shell + canvas ──────────────────────────
-type ModelInfo = { chat_model?: string; streaming_model?: string; agent_model?: string; meeting_model?: string };
-
-function useModelInfo(): ModelInfo | null {
-  const [models, setModels] = useState<ModelInfo | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const r = await fetch(`/api/models`, { cache: "no-store" });
-        if (!alive || !r.ok) return;
-        setModels(await r.json() as ModelInfo);
-      } catch {
-        /* model labels are informational */
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-  return models;
-}
-
-function ModelChips() {
-  const models = useModelInfo();
-  const streaming = models?.streaming_model || models?.meeting_model || "streaming";
-  const chat = models?.chat_model || models?.agent_model || "chat";
-  const chip = (label: string, value: string) => (
-    <span title={`${label} model: ${value}`} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t2)", background: "var(--panel)", fontSize: 11.5, whiteSpace: "nowrap", minWidth: 0 }}>
-      <span style={{ color: "var(--t3)", fontFamily: "var(--mono)", flex: "none" }}>{label}</span>
-      <span style={{ color: "var(--t1)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{value}</span>
-    </span>
-  );
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "flex-end", minWidth: 0 }}>
-      {chip("stream", streaming)}
-      {chip("chat", chat)}
-    </div>
-  );
-}
+// ── Meeting tab (center) — meeting shell + the live transcript canvas ─────────────────────────
+// PRD decision 34: no model chips here. The product runs no model calls of its own beside the
+// agent, so which model is configured is not a fact about this meeting and has no place on it.
 
 /** Bot lifecycle controls on the meeting page header (owner ask 2026-07-09): Stop while the bot
  *  is in the call, Re-send once it stopped/completed/failed. Reuses the row-action map verbatim
@@ -811,8 +843,116 @@ export function meetingHeaderState(m: MeetingMock | undefined, connected: boolea
   return connected ? "live" : "reconnecting";
 }
 
+/** Whether a requested meeting id has RESOLVED, is still resolving, or does not exist for this user.
+ *  `listLoaded` is the meetings list having answered at least once — without it an id that simply hasn't
+ *  been fetched yet is indistinguishable from one that doesn't exist, and an addressable URL
+ *  (`/meetings/<id>`) would show a permanent "Connecting…" for a deleted or foreign meeting.
+ *  Exported for the routing test. */
+export type MeetingResolution = "resolving" | "resolved" | "not-found";
+export function meetingResolution(m: MeetingMock | undefined, listLoaded: boolean): MeetingResolution {
+  if (m) return "resolved";
+  return listLoaded ? "not-found" : "resolving";
+}
+
+/** How long a bound-but-not-yet-listed id gets to ARRIVE before the canvas calls it dead. One
+ *  snapshot round-trip, not a poll: the canvas asks once and then waits out the answer. */
+export const MEETING_LOOKUP_GRACE_MS = 8_000;
+
+/** What the canvas SHOWS for a requested id — `meetingResolution` plus the one state it lacked.
+ *
+ *  The founder's chat sent a bot into `google_meet/edh-vofu-jxm`, the gateway served
+ *  `GET /meetings/132` 200 and listed it, and the Transcript tab said "Meeting not found — Nothing
+ *  here matches 132". `meetingResolution` was correct about its own inputs and wrong about the
+ *  world: it reads `listLoaded` as "the list is COMPLETE", when all the flag can honestly mean is
+ *  "the list ANSWERED once" — and a row created mid-session is absent from that answer.
+ *
+ *  So an absent id gets one more question before it gets a verdict: `searching` while a fresh
+ *  snapshot is in flight, `not-found` only once that has come back without it. The P0 is untouched —
+ *  an unanswered list still resolves forever, so a network blip still cannot make a live meeting
+ *  look deleted. This adds a bounded wait; it removes no gate. */
+export type MeetingLookup = MeetingResolution | "searching";
+export function meetingLookupState(m: MeetingMock | undefined, listLoaded: boolean, graceExpired: boolean): MeetingLookup {
+  const base = meetingResolution(m, listLoaded);
+  return base === "not-found" && !graceExpired ? "searching" : base;
+}
+
+/** Ask once, then wait a BOUNDED moment — returns whether the grace for `meetingId` is spent.
+ *
+ *  Two effects rather than one, and that is the whole subtlety: a single effect holding both the
+ *  request and the timer clears its own timeout every time its inputs move, which is how a "bounded"
+ *  grace silently becomes an unbounded one. The request is guarded by a ref (exactly one per id — a
+ *  re-render must never become a request) and the deadline is an absolute timestamp, so re-running
+ *  the timer effect re-arms the SAME instant instead of restarting the clock.
+ *
+ *  The wait ends on that clock and not on the answer, because a snapshot that legitimately lacks the
+ *  row changes nothing and therefore notifies nobody. */
+function useMeetingLookupGrace(missing: boolean, meetingId: string): boolean {
+  const [expiredFor, setExpiredFor] = useState<string | null>(null);
+  const askedFor = useRef<string | null>(null);
+  const deadline = useRef<{ id: string; at: number } | null>(null);
+
+  useEffect(() => {
+    if (!missing || askedFor.current === meetingId) return;
+    askedFor.current = meetingId;
+    refreshMeetings();
+  }, [missing, meetingId]);
+
+  useEffect(() => {
+    if (!missing || expiredFor === meetingId) return;
+    if (deadline.current?.id !== meetingId) deadline.current = { id: meetingId, at: Date.now() + MEETING_LOOKUP_GRACE_MS };
+    const t = window.setTimeout(() => setExpiredFor(meetingId), Math.max(0, deadline.current.at - Date.now()));
+    return () => window.clearTimeout(t);
+  }, [missing, meetingId, expiredFor]);
+
+  return expiredFor === meetingId;
+}
+
+/** The clean terminal state for an id that isn't ours (deleted, mistyped, someone else's un-shared
+ *  meeting). A dead reference is a normal outcome of a shareable URL, so it reads as an answer — not an
+ *  error, not a spinner that never ends. Pure (no services) so it renders in a test as-is. */
+export function MeetingNotFound({ meetingId, onOpenToday }: { meetingId: string; onOpenToday?: () => void }) {
+  return (
+    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 380, textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Meeting not found</div>
+        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+          {meetingId
+            ? <>Nothing here matches <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. It may have been deleted, or it belongs to someone who hasn&apos;t shared it with you.</>
+            : <>This link doesn&apos;t carry a meeting. Open one from your day.</>}
+        </div>
+        {onOpenToday && (
+          <button onClick={onOpenToday}
+            style={{ marginTop: 16, fontSize: 12.5, padding: "5px 12px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 7, cursor: "pointer" }}>
+            Open today
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The neutral face of `searching`. NOT a verdict and NOT an error — it says the app is still
+ *  asking, which at that instant is the only true thing it can say. Pure, like its twin, so the
+ *  test renders it as-is. */
+export function MeetingLookingUp({ meetingId }: { meetingId: string }) {
+  return (
+    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 380, textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Looking for this meeting…</div>
+        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+          {meetingId
+            ? <>Fetching the latest list for <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. A meeting that was just created can take a moment to appear here.</>
+            : <>Fetching the latest meetings list.</>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MeetingTab({ params }: TabProps) {
+  const layout = useService(LayoutServiceId);
   const liveList = useLiveMeetings();
+  const listLoaded = useLiveMeetingsLoaded();
   const connected = useLiveMeetingsConnection();
   const requestedMeetingId = params.meetingId as string;
   // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
@@ -821,12 +961,36 @@ function MeetingTab({ params }: TabProps) {
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
   const header = meetingHeaderState(m, connected);
+  // An id the list does not carry is a QUESTION before it is an answer: re-ask the list once, and
+  // only call the meeting missing if the fresh snapshot still lacks it (see meetingLookupState).
+  const graceExpired = useMeetingLookupGrace(!m && listLoaded, requestedMeetingId);
+  const lookup = meetingLookupState(m, listLoaded, graceExpired);
+
+  // Still asking — say so, neutrally. A row the chat created moments ago lands here.
+  if (lookup === "searching") return <MeetingLookingUp meetingId={requestedMeetingId} />;
+
+  // An unknown id — a stale/foreign/mistyped meeting URL — is a clean dead end, never a crash and never
+  // an endless "Connecting…". Only once the list has actually answered AND been re-asked (P0: an
+  // offline list keeps resolving, so a network blip can't make a live meeting look deleted).
+  if (lookup === "not-found") {
+    return (
+      <MeetingNotFound
+        meetingId={requestedMeetingId}
+        onOpenToday={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
+      />
+    );
+  }
 
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
       <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+        {/* WRAPS. This header was written for the full-width centre pane and its controls are all
+            `flex: none`; rendered in a narrower column (minutes mode puts this same canvas in the
+            resizable pages panel) a single non-wrapping row does not truncate, it OVERLAPS — the
+            bot controls paint across the meeting's own name. Wrapping costs nothing at the width it
+            was designed for and stays legible at every width below it. */}
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, rowGap: 8, fontSize: 13, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, rowGap: 6, minWidth: 0 }}>
             {header === "live"
               ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
               : header === "reconnecting"
@@ -839,10 +1003,11 @@ function MeetingTab({ params }: TabProps) {
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
             {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
-          <div style={{ flex: 1 }} />
+          {/* the spacer keeps the controls right-aligned while they fit on the title's line, and
+              collapses to nothing once they have wrapped to their own */}
+          <div style={{ flex: "1 0 0", minWidth: 0 }} />
           {m && <BotControls m={m} connected={connected} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
-          <ModelChips />
         </div>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>

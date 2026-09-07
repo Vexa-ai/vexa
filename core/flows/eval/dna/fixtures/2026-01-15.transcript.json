@@ -1,0 +1,83 @@
+{
+ "meeting": {
+  "title": "Platform sync 2026-01-15",
+  "platform": "zoom",
+  "native_meeting_id": "000000000",
+  "occurrence": "2026-01-15",
+  "exact": "",
+  "source": "synthetic \u2014 written for this repo, no real meeting",
+  "participants": [
+   "Ada Okonjo",
+   "Bo Lindqvist",
+   "Chi Nakamura"
+  ]
+ },
+ "segments": [
+  {
+   "t": 0.0,
+   "end": 6.2,
+   "speaker": "Ada Okonjo",
+   "text": "Morning all. One item today: whether the ingest rewrite ships in this release or the next."
+  },
+  {
+   "t": 6.5,
+   "end": 14.0,
+   "speaker": "Bo Lindqvist",
+   "text": "The rewrite passes on staging but we have no load numbers above ten thousand events a second."
+  },
+  {
+   "t": 14.2,
+   "end": 21.0,
+   "speaker": "Ada Okonjo",
+   "text": "Then it does not ship this release. I would rather be late than page someone at three in the morning."
+  },
+  {
+   "t": 21.3,
+   "end": 28.4,
+   "speaker": "Chi Nakamura",
+   "text": "Agreed. I can run the load test on Thursday if I get the staging cluster to myself."
+  },
+  {
+   "t": 28.6,
+   "end": 33.0,
+   "speaker": "Ada Okonjo",
+   "text": "Take it. Bo, hand Chi the cluster after standup on Wednesday."
+  },
+  {
+   "t": 33.2,
+   "end": 40.1,
+   "speaker": "Bo Lindqvist",
+   "text": "Will do. Do we tell the two pilot customers, or wait until we have the numbers?"
+  },
+  {
+   "t": 40.4,
+   "end": 47.9,
+   "speaker": "Ada Okonjo",
+   "text": "Wait. We tell them once Chi's numbers are in, not before. No half-answers to a customer."
+  },
+  {
+   "t": 48.1,
+   "end": 55.0,
+   "speaker": "Chi Nakamura",
+   "text": "One open thing: the old ingest path stays on until when? Nobody has said."
+  },
+  {
+   "t": 55.2,
+   "end": 61.5,
+   "speaker": "Ada Okonjo",
+   "text": "Genuinely open. Bring it back next week with a date attached and we will decide then."
+  },
+  {
+   "t": 61.7,
+   "end": 66.0,
+   "speaker": "Bo Lindqvist",
+   "text": "Last thing, the on-call rota for the release week is still unassigned."
+  },
+  {
+   "t": 66.2,
+   "end": 72.4,
+   "speaker": "Ada Okonjo",
+   "text": "Also open. Let us not decide that with three of us. That is the meeting."
+  }
+ ]
+}

@@ -1,0 +1,58 @@
+{
+  "total": 3,
+  "unread": 0,
+  "count": 3,
+  "messages_count": 3,
+  "start": 0,
+  "tags": [],
+  "messages": [
+    {
+      "ID": "3ReplyCaseyXXXXXXXXXXX",
+      "MessageID": "reply-casey-1@example.test",
+      "Read": false,
+      "From": {"Name": "Casey Lund", "Address": "casey@example.test"},
+      "To": [{"Name": "", "Address": "vexa@example.com"}],
+      "Cc": null,
+      "Bcc": null,
+      "ReplyTo": [],
+      "Subject": "Re: Minutes: Platform Sync weekly",
+      "Created": "2026-09-01T21:20:11.5Z",
+      "Tags": [],
+      "Size": 512,
+      "Attachments": 0,
+      "Snippet": "Point 3 is wrong - the vote was deferred, not carried."
+    },
+    {
+      "ID": "2StrangerYYYYYYYYYYYYY",
+      "MessageID": "stranger-1@rehearsal.test",
+      "Read": false,
+      "From": {"Name": "Someone Else", "Address": "someone@rehearsal.test"},
+      "To": [{"Name": "", "Address": "other-tenant@rehearsal.test"}],
+      "Cc": null,
+      "Bcc": null,
+      "ReplyTo": [],
+      "Subject": "not addressed to this mailbox",
+      "Created": "2026-09-01T21:16:00Z",
+      "Tags": [],
+      "Size": 301,
+      "Attachments": 0,
+      "Snippet": "This mailbox is a shared double"
+    },
+    {
+      "ID": "1InvitePlatformSyncZZZ",
+      "MessageID": "invite-platform-sync-1@example.test",
+      "Read": false,
+      "From": {"Name": "Robin Vale", "Address": "organizer@example.test"},
+      "To": [{"Name": "", "Address": "vexa@example.com"}],
+      "Cc": null,
+      "Bcc": null,
+      "ReplyTo": [],
+      "Subject": "Invitation: Platform Sync weekly @ Sat Mar 2, 2030 2pm (UTC)",
+      "Created": "2026-09-01T21:14:02.503Z",
+      "Tags": [],
+      "Size": 1204,
+      "Attachments": 1,
+      "Snippet": "You have been invited to Platform Sync weekly."
+    }
+  ]
+}

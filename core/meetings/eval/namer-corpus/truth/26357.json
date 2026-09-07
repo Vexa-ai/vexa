@@ -1,0 +1,36 @@
+{
+ "tape": "26357",
+ "platform": "teams",
+ "source": "prod-signal-tape",
+ "image_version": "v0.12.23-rc.10.packet2",
+ "duration_s": 37.4,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {},
+ "untruthed": {
+  "201": "no truth: 0 unambiguous hint instants (< 5)"
+ },
+ "ambiguous_hint_instants": 0,
+ "roster_first_seen_s": {
+  "P1": 0.0
+ },
+ "roster_coverage": [
+  [
+   0.0,
+   1,
+   1
+  ]
+ ],
+ "judge": null,
+ "counts": {
+  "csrc": 12,
+  "hints": 0,
+  "roster": 4,
+  "ticks": 70
+ }
+}

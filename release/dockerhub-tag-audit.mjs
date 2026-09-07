@@ -11,6 +11,7 @@ export const RELEASE_REPOSITORIES = [
   "v012-gateway",
   "v012-mcp",
   "v012-terminal",
+  "v012-flows",
   "vexa-bot",
   "vexa-lite",
 ];

@@ -10,6 +10,10 @@ implements the same request shape.
 Use this path when you want a different ASR model without changing the bot, meeting-api, or live
 transcript pipeline.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ## Contract
 
 Vexa appends `/v1/audio/transcriptions` to `TRANSCRIPTION_SERVICE_URL` and sends multipart form data:
@@ -45,6 +49,17 @@ that path.
 
 If the backend ignores the `model` form part, leave `TRANSCRIPTION_MODEL` unset. If it validates model
 ids, set the exact served name.
+
+For JSON-only models such as Voxtral, Vexa first requests `verbose_json`, then falls back to `json`
+when the backend explicitly rejects the verbose format. The client remembers that choice for later
+audio windows, while Whisper-compatible backends retain segment and word metadata.
+
+```bash
+TRANSCRIPTION_MODEL=mistralai/Voxtral-Mini-4B-Realtime-2602
+```
+
+Use the exact model id returned by your gateway's `GET /v1/models`; deployments may expose a
+different Voxtral checkpoint or served name.
 
 ## Example: FunASR or SenseVoice
 

@@ -61,8 +61,8 @@ already holds, and each run leaves the workspace more complete (people, companie
 ## Going live instead
 
 To surface decisions and action items **during** the call rather than after, run the live copilot —
-`POST /agent/meeting/start` then stream cards from `GET /agent/meeting/stream`. See
-[Meeting copilot](/how-to/live-copilot) and the [Agent API](/api/agent#live-meeting-copilot).
+stream the transcript from `GET /agent/meeting/stream` and ask the agent about it. See
+[Follow a live meeting](/how-to/live-copilot) and the [Agent API](/api/agent).
 
 <Note>
 Routines and dispatches are workspace writes, so they need a **trusted** trigger (`message`/`scheduled`),

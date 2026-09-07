@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vexa · Live call replay</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: light-dark(#ffffff, #202124);
+      --foreground: light-dark(#252525, #fbfbfb);
+      --muted: light-dark(#f7f7f7, #2b2c2f);
+      --muted-foreground: light-dark(#747474, #b5b5b5);
+      --border: light-dark(#e7e7e7, #3a3a3a);
+      --live: light-dark(#d4183d, #ff6467);
+      --good: light-dark(#16875f, #65d6a7);
+      --warn: light-dark(#a76500, #ffbe55);
+      --teams: #6264a7;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body { margin: 0; background: var(--background); color: var(--foreground); font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    #app { min-height: 100vh; display: flex; flex-direction: column; }
+    header { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--background) 94%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+    .topbar { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 18px; }
+    .brand { font-size: 15px; font-weight: 650; }
+    .meeting { display: flex; align-items: center; gap: 7px; color: var(--muted-foreground); }
+    .platform-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--teams); }
+    .live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-foreground); font-size: 11px; font-weight: 650; }
+    .live-pill.running { color: var(--live); border-color: color-mix(in srgb, var(--live) 55%, var(--border)); }
+    .live-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .live-pill.running .dot { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .3; } }
+    .transport { display: grid; grid-template-columns: minmax(280px, 1fr) auto auto; align-items: center; gap: 12px; padding: 8px 18px 11px; border-top: 1px solid var(--border); }
+    audio { width: 100%; height: 34px; }
+    button, select { border: 1px solid var(--border); border-radius: 8px; background: var(--background); color: var(--foreground); font: inherit; padding: 7px 10px; }
+    button { cursor: pointer; }
+    button:hover { background: var(--muted); }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }
+    .metric { min-height: 48px; padding: 7px 18px; background: var(--background); }
+    .metric-label { color: var(--muted-foreground); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+    .metric-value { margin-top: 1px; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .metric-value.good { color: var(--good); }
+    .metric-value.warn { color: var(--warn); }
+    main { width: min(820px, 100%); margin: 0 auto; padding: 20px 24px 80px; }
+    .empty { min-height: 52vh; display: grid; place-content: center; gap: 6px; color: var(--muted-foreground); text-align: center; }
+    .empty strong { color: var(--foreground); font-size: 15px; }
+    .turn { margin: 0 0 18px; }
+    .turn-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+    .speaker { font-size: 13px; font-weight: 650; }
+    .turn-time { color: var(--muted-foreground); font-size: 11px; }
+    .turn-body { font-size: 14px; line-height: 1.65; }
+    .segment.pending { color: var(--muted-foreground); font-style: italic; }
+    .latency { display: inline-block; margin: 0 5px 0 3px; color: var(--muted-foreground); font: 9px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; vertical-align: 1px; }
+    .latency.first-visible.good { color: var(--good); }
+    .latency.first-visible.warn { color: var(--warn); }
+    .contested { color: var(--warn); }
+    .error { margin: 48px auto; max-width: 760px; padding: 16px; color: var(--live); white-space: pre-wrap; }
+    @media (max-width: 700px) {
+      .transport { grid-template-columns: 1fr auto; }
+      .transport audio { grid-column: 1 / -1; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      main { padding-inline: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">Loading live replay…</div>
+  <script type="module">
+    const pipelineMode = new URLSearchParams(location.search).get('mode') === 'pipeline';
+    const boot = pipelineMode
+      ? (await import('/_viewer/teams-csrc-pipeline-live.mjs')).bootTeamsPipelineLive
+      : (await import('/_viewer/teams-csrc-live-transcript.mjs')).bootTeamsLiveTranscript;
+    boot().catch((error) => {
+      const app = document.getElementById('app');
+      app.className = 'error';
+      app.textContent = error instanceof Error ? error.stack : String(error);
+    });
+  </script>
+</body>
+</html>

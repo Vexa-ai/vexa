@@ -79,6 +79,9 @@ function firstChatMessage(root: FakeEl): { sender: string; text: string } | unde
 
 // ── Exported selector surface (the bot re-exports these — keep them sane) ──────
 check('participant selectors are a non-empty string[]', teamsParticipantSelectors.length > 0 && teamsParticipantSelectors.every((s) => typeof s === 'string'));
+check('participant discovery starts from the exact voice outline and stable stream wrapper',
+  teamsParticipantSelectors[0] === '[data-tid="voice-level-stream-outline"]'
+    && teamsParticipantSelectors[1] === '[data-stream-type][data-tid]');
 check('name selectors non-empty', teamsNameSelectors.length > 0);
 check('participant-id selectors include [data-tid]', teamsParticipantIdSelectors.includes('[data-tid]'));
 check('container selectors fall back to body', teamsMeetingContainerSelectors.includes('body'));

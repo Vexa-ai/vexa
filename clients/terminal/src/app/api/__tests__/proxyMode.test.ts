@@ -37,4 +37,13 @@ describe("proxyMode — meetings-only server gate", () => {
     process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
     expect(refusedInMeetingsMode("user/calendar")).toBe(false);
   });
+
+  it("the PLURAL calendar paths route the same way (#1150) — id and sync segments included", () => {
+    for (const p of ["user/calendars", "user/calendars/f52a1067-6f0d-43c5-9641-54da51d3610f", "user/calendars/f52a1067/sync"]) {
+      expect(MEETINGS_DOMAIN.test(p)).toBe(true);
+    }
+    process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
+    expect(refusedInMeetingsMode("user/calendars")).toBe(false);
+    expect(refusedInMeetingsMode("user/calendars/abc/sync")).toBe(false);
+  });
 });

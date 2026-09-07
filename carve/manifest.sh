@@ -18,10 +18,18 @@ export CARVE_REMOTE="${CARVE_REMOTE:-https://github.com/Vexa-ai/vexa-core.git}"
 # clients/terminal = the reference workbench UI; docs/docs = Mintlify site.
 export CARVE_INCLUDE=(
   core
-  deploy/compose
-  deploy/transcription
+  # deploy/ whole: compose, helm, lite, transcription, contracts, bin. Founder ruling 2026-09-02:
+  # carving only compose+transcription was a mistake — the chart and the single-container image
+  # are part of the contribution.
+  deploy
+  Makefile
   clients/terminal
   clients/slim
+  # packages/transcript-rendering: shared transcript state library (published as
+  # @vexaai/transcript-rendering, dist/ tracked). core/meetings/modules/mixed-pipeline's
+  # eval-ui serves its dist at runtime and its test suite lstat()s the path — absent from
+  # the carve, `pnpm test` fails in vexa-core (v0.12.26 train, run 33667209852).
+  packages
   docs/docs
   package.json
   pnpm-workspace.yaml
@@ -29,9 +37,10 @@ export CARVE_INCLUDE=(
   turbo.json
   tsconfig.base.json
   README.md
-  SECURITY.md
-  security-insights.yml
-  security
+  # SECURITY.md, security-insights.yml and security/ are GOVERNANCE-OWNED by vexa-core
+  # (ADR-0025 §1: home = vexa-core, changes originate there and back-sync). Replaying the
+  # mono copies clobbered vexa-core-side edits — e.g. the Preeti Gupta maintainer entry in
+  # security-insights.yml (vexa-core#37). Left out of INCLUDE so sync.sh never touches them.
   architecture.calm.json
   calm
   .gitignore
@@ -73,7 +82,7 @@ export CARVE_MAILMAP="$MONO/carve/mailmap.txt"
 # --- Carve-owned override files (copied over the mono's after materialize) ---
 # Each line: "<override-file-under-carve/overrides/>  <dest-path-in-carve>"
 export CARVE_OVERRIDES=(
-  "Makefile:Makefile"          # compose-only entrypoint (mono's references removed deploy/lite)
+  bot-eval-README.md:core/meetings/services/bot/eval/README.md
   # De-robot the Vexum surface (vexa-platform#239): docs.core.vexa.ai stays up for
   # humans, invisible to robots. These four files + the docs.json seo transform in
   # transform.sh are PROJECTION-ONLY — they must never appear in the mono's docs/docs

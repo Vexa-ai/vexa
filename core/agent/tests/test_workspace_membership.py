@@ -106,7 +106,7 @@ def test_is_member_and_require_role_lattice(tmp_path):
 def test_mint_stores_only_hash_and_returns_token_once(tmp_path):
     _init_ws(tmp_path, "wsA")
     minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="owner1")
-    invites = json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())
+    invites = json.loads(m.invites_path(tmp_path, "wsA").read_text())
     assert len(invites) == 1
     assert invites[0]["hash"] == m.hash_token(minted.token)
     assert "token" not in invites[0]  # only the hash is persisted
@@ -126,7 +126,7 @@ def test_accept_grants_membership_both_stores(tmp_path):
     assert m.is_member(tmp_path, "wsA", "u2") == "contributor"
     assert idx.list("u2")[0]["workspace_id"] == "wsA"
     # a use was consumed
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 1
 
 
 def test_member_records_carry_verified_email(tmp_path):
@@ -174,7 +174,7 @@ def test_preview_invite_reads_terms_without_granting(tmp_path):
     assert pv["created_by"] == "owner1"
     # no membership was created and no use consumed
     assert m.is_member(tmp_path, "wsA", "someone") is None
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 0
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 0
     # unknown token → None (never enumerates workspaces)
     assert m.preview_invite(tmp_path, "not-a-real-token") is None
 
@@ -215,14 +215,14 @@ def test_double_accept_is_idempotent(tmp_path):
     assert res["already_member"] is True
     members = json.loads((tmp_path / "wsA" / m.MEMBERS_FILE).read_text())
     assert [x["subject"] for x in members].count("u2") == 1
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 1
 
 
 def test_revoked_invite_rejected(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
     minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o")
-    invite_id = json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["id"]
+    invite_id = json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["id"]
     m.revoke_invite(tmp_path, "wsA", invite_id)
     with pytest.raises(m.MembershipError) as e:
         m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
@@ -411,7 +411,7 @@ def test_restricted_refuses_non_listed_admits_listed(tmp_path):
                         subject_email="bob@vexa.ai", index=idx)
     assert e.value.status == 403
     # the use was NOT consumed by the refused attempt
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 0
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 0
     # a listed user (case-insensitive match) is admitted
     res = m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u_alice",
                           subject_email="alice@vexa.ai", index=idx)
@@ -494,7 +494,7 @@ def test_concurrent_accept_max_uses_one_grants_exactly_one(tmp_path):
     members = json.loads((tmp_path / "wsA" / m.MEMBERS_FILE).read_text())
     non_owner = [x for x in members if x["role"] != "owner"]
     assert len(non_owner) == 1, f"members.json over-granted: {members}"
-    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+    assert json.loads(m.invites_path(tmp_path, "wsA").read_text())[0]["uses"] == 1
 
 
 # ── ATTACK: agent SELF-COMMITS a policy tamper mid-turn (vector 3, the guard bypass) ──────────────
@@ -631,3 +631,76 @@ def test_require_gateway_identity_flag_rejects_direct_edge(tmp_path, monkeypatch
     r2 = c.get("/api/workspace/members?workspace_id=wsA",
                headers={"X-User-Id": "attacker", "X-Gateway-Verified": "1"})
     assert r2.status_code == 403
+
+
+# ── the listing must not lose a grant when the derived index is unreachable ──────────────────────
+class _DeadIndex:
+    """A ``MembershipIndex`` whose remote edge is down — the live failure on the dogfood deploy, where
+    agent-api held the compose-default internal secret and every call to admin-api answered 403."""
+
+    def add(self, subject, workspace_id, role, added_at):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    def remove(self, subject, workspace_id):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    def list(self, subject):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+
+def test_api_shared_list_survives_a_dead_index(tmp_path):
+    """create → list must show the row even when the index mirror is unreachable.
+
+    The regression: ``POST /api/workspace/shared/new`` returned 201 (the authoritative
+    policy/members.json write succeeded and the index write is best-effort by contract), but the
+    listing read ONLY the index and swallowed its error into ``{"memberships": []}`` — so the creator
+    could not see the workspace they had just been made owner of, and the failure was reported as
+    "you have no shared workspaces" instead of as an error."""
+    c = _client(tmp_path, _DeadIndex())
+
+    created = c.post("/api/workspace/shared/new", headers=_h("owner1"), json={"name": "Deal Room"})
+    assert created.status_code == 201, created.text
+    wid = created.json()["workspace_id"]
+    assert created.json()["role"] == "owner"
+
+    listed = c.get("/api/workspace/shared", headers=_h("owner1"))
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    rows = {r["workspace_id"]: r for r in body["memberships"]}
+    assert wid in rows, f"the grant just made is invisible: {body}"
+    assert rows[wid]["role"] == "owner"
+    # the degradation is SAID, not swallowed — an empty-looking listing must be distinguishable
+    # from a healthy one that genuinely has nothing in it.
+    assert body["index_degraded"] is True
+
+    # and it stays scoped to the caller: another subject sees nothing.
+    other = c.get("/api/workspace/shared", headers=_h("stranger")).json()
+    assert other["memberships"] == []
+
+
+def test_api_shared_list_unions_index_and_git_store(tmp_path):
+    """An index row for a workspace that is NOT on this host (another host's dir) is still listed —
+    the reconciliation ADDS from the git store, it never subtracts using it."""
+    _init_ws(tmp_path, "wsLocal")
+    idx = m.InMemoryMembershipIndex()
+    m.ensure_owner(tmp_path, "wsLocal", "owner1", index=idx)
+    idx.add("owner1", "wsElsewhere", "contributor", "2026-01-01T00:00:00Z")
+
+    body = _client(tmp_path, idx).get("/api/workspace/shared", headers=_h("owner1")).json()
+    assert {r["workspace_id"] for r in body["memberships"]} == {"wsLocal", "wsElsewhere"}
+    assert body["index_degraded"] is False
+    # no duplicate row for the workspace both stores know about
+    assert len([r for r in body["memberships"] if r["workspace_id"] == "wsLocal"]) == 1
+
+
+def test_list_memberships_skips_reserved_slugs(tmp_path):
+    """The authoritative scan honours the same reserved/dot namespace ``assert_shareable`` refuses,
+    so the SYSTEM + seed workspaces never surface as memberships."""
+    for slug in ("_global", "seed", ".attach", "wsReal"):
+        ws = tmp_path / slug / "policy"
+        ws.mkdir(parents=True)
+        (ws / "members.json").write_text(json.dumps([{"subject": "u1", "role": "owner"}]) + "\n")
+
+    got = m.list_memberships(tmp_path, "u1")
+    assert [r["workspace_id"] for r in got] == ["wsReal"]
+    assert m.list_memberships(tmp_path, "nobody") == []

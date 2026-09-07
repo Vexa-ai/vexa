@@ -21,6 +21,8 @@ flowchart LR
     postgres["postgres"]
     minio["minio"]
     dashboard["dashboard (deprecated)"]
+    flows_api["flows-api"]
+    flows_worker["flows-worker"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription

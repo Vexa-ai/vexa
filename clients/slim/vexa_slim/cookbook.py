@@ -61,25 +61,24 @@ async def _provision_token(admin_api: str, admin_token: str, email: str) -> str:
 
 async def agent_on_meeting(slim: Slim, native: str, *, meet_url: "str | None" = None,
                            platform: str = "google_meet") -> dict:
-    """Put an agent on a meeting: optionally send a bot (so a transcript flows), then start the copilot
-    processor. Returns the start result — the listening agent is now live."""
-    if meet_url:
-        await slim.meetings.send_bot(native, url=meet_url, platform=platform)
-    return await slim.agent.start_processing(native, platform=platform)
+    """Put a BOT on a meeting so a transcript flows. Returns the send result.
+
+    It used to do a second thing — start the copilot processor, so the transcript became notes and
+    cards. PRD decision 34 removed that producer; putting an AGENT on a meeting is now a `chat`
+    turn carrying an `active` meeting reference."""
+    if not meet_url:
+        return {"sent": False, "reason": "no meeting url — the bot is only sent when one is given"}
+    return await slim.meetings.send_bot(native, url=meet_url, platform=platform)
 
 
 async def listen_to_meeting(slim: Slim, native: str, *, seconds: float = 30.0,
                             meet_url: "str | None" = None, platform: str = "google_meet") -> Harvest:
     """The happy path as one call — returns the same `Harvest` whether the meeting is live or finished.
 
-    SOURCE-AGNOSTIC by design: the agent emits ONE envelope (notes/cards), carried live on redis and
-    persisted (same shape) to a durable file when finished — so a finished meeting folds to the SAME
-    `Harvest` a live one does. This verb folds the live redis stream (the finished-file fold is a
-    lower-level mechanism, not a cookbook verb)."""
+    The feed carries the meeting's TRANSCRIPT and nothing else (PRD decision 34 removed the
+    notes/cards producer that used to share it)."""
     await agent_on_meeting(slim, native, meet_url=meet_url, platform=platform)
-    out = await harvest(slim, native, seconds=seconds)   # live branch: fold the redis stream
-    await slim.agent.stop_processing(native, platform=platform)
-    return out
+    return await harvest(slim, native, seconds=seconds)
 
 
 async def meeting_doc(slim: Slim, native: str) -> "str | None":

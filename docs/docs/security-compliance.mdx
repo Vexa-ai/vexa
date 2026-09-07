@@ -13,11 +13,18 @@ transit a vendor's infrastructure. This page collects what a security review ask
   agents, the web workbench — runs on infrastructure you control ([Deployment](/deployment),
   [Kubernetes](/deployment-kubernetes)). Services bind to loopback; the gateway is the one
   front door, with an optional pre-auth edge layer — per-IP rate throttle, auto-ban of repeat
-  offenders, and static IP allow/deny — behind a `GUARD_ENABLED` kill switch. Self-hosted default
-  OFF; hosted/cloud runs it on. See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
-- **Air-gapped / zero egress.** Nothing phones home. Pair the stack with the
-  [self-hosted GPU transcription unit](/deployment#transcription-the-separate-gpu-unit) and
-  your own LLM endpoint and no request leaves your network.
+  offenders, and static IP allow/deny — behind a `GUARD_ENABLED` kill switch, **on by default on
+  every self-hosted path** (compose and Helm both ship it enabled; set `GUARD_ENABLED=false`
+  or `gateway.guard.enabled=false` to opt out). See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
+- **Self-hosted STT, no egress.** Pair the stack with the
+  [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) — bundled
+  GPU or CPU — and your own LLM endpoint, and the audio path never calls out: ✅ **Docker
+  Compose · Lite**, 🟡 **Kubernetes**, where the chart does not yet expose
+  `TRANSCRIPTION_MODEL` as a value and you set it on the meeting-api and terminal Deployments
+  via `extraEnv`, which the chart's own
+  [known boundaries](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md) state.
+  We have not run an install on a genuinely disconnected network, so we do not claim one: what
+  a procurement review can hold us to is self-hosted with no egress, not a certified air gap.
 - **Bring your own models.** LLM and speech-to-text endpoints are configuration
   ([Configuration](/configuration)); credential terms are documented in
   [Model credentials & licensing](/model-credentials-licensing).
@@ -47,6 +54,10 @@ transit a vendor's infrastructure. This page collects what a security review ask
 | [`license-exceptions.json`](https://github.com/Vexa-ai/vexa/blob/main/license-exceptions.json) | FINOS license gating: deps are Category-A permissive; every exception is explicit and reasoned. |
 | [`LICENSE`](https://github.com/Vexa-ai/vexa/blob/main/LICENSE) | Apache-2.0. |
 | CI gates | Isolation, contract seals, config contract, license audit, and a full-stack readiness proof run on every push (`scripts/gates.mjs`). |
+
+If you are the person who has to sign off on this dependency, [Architecture review](/architecture/evaluation)
+is the guided read of that table — what each artifact proves, what it does not, and
+[what running it costs](/architecture/evaluation#3-what-running-it-costs) — without asking us.
 
 ## Known gaps (honest)
 

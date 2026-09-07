@@ -128,3 +128,154 @@ def test_second_delete_never_re_stops_a_pre_active_bot():
         second = TestClient(app).delete(f"/bots/google_meet/once-{stage}", headers={"x-user-id": "7"})
         assert second.status_code == 404, f"{stage}: a redelivered stop must not re-trigger"
         assert len(pub.published) == published, f"{stage}: second DELETE re-published a leave command"
+
+
+# ── "explicit stop must be stop, evict" (founder ruling 2026-08-17) ──────────────────────────────
+#
+# A stop means the MEETING, not one container. `find_active` returns the newest row — enough for the
+# POST dedup, wrong for a stop: a SIBLING row on the same (user, platform, native) survived, and a
+# sibling still waiting in the lobby walked into the meeting after the user had said no. Siblings
+# are not hypothetical; they are the exact shape the auto-join sweep's duplicate guard exists for
+# (a manual "Send bot now" plus a calendar import that failed to adopt it — rows 26237 + 26251 on
+# one native id, live 2026-08-17).
+
+
+def _stopped(repo, user_id, platform, native):
+    rows = asyncio.run(repo.find_active_rows(user_id, platform, native))
+    return [row for row in rows if (row.get("data") or {}).get("stop_requested")]
+
+
+def test_stop_evicts_a_sibling_waiting_in_the_lobby():
+    """The founder's case: one bot is live, a second is still `awaiting_admission`. ONE stop takes
+    both down — flag, leave command, and (for the booting one) its workload."""
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    app = create_app(meeting_repo=repo, command_publisher=pub)
+    live = _seed(repo, user_id=7, platform="google_meet", native="mjm", status="active")
+    waiting = _seed(repo, user_id=7, platform="google_meet", native="mjm",
+                    status="awaiting_admission")
+
+    r = TestClient(app).delete("/bots/google_meet/mjm", headers={"x-user-id": "7"})
+    assert r.status_code == 200, r.text
+
+    stopped_ids = {row["id"] for row in _stopped(repo, 7, "google_meet", "mjm")}
+    assert stopped_ids == {live["id"], waiting["id"]}, (
+        "the stop left a sibling running — it will join the meeting the user just ended"
+    )
+
+    # each bot listens on its OWN meeting-scoped channel, so eviction means addressing it by id
+    channels = {chan for chan, _ in pub.published}
+    assert channels == {
+        f"bot_commands:meeting:{live['id']}",
+        f"bot_commands:meeting:{waiting['id']}",
+    }
+    # `also_stopped` names what the stop took BEYOND the row the caller would have gotten from
+    # `find_active` (the newest — here the waiting sibling). Reported so a duplicate bot is
+    # visible in the response and not merely in a log line.
+    assert r.json()["meeting_id"] == waiting["id"]
+    assert r.json()["also_stopped"] == [live["id"]]
+
+
+def test_stop_evicts_every_pre_active_sibling_and_preserves_each_stage():
+    """Eviction must not cost the #807 guarantee: each evicted row keeps the stage it died in."""
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    app = create_app(meeting_repo=repo, command_publisher=pub)
+    seeded = {
+        stage: _seed(repo, user_id=7, platform="google_meet", native="multi", status=stage)
+        for stage in ("requested", "joining", "awaiting_admission")
+    }
+
+    r = TestClient(app).delete("/bots/google_meet/multi", headers={"x-user-id": "7"})
+    assert r.status_code == 200, r.text
+
+    rows = {row["id"]: row for row in asyncio.run(repo.find_active_rows(7, "google_meet", "multi"))}
+    assert len(rows) == 3
+    for stage, meeting in seeded.items():
+        row = rows[meeting["id"]]
+        assert (row["data"] or {}).get("stop_requested") is True, f"{stage} survived the stop"
+        assert row["status"] == stage, f"{stage}: eviction overwrote the stage it died in (#807)"
+
+
+def test_stopped_siblings_never_re_dispatch_the_occurrence():
+    """The two halves meeting: every row the stop evicted classifies USER_STOPPED, so calendar sync
+    will not recreate the occurrence for ANY of them. Eviction without this would only move the
+    problem — the sibling dies now and is reborn on the next sync."""
+    from meeting_api.lifecycle.occurrence import Disposition, disposition
+
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    app = create_app(meeting_repo=repo, command_publisher=pub)
+    _seed(repo, user_id=7, platform="google_meet", native="reborn", status="active")
+    _seed(repo, user_id=7, platform="google_meet", native="reborn", status="awaiting_admission")
+
+    assert TestClient(app).delete(
+        "/bots/google_meet/reborn", headers={"x-user-id": "7"}
+    ).status_code == 200
+
+    for row in asyncio.run(repo.find_active_rows(7, "google_meet", "reborn")):
+        # the bots' own terminal events land later; the flag is what survives into them
+        for terminal in ("completed", "failed"):
+            assert disposition({**row, "status": terminal}) is Disposition.USER_STOPPED, (
+                "a stopped row whose terminal lands as %s must stay final for the occurrence"
+                % terminal
+            )
+
+
+def test_a_sibling_spawned_after_the_stop_is_still_evicted():
+    """The one-shot guard is PER ROW, not per request. A redelivered DELETE is a no-op (404), but a
+    NEW sibling that appeared after the first stop is a new bot heading for the same meeting — and
+    the user's stop already said no to that room."""
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    app = create_app(meeting_repo=repo, command_publisher=pub)
+    _seed(repo, user_id=7, platform="google_meet", native="late", status="active")
+
+    assert TestClient(app).delete(
+        "/bots/google_meet/late", headers={"x-user-id": "7"}
+    ).status_code == 200
+    published = len(pub.published)
+
+    # nothing new → the redelivery guard holds
+    assert TestClient(app).delete(
+        "/bots/google_meet/late", headers={"x-user-id": "7"}
+    ).status_code == 404
+    assert len(pub.published) == published
+
+    # a fresh sibling arrives → the stop reaches it
+    latecomer = _seed(repo, user_id=7, platform="google_meet", native="late", status="joining")
+    r = TestClient(app).delete("/bots/google_meet/late", headers={"x-user-id": "7"})
+    assert r.status_code == 200, r.text
+    assert (chan := f"bot_commands:meeting:{latecomer['id']}") in {c for c, _ in pub.published}, chan
+
+
+def test_stop_tears_down_an_evicted_siblings_workload():
+    """A booting sibling has not subscribed to its command channel yet, which is precisely why it
+    outlived the stop. The leave command alone cannot reach it — its workload must be torn down."""
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient
+
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    runtime = FakeRuntimeClient()
+    app = create_app(meeting_repo=repo, command_publisher=pub, runtime=runtime)
+    _seed(repo, user_id=7, platform="google_meet", native="tear", status="active")
+    booting = _seed(repo, user_id=7, platform="google_meet", native="tear", status="joining")
+    asyncio.run(repo.set_bot_container(meeting_id=booting["id"], bot_container_id="wl-booting"))
+
+    assert TestClient(app).delete(
+        "/bots/google_meet/tear", headers={"x-user-id": "7"}
+    ).status_code == 200
+    assert "wl-booting" in runtime.deleted, (
+        "the evicted sibling's workload survived — a bot nobody can command is still joining"
+    )
+
+
+def test_stop_marks_a_row_that_has_no_session_yet():
+    """A row spawned so recently that its session write has not landed still has to carry the user
+    intent — the flag is the only durable evidence, and without it the calendar recreates the
+    occurrence and sends another bot."""
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    app = create_app(meeting_repo=repo, command_publisher=pub)
+    sessionless = asyncio.run(repo.create_meeting(
+        user_id=7, platform="google_meet", native_meeting_id="nosess", data={}
+    ))
+
+    r = TestClient(app).delete("/bots/google_meet/nosess", headers={"x-user-id": "7"})
+    assert r.status_code == 200, r.text
+    rows = {row["id"]: row for row in asyncio.run(repo.find_active_rows(7, "google_meet", "nosess"))}
+    assert (rows[sessionless["id"]]["data"] or {}).get("stop_requested") is True

@@ -71,7 +71,12 @@ def test_git_remote_status_reports_ahead_after_a_local_commit(tmp_path):
     c = _client(tmp_path)
     body = c.get("/api/workspace/git-remote-status", headers=H).json()
     assert body["has_home"] is True and body["remote"] == "origin"
-    assert body["ahead"] == 1 and body["behind"] == 0 and body["tracked"] is True
+    # TWO, not one. Booting the app runs the workspace-id migration, which writes and COMMITS
+    # `.vexa/workspace.json` into every workspace (PRD decision 26.1). That commit is deliberate: a
+    # clone carries only TRACKED files, and an attached repo stays the same workspace precisely
+    # because its id is in the repo — so a workspace with a home is one commit ahead of it after
+    # the first boot that migrates it, and the next push carries the identity with it.
+    assert body["ahead"] == 2 and body["behind"] == 0 and body["tracked"] is True
 
 
 def test_manage_is_scoped_to_the_header_identity(tmp_path):
@@ -94,12 +99,55 @@ def test_purpose_roundtrip_via_routes(tmp_path):
 
 def test_push_via_route_fast_forwards(tmp_path):
     ws = _seed_primary(tmp_path, "u_jane", with_origin=True)
-    (ws / "note.md").write_text("local\n"); _run(ws, "add", "-A"); sha = None
-    _run(ws, "commit", "-q", "-m", "local"); sha = _run(ws, "rev-parse", "HEAD")
-    c = _client(tmp_path)
+    (ws / "note.md").write_text("local\n"); _run(ws, "add", "-A")
+    _run(ws, "commit", "-q", "-m", "local")
+    c = _client(tmp_path)                    # boot: the workspace-id migration commits the identity
+    sha = _run(ws, "rev-parse", "HEAD")      # …so HEAD is read AFTER it, not before
     r = c.post("/api/workspace/push", headers=H, json={"token": "ghp_x"})
     assert r.status_code == 200, r.text
     assert r.json()["head_sha"] == sha
     # status now in sync
     body = c.get("/api/workspace/git-remote-status", headers=H).json()
     assert body["ahead"] == 0
+
+
+# ── the company layer: a state, not a 404 the client renders in red ───────────────────────────────
+def _seed_global(root: Path) -> Path:
+    g = root / "_global"
+    g.mkdir(parents=True)
+    _run(g, "init", "-q", "-b", "main"); _run(g, "config", "user.email", "t@t"); _run(g, "config", "user.name", "t")
+    (g / "README.md").write_text("# Company\n"); _run(g, "add", "-A"); _run(g, "commit", "-q", "-m", "seed")
+    return g
+
+
+def test_git_remote_status_answers_for_the_company_layer(tmp_path):
+    """`_global` is nobody's slot and nobody's membership, so `_manage_dir` answered 404 — and the
+    workspace README's front page, having asked a true question and been told the workspace does not
+    exist, rendered `not readable` with `Could not read the GitHub state.` in red, to the
+    administrator, about a tier that simply has no remote (Vexa-ai/vexa#1628 point 3).
+
+    *No repo attached* is a STATE. This route now resolves the company layer through the READ gate —
+    the same call `/api/workspace/git` beside it already uses for `_global` — so the client is told
+    the truth and can render it as the ordinary thing it is."""
+    _seed_primary(tmp_path, "u_jane", with_origin=False)
+    _seed_global(tmp_path)
+
+    r = _client(tmp_path).get("/api/workspace/git-remote-status?slug=_global", headers=H)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["has_home"] is False and r.json()["branch"] == "main"
+
+
+def test_the_company_layer_is_the_only_widening(tmp_path):
+    """The fallback is one slug, deliberately. `_read_target` falls through to another person's DESK
+    on a read (the 2026-09-02 ruling), so a general fallback here would start answering with somebody
+    else's remote URL — a seam change nobody asked for. Every other slug still goes through
+    `_manage_dir`, and every WRITE (push · pull · detach) always did."""
+    _seed_primary(tmp_path, "u_jane", with_origin=False)
+    _seed_primary(tmp_path, "u_someone_else", with_origin=True)
+    _seed_global(tmp_path)
+    c = _client(tmp_path)
+
+    assert c.get("/api/workspace/git-remote-status?slug=u_someone_else", headers=H).status_code == 404
+    assert c.get("/api/workspace/git-remote-status?slug=nope", headers=H).status_code == 404
+    assert c.get("/api/workspace/git-remote-status?slug=_global", headers=H).status_code == 200

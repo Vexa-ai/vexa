@@ -48,68 +48,15 @@ interface SegmentDTO {
   text?: string | null;
 }
 
-/** A persisted processed note from the durable store (`data.processed.views[].doc.notes[]`,
- *  written by meeting-api's db-writer from the copilot's proc stream). SAME producer and shape as
- *  the live SSE `note` event payload — {id, speaker, chapter, text, t?, pass, frozen}. */
-export interface ProcessedNoteDTO {
-  id: string;
-  speaker?: string;
-  chapter?: string;
-  text: string;
-  t?: number;
-  tsMs?: number;   // absent in the durable store (live-only anchor); optional so the merged union renders
-  pass?: number;
-  frozen?: boolean;
-}
-
-/** The copilot view id inside data.processed.views[] (mirrors meeting-api's PROC_VIEW_ID). */
-const COPILOT_NOTES_VIEW_ID = "copilot-notes";
-
-interface ProcessedViewDTO { id?: string; doc?: { notes?: unknown[] } | null }
 interface TranscriptResponseDTO {
   segments?: SegmentDTO[];
-  data?: { processed?: { views?: ProcessedViewDTO[] } | null } | null;
 }
 
-/** Both durable halves of a meeting's transcript response: the raw segments (mapped for the
- *  transcript pane) and the copilot's persisted processed notes. */
+/** The durable half of a meeting's transcript response: the raw recorded segments, mapped for the
+ *  transcript pane. There is no second, "processed" body — PRD decision 34 removed the in-product
+ *  inference pipeline that produced it, so `data.processed` has no producer and is not read. */
 export interface DurableTranscript {
   lines: TranscriptLine[];
-  notes: ProcessedNoteDTO[];
-}
-
-/** Pull the copilot-notes view's notes out of a transcript response body. Exported for tests. */
-export function processedNotesOf(body: TranscriptResponseDTO | null | undefined): ProcessedNoteDTO[] {
-  const views = body?.data?.processed?.views;
-  if (!Array.isArray(views)) return [];
-  const view = views.find((v) => v?.id === COPILOT_NOTES_VIEW_ID);
-  const raw = view?.doc?.notes;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
-    .map((n) => ({
-      id: String(n.id ?? "").trim(),
-      speaker: typeof n.speaker === "string" ? n.speaker : undefined,
-      chapter: typeof n.chapter === "string" ? n.chapter : undefined,
-      text: typeof n.text === "string" ? n.text : "",
-      t: typeof n.t === "number" && Number.isFinite(n.t) ? n.t : undefined,
-      pass: typeof n.pass === "number" ? n.pass : undefined,
-      frozen: typeof n.frozen === "boolean" ? n.frozen : undefined,
-    }))
-    .filter((n) => n.id && n.text.trim());
-}
-
-/** Merge live note deltas OVER a durable seed by note id (the backend's own merge rule — a live
- *  re-emit of a persisted note updates it in place, never duplicates). Seed order is preserved;
- *  notes only seen live append in arrival order. Exported for tests. */
-export function mergeNotesById<T extends { id: string }>(seed: T[], live: T[]): T[] {
-  if (!seed.length) return live;
-  if (!live.length) return seed;
-  const seedIds = new Set(seed.map((n) => n.id));
-  const liveById = new Map(live.map((n) => [n.id, n]));
-  const out: T[] = seed.map((n) => liveById.get(n.id) ?? n);
-  for (const n of live) if (!seedIds.has(n.id)) out.push(n);
-  return out;
 }
 
 function formatTranscriptTime(start?: number | null): string {
@@ -129,6 +76,9 @@ function formatTranscriptTime(start?: number | null): string {
 const LIVE_STATUSES = new Set(["active", "joining", "requested", "awaiting_admission", "needs_help", "stopping"]);
 
 let meetings: MeetingMock[] = [];
+let loaded = false;        // a snapshot has come back at least once — an id absent from the list is then
+                           // genuinely unknown (not merely not-fetched-yet), which is what lets a meeting
+                           // route render a not-found state instead of a forever-"Connecting…" shell.
 let wsConnected = false;   // the live meeting.status stream's connection state — part of the store's external state
 const subs = new Set<() => void>();
 let started = false;
@@ -198,7 +148,31 @@ function toMock(d: MeetingRowDTO): MeetingMock {
 
 /** ONE snapshot fetch of the real meetings list (gateway → meeting-api). Seeds / re-seeds the store; the
  *  live deltas thereafter arrive over the WebSocket. Called once on mount and on each (re)connect. */
-async function snapshot() {
+/** Coalesce snapshot bursts. `snapshot()` is fired on mount, on every WS (re)connect, and by every
+ *  status frame naming a row the store does not hold — so anything that repeats upstream becomes a
+ *  request storm here. It did: a gateway close-loop on 2026-09-02 turned one idle browser into 519
+ *  `GET /api/meetings` calls in three minutes, and a store notification on every connectedness
+ *  flip, which flickered the rail under the founder while he was using it.
+ *
+ *  The backoff bug that drove that loop is fixed in `gatewayWS.ts`, but this is the layer that
+ *  AMPLIFIED it, and it should not amplify the next one either. One in-flight snapshot at a time;
+ *  a call arriving while one is running sets a trailing flag and re-runs once when it lands, so a
+ *  burst of N collapses to at most 2 requests and never loses the final state. */
+let snapInFlight = false;
+let snapPending = false;
+
+async function snapshot(): Promise<void> {
+  if (snapInFlight) { snapPending = true; return; }
+  snapInFlight = true;
+  try {
+    await snapshotOnce();
+  } finally {
+    snapInFlight = false;
+    if (snapPending) { snapPending = false; void snapshot(); }
+  }
+}
+
+async function snapshotOnce() {
   const revision = ++storeRevision;
   try {
     const r = await fetch("/api/meetings", { cache: "no-store" });
@@ -213,12 +187,15 @@ async function snapshot() {
     const key = (m: MeetingMock[]) => m.map((x) =>
       `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
-    if (key(next) !== key(meetings)) {
+    const wasLoaded = loaded;
+    loaded = true;
+    if (!wasLoaded || key(next) !== key(meetings)) {
       meetings = next;
       subs.forEach((f) => f());
     }
   } catch {
-    /* offline — keep last known */
+    /* offline — keep last known, and stay UNLOADED: an unreachable list must not make every meeting
+       look deleted. The view keeps resolving until a snapshot actually answers. */
   }
 }
 
@@ -271,18 +248,17 @@ function ensureStarted() {
   });
 }
 
-const EMPTY_DURABLE: DurableTranscript = { lines: [], notes: [] };
+const EMPTY_DURABLE: DurableTranscript = { lines: [] };
 
 /** Fetch a meeting's DURABLE transcript over REST (gateway → meeting-api): the recorded segments
- *  for the transcript pane PLUS the copilot's persisted processed notes (data.processed.views —
- *  the copilot-notes view). For a past meeting this is THE source; for a live one it seeds
+ *  for the transcript pane. For a past meeting this is THE source; for a live one it seeds
  *  whatever was persisted before the client connected. Returns empties on error.
  *
  *  P0 (wrong-row hydration fix): fetch by the meetings-domain ROW id via
  *  `GET /api/transcripts/by-id/{meetingId}` (owner-scoped downstream). The native path
  *  (`/transcripts/{platform}/{native}`) resolves to the NEWEST row for that native, so a user with
- *  several rows on the same link always read the latest — the notes of an OLDER row vanished. Fetching
- *  by the exact row id returns THAT row's segments + processed notes, never a sibling's (and never
+ *  several rows on the same link always read the latest — an OLDER row's segments vanished. Fetching
+ *  by the exact row id returns THAT row's segments, never a sibling's (and never
  *  another tenant's). `meetingId` is the row id the mock now carries as `id`. */
 export async function fetchDurableTranscript(meetingId: string): Promise<DurableTranscript> {
   try {
@@ -293,14 +269,13 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
     const lines = list
       .filter((s) => (s.text ?? "").trim())
       .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
-    return { lines, notes: processedNotesOf(body) };
+    return { lines };
   } catch {
     return EMPTY_DURABLE;
   }
 }
 
-/** Fetch a PAST meeting's recorded transcript lines (segments only), by the ROW id. Kept for callers
- *  that don't need the processed notes. */
+/** Fetch a PAST meeting's recorded transcript lines by the ROW id. */
 export async function fetchTranscript(meetingId: string): Promise<TranscriptLine[]> {
   return (await fetchDurableTranscript(meetingId)).lines;
 }
@@ -321,6 +296,36 @@ export function refreshMeetings(): void {
   void snapshot();
 }
 
+/** BIND-TIME REPAIR — the id that arrives before the row does.
+ *
+ *  A meeting row created MID-SESSION (the chat sends a bot; meeting-api makes row 132) does not
+ *  enter this store until something re-snapshots. `applyFrame` re-snapshots on a `meeting.status`
+ *  frame naming an unknown row, but that frame either does not fire on creation or races the
+ *  subscription — so whatever binds the new id first (a chat's `meeting`, a `meeting:` artifact, a
+ *  `?meeting=` deeplink, a chip) is holding an id this list cannot resolve, and the canvas called
+ *  that "Meeting not found" for a meeting the gateway was serving 200.
+ *
+ *  So BINDING an unknown id ASKS, once. Throttled per id, because every one of those call sites
+ *  fires from a render path: the amplification lesson `snapshot()` already carries (2026-09-02, one
+ *  idle browser turned into 519 `GET /api/meetings` in three minutes) counts double for something a
+ *  re-render can trigger. A row that is PRESENT costs nothing and clears its own throttle, so an id
+ *  that goes away and comes back is asked for again rather than remembered as hopeless. */
+const REBIND_ASK_MS = 10_000;
+const askedFor = new Map<string, number>();
+export function ensureMeetingKnown(id: string | null | undefined): void {
+  const key = (id ?? "").trim();
+  if (!key || typeof window === "undefined") return;
+  // Match the way every consumer addresses a meeting: the ROW id, or the native code a deeplink or
+  // a chip carries. Either one being present means there is nothing to ask for.
+  if (meetings.some((m) => m.id === key || m.native_id === key)) { askedFor.delete(key); return; }
+  const now = Date.now();
+  const last = askedFor.get(key);
+  if (last !== undefined && now - last < REBIND_ASK_MS) return;
+  for (const [k, at] of askedFor) if (now - at >= REBIND_ASK_MS) askedFor.delete(k);
+  askedFor.set(key, now);
+  void snapshot();
+}
+
 /** Subscribe a component to the live `meeting.status` stream's CONNECTION state. `false` means the
  *  rows are the last snapshot, not live truth — state-bearing controls (Stop bot …) must degrade
  *  to indeterminate/disabled until it is `true` again (ws.v1 is the authoritative state channel). */
@@ -329,6 +334,18 @@ export function useLiveMeetingsConnection(): boolean {
   return useSyncExternalStore(
     (cb) => { subs.add(cb); return () => subs.delete(cb); },
     () => wsConnected,
+    () => false,
+  );
+}
+
+/** Subscribe a component to whether the meetings list has ANSWERED at least once. `false` means "still
+ *  resolving"; `true` means the list is authoritative, so an id missing from it does not exist for this
+ *  user (deleted, never existed, or owned by someone else and not shared). */
+export function useLiveMeetingsLoaded(): boolean {
+  ensureStarted();
+  return useSyncExternalStore(
+    (cb) => { subs.add(cb); return () => subs.delete(cb); },
+    () => loaded,
     () => false,
   );
 }

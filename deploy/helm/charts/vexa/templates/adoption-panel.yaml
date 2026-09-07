@@ -1,0 +1,71 @@
+{{- if .Values.adoptionPanel.enabled }}
+{{- /*
+THE ADOPTION PANEL — three ConfigMaps, no workload, no Service, no network policy to write.
+
+WHAT THIS DOES NOT DO: deploy Grafana. Standing an observability stack inside a central bank's
+cluster is that bank's platform decision, not a side effect of installing a meeting bot — and
+the delivery kit already carries a declared hole about shipping monitoring CRDs it does not
+mirror (`kube-prometheus-stack-not-mirrored`). So the chart publishes the two artifacts and
+stops: a Grafana that already runs with the standard sidecar picks them up by label, and an
+operator with no sidecar lifts the JSON out with one kubectl.
+
+WHY THE CREDENTIALS ARE NOT HERE: the datasource file is emitted VERBATIM, with ${VAR}
+placeholders Grafana expands itself. The chart resolves only the four non-secret values — host,
+port, and the two database names — into a separate env ConfigMap. The password stays in the
+Secret it already lives in and is never rendered by this chart, which is the same discipline
+flows.yaml states for its own DSN.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "adoption-dashboard") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: adoption-panel
+    {{- /* The label the standard Grafana sidecar watches for dashboards to import. */}}
+    {{ .Values.adoptionPanel.dashboardLabel }}: "1"
+  {{- with .Values.adoptionPanel.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  adoption-panel.json: |-
+{{ .Files.Get "dashboards/adoption-panel.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "adoption-datasource") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: adoption-panel
+    {{ .Values.adoptionPanel.datasourceLabel }}: "1"
+data:
+  vexa-adoption-datasources.yaml: |-
+{{ .Files.Get "dashboards/datasource-template.yaml" | indent 4 }}
+---
+{{- /*
+The non-secret half of the datasource's environment, resolved from this release. Mount it into
+Grafana with `envFrom: [configMapRef: {name: <this>}]` and add VEXA_DB_USER/VEXA_DB_PASSWORD
+from the Postgres Secret. Kept separate from the datasource ConfigMap so that the file above
+stays byte-identical to the one in the repository — it is the same artifact either way, which
+is what makes it reviewable.
+
+VEXA_DB_HOST deliberately resolves through `vexa.dbHostEffective`, i.e. through PgBouncer when
+PgBouncer is enabled, exactly like every service in this chart. A reporting datasource opening
+its own direct connections past the pooler is how a dashboard becomes an incident.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "adoption-panel-env") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: adoption-panel
+data:
+  VEXA_DB_HOST: {{ include "vexa.dbHostEffective" . | quote }}
+  VEXA_DB_PORT: {{ include "vexa.dbPortEffective" . | quote }}
+  VEXA_APP_DB: {{ .Values.database.name | quote }}
+  VEXA_FLOWS_DB: {{ .Values.flows.databaseName | quote }}
+  VEXA_DB_SSLMODE: {{ .Values.database.sslMode | quote }}
+{{- end }}

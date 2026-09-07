@@ -88,7 +88,7 @@ class _AgentToApi:
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
     monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")          # no gateway in-process → fallback subject
-    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_repo_root() / "core" / "agent" / "workspace-seeds" / "default"))
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_repo_root() / "behavior" / "workspaces" / "default"))
     scheduler = _FakeScheduler()
     app = create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),

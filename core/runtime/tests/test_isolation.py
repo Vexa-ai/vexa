@@ -63,11 +63,11 @@ def test_plan_none_for_workspaceless_workloads():
 def test_shared_gid_allocates_once_and_persists(tmp_path):
     root = str(tmp_path)
     g1 = iso._shared_gid(root, "deal-9")
-    g2 = iso._shared_gid(root, "oenb-1424e3")
+    g2 = iso._shared_gid(root, "acme-1424e3")
     assert g1 == GID_BASE and g2 == GID_BASE + 1
     assert iso._shared_gid(root, "deal-9") == g1          # stable on re-ask
     reg = json.loads((tmp_path / iso.GID_REGISTRY).read_text())
-    assert reg == {"deal-9": g1, "oenb-1424e3": g2}
+    assert reg == {"deal-9": g1, "acme-1424e3": g2}
 
 
 # ── apply (effects recorded — a non-root test cannot chown) ───────────────────

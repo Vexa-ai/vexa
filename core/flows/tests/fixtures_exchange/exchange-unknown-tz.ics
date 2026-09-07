@@ -1,0 +1,15 @@
+BEGIN:VCALENDAR
+PRODID:-//Microsoft Exchange Server 2019//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VTIMEZONE
+TZID:Customized Time Zone
+END:VTIMEZONE
+BEGIN:VEVENT
+DTSTART;TZID="Customized Time Zone":20300901T110000
+UID:custom-tz-0001@oenb.at
+ORGANIZER:mailto:anna.bank@oenb.at
+SUMMARY:Hand-built zone
+LOCATION:https://meet.google.com/cus-tomz-one
+END:VEVENT
+END:VCALENDAR

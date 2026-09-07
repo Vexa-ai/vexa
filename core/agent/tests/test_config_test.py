@@ -6,7 +6,19 @@ token, unreachable backend, and the happy paths.
 """
 import json
 
+import pytest
+
 from control_plane import config_test as ct
+
+
+@pytest.fixture(autouse=True)
+def _allow_the_fixture_gateways(monkeypatch):
+    """The endpoint the Test button probes now passes the SAME operator allow-list the dispatch
+    applies (F84) — a button that greens a host the turn refuses is the "certifies a config the
+    turn will not use" defect. These fixtures' hosts are allow-listed explicitly, which is also how
+    an operator enables their own gateway."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW",
+                       "gw.example,gw,transcription.vexa.ai,api.openai.com,t.vexa.ai,t,x")
 
 
 # ── subscription file ─────────────────────────────────────────────────────────────────────────
@@ -38,6 +50,35 @@ def test_subscription_garbage_file(tmp_path):
     p.write_text("not json")
     out = ct.test_subscription_credentials(str(p))
     assert not out["ok"] and ct.KEYCHAIN_REFRESH in out["summary"]
+
+
+def test_subscription_resolves_the_mount_per_call_not_at_import(tmp_path, monkeypatch):
+    """The 32h dogfood outage (2026-08-31): the path was a module constant bound into a DEFAULT
+    ARGUMENT, so it was decided once at import — and under the old single-FILE bind that also
+    pinned an inode. The claude CLI refreshes a token by rename(2)-ing a NEW inode over
+    .credentials.json, so this surface went on grading a token that no longer existed. Called with
+    no argument it must re-resolve, and it must see the replacement."""
+    from shared import host_claude as hc
+
+    d = tmp_path / "host-claude"
+    d.mkdir()
+    monkeypatch.setattr(hc, "CREDENTIALS_DIR_MOUNT", str(d))
+    monkeypatch.setattr(hc, "LEGACY_CREDENTIALS_MOUNT", str(tmp_path / "absent"))
+    creds = d / hc.CREDENTIALS_FILENAME
+
+    creds.write_text(json.dumps({"claudeAiOauth": {"expiresAt": 1_000_000}}))
+    expired = ct.test_subscription_credentials(now=2_000.0)
+    assert not expired["ok"] and expired.get("expired") is True
+
+    # the refresh, exactly as the CLI performs it — a new inode moved over the old name
+    tmp = d / ".credentials.json.tmp"
+    tmp.write_text(json.dumps({"claudeAiOauth": {"expiresAt": 9 * 3600 * 1000}}))
+    tmp.rename(creds)
+
+    refreshed = ct.test_subscription_credentials(now=0.0)
+    assert refreshed["ok"] and refreshed["expires_in_hours"] == 9.0, (
+        "a token refreshed on the host must be visible WITHOUT recreating the container"
+    )
 
 
 # ── custom endpoint ───────────────────────────────────────────────────────────────────────────

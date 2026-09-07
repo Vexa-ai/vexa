@@ -79,7 +79,7 @@ env:
 			echo "Seeding $(ENV_FILE) from deploy/compose/.env"; cp "$(ROOT)/deploy/compose/.env" "$(ENV_FILE)"; \
 		else \
 			echo "Creating minimal $(ENV_FILE) (edit TRANSCRIPTION_SERVICE_* for transcripts)"; \
-			printf 'ADMIN_TOKEN=changeme\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=v012\n' > "$(ENV_FILE)"; \
+			printf 'ADMIN_TOKEN=\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=v012\n' > "$(ENV_FILE)"; \
 		fi; \
 	fi
 
@@ -95,10 +95,13 @@ preflight:
 ## lost — which once shipped `docker run … $IMG` with an EMPTY image (vexa-lite never created,
 ## every front door down). Keep all commentary OUT of the recipe body; annotate here instead.
 ##
-## Claude-credential automount (C2/#502): if the host has ~/.claude/.credentials.json, mount it and
-## point HOST_CLAUDE_CREDENTIALS at the IN-CONTAINER path — in LITE the process backend reads the
-## file directly. (Compose is the opposite: there the var is a docker-HOST path the compose file
-## mounts. Don't copy the semantics across.)
+## Claude-credential automount (C2/#502): if the host has ~/.claude/.credentials.json, mount the
+## DIRECTORY that holds it and point HOST_CLAUDE_CREDENTIALS at the IN-CONTAINER path inside that
+## mount — in LITE the process backend reads the file directly. (Compose is the opposite: there the
+## var is a docker-HOST path the compose file mounts. Don't copy the semantics across.)
+## It is the DIRECTORY, not the file, because a single-file bind pins the inode it was created with
+## and the CLI refreshes the token by rename(2)-ing a NEW inode over .credentials.json — lite is a
+## long-lived container, so a file bind would serve the pre-refresh token until the next restart.
 ##
 ## `envv` strips an INLINE COMMENT and trailing space from a .env value. `.env.example` once shipped
 ## `ADMIN_TOKEN=dev-admin-token   # admin-api auth…`; a bare `cut -d= -f2-` kept the comment, and the
@@ -114,7 +117,7 @@ up: preflight
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
-	ADMIN_TK=$$(envv ADMIN_TOKEN); ADMIN_TK=$${ADMIN_TK:-changeme}; \
+	ADMIN_TK=$$(envv ADMIN_TOKEN); \
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
@@ -122,7 +125,7 @@ up: preflight
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
 		echo "  Detected Claude subscription credentials — mounting into container"; \
-		CLAUDE_MOUNT="-v $$CLAUDE_CREDS:/var/lib/vexa/host-claude-credentials:ro -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude-credentials"; \
+		CLAUDE_MOUNT="-v $$HOME/.claude:/var/lib/vexa/host-claude:ro -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json"; \
 	else \
 		CLAUDE_MOUNT=""; \
 	fi; \

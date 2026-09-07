@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { TranscriptSegment } from './types';
-import type { TranscriptMessage } from './manager';
+import type { TranscriptMessage, TranscriptRetractMessage } from './manager';
 import { createTranscriptManager } from './manager';
 
 function seg(
@@ -120,5 +120,46 @@ describe('createTranscriptManager', () => {
 
     manager.clear();
     expect(manager.getSegments()).toHaveLength(0);
+  });
+});
+
+describe('createTranscriptManager — retraction', () => {
+  it('handleMessage clears a confirmed row on "transcript_retract"', () => {
+    const manager = createTranscriptManager();
+    manager.bootstrap([
+      seg('Alice', 0, 5, 'kept', { segment_id: 'a:0' }),
+      seg('Alice', 5, 10, 'withdrawn', { segment_id: 'a:1' }),
+    ]);
+
+    const msg: TranscriptRetractMessage = { type: 'transcript_retract', segment_ids: ['a:1'] };
+    const result = manager.handleMessage(msg);
+    expect(result).not.toBeNull();
+    expect(result!.map(s => s.text)).toEqual(['kept']);
+    expect(manager.getSegments().map(s => s.text)).toEqual(['kept']);
+  });
+
+  it('handleMessage clears a pending draft delivered by an earlier tick', () => {
+    const manager = createTranscriptManager();
+    manager.bootstrap([]);
+
+    const tick: TranscriptMessage = {
+      type: 'transcript',
+      speaker: 'csrc:201',
+      confirmed: [],
+      pending: [seg('csrc:201', 0, 3, 'forming', { segment_id: 'csrc-201:1000', completed: false })],
+    };
+    expect(manager.handleMessage(tick)).toHaveLength(1);
+
+    const result = manager.handleMessage({ type: 'transcript_retract', segment_ids: ['csrc-201:1000'] });
+    expect(result).toEqual([]);
+    expect(manager.getState().pendingBySpeaker.size).toBe(0);
+  });
+
+  it('handleMessage returns null when the retracted id is unknown', () => {
+    const manager = createTranscriptManager();
+    manager.bootstrap([seg('Alice', 0, 5, 'kept', { segment_id: 'a:0' })]);
+
+    expect(manager.handleMessage({ type: 'transcript_retract', segment_ids: ['nope'] })).toBeNull();
+    expect(manager.getSegments()).toHaveLength(1);
   });
 });

@@ -57,15 +57,19 @@ test("audits all prior refs and both target refs as absent", async (t) => {
     RELEASE_REPOSITORIES.length + DELTA_REPOSITORIES.length,
   );
   assert.ok(result.rows.every((row) => row.startsWith("ABSENT\t")));
-  assert.equal(readFileSync(outputPath, "utf8").trim().split("\n").length, 12);
+  assert.equal(
+    readFileSync(outputPath, "utf8").trim().split("\n").length,
+    RELEASE_REPOSITORIES.length + DELTA_REPOSITORIES.length,
+  );
   assert.equal(requests[0].options.method, "POST");
   assert.ok(requests.slice(1).every(({ options }) => options.method === "HEAD"));
+  const priorEnd = 1 + RELEASE_REPOSITORIES.length;
   assert.deepEqual(
-    requests.slice(1, 11).map(({ url }) => url.split("/").at(-1)),
+    requests.slice(1, priorEnd).map(({ url }) => url.split("/").at(-1)),
     Array(RELEASE_REPOSITORIES.length).fill("v0.12.18-260724.packet2"),
   );
   assert.deepEqual(
-    requests.slice(11).map(({ url }) => url.split("/").at(-1)),
+    requests.slice(priorEnd).map(({ url }) => url.split("/").at(-1)),
     Array(DELTA_REPOSITORIES.length).fill("v0.12.18-260724.packet3"),
   );
   assert.ok(

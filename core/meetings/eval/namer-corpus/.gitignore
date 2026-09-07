@@ -1,0 +1,8 @@
+# Normalized namer inputs carry real participant display names, and a tape's transcript carries
+# meeting content. Neither is ever committed; only the pseudonymized truth and the scorecard are.
+norm/
+raw/
+replay/
+maps/
+*.SCRATCH.jsonl
+spec.json

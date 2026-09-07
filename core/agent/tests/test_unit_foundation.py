@@ -114,16 +114,11 @@ def test_dispatcher_worker_env_carries_configured_model():
     assert env["VEXA_AGENT_MODEL"] == "deepseek/deepseek-v4-pro"
 
 
-def test_dispatcher_worker_env_carries_configured_meeting_model():
-    settings = load_settings(meeting_model="openrouter/free")
-    rt = _FakeRuntime()
-    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
-    d.dispatch(VALID_INV)
-    _, _profile, env = rt.spawned[0]
-    assert env["VEXA_MEETING_MODEL"] == "openrouter/free"
-
-
-def test_dispatcher_worker_env_carries_meeting_transcript_cursor():
+def test_dispatcher_worker_env_carries_no_transcript_stream(monkeypatch):
+    """PRD decision 34 fence. A `kind: meeting` dispatch used to build a whole second worker shape —
+    VEXA_TRANSCRIPT_STREAM + the meeting facts + a 4h idle window — for the copilot that tailed the
+    transcript and ran completion beats. Nothing mints that dispatch any more, and nothing consumes
+    that env: a caller that still sends one gets an ordinary worker."""
     settings = load_settings()
     rt = _FakeRuntime()
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
@@ -141,9 +136,9 @@ def test_dispatcher_worker_env_carries_meeting_transcript_cursor():
     }
     d.dispatch(inv)
     _, _profile, env = rt.spawned[0]
-    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:abc-defg-hij"
-    assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
-    assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(4 * 60 * 60)
+    for key in ("VEXA_TRANSCRIPT_STREAM", "VEXA_TRANSCRIPT_START_ID", "VEXA_MEETING_SESSION_UID",
+                "VEXA_MEETING_NUMERIC_ID", "VEXA_MEETING_MODEL"):
+        assert key not in env
 
 
 def test_local_identity_minter_emits_signed_dispatch_claims():
@@ -172,12 +167,11 @@ def test_dispatcher_rejects_nonconformant_invocation():
     assert not rt.spawned
 
 
-def test_dispatcher_worker_env_carries_numeric_meeting_id():
-    """`numeric_meeting_id` (the meetings-domain ROW id — unique per meeting run, unlike the native
-    id a re-sent bot reuses) is an INTERNAL routing hint: it must reach the worker env
-    (VEXA_MEETING_NUMERIC_ID → the proc:meeting:{numeric} processed-notes key the meeting-api
-    db-writer persists) while being STRIPPED before the sealed unit.v1 check
-    (MeetingRef is additionalProperties:false) — exactly like transcript_start_id."""
+def test_internal_meeting_hints_are_stripped_before_the_contract_check():
+    """`numeric_meeting_id` / `native_id` / `transcript_start_id` are agent-api INTERNAL routing
+    hints and the sealed MeetingRef is additionalProperties:false — so a dispatch carrying them must
+    still pass the unit.v1 check. (They no longer reach the worker env: the shape they configured
+    was the copilot's, removed by PRD decision 34.)"""
     settings = load_settings()
     rt = _FakeRuntime()
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
@@ -195,12 +189,8 @@ def test_dispatcher_worker_env_carries_numeric_meeting_id():
     }
     d.dispatch(inv)  # would raise at the seam if the hint leaked into the contract check
     _, _profile, env = rt.spawned[0]
-    assert env["VEXA_MEETING_NUMERIC_ID"] == "17"
-    # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
-    # (numeric_meeting_id) — unique per run — NOT the native id (which collides across tenants +
-    # a user's re-sends). The native id rides SEPARATELY as VEXA_MEETING_ID (the readable kg doc name).
-    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:17"          # carrier keys on the ROW id
-    assert env["VEXA_MEETING_ID"] == "abc-defg-hij"                 # native survives for display only
+    assert "VEXA_MEETING_NUMERIC_ID" not in env
+    assert "VEXA_TRANSCRIPT_STREAM" not in env
 
 # ── model-auth passthrough: agent-api env → worker spec env (the k8s/helm credential seam) ────
 
@@ -256,17 +246,15 @@ def _seed_ws(root, subject, marker="SEED"):
 
 
 def test_dispatcher_worker_env_carries_the_baseline_plus_system_tier(tmp_path):
-    """No activated extras, no _global configured → VEXA_MOUNTS is the three-tier stack degraded to the
-    private baseline + the always-present PRIVATE SYSTEM tier (AMENDMENT 4). The active portion is exactly
-    today's single-workspace behavior; _system is appended (create-if-absent, read-write)."""
+    """No activated extras still produces the complete global + private + system stack."""
     settings = load_settings(workspaces_dir=str(tmp_path / "workspaces"))
     rt = _FakeRuntime()
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     mounts = json.loads(env["VEXA_MOUNTS"])
-    assert [m["role"] for m in mounts] == ["private", "system"]  # no _global (unconfigured)
-    assert mounts[0]["primary"] is True and mounts[0]["path"].endswith("/u_jane")
+    assert [m["role"] for m in mounts] == ["global", "private", "system"]
+    assert mounts[1]["primary"] is True and mounts[1]["path"].endswith("/u_jane")
     sysm = mounts[-1]
     assert sysm["slug"] == "_system" and sysm["write"] is True and sysm["primary"] is False
 
@@ -352,22 +340,42 @@ class _FakeModelConfig:
 
 def test_dispatcher_model_config_overrides_deployment_models():
     """The subject's configured models beat the deployment defaults (Settings → Models wins)."""
-    settings = load_settings(agent_model="deployment-default", meeting_model="deployment-meeting")
+    settings = load_settings(agent_model="deployment-default")
     rt = _FakeRuntime()
-    mc = _FakeModelConfig({"model": "my-model", "meeting_model": "my-meeting"})
+    mc = _FakeModelConfig({"model": "my-model"})
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
     d.dispatch(VALID_INV)
     assert mc.asked == ["u_jane"]
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "my-model"
-    assert env["VEXA_LLM_MODEL"] == "my-model"          # completion default follows the chat model
-    assert env["VEXA_MEETING_MODEL"] == "my-meeting"
+    # ONE model (PRD decision 34): no second dial follows it into the worker.
+    assert "VEXA_LLM_MODEL" not in env and "VEXA_MEETING_MODEL" not in env
 
 
-def test_dispatcher_model_config_custom_mode_stamps_both_call_shapes():
-    """mode:custom points the harness (ANTHROPIC_*) AND the completion adapters (VEXA_LLM_*) at
-    the supplied gateway. Dispatch-stamped keys WIN downstream (docker_backend copies its own env
-    only for keys absent here)."""
+def test_dispatcher_model_config_stamps_reasoning_effort():
+    """Settings → Models effort pin reaches the worker env as VEXA_AGENT_EFFORT (the claude-code
+    harness passes it through as --effort). Absent ⇒ no env key ⇒ the CLI's own default."""
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"model": "my-model", "effort": "medium"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_EFFORT"] == "medium"
+    # no effort configured ⇒ no env key at all (unset must mean "don't touch the CLI default")
+    rt2 = _FakeRuntime()
+    d2 = dispatch.Dispatcher(load_settings(), rt2, _FakeIdentity(),
+                           model_config=_FakeModelConfig({"model": "my-model"}))
+    d2.dispatch(VALID_INV)
+    _, _profile2, env2 = rt2.spawned[0]
+    assert "VEXA_AGENT_EFFORT" not in env2
+
+
+def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape(monkeypatch):
+    """mode:custom points the agent harness (ANTHROPIC_*) at the supplied gateway. Dispatch-stamped
+    keys WIN downstream (docker_backend copies its own env only for keys absent here). It used to
+    stamp a SECOND pair (VEXA_LLM_PROVIDER/_BASE_URL/_API_KEY) for the completion adapters — one
+    endpoint, configured twice, in two dialects; PRD decision 34 removed the second consumer."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # F84: the operator gate
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
                            "api_key": "sk-user", "model": "qwen3"})
@@ -376,10 +384,8 @@ def test_dispatcher_model_config_custom_mode_stamps_both_call_shapes():
     _, _profile, env = rt.spawned[0]
     assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-user"
-    assert env["VEXA_LLM_PROVIDER"] == "openai-compat"
-    assert env["VEXA_LLM_BASE_URL"] == "https://gw.example.com"
-    assert env["VEXA_LLM_API_KEY"] == "sk-user"
     assert env["VEXA_AGENT_MODEL"] == "qwen3"
+    assert not any(k.startswith("VEXA_LLM_") for k in env)
 
 
 def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(monkeypatch):
@@ -395,21 +401,20 @@ def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "opus"
     assert "ANTHROPIC_BASE_URL" not in env
-    assert "VEXA_LLM_API_KEY" not in env
 
 
-def test_dispatcher_model_config_allowlist_gates_models_not_endpoint():
+def test_dispatcher_model_config_allowlist_gates_models_not_endpoint(monkeypatch):
     """A non-allowlisted model is DROPPED (deployment default applies) — never an error; the
     custom endpoint itself is not the allowlist's business."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # the ENDPOINT gate is separate
     settings = load_settings(agent_model="deployment-default", model_allowlist="sonnet,haiku")
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
-                           "model": "not-allowed", "meeting_model": "haiku"})
+                           "model": "not-allowed"})
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "deployment-default"   # gated pref falls through
-    assert env["VEXA_MEETING_MODEL"] == "haiku"              # allowlisted pref applies
     assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
 
 
@@ -509,6 +514,43 @@ def test_watchdog_stays_quiet_when_the_worker_acks(monkeypatch):
     assert len(rt.spawned) == 1  # no respawn
 
 
+class _AliveFakeRuntime(_FakeRuntime):
+    """A worker that is genuinely ALIVE and simply never acks — the wedged case F161's fix must
+    keep honest. Unlike `_FakeRuntime` (`await_done` → "completed", i.e. gone), this one always
+    reports "running", so `_workload_gone()` is False for the whole watch window."""
+
+    def await_done(self, workload_id, timeout_sec=0.0):
+        return "running"
+
+
+def test_watchdog_still_warns_when_a_worker_is_alive_but_never_acks(monkeypatch, caplog):
+    """The turn-ack-before-writeback fix (engine.serve — the trailer now runs in the background so
+    a queued message's ack no longer waits on the PREVIOUS turn's write-back) must not have bought
+    its speed by weakening this detector. A unit that is truly wedged — alive, per the runtime, and
+    never emits `turn-accepted` at all — still has to trip the deadline warning: `_workload_gone()`
+    is checked every poll regardless of the overall deadline (dispatch.py's own comment on
+    `_watch_delivery`), so raising or removing this warning would be the actual regression, not
+    fixing it. No engine.py change is exercised here — this proves the (unchanged) dispatcher-side
+    detector is still honest."""
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_DEADLINE_SEC", 0.3)
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_POLL_SEC", 0.05)
+    import time as _time
+
+    rt = _AliveFakeRuntime()
+    warm = _WarmFake()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), warm_stream=warm)
+    with caplog.at_level("WARNING", logger="agent_api.dispatch"):
+        d.dispatch(VALID_INV)          # nothing ever acks this on the (fake) out topic
+        deadline = _time.monotonic() + 2.0
+        while _time.monotonic() < deadline:
+            if any("no turn-accepted within" in r.message for r in caplog.records):
+                break
+            _time.sleep(0.02)
+    assert any("no turn-accepted within" in r.message for r in caplog.records), \
+        "a genuinely wedged (alive, silent) unit must still trip the ack-deadline warning"
+    assert len(rt.spawned) == 1  # alive ⇒ never respawned, per _workload_gone()
+
+
 def test_message_dispatch_stamps_the_chat_idle_window():
     rt = _FakeRuntime()
     settings = load_settings()
@@ -516,3 +558,24 @@ def test_message_dispatch_stamps_the_chat_idle_window():
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(settings.chat_idle_timeout_sec)
+
+
+# ── the deployment runner is resolved per call, never frozen at import (F92) ─────────────────────
+
+def test_vexa_runner_is_read_when_the_dispatch_is_built(monkeypatch):
+    """F92 REPRODUCTION. `RUNNER` was a module constant bound into `make_dispatch`'s DEFAULT
+    ARGUMENT, so it was decided once when `shared.units` was first imported — the exact pattern
+    `control_plane/config_test.py` documents at length as a 32-hour outage. An operator who changed
+    VEXA_RUNNER saw nothing happen; a test that set it read whatever the interpreter saw first."""
+    from shared import units as u
+
+    monkeypatch.delenv("VEXA_RUNNER", raising=False)
+    start = u.entrypoint(inline="hi")
+    assert u.make_dispatch(subject="u1", trigger="message", start=start)["runner"] == "claude-code"
+
+    monkeypatch.setenv("VEXA_RUNNER", "openai-agent")
+    assert u.make_dispatch(subject="u1", trigger="message", start=start)["runner"] == "openai-agent"
+
+    # an explicit argument still wins over the deployment floor
+    assert u.make_dispatch(subject="u1", trigger="message", start=start,
+                           runner="codex")["runner"] == "codex"

@@ -1,5 +1,5 @@
 {
-  "_comment": "Category-B (weak-copyleft) dependencies allowed by exception under P17 / ADR-0004. Each entry is a deliberate, isolated, reviewed allowance — NOT a place to silence Cat-X (GPL/AGPL/source-available). `package` is matched by exact name OR name-prefix (covers per-platform variants). gate:licenses fails on any Cat-B dep not listed here.",
+  "_comment": "Dependencies allowed by exception under P17 / ADR-0004. `categoryB` = weak-copyleft (LGPL/MPL/EPL); `undeclared` = the package.json carries no `license` field at all (pnpm reports \"Unknown\"), so a human read the licence file the package ships and recorded it here. Each entry is a deliberate, isolated, reviewed allowance — NOT a place to silence Cat-X (GPL/AGPL/source-available). `package` is matched by exact name OR name-prefix (covers per-platform variants). gate:licenses fails on any Cat-B or undeclared dep not listed here.",
   "categoryB": [
     {
       "package": "@img/sharp-libvips",
@@ -15,6 +15,16 @@
       "reason": "Native CSS transform/minification engine used by the Next/Tailwind toolchain. MPL applies to the unmodified dependency files, not to Vexa source or generated CSS.",
       "disposition": "Logged exception; dependency remains an isolated build/runtime package managed by pnpm.",
       "scope": "frontend build pipeline and Next CSS handling",
+      "approved": "ADR-0004"
+    }
+  ],
+  "undeclared": [
+    {
+      "package": "khroma",
+      "license": "MIT",
+      "reason": "Colour-manipulation library, a direct dependency of mermaid (diagram rendering in the terminal's doc/editor/chat renderers, Vexa-ai/vexa#1617). Its package.json omits the `license` field, so pnpm reports it as \"Unknown\"; the package itself ships `license` verbatim — \"The MIT License (MIT), Copyright (c) 2019-present Fabio Spampinato, Andrew Maney\" — and its repository (github:fabiospampinato/khroma) states MIT. Cat A on the text, undeclared only in the metadata.",
+      "disposition": "Logged exception; read from the shipped licence file at khroma@2.1.0. Re-read it if the package is ever upgraded across a major.",
+      "scope": "@vexa/terminal (transitive via mermaid, bundled into the client)",
       "approved": "ADR-0004"
     }
   ]

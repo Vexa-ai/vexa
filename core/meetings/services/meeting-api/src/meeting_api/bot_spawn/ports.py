@@ -15,6 +15,7 @@ supplies the production implementations; the module's tests supply in-process fa
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional, Protocol, runtime_checkable
 
 
@@ -32,6 +33,22 @@ class MeetingRepo(Protocol):
 
         ACTIVE = status in ``{requested, joining, awaiting_admission, active}`` (parent's non-terminal
         set; ``stopping`` is in-flight too — see ``_ACTIVE_STATUSES``)."""
+        ...
+
+    async def find_active_rows(
+        self, user_id: int, platform: str, native_meeting_id: str
+    ) -> list[dict]:
+        """EVERY non-terminal row the user has for ``(platform, native_id)``, newest first.
+
+        ``find_active`` answers "is this room taken?" and returns one row, which is all the POST
+        dedup needs. The user STOP needs all of them: a stop means the MEETING, not one container.
+        A second row on the same link is not hypothetical — it is the shape the auto-join sweep's
+        duplicate guard exists for (a manual "Send bot now" plus a calendar import that failed to
+        adopt it, live 2026-08-17) — and stopping only the newest left the sibling waiting in the
+        lobby to walk in after the user had said no.
+
+        ACTIVE here includes ``stopping``: a row already on its way out is still non-terminal, and
+        the caller de-duplicates on the ``stop_requested`` flag rather than on status."""
         ...
 
     async def find_active_by_userdata(self, userdata_s3_path: str) -> Optional[dict]:
@@ -111,13 +128,35 @@ class MeetingRepo(Protocol):
         ...
 
     async def fail_meeting(
-        self, *, meeting_id: int, reason: str, failure_stage: str = "requested"
+        self,
+        *,
+        meeting_id: int,
+        reason: str,
+        failure_stage: Optional[str] = "requested",
+        completion_reason: str = "start_failed",
+        data: Optional[dict] = None,
     ) -> Optional[dict]:
         """Mark a meeting ``failed`` BY ID (no session_uid), stamping ``reason``/``failure_stage`` into
         ``meeting.data`` — the spawn-time failure path (#718). A workload dead on arrival is refused
         BEFORE the ``MeetingSession`` exists, so the session-keyed ``update_meeting_status`` cannot
         reach the row; this fails it directly so no ``requested`` row lingers for the reaper to flip
-        reason-less. Returns the updated row (or ``None`` for an unknown id)."""
+        reason-less. Returns the updated row (or ``None`` for an unknown id).
+
+        ``completion_reason`` defaults to the spawn path's ``start_failed``. The USER-STOP terminals
+        pass ``stopped`` — and whatever the caller passes, ``stop_requested`` on the row (or in
+        ``data``) DOMINATES it (``lifecycle.machine.dominant_completion_reason``), so this writer
+        cannot record a fault over a stop either.
+
+        ``failure_stage=None`` writes NO stage: a PLANNED row that is cancelled before any bot
+        existed has no stage to attribute, and inventing one ("requested") would claim a spawn that
+        never happened. ``data`` merges extra keys (the stop path's ``stop_requested``)."""
+        ...
+
+    async def get_meeting(self, meeting_id: int) -> Optional[dict]:
+        """Read ONE meeting row by id — the spawn fence's fresh read of ``data.stop_requested``
+        (and the stop route's fresh read of ``bot_container_id``). Deliberately not served from any
+        snapshot the caller already holds: both readers exist precisely because the row may have
+        changed under them."""
         ...
 
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
@@ -302,6 +341,62 @@ class WorkloadUnknown(Exception):
 
 class TranscriptionNotConfigured(Exception):
     """transcribe_enabled=true but no transcription backend resolved (Settings nor env)."""
+
+
+
+# ── shared row-shaping helpers (here, not in adapters, so the in-memory fakes reuse the
+#    EXACT same code without importing the SQLAlchemy adapters module) ─────────────────
+
+def _stopped_reopen_detail(meeting_id) -> str:
+    """The 409 a ``continue_meeting`` against a USER-STOPPED row answers with.
+
+    Outward-facing, so it names the working path and nothing else: a stopped meeting is finished,
+    and a new run is a new ``POST /bots``."""
+    return (
+        f"meeting {meeting_id} was stopped by the user and cannot be continued — "
+        f"POST /bots again (without continue_meeting) to start a new bot"
+    )
+
+
+# The terminal attribution ``reopen_meeting`` used to DELETE. A continued run is a second run on one
+# row, so the first run's ending is history, not noise: erasing it left no record that the row had
+# ever completed, which is how a resurrected row (rev 193, 26313) read as if it had never ended.
+_COMPLETION_HISTORY_KEY = "completion_history"
+_ARCHIVED_KEYS = ("completion_reason", "failure_stage", "failure_reason")
+_COMPLETION_HISTORY_CAP = 20
+
+
+def _archive_completion(data: dict) -> dict:
+    """Move a row's terminal attribution into ``data.completion_history`` instead of erasing it.
+
+    Called by both ``reopen_meeting`` implementations (SQL + fake) so the two cannot drift. Capped
+    like every other ring-buffer this codebase persists into ``meeting.data``; a row reopened
+    hundreds of times must not grow its JSONB without bound."""
+    archived = {key: data.pop(key) for key in _ARCHIVED_KEYS if data.get(key) is not None}
+    if not archived:
+        return data
+    archived["reopened_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    history = data.get(_COMPLETION_HISTORY_KEY)
+    history = list(history) if isinstance(history, list) else []
+    history.append(archived)
+    data[_COMPLETION_HISTORY_KEY] = history[-_COMPLETION_HISTORY_CAP:]
+    return data
+
+class MeetingStopped(Exception):
+    """The user's STOP applies to this meeting, so no bot may be started on it → HTTP 409.
+
+    Two spawn paths raise it, both from the same rule (founder ruling 2026-08-17, *"explicit stop
+    must be stop, evict"*):
+
+      * **the spawn fence** — a DELETE landed while this very spawn was in flight. Stage rev 193
+        (row 26313): DELETE 0.4s after POST answered 200 and flagged the row, then the workload was
+        created and the bot joined, because the stop's direct teardown targeted a workload that did
+        not exist yet and the leave command was published before the bot could subscribe.
+      * **``continue_meeting``** — reopening a row the user STOPPED would resurrect exactly the run
+        they ended (rev 193 resurrected 26313 to ``requested`` with ``stop_requested`` still true).
+
+    A stopped meeting is not a broken one: a fresh ``POST /bots`` (without ``continue_meeting``)
+    starts a new run on a new row, and that is the documented path. The detail string says so."""
 
 
 class DuplicateMeeting(Exception):

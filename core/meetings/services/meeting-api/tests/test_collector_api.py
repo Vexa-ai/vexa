@@ -71,8 +71,10 @@ def test_get_meetings_conforms():
     body = r.json()
     assert_api_conforms("MeetingListResponse", body)
     assert len(body["meetings"]) == 2
-    # newest first
-    assert body["meetings"][0]["platform"] == "zoom"
+    # #1222: the live (non-terminal) meeting pins above the newer-created terminal row —
+    # the list orders by (non-terminal pin, event time), not created_at recency.
+    assert body["meetings"][0]["platform"] == "google_meet"
+    assert body["meetings"][1]["platform"] == "zoom"
 
 
 def test_get_meetings_filters():
@@ -87,6 +89,23 @@ def test_get_meetings_filters():
 
     r2 = client.get("/meetings", headers=GATEWAY_HEADERS, params={"limit": 1})
     assert len(r2.json()["meetings"]) == 1
+
+
+def test_get_meetings_can_exclude_planned_rows_before_pagination():
+    store, _ = _seeded()
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="future",
+                       status="scheduled", created_at="2026-08-14T22:00:00Z")
+    store.seed_meeting(user_id=USER, platform="unknown", native_meeting_id="",
+                       status="idle", created_at="2026-08-14T21:00:00Z")
+    client = TestClient(create_app(store, redis=None))
+
+    response = client.get(
+        "/meetings", headers=GATEWAY_HEADERS,
+        params={"exclude_planned": "true", "limit": 1},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [meeting["status"] for meeting in response.json()["meetings"]] == ["active"]
 
 
 def test_get_meetings_empty_for_other_user_conforms():

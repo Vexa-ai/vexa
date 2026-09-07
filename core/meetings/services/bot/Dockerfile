@@ -106,13 +106,23 @@ FROM vexa/meet-join-env:dev AS runtime
 # it back on clean teardown; without the binary every authenticated spawn fails
 # at session-restore. The Playwright + humanized-X11 stack (xvfb·xdotool·xclip·
 # x11vnc·websockify) comes from the base.
+# noble (#1011) dropped `awscli` from the archive — `apt-get install awscli` has no
+# installation candidate there, which broke this image the moment the base moved. AWS's
+# own v2 installer is the supported path on 24.04; it is the same binary the session
+# store shells out to, so nothing above this line changes.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        pulseaudio \
        fluxbox \
        socat \
-       awscli \
+       ca-certificates \
+       curl \
+       unzip \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip \
     && rm -rf /var/lib/apt/lists/* \
     && aws --version
 
@@ -160,6 +170,16 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 # expects), then run the worker. Boot → validate config → launch browser → join.
 COPY core/meetings/services/bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# A WRITABLE HOME, because the UID is not ours to choose. Under OpenShift's `restricted-v2`
+# SCC (and any PSA-restricted namespace) admission assigns a random per-namespace UID that
+# exists in no /etc/passwd — measured on a real admitted bot pod: runAsUser 1000920000. With
+# no HOME in the image the runtime falls back to `/`, which that UID cannot write, and the
+# entrypoint's whole bringup dies on it: pulseaudio wants $HOME/.config/pulse, fluxbox wants
+# $HOME/.fluxbox, Chromium wants $HOME/.config + $HOME/.cache, and the aws CLI wants
+# $HOME/.aws. /tmp is mode 1777, so it is writable by every UID without knowing which one.
+# See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
+ENV HOME=/tmp
 
 # noVNC (browser view) — present in the env base; harmless if unused.
 EXPOSE 6080

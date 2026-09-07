@@ -1,0 +1,39 @@
+# SearXNG settings for the `search` compose profile — the OPERATOR'S search endpoint, which the
+# openai-agent harness's `WebSearch` speaks to over VEXA_SEARCH_URL + VEXA_SEARCH_DIALECT=searxng.
+#
+# SearXNG is AGPL-3.0 and is NOT part of Vexa. The compose block pins an UNMODIFIED upstream image
+# that the operator pulls from SearXNG's own registry and runs as a separate service; no search code
+# is built into, or redistributed inside, any vexaai/* artifact. Declared as a sidecar in
+# ../../../image-licenses.json, exactly as minio/minio is.
+#
+# NOTE ON SYNTAX: SearXNG does NOT expand shell-style ${VAR} in this file — a `${SEARXNG_SECRET}`
+# written here is read LITERALLY and becomes the key. Its settings loader instead reads the
+# `SEARXNG_SECRET` ENVIRONMENT variable and overrides `server.secret_key` with it, so the secret
+# lives in the compose `environment:` block (which docker DOES expand) and never in this file. Same
+# shape, and the same reason, as ../llm-shim/config.yaml.
+
+use_default_settings: true
+
+server:
+  # Informational: granian is the actual HTTP server and GRANIAN_HOST owns the socket (see compose).
+  bind_address: "0.0.0.0"
+  port: 8080
+  # The limiter/botdetection refuses the JSON format for a non-browser client, which is exactly what
+  # the harness is — leaving it on makes every WebSearch a 403. Safe here because the service is
+  # published on loopback only and is otherwise reachable just from the private compose network.
+  limiter: false
+  image_proxy: false
+  # secret_key: supplied by SEARXNG_SECRET in the environment — see the syntax note above.
+
+search:
+  # THE reason this file exists: SearXNG's JSON output is OFF by default and the endpoint answers
+  # 403 until `json` is listed here. `VEXA_SEARCH_DIALECT=searxng` parses exactly this format.
+  formats:
+    - html
+    - json
+
+outgoing:
+  # A search is inside an agent turn's wall-clock budget, so a slow engine must lose rather than
+  # spend the turn: the harness caps its own request too, and these keep the upstream fan-out short.
+  request_timeout: 6.0
+  max_request_timeout: 12.0

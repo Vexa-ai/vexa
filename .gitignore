@@ -13,7 +13,9 @@ __pycache__/
 !**/.env.example
 .recordings/
 deploy/execution-targets.json
-# local test/debug artifacts (Playwright MCP screenshots + snapshots)
+# local test/debug artifacts (Playwright MCP screenshots + snapshots). The rule was added AFTER a
+# June 2026 session had already committed 17 page dumps of the hosted dashboard; those were removed
+# in 0.12.27. An ignore rule never untracks what is already tracked — check `git ls-files` too.
 .playwright-mcp/
 /*.png
 # local Claude Code settings + worktrees (per-machine, never committed)

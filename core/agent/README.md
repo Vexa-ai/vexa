@@ -3,7 +3,8 @@
 ## Purpose
 This module is the **execution domain**: it turns a trigger (a chat turn, a fired
 schedule, an external event, a live transcript beat) into a **governed agent action**
-committed to a user's `workspace.v1` git repo. It owns 8 control-plane contracts and houses
+committed to a user's `workspace.v1` git repo (owned by [`core/workspaces`](../workspaces),
+PRD decision 47 — this domain consumes it). It owns 7 control-plane contracts and houses
 the `agent-api` service — the one Dispatcher that funnels every trigger through a single
 `unit.v1` envelope and spawns an isolated `runtime.v1` agent worker. The worker reaches models
 and coding-agent CLIs only through the provider-agnostic [`llm`](llm) module (completion +
@@ -15,8 +16,7 @@ personal + normal single-rank workspaces, the sharing model, and live in-meeting
 documented in **[`docs/docs/core/workspaces.mdx`](../../docs/docs/core/workspaces.mdx)**.
 
 ## Boundary (SoC)
-**This domain is about:** the copilot lifecycle, chat, the user's `workspace.v1`, notes/cards, and agent
-config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
+**This domain is about:** chat, the user's `workspace.v1`, agent turns and agent config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
 
 The agent **may hold, compose, and serve meeting data downstream** — *once it has acquired it legally*,
 through a **published contract**: the gateway's `/transcripts` API (e.g. the meeting-scoped read tool) or
@@ -34,17 +34,19 @@ lives in the cookbook layer *above* both domains, never inside this one. See
 | consumes | gateway / terminal | `POST /api/chat`, `POST /events`, `POST /invocations`, `POST /api/routines` | chat turns, external events, routine authoring |
 | consumes | identity | `identity/contracts/identity.v1` (`IdentityPort.mint`) | per-dispatch signed token, `canAccess` |
 | spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start` |
-| produces | workspace | `agent/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
+| produces | workspace | `workspaces/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
 | publishes | gateway / surfaces | `gateway/contracts/ws.v1` (redis `unit:<id>:out`, mode `card`) | turn events + `proactive-card.v1` outputs |
 | calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body |
 
 ## Contracts
 **Owns:** [`unit.v1`](contracts/unit.v1) · [`routine.v1`](contracts/routine.v1) ·
-[`workspace.v1`](contracts/workspace.v1) · [`event.v1`](contracts/event.v1) ·
+[`event.v1`](contracts/event.v1) ·
 [`tool.v1`](contracts/tool.v1) · [`task.v1`](contracts/task.v1) ·
 [`invoke.v1`](contracts/invoke.v1) · [`proactive-card.v1`](contracts/proactive-card.v1).
-Only `invoke.v1` + `workspace.v1` are pinned in `contracts.seal.json`; the rest are
+Only `invoke.v1` is pinned in `contracts.seal.json`; the rest are
 **UNSEALED** (sealed per-MVP). **Consumes:** `meetings/contracts/transcript.v1`,
+[`workspaces/contracts/workspace.v1`](../workspaces/contracts/workspace.v1) (moved out of this
+domain, PRD decision 47 step 1 — still sealed in `contracts.seal.json`, now under its own path),
 `runtime/contracts/runtime.v1`, `identity/contracts/identity.v1`, `gateway/contracts/ws.v1`.
 
 ## Isolated evaluation
@@ -60,7 +62,9 @@ Only `invoke.v1` + `workspace.v1` are pinned in `contracts.seal.json`; the rest 
 - ✅ delivered — chat dispatch, warm-session resume, workspace git commit (`workspace.v1`)
 - ✅ delivered — generic event ingress (`event.v1` → `unit.v1`) and tool mechanism (`tool.v1` → `--allowedTools` + injected MCP)
 - ✅ delivered — routines: `routine.v1` `kind:scheduled` compiles to a `schedule.v1` cron job
-- ✅ delivered — live in-meeting copilot: transcript stream → propose-only beats → `proactive-card.v1`
+- 🗑 removed (PRD decision 34) — the live in-meeting copilot (transcript stream → propose-only
+  beats → `proactive-card.v1`) and the `processed-notes.v1` stream it produced. The product runs no
+  model calls of its own beside the agent; a meeting reaches the agent over the MCP.
 - 🟡 partial — most owned contracts UNSEALED (sealed per-MVP); `invoke.v1` retired once the meetings path migrates
 - ⬜ planned — `routine.v1` gains a `target` (agent|meeting) so a routine can schedule a bot
 - ⬜ planned — `workspace.v1` meeting-entity convention (a meeting becomes `kg/entities/meeting/*`)

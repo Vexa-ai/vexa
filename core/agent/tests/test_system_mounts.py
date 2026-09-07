@@ -1,6 +1,6 @@
-"""The two SYSTEM TIERS of the three-tier mount stack (AMENDMENT 4): the _global GLOBAL SYSTEM tier
-(read-only, mount-when-present) and the _system PRIVATE SYSTEM tier (read-write, create-if-absent), and
-their composition by ``dispatch.build_mount_set`` into the full stack ``[_global?, *active, _system]``.
+"""The two SYSTEM TIERS of the three-tier mount stack (AMENDMENT 4): the mandatory _global GLOBAL
+SYSTEM tier and the _system PRIVATE SYSTEM tier (read-write, create-if-absent), and their composition
+by ``dispatch.build_mount_set`` into the full stack ``[_global, *active, _system]``.
 
 Backend-free (fakes / tmp dirs, no docker/kubectl) — the system-mount plumbing is proven offline."""
 from __future__ import annotations
@@ -34,7 +34,7 @@ def _seed_baseline(root: Path, subject: str) -> Path:
     return ws
 
 
-# ── _global: GLOBAL SYSTEM tier — READ-ONLY, mount-when-present ────────────────
+# ── _global: GLOBAL SYSTEM tier — mandatory and read-only by default ──────────
 
 def test_global_mount_is_read_only_with_its_own_source(tmp_path):
     gdir = _git_repo(tmp_path / "global", "GLOBAL")
@@ -56,12 +56,13 @@ def test_global_mount_carries_a_pinned_ref(tmp_path):
     assert global_mount(settings2, "/workspaces")["ref"] is None
 
 
-def test_global_mount_absent_when_unconfigured_or_missing(tmp_path):
-    # unconfigured → skip (None), the stack degrades gracefully
-    assert global_mount(load_settings(), "/workspaces") is None
-    # configured but the path does not exist → skip (None) + logged, never raises
+def test_global_mount_fails_closed_when_unconfigured_or_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="required"):
+        global_mount(load_settings(), "/workspaces")
     settings = load_settings(global_system_workspace_path=str(tmp_path / "does-not-exist"))
-    assert global_mount(settings, "/workspaces") is None
+    with pytest.raises(RuntimeError, match="does not exist"):
+        global_mount(settings, "/workspaces")
 
 
 # ── _system: PRIVATE SYSTEM tier — READ-WRITE, create-if-absent ───────────────
@@ -109,20 +110,22 @@ def test_build_mount_set_is_global_active_system_in_order(tmp_path):
     assert [m["slug"] for m in stack if m["role"] == "private"] == [m["slug"] for m in active]
 
 
-def test_build_mount_set_degrades_without_global(tmp_path):
-    """No _global configured → the stack is [*active, _system] (system tiers fail soft into the set)."""
+def test_build_mount_set_fails_closed_without_global(tmp_path, monkeypatch):
+    """A dispatch cannot start without the mandatory organisation tier."""
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     root = tmp_path / "ws"
     _seed_baseline(root, "u1")
     settings = load_settings(workspaces_dir=str(root))
-    stack = build_mount_set(settings, "u1")
-    assert [m["role"] for m in stack] == ["private", "system"]  # _global skipped, _system always present
+    with pytest.raises(RuntimeError, match="every agent stack includes _global"):
+        build_mount_set(settings, "u1")
 
 
 def test_build_mount_set_survives_a_broken_system_tier(tmp_path, monkeypatch):
     """A failure creating _system must NOT abort the dispatch — it degrades to just the active set + logs."""
     root = tmp_path / "ws"
     _seed_baseline(root, "u1")
-    settings = load_settings(workspaces_dir=str(root))
+    gdir = _git_repo(tmp_path / "global", "GLOBAL")
+    settings = load_settings(workspaces_dir=str(root), global_system_workspace_path=str(gdir))
 
     def boom(*a, **k):
         raise OSError("disk full")
@@ -132,4 +135,4 @@ def test_build_mount_set_survives_a_broken_system_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(disp, "system_mount", boom)
 
     stack = build_mount_set(settings, "u1")
-    assert [m["role"] for m in stack] == ["private"]  # ran without _system, never raised
+    assert [m["role"] for m in stack] == ["global", "private"]  # ran without _system, never raised

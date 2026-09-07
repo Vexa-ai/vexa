@@ -1,10 +1,54 @@
 ---
 title: "Send a bot and get a transcript"
-description: "Capture a Google Meet, Zoom, Teams, or Jitsi call in real time."
+description: "Send a bot to a Google Meet, Zoom, Teams, or Jitsi call and get a real-time transcript — hosted in one API call, or self-hosted under Apache-2.0."
 ---
 
 A Vexa bot joins a call like any participant and streams back a **speaker-attributed** transcript. No
 plugin, no host configuration.
+
+## Get an API key
+
+There are two ways to run Vexa. Both speak the same API; only the base URL differs.
+
+### Hosted
+
+1. Sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google account.
+2. Copy your API key from [your account page](https://vexa.ai/account).
+3. Send a bot:
+
+```bash
+curl -X POST "https://api.cloud.vexa.ai/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
+```
+
+`native_meeting_id` is the id inside the join URL — `abc-defg-hij` in
+`https://meet.google.com/abc-defg-hij`.
+
+New accounts get **$5 of free bot credit and no credit card is required** — about 16 hours of bot
+time at $0.30/hr ([pricing](https://vexa.ai/pricing)).
+
+### Self-hosted
+
+Vexa is Apache-2.0 and runs entirely inside your own perimeter. `make all` pulls the published
+images and prints an API key when the stack is up:
+
+```bash
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make all
+```
+
+Full walkthrough: [Quickstart](/quickstart). Base URLs, scopes, and key rotation:
+[Authentication](/authentication).
+
+### Set your base URL
+
+The rest of this page uses `$API_BASE` and `$API_KEY`:
+
+| Deployment | `API_BASE` |
+|---|---|
+| Hosted | `https://api.cloud.vexa.ai` |
+| Self-hosted (`make all` / compose) | `http://localhost:18056` |
 
 ## 1. Send the bot
 
@@ -30,12 +74,28 @@ The only thing that changes between platforms is the `platform` value.
   </Tab>
   <Tab title="Microsoft Teams">
     ```bash
+    # the meeting ID and its passcode, as Teams shows them in the invite
     curl -X POST "$API_BASE/bots" \
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-      -d '{"platform":"teams","native_meeting_id":"<meeting-id>","bot_name":"Vexa"}'
+      -d '{"platform":"teams","native_meeting_id":"397421056486982","passcode":"X8hcQVTnGNpGelJLSv","bot_name":"Vexa"}'
     ```
+
+    Teams meetings come addressed two ways, and both are valid `native_meeting_id`s:
+
+    - the **numeric meeting ID** (10–15 digits) Teams prints next to a **passcode** — pass the
+      passcode in `passcode`, never glued onto the id;
+    - the **thread id** out of a classic `…/l/meetup-join/19:meeting_…@thread.v2` link, which
+      carries its own credential and takes no separate passcode.
+
+    On a non-default Teams cloud — `teams.live.com` for personal meetings, `gov.` / `dod.`
+    `teams.microsoft.us` for GCC-High and DoD — add `teams_base_host`, or the bot builds its URL
+    on the world-wide host and joins a different Teams. Sending the full `meeting_url` instead
+    settles both the host and the passcode on its own.
   </Tab>
   <Tab title="Jitsi Meet">
+    Jitsi is **join + capture offline-proven; live validation pending** — Meet, Zoom and Teams are
+    production. See [#883](https://github.com/Vexa-ai/vexa/issues/883).
+
     ```bash
     # the room name is the id; meeting_url is REQUIRED — a room name is scoped to a
     # deployment (meet.jit.si or your self-hosted instance), so the URL says which one
@@ -60,7 +120,13 @@ curl -X POST "$API_BASE/bots" \
 
 A URL that isn't a recognizable meeting link is refused with a `422` naming the missing
 `native_meeting_id`; if you supply both `platform` and `meeting_url` and they disagree, that's a
-`422` too. An explicit `native_meeting_id` always wins — the URL never overrides it.
+`422` too. An explicit `native_meeting_id` always wins — the URL never overrides it. A passcode
+already in the URL's query also wins over a separate `passcode` field.
+
+The passcode field is spelled **`passcode`**. `password`, `meeting_password` and the other
+near-misses are refused with a `422` naming the field to use — a passcode we cannot read is a
+passcode the bot would join without, and a `201` that means "joined nothing" costs more to debug
+than an error does.
 
 Optional: `language` (ISO code) and `task` (`transcribe` default, or `translate`). Language works in
 two modes:
@@ -87,7 +153,7 @@ curl -X POST "$API_BASE/bots" \
 
 Or set `TRANSCRIBE_ENABLED=false` in the deployment env so every spawn defaults to capture-only.
 Recording is separate: pass `recording_enabled` / `RECORDING_ENABLED` if you also need persisted
-audio. See [Configuration](/configuration#transcription-stt).
+audio — audio only; there is no video recording path. See [Configuration](/configuration#transcription-stt).
 
 On Meet and Teams the bot may wait in the lobby until a host admits it; a Jitsi room with the
 lobby enabled behaves the same way.

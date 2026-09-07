@@ -1,0 +1,41 @@
+{
+ "tape": "26040",
+ "platform": "teams",
+ "source": "prod-signal-tape",
+ "image_version": "v0.12.22-rc.4",
+ "duration_s": 108.6,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "201": {
+   "name": "P1",
+   "instants": 36,
+   "purity": 1.0,
+   "owner_share": 1.0
+  }
+ },
+ "untruthed": {},
+ "ambiguous_hint_instants": 0,
+ "roster_first_seen_s": {
+  "P1": 0.0
+ },
+ "roster_coverage": [
+  [
+   0.0,
+   1,
+   2
+  ]
+ ],
+ "judge": null,
+ "counts": {
+  "csrc": 20,
+  "hints": 51,
+  "roster": 4,
+  "ticks": 0
+ }
+}

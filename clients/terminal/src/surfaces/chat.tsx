@@ -11,17 +11,33 @@ import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { ReportTurn } from "./ReportThis";
+import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
-import { streamChatTurn, type ChatPhase } from "./chatStream";
+import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
+import { createStickToBottom, type StickToBottom } from "./stickToBottom";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { presentError } from "./apiClient";
+import { promptCarriesActiveContext } from "./surfaceSync";
+import { isPageIntent, type ChatIntent } from "./chatIntent";
+import { surfaceOf, type FrictionSurface } from "./frictionApi";
+import { actEnded, actNoted, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
+import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob, queueJob, startJob, stepJob, type JobRec } from "./jobs";
+// THE CHAT'S INBOX (Vexa-ai/vexa#1610) — everything submitted is on the SERVER at once, and the
+// queued rows are read back from it rather than remembered here. See `surfaces/inbox.ts`.
+import { claimInboxRow, fetchPending, flushOutbox, newSubmissionId, reconcileInbox, submitToInbox } from "./inbox";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
+  // `mcp__vexa__entity_upsert` → `entity_upsert`. The namespace is ours, not the reader's, and the
+  // founder's own words for what he was watching were "entity_upsert".
+  tool = tool.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
   const t = tool.toLowerCase();
   // verb-first labels: the op line reads as what the agent is DOING, not an internal tool name
   const [icon, verb] = /read|cat|open/.test(t) ? [opIcon.read, "Reading"]
@@ -35,12 +51,32 @@ function toolOp(tool: string, args?: Record<string, unknown>): Op {
   const file = typeof args?.file_path === "string" ? (args.file_path as string) : undefined;
   const wrote = !!file && /edit|write|append|notebook/.test(t);
   const name = file ? file.split("/").filter(Boolean).pop() : undefined;
-  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "done", file, wrote };
+  // RUNNING, not done (F66). Every op was appended with `status: "done"`, so the step line rendered
+  // a green TICK from the first tool call — an 18-step turn showed a finished-looking line that
+  // never moved. Founder: *"i know it's working now, but it just stays like it's stale."* The op
+  // that just started IS the one in progress; `onTool` marks the previous one done as it arrives,
+  // and the turn's end marks the last one.
+  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "running", file, wrote };
 }
 
-/** the backend history turn shape (GET /api/sessions/:session/history) */
+/** Close any step still marked running — the turn is over, so nothing in it is in progress. Errors
+ *  keep their own status: a step that FAILED did not succeed because the turn ended. */
+function settleOps(ops: Op[]): Op[] {
+  return ops.some((o) => o.status === "running")
+    ? ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o))
+    : ops;
+}
+
+/** the backend history turn shape (GET /api/sessions/:session/history).
+ *
+ *  `text` is what the MODEL was given: the worker's preambles, the control plane's grounding, and
+ *  the person's sentence at the end of it. `user_text` is what the PERSON typed — recorded as its
+ *  own field by the worker (`worker/engine.py` record_user_text) and served verbatim by
+ *  `workspace_reader.history`. It is optional because records written before the field existed do
+ *  not have it, and only because of that: for every turn taken from now on it is the only thing
+ *  this surface should render. */
 type HistoryTurn =
-  | { role: "user"; text: string }
+  | { role: "user"; text: string; user_text?: string }
   | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean }[]; commit?: string };
 
 type AgentTurn = Extract<Turn, { role: "agent" }>;
@@ -51,9 +87,13 @@ type ChatSessionState = {
   loaded: boolean;
   nextId: number;
   abort: AbortController | null;
+  /** BACKGROUND JOBS still running for this thread (Vexa-ai/vexa#1584). Deliberately NOT `busy`:
+   *  the whole point of a job is that the chat is answerable while it runs. Several at once is the
+   *  normal case, so it is a list. */
+  jobs: JobRec[];
 };
 
-const EMPTY_CHAT_STATE: ChatSessionState = { turns: [], busy: false, loading: false, loaded: false, nextId: 0, abort: null };
+const EMPTY_CHAT_STATE: ChatSessionState = { turns: [], busy: false, loading: false, loaded: false, nextId: 0, abort: null, jobs: [] };
 const chatSessions = new Map<string, ChatSessionState>();
 const chatSubscribers = new Map<string, Set<() => void>>();
 
@@ -120,6 +160,9 @@ const ATTACHMENT_ACCEPT = [
 type ComposerAttachment = { id: string; file: File; isImage: boolean; previewUrl?: string };
 type UploadedWorkspaceFile = { name: string; path: string };
 
+/** Where a workspace keeps the pictures its pages reference (agent-api `shared/asset_source.py`). */
+const ASSETS_DIR = "assets";
+
 function resizeComposerTextarea(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   const height = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
@@ -127,9 +170,16 @@ function resizeComposerTextarea(el: HTMLTextAreaElement) {
   el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
 }
 
+/** AN ATTACHED PICTURE IS A PICTURE, and the turn is told so (Vexa-ai/vexa#1612). The upload route
+ *  puts images in `assets/` — the directory a page's `![…](…)` reads from — so the line handed to
+ *  the agent is the markdown that would put it on a page, ready to paste. Everything else keeps the
+ *  `@file:` token it has always had: a spreadsheet is something to READ, not something to show. */
 function attachmentPrompt(prompt: string, files: UploadedWorkspaceFile[]): string {
   if (files.length === 0) return prompt.trim();
-  const attached = ["Attached files:", ...files.map((f) => `- @file:${f.path}`)].join("\n");
+  const line = (f: UploadedWorkspaceFile) => (f.path.startsWith(`${ASSETS_DIR}/`)
+    ? `- ![${f.name}](${f.path}) — already in this workspace; reference it like that on a page`
+    : `- @file:${f.path}`);
+  const attached = ["Attached files:", ...files.map(line)].join("\n");
   return prompt.trim() ? `${prompt.trim()}\n\n${attached}` : attached;
 }
 
@@ -208,11 +258,23 @@ const CONTEXT_BLOCKS: Array<[RegExp, RegExp]> = [
   [/^The user is looking at the workspace/, /(?:<\/readme>\s*|context is missing\.\s*)/],
 ];
 
-// The server marks the grounding→user boundary with this sentinel (control_plane/api.py). When present,
-// ONE cut removes every folded block regardless of wording drift; the regex blocks below are the
-// fallback for chats stored before the sentinel shipped.
+// The grounding→user boundary marker (control_plane/api.py CONTEXT_SENTINEL, and the composer below
+// writes it too). When present, ONE cut removes every folded block regardless of wording drift.
 const CONTEXT_SENTINEL = "<!--vexa:user-input-below-->";
 
+/** THIS IS THE FALLBACK, AND IT IS ONLY THE FALLBACK (F47).
+ *
+ *  Every turn taken from 2026-09-02 onward carries the person's words as their own field
+ *  (`HistoryTurn.user_text`), and the loader below renders that field and never a composed prompt.
+ *  This function reconstructs the human half of an OLDER record by stripping the machinery off the
+ *  front — the sentinel when the record has one, else the wording-matched blocks above.
+ *
+ *  It is kept, and it is not to be relied on again. Reconstruction by stripping is derived from text
+ *  the SERVER owns and nothing checks the derivation, so it fails silently and completely whenever a
+ *  preamble changes shape: on 2026-09-02 the preamble set changed and every turn in the founder's
+ *  chat rendered as a grey USER bubble containing "## Referencing knowledge (always)", the mount
+ *  stack and the write-routing policy, with his own sentence buried at the bottom. Do not extend it
+ *  to cover a new preamble; the field is the answer. */
 export function stripContextBlocks(raw: string): string {
   const si = raw.lastIndexOf(CONTEXT_SENTINEL);
   if (si >= 0) {
@@ -259,6 +321,20 @@ function compactStoredUserText(text: string): string {
   // The default is the CONTEXT-STRIPPED text (sentinel/regex) — NOT the raw stored prompt. Returning
   // `text` here silently discarded the strip, leaking the whole grounding preamble into the bubble.
   return raw;
+}
+
+/** WHAT A STORED USER TURN RENDERS AS — the whole rule, in one place (F47).
+ *
+ *  `user_text` is the person's own words, recorded as their own field by the worker at the moment
+ *  the turn was composed. When it is there it is the answer, verbatim: the composed prompt is never
+ *  shown, whatever preambles happen to be in front of it this month.
+ *
+ *  Only a record written before that field existed falls through to `compactStoredUserText`, which
+ *  reconstructs the human half by stripping the machinery off the front — the sentinel if the record
+ *  carries one, else the wording-matched preamble blocks. That path is the fallback and nothing
+ *  else; see `stripContextBlocks` for why it must never be the primary again. */
+export function historyUserText(t: { text: string; user_text?: string }): string {
+  return t.user_text ?? compactStoredUserText(t.text);
 }
 
 const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
@@ -368,13 +444,48 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
   );
 }
 
-function ChatConversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
-  if (turns.length === 0 && empty) return <>{empty}</>;
+/** A job whose stream died with it unaccounted for. One spelling: the chat says it in a turn and the
+ *  control that was pressed says it in place (Vexa-ai/vexa#1604), and they must not disagree. */
+const LOST_JOB_LINE = "Lost the connection to that background job";
+
+/** WHAT A BACKGROUND JOB IS DOING — in the chat, beside the step rows, never in the composer
+ *  (Vexa-ai/vexa#1587). A job is not `busy` (Vexa-ai/vexa#1584): the composer stays free while it
+ *  runs, which is the whole point — so its line cannot hang off a turn, and sits at the foot of the
+ *  transcript instead. `jobLine` is the same shape the turn's own step row reads in, so nobody has
+ *  to learn a second vocabulary; the job's TARGET is what tells two of them apart. */
+function JobRows({ jobs }: { jobs: JobRec[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, margin: "0 0 14px 5px" }}>
+      {jobs.map((j) => (
+        <div key={j.id} data-job-line title={jobLine([j])}
+          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: "var(--t2)" }}>
+          <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: "var(--accent)", flex: "none" }} />
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{jobLine([j])}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue }: {
+  turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface; jobs?: JobRec[];
+  /** A STOPPED TURN'S CONTINUE PRESS (Vexa-ai/vexa#1622) — forwarded to the bubble that draws it. */
+  onContinue?: (turn: Extract<Turn, { role: "agent" }>) => void;
+}) {
+  if (turns.length === 0 && empty && jobs.length === 0) return <>{empty}</>;
   return (
     <>
       {turns.map((t, i) => t.role === "user"
         ? <div key={t.id} style={{ marginBottom: 16 }}><div style={userBubble}><ReferenceText text={t.text} /></div></div>
-        : <Conversation key={t.id} turns={[t]} busy={!!busy && i === turns.length - 1} />)}
+        // "REPORT THIS" ON A TURN (PRD decision 33 §2). Only the AGENT's turns carry it: the person
+        // reporting their own sentence is not a rough edge, and an action on every bubble is twice
+        // the chrome for half the meaning. The surface travels with the report — chat, kind, the open
+        // page — so nobody is asked to describe where they were.
+        : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
+            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} />
+          </ReportTurn>)}
+      <JobRows jobs={jobs} />
     </>
   );
 }
@@ -443,7 +554,15 @@ function referenceContext(text: string): string {
 
 function promptWithReferences(prompt: string, userText: string): string {
   const context = referenceContext(userText);
-  return context ? `${prompt.trim()}\n\n---\n${context}` : prompt.trim();
+  // THE PERSON'S WORDS COME LAST, AND THE SENTINEL SAYS WHERE THEY START (F47). The reference block
+  // is machinery this composer wrote — token resolution instructions for the model — and it used to
+  // be appended AFTER the sentence, which put it inside everything downstream treats as "what the
+  // person said": the worker records that half as `user_text`, and the bubble would have shown a
+  // `- token: @meeting:…  kind: meeting  native_id: …` dump under every question about a meeting.
+  // Moving it in front and marking the boundary costs the model nothing (grounding first, ask last,
+  // like every other preamble) and makes the human half exact rather than approximately right. The
+  // server inserts its own sentinel in front of this whole string; both readers take the LAST one.
+  return context ? `${context}\n\n---\n${CONTEXT_SENTINEL}${prompt.trim()}` : prompt.trim();
 }
 
 function activeReference(tab: ActiveTab | null): ActiveReference | null {
@@ -472,6 +591,10 @@ const meetingLabel = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.tit
 function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   if (!ref) return "";
   if (ref.kind === "file") {
+    // PRD decision 30: this narration and the server's surface record are two answers to one
+    // question. While the record is not live the prompt keeps carrying it — dropping it first would
+    // leave the agent knowing LESS than it does today. One flag flips both halves together.
+    if (!promptCarriesActiveContext()) return "";
     return `Active context: the user is viewing the workspace file ${ref.value}. Read it with your Read tool if relevant.`;
   }
 
@@ -487,9 +610,21 @@ function meetingPlatformSlug(meeting: MeetingMock | undefined): string {
   return p === "Google Meet" || p === "google_meet" ? "google_meet" : (p ?? "google_meet");
 }
 
-function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
+/** The turn's prompt with the terminal's own narration of what the reader has open in front of it.
+ *  Exported for the test that pins the boundary marker — see . */
+export function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   const context = activeContextPrompt(ref, meeting);
-  return context ? `${context}\n\n---\n${prompt.trim()}` : prompt.trim();
+  // …AND THE SENTINEL GOES BETWEEN THEM (Vexa-ai/vexa#1603), for the same reason it does in
+  // `promptWithReferences` above and with a sharper symptom. The server marks the boundary between
+  // ITS grounding and `body.prompt` — but `body.prompt` is this whole composed string, so the
+  // narration this composer wrote landed on the HUMAN side of the only boundary marker there was.
+  // The worker records that side verbatim as `user_text` (`worker/engine.py::human_half`, which
+  // cuts at the LAST sentinel), so the founder's own bubble read *"Active context: the user is
+  // viewing the workspace file README.md. Read it with your Read tool if relevant. --- "* and then
+  // his sentence. One marker, in the right place, and the human half is exact rather than
+  // approximately right — the model still reads the narration first and the ask last, with an HTML
+  // comment between them, so nothing about the turn it runs changes.
+  return context ? `${context}\n\n---\n${CONTEXT_SENTINEL}${prompt.trim()}` : prompt.trim();
 }
 
 const ROUTINE_COMMAND = "/routine";
@@ -546,26 +681,58 @@ function routineCreationPrompt(commandText: string): string {
   ].join("\n");
 }
 
-type ChatProps = Partial<TabProps>;
+/** `emptyExtra` — whatever the host wants in the void an empty conversation leaves between its
+ *  greeting and the composer. The chat owns that layout and nothing else: it never decides what
+ *  goes there (the minutes shell derives its proposal chips), so the two stay independent. */
+type ChatProps = Partial<TabProps> & {
+  emptyExtra?: ReactNode;
+};
 
 
-// MINUTES empty-state greeting — per SESSION, because the chat's room decides its voice:
-// meeting chats brief or recap, the org chat sets up the tier, room threads state their scope.
+/** WHICH greeting is TRUE in this room — and in every room but one, the answer is NONE.
+ *
+ *  ── F36, founder ruling 2026-09-02 ────────────────────────────────────────────────────────────
+ *  A chat opened with `+` shows an EMPTY COMPOSER AND NOTHING ELSE. Two lines are deleted here,
+ *  not made unreachable:
+ *    · "A fresh thread in this project. Ask across everything its workspaces hold …" — the
+ *      empty-state of a plain chat, which he met in a chat he had never created;
+ *    · "👋 I'm your agent here … paste a meeting link …" — the home greeting, which greeted a chat
+ *      that was about nothing.
+ *  Both were DEFAULTS: nothing in anyone's state produced them, they filled a blank page. His words
+ *  on finding them: *"i do not like this text."*
+ *
+ *  What survives is the pair a MEETING produces, because the room is about something and the line
+ *  is true of that thing. Minutes language is only honest in a chat BOUND TO A MEETING: the old
+ *  rule asked "does this account have any held meeting?" and answered it for every session, so the
+ *  home chat greeted a brand-new account with "I kept the minutes of your meeting" (founder,
+ *  2026-09-01, on an account with no meetings at all). A `meet-` room asks about ITS OWN meeting;
+ *  everywhere else says nothing at all. */
 function minutesEmptyGreeting(session: string): string {
-  const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
-  if (session.startsWith("org-setup"))
-    return `${GLOBAL_SETUP_GREETING} ${GLOBAL_SETUP_GREETING_SUB}`;
-  if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
-    return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
-  if (session.startsWith("meet-")) {
-    const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-    return strip(held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
-  }
-  const anyHeld = liveMeetingsNow().some((mm) => ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-  return strip(anyHeld ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
+  if (!session.startsWith("meet-")) return "";
+  const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
+  return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "").replace(/\*\*/g, "");
 }
 
-export function Chat({ params = {} }: ChatProps) {
+/** Everything a send carries besides its words.
+ *
+ *  `queuedRowId` USED TO BE HERE (Vexa-ai/vexa#1594) — the id of the "queued behind the current
+ *  turn" row a press had already put on screen, handed to the send that eventually fired it. There
+ *  is no such send any more: a mid-turn press goes straight to the server's inbox
+ *  (Vexa-ai/vexa#1610) and the row is retired by whichever of the two things that own it happens
+ *  first — the server dropping it from the pending list, or `job-started` naming its target. */
+type SendOpts = {
+  hidden?: boolean;
+  ground?: boolean;
+  scaffoldId?: string;
+  intent?: ChatIntent;
+  /** WATCH SOMETHING ALREADY SUBMITTED (Vexa-ai/vexa#1610) — the cursor to attach from. There is no
+   *  prompt and no user bubble on this path: the words went to the server's inbox when the person
+   *  submitted them, and this send exists only to render the turn they are about to get. Sending
+   *  them again is the one thing that must not happen. */
+  attachFrom?: string;
+};
+
+export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
@@ -596,6 +763,12 @@ export function Chat({ params = {} }: ChatProps) {
   const activeMeeting = activeRef?.kind === "meeting"
     ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value)
     : undefined;
+  // MINUTES: the composer stops ADVERTISING the focused doc (founder, 2026-09-01 — same treatment
+  // as 722629588 gave the schedule chip). The context still flows: contextRef below continues to
+  // ground the prompt and to fill the wire bundle; only the FOCUS chip and the badge stamped on the
+  // user bubble go away. In minutes mode the open document is already visible in the panel beside
+  // the conversation, so the badge was repeating what the eye can see.
+  const advertiseFocus = !minutesOnly();
   const contextRef: ActiveReference | null = focusRef?.kind === "meeting"
     ? { kind: "meeting", value: activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value, raw: `@meeting:${activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value}` }
     : focusRef;
@@ -604,17 +777,26 @@ export function Chat({ params = {} }: ChatProps) {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Follow the stream ONLY while the user is pinned to the bottom. Scrolling up to read
-  // detaches (streaming updates no longer yank the view); scrolling back down re-attaches.
-  // Sending a message always re-attaches — that's a human action asking for the reply.
-  const stickToBottomRef = useRef(true);
+  // Follow the stream ONLY while the reader is at the bottom — "chat should not fight with me when
+  // it's outputting text and i scroll up to scroll chat history" (founder, Vexa-ai/vexa#1599).
+  // The rule lives in surfaces/stickToBottom.ts, which decides from the container's POSITION: the
+  // flag this used to keep was written by the `scroll` event, which is dispatched a frame late and
+  // so still said at-the-bottom while the reader was already moving away from it.
+  const [following, setFollowing] = useState(true);
+  const stickRef = useRef<StickToBottom | null>(null);
+  if (!stickRef.current) stickRef.current = createStickToBottom(() => scrollRef.current, { onFollowingChange: setFollowing });
+  const stick = stickRef.current;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => { stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; };
+    const onScroll = () => stick.onScroll();
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [stick]);
+  // The transcript is measured AFTER the commit that grew it, which the stream callback below
+  // cannot do — a chunk's text is not in the DOM yet when it fires. Keyed on the content itself
+  // (every chunk rebuilds `turns`) so that typing in the composer costs no layout read.
+  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
@@ -691,13 +873,49 @@ export function Chat({ params = {} }: ChatProps) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
-        const loaded: Turn[] = (data.turns ?? [])
+        // THE PERSON'S WORDS ARE A FIELD, NOT SOMETHING TO RECOVER (F47). `user_text` is what they
+        // typed, recorded by the worker beside the turn; `text` is the composed prompt the model
+        // was given. When the field is there it is rendered as-is and the composed prompt is never
+        // shown. `compactStoredUserText` runs only for records written before the field existed —
+        // it strips the machinery off the front by sentinel, else by matching preamble wording,
+        // which is the derivation that silently broke on 2026-09-02 and put the whole grounding
+        // prompt in a grey user bubble.
+        //
+        // `raw` stays the stored prompt either way: the filters below test the SHAPE of what was
+        // stored (an onboarding kickoff, a machinery-marked composed opening), and those marks live
+        // in the prompt, not in the person's sentence.
+        const compacted = (data.turns ?? []).map((t) =>
+          t.role === "user"
+            ? { ...t, text: historyUserText(t), raw: t.text }
+            : { ...t, raw: t.text });
+        const loaded: Turn[] = compacted
           // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
           // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.
-          .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK) && !t.text.includes(ONBOARDING_REPLY_SEP)))
+          .filter((t) => !(t.role === "user" && t.raw.includes(ONBOARDING_KICKOFF_MARK) && !t.raw.includes(ONBOARDING_REPLY_SEP)))
+          // MACHINERY IS NEVER THE PERSON'S SPEECH. A turn the product composed (a `?ask=` preset
+          // from an emailed link, a proposal chip's hidden kick) was hidden when it was sent and
+          // must stay hidden when it is read back — the founder saw his own prepare kick returned
+          // to him as a grey user bubble because nothing marked it. Unconditional, unlike the
+          // onboarding filter above: a kick has no "and then the human replied" form.
+          .filter((t) => !(t.role === "user" && t.raw.includes(MACHINERY_MARK)))
+          // LEGACY, and dated: every composed opening sent BEFORE the mark existed (2026-09-02) is
+          // already in a transcript and would keep surfacing. Those sessions cannot be rewritten —
+          // they are the users' own records — so they are recognised by their shape instead, and
+          // only in the one position a composed opening can occupy: the session's FIRST turn,
+          // opening with a bracketed preset tag (`[prep] …`, `[minutes-review] …` — the same tag
+          // the agent instructions key on), and long, because a preset body is an instruction block
+          // and a person's first line is a sentence. Delete this clause once no live session
+          // predates the mark.
+          .filter((t, i, arr) => !(t.role === "user"
+            && arr.findIndex((x) => x.role === "user") === i
+            && t.text.length >= 200
+            && /^\s*\[[a-z][a-z0-9_-]{0,63}\]\s/.test(t.text)
+            // an onboarding reply also opens with a bracketed tag and is long — it is the HUMAN's
+            // words wrapped in grounding, and the filter above already decided its fate.
+            && !t.raw.includes(ONBOARDING_KICKOFF_MARK)))
           .map((t, i) =>
             t.role === "user"
-              ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
+              ? { id: `h-u-${i}`, role: "user", text: t.text }
               : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
         updateChatState(key, (s) => {
           if (s.loaded || s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
@@ -762,21 +980,99 @@ export function Chat({ params = {} }: ChatProps) {
     return data.files ?? [];
   };
 
-  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean } = {}) => {
+  // ── WHAT A TURN CARRIES, COMPOSED ONCE ──────────────────────────────────────────────────────
+  //
+  //  Two callers now: the send that STREAMS a turn, and the submit that only puts one on the
+  //  server's inbox (Vexa-ai/vexa#1610). Two compositions of one turn is how a message queued at
+  //  10:00 ends up grounded differently from the same message typed at 10:01 — the defect is
+  //  invisible from either call site and obvious from between them, which is why this is a function.
+
+  /** The prompt as it goes on the wire. `hidden` marks machinery in the RECORD, not only in this
+   *  render: without the mark it comes back from `/api/sessions/<s>/history` on the next hydration
+   *  as the person's own grey bubble. */
+  const composePrompt = (prompt: string, referenceSource: string, o: SendOpts = {}) => {
+    const raw = promptWithReferences(prompt, referenceSource.trim());
+    const base = raw && o.hidden ? raw + MACHINERY_NOTE : raw;
+    return { base, wire: (o.ground ?? true) ? promptWithActiveContext(base, contextRef, activeMeeting) : base };
+  };
+
+  /** The active center tab grounds the turn: a meeting passes {kind, platform, native_id, meeting_id}
+   *  so agent-api folds its live transcript into the prompt server-side; a file passes {kind, ref}.
+   *
+   *  P0 (cross-tenant leak fix): `meeting_id` is the meetings-domain ROW id (the mock's `id`) — the
+   *  transcript carrier keys on it, so grounding reads THIS row's transcript (`tc:meeting:{row_id}`),
+   *  never a DIFFERENT tenant's / an older row's under the shared native. `native_id` is display only.
+   *  The meeting's raw STATUS (+ title/when/workspace) rides along so agent-api branches the
+   *  grounding by lifecycle phase — prep (no transcript, steer preparation) / live (fold the live
+   *  stream) / post (fold the processed notes). A status-less payload keeps the legacy live path.
+   *
+   *  The CONTEXT BUNDLE (slice 1): tz + surface + focus + explicit include toggles. The focus
+   *  mirrors `active` for meeting/file (server prefers `context`); workspace/today are new focus
+   *  kinds the server folds itself. ground:false (onboarding) sends no bundle at all. */
+  const wireContext = (ground: boolean) => {
+    const active = !ground || !contextRef
+      ? undefined
+      : contextRef.kind === "meeting"
+        ? {
+            kind: "meeting", native_id: contextRef.value, meeting_id: activeMeeting?.id,
+            platform: meetingPlatformSlug(activeMeeting),
+            status: activeMeeting?.live_status,
+            title: activeMeeting ? meetingLabel(activeMeeting) : undefined,
+            scheduled_at: activeMeeting?.scheduled_at,
+            workspace_id: activeMeeting?.workspace_id,
+          }
+        : { kind: contextRef.kind, ref: contextRef.raw };
+    const wireFocus: FocusPayload | null | undefined = !ground
+      ? undefined
+      : (active && (active.kind === "meeting" || active.kind === "file"))
+        ? (active as FocusPayload)
+        : bundleFocus;
+    const context = !ground ? undefined : buildChatContext({
+      activeList, activeTab, focus: wireFocus ?? null, includeSchedule,
+    });
+    return { active, context };
+  };
+
+  // WHAT A STOPPED TURN WOULD RE-SUBMIT (Vexa-ai/vexa#1622) — per agent-turn id, the intent that
+  // turn was running under and the instruction the harness offered to continue with.
+  //
+  // A REF BESIDE THE TURN, not a field on it. The Continue act has to go back to the SAME TARGET,
+  // and the target lives on the intent — a chat concern that `workbench/agent-window`'s `Turn`
+  // (a rendering model, shared with the meeting copilot) has no business carrying. Nothing here is
+  // rendered, so nothing here may cause a render either.
+  const continuable = useRef(new Map<string, { instruction: string; intent?: ChatIntent }>());
+
+  const send = async (text: string, prompt = text, referenceSource = text, opts: SendOpts = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
-    const { hidden = false, ground = true } = opts;
+    const { hidden = false, ground = true, attachFrom } = opts;
     const v = text.trim();
-    const basePrompt = promptWithReferences(prompt, referenceSource.trim());
+    const { base: basePrompt, wire: p } = composePrompt(prompt, referenceSource, opts);
     const key = chatKey;
     const sessionForSend = session;
     const state = getChatState(key);
-    if (!v || !basePrompt || state.busy) return;
+    // AN ATTACH CARRIES NO WORDS, by construction — they are already on the server (see `attachFrom`
+    // on SendOpts). Everything else about this function is unchanged, which is the point: one
+    // rendering path, whether the turn was dispatched here or is being watched.
+    if ((!attachFrom && (!v || !basePrompt)) || state.busy) {
+      // NOTHING IS BEING SENT, so the CONTROL that was pressed must stop saying something is —
+      // that is the same lie as a spinner that outlives its turn, one object along
+      // (Vexa-ai/vexa#1604).
+      if (opts.intent && isJobIntent(opts.intent)) actSettled(actTarget(opts.intent));
+      return;
+    }
+    // …AND THIS ONE IS ON THE WIRE (Vexa-ai/vexa#1604). An act that waited for the turn in front of
+    // it stops saying it is queued at the moment it stops being queued — a control that goes on
+    // saying it is the same defect as one that says nothing, a minute later.
+    if (opts.intent && isJobIntent(opts.intent)) actSending(actTarget(opts.intent));
     const n = state.nextId;
     const agentId = `a-${n}`;
-    const displayText = appendReferenceToken(v, contextRef);
+    const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
     const ctrl = new AbortController();
-    const newTurns = hidden
+    // AN ATTACH DRAWS NO USER BUBBLE for the same reason a hidden turn does not: the person's own
+    // words are already on screen — they were painted at the moment they were submitted, dimmed,
+    // and this turn is the answer to them.
+    const newTurns = hidden || attachFrom
       ? [{ id: agentId, role: "agent" as const, text: "", ops: [] }]
       : [{ id: `u-${n}`, role: "user" as const, text: displayText }, { id: agentId, role: "agent" as const, text: "", ops: [] }];
     updateChatState(key, (s) => ({
@@ -799,55 +1095,176 @@ export function Chat({ params = {} }: ChatProps) {
     // measures the CURRENT wait (the useful "is it stuck?" signal), not total turn time.
     const setStatus = (phase: ChatPhase | null) =>
       patchAgentTurn(key, agentId, (t) => ({ ...t, status: phase ? { phase, since: t.status?.since ?? Date.now() } : null }));
-    const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
-    // The active center tab grounds the turn: a meeting passes {kind, platform, native_id, meeting_id} so
-    // agent-api folds its live transcript into the prompt server-side; a file passes {kind, ref}.
-    // P0 (cross-tenant leak fix): `meeting_id` is the meetings-domain ROW id (the mock's `id`) — the
-    // transcript carrier keys on it, so grounding reads THIS row's transcript (`tc:meeting:{row_id}`),
-    // never a DIFFERENT tenant's / an older row's under the shared native. `native_id` is display only.
-    // The meeting's raw STATUS (+ title/when/workspace) rides along so agent-api branches the
-    // grounding by lifecycle phase — prep (no transcript, steer preparation) / live (fold the live
-    // stream) / post (fold the processed notes). A status-less payload keeps the legacy live path.
-    const active = !ground || !contextRef
-      ? undefined
-      : contextRef.kind === "meeting"
-        ? {
-            kind: "meeting", native_id: contextRef.value, meeting_id: activeMeeting?.id,
-            platform: meetingPlatformSlug(activeMeeting),
-            status: activeMeeting?.live_status,
-            title: activeMeeting ? meetingLabel(activeMeeting) : undefined,
-            scheduled_at: activeMeeting?.scheduled_at,
-            workspace_id: activeMeeting?.workspace_id,
-          }
-        : { kind: contextRef.kind, ref: contextRef.raw };
-    // The CONTEXT BUNDLE (slice 1): tz + surface + focus + explicit include toggles. The focus
-    // mirrors `active` for meeting/file (server prefers `context`); workspace/today are new
-    // focus kinds the server folds itself. ground:false (onboarding) sends no bundle at all.
-    const wireFocus: FocusPayload | null | undefined = !ground
-      ? undefined
-      : (active && (active.kind === "meeting" || active.kind === "file"))
-        ? (active as FocusPayload)
-        : bundleFocus;
-    const context = !ground ? undefined : buildChatContext({
-      activeList, activeTab, focus: wireFocus ?? null, includeSchedule,
-    });
+    const { active, context } = wireContext(ground);
+    // F40 — a tool call ENDS an assistant message, so the next interim text is a new paragraph.
+    // The rule itself is `joinInterim` in chatStream.ts, where it is documented and tested; this is
+    // only the flag it reads. See there for why the boundary is a tool call and not a delta count.
+    let breakBeforeNextDelta = false;
+    // THE HANDOVER (Vexa-ai/vexa#1584). A turn that spawns a background job is over the moment the
+    // job starts, and the composer must be free THEN — not when this connection eventually closes,
+    // two minutes later. From that point the flag belongs to whatever the person sends next, so
+    // this send stops touching it: clearing `busy` in its own `finally` would clear a later turn's.
+    let ownsBusy = true;
+    const startedJobs = new Set<string>();
     try {
       const result = await streamChatTurn(
-        { prompt: p, session: sessionForSend, active, context },
+        // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
+        // `intent` (PRD decision 32) — an Extend/Create press is an ACT on a named file, not a
+        // sentence; it travels typed so the server can turn it into a preset without parsing prose.
+        { prompt: attachFrom ? "" : p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId, intent: opts.intent },
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
-          onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + text })),
-          onTool: (tool, args) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, toolOp(tool, args)] })),
-          onCommit: (sha) => patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })),
+          // A TURN BEING TAKEN IS SOMETHING LEAVING THE INBOX (Vexa-ai/vexa#1610), so this is when
+          // the queued rows are re-read: the row for the message now answering stops saying it is
+          // waiting at the moment it stops waiting, rather than when the answer finishes.
+          onAccepted: () => { void refreshPending(); },
+          onDelta: (text) => patchAgentTurn(key, agentId, (t) => {
+            const joined = joinInterim(t.text ?? "", text, breakBeforeNextDelta);
+            breakBeforeNextDelta = false;
+            return { ...t, status: null, text: joined };
+          }),
+          // A FILE THIS TURN WROTE. Re-emitted for the shell, which owns the chat record's tabs —
+          // this surface never opens a document itself (F41).
+          onArtifact: (a) => window.dispatchEvent(new CustomEvent(ARTIFACT_EVENT, { detail: a })),
+          // …AND A PAGE THE PERSON ASKED FOR (Vexa-ai/vexa#1586). Its own event, not the artifact
+          // one: an artifact defers to a reader who has opened something else, an open is that
+          // reader. Same forwarding rule — this surface opens nothing itself.
+          onOpen: (o) => window.dispatchEvent(new CustomEvent(OPEN_PAGE_EVENT, { detail: o })),
+          onFocusWorkspace: (f) => window.dispatchEvent(new CustomEvent(FOCUS_WORKSPACE_EVENT, { detail: f })),
+          // TERMS THIS TURN PUBLISHED for a meeting's transcript (PRD decision 35). Same seam and
+          // same reason as the artifact above: the chips are part of the chat's record and the
+          // transcript renders that record — this surface forwards and stores nothing.
+          onTerms: (t) => window.dispatchEvent(new CustomEvent(TERMS_EVENT, { detail: t })),
+          onTool: (tool, args) => {
+            breakBeforeNextDelta = true;      // F40 — the assistant message ended here
+            const op = toolOp(tool, args);
+            // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
+            // chip in the reply that names this new file resolves to "not found" — which is the
+            // whole reason a turn's own chips were dead on arrival.
+            if (op.wrote) invalidateDocLinkCaches();
+            // the step that was running has finished — the arrival of the next one IS its completion
+            patchAgentTurn(key, agentId, (t) => ({
+              ...t, status: null,
+              ops: [...t.ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o)), op],
+            }));
+          },
+          onCommit: (sha) => {
+            invalidateDocLinkCaches();
+            // The panel may be showing a document this turn just CREATED. A chat declares its
+            // tabs up front (PRD decision 18), so the setup conversation opens five pages
+            // before four of them exist — and without this they stay "no page here yet" until
+            // something else happens to remount them. A commit is the durable moment the files
+            // became real, so it is the one that tells the panel to look again.
+            window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT));
+            patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha }));
+          },
+          // THE TURN HANDED ITS WORK OFF AND IS DONE. Settle its steps, drop the live indicator and
+          // give the composer back — the acknowledgement line has already arrived as a delta, and
+          // everything from here belongs to the job chip below.
+          onJobStarted: (j) => {
+            ownsBusy = false;
+            startedJobs.add(j.jobId);
+            patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
+            // THE QUEUED ROW BECOMES THE RUNNING ONE (Vexa-ai/vexa#1594). The press already put a
+            // line on screen; this is that line learning its job id. Two rows for one act would
+            // read as two acts.
+            updateChatState(key, (s) => ({
+              ...s, busy: false,
+              // ONE ACT, ONE ROW (Vexa-ai/vexa#1610). Two things can be true when a job starts, and
+              // both retire a waiting row into a running one rather than leaving two on screen:
+              // the act was QUEUED IN THE SERVER'S INBOX (`claimInboxRow` — the row this browser
+              // drew at the press, or the one the pending list gave it), or it was queued BEHIND
+              // ANOTHER JOB on the same page and already carries this id (`promoteJob`).
+              // `startJob` adds nothing for an id it already has, which is what makes the pair safe.
+              jobs: promoteJob(startJob(claimInboxRow(s.jobs, j.target),
+                                        { id: j.jobId, kind: j.kind, target: j.target }), j.jobId),
+            }));
+            // …AND THE CONTROL THAT WAS PRESSED LEARNS THE SAME ID (Vexa-ai/vexa#1604). It has been
+            // saying "Creating…" since the press; from here it can count the job's own steps.
+            actStarted({ job: j.jobId, kind: j.kind, target: j.target });
+          },
+          // QUEUED BEHIND ANOTHER ACT ON THE SAME PAGE (Vexa-ai/vexa#1610) — where a refusal used to
+          // be. The turn that asked is over, so the composer comes back exactly as it does for a job
+          // that started; the row says it is waiting, and it already carries the id it will run
+          // under. Never a dead end: the same connection sees it start, step and land.
+          onJobQueued: (j) => {
+            ownsBusy = false;
+            startedJobs.add(j.jobId);
+            patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
+            updateChatState(key, (s) => ({
+              ...s, busy: false,
+              jobs: queueJob(claimInboxRow(s.jobs, j.target),
+                             { id: j.jobId, kind: j.kind, target: j.target }),
+            }));
+            actQueued({ target: j.target, kind: j.kind });
+          },
+          onJobStep: (jobId, tool) => {
+            const step = toolOp(tool).label.split(" · ").pop() ?? "";
+            actStepped(jobId, step);
+            updateChatState(key, (s) => ({ ...s, jobs: stepJob(s.jobs, jobId, step) }));
+          },
+          // STILL GOING, IN A FRESH WINDOW (Vexa-ai/vexa#1613). A long act that reached its
+          // per-window tool-call budget used to die there — the founder's OeNB job ran 72 steps
+          // and then said it had failed. It now checkpoints and continues, and the row it already
+          // has says so. No step is counted: nothing was done, something was RESUMED.
+          onJobProgress: (jobId, line) => {
+            actNoted(jobId, line);
+            updateChatState(key, (s) => ({ ...s, jobs: noteJob(s.jobs, jobId, line) }));
+          },
+          // ONE LINE, ALWAYS — landed or died. A job that finishes in silence is indistinguishable
+          // from one that is still running, and the chip has just gone.
+          onJobEnd: ({ jobId, ok, line }) => {
+            startedJobs.delete(jobId);
+            // THE CONTROL LANDS OR SHOWS WHY (Vexa-ai/vexa#1604). Landed → its state goes and it is
+            // a control again; the page it wrote is already on screen, put there by the commit.
+            // Died → it keeps the one line and offers the act again.
+            actEnded(jobId, ok, line);
+            updateChatState(key, (s) => ({
+              ...s,
+              jobs: endJob(s.jobs, jobId),
+              turns: line ? [...s.turns, { id: `j-${jobId}`, role: "agent" as const, text: line, ops: [] }] : s.turns,
+            }));
+          },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
-          onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + msg })),
-          onProgress: () => { if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); },
+          // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
+          // the turn did produce and say plainly that it is partial, so the person knows to ask
+          // again rather than reading half an answer as the whole one.
+          //
+          // …AND SAY IT AS A FIELD, NOT AS PROSE (Vexa-ai/vexa#1622). Appending `_reason_` to the
+          // text was the F89 fix and it was not enough: the sentence read as part of the agent's
+          // answer, and prose cannot carry a button. The line now renders as its own row under the
+          // reply, with the Continue act beside it — which is the whole difference between "that
+          // turn stopped" and the founder re-typing the same instruction three times.
+          onTruncated: (reason, partial, stop) => {
+            if (stop?.act) {
+              continuable.current.set(agentId, { instruction: stop.act.instruction, intent: opts.intent });
+            }
+            patchAgentTurn(key, agentId, (t) => ({
+              // `||`, not `??`: an agent turn is CREATED with `text: ""`, so the old nullish
+              // fallback never once reached `partial` — on a backend that streams no deltas (or a
+              // view that attached after they went past) the reply the turn did manage was
+              // dropped, and the person got a stop line over an empty bubble.
+              ...t, status: null, text: t.text || partial || "",
+              ...(typeof stop?.steps === "number" ? { steps: stop.steps } : {}),
+              stopped: { line: reason, ...(stop?.act ? { act: stop.act } : {}) },
+            }));
+          },
+          // THE SERVER'S STEP COUNT (Vexa-ai/vexa#1622) — it replaces this browser's own tally in
+          // the settled op line. A view that attached to a turn already in flight counted only what
+          // it saw; the server counted the turn.
+          onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
+          onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
+          onProgress: () => stick.onContent(),
         },
-        { signal: ctrl.signal },
+        { signal: ctrl.signal, attachFrom },
       );
-      if (!result.aborted && !result.terminal) {
+      // WHERE THIS CHAT HAS READ TO (Vexa-ai/vexa#1610) — what the NEXT queued item attaches from,
+      // so watching a queue costs no gap and replays nothing. Remembered even on a failed turn: the
+      // cursor is a position on the Stream, not a verdict about the turn.
+      if (result.cursor) cursorRef.current = result.cursor;
+      if (!result.aborted && !result.terminal && startedJobs.size === 0) {
         // The turn never reached a clean end even after resuming past the hard cap — the connection is
         // genuinely lost. Say so (fail-loud, P18): append a note if there was partial output, else the
         // timeout copy. The worker may still finish server-side, so point the user at a reopen.
@@ -858,13 +1275,32 @@ export function Chat({ params = {} }: ChatProps) {
             : "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." };
         });
       } else {
-        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null }));  // clean end — drop any lingering status line
+        // THE TICK ONLY AT THE END (F66): the last step settles when the turn does, never before.
+        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
       }
     } catch (e) {
       if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
-      else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }));
+      else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(e).headline }));
     } finally {
-      updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
+      // whatever happened — abort, error, timeout — no step is left spinning. A spinner that
+      // outlives its turn is the same lie as a tick that precedes it.
+      patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
+      if (ownsBusy) updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
+      // A JOB CHIP MUST NOT OUTLIVE ITS CONNECTION, for the same reason a spinner must not outlive
+      // its turn. `onJobEnd` removes each one as it lands, so anything still in this set means the
+      // stream died with that job unaccounted for — say so, and stop spinning.
+      for (const lost of startedJobs) {
+        actEnded(lost, false, LOST_JOB_LINE);
+        updateChatState(key, (s) => ({
+          ...s, jobs: endJob(s.jobs, lost),
+          turns: [...s.turns, { id: `j-${lost}`, role: "agent" as const, text: `_${LOST_JOB_LINE} — it may still have finished; reopen the page to see._`, ops: [] }],
+        }));
+      }
+      // THE TURN IS OVER AND NO JOB EVER CLAIMED THIS ACT (Vexa-ai/vexa#1604) — a refusal, an error,
+      // or a deployment whose worker still runs the act inline. Whatever happened, nothing is
+      // running, so the control must not go on saying it is. A FAILURE is left standing: it is not
+      // waiting for anything, it is telling the person something.
+      if (opts.intent && isJobIntent(opts.intent)) actSettled(actTarget(opts.intent));
     }
   };
 
@@ -873,28 +1309,139 @@ export function Chat({ params = {} }: ChatProps) {
     updateChatState(chatKey, (s) => ({ ...s, busy: false, abort: null }));
   };
 
+  // ── THE INBOX (Vexa-ai/vexa#1610) ───────────────────────────────────────────────────────────
+  //
+  //  `cursorRef` is where this chat has read to on its own output Stream; `attachedRef` is the
+  //  queue head it last opened a view for. Refs and not state: neither is rendered, and neither may
+  //  cause a render — an attach that re-fired on every keystroke would be a second reader of one
+  //  turn.
+  const cursorRef = useRef("");
+  const attachedRef = useRef("");
+  //  …and `catchingUp` is the one-at-a-time latch on the catch-up below. Without it a fast
+  //  busy→idle→busy flicker can run two flushes over one outbox, and both would send it.
+  const catchingUp = useRef(false);
+  useEffect(() => { cursorRef.current = ""; attachedRef.current = ""; }, [session]);
+
+  /** Read the server's pending list back and make the queued rows agree with it. The rows this
+   *  chat DREW optimistically are replaced by the ones the server holds — same ids, so nothing
+   *  flickers — and a row whose work has been taken disappears because the server stopped listing
+   *  it, not because this browser decided it had. */
+  const refreshPending = async () => {
+    const view = await fetchPending(session);
+    updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
+    return view;
+  };
+
+  /** Put a submission on the server NOW — the whole of what changed for a person typing mid-turn.
+   *  On a refused or dropped POST the unsent copy stays in the outbox and the next idle moment
+   *  retries it; the row stays on screen until the server confirms one way or the other, because a
+   *  row that vanishes is indistinguishable from a message that was never sent. */
+  const submitToServer = async (id: string, prompt: string, referenceSource: string, o: SendOpts) => {
+    const { wire } = composePrompt(prompt, referenceSource, o);
+    const { active, context } = wireContext(o.ground ?? true);
+    try {
+      const view = await submitToInbox({
+        id, session, prompt: wire, active, context, scaffoldId: o.scaffoldId, intent: o.intent,
+      });
+      updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
+    } catch {
+      // Left in the outbox on purpose — `flushOutbox` re-sends it the moment the chat is idle, and
+      // again on the next load. Saying nothing here is deliberate too: the message is not lost, and
+      // an error banner for a retry that is about to succeed is its own kind of lie.
+    }
+  };
+
   // A canvas keyword chip (or any harness `actions.ask`) asks the visible chat a question: reveal the rail
   // and stream the answer here. sendRef keeps the latest `send` closure so the listener stays stable.
   const sendRef = useRef(send);
   sendRef.current = send;
+
+  /** CONTINUE A TURN THAT RAN OUT OF BUDGET (Vexa-ai/vexa#1622).
+   *
+   *  It goes out through `ASK_CHAT_EVENT` — the one door every act already uses — so it inherits
+   *  #1610's inbox for free: pressed while something else is running it is SUBMITTED to the server
+   *  at once and drawn as a queued row; pressed on an idle chat it is a turn like any other. The
+   *  submission never lives in this browser, which is the property that made re-pressing safe.
+   *
+   *  A page act carries its INTENT back with the new instruction, so the act lands on the same
+   *  target and the worker queues it behind whatever is writing that page. A turn somebody typed
+   *  has no intent, and its target is the conversation — which is where the words go anyway. */
+  const continueTurn = (t: Extract<Turn, { role: "agent" }>) => {
+    const held = continuable.current.get(t.id);
+    const instruction = t.stopped?.act?.instruction || held?.instruction || "";
+    if (!instruction) return;
+    continuable.current.delete(t.id);
+    const intent = held?.intent;
+    window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+      detail: {
+        prompt: instruction,
+        display: instruction,
+        ...(intent ? { intent: { ...intent, instruction } } : {}),
+      },
+    }));
+  };
+  // AN ACT PRESSED WHILE A TURN IS RUNNING IS NEVER DROPPED (Vexa-ai/vexa#1594).
+  //
+  //  Founder walk 2026-09-06: *"extend this page button does not work when chat is working"*. The
+  //  press did reach `onAsk`; `onAsk` did call `send`; and `send`'s first line returns on
+  //  `state.busy`. The act evaporated between two functions — no bubble, no row, no error, nothing
+  //  on the wire — while the control that produced it looked exactly as it does when it works.
+  //
+  //  So an ask that arrives mid-turn is never dropped. It used to QUEUE WHOLE in this component —
+  //  display, prompt, intent and every option — and fire as its own turn when the current one
+  //  ended; since Vexa-ai/vexa#1610 it is SUBMITTED TO THE SERVER at once instead, because a queue
+  //  with one reader in one tab is a queue another device cannot see and a closed tab never fires.
+  //  A page act (Extend / Create, the two kinds the server runs as background jobs —
+  //  `chat_intents.JOB_KINDS`, which is what `isPageIntent` is) still puts a ROW at the foot of the
+  //  transcript AT ONCE saying it is queued; the difference is that the row is then reconciled
+  //  against the server's own pending list. Never a silent drop, and never a disabled control.
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; hidden?: boolean; ground?: boolean; session?: string }>).detail;
+      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
       // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
       // stash it; the target session's Chat consumes it the moment it mounts.
       if (detail?.session && detail.session !== session) {
-        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, hidden: detail.hidden, ground: detail.ground })); } catch { /* ignore */ }
+        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground, scaffoldId: detail.scaffoldId })); } catch { /* ignore */ }
         return;
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      void sendRef.current(prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
+      // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
+      // the user's own sentence renders as their message, and the grounding it carries does not.
+      const display = detail?.display || prompt;
+      const opts: SendOpts = { hidden: detail?.hidden, ground: detail?.ground, scaffoldId: detail?.scaffoldId, intent: detail?.intent };
+      // MID-TURN: SUBMIT IT TO THE SERVER NOW (Vexa-ai/vexa#1610), and say so where there is
+      // somewhere to say it. It used to be pushed onto `askQueue` — a list in this tab — and sent
+      // when the turn ended, which is a queue with one reader in one browser: another device never
+      // saw the press, and a closed tab never fired it.
+      if (getChatState(chatKey).busy) {
+        const rowId = newSubmissionId();
+        // Only a PAGE act has a row to draw HERE, at the press: it names a file, which is what a job
+        // row is about. Every other submission gets its row from the server's pending list a moment
+        // later, and `inbox: true` is what lets that list replace this one instead of doubling it.
+        const act = detail?.intent && isPageIntent(detail.intent) ? detail.intent : null;
+        if (act) {
+          updateChatState(chatKey, (s) => ({
+            ...s, jobs: queueJob(s.jobs, { id: rowId, kind: act.kind, target: jobTarget(act), inbox: true }),
+          }));
+        }
+        // …AND IN PLACE, ON THE CONTROL THAT WAS PRESSED (Vexa-ai/vexa#1604), in the row's own
+        // words. EVERY job act, not only the page ones: a transcript passage names no file so it
+        // draws no row in the chat, but it was pressed on a control standing under the reader's
+        // cursor, and that control is owed the same answer.
+        if (detail?.intent && isJobIntent(detail.intent)) {
+          actQueued({ target: actTarget(detail.intent), kind: detail.intent.kind });
+        }
+        void submitToServer(rowId, prompt, prompt, opts);
+        return;
+      }
+      void sendRef.current(display, prompt, prompt, opts);
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
-  }, [layout, session]);
+  }, [layout, session, chatKey]);
 
   // Consume a stashed session-targeted ask once THIS chat is the target and idle.
   useEffect(() => {
@@ -905,65 +1452,97 @@ export function Chat({ params = {} }: ChatProps) {
     const t = setTimeout(() => {
       try { localStorage.removeItem(key); } catch { /* ignore */ }
       try {
-        const d = JSON.parse(raw as string) as { prompt: string; hidden?: boolean; ground?: boolean };
-        if (d.prompt) void sendRef.current(d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground });
+        const d = JSON.parse(raw as string) as { prompt: string; display?: string; hidden?: boolean; ground?: boolean; scaffoldId?: string };
+        if (d.prompt) void sendRef.current(d.display || d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground, scaffoldId: d.scaffoldId });
       } catch { /* ignore */ }
     }, 600);
     return () => clearTimeout(t);
   }, [session]);
 
-  // Onboarding seeds a CACHED greeting (instant, no LLM) and arms the chat — the user's next reply carries
-  // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.
-  const onboardingArmedRef = useRef(false);
-  useEffect(() => {
-    const onSeed = () => {
-      if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      const key = chatKey;
-      updateChatState(key, (s) => (
-        s.turns.length
-          ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly()
-                ? (liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))) ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
-                : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
-      ));
-      onboardingArmedRef.current = true;
-    };
-    window.addEventListener(ONBOARDING_SEED_EVENT, onSeed);
-    return () => window.removeEventListener(ONBOARDING_SEED_EVENT, onSeed);
-  }, [layout, chatKey]);
+  // ── DELETED 2026-09-02 (F36): the cached onboarding greeting ────────────────────────────────
+  //
+  //  This listener wrote a canned agent turn into an empty chat the moment OnboardingGate fired its
+  //  seed — instantly, with no model round-trip — and armed the chat so the person's first reply
+  //  carried the discovery-loop grounding. It is what put "I'm your agent here … paste a meeting
+  //  link" in front of the founder in a chat he had never made.
+  //
+  //  A first turn nobody typed is machinery speaking as the product, and the founder's ruling is
+  //  that a new chat says nothing. The grounding it used to arm still reaches the agent — the setup
+  //  proposal chip carries it in its own kick (minutes/proposals.ts), which is a chip the person
+  //  actually pressed rather than a greeting they were handed.
 
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
   const newChat = () => selectSession(`chat-${Date.now().toString(36)}`);
 
-  // Messages typed while the agent is mid-turn QUEUE instead of silently dropping: the bubble
-  // appears immediately (dimmed, "queued"), and fires as its own turn the moment the current one
-  // ends. A queued bubble that never sends (navigation away) is dropped with its ref — it was
-  // never in the session.
-  const queuedRef = useRef<{ id: string; display: string; prompt: string }[]>([]);
+  // THE CHAT IS IDLE — CATCH UP WITH THE SERVER (Vexa-ai/vexa#1610).
+  //
+  //  Three things, in this order, and each is about the queue being the SERVER's:
+  //   1. re-send anything a dropped POST left in the outbox (the one gap the server cannot see);
+  //   2. re-read the pending list, so the queued rows are what the server holds and not what this
+  //      browser remembers;
+  //   3. if something is queued, ATTACH to watch it run — never re-send it. It is already on the
+  //      inbox; posting it again is the double-turn this whole issue exists to prevent.
+  //
+  //  The attach is bounded by the queue HEAD: one view per head, and a head that has not moved is
+  //  a view already open or one that ended with nothing taken. That is the stop condition — without
+  //  it a wedged worker would be re-attached to forever.
+  //
+  //  IT RUNS ON MOUNT TOO, which is the reload / second window / swapped-container case: the chat
+  //  comes up, reads the queue it never held, and watches it. One effect rather than a second one
+  //  beside it, because two would both flush the outbox and could send one message twice.
   useEffect(() => {
-    if (busy) return;
-    const next = queuedRef.current.shift();
-    if (!next) return;
-    updateChatState(chatKey, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== next.id) }));
-    void send(next.display, next.prompt, "");
+    if (busy || catchingUp.current) return;
+    let cancelled = false;
+    catchingUp.current = true;
+    void (async () => {
+      try {
+        await flushOutbox(session);
+        const view = await refreshPending();
+        if (cancelled || !view.pending.length) return;
+        const head = view.pending[0].entry;
+        if (attachedRef.current === head) return;
+        attachedRef.current = head;
+        // The cursor of the stream that just ended is EXACT — the next events after it are the
+        // queued turn's. With none (a reload, a second window) the server's own tail is the honest
+        // second best: the turn may already be under way, and its beginning is in the transcript.
+        void send("", "", "", { attachFrom: cursorRef.current || view.cursor || "0-0" });
+      } finally {
+        catchingUp.current = false;
+      }
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy]);
+  }, [busy, session]);
 
   const onSubmit = async () => {
     const v = value.trim();
     const hasAttachments = attachments.length > 0;
     if ((!v && !hasAttachments) || uploading) return;
+    // the user WROTE here — the minutes rail keeps a `touched` flag per chat and this is its
+    // only writer. Fired before the busy/queue branches, because queueing is still authorship.
+    //
+    // The TEXT rides along (F38). The rail names a chat from its first human turn, and this is the
+    // only place in the client that knows a turn is a human's: an agent turn never reaches here,
+    // and a composed opening arrives through the ask-chat path, not through the composer. So the
+    // name is taken from a message the person typed, by construction rather than by a check.
+    window.dispatchEvent(new CustomEvent(CHAT_TOUCHED_EVENT, { detail: { session, text: v } }));
     if (busy) {
-      if (!v || hasAttachments) return;   // queue plain text only; attachments wait for idle
-      const qid = `q-${Date.now().toString(36)}`;
-      queuedRef.current.push({ id: qid, display: v, prompt: isRoutineCommand(v) ? routineCreationPrompt(v) : v });
+      if (!v || hasAttachments) return;   // submit plain text only; attachments wait for idle
+      // ON THE SERVER, NOW (Vexa-ai/vexa#1610). This used to push onto `queuedRef` — a list in this
+      // tab — and send when the turn ended. The founder sent two messages into a busy session on
+      // 2026-09-02 and neither became a turn; that failure was a lost POST, and this one is its
+      // sibling: a message nobody but this browser had. The bubble still appears immediately, the
+      // words go to the session's inbox immediately, and the queued row that follows is the
+      // SERVER's answer about what is waiting.
+      const qid = newSubmissionId();
       updateChatState(chatKey, (s) => ({ ...s, turns: [...s.turns, { id: qid, role: "user", text: v }] }));
+      stick.pin();   // queued or not, the person just wrote — show them their own turn
       setValue("");
+      void submitToServer(qid, isRoutineCommand(v) ? routineCreationPrompt(v) : v, v, {});
       return;
     }
-    stickToBottomRef.current = true;  // sending re-attaches follow-the-stream
-    window.setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }), 0);
+    stick.pin();   // sending re-attaches follow-the-stream — the human asked for this reply
     if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
     if (!hasAttachments && v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
     let prompt = isRoutineCommand(v) ? routineCreationPrompt(v) : v;
@@ -986,16 +1565,15 @@ export function Chat({ params = {} }: ChatProps) {
       displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
       clearAttachments();
     }
-    // First onboarding reply: prepend the (hidden) discovery-loop grounding so the agent researches from
-    // this one answer. compactStoredUserText strips it back off on reload; the user only ever sees `displayText`.
-    if (onboardingArmedRef.current && !hasAttachments) {
-      onboardingArmedRef.current = false;
-      prompt = ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
-    }
-    // Org-setup first reply: the greeting was cached (no LLM turn) — attach the flow grounding here.
-    if (session.startsWith("org-setup") && turns.length === 0) {
-      prompt = GLOBAL_SETUP_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
-    }
+    // ── DELETED 2026-09-02 (F36/F37): the two grounding arms ────────────────────────────────
+    //
+    //  The first attached the discovery-loop grounding to whatever reply followed the cached
+    //  greeting; the second attached the org-setup flow grounding to the first turn of an
+    //  `org-setup` session. Both are gone with the paths that armed them: the greeting is deleted,
+    //  and the `org-setup` session id was minted by the rail's seeding and by nothing else, so the
+    //  branch is now unreachable — which, per the founder's stale-code ruling, means it is deleted
+    //  rather than left as a trap for the next person who wonders why it never fires. The admin
+    //  conversation is a SCAFFOLD (`kind: "admin-setup"`), opened and grounded from its record.
     void send(displayText, prompt, referenceSource);
     setValue("");
   };
@@ -1018,8 +1596,20 @@ export function Chat({ params = {} }: ChatProps) {
   const slash = value.startsWith("/");
   const skills = slash ? commands.querySkills(value) : [];
 
+  // THE INPUT FIELD IS FOR TYPING. F66's second half — "working · 18 steps · entity_upsert" beside
+  // the stop button — is GONE (founder ruling 2026-09-06, Vexa-ai/vexa#1587, on a screenshot of the
+  // composer reading `working · 1 step · james-spadafora.md` while the chat above already said
+  // `Reading · james-spadafora.md · 1 step` and `Working…`): *"working · 2 steps · whats_waiting —
+  // remove that from the input field"*. A running turn — and a running job — is told ONCE, in the
+  // chat, where the step rows are (`JobRows` below, and the turn's own op line in agent-window).
+  // The stop control stays: that is a handle, not narration.
+
   const composer = (
     <>
+      {/* THE STANDING ROW that used to sit here — "Open transcript" · "Open note" (#1586) — is
+          gone with the chips it carried (Vexa-ai/vexa#1600, founder: *"just keep a tab that can't
+          be closed instead"*). It was this component's only host slot above the composer, so the
+          slot goes too rather than standing empty waiting for a second reason to exist. */}
       {slash && skills.length > 0 && (
         <div style={{ border: "1px solid var(--line2)", borderRadius: 11, background: "var(--panel)", overflow: "hidden" }}>
           {skills.map((c) => <div key={c.id} onMouseDown={() => setValue(c.skill! + " ")} style={{ display: "flex", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13 }}><code style={{ fontFamily: "var(--mono)", color: "var(--accent)", minWidth: 88 }}>{c.skill}</code><span style={{ color: "var(--t3)", fontSize: 12 }}>{c.title}</span></div>)}
@@ -1030,7 +1620,7 @@ export function Chat({ params = {} }: ChatProps) {
         onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
-        {(contextRef || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
+        {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
                 sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
@@ -1050,7 +1640,7 @@ export function Chat({ params = {} }: ChatProps) {
             ) : null}
             {/* B4 carve: the meeting focus is ONE chip — `Preparing · Title ×` — never a mono
                 uppercase label plus a second raw-id Focus chip for the same meeting. */}
-            {contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
+            {advertiseFocus && contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
                 <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
@@ -1064,14 +1654,14 @@ export function Chat({ params = {} }: ChatProps) {
                     style={{ background: "none", border: "none", color: mode.color, opacity: 0.7, cursor: "pointer", display: "flex", padding: 2, flex: "none" }}><Icon name="x" size={10} /></button>
                 </span>
               );
-            })() : contextRef ? (
+            })() : advertiseFocus && contextRef ? (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <ReferenceChip refToken={contextRef} />
                 <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
               </>
             ) : null}
-            {!contextRef && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
+            {(!advertiseFocus || !contextRef) && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: bundleFocus.kind === "workspace" ? "var(--blue)" : "var(--t2)", background: bundleFocus.kind === "workspace" ? "var(--bluebg)" : "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "1px 7px" }}>
@@ -1145,16 +1735,33 @@ export function Chat({ params = {} }: ChatProps) {
 
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
-      <ChatConversation turns={turns} busy={busy || loading} empty={
-        !loading && minutesOnly() && session.startsWith("org-setup")
-          // The org-setup opener is ONE profound question standing in the void — centered, spare.
-          ? <div style={{ minHeight: "calc(100vh - 260px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", maxWidth: 520, margin: "0 auto", padding: "0 22px" }}>
-              <div style={{ fontSize: 34, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.02em", lineHeight: 1.25 }}>{GLOBAL_SETUP_GREETING}</div>
-              <div style={{ fontSize: 14.5, color: "var(--t2)", lineHeight: 1.6, marginTop: 16, maxWidth: 440 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
-            </div>
-          : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
-          ? minutesEmptyGreeting(session)
-          : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />
+      {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
+          research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
+          admin onboarding, reachable only from an `org-setup` session the rail's own seeding
+          planted, and it promised the reader a research step that does not exist. The founder met
+          it in a chat he never made — *"I explain this as stale code."*
+          What is left renders the meeting greeting when there IS a meeting, and otherwise renders
+          nothing but whatever the host put in `emptyExtra`. */}
+      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} onContinue={continueTurn} empty={
+        <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
+            {loading ? "Loading conversation…" : (minutesOnly()
+              ? minutesEmptyGreeting(session)
+              : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}
+            {/* NOT while the history is still loading: a chip that appears and then vanishes under
+                an arriving conversation is worse than one that arrives a beat late. */}
+            {!loading && emptyExtra}
+          </div>} />
+      {/* JUMP TO LATEST — the only way back to following that costs the reader nothing. Sticky to
+          the bottom of the scroller and zero-height, so it adds no scroll height of its own and the
+          window shell (owned by parallel work) is untouched. */}
+      {!following && (
+        <div style={{ position: "sticky", bottom: 0, height: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+          <button type="button" onClick={() => stick.pin()} aria-label="Jump to latest" title="Jump to latest"
+            style={{ pointerEvents: "auto", transform: "translateY(-10px)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", borderRadius: 999, padding: "5px 12px", fontSize: 12, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.18)" }}>
+            <Icon name="chevR" size={13} style={{ transform: "rotate(90deg)" }} />Jump to latest
+          </button>
+        </div>
+      )}
     </AgentWindow>
   );
 }

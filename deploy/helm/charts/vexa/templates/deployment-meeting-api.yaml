@@ -20,18 +20,24 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.meetingApi.terminationGracePeriodSeconds | default 30 }}
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: meeting-api
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.global.imageTag | default .Values.meetingApi.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - {{ printf "sleep %v" (.Values.meetingApi.preStopDelaySeconds | default 5) | quote }}
           ports:
             - name: http
               containerPort: 8080

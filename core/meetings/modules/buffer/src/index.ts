@@ -12,3 +12,10 @@
  */
 export { localAgreement, words, longestCommonWordPrefix, commonWordPrefix } from './local-agreement.js';
 export type { AgreementSegment, AgreementResult } from './local-agreement.js';
+// Faithful shared copy of the Google Meet transcription window. Google Meet keeps its
+// pipeline-local implementation in this release; Teams imports this copy only after parity proof.
+export { GmeetCompatibleBuffer, rms as gmeetCompatibleRms } from './gmeet-compatible-buffer.js';
+export type {
+  GmeetCompatibleBufferConfig,
+  GmeetCompatibleSubmissionTrigger,
+} from './gmeet-compatible-buffer.js';

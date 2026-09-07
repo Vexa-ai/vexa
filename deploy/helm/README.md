@@ -56,6 +56,8 @@ Docker to build the images. It proves the control plane stands up and `/health` 
 | `terminal.enabled` | `true` | The web UI. Set `terminal.publicUrl` (NEXTAUTH_URL/TERMINAL_URL) when fronted by ingress; add OAuth via `terminal.extraEnv`. |
 | `ingress.enabled` | `false` | Fronts the **terminal** by default; set `host`/`className`/`tls`. Add a second path to `gateway` to also expose the raw API. |
 | `minio.service.type` | `ClusterIP` | `NodePort` to reach presigned download URLs browser-side on dev clusters. |
+| `agentApi.workspaces.accessMode` | `ReadWriteOnce` | The **one** workspace store, and it has two mounters, not one: agent-api holds the claim for its whole lifetime, and **every worker Pod the runtime spawns mounts the same PVC** (`runtime_kernel/k8s_backend.py` builds the Pod from `VEXA_WORKSPACE_MOUNT_SOURCE`, the claim name agent-api passes down). RWO binds a volume to one **node**, so the moment a worker is scheduled anywhere else it fails Multi-Attach and the dispatch never starts — and agent-api's own rollout has to be `Recreate` for the same reason. Single-node (k3s `local-path`) is fine on RWO. **Multi-node needs `ReadWriteMany`** plus a storage class that supports it (NFS/Longhorn; on OpenShift typically ODF CephFS) — set both, or keep every worker pinned to agent-api's node. |
+| `global.securityContext.deliver` | `true` | Whether the chart delivers a `securityContext` at all — pod-level and container-level, on all 8 workloads. Keep `true` on plain Kubernetes: PSA-restricted namespaces *validate* these fields and refuse a spec without them. Set **`false` on OpenShift**: `restricted-v2` *injects* them (random UID, `runAsNonRoot`, drop ALL, `RuntimeDefault`, `fsGroup`) and is more likely to reject a spec that supplies its own. The vexa-delivery OpenShift provider profile sets it false. |
 
 ## Known boundaries (v0.12)
 
@@ -65,6 +67,25 @@ Docker to build the images. It proves the control plane stands up and `/health` 
   filesystem contains only its dispatch's workspaces. Multi-node clusters need an **RWX** storage
   class for the store PVC (NFS/Longhorn; k3s `local-path` is RWO-only — single node works), with
   `agentApi.workspaces.accessMode: ReadWriteMany`.
+- **Bundled Postgres cannot run under an arbitrary UID — use an external database on OpenShift.**
+  `postgres.image` is the official `postgres:17-alpine` (`values.yaml`), whose entrypoint runs
+  `initdb` as the baked-in `postgres` user and needs a passwd entry for whatever UID it is given.
+  OpenShift's `restricted-v2` SCC assigns a random per-namespace UID that exists in no
+  `/etc/passwd`, so the bundled all-in-one Postgres does not start there. This is a known
+  limitation of the convenience path, not of the chart: **set `postgres.enabled: false`** and
+  point `database.*` at a managed/operator-run Postgres (CloudNativePG or the Crunchy operator
+  in most OpenShift estates), with `postgres.credentialsSecretName` naming a pre-existing
+  Secret; add `pgbouncer.enabled: true` if that database has a fixed connection budget.
+  Swapping in a UID-agnostic image (bitnami / Red Hat `postgresql`) would also work and is
+  deliberately **not** done here — changing the database image under existing installs is a
+  data-durability decision, not a packaging one.
+- **Do not add `fsGroup` (or `runAsUser` / `runAsGroup`) to get a volume writable on OpenShift.**
+  The chart sets none of them anywhere, and that is deliberate: `restricted-v2` assigns an
+  `fsGroup` from the namespace's own range and *rejects* any value outside it
+  (`MustRunAsRange`), so a hand-set `fsGroup` turns a working install into an admission
+  failure. Let admission supply it. Where a volume still comes up unwritable, the fix belongs
+  in the image (a `HOME`/data dir writable by any UID) or in the storage class, never in a
+  securityContext this chart delivers — see `global.securityContext.deliver` above.
 - The `runtime` image bundles `kubectl` for the k8s backend; the docker/process backends ignore it.
 - **`TRANSCRIPTION_MODEL` is not values-plumbed yet** (#522 ships the env on compose + Lite): to
   point k8s bots at a validating STT backend (Groq/vLLM), add the env to the meeting-api (and

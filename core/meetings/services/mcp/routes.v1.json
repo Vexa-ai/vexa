@@ -1,0 +1,106 @@
+{
+  "contract": "routes.v1",
+  "domain": "mcp",
+  "owner": "core/meetings/services/mcp",
+  "edge": "gateway",
+  "note": "The MCP front door. Its tools call BACK through this gateway with the caller's own key, so /bots is gated on that second hop too; this is the first hop.",
+  "presence_env": "MCP_URL",
+  "routes": [
+    {
+      "method": "DELETE",
+      "path": "/mcp",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/mcp",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "OPTIONS",
+      "path": "/mcp",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/mcp",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/mcp",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/mcp/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/mcp/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "OPTIONS",
+      "path": "/mcp/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/mcp/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/mcp/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    }
+  ]
+}

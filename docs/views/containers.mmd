@@ -33,6 +33,10 @@ flowchart LR
     postgres["postgres"]
     minio["minio"]
   end
+  subgraph flows["flows"]
+    flows_api["flows-api"]
+    flows_worker["flows-worker"]
+  end
   slim["slim"]
   extension["extension"]
   terminal["terminal"]
@@ -42,6 +46,7 @@ flowchart LR
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
+  meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| service_authority
   meeting_api -->|"HTTP(S)"| system_webhook
   agent_api -->|"HTTPS"| runtime
@@ -57,3 +62,6 @@ flowchart LR
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
+  flows_worker -->|""| agent_api
+  flows_worker -->|""| gateway
+  flows_worker -->|""| admin_api

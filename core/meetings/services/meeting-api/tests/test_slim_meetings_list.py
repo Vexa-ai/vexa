@@ -37,6 +37,9 @@ HEAVY_DATA = {
     "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
     "title": "Weekly sync",
     "docs": [{"workspace": "u", "path": "notes.md"}],
+    "calendar_connection_id": "calendar-primary",
+    "calendar_uid": "weekly-sync@example.com",
+    "scheduled_at": "2026-08-20T10:00:00Z",
     # heavy detail keys the LIST must never ship (the outage cause)
     "speaker_events": [{"i": i, "t": "x" * 64} for i in range(2000)],   # the ~3 MB-class key
     "bot_logs": ["log-line " * 8] * 2000,
@@ -44,6 +47,21 @@ HEAVY_DATA = {
     "status_transition": [{"to": "active"}],
     "chat_messages": [{"m": "hi"}],
     "last_error": {"trace": "x" * 5000},
+    "calendar_sources": [{
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "uid": "weekly-sync@example.com",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+        "event": {
+            "component": {
+                "properties": [
+                    {"name": f"X-PROVIDER-{i:04d}", "value": "x" * 128}
+                    for i in range(2000)
+                ],
+            },
+        },
+    }],
 }
 
 HEAVY_KEYS = ("speaker_events", "bot_logs", "recordings", "status_transition",
@@ -89,6 +107,15 @@ def test_list_row_drops_heavy_data_keeps_light(path):
     # …but the light metadata the list actually renders survives.
     assert row["data"].get("title") == "Weekly sync"
     assert row["data"].get("docs") == [{"workspace": "u", "path": "notes.md"}]
+    assert row["data"].get("calendar_connection_id") == "calendar-primary"
+    assert row["data"].get("calendar_uid") == "weekly-sync@example.com"
+    assert row["data"].get("scheduled_at") == "2026-08-20T10:00:00Z"
+    assert row["data"].get("calendar_sources") == [{
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+    }]
     assert row["constructed_meeting_url"] == "https://meet.google.com/abc-defg-hij"
     assert row["status"] == "active" and row["native_meeting_id"] == "abc-defg-hij"
     # the whole list response is a few KB, not the multi-MB the stored data would make.
@@ -97,7 +124,8 @@ def test_list_row_drops_heavy_data_keeps_light(path):
 
 def test_get_meeting_by_id_still_returns_full_data():
     """A3 — the detail path (GET /meetings/{id}) reuses list_meetings on the INTERNAL path, so it
-    still returns the full `data`; only the LIST drops it."""
+    still returns the full `data`; only the LIST drops it. The one exception is the calendar
+    sources' raw ICS snapshot, projected away at the response edge for every viewer."""
     store = InMemoryTranscriptStore()
     mid = _seed_heavy(store)
     c = _client(store)
@@ -109,6 +137,76 @@ def test_get_meeting_by_id_still_returns_full_data():
     assert detail.status_code == 200
     body = detail.json()
     assert "data" in body and "speaker_events" in body["data"] and "recordings" in body["data"]
+    assert body["data"]["calendar_sources"] == [{
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+    }]
+    # the identity the detail page renders is still reachable — from the row's own singular keys.
+    assert body["data"]["calendar_uid"] == "weekly-sync@example.com"
+
+
+def test_transcript_by_id_projects_calendar_sources_and_keeps_the_stored_snapshot():
+    """The raw ICS event snapshot is sweep state: it stays in the row and never rides a response.
+
+    The transcript reaches workspace members and share recipients as well as the owner, and the
+    snapshot carries the whole calendar component — attendees, organizer, description. So the
+    projection is unconditional, and the STORED row still has everything the sweep reconciles on.
+
+    "Unconditional" means EVERY response edge, and a PATCH's echo of the row it just wrote is one
+    — it was the edge this test's claim did not actually cover (live 2026-08-17: a PATCH reply
+    carried the source's uid plus event.resolved_start / calendar / component). The test below
+    pins both PATCH routes.
+    """
+    store = InMemoryTranscriptStore()
+    mid = _seed_heavy(store)
+    r = _client(store).get(f"/transcripts/by-id/{mid}", headers=HEADERS)
+    assert r.status_code == 200
+    (source,) = r.json()["data"]["calendar_sources"]
+    assert source == {
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+    }
+    (stored,) = store._meetings[mid]["data"]["calendar_sources"]
+    assert stored["event"]["component"]["properties"]
+    assert stored["uid"] == "weekly-sync@example.com"
+
+
+PROJECTED_SOURCE = {
+    "id": "calendar-primary",
+    "name": "Primary calendar",
+    "auto_join": True,
+    "bot_name": "Work Notes",
+}
+
+
+@pytest.mark.parametrize("path", ["/meetings/{mid}", "/meetings/google_meet/abc-defg-hij"])
+def test_patch_response_projects_calendar_sources_on_both_routes(path):
+    """The PATCH echo is a response, so the raw ICS snapshot is not in it — on the row-id route and
+    on the native-keyed alias, which forward to the same handler. Measured live 2026-08-17: a
+    ``PATCH /meetings/{id}`` reply shipped ``uid`` + ``event.resolved_start``/``calendar``/
+    ``component`` back to the caller."""
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="scheduled", data=dict(HEAVY_DATA),
+    )
+
+    r = _client(store).patch(path.format(mid=mid), headers=HEADERS,
+                             json={"title": "Renamed by the user"})
+
+    assert r.status_code == 200
+    (source,) = r.json()["data"]["calendar_sources"]
+    assert source == PROJECTED_SOURCE          # no uid, no event snapshot
+    assert "resolved_start" not in r.text
+    assert r.json()["data"]["title"] == "Renamed by the user"
+    # …and the STORED row keeps everything calendar sync reconciles against
+    (stored,) = store._meetings[mid]["data"]["calendar_sources"]
+    assert stored["uid"] == "weekly-sync@example.com"
+    assert stored["event"]["component"]["properties"]
 
 
 # ── C2 · default page size + honest has_more ───────────────────────────────────────────────────────
@@ -124,6 +222,64 @@ def test_bots_has_more_reflects_more_not_hardcoded_false():
     # the whole (small) set on one page → no more
     r2 = c.get("/bots", headers=HEADERS, params={"limit": 100})
     assert r2.json()["has_more"] is False
+
+
+def test_bots_excludes_planned_rows_before_page_and_has_more_are_computed():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="past",
+                       status="completed", created_at="2026-08-14T20:00:00Z")
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="future-a",
+                       status="scheduled", created_at="2026-08-14T22:00:00Z")
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="future-b",
+                       status="scheduled", created_at="2026-08-14T21:00:00Z")
+    c = _client(store)
+
+    response = c.get("/bots", headers=HEADERS, params={"exclude_planned": "true", "limit": 1})
+
+    assert response.status_code == 200
+    assert [meeting["status"] for meeting in response.json()["meetings"]] == ["completed"]
+    assert response.json()["has_more"] is False
+
+
+def test_populated_calendar_account_history_is_compact_and_excludes_plans():
+    """A populated first page keeps run history small even when Calendar stores full event snapshots."""
+    store = InMemoryTranscriptStore()
+    calendar_sources = HEAVY_DATA["calendar_sources"]
+    for i in range(50):
+        status = "scheduled" if i < 11 else "failed" if i < 14 else "completed"
+        data = {
+            "title": f"Meeting {i}",
+            "calendar_connection_id": "calendar-primary",
+            "calendar_uid": f"meeting-{i}@example.com",
+            "scheduled_at": f"2026-08-{(i % 20) + 1:02d}T10:00:00Z",
+        }
+        if i < 16:
+            data["calendar_sources"] = calendar_sources
+        store.seed_meeting(
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id=f"calendar-{i:02d}",
+            status=status,
+            created_at=f"2026-08-14T{(i // 60):02d}:{i % 60:02d}:00Z",
+            data=data,
+        )
+
+    response = _client(store).get(
+        "/bots", headers=HEADERS, params={"exclude_planned": "true", "limit": 50},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["meetings"]) == 39
+    assert {meeting["status"] for meeting in body["meetings"]} == {"completed", "failed"}
+    assert all(
+        "event" not in source
+        for meeting in body["meetings"]
+        for source in meeting["data"].get("calendar_sources", [])
+    )
+    assert all(meeting["data"]["calendar_uid"] for meeting in body["meetings"])
+    assert body["has_more"] is False
+    assert len(response.content) < 50_000, f"history page too large: {len(response.content)} bytes"
 
 
 async def test_list_view_applies_default_limit_and_has_more():

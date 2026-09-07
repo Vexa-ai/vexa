@@ -20,6 +20,10 @@ derives it from the key.
 
 ## Getting a key
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 `make all` mints a key as part of bring-up and **prints it** (along with the service URLs) when the
 stack is ready — copy it from the `make all` output and use it as your `X-API-Key`.
 
@@ -66,9 +70,17 @@ is refused with `422` — never silently dropped.
 
 | Scope | Grants |
 |---|---|
-| `bot` | send and manage meeting bots, read transcripts |
-| `tx` | transcription / transcript access |
-| `browser` | browser-tool capabilities |
+| `bot` | bot lifecycle — `POST`/`GET`/`DELETE /bots`, `/bots/status`, bot config — and the calendar connections (`/user/calendar`, `/user/calendars/*`), because an auto-join feed spawns bots |
+| `tx` | the transcript and meeting-record plane — `/meetings*`, `/transcripts/*` |
+| `browser` | browser-tool capabilities. **Reaches no API route today** — a browser-only key can call [`/auth/me`](/api/settings#identity) and nothing else |
+
+`/recordings*`, `/user/webhook*`, `/user/models`, `/user/transcription`, `/agent/*` and `/mcp` accept
+either `bot` or `tx`. Most keys want both: `{"scopes":["bot","tx"]}`. The three `/user/*` routes in
+that list are the [Settings API](/api/settings) — model credentials, transcription backend, and
+webhook delivery, stored per key owner.
+
+Every route requires a scope. A key that holds none of the scopes a route accepts gets `403`,
+whichever route it is.
 
 Keys are prefixed by their primary scope — `vxa_bot_…`, `vxa_tx_…`, `vxa_browser_…`. A key without a
 recognized scope is rejected.
@@ -103,6 +115,6 @@ differently-named entries are self-serve keys the user minted and are never prun
 |---|---|---|
 | `401` | `Missing API key` | no `X-API-Key` header |
 | `401` | `Invalid API key` | unknown or revoked key |
-| `403` | `Token scope not authorized` | key lacks the scope this route needs |
+| `403` | `Insufficient scope for this endpoint` | key lacks the scope this route needs |
 
 See the full [error reference](/api/errors).

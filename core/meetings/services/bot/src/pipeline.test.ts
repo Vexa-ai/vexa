@@ -21,7 +21,7 @@ import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
-import type { ChunkedTranscriberCallbacks } from '@vexa/mixed-pipeline';
+import type { ChunkedTranscriberCallbacks, TeamsCsrcGmeetPipelineOptions } from '@vexa/mixed-pipeline';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
   }
 
-  // ── 5) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
+  // ── 5) LEGACY MIXED LANE (Zoom/Jitsi) speaker-label boundary (#890): a turn the lane has NOT
   //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
   //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display
   //     name — so per-speaker consumers group unattributed turns as ONE speaker, not hundreds.
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
       cb = c;
       return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
     };
-    const pipe = createBotPipeline(baseInv({ platform: 'teams' }), sink, { createMixedTranscriber: factory });
+    const pipe = createBotPipeline(baseInv({ platform: 'jitsi' }), sink, { createMixedTranscriber: factory });
     await pipe.start();   // triggers the transcriber factory → captures the mixed lane's publish callback
     check('mixed lane: transcriber factory wired (publish callback captured)', !!cb, 'factory not called');
 
@@ -212,7 +212,77 @@ async function main(): Promise<void> {
       JSON.stringify(sink.published.map((s) => ({ id: s.segment_id, abs: s.absolute_start_time, start: s.start }))));
   }
 
-  // ── 6) MIXED LANE pending RETRACTION (transcript de-dup): the mixed lane republishes its pending
+  // ── 6) TEAMS CSRC/GMEET ADAPTER: production selects the virtual-channel lane, forwards every
+  //     identity input the capture bridge already collects, preserves one stable speaker key per
+  //     CSRC, and retracts a cleared draft. This is the composition seam module-only tests cannot
+  //     see: it proves the live path selects the virtual-channel lane, not a diarizer. ──
+  {
+    const sink = captureSink();
+    let options: TeamsCsrcGmeetPipelineOptions | null = null;
+    const calls: string[] = [];
+    let disposed = false;
+    const factory = (received: TeamsCsrcGmeetPipelineOptions) => {
+      options = received;
+      return {
+        feedMixedAudio: (_pcm: Float32Array, tsMs: number) => calls.push(`audio:${tsMs}`),
+        recordTransportEvent: (event: { csrc: number; active: boolean; tMs: number }) => calls.push(`csrc:${event.csrc}:${event.active}`),
+        recordHint: (name: string) => calls.push(`hint:${name}`),
+        recordCaption: (name: string) => calls.push(`caption:${name}`),
+        recordRosterName: (name: string) => calls.push(`roster:${name}`),
+        recordRosterCoverage: (named: number, participants: number) => calls.push(`coverage:${named}/${participants}`),
+        async dispose() { disposed = true; },
+      };
+    };
+    let legacyMixedFactoryCalled = false;
+    const pipe = createBotPipeline(baseInv({ platform: 'teams' }), sink, {
+      createTeamsTranscriber: factory,
+      createMixedTranscriber: async () => {
+        legacyMixedFactoryCalled = true;
+        throw new Error('Teams must not construct the legacy mixed lane');
+      },
+    });
+    await pipe.start();
+    pipe.feedMixedAudio(FRAME, 1_000);
+    pipe.recordTransportEvent?.({ csrc: 201, active: true, tMs: 1_000 });
+    pipe.recordHint('Alice', 1_050, false);
+    pipe.recordCaptionName?.('Alice', 1_100);
+    pipe.recordRosterName?.('Alice', 1_150);
+    pipe.recordRosterCoverage?.(1, 2, 1_200);
+
+    options!.onSegment({
+      csrc: 201, speaker: 'Speaker A', sourceKey: 'csrc-201:1', segmentId: 'csrc-201:1:1000',
+      text: 'forming', startMs: 1_000, endMs: 1_800, completed: false, language: 'en',
+    });
+    options!.onSegment({
+      csrc: 201, speaker: 'Alice', sourceKey: 'csrc-201:1', segmentId: 'csrc-201:1:1000',
+      text: 'confirmed words', startMs: 1_000, endMs: 2_000, completed: true, language: 'en',
+    });
+    options!.onSegment({
+      csrc: 840, speaker: 'Speaker B', sourceKey: 'csrc-840:1', segmentId: 'csrc-840:1:2000',
+      text: '', startMs: 2_000, endMs: 2_000, completed: false, language: 'en',
+    });
+    await sleep(20);
+
+    check('Teams selects the CSRC/GMeet factory, never the legacy Pyannote-capable mixed factory',
+      !!options && !legacyMixedFactoryCalled);
+    check('Teams forwards mixed PCM plus CSRC, hint, caption, roster, and coverage evidence',
+      ['audio:1000', 'csrc:201:true', 'hint:Alice', 'caption:Alice', 'roster:Alice', 'coverage:1/2']
+        .every((entry) => calls.includes(entry)), JSON.stringify(calls));
+    const named = sink.published.find((segment) => segment.text === 'confirmed words');
+    check('Teams publishes the earned human name and a stable CSRC speaker key',
+      named?.speaker === 'Alice' && named.speaker_key === 'csrc:201', JSON.stringify(named));
+    check('Teams provisional Speaker A/B labels stay internal',
+      sink.published.find((segment) => segment.text === 'forming')?.speaker === '', JSON.stringify(sink.published));
+    check('Teams segment is transcript.v1-valid and producer-stamped for live rendering',
+      !!named && !!validateSeg(named) && named.absolute_start_time === new Date(1_000).toISOString(),
+      `${JSON.stringify(named)} ${ajv.errorsText(validateSeg.errors)}`);
+    check('Teams cleared draft retracts its exact durable id',
+      sink.retracted.includes('csrc-840:1:2000'), JSON.stringify(sink.retracted));
+    await pipe.stop();
+    check('Teams stop flushes/disposes the CSRC/GMeet lane', disposed);
+  }
+
+  // ── 7) LEGACY MIXED LANE pending RETRACTION (transcript de-dup): the mixed lane republishes its pending
   //     tail as a FULL-REPLACE block. The bot's egress is append-only + the terminal upserts by id, so a
   //     draft id that DROPS OUT of the block (confirmed under a new seq id, tail shrank, turn closed) must
   //     be RETRACTED or it lingers as a stale "unattached" duplicate (and an over-read past the turn
@@ -224,7 +294,9 @@ async function main(): Promise<void> {
       cb = c;
       return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
     };
-    const pipe = createBotPipeline(baseInv({ platform: 'zoom' }), sink, { createMixedTranscriber: factory });
+    // jitsi is the sole legacy-mixed lane (zoom moved to per-track, teams to CSRC); retraction is a
+    // mixed-lane concern.
+    const pipe = createBotPipeline(baseInv({ platform: 'jitsi' }), sink, { createMixedTranscriber: factory });
     await pipe.start();
     const seg = (id: string, s: number, e: number) => ({ text: 't', startMs: s, endMs: e, language: 'en', segmentId: id });
 

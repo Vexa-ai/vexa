@@ -14,6 +14,6 @@ The guides split by the plane they touch — **meetings**, **agents**, or both c
 | `post-meeting-report.mdx` | meetings → agents — generate a report from a finished meeting |
 | `daily-brief.mdx` | agents — scheduled summarization |
 | `email-triage.mdx` | agents — triage an inbox |
-| `live-copilot.mdx` | both — real-time assist over a live meeting |
+| `live-copilot.mdx` | both — follow a live meeting (raw transcript stream + an agent turn over it) |
 | `chat-workspace.mdx` | agents — drive the workspace chat surface |
 | `workspace-files.mdx` | agents — read/write workspace files |

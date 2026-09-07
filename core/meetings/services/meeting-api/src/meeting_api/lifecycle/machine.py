@@ -49,6 +49,33 @@ class CompletionReason(str, Enum):
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"
 
 
+# The one terminal reason a user stop resolves to, at EVERY stage.
+USER_STOP_REASON = CompletionReason.STOPPED.value
+
+
+def dominant_completion_reason(reason: Any, *, stop_requested: bool) -> Any:
+    """``stop_requested`` DOMINATES every completion-reason writer — one rule, one place.
+
+    A stop that loses a race still ends the run, and the row must record WHY THE USER ENDED IT, not
+    whichever fault the race happened to reach first. Witnessed on stage rev 193 (row 26313): a
+    DELETE landed 0.4s after the POST, the bot was torn down before it could join, and the terminal
+    was written ``join_failure`` — a reason ``retry.py`` classes TRANSIENT, so the occurrence stayed
+    eligible for re-dispatch while ``data.stop_requested`` was true the whole time. The reason is the
+    user's intent; the race is an accident of scheduling and has no business overwriting it.
+
+    Founder ruling 2026-08-17: *"explicit stop must be stop, evict."*
+
+    Applied at EVERY site that writes a terminal reason: the FSM advance
+    (``LifecycleSink.apply_change`` below), the reconcile sweeps
+    (``reconcile._pre_active_completion_reason`` + the was-active branch), and the by-id
+    spawn-failure write (``MeetingRepo.fail_meeting``). ``lifecycle.occurrence`` then reads the
+    result as ``USER_STOPPED`` — which is why the dominance has to hold at the WRITE, not only at
+    the classification: a row whose reason says ``join_failure`` is re-dispatchable to every reader
+    that never looks at the flag.
+    """
+    return USER_STOP_REASON if stop_requested else reason
+
+
 class FailureStage(str, Enum):
     """lifecycle.v1 `FailureStage` — furthest stage reached, for `failed` attribution."""
 
@@ -167,6 +194,53 @@ def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
     return list(reversed(kept)), False
 
 
+#: Stages at which the bot had NOT yet reported reaching the waiting room. Used to answer
+#: "did it ever reach the lobby?" from the FSM's own history — the single most load-bearing
+#: discriminator in the taxonomy (#1058: lobby expiry vs never-got-there).
+_PRE_LOBBY_STAGES = frozenset({FailureStage.REQUESTED, FailureStage.JOINING})
+
+
+def _capture_join_evidence(
+    rec: "MeetingRecord", event: Dict[str, Any], frm: Optional[BotStatus]
+) -> Optional[Dict[str, Any]]:
+    """Best-effort typed evidence for a `failed` terminal (#1059/#1058). NEVER raises.
+
+    `reached_lobby` is answered from the record's OWN history, not the payload: a bot that reported
+    `awaiting_admission` is a bot that stood in the waiting room, whatever its terminal event later
+    claims about its stage (the orchestrator stamps a fixed `awaiting_admission` on every
+    non-admitted verdict). Same discipline as `failure_stage`: derive server-side, never trust a
+    stale payload field (FM-003).
+
+    `needs_help` is deliberately NOT proof of a lobby on its own. It implies one only while
+    `LEGAL_TRANSITIONS` permits reaching it from `awaiting_admission` alone — and #1251 adds
+    `joining -> needs_help` precisely so a PRE-lobby blocker (a consent gate, a captcha) can
+    escalate. The day that lands, a bot that never saw a waiting room would be stamped
+    `reached_lobby` -> `awaiting_admission_timeout` -> `host_action`: filed as *the host did not let us in*,
+    and excluded from `system_failure_rate` — the metric under-reporting our own defects in exactly
+    the cohort #1251 exists to investigate. So the test is how `needs_help` was ENTERED, not that it
+    occurred.
+    """
+    try:
+        from .join_evidence import evidence_from_event
+
+        reached_lobby = (
+            BotStatus.AWAITING_ADMISSION in rec.history
+            or frm is BotStatus.AWAITING_ADMISSION
+            or (frm is BotStatus.NEEDS_HELP and BotStatus.AWAITING_ADMISSION in rec.history)
+        )
+        if rec.failure_stage is FailureStage.ACTIVE:
+            # A bot that reached `active` was ADMITTED — whatever killed it afterwards (a pipeline
+            # fault, an eviction) is not a join failure. The join taxonomy has nothing truthful to
+            # say about it, so it says nothing rather than filing it under `unknown`.
+            return None
+        stage = rec.failure_stage.value if rec.failure_stage is not None else None
+        return evidence_from_event(
+            event, stage=stage, reached_lobby=reached_lobby, reason_text=rec.reason
+        )
+    except Exception:  # noqa: BLE001 — evidence is a report about a finished run; never fail on it
+        return None
+
+
 class IllegalTransition(Exception):
     """Raised when a lifecycle event would drive an illegal FSM transition.
 
@@ -216,6 +290,10 @@ class MeetingRecord:
     #: What degraded the meeting without ending it — today the STT backend refusing chunks
     #: (kinds + counts + the backend's own detail), reported by the bot on the terminal event.
     stt_fault: Optional[Dict[str, Any]] = None
+    #: WHY a pre-active run never reached the meeting (#1059/#1058) — the typed
+    #: `join_evidence.JoinFailureReason` plus the stage, the stage timings, and the platform's own
+    #: signal. Set on a `failed` terminal only; see `data` below for how it lands in the JSONB.
+    join_evidence: Optional[Dict[str, Any]] = None
     # User intent (parent's `meeting.data.stop_requested`) — set by the DELETE/stop path, read
     # first by the exit classifier so a user stop is never mis-attributed as a failure.
     stop_requested: bool = False
@@ -233,12 +311,30 @@ class MeetingRecord:
         Mirrors the parent's `meeting.data` keys (`status_transition`, `completion_reason`,
         `failure_stage`, `bot_logs`, `bot_resources`, `last_error`, `stop_requested`) so a
         recordings/transcript reader sees the same attribution shape it does in prod.
+
+        THIS IS A WRITE PATH, not a view. The dict returned here is handed to
+        `update_meeting_status(data=…)`, whose adapter shallow-merges every top-level key into the
+        real `meetings.data` JSONB column — no allow-list, so a key added here reaches production and
+        the public `GET /meetings` the moment it is projected. That is also why omission matters:
+        a key this property does not emit is a fact no query can ever ask about, which is exactly
+        how 83 `join_failure` rows came to carry `reason: None` (see the `reason` note below).
         """
         d: Dict[str, Any] = {"status_transition": list(self.status_transition)}
         if self.completion_reason is not None:
             d["completion_reason"] = self.completion_reason.value
         if self.failure_stage is not None:
             d["failure_stage"] = self.failure_stage.value
+        # THE REASON, AT THE TOP LEVEL (#1059). Every producer already stamps one — the bot on each
+        # terminal it emits, the reconcile sweep with the probe's own answer — and the record has
+        # carried it on `self.reason` all along. It just never landed anywhere a reader looks: the
+        # only projection was `last_error.reason`, a key the list view DROPS
+        # (`projection.LIST_OMIT_KEYS`) and which `data->>'reason'` cannot see. That is the whole
+        # mechanism behind "all 83 join_failure rows carry reason: None" — not a missing report, a
+        # missing projection. Hoisting it costs nothing and makes the failure decomposable by query.
+        if self.reason is not None:
+            d["reason"] = self.reason
+        if self.join_evidence is not None:
+            d["join_evidence"] = dict(self.join_evidence)
         if self.error_details is not None:
             d["last_error"] = {
                 "exit_code": self.exit_code,
@@ -258,7 +354,13 @@ class MeetingRecord:
 
 
 class MeetingStore:
-    """In-memory record store, keyed by connection_id. No DB — the eval is in-process."""
+    """In-memory record store, keyed by connection_id — it holds no DB handle.
+
+    Read that narrowly: the STORE is in-process, the BRICK is not a simulation. Records advanced
+    here are projected through `MeetingRecord.data` and merged into the `meetings.data` JSONB column
+    by `update_meeting_status`, which is how production learns why a meeting ended. A record lost on
+    restart is re-created from the DB status (`rehydrate`), not from here.
+    """
 
     def __init__(self) -> None:
         self._records: Dict[str, MeetingRecord] = {}
@@ -293,6 +395,14 @@ class MeetingStore:
         illegal; there the durable row may represent progress committed by another API replica.
         """
         rec = self.get_or_create(connection_id)
+        # The user's stop intent is carried ALWAYS, outside the status guard, and only ever raised:
+        # it is durable state the stop path wrote straight to the DB row (never through this FSM),
+        # it is monotonic (nothing un-presses stop), and the terminal-reason rule below depends on
+        # this record knowing it. Guarding it behind `rec.status is None` was the F3 hole — a record
+        # already advanced to `joining` in this process never learned the DELETE had landed, so its
+        # terminal was written with the bot's own `join_failure`.
+        if isinstance(persisted_data, dict) and persisted_data.get("stop_requested"):
+            rec.stop_requested = True
         if rec.status is None or replace_stale:
             seeded = bot_status_from_persisted(persisted_status)
             if seeded is not None:
@@ -365,6 +475,19 @@ class LifecycleSink:
         StatusChange (webhook body)."""
         return self.apply_change(event).record
 
+    @staticmethod
+    def _terminal_reason(
+        rec: MeetingRecord, event: Dict[str, Any]
+    ) -> Optional[CompletionReason]:
+        """The reason to record on a terminal advance — the bot's, unless the USER stopped it.
+
+        The bot reports what IT saw (it was killed mid-join → ``join_failure``). When the record
+        carries the user's stop intent, that intent is the truth about why the run ended, and it
+        wins here at the WRITE — see ``dominant_completion_reason``."""
+        raw = event.get("completion_reason")
+        raw = dominant_completion_reason(raw, stop_requested=rec.stop_requested)
+        return CompletionReason(raw) if raw else None
+
     def apply_change(
         self,
         event: Dict[str, Any],
@@ -434,18 +557,24 @@ class LifecycleSink:
             rec.error_details = str(event["error_details"])
 
         if to is BotStatus.COMPLETED:
-            raw = event.get("completion_reason")
-            rec.completion_reason = CompletionReason(raw) if raw else None
+            rec.completion_reason = self._terminal_reason(rec, event)
         elif to is BotStatus.FAILED:
             # FM-003: derive failure_stage from the stage we were IN, not the payload.
             rec.failure_stage = _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
-            raw = event.get("completion_reason")
-            rec.completion_reason = CompletionReason(raw) if raw else None
+            rec.completion_reason = self._terminal_reason(rec, event)
             # The parent builds an `error_details` string on a failed exit when none supplied.
             if rec.error_details is None and (rec.exit_code is not None or rec.reason):
                 rec.error_details = (
                     f"Bot exited with code {rec.exit_code}; reason: {rec.reason}"
                 )
+            # TYPED join evidence (#1058) — the diagnostic axis alongside the sealed
+            # `completion_reason`, so the ~20s platform refusal and the ~13min lobby expiry that
+            # both read `join_failure` become two countable populations. Prefer the producer's own
+            # verdict (the bot holds the platform signal and the stage timings); derive one from the
+            # record when it sent none, so a reconcile-driven or runtime-destroy terminal is
+            # evidenced too. FAIL-OPEN by contract: this is a REPORT about a run that has already
+            # ended, and no fault in it may alter the terminal the FSM is recording.
+            rec.join_evidence = _capture_join_evidence(rec, event, frm)
 
         # Terminal forensics → record.data (parent caps bot_logs, trims oldest-first).
         if to in _TERMINAL:

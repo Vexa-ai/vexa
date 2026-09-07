@@ -24,13 +24,9 @@ import urllib.request
 # runtime.v1 WorkloadStatus carries no labels/env.
 _BOT_ID = re.compile(r"^mtg-(?P<meeting>.+)-(?P<conn>[0-9a-zA-Z]{1,8})$")
 
-# The meetings-domain carrier keys (single shared redis). Kept in sync with
-# collector/db_writer.py (proc_stream_key / ACTIVE_MEETINGS_KEY) and worker/meeting.py.
+# The meetings-domain carrier key (single shared redis). Kept in sync with
+# collector/db_writer.py (ACTIVE_MEETINGS_KEY).
 ACTIVE_MEETINGS_KEY = "active_meetings"
-# ADR-0027 Train 2: meetings finalized but not yet drained through the worker's view_end marker
-# (zset: member = meeting row id, score = drain deadline epoch). Healthy = members clear within
-# ~2 db-writer ticks of a stop; a member past its deadline = the run-46 S1 signature, live.
-PROCESSED_PENDING_KEY = "processed_pending"
 
 
 def classify_workload(status: dict) -> dict:
@@ -83,10 +79,13 @@ def _stream_stat(r, key: str) -> dict:
 
 def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
     """Per-meeting pipeline state, one row per meeting id discovered from ANY carrier: the
-    processed-notes stream/flag/cursor (``proc:meeting:*``), the transcript stream
-    (``tc:meeting:*``), the db-writer's discovery set (``active_meetings``), and the live
-    registry. Non-numeric (native-keyed) proc streams surface too — those are exactly the
-    S2 keying bug the panel exists to make visible."""
+    transcript stream (``tc:meeting:*``), the db-writer's discovery set (``active_meetings``), and
+    the live registry. Non-numeric (native-keyed) streams surface too — those are exactly the S2
+    keying bug the panel exists to make visible.
+
+    It also used to discover and report the copilot's carriers — the ``proc:meeting:*`` notes
+    stream, its ``:on`` flag and ``:cursor``, and the ``processed_pending`` drain zset. PRD decision
+    34 removed the producer; a panel row for a key nothing writes is a light that can only be off."""
     live_by_id: dict[str, dict] = {}
     for m in live_meetings or []:
         for key_field in ("numeric_meeting_id", "meeting_id", "native_id"):
@@ -95,29 +94,18 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
                 live_by_id.setdefault(str(v), m)
 
     ids: set[str] = set()
-    for pattern, strip_suffixes in (("proc:meeting:*", (":on", ":cursor")), ("tc:meeting:*", ())):
-        try:
-            for raw in r.scan_iter(match=pattern, count=200):
-                key = raw if isinstance(raw, str) else raw.decode()
-                for suffix in strip_suffixes:
-                    if key.endswith(suffix):
-                        key = key[: -len(suffix)]
-                        break
-                ids.add(key.split(":", 2)[2])
-        except Exception:  # noqa: BLE001 — a failed scan degrades discovery, not the endpoint
-            pass
+    try:
+        for raw in r.scan_iter(match="tc:meeting:*", count=200):
+            key = raw if isinstance(raw, str) else raw.decode()
+            ids.add(key.split(":", 2)[2])
+    except Exception:  # noqa: BLE001 — a failed scan degrades discovery, not the endpoint
+        pass
     active: set[str] = set()
     try:
         active = {m if isinstance(m, str) else m.decode() for m in (r.smembers(ACTIVE_MEETINGS_KEY) or set())}
     except Exception:  # noqa: BLE001
         pass
-    pending: dict[str, float] = {}
-    try:
-        for member, score in r.zrange(PROCESSED_PENDING_KEY, 0, -1, withscores=True) or []:
-            pending[member if isinstance(member, str) else member.decode()] = float(score)
-    except Exception:  # noqa: BLE001 — pre-Train-2 stacks have no zset; the column just stays empty
-        pass
-    ids |= active | set(live_by_id) | set(pending)
+    ids |= active | set(live_by_id)
 
     # A live-registry row is keyed under BOTH its numeric row id and its native aliases. When the
     # numeric row exists, an alias id with no real carriers of its own is registry echo, not an S2
@@ -138,23 +126,10 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
             "row_keyed": mid.isdigit(),  # False = a native-keyed carrier the db-writer never drains (S2)
             "in_active_meetings": mid in active,
         }
-        if mid in pending:
-            row["pending_drain"] = {"deadline": pending[mid], "overdue": pending[mid] < time.time()}
-        try:
-            row["processing_on"] = bool(r.get(f"proc:meeting:{mid}:on"))
-            row["copilot_cursor"] = r.get(f"proc:meeting:{mid}:cursor")
-        except Exception:  # noqa: BLE001
-            pass
-        proc = _stream_stat(r, f"proc:meeting:{mid}")
         tc = _stream_stat(r, f"tc:meeting:{mid}")
-        if proc:
-            row["proc_stream"] = proc
         if tc:
             row["transcript_stream"] = tc
-        if mid in aliased and not (
-            proc.get("len") or tc.get("len") or row.get("processing_on") or row.get("copilot_cursor")
-            or mid in active or mid in pending
-        ):
+        if mid in aliased and not (tc.get("len") or mid in active):
             continue  # registry echo of a numeric row — no carriers of its own, nothing to report
         live_row = live_by_id.get(mid)
         if live_row:

@@ -7,6 +7,7 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -87,6 +88,18 @@ def test_authed_request_passes_body_and_status_verbatim():
     r = client.post("/bots", headers=AUTH, json={"platform": "google_meet", "native_meeting_id": "abc"})
     assert r.status_code == 201
     assert r.json() == {"id": 99, "platform": "google_meet"}
+
+
+def test_recording_delete_is_forwarded_to_meeting_api():
+    downstream = FakeDownstream(
+        status_code=200, body={"status": "deleted", "recording_id": 42}
+    )
+    client, _ = _client(downstream=downstream)
+    response = client.delete("/recordings/42", headers=AUTH)
+    assert response.status_code == 200
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://meeting-api/recordings/42"
+    assert downstream.last["headers"]["x-user-id"] == "7"
 
 
 def test_range_response_preserves_content_range_headers():
@@ -173,6 +186,47 @@ def test_identity_headers_injected_and_spoof_stripped():
     assert fwd["x-api-key"] == VALID_KEY
 
 
+def test_internal_tier_header_is_stripped_from_a_public_request():
+    """F95 — the internal tier is not reachable from the public edge.
+
+    `/agent/{path}` maps to agent-api `/api/{path}`, and agent-api's `_internal_caller` (with
+    admin-api's `_check_internal`, and the meeting room's gate 0, which the code itself calls the
+    trust boundary on who is in the room) is gated SOLELY on `x-internal-secret`. The strip used to
+    be an eight-name list of `x-user-*` spellings, so a request carrying `x-internal-secret` — the
+    compose default was a literal in a public repository, and the exact value the comparison used —
+    arrived at agent-api and was believed.
+
+    The header must not reach the downstream at all, whatever value it carries."""
+    client, downstream = _client()
+    r = client.get("/bots/status", headers={
+        **AUTH,
+        "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
+        "x-vexa-internal-api-secret": "vexa-internal-secret",
+        "x-admin-api-key": "changeme",
+        "x-gateway-verified": "1",                     # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
+    })
+    assert r.status_code == 200
+    fwd = downstream.last["headers"]
+    for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret",
+                    "x-admin-api-key", "x-gateway-verified"):
+        assert spoofed not in fwd, f"{spoofed} reached the downstream from a public request"
+    # The strip is by FAMILY, not by a list that rots: a header nobody has invented yet, spelled
+    # inside one of the internal families, is stripped for free.
+    assert "x-user-id" in fwd and fwd["x-user-id"] == "7"
+
+
+def test_authority_header_families_are_recognised_by_prefix():
+    """The oracle behind the strip, stated directly — a list of eight names is what failed."""
+    from gateway.app import _is_authority_header
+
+    for name in ("x-internal-secret", "X-Internal-Secret", "x-internal-anything-new",
+                 "x-vexa-internal-api-secret", "x-user-id", "x-user-invented-tomorrow",
+                 "x-admin-api-key", "x-gateway-verified"):
+        assert _is_authority_header(name), name
+    for name in ("x-api-key", "content-type", "x-trace-id", "authorization", "mcp-session-id"):
+        assert not _is_authority_header(name), name
+
+
 def test_meeting_intent_put_forwards_to_meeting_api():
     """The Meetings surface's Schedule/Cancel action PUTs the user-owned intent; the gateway must
     forward it verbatim to meeting-api's PUT /meetings/{platform}/{native}/intent. Regression: this
@@ -248,6 +302,25 @@ def test_native_chat_read_forwards_to_meeting_api():
     assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
 
 
+def test_native_participants_read_forwards_to_meeting_api():
+    """#451: GET /meetings/{platform}/{native}/participants forwards, path-for-path, to the
+    owner-scoped meeting-api read. The edge adds no roster logic of its own — it must not, or the
+    ownership check would live in two places and only one of them would be tested."""
+    client, downstream = _client()
+    r = client.get("/meetings/google_meet/abc-defg-hij/participants", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij/participants")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_participants_read_without_a_key_is_401():
+    """Fail-closed: an unauthenticated participants read never reaches meeting-api at all."""
+    client, downstream = _client()
+    assert client.get("/meetings/google_meet/abc-defg-hij/participants").status_code == 401
+    assert downstream.last is None
+
+
 def test_recording_download_alias_forwards_to_raw():
     """#579 C3: GET /recordings/{id}/media/{mid}/download aliases to the .../raw byte route."""
     client, downstream = _client()
@@ -294,6 +367,67 @@ def test_user_calendar_sync_routes_forward_to_meeting_api():
     assert r.status_code == 200
     assert downstream.last["method"] == "POST"
     assert downstream.last["url"] == "http://meeting-api/user/calendar/sync"
+
+
+def test_plural_calendar_routes_forward_to_owning_services():
+    client, downstream = _client()
+    client.get("/user/calendars", headers=AUTH)
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://admin-api/user/calendars"
+
+    client.post("/user/calendars", headers=AUTH,
+                json={"name": "Work", "ics_url": "https://cal.example/work.ics"})
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://admin-api/user/calendars"
+
+    client.patch("/user/calendars/work-1", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"] == "http://admin-api/user/calendars/work-1"
+
+    client.post("/user/calendars/work-1/sync", headers=AUTH)
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/work-1/sync"
+
+    client.delete("/user/calendars/work-1", headers=AUTH)
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://admin-api/user/calendars/work-1"
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
+def test_calendar_id_is_re_encoded_into_one_downstream_segment():
+    """Starlette hands the handler a DECODED param, so a raw interpolation would let the caller
+    graft a query string onto the downstream hop: `x%3Fdebug%3D1` must stay one literal segment."""
+    client, downstream = _client()
+    client.patch("/user/calendars/x%3Fdebug%3D1", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["url"] == "http://admin-api/user/calendars/x%3Fdebug%3D1"
+
+    client.post("/user/calendars/x%23frag/sync", headers=AUTH)
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/x%23frag/sync"
+
+
+def test_calendar_id_dot_segments_cannot_walk_up_the_downstream_path():
+    """`%2E%2E` decodes to `..`, which httpx resolves against the base path — un-encoded it turns
+    PATCH /user/calendars/{id} into a PATCH on admin-api's whole /user record."""
+    client, downstream = _client()
+    client.patch("/user/calendars/%2E%2E", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["url"] == "http://admin-api/user/calendars/%2E%2E"
+    assert httpx.URL(downstream.last["url"]).path == "/user/calendars/.."
+
+    client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/%2E%2E/sync"
+
+
+def test_calendar_id_with_control_character_is_4xx_not_500():
+    """httpx raises InvalidURL (not a RequestError) for a NUL/CRLF id, so it would escape the
+    502/504 mapping as a gateway 500 — the caller's bad path param is refused at the edge."""
+    client, downstream = _client()
+    r = client.delete("/user/calendars/%00", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
+
+    r = client.post("/user/calendars/a%0D%0Ab/sync", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
 
 
 def test_user_calendar_requires_api_key():

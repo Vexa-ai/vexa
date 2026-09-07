@@ -1,0 +1,106 @@
+---
+title: "Step vocabulary"
+description: "The deployed capabilities flows compose — generated from the step docstrings in the image; every name here is submittable, nothing here is folklore."
+---
+
+A flow is a list of these names. This page is **generated from the registry** (`make vocab-docs`) — the docstring in the code is the contract, and `GET /flows` serves the same text at runtime.
+
+### `ack_by_email`
+
+Acknowledge by email: when Vexa joins, plus the finalize-your-workspace ask when onboarding is pending. Registers the mail as a THREAD ANCHOR (replies become conversation). Reads: refs.{organizer,url,start,title} · Prior: ensure_user · Effect: one notification Result: {message_id, workspace_ready}.
+
+### `attend_live`
+
+PENDING WHILE THE CALL RUNS — the reaction that makes "a meeting is happening right now" a queue item instead of a `/bots/status` read at the edge. It does nothing and that is the point. `Wait` burns no attempt and costs nothing while parked (`flows/loop.tick`), so the value here is entirely in the ROW: a person's queue can say a call is live because flows is holding a pending reaction that says so, with the flow that produced it attached — which is what `behavior/queue/live_meeting.pending.md` speaks. Reaches no domain: `needs` is empty on purpose, so this works in every profile.
+
+### `await_claim`
+
+The QUESTION card: one proposed claim, waiting for a person to confirm or correct it. Same re-read, same reason. The block's reason carries the CLAIM ITSELF and nothing else: it is this person's data, not our prose, and the sentence around it is `behavior/queue/desk_claim.human.md`'s.
+
+### `await_scaffold`
+
+The SETUP card: a desk exists and has never been filled in. Reads: refs.uid. It re-reads the desk rather than trusting the event, because the fact is old the moment it is published: a person who finished setup between the publish and this step must not be asked again. `Done` when the marker is there, `Block` when it is not.
+
+### `await_start`
+
+Sleep until start − 2 min — time is a column (Wait until), zero cost while parked. Reads: refs.start.
+
+### `dispatch_bot`
+
+Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the existing meeting). Prior: ensure_user (for the key) · Effect: bot container Result: {meeting_id, native, platform}.
+
+### `drive_group`
+
+Drive the conversation to the AGENT'S OWN ACCEPT: email each new outbox content (send-once registry), nudge on silence (params: nudge cadence), Done when the agent writes its acceptance marker (.scaffolded / group marker). Effect: emails.
+
+### `drive_person`
+
+Drive the conversation to the AGENT'S OWN ACCEPT: email each new outbox content (send-once registry), nudge on silence (params: nudge cadence), Done when the agent writes its acceptance marker (.scaffolded / group marker). Effect: emails.
+
+### `drop_to_attendees`
+
+The meeting's ARTEFACT into every desk in the room — the organiser's included. Plain code, no agent turn, no LLM (founder decisions 20 and 22). This is where the meeting lands on a person's desk. `process_meeting` writes into no desk at all, so nothing else does it: one meeting produces one artefact, and this step copies that same artefact, byte-for-byte, to everybody who was in the room. The only thing that differs between two people's copies is the `?meeting=` link, which carries their own share token because a forwarded link must grant its new reader nothing. WHO. The organiser, plus every attendee `email_attendees` ACTUALLY mailed (its `drops` payload carries the exact link each of them was given, so nothing is recomputed and no second share capability is minted). The organiser is not special: they get the same entity, with the link `email_minutes` already built for them. PER PERSON, three effects and no others: 1. their platform user (`ensure_platform_user`) and their desk (`POST /api/workspace/init` AS THEM — the same seeding the click does). Nothing else is built: no chat, no session, no scaffolding. 2. `kg/entities/meeting/<date>-<slug>.md` — the report, with the meeting's title, date, organiser and roster as frontmatter, and their own link at the foot. 3. `kg/entities/meeting/index.md` gains one line, once. Both writes go through `PUT /api/workspace/file`, which commits, so each lands in that desk's history rather than as an untracked file. IT IS ENTITY-FREE, AND THAT IS AN ECONOMIC BOUND, NOT AN OVERSIGHT (founder, decision 22 addendum). No person entity, no company entity, no decision entity, no README rewrite, and no agent turn — the whole step is plain code. *A desk nobody talks to is a flat pile of reports: complete, and free.* Wiring that pile into entities costs a model call per person per meeting, and for somebody who never opens the product it buys nothing. The wiring happens when the person ENGAGES, in their own chat, proposed by the agent rather than run on their behalf. The one exception is the GROUP desk, which `process_meeting` maintains with entities because it is the room's shared state rather than one person's pile — and that is the group's desk, never an individual's. IT READS NO DESK. The only paths it reads anywhere are the two it is itself the author of — the entity above and that index — and it reads them for exactly one reason: so a second run writes nothing instead of a second entity, a second index line and a second commit. What it reads is compared against what it was about to write and then dropped: never returned, never logged, never shown to another person, never mixed into anyone else's file. Nothing belonging to one person reaches another. IDEMPOTENT per (meeting, person) twice over, because the two halves fail differently: `ctx.scratch` skips people already done inside this run (a `StepError` re-runs the whole step), and each write is a content-compare on a stable path, which is what survives a worker restart that loses scratch entirely. FAILURE POLICY: one person's drop failing must never cost the others theirs, so each is attempted in its own try and the failures are collected into the result — a partial drop is a fact an operator can see and re-run. The step fails only when EVERY drop failed, which is not one person's bad state but the agent-api being unreachable; retryable, since every write above is safe to repeat. Prior: process_meeting{report}, email_attendees{drops}, email_minutes{link} Effect: N desk writes · Result: {dropped, to, failed, entity}.
+
+### `email_attendees`
+
+Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click composes. Cannot run before the note: its input is process_meeting's receipt. THE SHAPE, in order: HEAD → the shared report → one gap line → one button. Nothing else. The head AND the subject are one `mailtext.render("attendee-head", …)` — the live text is `_global/mail/attendee-head.md`, re-read every send, falling back to the identical baked default; the gap line and the button are `notify.compose`'s, so the step never writes the url itself. ONE REPORT, THE SAME MAIL TO EVERYONE (founder, 2026-09-02). Every inside-domain attendee receives byte-identical words — the same report the organiser gets from `email_minutes` — and the ONLY thing that differs per person is the share token in their own button, which has to differ because a forwarded link must grant its new reader nothing. There is no per-person section, no `## _decision`, no silent-attendee policy and no room-size cap: the `mail_outbox/attendees-<id>.md` mechanism those needed is gone from `process_meeting`. Personalisation happens in the chat AFTER the click, where the person is there to be asked. Reads: refs.{participants, organizer, title, meeting_id, share?} · Effect: N notifications Result: {sent, followup, skipped, drops, failed}. `drops` is what `drop_to_attendees` runs on: one entry per person the mail ACTUALLY went to, carrying the exact link they were given, so the next step neither recomputes the fan-out nor mints a second share capability per attendee. It does mean the receipt holds those links, tokens included: see the step below.
+
+### `email_minutes`
+
+Send the committed note VERBATIM in the body + the feedback ask + ONE link into the minutes terminal, already primed on this meeting. Cannot run before the commit: its input IS process_meeting's receipt. The link is `?ask=minutes-review&meeting=<row-id>` on VEXA_UI_URL. Both params compose and both survive the sign-in hop, so a signed-out reader clicks once, gets a magic link, and lands in a chat that already holds the meeting — the reply-by-email door stays open beside it, unchanged. The preset body is admin-owned (`_global/asks/minutes-review.md`) and substitutes {{meeting}}: the URL never carries prompt text, so nobody who can send mail can drive somebody else's agent. Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification.
+
+### `email_reply`
+
+Mail the agent's reply on the same thread; register Message-ID; record the content hash in mail_outbox_sent (send-once across reactions and restarts). Prior: feedback_turn · Effect: one notification.
+
+### `emit_completed`
+
+EMIT meeting.completed carrying IDENTITY ONLY — the fact the post-meeting flows react to. Prior: dispatch_bot, run_meeting. The transcript used to ride inside this event, truncated to 8,000 characters to fit. That made the event a second home for a fact the transcription domain already owns, and the cap was the product's ceiling: on an hour-long meeting the agent saw about the first twelve minutes, so its notes were well-formed and nearly content-free (measured — the mechanical score said 0.94 while the judge said 7/100, and both were right). Identity travels; the words stay where they live. The agent reads them itself over the MCP with its delegation token, in full.
+
+### `emit_prep`
+
+EMIT meeting.upcoming — the fact the prepare flow reacts to. THE ADMIT: on this deployment an invite IS the meeting-created event. Nothing else publishes one — mailbox.py admits only invite.received and mail.reply, and a meeting made any other way (the terminal, the control MCP's bot_schedule, calendar sync) reaches the platform's meetings table without telling flows. So the fact is emitted from inside invite_intake, before await_start parks: a second producer can admit the same event type later without touching this step. Prior: ensure_user.
+
+### `emit_started`
+
+EMIT meeting.started — the fact the live flow reacts to. Prior: dispatch_bot. THE PRODUCER, on this deployment, and deliberately a temporary one. meeting-api already derives a typed `meeting.started` when the bot goes ACTIVE (`core/meetings/services/meeting-api/src/meeting_api/lifecycle/webhook.py:40`) — that is the true signal and the right home for it. Nothing carries it into flows' intake, so the event exists and nothing reacts to it. Emitting it from inside `invite_intake` is the shape `emit_prep` already uses one screen up, for the same stated reason: a second producer can admit the same event type later WITHOUT touching this step, because admission dedups on the source event id. When meetings publishes it, this step goes and the flow does not change.
+
+### `ensure_user`
+
+Provision the platform user for the organizer (idempotent lookup-or-create). Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call) Result: {uid} — every later step's identity. ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step created user 131 with the email `20260902t183213z` — an invite's own DTSTAMP, handed to it by an ICS parser that had matched the word "organizer" inside the UID line. The parse is fixed (`mailbox.parse_ics` anchors its property patterns), and this is the second lock, because this step is the LAST place that can tell: everything after it works with a uid and has no way to know the account behind it is a timestamp. A refusal here is not retryable — the refs are frozen at admission, so the same malformed value would arrive on every attempt — and it must be loud: an account minted from a parse artefact is invisible until somebody reads the user table, which is how this one was found.
+
+### `feedback_turn`
+
+One conversation turn: hand the inbound email to the session's agent (workspace updated where facts changed), collect the reply via the FILE-OUTBOX contract (mail_outbox/<session>.md, content-hash), coalesced across sibling reactions. THE MAIL IS DATA, NEVER INSTRUCTIONS — see `_untrusted_mail`. Who is even allowed to reach this step is decided one process away, in the mailbox intake's allow-list and rate limits; this is the second half of the same rule, for the mail that IS allowed through. Reads: refs.{uid,session,text,from_addr} · Effect: agent worker turn · Result: {reply}.
+
+### `open_group`
+
+Open the onboarding conversation: seed the workspace, dispatch the agent kickoff (non-blocking — the freeze law). The agent's replies arrive via the FILE-OUTBOX contract; the human's via threaded email. Reads: refs.uid (+person/group).
+
+### `open_person`
+
+Open the onboarding conversation: seed the workspace, dispatch the agent kickoff (non-blocking — the freeze law). The agent's replies arrive via the FILE-OUTBOX contract; the human's via threaded email. Reads: refs.uid (+person/group).
+
+### `prepare_meeting`
+
+The front door of the loop whose back door is email_minutes: one short note asking whether they want to walk in ready, carrying `?ask=prep&meeting=<ref>`. A TEMPLATE — substitutions only, no agent turn — read from `_global/mail/prepare.md` so the wording is a file edit rather than a rebuild. Five lines, plain text, one link: a prepare mail that has to be read twice has already failed. Honours mail_prep exactly as email_minutes honours mail_minutes. IT NEVER GOES TO A STRANGER. Founder, 2026-09-02, on a pre-meeting fan-out across a room: *"I am afraid this will not work for a 50 attendee meeting."* Before the meeting there is nothing yet to justify a mail to somebody who has never heard of us — and the recipient of this one is the organiser, or a person who is already a user. A stranger meets Vexa AFTER their meeting, in the attendee follow-up, which is why that mail carries the introduction and this one does not. Relatedly: this mail must never claim a workspace was started for anyone. Nothing is built for a person who has not clicked. Reads: refs.{organizer|person, title, start, uid?, meeting_id?, url?} Effect: one notification · Result: {message_id, meeting_ref}.
+
+### `process_meeting`
+
+ONE REAL AGENT TURN on session meet-<id>, producing ONE SHARED ARTEFACT: the meeting's report, the same words for everybody who was in the room. IT WRITES INTO NO DESK (founder decision 22, 2026-09-02). Not the organiser's either. The canonical home of the note is THE MEETING ROW AND ITS TRANSCRIPT STORE; every attendee's desk — the organiser's included, nobody special — receives the artefact itself afterwards, from `drop_to_attendees`. One meeting, one artefact, and the desks are where it lands, not where it lives. COMPLETION IS THE REPLY, GROUNDED IN THE TRANSCRIPT. It used to be a new commit touching `kg/entities/meeting/` in the organiser's repo (`ag.latest_meeting_note`, now deleted with its baseline). With no desk write that commit never happens, so that detector would wait fifteen minutes and fail every meeting — a silently never-completing step, which is worse than a loud one. The turn's own reply IS the artefact: the kick already required the reply to BE the report, because it was already being mailed verbatim. THE GROUNDING GATE IS UNCHANGED and now matters more, since the reply is no longer cross-checkable against a committed file: does the report share any six-word run with the actual transcript? If not the agent is told exactly that, once, and asked again; if it still cannot ground it the reaction FAILS LOUDLY rather than mailing a report nobody can trace to the meeting. THE ROOM. The turn may READ the desks of the people on the invite, prioritised by speaking time and capped by `room_read_max`. Flows proposes; agent-api verifies, resolves each address to a subject, and mounts only those who already have a desk — so nothing here mounts anything and no account is ever minted for the room. THE GROUP, and ONLY when there is one: the group desk is mounted read/write and this turn MAINTAINS it — its people, decisions, open items, README — rather than appending an artefact to it. A meeting with no group gets none of that. Reads: refs.{uid,meeting_id,native,participants?,participant_names?,group?} Effect: one agent turn · Result: {report, group, room_read}.
+
+### `require_workspace`
+
+RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, and deliberately not deleted. It was the queue gate: minutes waited for `.scaffolded`, and while they waited it mailed "Your minutes are waiting / Finish the setup conversation and the minutes arrive right after". The founder's ruling on reading that mail was "no we do not want that", and the step is out of `post_meeting` from version 4. IT STAYS REGISTERED, AND EMPTY, so that any reaction still in flight on an older version — or any DB-authored version that still names it — DRAINS instead of dying on "unknown step", and above all so that the nudge cannot be sent by a code path nobody remembered. Deleting the function would have left the mail reachable from a stale flow row; emptying it makes it unreachable from anywhere. Result: {ready} — the shape the old receipts carry.
+
+### `rsvp_accept`
+
+Accept the invitation IN THE ORGANIZER'S CALENDAR — iMIP METHOD:REPLY over SMTP; Google flips Vexa to "Yes" in the guest list. Reads: refs.{organizer,ics_uid,start,title} Effect: one calendar reply email · Result: {message_id}.
+
+### `run_meeting`
+
+Poll-composite until completed. Transcribe window + (declared double) fixture injection.
+
+### `spawn_onboardings`
+
+RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above. It emitted `onboarding.person.needed` / `onboarding.group.needed`, which started the email conversations that chased a person until they finished setup. Those flows are gone, so the facts now have no consumer — and a step that emits a fact nothing reacts to is worse than one that does nothing, because it leaves rows in the log implying work that never existed. The invite's touches are RSVP accept, the ack mail, and the prepare mail. Three, and no others. Group setup happens in a chat behind a `group-setup` scaffold, where the person is there to be asked. Result: {} — no reactions created, deliberately.

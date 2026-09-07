@@ -29,6 +29,11 @@ function modelPartOf(body: string): string | null {
   const m = body.match(/name="model"\r\n\r\n([^\r]*)\r\n/);
   return m ? m[1] : null;
 }
+/** The value of the `response_format` form part in a captured multipart body. */
+function responseFormatPartOf(body: string): string | null {
+  const m = body.match(/name="response_format"\r\n\r\n([^\r]*)\r\n/);
+  return m ? m[1] : null;
+}
 
 async function run() {
   const pcm = new Float32Array(1600).fill(0.05); // 0.1s of audio
@@ -47,9 +52,27 @@ async function run() {
     await client.transcribe(pcm, 'en');
     check('unconfigured → default whisper-1 (no behavior change)', modelPartOf(body()) === 'whisper-1', `got ${JSON.stringify(modelPartOf(body()))}`);
   }
+  // Backends such as Voxtral reject verbose_json but accept the same OpenAI endpoint with json.
+  {
+    const formats: Array<string | null> = [];
+    (globalThis as any).fetch = async (_url: unknown, init: { body: Buffer }) => {
+      formats.push(responseFormatPartOf(Buffer.from(init.body).toString('latin1')));
+      if (formats.length === 1) {
+        return new Response(JSON.stringify({ message: 'Currently do not support verbose_json for Voxtral' }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ text: 'voxtral ok' }), { status: 200 });
+    };
+    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', model: 'voxtral', maxRetries: 0 });
+    const first = await client.transcribe(pcm, 'en');
+    await client.transcribe(pcm, 'en');
+    check('verbose_json rejection falls back once, then caches json',
+      JSON.stringify(formats) === JSON.stringify(['verbose_json', 'json', 'json']),
+      `formats=${JSON.stringify(formats)}`);
+    check('json-only response remains a valid transcription result', first.text === 'voxtral ok', `text=${JSON.stringify(first.text)}`);
+  }
 
   (globalThis as any).fetch = realFetch;
   if (failed) { console.error(`\n❌ stt model: ${failed} check(s) FAILED.`); process.exit(1); }
-  console.log('\n✅ stt model (P5, #522): the wire carries the configured model id; unset stays whisper-1.');
+  console.log('\n✅ stt model (P5, #522): configured model ids reach the wire; json-only OpenAI-compatible backends negotiate once.');
 }
 run().catch((e) => { console.error(e); process.exit(1); });

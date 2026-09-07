@@ -40,23 +40,11 @@ class AgentApi(_Domain):
             r.raise_for_status()
             return r.json()
 
-    async def start_processing(self, native: str, *, platform: str = "google_meet") -> dict:
-        """Launch the copilot processor for a meeting — spawn-or-touch the listening agent so it turns the
-        live transcript into notes + cards. Idempotent: if it's already running, this keeps it alive.
-        (This only STARTS the producer; observe its output separately with `watch`.)"""
-        return await self._set_processing(native, on=True, platform=platform)
-
-    async def stop_processing(self, native: str, *, platform: str = "google_meet") -> dict:
-        """Turn the copilot processor OFF — the raw transcript keeps flowing, but no notes/cards are
-        produced. The processing cursor is frozen, so a later start resumes where it left off."""
-        return await self._set_processing(native, on=False, platform=platform)
-
-    async def _set_processing(self, native: str, *, on: bool, platform: str) -> dict:
-        body = {"native_id": native, "platform": platform, "on": on}
-        async with httpx.AsyncClient(timeout=self._timeout) as c:
-            r = await c.post(self.url("/meeting/process"), headers=self._headers, json=body)
-            r.raise_for_status()
-            return r.json()
+    # `start_processing` / `stop_processing` lived here: POST /agent/meeting/process, the on/off
+    # switch for the in-product copilot that turned the live transcript into notes + cards. PRD
+    # decision 34 removed that pipeline and the endpoint with it — the product runs no model calls
+    # of its own beside the agent, so there is nothing to switch on. Use `chat` with an
+    # `active={"kind": "meeting", ...}` reference to put the agent on a meeting instead.
 
     async def read_doc(self, native: str) -> "dict | None":
         """The agent's durable meeting doc, or None if not written yet."""

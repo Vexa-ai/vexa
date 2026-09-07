@@ -18,8 +18,9 @@
  * A shim-only test is not sufficient evidence for this behaviour. This one runs
  * the REAL page code at the REAL frame cadence with the REAL wall clock:
  *   1. the built bundle exposes createTeamsSpeakers;
- *   2. headless Chromium loads a Teams-shaped fixture — a tile whose outline's
- *      inline style animates like a voice bar, plus a tile with NO outline;
+ *   2. headless Chromium loads a Teams-shaped fixture — a stream wrapper whose
+ *      outer layout matches no participant selector and whose outline animates
+ *      like a voice bar, plus a tile with NO outline;
  *   3. startCaptureBridge (the real function) wires the page; the fixture drives
  *      10 style updates at 150ms; the test asserts ONE START then ONE END cross
  *      Node-side with the participant's name, and ZERO hints for the tile that
@@ -55,11 +56,11 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // Carol's tile carries no outline at all (the #481 1:1-layout class): no signal
 // ⇒ no hint, ever — never a guessed one.
 const FIXTURE = `<!doctype html><html><body>
-  <div data-tid="participant-tile-1" id="t1">
+  <section id="t1">
     <div data-tid="Alice Real" data-stream-type="Video">
       <div data-tid="voice-level-stream-outline" id="o1" style="transform:scaleY(0.1)"></div>
     </div>
-  </div>
+  </section>
   <div data-tid="participant-tile-3" id="t3" title="Carol NoOutline">
     <span title="Carol NoOutline">Carol NoOutline</span>
   </div>

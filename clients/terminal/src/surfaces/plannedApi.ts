@@ -3,8 +3,8 @@
  *
  *  A PLANNED meeting is a normal meetings row born in an intent status (`scheduled`/`idle`), no
  *  bot yet: `POST /api/meetings` creates it, `PATCH/DELETE /api/meetings/{id}` edit it BY ROW ID
- *  (link-less plans have no native id to address). The calendar config (`/api/user/calendar`)
- *  lives in the identity domain — the ICS URL is a secret, so reads come back MASKED. */
+ *  (link-less plans have no native id to address). Calendar CONNECTIONS (`/api/user/calendars`)
+ *  live in the identity domain — the ICS URL is a secret, write-only, never read back. */
 
 import { ApiError } from "./apiClient";
 
@@ -56,34 +56,88 @@ export async function deletePlannedMeeting(id: string | number): Promise<void> {
   return jsonOrThrow(await fetch(`/api/meetings/${encodeURIComponent(String(id))}`, { method: "DELETE" }));
 }
 
-export interface CalendarConfig {
+/** ── Calendar connections (the PLURAL API, #1150) ────────────────────────────────────────────
+ *
+ *  An account holds up to ten NAMED ICS connections, each with its own auto-join policy and bot
+ *  name. `/api/user/calendars*` proxies to identity (config) and meeting-api (sync) through the
+ *  same gateway edge as the singular era.
+ *
+ *  THE FEED ADDRESS IS A CREDENTIAL. It is write-only: a connection is created or updated WITH an
+ *  `ics_url`, and the API never returns one. What comes back is `ics_url_set` (does this connection
+ *  have a feed) plus `ics_url_masked` (host + short suffix, for recognition only — deliberately not
+ *  the address). Nothing in this client ever renders a stored URL back into an input. */
+
+/** How many active connections an account may hold; the eleventh POST is a 409 (docs/api/calendar). */
+export const MAX_CALENDARS = 10;
+
+export interface CalendarConnection {
+  id: string;
+  name: string;
   ics_url_set: boolean;
-  ics_url_masked: string | null;
-  auto_join: boolean;   // the GLOBAL default stamped onto imported meetings
+  ics_url_masked: string | null;   // recognition hint (host + suffix) — NEVER the credential
+  auto_join: boolean;
+  bot_name: string;
+  enabled: boolean;
 }
 
-export async function getCalendarConfig(): Promise<CalendarConfig> {
-  return jsonOrThrow(await fetch("/api/user/calendar", { cache: "no-store" }));
+export interface CalendarCreateBody {
+  name: string;
+  ics_url: string;
+  auto_join?: boolean;
+  bot_name?: string;
 }
 
-export async function setCalendarConfig(body: { ics_url?: string | null; auto_join?: boolean }): Promise<CalendarConfig> {
-  return jsonOrThrow(await fetch("/api/user/calendar", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+/** Any subset; omitted fields keep their stored value. `ics_url` REPLACES the secret feed. */
+export interface CalendarUpdateBody {
+  name?: string;
+  ics_url?: string;
+  auto_join?: boolean;
+  bot_name?: string;
+  enabled?: boolean;
+}
+
+export async function listCalendars(): Promise<CalendarConnection[]> {
+  const body = await jsonOrThrow<{ calendars?: CalendarConnection[] }>(
+    await fetch("/api/user/calendars", { cache: "no-store" }),
+  );
+  return body?.calendars ?? [];
+}
+
+/** 201 → the masked connection. 409 = already at MAX_CALENDARS; 422 = bad name/bot name/feed URL. */
+export async function createCalendar(body: CalendarCreateBody): Promise<CalendarConnection> {
+  return jsonOrThrow(await fetch("/api/user/calendars", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }));
 }
 
-/** The last sync attempt's outcome (stamped by the sweep AND by syncCalendarNow). */
+export async function updateCalendar(id: string, body: CalendarUpdateBody): Promise<CalendarConnection> {
+  return jsonOrThrow(await fetch(`/api/user/calendars/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }));
+}
+
+/** 204 → the secret is gone immediately; a secret-free tombstone lets sync unpick this source
+ *  from planned meetings. Meetings another calendar also feeds survive. */
+export async function deleteCalendar(id: string): Promise<void> {
+  return jsonOrThrow(await fetch(`/api/user/calendars/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+
+/** The last sync attempt's outcome (stamped by the background sweep AND by a Sync-now). */
 export interface CalendarSyncStamp {
+  calendar_id?: string;
+  calendar_name?: string;
   last_sync?: string;
   last_error?: string | null;
   counts?: { created?: number; updated?: number; cancelled?: number };
 }
 
-export async function getCalendarSyncStatus(): Promise<CalendarSyncStamp> {
-  return jsonOrThrow(await fetch("/api/user/calendar/sync", { cache: "no-store" }));
+/** The retained stamp for ONE connection, or `{}` when it has never synced. */
+export async function getCalendarSyncStatus(id: string): Promise<CalendarSyncStamp> {
+  return jsonOrThrow(await fetch(`/api/user/calendars/${encodeURIComponent(id)}/sync`, { cache: "no-store" }));
 }
 
-/** Run the user's calendar sync RIGHT NOW → the fresh stamp (or throws: 404 = no feed connected). */
-export async function syncCalendarNow(): Promise<CalendarSyncStamp> {
-  return jsonOrThrow(await fetch("/api/user/calendar/sync", { method: "POST" }));
+/** Sync ONE connection RIGHT NOW → the fresh stamp. A feed fetch/parse fault is a 200 carrying
+ *  `last_error` (not a throw); 404 = unknown/disabled/deleted, 503 = sync unwired here. */
+export async function syncCalendar(id: string): Promise<CalendarSyncStamp> {
+  return jsonOrThrow(await fetch(`/api/user/calendars/${encodeURIComponent(id)}/sync`, { method: "POST" }));
 }

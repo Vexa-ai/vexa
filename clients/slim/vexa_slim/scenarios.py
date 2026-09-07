@@ -14,42 +14,30 @@ def format_event(evt: dict) -> "str | None":
     t = evt.get("type")
     if t == "transcript":
         return f"    · transcript [{evt.get('speaker') or '?'}] {(evt.get('text') or '')[:80]}"
-    if t == "note":
-        n = evt.get("note") or {}
-        return f"    · NOTE      [{n.get('speaker', '?')}] {(n.get('text') or '')[:80]}"
-    if t == "card":
-        c = evt.get("card") or {}
-        return f"    · CARD      {c.get('kind', '?')}: {c.get('title', '')}"
-    if t == "model-error":
-        return f"    · model-error: {json.dumps(evt.get('error'))[:160]}"
+    if t == "retract":
+        return f"    · retract   {json.dumps(evt.get('segment_ids'))[:80]}"
     if t == "meeting-end":
         return "    · meeting-end"
     return None
 
 
 def verdict(tally: dict) -> "tuple[int, str]":
-    """Map an event tally → (exit_code, human verdict line). The one place the pass/fail rules live."""
+    """Map an event tally → (exit_code, human verdict line). The one place the pass/fail rules live.
+
+    The bar is the TRANSCRIPT. It used to be notes + cards from the in-product processor, which PRD
+    decision 34 removed: whether the agent then makes something of a meeting is a question for a
+    chat turn over the MCP, not for this feed."""
     transcript = tally.get("transcript", 0)
-    produced = tally.get("note", 0) + tally.get("card", 0)
-    errors = tally.get("model-error", 0)
-    notes, cards = tally.get("note", 0), tally.get("card", 0)
     if transcript == 0:
         return 3, ("? INCONCLUSIVE · no transcript flowed — the bot isn't in the meeting (or wrong "
                    "native_id). Send a bot / pick a live meeting and retry.")
-    if produced == 0:
-        return 1, (f"✗ FAIL · transcript flowed ({transcript} segs) but the processor emitted 0 "
-                   "notes/cards. Check it armed (proc:on) and the worker spawned.")
-    if errors:
-        return 0, (f"⚠ PASS (degraded) · {notes} note(s) + {cards} card(s) over {transcript} segs, "
-                   f"BUT {errors} beat(s) hit a model-error (fallback/misconfigured model).")
-    return 0, (f"✓ PASS · transcript flowed ({transcript}) AND the processor emitted "
-               f"{notes} note(s) + {cards} card(s), no errors.")
+    return 0, f"✓ PASS · transcript flowed ({transcript} segs) onto the live feed."
 
 
 async def run_processor(slim: Slim, native: str, *, platform: str = "google_meet",
                         seconds: float = 45.0, send_bot_url: "str | None" = None) -> int:
-    """Validate the meeting-processor agent end-to-end through the gateway. Reads as 6 steps."""
-    print(f"── meeting-processor agent validation · native={native} platform={platform} ──\n")
+    """Validate the live-transcript path end-to-end through the gateway. Reads as 5 steps."""
+    print(f"── live-transcript validation · native={native} platform={platform} ──\n")
 
     # 1 · auth + agent-api reachable
     try:
@@ -68,11 +56,8 @@ async def run_processor(slim: Slim, native: str, *, platform: str = "google_meet
     else:
         print("[2] skip send-bot (expecting a live transcript already on this meeting)")
 
-    # 3 · launch the processing agent  (agent domain)
-    print(f"[3] processor ON · {json.dumps(await slim.agent.start_processing(native, platform=platform))}\n")
-
-    # 4 · watch the merged feed, printing a compact live trace
-    print(f"[4] watching merged feed for {seconds:.0f}s …")
+    # 3 · watch the live feed, printing a compact trace
+    print(f"[3] watching the live feed for {seconds:.0f}s …")
 
     def trace(evt: dict) -> None:
         line = format_event(evt)
@@ -80,17 +65,17 @@ async def run_processor(slim: Slim, native: str, *, platform: str = "google_meet
             print(line)
 
     tally = await slim.agent.watch(native, seconds=seconds, on_event=trace)
-    print(f"\n[4] tally: {json.dumps(tally)}")
+    print(f"\n[3] tally: {json.dumps(tally)}")
 
-    # 5 · verdict
+    # 4 · verdict
     rc, line = verdict(tally)
     print(f"\n── verdict ──\n  {line}")
 
-    # 6 · the durable artifact
+    # 5 · the durable artifact, if a chat turn has written one
     doc = await slim.agent.read_doc(native)
     if doc and doc.get("content"):
         head = "\n".join(doc["content"].splitlines()[:8])
-        print(f"\n[6] meeting doc kg/entities/meeting/{native}.md (head):\n{head}")
+        print(f"\n[5] meeting doc kg/entities/meeting/{native}.md (head):\n{head}")
     else:
-        print(f"\n[6] meeting doc not written yet (kg/entities/meeting/{native}.md)")
+        print(f"\n[5] meeting doc not written yet (kg/entities/meeting/{native}.md)")
     return rc

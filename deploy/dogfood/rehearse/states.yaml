@@ -1,0 +1,450 @@
+# states.yaml — THE CATALOGUE. PRD decision 38.1: "user states are data".
+#
+# Every state a person can be in when a touch reaches them, written as an ordered recipe of
+# steps against the product's OWN doors. Nothing here is code and nothing here needs an image:
+# a state is entered on the running stack by executing these rows (see ../README.md § Hot).
+#
+# THE SHAPE OF A ROW
+#   do:      one verb from the closed vocabulary in catalogue.py VERBS. An unknown verb is
+#            refused at load, not at run — a recipe that half-executes and then discovers it
+#            cannot finish has already changed the stack.
+#   door:    which service actually answers. It is CHECKED against the verb's declared door at
+#            load time, so this column can never drift into decoration: if the code changes
+#            which door a verb uses, every recipe naming the old one fails the catalogue test.
+#   <args>   the verb's own arguments. `{{ }}` interpolates from the run's bindings
+#            (`subject`, `organizer`, `state`, `meeting`, `when`, `domain`, `title`, `native`)
+#            and from anything an earlier step captured with `as:`.
+#
+# THE VERIFY BLOCK is not a formality and it is not a log line. `rehearse()` runs it after the
+# steps and returns it; `run_all.py` fails a state on it and files the failure as friction
+# (decision 33). A state whose artefacts cannot be checked without a human eye does not belong
+# in this file.
+#
+# ADDRESSES. Every address in every recipe resolves under $VEXA_REHEARSE_DOMAIN (default
+# rehearse.test) and the engine refuses anything else BEFORE the first door is touched. This is
+# the whole safety story: the founder's identities, `_global`, the DNA and OeNB groups cannot be
+# named by a recipe, because the domain check runs over the interpolated arguments.
+#
+# IDEMPOTENCE is by derived identity, never by a marker file: the ICS UID and the meeting's
+# native id are functions of (state, subject, meeting), and the fact's source_event_id is a
+# function of the meeting ROW that native id resolves to. So a second run of the same state dedups
+# at the doors that already dedup — the mail poller on the ICS UID, `seed_meeting` adopting the
+# completed row it already made, `admit()` on (source_event_id, flow), `user_ensure` on the
+# address. And after `subject_reset` the row is gone with its owner, so the same recipe produces a
+# genuinely new touch instead of a silent duplicate. That is why the fact's id names the row and
+# not the calendar date: an id that never changes cannot be re-entered, and an id that changes
+# every run cannot be idempotent.
+
+version: 1
+
+# The one deployment value this file needs. The engine reads it from the environment; it is named
+# here so the catalogue states its own precondition rather than assuming one.
+domain_env: VEXA_REHEARSE_DOMAIN
+default_domain: rehearse.test
+
+# Where the meeting material comes from. `meeting=` on the call names a file in this directory.
+fixtures_env: VEXA_DNA_FIXTURES
+default_fixtures: ~/dna-fixtures
+
+states:
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  blank-admin:
+    summary: >
+      A blank instance, and the first sign-in claims it. Produces the sign-in mail and its link —
+      the touch that turns an unclaimed deployment into a company's.
+    story: PRD decision 17 · rehearsal script stage 1 · alpha ledger rows 6-8
+    # THIS RECIPE NEVER BLANKS. It asserts the precondition and refuses when it does not hold,
+    # naming what is in the way. Blanking is `bin/blank-instance.sh`, it deletes every person on
+    # the stack, and it is not something a state recipe may do as a side effect of being entered.
+    preconditions:
+      - instance is blank (no admin claimed, company layer missing)
+      - the subject address has no user
+    steps:
+      - do: require_instance_blank
+        door: admin-api
+      - do: require_subject_absent
+        door: admin-api
+        address: "{{subject}}"
+      - do: request_sign_in_link
+        door: terminal
+        address: "{{subject}}"
+      - do: await_mail
+        door: mailpit
+        to: "{{subject}}"
+        subject_contains: "sign in"
+        as: sign_in_mail
+    artefacts:
+      mail: one message to {{subject}} carrying a single-use magic link
+      link: the magic link — clicking it CLAIMS THE INSTANCE for {{subject}}
+      desks: none; the claim creates the admin's desk and the admin-setup scaffold
+    verify:
+      - check: mail_present
+        of: sign_in_mail
+      - check: link_present
+        of: sign_in_mail
+        must_match: "/(auth|redeem|\\?t=)"
+        as: sign_in
+      # The state is "about to claim", not "claimed": nothing was clicked, so no user exists yet.
+      - check: no_user
+        address: "{{subject}}"
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  organizer-invited:
+    summary: >
+      The subject is a user with a scaffolded desk who has just put the mailbox on a meeting.
+      An invite lands in the mail double for a DNA fixture starting at now+{{when}}; the prepare
+      touch comes back within seconds.
+    story: rehearsal script stage 2-3 · alpha ledger 11:23Z (station 2)
+    # start = now + when (default +30m) ON PURPOSE. `invite_intake` parks on `await_start` until
+    # start-2min, so nothing dispatches a real bot at a fixture URL; the prepare mail is emitted
+    # immediately by `emit_prep`. A past start would spawn a bot that cannot join.
+    steps:
+      - do: user_ensure
+        door: admin-api
+        address: "{{subject}}"
+        as: subject_user
+      - do: desk_init
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+      - do: drop_invite
+        door: smtp
+        organizer: "{{subject}}"
+        title: "{{title}}"
+        start: "{{when}}"
+        attendees_from_fixture: true
+        ics_uid: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+      - do: await_mail
+        door: mailpit
+        to: "{{subject}}"
+        subject_contains: "Prepare"
+        as: prepare_mail
+      # A REHEARSAL LEAVES NOTHING ARMED. `invite_intake` parks on `await_start` until start−2min
+      # and then dispatches a REAL bot at the invite's URL — and this state rehearses the PREPARE
+      # touch, not the bot leg. Left parked, the run arms a live dispatch at a fixture Zoom URL
+      # that fires on the clock long after the state was reported green: on 2026-09-02 meeting 115
+      # reached `joining` while the catalogue was still running.
+      - do: cancel_bot_leg
+        door: flows-api
+        flow: invite_intake
+        source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        subject: '{{subject_user.uid}}'
+    artefacts:
+      mail: "RSVP (\"Accepted\") and \"Prepare: {{title}}\" to {{subject}}"
+      link: the prepare mail's only link is /?s=<scaffold id> (kind `prep`)
+      desks: "{{subject}}'s desk exists; the meeting row is scheduled, parked on await_start"
+    verify:
+      - check: mail_present
+        of: prepare_mail
+      - check: link_present
+        of: prepare_mail
+        must_match: "/\\?s="
+        as: prepare
+      - check: scaffold_resolves
+        link: prepare
+        kind: prep
+      - check: user_exists
+        address: "{{subject}}"
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  attendee-stranger-minutes:
+    summary: >
+      A meeting has been held with a real DNA transcript, and the subject was in the room but has
+      never signed in. The post-meeting run writes one shared report, mails everyone, and drops a
+      pointer on every attendee's desk — the subject's desk is born from the drop.
+    story: rehearsal script stage 4b · PRD decisions 19-22, 22a
+    steps:
+      # The organizer is a SEPARATE rehearse-domain identity: the subject must be a stranger, and
+      # a stranger cannot be the person who owns the meeting row.
+      - do: user_ensure
+        door: admin-api
+        address: "{{organizer}}"
+        as: organizer_user
+      - do: desk_init
+        door: agent-api
+        subject: "{{organizer_user.uid}}"
+      - do: require_subject_absent
+        door: admin-api
+        address: "{{subject}}"
+      - do: seed_meeting
+        door: gateway
+        owner: "{{organizer_user.uid}}"
+        native: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        as: meeting_row
+      - do: emit_fact
+        door: flows-api
+        event_type: meeting.completed
+        source_event_id: "rehearse-{{state}}-{{subject_local}}-{{meeting_row.meeting_id}}"
+        refs:
+          uid: "{{organizer_user.uid}}"
+          organizer: "{{organizer}}"
+          meeting_id: "{{meeting_row.meeting_id}}"
+          native: "{{meeting_row.native_meeting_id}}"
+          title: "{{title}}"
+          start: "{{meeting_row.started_epoch}}"
+          participants: "{{fixture_attendees}}"
+          participant_names: "{{fixture_attendee_names}}"
+      - do: await_mail
+        door: mailpit
+        to: "{{subject}}"
+        subject_contains: "{{title}}"
+        as: attendee_mail
+        budget_s: 900
+    artefacts:
+      mail: the attendee follow-up to {{subject}}, head template + the one shared report
+      link: one button — /?s=<scaffold id> (kind `post-meeting`), carrying the meeting's share
+      desks: "{{subject}}'s desk is created by the drop and holds the report; no click required"
+    verify:
+      - check: mail_present
+        of: attendee_mail
+      - check: link_present
+        of: attendee_mail
+        must_match: "/\\?s="
+        as: minutes
+      - check: scaffold_resolves
+        link: minutes
+        kind: post-meeting
+      - check: meeting_status
+        of: meeting_row
+        is: completed
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  group-member:
+    summary: >
+      A group desk exists with the subject as a member, and a #group meeting has been held. The
+      post-meeting run mounts the group desk read/write and maintains it (decision 22, group half).
+    story: rehearsal script stage 5 · PRD decision 22
+    steps:
+      - do: user_ensure
+        door: admin-api
+        address: "{{organizer}}"
+        as: organizer_user
+      - do: desk_init
+        door: agent-api
+        subject: "{{organizer_user.uid}}"
+      - do: user_ensure
+        door: admin-api
+        address: "{{subject}}"
+        as: subject_user
+      - do: desk_init
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+      - do: group_new
+        door: agent-api
+        owner: "{{organizer_user.uid}}"
+        name: "rehearse {{meeting}}"
+        purpose: "The rehearsal group for the {{meeting}} DNA occurrence."
+        as: group
+      # A person JOINS by redeeming an invite. There is no add-a-member verb, deliberately
+      # (agent-api has none), so the recipe mints one and redeems it as the subject — the same
+      # two calls a human makes.
+      - do: group_join
+        door: agent-api
+        group: "{{group.workspace_id}}"
+        owner: "{{organizer_user.uid}}"
+        member: "{{subject_user.uid}}"
+        member_email: "{{subject}}"
+      - do: seed_meeting
+        door: gateway
+        owner: "{{organizer_user.uid}}"
+        native: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        as: meeting_row
+      - do: emit_fact
+        door: flows-api
+        event_type: meeting.completed
+        source_event_id: "rehearse-{{state}}-{{subject_local}}-{{meeting_row.meeting_id}}"
+        refs:
+          uid: "{{organizer_user.uid}}"
+          organizer: "{{organizer}}"
+          meeting_id: "{{meeting_row.meeting_id}}"
+          native: "{{meeting_row.native_meeting_id}}"
+          title: "{{title}}"
+          start: "{{meeting_row.started_epoch}}"
+          group: "{{group.workspace_id}}"
+          participants: "{{fixture_attendees}}"
+          participant_names: "{{fixture_attendee_names}}"
+      - do: await_mail
+        door: mailpit
+        to: "{{subject}}"
+        subject_contains: "{{title}}"
+        as: group_mail
+        budget_s: 900
+    artefacts:
+      mail: the follow-up to every attendee, including the member {{subject}}
+      link: /?s=<scaffold id> whose intent is the GROUP desk, mounted in the member's sessions
+      desks: the group desk holds the maintained pages; every attendee desk holds the report
+    verify:
+      - check: mail_present
+        of: group_mail
+      - check: link_present
+        of: group_mail
+        must_match: "/\\?s="
+        as: group_minutes
+      - check: group_member
+        group: "{{group.workspace_id}}"
+        address: "{{subject}}"
+        owner: "{{organizer_user.uid}}"
+      # The group desk is READ AS THE MEMBER: agent-api resolves a shared workspace by membership,
+      # so "is the group desk written?" and "can the member see it?" are one question here.
+      - check: desk_nonempty
+        subject: "{{subject_user.uid}}"
+        slug: "{{group.workspace_id}}"
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  warm-desk-recurring:
+    summary: >
+      The subject's desk already holds two reports from earlier occurrences of the same series.
+      A third invite arrives, and the prepare touch is the WARM branch — it tells what is held and
+      asks the one question, instead of introducing itself to a stranger.
+    story: rehearsal script stage 6 · prep preset's warm branch
+    # The two prior reports go in through POST /api/workspace/entity — the product's own write
+    # door, the one `entity_upsert` forwards to. They are a STAND-IN for two earlier post-meeting
+    # runs, declared as such (`source: rehearse:<state>`), not a claim that those runs happened.
+    # The faithful alternative is two real completed meetings; it costs two agent turns and it is
+    # what `run_all.py --deep` does.
+    steps:
+      - do: user_ensure
+        door: admin-api
+        address: "{{subject}}"
+        as: subject_user
+      - do: desk_init
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+      - do: desk_entity
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+        kind: meeting
+        name: "{{title}} — first occurrence"
+        summary: "An earlier occurrence of {{title}}, on the desk before this rehearsal began."
+        facts:
+          - "The series met and the report landed on this desk."
+        source: "rehearse:{{state}}"
+      - do: desk_entity
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+        kind: meeting
+        name: "{{title}} — second occurrence"
+        summary: "The occurrence before this one; the desk is warm, not new."
+        facts:
+          - "The series met again and the report landed on this desk."
+        source: "rehearse:{{state}}"
+      # `desk_state()` is the product's classifier and its vocabulary is not ours: meeting entities
+      # ALONE are a `pile` — "reports landed and nobody wired them", decision 22's economics —
+      # and it takes a NON-meeting entity for a desk to read `warm` ("somebody has worked here").
+      # The first live run failed here, correctly: two prior reports made a pile, not a warm desk.
+      # A warm desk really does carry both, so the recipe now writes both rather than arguing with
+      # the classifier.
+      - do: desk_entity
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+        kind: person
+        name: "{{subject_local}}"
+        summary: "The subject's own page — what makes this desk worked-in rather than a pile."
+        facts:
+          - "Attends the {{title}} series."
+        source: "rehearse:{{state}}"
+      - do: drop_invite
+        door: smtp
+        organizer: "{{subject}}"
+        title: "{{title}}"
+        start: "{{when}}"
+        attendees_from_fixture: true
+        ics_uid: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+      - do: await_mail
+        door: mailpit
+        to: "{{subject}}"
+        subject_contains: "Prepare"
+        as: prepare_mail
+      - do: cancel_bot_leg          # same reason as organizer-invited: disarm the bot leg
+        door: flows-api
+        flow: invite_intake
+        source_contains: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        subject: '{{subject_user.uid}}'
+    artefacts:
+      mail: "\"Prepare: {{title}}\" to {{subject}}"
+      link: "/?s=<scaffold id> (kind `prep`) whose refs carry `state: warm`"
+      desks: two meeting entities on {{subject}}'s desk before the touch is composed
+    verify:
+      - check: desk_nonempty
+        subject: "{{subject_user.uid}}"
+      - check: mail_present
+        of: prepare_mail
+      - check: link_present
+        of: prepare_mail
+        must_match: "/\\?s="
+        as: prepare
+      - check: scaffold_resolves
+        link: prepare
+        kind: prep
+        desk_state: warm
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  reply-pending:
+    summary: >
+      A minutes mail has been sent to the subject and they have replied to it by mail. The reply
+      is on a registered thread, so the poller admits `mail.reply` and `email_chat` is the turn
+      waiting to run.
+    story: rehearsal script stage 4 (the reply leg) · flows email_chat
+    steps:
+      - do: user_ensure
+        door: admin-api
+        address: "{{subject}}"
+        as: subject_user
+      - do: desk_init
+        door: agent-api
+        subject: "{{subject_user.uid}}"
+      - do: seed_meeting
+        door: gateway
+        owner: "{{subject_user.uid}}"
+        native: "rehearse-{{state}}-{{subject_local}}-{{meeting}}"
+        as: meeting_row
+      - do: emit_fact
+        door: flows-api
+        event_type: meeting.completed
+        source_event_id: "rehearse-{{state}}-{{subject_local}}-{{meeting_row.meeting_id}}"
+        refs:
+          uid: "{{subject_user.uid}}"
+          organizer: "{{subject}}"
+          meeting_id: "{{meeting_row.meeting_id}}"
+          native: "{{meeting_row.native_meeting_id}}"
+          title: "{{title}}"
+          start: "{{meeting_row.started_epoch}}"
+      - do: await_mail
+        door: mailpit
+        to: "{{subject}}"
+        subject_contains: "{{title}}"
+        as: minutes_mail
+        budget_s: 900
+      # The reply goes back through the SAME door a person's mail client uses: SMTP into the
+      # double, In-Reply-To set to the minutes mail's own Message-ID. `mail_thread` resolves it;
+      # nothing is injected past the poller.
+      - do: reply_to_mail
+        door: smtp
+        to_mail: minutes_mail
+        from_address: "{{subject}}"
+        body: >
+          One correction: the decision on the third item was deferred, not taken.
+          Please amend the note and tell me what is still open.
+        as: reply
+      - do: await_reaction
+        door: flows-api
+        flow: email_chat
+        since: "{{reply.sent_at}}"
+        as: email_chat_reaction
+        budget_s: 300
+    artefacts:
+      mail: "\"Minutes: {{title}}\" out, one reply in, and the agent's threaded answer after"
+      link: the minutes mail's /?s= link stays valid; the reply loop needs no link at all
+      desks: the note on {{subject}}'s desk, amended by the reply turn
+    verify:
+      - check: mail_present
+        of: minutes_mail
+      # The minutes mail carries the same scaffolded button every other touch does. The reply loop
+      # does not need it — but a minutes mail WITHOUT it is the F10 defect (a link that opens onto
+      # nothing), so the state checks it on the way past.
+      - check: link_present
+        of: minutes_mail
+        must_match: "/\\?s="
+        as: minutes
+      - check: reaction_admitted
+        of: email_chat_reaction

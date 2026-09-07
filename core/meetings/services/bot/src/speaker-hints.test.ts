@@ -1,35 +1,29 @@
 /**
- * L2/L3 — the mixed-lane speaker-hint wiring, OFFLINE (no browser, no pyannote, no whisper).
+ * L2/L3 — the platform speaker-evidence wiring, OFFLINE (no browser, no pyannote, no whisper).
  *
  * Pins the seams #498 names:
- *   • C2 kind fidelity: the platform's TRUE hint kind reaches the transcriber —
- *     'dom-outline' for Teams, 'dom-active' for Zoom AND jitsi (observed via an
- *     injected MixedTranscriberFactory at the exact recordHint seam);
- *   • C1 counters: received advances per hint; matched/missed advance on the
- *     transcriber's onHintOutcome; a hint with no overlapping turn counts missed;
+ *   • C2 route fidelity: Teams hints reach the CSRC/GMeet lane without touching the
+ *     legacy mixed/Pyannote factory; Zoom and Jitsi retain their true `dom-active` kind;
+ *   • C1 counters: received advances per hint on Teams; matched/missed remain a
+ *     legacy mixed-lane binder instrument for Zoom/Jitsi;
  *   • C3 clock guard: an implausibly-skewed (non-epoch) hint tMs is re-stamped to
  *     epoch with a LOUD warning — never silently bound to nothing; epoch times and
  *     the undefined-tMs fallback pass through;
- *   • C5 host parity: one scripted timeline (audio + boundaries + hints) through the
- *     desktop-style wiring (ChunkedTranscriber + 'dom-outline' directly — the
- *     extension's shape, clients/extension/src/inpage.ts) and through the bot's
- *     teams lane produces identical named segments.
+ *   • C5 Teams composition: mixed PCM, transport/name evidence, transcript publication,
+ *     and teardown all cross the injected CSRC/GMeet transcriber seam.
  * Run: npx tsx src/speaker-hints.test.ts
  */
-import { ChunkedTranscriber, type BoundarySource, type ChunkSegment } from '@vexa/mixed-pipeline';
-import type { BoundaryEvent } from '@vexa/mixed-pipeline';
+import { ChunkedTranscriber, type BoundarySource, type TeamsCsrcGmeetPipelineOptions } from '@vexa/mixed-pipeline';
 import { createBotPipeline, hintKindForPlatform, type BotPipeline } from './pipeline.js';
 import { makeSpeakerHintSink } from './capture-bridge.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSink } from './ports.js';
-import type { TranscriptSegment } from './contracts.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
   console.log(`  ${cond ? '✅' : '❌'} ${name}${cond ? '' : '  — ' + detail}`);
   if (!cond) failed++;
 };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const inv = (platform: Invocation['platform']): Invocation => ({
   platform, meetingUrl: 'https://example.test/m', botName: 'Vexa',
@@ -38,7 +32,7 @@ const inv = (platform: Invocation['platform']): Invocation => ({
 const nullSink: TranscriptSink = { async publish() { /* discard */ } };
 
 /** A spy transcriber factory — records exactly what the bot forwards. */
-function spyFactory() {
+function mixedSpyFactory() {
   const hints: { name: string; kind: string; tMs: number; isEnd?: boolean }[] = [];
   let cb: Parameters<NonNullable<Parameters<typeof createBotPipeline>[2]['createMixedTranscriber']>>[0] | null = null;
   const factory = async (c: typeof cb & object) => {
@@ -52,14 +46,57 @@ function spyFactory() {
   return { hints, factory: factory as NonNullable<Parameters<typeof createBotPipeline>[2]['createMixedTranscriber']>, getCb: () => cb };
 }
 
+/** A spy for the production Teams-only CSRC/GMeet construction seam. */
+function teamsSpyFactory() {
+  const hints: { name: string; tMs: number; isEnd?: boolean }[] = [];
+  const audio: { samples: number; tMs: number }[] = [];
+  const transport: { csrc: number; active: boolean; tMs: number }[] = [];
+  let options: TeamsCsrcGmeetPipelineOptions | null = null;
+  let disposed = false;
+  const factory = (value: TeamsCsrcGmeetPipelineOptions) => {
+    options = value;
+    return {
+      feedMixedAudio(pcm: Float32Array, tMs: number) { audio.push({ samples: pcm.length, tMs }); },
+      recordTransportEvent(event: { csrc: number; active: boolean; tMs: number }) { transport.push(event); },
+      recordHint(name: string, tMs: number, isEnd = false) { hints.push({ name, tMs, isEnd }); },
+      recordCaption() { /* not under test */ },
+      recordRosterName() { /* not under test */ },
+      recordRosterCoverage() { /* not under test */ },
+      async dispose() { disposed = true; },
+    };
+  };
+  return { hints, audio, transport, factory, getOptions: () => options, isDisposed: () => disposed };
+}
+
 async function main(): Promise<void> {
-  // ── C2: kind fidelity per platform at the transcriber seam ──
-  console.log('C2 — platform hint kind reaches the transcriber');
+  // ── C2: platform evidence reaches the correct transcriber seam ──
+  console.log('C2 — platform evidence reaches the correct transcriber');
   check("hintKindForPlatform('teams') == 'dom-outline'", hintKindForPlatform('teams') === 'dom-outline');
   check("hintKindForPlatform('zoom') == 'dom-active'", hintKindForPlatform('zoom') === 'dom-active');
   check("hintKindForPlatform('jitsi') == 'dom-active' (jitsi lane preserved)", hintKindForPlatform('jitsi') === 'dom-active');
-  for (const [platform, kind] of [['teams', 'dom-outline'], ['zoom', 'dom-active'], ['jitsi', 'dom-active']] as const) {
-    const spy = spyFactory();
+  {
+    const spy = teamsSpyFactory();
+    const pipe = createBotPipeline(inv('teams'), nullSink, {
+      createTeamsTranscriber: spy.factory,
+      // A legacy factory must never be consulted on Teams.
+      createMixedTranscriber: async () => { throw new Error('legacy mixed factory selected for Teams'); },
+    });
+    await pipe.start();
+    pipe.recordHint('Alice', 1234567890123);
+    pipe.recordHint('Alice', 1234567891123, true);
+    await pipe.stop();
+    check('teams: recordHint reaches the CSRC/GMeet lane with name+tMs+isEnd intact',
+      spy.hints.length === 2
+      && spy.hints[0].name === 'Alice' && spy.hints[0].tMs === 1234567890123 && spy.hints[0].isEnd === false
+      && spy.hints[1].isEnd === true,
+      JSON.stringify(spy.hints));
+  }
+  // Zoom is no longer on the mixed transcriber (it rides the per-track lane; its watcher→resolver
+  // path is covered by zoom-speaker-wiring.test.ts) — and Teams rides the CSRC/GMeet lane above.
+  // Only jitsi forwards hints to the legacy mixed recordHint.
+  for (const platform of ['jitsi'] as const) {
+    const kind = 'dom-active';
+    const spy = mixedSpyFactory();
     const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
     await pipe.start();
     pipe.recordHint('Alice', 1234567890123);
@@ -75,22 +112,19 @@ async function main(): Promise<void> {
   // ── C1: counters — received per hint; matched/missed via onHintOutcome ──
   console.log('C1 — hint-hop counters');
   {
-    const spy = spyFactory();
-    const pipe = createBotPipeline(inv('teams'), nullSink, { createMixedTranscriber: spy.factory });
+    const spy = teamsSpyFactory();
+    const pipe = createBotPipeline(inv('teams'), nullSink, { createTeamsTranscriber: spy.factory });
     await pipe.start();
     pipe.recordHint('Alice', Date.now());
     pipe.recordHint('Bob', Date.now());
     check('received advances per pipeline-received hint', pipe.hintCounters?.received === 2, JSON.stringify(pipe.hintCounters));
-    const cb = spy.getCb()!;
-    cb.onHintOutcome?.({ name: 'Alice', kind: 'dom-outline', tMs: Date.now(), outcome: 'matched' });
-    cb.onHintOutcome?.({ name: 'Ghost', kind: 'dom-outline', tMs: Date.now(), outcome: 'missed' });
-    check('binder outcomes advance matched/missed', pipe.hintCounters?.matched === 1 && pipe.hintCounters?.missed === 1, JSON.stringify(pipe.hintCounters));
+    check('Teams forwards both hints through its production seam', spy.hints.length === 2, JSON.stringify(spy.hints));
     await pipe.stop();
   }
   {
-    // End-to-end missed: the REAL transcriber (injected segmenter, no model) — a hint
-    // with no overlapping turn increments `missed`, loudly countable.
-    const pipe = createBotPipeline(inv('teams'), nullSink, {
+    // The matched/missed binder outcome is still truthful on the legacy mixed (Jitsi) lane.
+    // (Zoom left the mixed lane for per-track; Teams rides CSRC — jitsi is the sole legacy mixed.)
+    const pipe = createBotPipeline(inv('jitsi'), nullSink, {
       createMixedTranscriber: (cb) => ChunkedTranscriber.create({
         ...cb,
         makeSegmenter: async (): Promise<BoundarySource> => ({ appendFrame: async () => { /* scripted */ }, reset: () => { /* scripted */ } }),
@@ -122,66 +156,32 @@ async function main(): Promise<void> {
     check('undefined tMs falls back to Node epoch', got[2] !== undefined && Math.abs(got[2].tMs - Date.now()) < 5000 && got[2].isEnd === true, JSON.stringify(got[2]));
   }
 
-  // ── C5: host parity — one timeline, desktop wiring vs bot wiring, identical output ──
-  console.log('C5 — desktop-vs-bot differential (same fixture, diffed segments)');
+  // ── C5: the bot's Teams adapter crosses every production CSRC/GMeet seam ──
+  console.log('C5 — Teams CSRC/GMeet bot composition');
   {
-    const stubTranscribe = async () => ({
-      text: 'hello from the fixture', language: 'en', duration: 2,
-      segments: [{ start: 0, end: 2, text: 'hello from the fixture' }],
+    const spy = teamsSpyFactory();
+    const published: Array<{ speaker: string; speakerKey?: string; text: string; completed?: boolean }> = [];
+    const sink: TranscriptSink = { async publish(segment) {
+      published.push({ speaker: segment.speaker, speakerKey: segment.speaker_key, text: segment.text, completed: segment.completed });
+    } };
+    const pipe = createBotPipeline(inv('teams'), sink, { createTeamsTranscriber: spy.factory });
+    await pipe.start();
+    pipe.feedMixedAudio(new Float32Array(1600).fill(0.05), 10_000);
+    pipe.recordTransportEvent?.({ csrc: 201, active: true, tMs: 10_000 });
+    pipe.recordHint('Alice Fixture', 10_100);
+    spy.getOptions()!.onSegment({
+      csrc: 201, speaker: 'Alice Fixture', sourceKey: 'csrc-201', segmentId: 'csrc-201:0',
+      text: 'hello from the fixture', startMs: 10_000, endMs: 12_000, completed: true, language: 'en',
     });
-    interface Host { published: { speaker: string; text: string; completed: boolean }[]; feed(pcm: Float32Array, t: number): void; hint(name: string, t: number, isEnd?: boolean): void; boundary(ev: BoundaryEvent): void; stop(): Promise<void> }
-
-    // Desktop-style host: ChunkedTranscriber wired the way the extension wires it
-    // (direct recordHint with the platform kind — inpage.ts posts kind 'dom-outline').
-    const makeDesktopHost = async (): Promise<Host> => {
-      let emit!: (ev: BoundaryEvent) => void;
-      const published: Host['published'] = [];
-      const push = (speaker: string, segs: ChunkSegment[], completed: boolean) => { for (const s of segs) published.push({ speaker, text: s.text, completed }); };
-      const tc = await ChunkedTranscriber.create({
-        language: 'en', transcribe: stubTranscribe,
-        publish: (sp, confirmed, pending) => { push(sp, confirmed, true); push(sp, pending, false); },
-        publishPending: (sp, segs) => push(sp, segs, false),
-        clearPending: () => { /* fixture */ }, rename: (_o, n, segs) => push(n, segs, true),
-        makeSegmenter: async (onB): Promise<BoundarySource> => { emit = onB; return { appendFrame: async () => { /* scripted */ }, reset: () => { /* scripted */ } }; },
-        log: () => { /* quiet */ },
-      });
-      return { published, feed: (p, t) => tc.feedAudio(p, t), hint: (n, t, e) => tc.recordHint(n, 'dom-outline', t, e), boundary: (ev) => emit(ev), stop: () => tc.dispose() };
-    };
-
-    // Bot host: the REAL bot teams lane (createBotPipeline) with only the segmenter scripted.
-    const makeBotHost = async (): Promise<Host> => {
-      let emit!: (ev: BoundaryEvent) => void;
-      const published: Host['published'] = [];
-      const sink: TranscriptSink = { async publish(seg: TranscriptSegment) { published.push({ speaker: seg.speaker, text: seg.text, completed: !!seg.completed }); } };
-      const pipe = createBotPipeline(inv('teams'), sink, {
-        transcribe: stubTranscribe,
-        createMixedTranscriber: (cb) => ChunkedTranscriber.create({
-          ...cb, transcribe: stubTranscribe,
-          makeSegmenter: async (onB): Promise<BoundarySource> => { emit = onB; return { appendFrame: async () => { /* scripted */ }, reset: () => { /* scripted */ } }; },
-          log: () => { /* quiet */ },
-        }),
-      });
-      await pipe.start();
-      return { published, feed: (p, t) => pipe.feedMixedAudio(p, t), hint: (n, t, e) => pipe.recordHint(n, t, e), boundary: (ev) => emit(ev), stop: () => pipe.stop() };
-    };
-
-    // ONE scripted timeline through both hosts.
-    const drive = async (host: Host): Promise<string> => {
-      const frame = new Float32Array(1600).fill(0.05);   // 100ms @16k, above DROP_RMS
-      for (let t = 10000; t < 13000; t += 100) host.feed(frame, t);
-      host.boundary({ tMs: 10000, kind: 'silence→speaker', confidence: 0.9 });
-      await sleep(50);
-      host.hint('Alice Fixture', 11000);
-      host.boundary({ tMs: 13000, kind: 'speaker→silence', confidence: 0.9 });
-      await sleep(150);
-      await host.stop();
-      const confirmed = host.published.filter((p) => p.completed).map((p) => `${p.speaker}|${p.text}`).sort();
-      return JSON.stringify(confirmed);
-    };
-    const desktopOut = await drive(await makeDesktopHost());
-    const botOut = await drive(await makeBotHost());
-    check('desktop and bot wiring publish IDENTICAL named segments', desktopOut === botOut && desktopOut.includes('Alice Fixture'),
-      `desktop=${desktopOut} bot=${botOut}`);
+    await pipe.stop();
+    check('mixed PCM reaches the Teams transcriber', spy.audio.length === 1 && spy.audio[0].samples === 1600, JSON.stringify(spy.audio));
+    check('CSRC activity reaches the Teams transcriber', spy.transport.length === 1 && spy.transport[0].csrc === 201, JSON.stringify(spy.transport));
+    check('Teams rows publish with the stable CSRC speaker key',
+      published.length === 1 && published[0].speaker === 'Alice Fixture'
+      && published[0].speakerKey === 'csrc:201' && published[0].text === 'hello from the fixture'
+      && published[0].completed === true,
+      JSON.stringify(published));
+    check('Teams teardown disposes the CSRC/GMeet lane', spy.isDisposed());
   }
 
   console.log(failed === 0 ? '\n✅ speaker-hints: all green' : `\n❌ speaker-hints: ${failed} failure(s)`);

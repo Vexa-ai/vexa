@@ -33,7 +33,10 @@ MODEL_SIZE = os.getenv("MODEL_SIZE", "large-v3-turbo")
 
 # Device detection: Use environment variable or default to cuda for GPU containers
 # CTranslate2 (used by faster-whisper) will automatically detect and use CUDA if available
-DEVICE = os.getenv("DEVICE", "cuda")
+# Normalized once here so every later `DEVICE == "..."` comparison in this file (health check,
+# CPU thread setup, the concurrency default below) sees a clean value regardless of stray
+# whitespace or casing (e.g. "CUDA", " cpu ") in the operator-set env var.
+DEVICE = os.getenv("DEVICE", "cuda").strip().lower()
 
 # Compute type optimization: Use INT8 for optimal VRAM efficiency
 # Research shows: large-v3-turbo + INT8 = ~2.1 GB VRAM (validated)
@@ -164,11 +167,26 @@ model: Optional[WhisperModel] = None
 
 # Load management: Global concurrency limit and bounded queue
 # These settings control how many transcription requests can be processed concurrently.
-# CTranslate2 serializes CUDA ops, so concurrent requests queue on the GPU.
-# RTX 4090 benchmarks (2026-03-08): 20 concurrent handles fine, latency ~3s worst case.
-# Set high enough to avoid artificial bottlenecks, low enough to bound queue latency.
+# CTranslate2 serializes ops per device, so concurrent requests queue on it.
+# RTX 4090 benchmarks (2026-03-08): 20 concurrent handles fine, latency ~3s worst case - that
+# number is GPU-specific. On CPU each admitted job only gets 1/Nth of the cores, so the same
+# 20 means every job runs proportionally slower, none finish in bounded time, the semaphore
+# never releases, and every request after that 503s forever (2026-08-13 CPU deadlock incident).
+# Default is therefore device-aware; an operator-set env var always wins over the default.
 # MAX_ACTIVE_REQUESTS is the preferred name; MAX_CONCURRENT_TRANSCRIPTIONS is kept for compatibility.
-MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_ACTIVE_REQUESTS", _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 20))
+def _default_max_concurrent(device: str) -> int:
+    """Only an explicit "cuda" gets the RTX-4090-benchmarked 20; everything else (cpu, auto, mps,
+    or any other faster-whisper device string) gets the small CPU-safe cap. Inverted on purpose:
+    faster-whisper's "auto" resolves to whatever CTranslate2 finds at runtime - which can be CPU -
+    so it must not silently inherit the GPU default just because it isn't the literal "cpu". 2
+    lets a couple of requests overlap without each one starving for cores on a typical (8-16
+    core) CPU box - tune via MAX_ACTIVE_REQUESTS if your hardware differs."""
+    return 20 if device == "cuda" else 2
+
+
+MAX_CONCURRENT_TRANSCRIPTIONS = _env_int(
+    "MAX_ACTIVE_REQUESTS", _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", _default_max_concurrent(DEVICE))
+)
 MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
 
 # Backpressure strategy:
@@ -178,11 +196,61 @@ FAIL_FAST_WHEN_BUSY = _env_bool("FAIL_FAST_WHEN_BUSY", True)
 BUSY_RETRY_AFTER_S = _env_int("BUSY_RETRY_AFTER_S", 1)
 REALTIME_RESERVED_SLOTS = _env_int("REALTIME_RESERVED_SLOTS", 1)
 
+# Bound on the ENTIRE per-request transcription work - all temperature-fallback attempts
+# together (see the for-loop below), not each attempt individually. The semaphore permit for a
+# request is only released in the handler's `finally`, which only runs once this awaited work
+# returns - so work that never returns (pathological input, a hang inside
+# CTranslate2/faster-whisper, thread contention under load) would hold its permit forever
+# regardless of how small MAX_CONCURRENT_TRANSCRIPTIONS is. This is a backstop independent of the
+# concurrency default above.
+#
+# What this DOES guarantee: the semaphore permit is always reclaimed within TRANSCRIPTION_TIMEOUT_S.
+# What it does NOT guarantee: asyncio.wait_for only cancels the await - concurrent.futures.Future
+# .cancel() is a no-op once a thread has started, so the underlying thread keeps running the real
+# call to completion (or forever) and keeps occupying its transcription_executor slot. A reclaimed
+# permit is only useful because that executor is sized with headroom over MAX_CONCURRENT_TRANSCRIPTIONS
+# (see below) - without that headroom the next admitted request just queues behind the zombie
+# thread and reclaiming the permit buys nothing. A genuinely hung native call still burns one
+# thread and its CPU core for good; actually killing it would need subprocess isolation, which is
+# deliberately out of scope here - this is a mitigation, not a hard kill switch.
+#
+# This is a HANG BACKSTOP, not a latency governor. Its only job is to guarantee the semaphore
+# permit above is eventually reclaimed when model.transcribe() itself never returns; it is not
+# meant to bound how long a legitimate transcription is allowed to run, and should fire rarely or
+# never in normal operation. Do NOT align it under the bot's own 30s per-attempt
+# AbortController (core/meetings/modules/whisper/src/transcription-client.ts:241-242): a bound
+# below real worst-case work turns every full-size chunk into a guaranteed 504, which is a worse
+# outage than the hang this backstop exists to catch. The client abandoning an attempt at 30s and
+# the server going on to burn time on it anyway is accepted waste - the alternative (this timeout
+# cutting off a transcription that was legitimately about to finish correctly) is worse.
+#
+# Measured 2026-08-13 on the reference CPU deployment this default is sized for (12-core NAS,
+# DEVICE=cpu, COMPUTE_TYPE=int8, MODEL_SIZE=large-v3-turbo, MAX_ACTIVE_REQUESTS=2,
+# CPU_THREADS=6, single request, zero contention): a ~30s audio chunk - the gmeet lane's
+# maxBufferDuration hard cap, i.e. the largest chunk this service is ever handed - took 28.5-29.0s
+# of wall clock per attempt (two runs: total=29.047187s http=200 and total=28.509628s http=200;
+# faster-whisper's own log for the second run: "completed in 28.51s - Duration: 29.95s"). That is
+# ~0.95x realtime: this CPU/model combination cannot keep pace with a live meeting no matter how
+# concurrency is tuned, and a single legitimate attempt already sits close to 29s - a 25s bound
+# would 504 every full-size chunk on exactly the deployment this fix targets. 120s leaves ~4x
+# margin over that measured per-attempt time. Do not re-tighten this from guesswork; re-measure on
+# the target hardware first. Note this bound covers the WHOLE request, not one attempt - with
+# USE_TEMPERATURE_FALLBACK enabled, up to 6 attempts share this one budget, not 120s each; raise
+# TRANSCRIPTION_TIMEOUT_S accordingly on CPU deployments that also enable temperature fallback.
+TRANSCRIPTION_TIMEOUT_S = _env_float("TRANSCRIPTION_TIMEOUT_S", 120.0)
+
 # Semaphore to limit concurrent transcriptions (protects GPU/CPU from overload)
 transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
 
-# Thread pool for running blocking transcription calls
-transcription_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TRANSCRIPTIONS)
+# Thread pool for running blocking transcription calls. Sized ONE THREAD LARGER than the
+# semaphore on purpose: TRANSCRIPTION_TIMEOUT_S above can only reclaim the semaphore permit, not
+# the thread a timed-out call is still running in (see that comment) - a same-sized pool would let
+# a freshly-admitted request find every thread busy (N-1 live requests + 1 zombie) and queue
+# behind the zombie, making the reclaimed permit useless. +1 covers exactly one in-flight zombie,
+# which is what a single timed-out request produces. If more than one request times out at once,
+# later ones still queue behind the earlier zombies - that residual ceiling is accepted, not
+# solved, here (see the comment above).
+transcription_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TRANSCRIPTIONS + 1)
 
 # Queue to track waiting requests (for 429/503 responses when full)
 # We use a simple counter since FastAPI doesn't have a built-in queue
@@ -206,12 +274,35 @@ def _deferred_capacity_available(active_rt: int, active_df: int) -> bool:
     return deferred_limit > 0 and active_df < deferred_limit and total_active < MAX_CONCURRENT_TRANSCRIPTIONS
 
 
+def _is_cpu_unsafe_model_size(model_size: str) -> bool:
+    """True for the "medium"/"large" model family, which deploy/transcription/docker-compose.cpu.yml
+    already documents as unfit for a CPU worker: `medium` sheds load with 503 "Service busy" (a
+    fresh self-host on a modest VM gets NO transcript) and large-v3-turbo (this service's default
+    MODEL_SIZE) measures ~0.95x realtime on CPU - see the TRANSCRIPTION_TIMEOUT_S comment above.
+    That compose file's own default is `small`, witnessed to keep pace on 4-6 vCPU.
+
+    Prefix match, not substring: `distil-large-v3` does NOT start with "large" or "medium" - it's a
+    distilled model built specifically to be faster, and nothing measured here says otherwise, so
+    it must not be flagged alongside the family it was distilled from."""
+    size = model_size.strip().lower()
+    return size.startswith("medium") or size.startswith("large")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize Whisper model on startup"""
     global model
     logger.info(f"Worker {WORKER_ID} starting up...")
     logger.info(f"Device: {DEVICE}, Model: {MODEL_SIZE}, Compute: {COMPUTE_TYPE}")
+    if DEVICE == "cpu" and _is_cpu_unsafe_model_size(MODEL_SIZE):
+        logger.warning(
+            f"Worker {WORKER_ID} running {MODEL_SIZE} on CPU - the medium/large model family "
+            "is known not to keep pace with real-time meeting audio on CPU regardless of "
+            "concurrency tuning (medium sheds load with 503 'Service busy'; large-v3-turbo "
+            "measured ~0.95x realtime - a ~30s chunk takes ~29s to transcribe), and the "
+            "client's 30s abort will fire on full-size chunks. Use a smaller MODEL_SIZE "
+            "(e.g. small) or a GPU device for realtime workloads."
+        )
     logger.info(
         "Quality params - "
         f"beam_size={BEAM_SIZE}, best_of={BEST_OF}, "
@@ -426,78 +517,94 @@ async def transcribe_audio(
         last_info = None
         last_segments: List[Dict[str, Any]] = []
 
-        for t in temps:
-            # Run blocking transcription in thread pool to avoid blocking event loop
-            def _transcribe_sync():
-                return model.transcribe(
-                    audio_array,
-                    language=language,
-                    task=task,
-                    initial_prompt=prompt,
-                    temperature=t,
-                    beam_size=BEAM_SIZE,
-                    best_of=BEST_OF,
-                    compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
-                    log_prob_threshold=LOG_PROB_THRESHOLD,
-                    no_speech_threshold=NO_SPEECH_THRESHOLD,
-                    condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
-                    prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
-                    repetition_penalty=REPETITION_PENALTY,
-                    no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
-                    vad_filter=VAD_FILTER,
-                    vad_parameters={
-                        "threshold": VAD_FILTER_THRESHOLD,
-                        "min_silence_duration_ms": req_min_silence,
-                        "max_speech_duration_s": req_max_speech,
-                    },
-                    word_timestamps=want_word_timestamps,
+        async def _run_temperature_attempts() -> None:
+            # TRANSCRIPTION_TIMEOUT_S bounds ONE call to this coroutine (see below), i.e. the
+            # whole request - every temperature-fallback attempt in `temps` together, not each
+            # attempt individually. With USE_TEMPERATURE_FALLBACK on, temps has 6 entries; a
+            # per-attempt bound would let a single request cost up to 6x TRANSCRIPTION_TIMEOUT_S.
+            nonlocal best, last_info, last_segments
+            for t in temps:
+                # Run blocking transcription in thread pool to avoid blocking event loop
+                def _transcribe_sync():
+                    return model.transcribe(
+                        audio_array,
+                        language=language,
+                        task=task,
+                        initial_prompt=prompt,
+                        temperature=t,
+                        beam_size=BEAM_SIZE,
+                        best_of=BEST_OF,
+                        compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
+                        log_prob_threshold=LOG_PROB_THRESHOLD,
+                        no_speech_threshold=NO_SPEECH_THRESHOLD,
+                        condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
+                        prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
+                        repetition_penalty=REPETITION_PENALTY,
+                        no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
+                        vad_filter=VAD_FILTER,
+                        vad_parameters={
+                            "threshold": VAD_FILTER_THRESHOLD,
+                            "min_silence_duration_ms": req_min_silence,
+                            "max_speech_duration_s": req_max_speech,
+                        },
+                        word_timestamps=want_word_timestamps,
+                    )
+
+                segments_list, info = await asyncio.get_event_loop().run_in_executor(
+                    transcription_executor, _transcribe_sync
                 )
-            
-            segments_list, info = await asyncio.get_event_loop().run_in_executor(
-                transcription_executor, _transcribe_sync
+                last_info = info
+
+                # Convert segments to list (faster-whisper returns generator)
+                segments: List[Dict[str, Any]] = []
+                for idx, segment in enumerate(segments_list):
+                    seg_dict: Dict[str, Any] = {
+                        "id": idx,
+                        "seek": 0,
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": segment.text,
+                        "tokens": [],
+                        "temperature": t,
+                        "avg_logprob": segment.avg_logprob,
+                        "compression_ratio": segment.compression_ratio,
+                        "no_speech_prob": segment.no_speech_prob,
+                        "audio_start": segment.start,
+                        "audio_end": segment.end,
+                    }
+                    if want_word_timestamps and hasattr(segment, 'words') and segment.words:
+                        seg_dict["words"] = [
+                            {"word": w.word, "start": w.start, "end": w.end, "probability": w.probability}
+                            for w in segment.words
+                        ]
+                    segments.append(seg_dict)
+                last_segments = segments
+
+                if _looks_like_silence(segments):
+                    best = ("", info.language, getattr(info, 'language_probability', 0.0), 0.0, [])
+                    logger.info(f"Worker {WORKER_ID} detected silence (temp={t})")
+                    return
+
+                is_hallucination = _looks_like_hallucination(segments)
+
+                if not is_hallucination:
+                    full_text = " ".join([s["text"].strip() for s in segments]).strip()
+                    duration = segments[-1]["end"] if segments else 0.0
+                    best = (full_text, info.language, getattr(info, 'language_probability', 0.0), duration, segments)
+                    logger.info(f"Worker {WORKER_ID} accepted transcription (temp={t})")
+                    return
+                else:
+                    logger.info(f"Worker {WORKER_ID} rejected transcription as hallucination/low-confidence (temp={t})")
+
+        try:
+            await asyncio.wait_for(_run_temperature_attempts(), timeout=TRANSCRIPTION_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Worker {WORKER_ID} transcription exceeded TRANSCRIPTION_TIMEOUT_S="
+                f"{TRANSCRIPTION_TIMEOUT_S}s for the whole request (temps={temps}) - "
+                "aborting so the slot is freed"
             )
-            last_info = info
-
-            # Convert segments to list (faster-whisper returns generator)
-            segments: List[Dict[str, Any]] = []
-            for idx, segment in enumerate(segments_list):
-                seg_dict: Dict[str, Any] = {
-                    "id": idx,
-                    "seek": 0,
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text,
-                    "tokens": [],
-                    "temperature": t,
-                    "avg_logprob": segment.avg_logprob,
-                    "compression_ratio": segment.compression_ratio,
-                    "no_speech_prob": segment.no_speech_prob,
-                    "audio_start": segment.start,
-                    "audio_end": segment.end,
-                }
-                if want_word_timestamps and hasattr(segment, 'words') and segment.words:
-                    seg_dict["words"] = [
-                        {"word": w.word, "start": w.start, "end": w.end, "probability": w.probability}
-                        for w in segment.words
-                    ]
-                segments.append(seg_dict)
-            last_segments = segments
-
-            if _looks_like_silence(segments):
-                best = ("", info.language, getattr(info, 'language_probability', 0.0), 0.0, [])
-                logger.info(f"Worker {WORKER_ID} detected silence (temp={t})")
-                break
-
-            is_hallucination = _looks_like_hallucination(segments)
-
-            if not is_hallucination:
-                full_text = " ".join([s["text"].strip() for s in segments]).strip()
-                duration = segments[-1]["end"] if segments else 0.0
-                best = (full_text, info.language, getattr(info, 'language_probability', 0.0), duration, segments)
-                logger.info(f"Worker {WORKER_ID} accepted transcription (temp={t})")
-                break
-            else:
-                logger.info(f"Worker {WORKER_ID} rejected transcription as hallucination/low-confidence (temp={t})")
+            raise HTTPException(status_code=504, detail="Transcription timed out")
 
         if best is None:
             # Fall back to last attempt (even if it looks low-quality) to preserve backward behavior.

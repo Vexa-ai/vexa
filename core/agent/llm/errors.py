@@ -3,8 +3,12 @@
 A 401 from a model provider (a key sent to the wrong endpoint) used to surface as a generic
 "model inference failed" — the operator was never told the token and the endpoint disagreed. The
 signature detector, the provider-host resolver, the boot preflight, and the two UnitEvent builders
-live HERE so every adapter and every consumer shares one vocabulary. Event shapes are FROZEN — the
-terminal reducer and the SSE relay consume them field-for-field.
+live HERE so every adapter and every consumer shares one vocabulary.
+
+Since PRD decision 34 these describe the AGENT harness only; there is no second, in-product
+inference pipeline to fail. ``model_error_event`` remains the harness's own failure event on the
+chat unit stream — it is no longer relayed onto a meeting's feed, which carries the transcript and
+nothing else.
 """
 from __future__ import annotations
 
@@ -52,11 +56,8 @@ def looks_like_auth_failure(text: object) -> bool:
 
 def provider_host(base_url: str | None = None) -> str:
     """The host the credential is being sent to, for the auth-error hint. Resolution order:
-    explicit arg → ``VEXA_LLM_BASE_URL`` (the completion provider) → ``ANTHROPIC_BASE_URL`` (the
-    claude-code harness) → ``"unknown"``."""
-    raw = base_url if base_url is not None else (
-        os.environ.get("VEXA_LLM_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL", "")
-    )
+    explicit arg → ``ANTHROPIC_BASE_URL`` (the claude-code harness) → ``"unknown"``."""
+    raw = base_url if base_url is not None else os.environ.get("ANTHROPIC_BASE_URL", "")
     raw = (raw or "").strip()
     if not raw:
         return "unknown"
@@ -80,9 +81,8 @@ def auth_error_event(detail: object, *, model: str | None, stage: str) -> dict:
             "provider_host": host,
             "hint": (
                 f"provider {host} returned an auth failure (401) — token/endpoint mismatch; "
-                "check VEXA_LLM_BASE_URL vs VEXA_LLM_API_KEY (completions) or ANTHROPIC_BASE_URL "
-                "vs ANTHROPIC_AUTH_TOKEN (the claude-code runner) — an sk-or- token must go to "
-                "openrouter.ai, an sk-ant- token to api.anthropic.com"
+                "check ANTHROPIC_BASE_URL vs ANTHROPIC_AUTH_TOKEN (the claude-code runner) — an "
+                "sk-or- token must go to openrouter.ai, an sk-ant- token to api.anthropic.com"
             ),
             "message": text[:600],
         },
@@ -118,22 +118,17 @@ def _mismatch(tok: str, host: str, *, key_var: str, url_var: str) -> str | None:
 
 def preflight_provider_guard(*, base_url: str | None = None, token: str | None = None) -> str | None:
     """Cheap boot guard: if a credential PREFIX and its base-url HOST obviously disagree, return a
-    loud warning string (the caller logs it). Judges the completion pair (``VEXA_LLM_API_KEY`` /
-    ``VEXA_LLM_BASE_URL``) first, then the claude-code pair (``ANTHROPIC_AUTH_TOKEN`` /
-    ``ANTHROPIC_BASE_URL``). Explicit kwargs judge just that one pair (back-compat with callers
-    that pass them). Returns None when consistent or unjudgeable."""
+    loud warning string (the caller logs it). Judges the claude-code pair (``ANTHROPIC_AUTH_TOKEN``
+    / ``ANTHROPIC_BASE_URL``); explicit kwargs judge just that one pair (back-compat with callers
+    that pass them). Returns None when consistent or unjudgeable.
+
+    It used to judge a second pair first — ``VEXA_LLM_API_KEY`` / ``VEXA_LLM_BASE_URL``, the
+    completion provider's. PRD decision 34 removed that provider and its env."""
     if base_url is not None or token is not None:
         tok = (token if token is not None else os.environ.get("ANTHROPIC_AUTH_TOKEN", "")) or ""
         url = base_url if base_url is not None else os.environ.get("ANTHROPIC_BASE_URL", "")
         return _mismatch(tok.strip(), provider_host(url).lower(),
                          key_var="ANTHROPIC_AUTH_TOKEN", url_var="ANTHROPIC_BASE_URL")
-    llm_key = (os.environ.get("VEXA_LLM_API_KEY") or "").strip()
-    llm_url = (os.environ.get("VEXA_LLM_BASE_URL") or "").strip()
-    if llm_key and llm_url:
-        warn = _mismatch(llm_key, provider_host(llm_url).lower(),
-                         key_var="VEXA_LLM_API_KEY", url_var="VEXA_LLM_BASE_URL")
-        if warn:
-            return warn
     tok = (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
     ant_url = os.environ.get("ANTHROPIC_BASE_URL", "")
     return _mismatch(tok, provider_host(ant_url).lower(),

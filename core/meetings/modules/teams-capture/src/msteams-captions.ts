@@ -62,7 +62,7 @@
  * observation and NO caption event. Unknown stays unknown — a diagnostic that
  * becomes a speaker name is a fabricated speaker name.
  */
-import { isTeamsDisplayNameCandidate } from './msteams-speakers.js';
+import { isSelfDisplayName, isTeamsDisplayNameCandidate } from './msteams-speakers.js';
 
 /** Teams live-caption selectors. The wrapper + the two leaf atoms are the 0.10
  * pair, verified live on host AND guest views; the rest are candidates carried so
@@ -250,7 +250,6 @@ export function createTeamsCaptions(opts: TeamsCaptionsOptions): TeamsCaptions {
   const stabilizeMs = opts.stabilizeMs ?? 900;
   const pollMs = opts.pollMs ?? 250;
   const absentAfterMs = opts.absentAfterMs ?? 30_000;
-  const selfLower = (opts.selfName || '').toLowerCase();
 
   const startedAt = now();
   // 'unknown' — nothing seen yet (the enable step may still be in flight);
@@ -431,7 +430,7 @@ export function createTeamsCaptions(opts: TeamsCaptionsOptions): TeamsCaptions {
     const rawSpeaker = (authors.nodes[authors.nodes.length - 1].textContent || '').trim();
     if (!rawSpeaker) { emitUnresolved('author-empty'); return; }
     if (!isTeamsDisplayNameCandidate(rawSpeaker)) { emitUnresolved('author-not-name-shaped'); return; }
-    if (selfLower && rawSpeaker.toLowerCase().includes(selfLower)) {
+    if (isSelfDisplayName(rawSpeaker, opts.selfName)) {
       counters.self++;
       // Our own captions end the previous speaker's entry all the same.
       if (pending && !pending.emitted) emitCaption(pending, true);

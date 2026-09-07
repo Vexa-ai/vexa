@@ -45,6 +45,28 @@ class User(Base):
 
     api_tokens = relationship("APIToken", back_populates="user")
 
+    __table_args__ = (
+        # MIGRATION-0007 — every email lookup in this service folds case
+        # (`func.lower(User.email) == …`, `create_user` + `GET /admin/users/email/{email}`), and the
+        # plain `email` index above cannot serve that predicate: both lookups are sequential scans
+        # on `users`, on the sign-in path.
+        #
+        # NON-UNIQUE, DELIBERATELY, AND THIS IS THE HONEST PART. The invariant we want is
+        # one-address-one-account, which is a UNIQUE index on `lower(email)`. It cannot ship as one
+        # here: the instances that need it are exactly the instances that already hold case-variant
+        # duplicate rows (that is the defect), a UNIQUE build against those rows raises
+        # UniqueViolation, and `_sync_indexes` FAILS CLOSED on a unique-index failure by design
+        # (#1186) — so shipping it unique would turn "this instance has a few ghost accounts" into
+        # "admin-api will not start". Trading a data defect for an outage is not a fix.
+        #
+        # What closes the hole instead, today: `create_user` stores new addresses folded, so a new
+        # collision is caught by the `email` UNIQUE index that already exists, and both lookups
+        # ORDER BY id so an instance holding duplicates resolves the same row every time. The
+        # UNIQUE upgrade is an operator step AFTER reconciling the duplicates — the SQL to find
+        # them, and the CONCURRENTLY build, are in schema/MIGRATION-0007-users-email-lower.md.
+        Index("ix_users_email_lower", text("lower(email)")),
+    )
+
 
 class PlatformSetting(Base):
     """Deployment-wide runtime config, one JSONB value per key (`models`, `transcription`).
@@ -109,6 +131,24 @@ class Meeting(Base):
         Index("ix_meeting_transcript_viewers_gin",
               text("(data -> 'transcript_viewers') jsonb_path_ops"), postgresql_using="gin"),
         Index("ix_meeting_workspace_created_at", text("(data ->> 'workspace_id')"), "created_at"),
+        # #1222 (mirror of meeting-api's sessions/models.py): the list_view sort is
+        # (non-terminal pin, MEETING EVENT time, id), so the owner/workspace union branches need
+        # THAT key index-walkable, not created_at. `meeting_event_time()` is the IMMUTABLE wrapper
+        # for COALESCE(data.scheduled_at, start_time, created_at), created by _sync_functions
+        # (sync.py) BEFORE create_all/_sync_indexes — these expressions must stay verbatim-equal
+        # to the ORDER BY in the collector's list_meetings or the planner won't substitute them.
+        # ⚠ PROD ROLLOUT: create the function + both indexes CONCURRENTLY out-of-band BEFORE this
+        # change deploys — see schema/MIGRATION-0005-meeting-event-order.md.
+        Index("ix_meeting_user_event_order", "user_id",
+              text("(status IN ('active', 'awaiting_admission', 'joining', 'requested', "
+                   "'scheduled', 'stopping'))"),
+              text("meeting_event_time(data, start_time, created_at)"),
+              "id"),
+        Index("ix_meeting_workspace_event_order", text("(data ->> 'workspace_id')"),
+              text("(status IN ('active', 'awaiting_admission', 'joining', 'requested', "
+                   "'scheduled', 'stopping'))"),
+              text("meeting_event_time(data, start_time, created_at)"),
+              "id"),
         # ROB1/ROB2 DB-level backstop (mirror of meeting-api's sessions/models.py): at most ONE
         # ACTIVE (non-terminal) meeting per (user, platform, native_meeting_id). Unique PARTIAL
         # index — terminal rows (completed/failed) are NOT covered, so a user can re-meet the same
