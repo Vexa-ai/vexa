@@ -384,6 +384,69 @@ test("alias readback digest rewrite is an identity failure", async () => {
   );
 });
 
+test("an ABSENT negative-control tag is unchanged, not an error (v012 promote, #1654 follow-up)", async () => {
+  // vexaai/v012-admin-api has no `latest` tag at all. The v012 promote asserts `latest` is
+  // unchanged while it moves `:v012`; a 404 there used to abort the whole promotion (exit 7,
+  // run 34105335802). Absent before and absent after IS the control holding.
+  const bytes = Buffer.from('{"schemaVersion":2}');
+  const receipt = await aliasManifest({
+    repository: "vexaai/v012-admin-api",
+    sourceReference: "v0.12.27",
+    targetReference: "v012",
+    expectedDigest: digest("1"),
+    unchangedReference: "latest",
+    username: "user",
+    password: "token",
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes("/token")) return response(200, { token: "push-token" });
+      const reference = decodeURIComponent(String(url).split("/manifests/")[1]);
+      if (options.method === "PUT") return response(201, "", { "docker-content-digest": digest("1") });
+      if (reference === "latest") return response(404, { errors: [{ code: "MANIFEST_UNKNOWN" }] });
+      return response(200, bytes, {
+        "content-type": "application/vnd.oci.image.manifest.v1+json",
+        "docker-content-digest": digest("1"),
+      });
+    },
+  });
+  assert.equal(receipt.targetDigest, digest("1"));
+  assert.equal(receipt.unchangedDigest, undefined);
+});
+
+test("an absent negative control that APPEARS during the alias still fails", async () => {
+  const bytes = Buffer.from('{"schemaVersion":2}');
+  let latestReads = 0;
+  await assert.rejects(
+    aliasManifest({
+      repository: "vexaai/v012-admin-api",
+      sourceReference: "v0.12.27",
+      targetReference: "v012",
+      expectedDigest: digest("1"),
+      unchangedReference: "latest",
+      username: "user",
+      password: "token",
+      fetchImpl: async (url, options = {}) => {
+        if (String(url).includes("/token")) return response(200, { token: "push-token" });
+        const reference = decodeURIComponent(String(url).split("/manifests/")[1]);
+        if (options.method === "PUT") return response(201, "", { "docker-content-digest": digest("1") });
+        if (reference === "latest") {
+          latestReads += 1;
+          return latestReads === 1
+            ? response(404, { errors: [{ code: "MANIFEST_UNKNOWN" }] })
+            : response(200, bytes, {
+                "content-type": "application/vnd.oci.image.manifest.v1+json",
+                "docker-content-digest": digest("9"),
+              });
+        }
+        return response(200, bytes, {
+          "content-type": "application/vnd.oci.image.manifest.v1+json",
+          "docker-content-digest": digest("1"),
+        });
+      },
+    }),
+    (error) => error instanceof RegistryValidationError && /negative-control descriptor moved/.test(error.message),
+  );
+});
+
 test("aliasing cannot move the unchanged latest negative control", async () => {
   const bytes = Buffer.from('{"schemaVersion":2}');
   let latestReads = 0;
