@@ -113,6 +113,10 @@ edges:
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
+  discord-bot -write-> segments-stream
+  discord-bot -write-> tc-mutable
+  discord-bot -call-> transcription  # audio -> first-party STT via transcriptionServiceUrl (invocation.v1)
+  discord-bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status
   meeting-api -write-> bot-commands  # PUBLISH leave/speak
@@ -145,13 +149,13 @@ edges:
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
+  bot, discord-bot, agent-worker deployed-in runtime
   flows-worker -write-> flows-rows
   flows-api -write-> flows-rows  # the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer
   flows-api -read-> flows-rows
   flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
   flows-worker -req-> gateway
   flows-worker -req-> admin-api
-  bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy
 

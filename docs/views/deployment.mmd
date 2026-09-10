@@ -2,6 +2,7 @@
 flowchart TB
   subgraph runtime_wl["runtime workloads"]
     bot["bot"]
+    discord_bot["discord-bot"]
     agent_worker["agent-worker"]
   end
   meeting_api -->|"POST /workloads spawn bot"| runtime_wl
