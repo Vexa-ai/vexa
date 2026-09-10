@@ -37,6 +37,10 @@ failures (`422`).
 **Meetings API** (`/meetings`, `/bots`, `/transcripts/*`)
 - `401` on a missing or invalid `X-API-Key`; `403` when the key lacks the route's scope.
 - `404` reading a transcript for a meeting that was never started.
+- `GET /transcripts/*` → `400` on any query parameter other than `since`, naming it
+  (`detail: "Unsupported query parameter(s): limit. This endpoint accepts: since."`), and `400` on a
+  `since` that isn't an ISO-8601 UTC timestamp. A parameter the endpoint does not honour is refused,
+  never accepted and dropped — see [following a live meeting](/api/meetings#following-a-live-meeting-since).
 - `POST /meetings` (plan) → `409` when a non-terminal meeting already exists for that link; `422`
   on an unrecognizable `meeting_url`.
 - `PATCH /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting is only
