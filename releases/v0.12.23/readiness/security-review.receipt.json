@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "leg": "security-review",
+  "candidate_map_sha": "3422d02f02985ab0f02fc47f58a6b4b3e23f0163397f1073c004fe44624d764f",
+  "input_identity": "v0.12.22..c93a24374c4337b226f74000dd5ca4d9fbcfe307",
+  "result": "green",
+  "findings_ref": "https://github.com/Vexa-ai/vexa/issues/1231",
+  "generated_at": "2026-08-18T15:41:08Z",
+  "generated_by": "agent (readiness backfill session · security-review)",
+  "notes": [
+    "Verdict as written by the rc.18 review: no blocking findings — nothing this train adds is reachable by an unauthenticated or a cross-tenant path. Secrets pass clean, injection pass clean. Three HIGH findings are authenticated and single-tenant, which under this leg's blocking-verdict discipline ride to the next train with filed issues and named owners.",
+    "Findings published as Vexa-ai/vexa#1231 (SSRF IPv4-mapped-IPv6 bypass, S1), #1232 (ICS fetch bounds + unbounded VEVENT count, S2/S3), #1233 (retract/disclosure + Next.js critical, S4/S5 + dependencies). findings_ref carries #1231; the other two are named here because the field takes one pointer.",
+    "Tree identity checked by the review: rc.18 images were built from c0571429 on release/0.12.23-rc.18-freeze, which is not a descendant of the reviewed c93a2437. git diff c93a2437 c0571429 returns four files — a workflow, a map test, the map, and the witness receipt — and NO source file differs, so every finding applies exactly to the built candidate.",
+    "IDENTITY GAP, disclosed: this leg's manifest input declares '<prev tag>..<candidate head sha> + deps@<lockfile sha256>'. The review recorded the dependency state as counts (56 open alerts: 2 critical / 27 high / 27 medium; 18 of 18 distinct vulns land in at least one published image; zero with a verified first-party reachable path) but never recorded a lockfile hash. The deps half is therefore absent from input_identity, which satisfies the declared regex but does NOT void this receipt on a dependency bump. Re-run the leg to restore the full binding."
+  ]
+}

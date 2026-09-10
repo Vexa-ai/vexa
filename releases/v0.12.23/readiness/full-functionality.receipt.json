@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "leg": "full-functionality",
+  "candidate_map_sha": "3422d02f02985ab0f02fc47f58a6b4b3e23f0163397f1073c004fe44624d764f",
+  "input_identity": "https://github.com/Vexa-ai/vexa/actions/runs/32141246247",
+  "result": "green",
+  "findings_ref": "https://github.com/Vexa-ai/vexa/actions/runs/32141246247",
+  "generated_at": "2026-08-18T15:41:08Z",
+  "generated_by": "agent (readiness backfill session · full-functionality)",
+  "notes": [
+    "release-validate run 32141246247 at validation_source 29eb4186: 9 legs SUCCESS (resolve, validate-mock-fsm, validate-v010-compat, validate-lite, validate-arm64, validate-bot-spawn, image-identity, validate-compose, validate-helm-k3s), 3 SKIPPED (value gate guarantee 8, witness gate guarantee 7, promote moving tag). The skipped three are not this leg's subject: guarantee 7/8 are human-only gates, and guarantee 8 is separately carried by the train-value leg.",
+    "The candidate map bytes moved after this run (31f8740b -> 3422d02f) solely to record this run's own validation_source/validation_run. No image digest, no candidate_tag and no build_source changed, so the candidate this run examined IS the candidate the current map describes; the receipt binds the current sha rather than the pre-freeze sha it could not have known.",
+    "OUT OF SCOPE, CARRIED BY blast-radius: candidate build run 32139430561 (release-images.yml) concluded FAILURE, so validate-bot-delta, validate-lite-delta-amd64, validate-lite-delta-arm64, candidate-delta-receipt and alias-candidate never ran for rc.18. Those legs belong to release-images.yml, not to this leg's declared oracle."
+  ]
+}
