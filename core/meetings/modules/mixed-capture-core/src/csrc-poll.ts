@@ -112,7 +112,7 @@ export interface CsrcPollOptions {
   receivers?: () => CsrcReceiverLike[];
   /** Poll cadence in ms. Default 100 — the granularity the transport itself updates at. */
   pollMs?: number;
-  /** How long a source stays active after its last observed contribution. Default 400 ms. */
+  /** How long a source stays active after its last observed contribution. Default 800 ms. */
   inactiveMs?: number;
   /** Epoch-ms clock (injectable for tests). */
   now?: () => number;
@@ -133,8 +133,13 @@ export interface CsrcPoll {
 
 /** The transport updates roughly per packet; 100 ms is one packet-train, not an arbitrary tick. */
 export const CSRC_POLL_MS = 100;
-/** Chosen to span a packet gap (jitter, DTX, a brief pause) without holding a finished turn open. */
-export const CSRC_INACTIVE_MS = 400;
+/** Chosen to span a packet gap (jitter, DTX, a brief pause) without holding a finished turn open.
+ *  Measured on a live Microsoft Teams meeting (2026-08-20): replaying this transition logic over a
+ *  599-sample tape of a 6 s speech / 7 s silence cycle yields 10 deactivations at 400 ms —
+ *  fragmenting one speech phase into segments as short as 0.1 s — against 7 at 800 ms, where the
+ *  reconstructed segments match the fixture's real structure. Teams' mixer pauses inside a turn
+ *  for longer than one packet-train, so 400 ms closes turns that are still open. */
+export const CSRC_INACTIVE_MS = 800;
 /** Beyond this, a timestamp is not the clock we think it is. Mirrors the bridge's hint guard. */
 const MAX_CLOCK_SKEW_MS = 10 * 60 * 1000;
 
