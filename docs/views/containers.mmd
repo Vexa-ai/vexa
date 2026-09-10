@@ -34,8 +34,13 @@ flowchart LR
     minio["minio"]
   end
   discord_bot["discord-bot"]
+  subgraph flows["flows"]
+    flows_api["flows-api"]
+    flows_worker["flows-worker"]
+  end
   slim["slim"]
   extension["extension"]
+  claude_plugin["claude-plugin"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
   meeting_api -->|"write"| segments_table
@@ -60,3 +65,6 @@ flowchart LR
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
+  flows_worker -->|""| agent_api
+  flows_worker -->|""| gateway
+  flows_worker -->|""| admin_api

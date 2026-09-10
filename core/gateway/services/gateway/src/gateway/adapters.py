@@ -201,7 +201,12 @@ def build_production_app(
 
     admin_api_url = admin_api_url or os.getenv("ADMIN_API_URL", "http://admin-api:8001")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
-    agent_api_url = os.getenv("AGENT_API_URL", "http://agent-api:8100")
+    # THE AGENT DOMAIN'S PRESENCE SIGNAL (PRD decisions 40.6 + 40.7). Unset means the deployment
+    # does not run agents — the `no-agents` product — and the edge then registers no `/agent/*`
+    # route and loads no `core/agent/routes.v1.json`, so a request there is a 404. A URL default
+    # here would assert the domain exists and make absence unsayable, which is the same defect a
+    # host-port default has one layer down. Every shipped deployment names it: compose, helm, lite.
+    agent_api_url = os.getenv("AGENT_API_URL", "")
     # #795: the MCP service, fronted at the gateway edge under /mcp (streamable-HTTP transport).
     mcp_url = os.getenv("MCP_URL", "http://mcp:8010")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")

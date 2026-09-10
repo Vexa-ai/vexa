@@ -94,6 +94,12 @@ curl -X POST "$API_BASE/agent/workspace/swap" \
   -d '{"repo":"https://github.com/acme/knowledge.git","ref":"main","token":"<git-token>"}'
 ```
 
+`repo` must be an `https://`, `ssh://` or `git@host:owner/repo` URL pointing at a public or company
+git host. A host inside the deployment is refused: a loopback, private, link-local, reserved or
+multicast address, or an unqualified name with no dot. Local filesystem paths are refused too,
+unless the operator sets `VEXA_ALLOW_LOCAL_REPO_ROOT` to an `os.pathsep`-separated list of
+directories (`:` on Linux and macOS) that a local path must resolve inside.
+
 Omit `repo` to swap back to the seed workspace. Check what's attached:
 
 ```bash

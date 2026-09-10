@@ -15,7 +15,8 @@ if [ -n "${VEXA_API_KEY:-}" ]; then
     exit 0
 fi
 
-ADMIN="${ADMIN_API_TOKEN:-changeme}"
+# Inherited from the entrypoint, which mints one per boot when the operator supplied none.
+ADMIN="${ADMIN_API_TOKEN:-}"
 echo "[provision-key] waiting for admin-api..."
 for _ in $(seq 1 60); do
     curl -sf -o /dev/null http://localhost:8001/health 2>/dev/null && break

@@ -1,0 +1,34 @@
+[project]
+name = "vexa-flows"
+version = "0.12.0"
+description = "The reaction engine: a fact arrives, a flow reacts to it, and every step is a row somebody can look at. The engine itself is stdlib-pure (gate:isolation-py holds it there); the dependencies below belong to the EDGES the suite exercises in-process, never to `src/flows/`."
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    # The suite still opens NO SOCKET. These are here because the offline tests exercise the two
+    # edges in-process: `TestClient` mounts `flows_integrations.flows_api` (FastAPI + pydantic) on
+    # the ASGI app directly, and `test_schema_drift.py` regenerates `schema.sql` from the
+    # SQLAlchemy models that are its SSOT — without them it SKIPS, which makes the drift gate
+    # silently absent rather than green. `httpx` is `fastapi.testclient`'s transport. `uvicorn` is
+    # deliberately NOT here: nothing imports it outside `flows_api`'s `__main__`.
+    "fastapi>=0.115",
+    "pydantic>=2",
+    "sqlalchemy>=2",
+    # IMPORTED, never connected. `postgres_db` is lazy about the CONNECTION but `create_engine`
+    # resolves the DBAPI eagerly, so composing `flows_api` at all needs the driver present — which
+    # is the property `tests/test_health.py` is about: the app builds against an unreachable DSN
+    # with no database running anywhere. Same spelling as the image's own `pip install`.
+    "psycopg[binary]>=3",
+    "httpx>=0.27",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The same `sys.path` the two entrypoints build for themselves (`sys.path.insert(0, parents[1])` at
+# the top of `flows_api` and `flows_worker`): the packages under `src/` are imported by bare name in
+# the image, and a suite that reached them any other way would exercise a layout the product has not
+# got. `tests` is on it too, for the sqlite double.
+pythonpath = ["src", "tests"]

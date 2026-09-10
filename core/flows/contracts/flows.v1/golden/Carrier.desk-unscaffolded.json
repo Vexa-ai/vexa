@@ -1,0 +1,12 @@
+{
+  "event": "desk.unscaffolded",
+  "owner": "agent",
+  "published_by": "private",
+  "cardinality": "exactly_once_per_subject",
+  "refs": [
+    "uid"
+  ],
+  "source_event_id": "desk-<uid> — keyed to the person, because the fact is about their one desk",
+  "stamp": "the desk itself: the agent domain publishes only on the call that CREATED the workspace directory, and existence on disk is what makes that call happen once",
+  "description": "A desk exists and nobody has finished setting it up; triggers desk_setup, whose step blocks until `.scaffolded` appears. Published by the agent domain at POST /api/workspace/init — the one seam that provisions a desk, called on every login and idempotent, so the publish is gated on the desk being CREATED rather than on the call. THE STAMP IS THE DESK: unlike onboarding.completed there is no column to write, and none is needed — the fact is re-derivable from the workspace at any time (a directory with no `.scaffolded` in it), so a publish that never lands loses a queue card and never loses the fact, and a sweep can replay from the desks. NOT PUBLISHED FROM THIS TREE (`published_by: private`): the agent-api control plane that serves POST /api/workspace/init, and the publish-edge declaration in its own `config.v1.json`, are not in this cut — so nothing here declares the publish and nothing here can. The consumer half is real and stays: the flow that reacts to it (`desk_setup`, in the optional `flows_defs/production_agent.py`) registers only where the agent domain is deployed, and a deployment that mounts that domain receives the fact and runs it. Absent from the no-agents profile (PRD decision 40.6) because the agent domain is: there is no switched-off publisher there, there is no publisher."
+}

@@ -1,12 +1,27 @@
 {
  "contract": "config.v1",
  "service": "gateway",
+ "capabilities": {
+  "agent_domain": {
+   "description": "Whether this deployment fronts the AGENT domain (PRD decision 40.7: meetings, agents and flows work independently and in any configuration, identity being the only shared dependency). Presence is a configuration fact \u2014 whether the deployment named the door \u2014 never a probe: a probe makes \"agent-api is restarting\" and \"there is no agent-api\" the same answer, and the second is a shipped product.",
+   "when_unconfigured": "The edge registers no /agent/* route and assembles no agent rows into its scope table, so a request to /agent/anything is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. Everything else is unchanged: this is the `no-agents` product of decision 40.6 (gateway + meetings + flows + identity), not a degraded gateway."
+  }
+ },
  "keys": [
   {
    "key": "INTERNAL_API_SECRET",
    "class": "required-explicit",
    "secret": true,
-   "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) — so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526)."
+   "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) — so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526). It is ALSO the internal-tier authority agent-api's _internal_caller and admin-api's _check_internal compare against, which is why a published placeholder is refused outright (F95).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "ADMIN_API_URL",
@@ -22,10 +37,10 @@
   },
   {
    "key": "AGENT_API_URL",
-   "class": "defaulted",
-   "default": "http://agent-api:8100",
-   "description": "agent control-plane base URL fronted under /api/*",
-   "targets": ["helm", "lite"]
+   "class": "capability",
+   "capability": "agent_domain",
+   "description": "agent control-plane base URL fronted under /api/*. UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.6 no-agents, 40.7 domains are independent): the edge registers no /agent/* route and assembles no agent rows into its scope table, so a request there is 404 — this deployment does not serve it — rather than a 401 about a route that is not here. A URL default would assert the domain exists and make its absence unsayable.",
+   "targets": ["compose", "helm", "lite"]
   },
   {
    "key": "MCP_URL",

@@ -126,6 +126,22 @@ vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
+{{/* The flows-tier image ref (flows-api + flows-worker + flows-mailbox + the ensure-db
+initContainer — one image, four entrypoints). Same shape as vexa.botImage: an explicit
+flows.image wins, otherwise global.imageTag pins the standard repo, otherwise the chart's own
+default tag. It used to be a bare `vexaai/v012-flows:dev` value — a MUTABLE tag, and one the
+release's build-once promotion could never pin, so the flows tier alone floated while every other
+service moved to the release digest (A12). */}}
+{{- define "vexa.flowsImage" -}}
+{{- if .Values.flows.image -}}
+{{- .Values.flows.image -}}
+{{- else if .Values.global.imageTag -}}
+{{- printf "%s:%s" (.Values.flows.imageRepository | default "vexaai/v012-flows") .Values.global.imageTag -}}
+{{- else -}}
+{{- printf "%s:%s" (.Values.flows.imageRepository | default "vexaai/v012-flows") (.Values.flows.imageTag | default "v012") -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.postgresCredentialsSecretName" -}}
 {{- if .Values.postgres.enabled -}}
 {{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}

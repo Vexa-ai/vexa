@@ -14,6 +14,7 @@ flowchart LR
     mcp["mcp"]
     slim["slim"]
     extension["extension"]
+    claude_plugin["claude-plugin"]
     terminal["terminal"]
     segments_table["transcription_segments (table)"]
     runtime["runtime"]
@@ -22,6 +23,8 @@ flowchart LR
     postgres["postgres"]
     minio["minio"]
     dashboard["dashboard (deprecated)"]
+    flows_api["flows-api"]
+    flows_worker["flows-worker"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription
