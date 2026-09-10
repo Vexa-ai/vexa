@@ -1,0 +1,101 @@
+---
+title: "Your extract"
+description: "The group's minutes, addressed to one person: what changed for you because this meeting happened."
+---
+
+<Note>**Status:** produced and gated in dev; delivery over SMTP works; the agent-written artifact
+waits on the credential decision. See [status](/minutes/status).</Note>
+
+## Definition
+
+An **extract** is one output addressed to **exactly one person** about **one meeting**: the part
+of the group's minutes that changed something for them.
+
+The group keeps one record. Each member receives their own reading of it.
+
+An extract is deliberately *not* a summary. A summary is one text for a group, mostly restating what
+everyone present already heard. A delta is different for every recipient, and its value is
+highest for the person who was least central to the conversation — the one who now has to act
+on something decided while they listened.
+
+## Shape
+
+Sections appear only when they have content. An artifact where nothing changed for you is
+**short**, and that is correct behaviour rather than a failure to try.
+
+| Section | Answers |
+|---|---|
+| **Decided — affects you** | what the group settled that lands on your desk |
+| **You committed to** | what you said you would do, with any date attached |
+| **Owed to you** | what someone else took on for you |
+| **Changed since** | how this differs from the last time this group met |
+| **Worth knowing** | context you'd want but wouldn't have asked for |
+
+Written in the meeting's own language. Addressed in the second person. Concrete about names,
+dates and numbers, because a delta that generalises is a summary again.
+
+## Three rules it obeys
+
+**It is not conditioned on whether you spoke.** Presence is enough for the group to have changed
+something for you. A person who listened for an hour still has a context delta.
+
+**It always links to its record.** The transcript is one click away, every time. This is the
+honesty valve: transcription is imperfect, and a confident artifact built on a bad transcript
+is worse than nothing. When attribution is degraded, the artifact says so in a line rather than
+quietly asserting who said what.
+
+**It is built only from what the recipient is entitled to see.** A member of the group gets an
+extract informed by everything the group knows. Everyone else gets one built from the meeting
+record and **their own** group — never from a group they do not belong to. The same rule, applied
+from wherever the recipient stands.
+
+Who the recipient *is* comes from the organisation's own directory, and is used only in their own
+extract and kept only in their own group. It is their data, serving them.
+
+## How it is actually produced
+
+When a meeting completes, the system raises **one event per participant** — an event that names
+*who it concerns* — and each dispatches **a normal agent in the group's workspace**, prompted for
+that person.
+
+That is the same agent that answers chat, running the same way. It reads what the group knows, the
+transcript and the prior record, and it writes.
+
+Three consequences worth holding on to:
+
+- **The artifact differs per participant because the prompt does.** One workspace serves the
+  whole group; each run is addressed to one person and asks what changed for *them*.
+- **Post-meeting is not a special path.** Incoming mail, a completed meeting, a task transition —
+  all ride one envelope into one dispatcher. A new trigger is a new name, not new machinery.
+- **Wiring the model backend lights up everything at once**, because there is only one thing to
+  wire. See [running it on your own model](/minutes/model).
+
+## Before anything is sent
+
+Every completed record passes an **eligibility gate** before anything is written. Not every record
+is a meeting: a bot left running through a private conversation, or a tab playing a video, will
+produce a clean and entirely plausible artifact if nothing stops it.
+
+The gate returns one of three verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `send` | deliver to every entitled participant |
+| `hold_for_creator` | deliver to the meeting's creator alone, with a plain note |
+| `suppress` | build nothing, deliver nothing |
+
+**Under doubt it holds.** A held real meeting costs one person one click; a delivered private
+conversation cannot be recalled.
+
+The signal that matters most is the **roster**, not the transcript — a real meeting whose
+speaker attribution collapsed looks, in the text alone, exactly like a recording of one person
+in a group. Because meetings arrive [by invitation](/minutes/invitation), the roster is
+known before a word is transcribed.
+
+## Delivery
+
+Email, to each participant's invited address, from the workspace's address. Self-hosted
+deployments provide their own SMTP relay; nothing routes through a third-party email API.
+
+If no relay is configured, artifacts **queue and say so loudly**. They are never silently
+dropped — a delivery system that fails quietly is indistinguishable from one that works.
