@@ -186,6 +186,47 @@ def test_identity_headers_injected_and_spoof_stripped():
     assert fwd["x-api-key"] == VALID_KEY
 
 
+def test_internal_tier_header_is_stripped_from_a_public_request():
+    """F95 — the internal tier is not reachable from the public edge.
+
+    `/agent/{path}` maps to agent-api `/api/{path}`, and agent-api's `_internal_caller` (with
+    admin-api's `_check_internal`, and the meeting room's gate 0, which the code itself calls the
+    trust boundary on who is in the room) is gated SOLELY on `x-internal-secret`. The strip used to
+    be an eight-name list of `x-user-*` spellings, so a request carrying `x-internal-secret` — the
+    compose default was a literal in a public repository, and the exact value the comparison used —
+    arrived at agent-api and was believed.
+
+    The header must not reach the downstream at all, whatever value it carries."""
+    client, downstream = _client()
+    r = client.get("/bots/status", headers={
+        **AUTH,
+        "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
+        "x-vexa-internal-api-secret": "vexa-internal-secret",
+        "x-admin-api-key": "changeme",
+        "x-gateway-verified": "1",                     # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
+    })
+    assert r.status_code == 200
+    fwd = downstream.last["headers"]
+    for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret",
+                    "x-admin-api-key", "x-gateway-verified"):
+        assert spoofed not in fwd, f"{spoofed} reached the downstream from a public request"
+    # The strip is by FAMILY, not by a list that rots: a header nobody has invented yet, spelled
+    # inside one of the internal families, is stripped for free.
+    assert "x-user-id" in fwd and fwd["x-user-id"] == "7"
+
+
+def test_authority_header_families_are_recognised_by_prefix():
+    """The oracle behind the strip, stated directly — a list of eight names is what failed."""
+    from gateway.app import _is_authority_header
+
+    for name in ("x-internal-secret", "X-Internal-Secret", "x-internal-anything-new",
+                 "x-vexa-internal-api-secret", "x-user-id", "x-user-invented-tomorrow",
+                 "x-admin-api-key", "x-gateway-verified"):
+        assert _is_authority_header(name), name
+    for name in ("x-api-key", "content-type", "x-trace-id", "authorization", "mcp-session-id"):
+        assert not _is_authority_header(name), name
+
+
 def test_meeting_intent_put_forwards_to_meeting_api():
     """The Meetings surface's Schedule/Cancel action PUTs the user-owned intent; the gateway must
     forward it verbatim to meeting-api's PUT /meetings/{platform}/{native}/intent. Regression: this

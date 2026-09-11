@@ -10,7 +10,7 @@ composed three ways (desktop process · bot container · split cloud services). 
 
 **This domain is about:** joining meetings, capturing + transcribing them, the meeting row + bot
 lifecycle, meeting status, and the **transcript** — it is the *single writer* of the transcript carrier
-(P23). **It is never about:** the copilot, chat, the agent's workspace, or what gets *extracted* from a
+(P23). **It is never about:** chat, the agent's workspace, or what gets *extracted* from a
 transcript — that is the **agent** domain. `meetings ⊥ agent`: the two domains never call each other; they
 meet **only at the gateway**, over published contracts (`transcript.v1`, `api.v1`). See
 [`docs/docs/architecture/control-plane.mdx`](../../docs/docs/architecture/control-plane.mdx).

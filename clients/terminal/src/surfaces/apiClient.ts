@@ -16,9 +16,10 @@ export class ApiError extends Error {
   /** `detail` is the FLATTENED operator string (what goes in the message / the console). `body` is
    *  the parsed failure body as it came off the wire, kept because some failures are STRUCTURED and
    *  flattening them destroys the only thing the user needs: a `403
-   *  {"detail":{"code":"service_not_allowed","reason":"insufficient_balance"}}` is a paywall, and
-   *  once it is a string it is indistinguishable from a permissions fault (see
-   *  `surfaces/serviceDenial.ts`). Undefined when the body was absent or not JSON. */
+   *  {"detail":{"code":"service_not_allowed","reason":…,"message":…,"action_url":…}}` is the
+   *  deciding service refusing in its own words, and once it is a string it is indistinguishable
+   *  from a permissions fault (see `surfaces/serviceDenial.ts`). Undefined when the body was absent
+   *  or not JSON. */
   constructor(
     public readonly status: number,
     public readonly detail: string,

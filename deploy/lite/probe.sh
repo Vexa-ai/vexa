@@ -18,7 +18,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 APP="${APP_CONTAINER:-vexa-lite}"
 GW_PORT="${HOST_GATEWAY_PORT:-8056}"
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:$GW_PORT}"
-ADMIN_TOKEN="${ADMIN_TOKEN:-changeme}"
+ADMIN_TOKEN="${ADMIN_TOKEN:-}"
 
 X() { docker exec "$APP" "$@"; }
 

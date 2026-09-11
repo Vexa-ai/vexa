@@ -38,6 +38,17 @@
         ]
       },
       {
+        "group": "Workflows",
+        "pages": [
+          "flows/overview",
+          "flows/authoring",
+          "flows/vocabulary",
+          "flows/examples",
+          "flows/developing",
+          "flows/operations"
+        ]
+      },
+      {
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",

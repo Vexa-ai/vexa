@@ -2,6 +2,7 @@
   "name": "@vexa/terminal",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Vexa Terminal — an AI-first knowledge-worker terminal (Claude Code × Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference.",
   "scripts": {
     "dev": "PORT=3000 node server.mjs",
