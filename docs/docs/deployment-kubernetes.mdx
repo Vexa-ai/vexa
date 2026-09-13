@@ -35,6 +35,10 @@ helm install vexa deploy/helm/charts/vexa -f deploy/helm/charts/vexa/values.yaml
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ### Is this install actually working? — `make probe SURFACE=helm`
 
 The standing full-journey smoke probe drives spawn → schedule → boot → join → transcribe →
@@ -382,9 +386,17 @@ binds into each worker Pod as a PVC, scoped per-mount). The Compose stack is the
 most production mileage today; the chart is the right starting point for a cluster
 evaluation — track the [status page](/roadmap/status).
 
-## Air-gapped clusters
+## No-egress clusters
 
 Everything the chart deploys pulls from images you build and host in your own registry; pair it
-with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) and
-your own LLM endpoint ([Configuration](/configuration)) for a zero-egress posture. See
-[Security & compliance](/security-compliance).
+with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) — bundled
+GPU or CPU — and your own LLM endpoint ([Configuration](/configuration)) so the audio path never
+calls out. See [Security & compliance](/security-compliance).
+
+**One gap on this path, and it is this chart's:** `TRANSCRIPTION_MODEL` is **not values-plumbed**
+— set it on the meeting-api and terminal Deployments via `extraEnv` until it lands, which the
+chart's own [known boundaries](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md)
+state. Compose and Lite plumb it as a first-class setting. So no egress is ✅ on **Compose and
+Lite** and 🟡 **here**. We have not run an install on a genuinely disconnected network, so we do
+not claim one: what a procurement review can hold us to is self-hosted with no egress, not a
+certified air gap.

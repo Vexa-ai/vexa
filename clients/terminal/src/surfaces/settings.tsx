@@ -148,6 +148,13 @@ function ModelsSection() {
     { key: "api_key", label: "API key", placeholder: "unchanged unless typed", secret: true, showIf: (v: Record<string, string>) => v.mode === "custom" },
     { key: "model", label: "Chat model", placeholder: "deployment default (e.g. sonnet)" },
     { key: "meeting_model", label: "Meeting model", placeholder: "defaults to chat model" },
+    { key: "effort", label: "Reasoning effort", placeholder: "CLI default (e.g. medium)", options: [
+      { value: "", label: "CLI default" },
+      { value: "low", label: "low" },
+      { value: "medium", label: "medium" },
+      { value: "high", label: "high" },
+      { value: "xhigh", label: "xhigh" },
+    ] },
   ];
   const transcriptionFields = [
     { key: "url", label: "Service URL", placeholder: "deployment default" },

@@ -1,7 +1,7 @@
 ---
 title: "Vexa"
 sidebarTitle: "Overview"
-description: "Open-source meeting bots & real-time transcription API — Apache-2.0, cloud or self-hosted, air-gappable."
+description: "Open-source meeting bots & real-time transcription API — Apache-2.0, cloud or self-hosted, no egress."
 ---
 
 <div style={{ fontSize: "2rem", fontWeight: 600, lineHeight: 1.25, margin: "0.5rem 0 1.5rem" }}>
@@ -70,7 +70,7 @@ them.
 - **Turns knowledge into code** — meetings and emails become a living, Markdown [workspace](/concepts#workspace) that agents treat as their working directory.
 - **Runs agents safely** — every [agent](/core/agents) executes in an isolated, ephemeral [container](/concepts#container): no egress except through brokered tools, thousands in parallel, no lateral movement.
 - **Cloud-native deployment** — self-host the whole stack with [Docker Compose](/deployment) on a single Linux host.
-- **Stays in your environment** — open-source, self-hostable, air-gappable, with [bring-your-own inference](/deployment#air-gapped). Recordings and agent state never leave infrastructure you control.
+- **Stays in your environment** — open-source, self-hostable, and able to run with [no egress](/deployment#no-egress) via bring-your-own inference and a bundled STT unit. Recordings and agent state never leave infrastructure you control.
 
 ## Try it
 
@@ -81,10 +81,14 @@ make all      # full stack via Docker Compose — seeds .env, pulls the publishe
 ```
 
 The API comes up at `http://localhost:18056` (gateway) and the terminal web
-workbench at `http://localhost:13000`. Full options — air-gapped, bring-your-own
+workbench at `http://localhost:13000`. Full options — no egress, bring-your-own
 inference — in [Deployment](/deployment).
 
 **Prefer to look before you build?** Hosted [vexa.ai](https://vexa.ai) runs Vexa 0.12 for meeting bots and transcription today — agents aren't part of the hosted service yet. These docs describe the full 0.12 stack, agents included, that you self-host above.
+
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
 
 ## Why Vexa
 

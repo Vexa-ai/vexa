@@ -206,6 +206,41 @@ def _untracked_window_elapsed(
     return (now - first) > grace
 
 
+def _reconcile_join_evidence(
+    *,
+    status: Optional[str],
+    completion_reason: Optional[str],
+    detail: Optional[str],
+    source: str = "reconcile",
+) -> Optional[dict]:
+    """The typed join evidence for a SWEEP-driven pre-active terminal (#1059/#1058).
+
+    The sweep is second-hand by nature: it never saw the platform, only the stage the row was left
+    in and the kernel's answer about the workload. So it carries NO timings — an absent timing is
+    absent, never a fabricated zero — and its ``source`` says ``reconcile`` so a consumer can weight
+    it below a bot's first-hand report. What it CAN attribute it does: a row reaped in
+    ``awaiting_admission`` exhausted a wait (a denial would have arrived as its own sealed reason),
+    a row reaped in ``joining`` never got an admission signal, and a row still in ``requested``
+    honestly reads ``unknown`` — the bot never spoke, so nothing about the join is known.
+
+    Fail-open: any fault here yields ``None`` and the terminal proceeds unevidenced rather than not
+    at all (the sweep's whole job is to converge a stuck meeting; evidence must not block that)."""
+    try:
+        from .join_evidence import build_join_evidence, classify_join_failure
+
+        reason = classify_join_failure(
+            completion_reason=completion_reason,
+            stage=status,
+            reached_lobby=status == "awaiting_admission",
+            detail=detail,
+        )
+        return build_join_evidence(
+            reason=reason, stage=status, source=source, detail=detail,
+        )
+    except Exception:  # noqa: BLE001 — evidence never gates the convergence it describes
+        return None
+
+
 async def _escalate_untracked_zombie(
     meeting_id: Any,
     status: str,
@@ -231,15 +266,22 @@ async def _escalate_untracked_zombie(
     )
     pre_active = status in _PRE_ACTIVE_STATUSES
     stage = status if pre_active else "active"
+    completion_reason = (
+        _pre_active_completion_reason(status, stop_requested) if pre_active else "left_alone"
+    )
     body = {
         "connection_id": session_uid,
         "status": "failed",
         "failure_stage": stage,
-        "completion_reason": (
-            _pre_active_completion_reason(status, stop_requested) if pre_active else "left_alone"
-        ),
+        "completion_reason": completion_reason,
         "reason": reason,
     }
+    if pre_active:
+        evidence = _reconcile_join_evidence(
+            status=status, completion_reason=completion_reason, detail=reason,
+        )
+        if evidence is not None:
+            body["join_evidence"] = evidence
     log.warning(
         "nonterminal-reconcile: meeting %s (%s) escalated to failed — %s",
         meeting_id, status, reason,
@@ -383,6 +425,17 @@ async def reconcile_stale_nonterminal_sweep(
                 f"{_workload_evidence(bot_container_id, probe_info)}; "
                 f"reconciled to failed at {status} (never reached active)"
             )
+            # The TYPED axes on the same evidence (#1059/#1058): the stage the row died in decides
+            # WHAT (a lobby exhausted vs an admission signal that never came) and, with it, WHO —
+            # a host who never answered vs our own join layer. Without this the sweep's own
+            # `join_failure` rows stay as unaggregatable as the 83 that motivated the issue.
+            evidence = _reconcile_join_evidence(
+                status=status,
+                completion_reason=body["completion_reason"],
+                detail=body["reason"],
+            )
+            if evidence is not None:
+                body["join_evidence"] = evidence
             if stop_requested:
                 body["data"] = {"stop_requested": True}
         try:
@@ -548,6 +601,18 @@ async def synthesize_terminal_for_dead_workload(
                 else f"workload {state} before the bot reported (never started)"
             ),
         }
+        # Same typed axes on the runtime-confirmed-destroy path — a terminal driven by teardown
+        # evidence deserves the same decomposition as one driven by the sweep (#1059/#1058). A user
+        # stop lands `stopped_while_joining` → `user_action`, so a deliberate cancellation never
+        # counts against the system-failure rate.
+        evidence = _reconcile_join_evidence(
+            status=status,
+            completion_reason=body["completion_reason"],
+            detail=body["reason"],
+            source="runtime_destroy",
+        )
+        if evidence is not None:
+            body["join_evidence"] = evidence
         if stop_requested:
             body["data"] = {"stop_requested": True}
     elif status in _WAS_ACTIVE_STATUSES:

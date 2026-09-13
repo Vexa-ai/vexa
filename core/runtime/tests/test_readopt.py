@@ -368,10 +368,12 @@ def test_adopt_noop_on_backends_without_discovery():
 def test_k8s_start_stamps_adoption_labels(monkeypatch):
     from runtime_kernel import k8s_backend
 
-    calls: list[tuple[str, ...]] = []
+    import json as _json
 
-    def fake_kubectl(*args: str, check: bool = True):
-        calls.append(args)
+    calls: list[dict] = []
+
+    def fake_kubectl(*args: str, check: bool = True, stdin=None):
+        calls.append({"args": args, "stdin": stdin})
         class R:  # noqa: N801 — minimal stand-in
             returncode = 0
             stdout = ""
@@ -383,8 +385,11 @@ def test_k8s_start_stamps_adoption_labels(monkeypatch):
 
     be = k8s_backend.K8sBackend()
     be.start("mtg-2-d93eee39", Runnable(image="img"), {})
-    (run_args,) = calls
-    assert "--labels=runtime.managed=true,runtime.workload_id=mtg-2-d93eee39" in run_args
+    (call,) = calls
+    pod = _json.loads(call["stdin"])            # the labels ride the submitted manifest
+    assert pod["metadata"]["labels"] == {
+        "runtime.managed": "true", "runtime.workload_id": "mtg-2-d93eee39",
+    }
 
 
 def test_k8s_discovers_pods_by_label(monkeypatch):

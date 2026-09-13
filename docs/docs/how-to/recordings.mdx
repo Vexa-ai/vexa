@@ -15,6 +15,10 @@ self-host, your own MinIO bucket, so it never leaves your environment. The recor
 stored separately from the transcript (speaker separation lives in the transcript as text — there is no
 per-speaker audio).
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ## List recordings
 
 ```bash
@@ -60,7 +64,7 @@ curl -I -H "X-API-Key: $API_KEY" -H "Range: bytes=0-1023" \
 ## Where it's stored
 
 Recordings live in the bucket configured by `MINIO_*` ([Configuration](/configuration#database-storage)).
-On a self-host that's infrastructure you control; air-gapped deployments keep recordings entirely in-VPC.
+On a self-host that's infrastructure you control; a no-egress deployment keeps recordings entirely in-VPC.
 
 ## Delete a recording
 

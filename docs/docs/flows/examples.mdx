@@ -1,0 +1,98 @@
+---
+title: "Workflow examples"
+description: "Worked examples — real, submittable flow files against the deployed step vocabulary: variants, versions, manual replays and error workflows."
+---
+
+Every example on this page is a real flow file: `make check FILE=…` validates it against the
+deployed vocabulary, `make submit FILE=…` makes it live in ~10 seconds. Steps are **names** —
+the reviewed capabilities in the image; the file is data.
+
+## 1 · A minutes variant — compose the existing tail differently
+
+Ship a second post-meeting behavior alongside the stock one, without touching it:
+
+```python
+from flows_authoring import flow
+
+flow(name="post_meeting_digest", on="meeting.completed",
+     steps=["require_workspace", "process_meeting", "email_minutes"],
+     params={"style": "one-paragraph digest, action points only"})
+```
+
+Both this and the stock `post_meeting` react to the same completion fact — one event, two
+reactions, each independently durable. `params` reach the steps via `ctx.flow.param("style")`,
+so the same `process_meeting` step renders a different artifact.
+
+## 2 · A new version — change behavior for FUTURE meetings only
+
+Submitting the same `name` auto-bumps the version. New events select the newest active version;
+in-flight reactions finish under the version stamped at their admission — an edit can never
+corrupt running work.
+
+```python
+flow(name="post_meeting", on="meeting.completed",
+     steps=["require_workspace", "process_meeting", "email_minutes"],
+     params={"nudge_every_s": 3600, "note": "v2: hourly nudges instead of 15min"})
+```
+
+Roll back by retiring it: `POST /flows/post_meeting/2/retire` — v1 governs new events again.
+
+## 3 · The full intake chain — what an invite triggers
+
+The shipped composition, as it would be authored (three flows chained **only by facts**):
+
+```python
+flow(name="invite_intake", on="invite.received",
+     steps=["ensure_user",          # auto-provision the organizer
+            "rsvp_accept",          # iMIP: Vexa shows "Yes" in their calendar
+            "ack_by_email",         # confirmation (+ finalize-workspace ask if needed)
+            "spawn_onboardings",    # EMITS onboarding facts when workspaces are missing
+            "await_start",          # time is a column: due = start − 2 min
+            "dispatch_bot",
+            "run_meeting",
+            "emit_completed"])      # EMITS meeting.completed → post_meeting reacts
+
+flow(name="onboard_person", on="onboarding.person.needed",
+     steps=["open_person", "drive_person"])       # a real agent conversation over email
+
+flow(name="post_meeting", on="meeting.completed",
+     steps=["require_workspace",    # QUEUES behind onboarding — late, never lost
+            "process_meeting", "email_minutes"])
+```
+
+The chaining primitive is a step that **emits a fact** (`ctx.emit`), never a flow calling a flow —
+each stays independently inspectable and retryable.
+
+## 4 · Manual replay — run a flow for one specific case
+
+Ops-grade re-processing without touching code: admit a fact by hand. Dedup means you choose a
+fresh `source_event_id` deliberately:
+
+```bash
+python3 -c "
+from flows import postgres_db, SystemClock, Registry, admit
+from flows_defs import production
+from flows_steps.common import db_url
+db = postgres_db(db_url()); reg = Registry(); production.build(reg, db)
+admit(db, reg, SystemClock(), source_event_id='replay-mtg9-2026-08-23',
+      event_type='meeting.completed',
+      subject_refs={'meeting_id': 9, 'uid': '13', 'organizer': 'anna@bank.com',
+                    'title': 'replayed', 'transcript': '…'})"
+```
+
+## 5 · An error workflow — react to failures like any other fact
+
+The n8n "error workflow" shape: failures are facts, and a flow can subscribe. Pattern: a
+monitoring tick (or the reconciler) emits `reaction.failed`, and:
+
+```python
+flow(name="on_failure_notify", on="reaction.failed",
+     steps=["ack_by_email"],
+     params={"note": "operator heads-up — reaction failed, see /reactions?status=failed"})
+```
+
+<Note>
+When a composition needs a capability the vocabulary lacks, that is a **new step** — reviewed
+Python, shipped in the image — or an **agent prompt/param**, which is data. The flow file itself
+never carries code; that is what keeps submission safe and export lossless.
+</Note>

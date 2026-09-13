@@ -26,7 +26,7 @@ class _DeadAtStartBackend:
 
     name = "docker"
 
-    def start(self, workload_id, runnable, env):
+    def start(self, workload_id, runnable, env, resources=None):
         raise RuntimeError(_MISSING_IMAGE_MSG)
 
     def exit_code(self, h):  # pragma: no cover — never reached (start raised)
@@ -89,7 +89,7 @@ def test_post_workloads_healthy_spawn_still_201():
     the fix does not turn healthy spawns into 502s."""
 
     class _OkBackend(_DeadAtStartBackend):
-        def start(self, workload_id, runnable, env):
+        def start(self, workload_id, runnable, env, resources=None):
             return WorkloadHandle(id=workload_id, impl=workload_id)
 
         def exit_code(self, h):

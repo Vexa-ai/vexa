@@ -1,6 +1,7 @@
 import { Page } from "playwright";
 import { log } from "../_host";
 import { zoomLeaveButtonSelector, zoomMeetingEndedModalSelector, zoomRemovalTexts } from "./selectors";
+import { dismissZoomPopups } from "./leave";
 
 /**
  * Starts polling for removal/end-of-meeting events.
@@ -86,6 +87,12 @@ export function startZoomRemovalMonitor(
     if (stopped || !page || page.isClosed()) return;
 
     try {
+      // Sweep benign Zoom popups off the meeting on every poll — the "mic is muted" advisory, the AI
+      // Companion notice, feature tips — so they don't linger over the call or the server-side recording.
+      // dismissZoomPopups is text/selector-anchored + instant (timeout:0), no-ops when absent, and never
+      // touches the removal/end modal (that's detected below). Was previously only run on leave.
+      await dismissZoomPopups(page).catch(() => {});
+
       // Check for end-of-meeting modal (zm-modal-body-title)
       const modalEl = page.locator(zoomMeetingEndedModalSelector).first();
       const modalVisible = await modalEl.isVisible({ timeout: 300 }).catch(() => false);

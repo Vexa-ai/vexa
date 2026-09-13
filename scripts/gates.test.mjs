@@ -137,6 +137,29 @@ function withEdited(relPath, find, repl, fn) {
   try { return fn(); } finally { writeFileSync(abs, orig); }
 }
 
+
+// ── gate:config-contract check 6 — the shared lite entrypoint (F130) ────────────────────────────
+// Checks 3 and 4 walk compose, helm and the supervisord program env in BOTH directions.
+// deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
+// one direction, that nothing walked: an export whose declaration AND reader were both deleted left
+// no refusal and no warning. Measured on the tip before the fix — the same plant was green.
+// entrypoint.sh is touched by no other test file, so the in-place edit below stays inside this
+// file's sequential run.
+const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
+
+test("config-contract vacuity: the committed lite entrypoint is green", () => {
+  const r = runGate("config-contract");
+  assert.equal(r.green, true, `the clean tree must be green or the fixture below proves nothing:\n${r.out}`);
+});
+
+test("an entrypoint.sh export that no adopted declaration carries is RED, named by file:line", () => {
+  const r = withEdited(LITE_ENTRYPOINT, "\nexport ", "\nexport VEXA_PHANTOM_ENTRY=1\nexport ",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `a phantom lite export passed the contract gate:\n${r.out}`);
+  assert.match(r.out, /entrypoint\.sh:\d+ exports VEXA_PHANTOM_ENTRY/,
+    `the failure must name the FILE AND LINE the operator has to open:\n${r.out}`);
+});
+
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";
@@ -202,7 +225,12 @@ const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
 test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
   // The gate must read helm templates, not only compose + values — a literal `image:` in a template
   // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
-  const r = withEdited(MINIO_JOB, "image: minio/mc:latest", "image: somevendor/unaudited:1.2",
+  // #1321 moved the mc image from a template literal to values (minio.mcImage) — the template
+  // line is now templated. The test's subject is unchanged: inject a LITERAL pin into the
+  // template and require the gate to read it.
+  const r = withEdited(MINIO_JOB,
+    "image: {{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}",
+    "image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
   assert.match(r.out, /undeclared pinned image/);
@@ -225,7 +253,7 @@ test("image-licenses RED: an undeclared structured Helm repository/tag pin reds"
 });
 
 test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
-  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS bot-builder";
+  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS bot-builder";
   const injected = `FROM somevendor/unaudited:1.2 AS review-probe\n${base}`;
   const r = withEdited(LITE, base, injected, () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared Dockerfile FROM image pin sailed through");
@@ -235,8 +263,8 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
 
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
-  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final";
-  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final", inject,
+  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble AS final";
+  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS final", inject,
     () => runGate("runtime-parity"));
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);

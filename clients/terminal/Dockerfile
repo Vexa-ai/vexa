@@ -32,6 +32,12 @@ ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=$NEXT_PUBLIC_GA_MEASUREMENT_ID
 # agent-api paths (404). Empty (default) keeps every surface. NEXT_PUBLIC_* → set BEFORE `next build`.
 ARG NEXT_PUBLIC_TERMINAL_MODE=""
 ENV NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
+# Bot display name baked into the client bundle (src/surfaces/defaultBotName.ts). Empty (default) →
+# the terminal omits bot_name on join and meeting-api's DEFAULT_BOT_NAME decides at RUNTIME, which is
+# the knob operators should use. Set this only to pin a name into the image; it then wins over the
+# deployment's DEFAULT_BOT_NAME and a rename costs a rebuild.
+ARG NEXT_PUBLIC_DEFAULT_BOT_NAME=""
+ENV NEXT_PUBLIC_DEFAULT_BOT_NAME=$NEXT_PUBLIC_DEFAULT_BOT_NAME
 # Regular build (not standalone): produces .next served by the custom server in production.
 RUN npm run build
 

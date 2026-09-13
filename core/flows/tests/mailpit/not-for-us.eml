@@ -1,0 +1,10 @@
+From: Someone Else <someone@rehearsal.test>
+To: other-tenant@rehearsal.test
+Subject: not addressed to this mailbox
+Message-ID: <stranger-1@rehearsal.test>
+Date: Tue, 01 Sep 2026 21:16:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+This mailbox is a shared double: mailpit accepts every address, so the poller
+must filter on VEXA_MAIL_ADDR or it answers other people's mail.

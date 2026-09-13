@@ -61,6 +61,38 @@ Provide your own `labelSelector` in a constraint to opt out of the automatic inj
 default (the shipped value) renders nothing — single-node / k3s installs are unaffected. Use
 `ScheduleAnyway`, not `DoNotSchedule`, unless you can guarantee enough nodes, or pods stay Pending.
 
+## Sizing the spawned bot and agent-worker Pods
+
+The `runtime` creates the meeting-bot and agent-worker Pods dynamically. Namespace policy commonly
+**requires every container to declare CPU and memory requests *and* limits** — a `ResourceQuota`
+naming `requests.cpu`/`limits.memory`, or a restricted OpenShift project. A Pod that declares none
+is rejected at admission, and the meeting or dispatch never starts.
+
+`runtime.workloadResources` sizes the two classes **independently** (this is *not*
+`runtime.resources`, which sizes the runtime Deployment itself):
+
+```yaml
+runtime:
+  workloadResources:
+    meetingBot:   { cpu: 1,   memoryMb: 2048 }   # Chromium + capture pipeline
+    agentWorker:  { cpu: 0.5, memoryMb: 1024 }   # code harness
+```
+
+| Value | Renders as | Notes |
+|---|---|---|
+| `cpu` | container `requests.cpu` **and** `limits.cpu`, in millicores (`0.5` → `500m`) | one value per dimension is runtime.v1's shape; there is no separate request/limit knob |
+| `memoryMb` | container `requests.memory` **and** `limits.memory`, in MiB (`2048` → `2048Mi`) | a **hard ceiling** — a workload exceeding it is OOM-killed |
+| either, set to `""` | nothing rendered for that class | preserves the optional contract: an unsized Pod, exactly as before |
+
+Request equals limit, so both classes get **Guaranteed** QoS. The shipped defaults are conservative
+and sized to fit a small dev cluster — raise `meetingBot.memoryMb` for real meetings rather than
+discovering the ceiling as a mid-meeting OOM kill. A caller may also override per workload by
+sending `resources` in its `runtime.v1` `WorkloadSpec`; the chart values are the default that
+applies when it does not.
+
+Enforcement is **Kubernetes-only**. The docker and process backends accept the same resource intent
+and do not act on it — they have no admission controller to satisfy, and no parity is claimed.
+
 ## Validate (no cluster)
 
 ```bash

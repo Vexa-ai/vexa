@@ -45,6 +45,28 @@ class User(Base):
 
     api_tokens = relationship("APIToken", back_populates="user")
 
+    __table_args__ = (
+        # MIGRATION-0007 — every email lookup in this service folds case
+        # (`func.lower(User.email) == …`, `create_user` + `GET /admin/users/email/{email}`), and the
+        # plain `email` index above cannot serve that predicate: both lookups are sequential scans
+        # on `users`, on the sign-in path.
+        #
+        # NON-UNIQUE, DELIBERATELY, AND THIS IS THE HONEST PART. The invariant we want is
+        # one-address-one-account, which is a UNIQUE index on `lower(email)`. It cannot ship as one
+        # here: the instances that need it are exactly the instances that already hold case-variant
+        # duplicate rows (that is the defect), a UNIQUE build against those rows raises
+        # UniqueViolation, and `_sync_indexes` FAILS CLOSED on a unique-index failure by design
+        # (#1186) — so shipping it unique would turn "this instance has a few ghost accounts" into
+        # "admin-api will not start". Trading a data defect for an outage is not a fix.
+        #
+        # What closes the hole instead, today: `create_user` stores new addresses folded, so a new
+        # collision is caught by the `email` UNIQUE index that already exists, and both lookups
+        # ORDER BY id so an instance holding duplicates resolves the same row every time. The
+        # UNIQUE upgrade is an operator step AFTER reconciling the duplicates — the SQL to find
+        # them, and the CONCURRENTLY build, are in schema/MIGRATION-0007-users-email-lower.md.
+        Index("ix_users_email_lower", text("lower(email)")),
+    )
+
 
 class PlatformSetting(Base):
     """Deployment-wide runtime config, one JSONB value per key (`models`, `transcription`).

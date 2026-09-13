@@ -32,7 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway import create_app
-from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
+from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY, needs_agent
 
 AUTH = {"x-api-key": VALID_KEY}
 SSE_ACCEPT = {"accept": "text/event-stream"}
@@ -394,6 +394,7 @@ def test_mcp_client_supplied_user_id_is_stripped_then_reinjected():
 
 
 # ------------------------------------------------- the agent SSE leg is untouched (row 4 anchor)
+@needs_agent
 def test_agent_sse_still_uses_the_byte_relay_stream_port():
     """The agent chat SSE keeps its own envelope-minting forward (`stream`), unchanged by the
     head-aware `open_stream` the MCP leg introduced."""

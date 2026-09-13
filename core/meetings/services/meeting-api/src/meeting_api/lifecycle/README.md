@@ -25,7 +25,9 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
 
 ## Surface
 - `machine.py` — `BotStatus`/`CompletionReason`/`FailureStage` (the lifecycle.v1 enums),
-  `LEGAL_TRANSITIONS` + `can_transition`, `MeetingRecord`, `MeetingStore` (in-memory, no DB),
+  `LEGAL_TRANSITIONS` + `can_transition`, `MeetingRecord`, `MeetingStore` (in-memory, holds no DB
+  handle — but `MeetingRecord.data` is projected into the real `meetings.data` JSONB by
+  `update_meeting_status`, so this brick is the sole writer of meeting attribution in production),
   `LifecycleSink` (`apply(event)` / `apply_change(event, transition_source=…)`), `IllegalTransition`,
   `TransitionSource`, `StatusChange`.
 - `receiver.py` — `create_app(store, on_status_change)`: the FastAPI receiver.

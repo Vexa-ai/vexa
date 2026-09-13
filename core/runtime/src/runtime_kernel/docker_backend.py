@@ -19,6 +19,7 @@ from urllib.parse import quote
 import requests_unixsocket
 
 from .backend import WorkloadHandle
+from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
 
@@ -174,7 +175,19 @@ class DockerBackend:
             )
         return target
 
-    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
+    def start(
+        self,
+        workload_id: str,
+        runnable: Runnable,
+        env: dict[str, str],
+        resources: Optional[Resources] = None,
+    ) -> WorkloadHandle:
+        """``resources`` is accepted and NOT enforced here — the enforcement boundary is k8s-only,
+        and this backend claims no parity with it. Compose/Lite have no admission controller
+        demanding a declared request+limit, and translating the intent into ``HostConfig.Memory``
+        would introduce an OOM-kill ceiling on live meeting bots that run unbounded today: a
+        behaviour change on the most-used substrate, bought for no admission benefit. A deployment
+        that wants Docker enforcement adds it as its own change, with its own live evidence."""
         if not runnable.image:
             raise ValueError("docker backend requires an image")
         name = self._cname(workload_id)

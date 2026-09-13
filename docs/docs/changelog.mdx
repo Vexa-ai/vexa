@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.23 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.27 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.23`** — the current release candidate control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.26`** — the current release candidate control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -845,6 +845,282 @@ probe), not inferred from planning docs.
   Lite venvs (admin-api, runtime, meeting-api, gateway, agent) now pass `--python 3.12`, matching the
   `FROM python:3.12-slim` every compose image (and helm, which ships those images) already pinned.
   Compose and helm never shared the exposure.
+
+- **Microsoft Teams speaker attribution (#499).** Teams uses CSRC transport activity to route the
+  mixed audio into per-speaker transcription windows with the same LocalAgreement buffering contract
+  as Google Meet. A transport-contested phrase is currently published under both contributing tracks — detected and counted in pipeline health, not yet resolved or marked in the public transcript.
+
+- **Every deploy surface now runs Valkey 8.1.9 instead of Redis (#653).** Vexa Lite, Docker
+  Compose, and Helm all use [Valkey](https://valkey.io) — the Linux Foundation's BSD-3 fork of
+  Redis 7.2.4 — for the bus, scheduler, and per-dispatch streams. This gives every surface (Lite
+  included) `XAUTOCLAIM` orphan-reclaim parity, and moves off source-available Redis ≥7.4
+  (RSALv2/SSPLv1). The store is wire-compatible (RESP): `REDIS_URL` and every `redis.*` config key
+  are unchanged, so existing overrides keep working. See [Deployment](/deployment).
+- **Two new license/parity gates close the class the audit exposed (#653).** `gate:image-licenses`
+  audits container-image pins and image-baked binaries (which `gate:licenses` never saw), and
+  `gate:runtime-parity` asserts every surface's engine version supports the RESP commands the code
+  actually calls — the rung that catches a backing store shipped without a capability the code
+  assumes.
+
+docs: attribute the FunASR/SenseVoice client validation to the upstream maintainers who ran it, and state plainly that no Vexa maintainer has reproduced it (#928).
+
+Release promotion now assigns moving image aliases by copying the authenticated
+registry manifest bytes and media type exactly, then reads back all frozen
+descriptors. Single-platform images can no longer be silently wrapped in a new
+index, and `:latest` is checked as an unchanged negative control unless its
+promotion was explicitly requested.
+
+- **Start here: hosted now runs Vexa 0.12 for meeting bots and transcription (#954).** The Overview
+  page no longer says hosted [vexa.ai](https://vexa.ai) is on the 0.10 line. It states the current
+  boundary: hosted runs 0.12 for meeting bots and transcription but does not include the agent
+  runtime — agents and the full stack require [self-hosting](/deployment).
+
+- **Meeting completion now reports the service that actually ran (#984).** Lifecycle events carry
+  producer-observed transition times, and completed meetings expose privacy-safe bot runtime and
+  transcription-provider outcomes so hosted billing can distinguish Vexa transcription from a
+  customer endpoint without inspecting configuration or credentials.
+
+- **Self-hosted deployments can opt into an external service authority without importing hosted
+  billing policy (#988).** Meeting-api can now ask a signed, versioned authority before bot spawn
+  and at each one-minute active-service boundary; stock OSS remains explicit allow-all when the
+  integration is unset. See [Configuration](/configuration#optional-service-authority).
+
+- **Operators can route terminal meeting facts to one signed, boot-frozen system callback (#992).**
+  The optional destination accepts only `meeting.completed` and `bot.failed`, has its own
+  retry/dead-letter lane, and may explicitly target an in-cluster HTTP service without weakening
+  the SSRF guard on customer-configured webhooks. See
+  [Configuration](/configuration#operator-terminal-callback).
+
+- **Admin identity reads now resolve an existing user by authoritative ID (#994).** Internal
+  service consumers can bind admission and lifecycle work to the authenticated numeric user
+  identity without falling back to email or creating a user as a side effect.
+
+- **Fixed (Teams):** speaker attribution now names participants again. Teams migrated its meeting UI to Fluent-UI v9, whose hashed class names churn every release — the old class-based name selectors resolved to `""`, so every hint was suppressed and all speech fell back to `Speaker`. Names now resolve from Teams' **stable** `data-tid` on the `[data-stream-type]` tile wrapper (anchored on the voice-level outline). The `vdi-frame-occlusion` speaking signal was correct all along; only the name lookup had rotted.
+- **Fixed (Teams):** transcription no longer repeats words. Teams delivers the whole meeting as a single server-side audio mix (track id prefixed `mainAudio`) — witnessed live: the standard web client receives exactly one audio receiver — but the bot is handed an extra redundant track whose audio is already in that mix. The mixed lane combined both, double-feeding every word to the transcriber. Teams now transcribes **only** the `mainAudio` mix. Separately, the WebRTC hook was mirroring each remote track twice (both `addEventListener('track')` and the `ontrack` setter fired) — now deduped by track id.
+
+- **Automate meeting summaries with n8n, documented (#1076).** New [n8n guide](/n8n) walks the
+  no-code path end to end — calendar trigger, `POST /bots`, transcript fetch, summary, Slack — and
+  states plainly that the published community template still points at the retired
+  `gateway.dev.vexa.ai` base URL, which must be swapped for `api.cloud.vexa.ai` after import. Also
+  covers the self-hosted reachability variants and the option to skip the calendar trigger entirely
+  by using [Vexa's own calendar sync](/how-to/calendar-sync). The `/n8n` URL had been drawing steady
+  traffic to a 404.
+
+- **The MCP server has a page, and it states the boundary (#1077).** New [MCP server](/vexa-mcp)
+  page lists the nine tools, gives a working client config, and says plainly what the surface does
+  and does not cover: fronted by the gateway at `/mcp` on self-hosted compose from 0.12.18, **not**
+  deployed by the Helm chart and therefore unavailable on hosted or Kubernetes, and never proven
+  against a real MCP client end to end ([#888](https://github.com/Vexa-ai/vexa/issues/888)). The
+  service README's Status block, which still listed the gateway-fronted `/mcp` forward as planned
+  while its own body documented the shipped behaviour, now matches.
+
+docs: honest-status page at `/chatgpt-transcript-share-links` — the 0.10.x public share-link flow is sealed-but-unserved in 0.12; page states what replaced it and what works today (#1078).
+
+docs: honest-status page at `/interactive-bots` — per-surface truth for the interactive family (chat read works; speak/chat-write/screen/avatar sealed-unserved), with the shape-design question linked (#1086).
+
+docs: redirect five guessed paths onto the pages that already answer them — `/ws/events`, `/local-webhook-development`, `/how-to/webhooks`, `/api/webhooks`, `/cookbook/share-transcript-url` — measured from the docs edge sensor.
+
+- **Manage multiple calendar feeds from the hosted dashboard (#1150).** Calendar is now a
+  first-class sidebar page with named, independently synced and disconnected ICS connections.
+  Meetings deduplicate across feeds, retain every named source under **Imported from**, and keep
+  existing single-calendar API clients compatible. The page groups upcoming auto-joins by calendar,
+  assigns each connection its own bot display name, and persists the complete source event metadata
+  on the planned meeting. The Meetings page requests run history separately, so `idle` and
+  `scheduled` calendar plans appear only in Calendar and no longer displace transcript rows. See
+  [Calendar sync](/how-to/calendar-sync).
+
+- **One bot per meeting, even under concurrent requests (#1185).** Simultaneous requests for the
+  same meeting now resolve to a single bot rather than occasionally admitting two, and a request
+  for a meeting that is already live adopts the running bot instead of starting a second one.
+
+- **Self-hosted deployments fail closed when the one-bot-per-meeting guarantee cannot be enforced
+  (#1187).** The admin service now refuses to start if its database is missing the unique index
+  that prevents duplicate live meetings, instead of starting and allowing duplicates to slip
+  through. Operators upgrading an existing deployment apply the schema migration shipped with this
+  release before rolling out. See [Deployment](/deployment).
+
+- **A failed auto-join retries on a bounded backoff instead of repeatedly (#1200).** When a
+  calendar occurrence's bot fails to join, the next attempt waits out a fixed backoff, and the
+  reason for the wait is readable on the meeting instead of being silent.
+
+- **Scheduled bots arrive two minutes early and wait longer to be admitted (#1210).** Calendar
+  auto-joins now dispatch two minutes before the scheduled start rather than one, and a bot waits
+  up to fifteen minutes in the lobby before giving up. See [Calendar sync](/how-to/calendar-sync).
+
+- **A meeting already served or stopped is never re-armed (#1211).** Calendar sync no longer
+  recreates and re-dispatches an occurrence whose bot already attended the meeting or was stopped
+  by the user; only genuine failures retry, and only within that occurrence's own window.
+
+- **An explicit stop is honoured on every path (#1212).** Stopping a scheduled meeting before its
+  bot is dispatched now cancels that occurrence instead of letting the sweep send a bot anyway; a
+  stop that races a starting bot leaves nothing running; and a stopped meeting records the stop as
+  its outcome rather than a join failure. A meeting the user stopped can no longer be continued in
+  place — request a new bot instead.
+
+- **Calendar auto-joined meetings are recorded like manually started ones (#1217).** A bot
+  dispatched from a connected calendar now follows the same recording setting as one started from
+  the API or the dashboard. Previously those meetings were transcribed but never recorded, and the
+  meeting page reported the missing audio as normal. See [Calendar sync](/how-to/calendar-sync).
+
+- **Teams speaker names no longer lock to the wrong participant (#1228).** When a participant
+  joined during the first minute, a name could be bound permanently to another speaker's audio and
+  never revised, leaving one person's words under another's name for the rest of the meeting. Names
+  earned before the participant list is complete are now provisional and corrected as evidence
+  arrives.
+
+- **Added (Meetings API):** `GET /meetings/{platform}/{native_meeting_id}/participants` — who was in a meeting, as far as the core actually knows. Every row is labelled with its `source`: `invite` (the calendar invitation's attendee list, which **does** include people who never spoke — for meetings imported from a connected calendar) and `speaker` (distinct speakers heard in the transcript, first-heard first). Owner-scoped: another user's meeting answers `404`, never an empty roster. The response also carries `observed_roster: "not_recorded"`, which is the honest part — nothing in the core records who was actually present, so an empty `participants` means *attendance was never captured*, never *nobody attended*. No identity resolution is performed: someone both invited and heard appears once per source, because matching a voice label to an invitee is a guess.
+
+- **Teams bots join with a separate `passcode` (#892).** A numeric Teams meeting ID plus its
+  `passcode` now builds the join URL Teams actually uses — `…/meet/<id>?p=<passcode>` — instead of
+  interpolating the id into the thread-id deep link and dropping the passcode; a
+  `19:…@thread.v2` id keeps its `…/l/meetup-join/` path. `teams_base_host` is honoured for the
+  personal and GCC-High/DoD clouds (unknown hosts are a `422`), and the passcode is kept off the
+  stored `constructed_meeting_url` and out of the bot's logs. Unsupported password aliases
+  (`password`, `meeting_password`, …) are refused with a typed `422` naming `passcode` rather than
+  accepted and silently ignored. See [Send a bot](/how-to/send-a-bot).
+
+- **Spawned bot and agent-worker Pods declare CPU/memory requests and limits, so quota-controlled
+  namespaces admit them (#1005).** The runtime accepted `resources` on a `runtime.v1` WorkloadSpec
+  but dropped it before the backend, so every dynamically created Pod was unsized — and a namespace
+  whose policy requires each container to declare requests *and* limits (a `ResourceQuota`, a
+  restricted OpenShift project) rejected both shipped workload classes at admission. Resource intent
+  now crosses the backend port, and the Kubernetes backend submits a complete Pod manifest carrying
+  the container's requests and limits alongside its image, command, env, labels, workspace mounts
+  and scheduling. Size the two classes independently with the chart's `runtime.workloadResources`
+  (`meetingBot` / `agentWorker`); each value sets both the request and the limit, and leaving a
+  class empty keeps the previous unsized behaviour. Enforcement is Kubernetes-only — the docker and
+  process backends accept the same intent without acting on it. See
+  [Deployment](/deployment-kubernetes).
+
+- **Interactive meeting capabilities get one API home — and the status page stops overstating speak (#1089).**
+  [ADR-0035](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0035-interactive-capabilities-live-behind-one-act-endpoint.md)
+  settles where speak / chat / screen / avatar live: a single `POST /bots/{platform}/{native_meeting_id}/acts`
+  endpoint carrying an `acts.v1` act, with `POST`/`DELETE …/speak` and `POST …/chat` kept as aliases for
+  callers already coding against them; `…/screen` and `…/avatar` retire from `api.v1`. The
+  [status page](/roadmap/status) is corrected in the same change: a bot spawned through the public API
+  cannot speak today even once the route lands, because `voice_agent_enabled` is accepted by `POST /bots`
+  and silently dropped before the invocation is built. See [Roadmap status](/roadmap/status).
+
+fix(gates): every gate failure now prints its diagnostic — an empty stdout Buffer is truthy, so `(e.stdout || e.stderr || e)` was discarding the real error at all 21 call sites (#1107). A gate that fails because the worktree has no dependencies installed now says so.
+
+- **Fixed:** a bot whose audio capture breaks mid-meeting no longer leaves a **live** meeting as `completed(left_alone)` (#1192). `left_alone` had one oracle — whether remote audio frames were arriving — so a broken capture chain was indistinguishable from an emptied room, and the meeting ended as a recorded success with an empty transcript. The bot now also reads whether any remote stream is currently connected and live: connected streams delivering nothing for a whole silence window are a capture fault, not an empty room. The bot holds the meeting open, logs `aloneness: capture-fault suspected`, and attempts one capture restart. **Behaviour change worth knowing:** where the platform keeps a server-side mix alive on an empty meeting (Teams), affected runs now end at the `maxActiveMs` ceiling instead of at the silence window — holding a live meeting is preferred to reporting a false success. An empty room with no connected streams still resolves `left_alone` exactly as before.
+
+- **Changed (API): your meetings list is ordered by when the meeting happened (#1226).** `GET /meetings` previously ordered by row creation, so a meeting imported from a calendar after it ran could sort above one that happened later. The list now orders by event time, and meetings that have not reached a terminal state stay pinned at the top where you are looking for them. See [Meetings](/api/meetings).
+
+- **New (MCP): an agent can file a ticket from inside its own session (#1272).** The `report_issue` tool lets a calling agent that hits a wall tell the operator what happened, in its own words, without leaving the session. Supplying `meeting_id` binds the report to the cluster's own record of the same meeting, so an operator reads the agent's account and the machine's account of the same seconds side by side. The caller's credential is verified before anything is filed, and the caller's API key never reaches the ticket sink — only a salted fingerprint of it. Ticketing is off until the deployment sets `VEXA_TICKET_SINK_URL`; until then the tool answers `503` and nothing else changes.
+
+- **Restarting mid-leave no longer strands a meeting in "stopping" (#1280).** When Vexa restarted while a
+  bot was still leaving, the meeting could sit in "stopping" — shown as active — indefinitely across a
+  redeploy burst. A meeting whose stop was explicitly requested now converges on the short stop grace.
+
+- **The bot and Lite images now build on Ubuntu 24.04 (Noble) (#1011).** The meeting-bot image and
+  the Vexa Lite single-container image moved from the Jammy to the Noble Playwright base — one base
+  for both. Self-hosters running the agent worker also get a fix: it already exec'd its Python
+  interpreter as a non-root per-subject uid, but that interpreter lives under `/root`, which is
+  `0700`, so every dispatch died with `Permission denied` and respawned. `/root` is now
+  traverse-only for others (`chmod o+x`); it stays unlistable and root-owned files keep their modes.
+
+- **More accurate Zoom speaker attribution (#1018).** Zoom transcripts are named per-participant with a
+  self-correcting vote, so a speaker's words are far less likely to land under the wrong name.
+
+- **Known limit — the Zoom bot joins as a web client, so not every Zoom meeting can be
+  recorded.** Some Zoom accounts and meetings block automated browser clients outright; the bot is
+  refused at the door there, ends as `failed` with reason `zoom_requires_rtms`, and no transcript is
+  produced. This is a platform policy on the host's side, not a fault in the bot — those meetings
+  need Zoom's Realtime Media Streams path, which this release does not ship
+  ([#706](https://github.com/Vexa-ai/vexa/issues/706)). Meetings that do admit a web client are
+  unaffected, and this release also improves the bot's ability to be admitted at all.
+
+- **Text-only custom STT responses now reach the transcript (#1148).** OpenAI-compatible
+  endpoints may return only `text`; the mixed pipeline now assigns that text to the submitted
+  speech window instead of discarding it for missing provider timestamps. See
+  [Custom STT endpoints](/how-to/custom-stt).
+
+- **Self-host: `DEFAULT_BOT_NAME` now names the bots the terminal sends (#1258).** The terminal hardcoded
+  `bot_name: "Vexa"` on every join, so the variable compose, Lite and helm already passed to
+  meeting-api could never take effect. The terminal now omits `bot_name` and lets the deployment
+  decide, making a rename a `.env` edit plus a meeting-api restart — no terminal rebuild. The stock
+  name is unchanged (`Vexa`), an explicit `bot_name` in `POST /bots` still wins, and
+  `NEXT_PUBLIC_DEFAULT_BOT_NAME` is now a real terminal build arg for baking a name into the image.
+  See [Configuration](/configuration#bot-participant-name).
+
+- **Custom STT: JSON-only Voxtral models now transcribe meetings.** Vexa negotiates down from
+  `verbose_json` to `json` once when a backend rejects verbose output, while Whisper backends keep
+  their richer segment metadata. See [Use a custom STT endpoint](/how-to/custom-stt).
+
+- **Two flows names change, both honoured for one release (#1456).** admin-api reads
+  `VEXA_FLOWS_API_URL`; the bare `FLOWS_API_URL` still works and the new name wins when both are
+  set. flows-api's operator key travels as `X-Flows-Operator-Key`; `X-Flows-Admin-Key` is still
+  accepted and warns once per process. The old name read as admin-api's token, which it never was —
+  a start script once carried `changeme` for it on exactly that misreading. Migrate before 0.12.28.
+
+- **Workflows: three new services and ten Postgres tables (#1456).** `flows-api`, `flows-worker` and
+  the optional `flows-mailbox` (one image, three commands) run durable product workflows — a fact
+  from the outside world becomes one reaction row, a worker runs one step and records a receipt.
+  They share the stack's Postgres and add ten tables of their own; no message broker, no scheduler.
+  `flows-worker` is not behind a profile: a deployment that admits facts and never advances them is
+  the failure this shape exists to avoid. See [Workflows](/flows/overview) and
+  [Operating workflows](/flows/operations).
+
+- **The gateway strips authority headers by family, not by name (#1456).** A public client could
+  previously send `x-internal-secret` — the value shipped in `docker-compose.yml` — and be believed
+  by the internal tier, because the strip was an eight-name list of `x-user-*` spellings. Any header
+  beginning `x-user-`, `x-internal-` or `x-vexa-internal-`, plus `x-admin-api-key` and
+  `x-gateway-verified`, is now dropped from every client request. **Upgrade the gateway with, or
+  before, the services behind it.**
+
+- **A person's settings live in identity, not in their workspace (#1456).** Timezone and the mail
+  switches are read from admin-api rather than from a `.settings.json` file in the workspace, so one
+  answer serves every service. **Existing deployments must run the one-shot import** — an
+  operator-triggered migration on admin-api reads the old files in — or everyone starts on the
+  defaults: mail on, clock in UTC.
+
+- **Breaking: boot refuses the published placeholder secrets (#1456).** A service whose
+  `INTERNAL_API_SECRET` is one of the literals printed in this repo (`vexa-internal-secret`,
+  `lite-internal-secret`, `changeme`, …) now stops at startup naming the variable, instead of
+  running on a secret every reader of the source already has. Generate one per deployment
+  (`openssl rand -hex 32`) and set the same value on every service before upgrading. Vexa Lite mints
+  a random one on each boot and needs nothing set. `VEXA_FLOWS_API_KEY` is refused the same way and
+  has no default at all. See [Configuration](/configuration).
+
+- **Search your transcripts, annotate a meeting, share by id (#1456).** `GET /transcripts/search`
+  runs full-text search over your own segments (the index builds itself on first boot, without
+  locking the table). `POST /meetings/{id}/annotate` attaches a title and arbitrary metadata to a
+  meeting during or after it, and `GET /meetings?metadata=` filters on what you wrote (16 KB and 64
+  keys per meeting). Meetings can now be addressed by their row id — `POST /meetings/{id}/share`
+  beside the existing platform/native pair. See [Meetings API](/api/meetings).
+
+- **`whats_waiting`, onboarding and friction reporting over MCP (#1532, #1545).** An agent asks
+  `whats_waiting` at the start of a session and gets what its person's Vexa needs right now, each
+  item carrying the sentence to say; a person with no meeting yet gets a first step instead of an
+  empty queue. `report_friction` files what did not work — no field is required and no value a
+  caller can send is refused — and `friction_so_far` reads your own reports back. See
+  [Authoring workflows](/flows/authoring).
+
+- **Standing notices ride along, and refusals arrive as structure (#1546, #1551).** An item whose
+  copy declares itself a standing notice now travels on the meeting tools' own results — and on
+  their refusals — so an agent hears it without going looking; `GET /queue/notices` asks for just
+  those sentences. A refused tool call reaches the agent as fields (`reason`, `message`,
+  `action_url`, the upstream body) instead of prose with JSON inside it. **Anything scraping the old
+  single-sentence error text needs updating.**
+
+- **A refusal carries the deciding service's own words (#1550).** When a service declines a request
+  it returns `message` and `action_url` alongside the reason, and the API and terminal render those
+  verbatim rather than mapping the reason onto copy of their own. A deployment's refusals now say
+  what that deployment means, not what this repo once guessed.
+
+- **The agent surface is unchanged (#1553).** `/agent/*` keeps the seven routes it served at
+  0.12.26, now declared in `core/agent/routes.v1.json` like every other domain. Compose keeps its
+  default `AGENT_API_URL`; a deployment that leaves the variable unset serves no agent surface and
+  answers `404` there.
+
+- **Meeting links are matched on the exact hostname (#1553).** `parse_meeting_link` and the
+  pasted-link/calendar parser used to decide the platform with a substring test, so
+  `teams.live.com.evil.example` and `notzoom.us` were read as Teams and Zoom. They now match the
+  hostname exactly, or as an explicit subdomain — vanity and government tenancies
+  (`us02web.zoom.us`, `company.zoom.us`, `frbmeetings.zoomgov.com`, `contoso.teams.microsoft.com`)
+  are unaffected, and a look-alike hostname is refused instead of sending a bot somewhere on its
+  say-so. See [MCP tools](/mcp).
 
 ## Versioning
 

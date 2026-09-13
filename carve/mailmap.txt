@@ -4,4 +4,5 @@ Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com> DmitryG228 <22809
 Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com> DmitriyG228 <2280905@gmail.com>
 Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com> seed <seed@example.com>
 Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com> t <t@t>
-Vexa Agent <agent@vexa.ai> vexa-agent <agent@vexa>
+Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com> vexa-agent <agent@vexa>
+Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com> <dmitrygrankin0@gmail.com>

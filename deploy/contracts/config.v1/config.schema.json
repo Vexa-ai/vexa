@@ -2,7 +2,7 @@
   "$id": "https://vexa.ai/contracts/config.v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "config.v1",
-  "description": "The per-service deployment-config declaration: every environment key a service consumes, classed as required-explicit (boot fails loud if unset), defaulted (the code default, documented), or capability (a named optional capability whose tri-state — configured / not_configured / misconfigured — is computed from the env, optionally live-probed, exposed on /health, and consulted by capability-gated endpoints). The declaration is the SSOT the deploy surfaces (compose / helm / lite) and the boot preflight are checked against (gate:config-contract).",
+  "description": "The per-service deployment-config declaration: every environment key a service consumes, classed as required-explicit (boot fails loud if unset), defaulted (the code default, documented), publish-edge (the address of another domain this service HANDS FACTS TO, fire-and-forget — never a value it needs), or capability (a named optional capability whose tri-state — configured / not_configured / misconfigured — is computed from the env, optionally live-probed, exposed on /health, and consulted by capability-gated endpoints). The declaration is the SSOT the deploy surfaces (compose / helm / lite) and the boot preflight are checked against (gate:config-contract).",
   "type": "object",
   "required": ["contract", "service", "keys"],
   "additionalProperties": false,
@@ -42,8 +42,8 @@
       "properties": {
         "key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
         "class": {
-          "enum": ["required-explicit", "defaulted", "capability"],
-          "description": "required-explicit: unset/empty ⇒ the boot preflight raises and the deploy refuses to start. defaulted: the documented code default applies when unset. capability: the key belongs to the named capability; the service runs either way and the capability's tri-state is computed from the env."
+          "enum": ["required-explicit", "defaulted", "publish-edge", "capability"],
+          "description": "required-explicit: unset/empty ⇒ the boot preflight raises and the deploy refuses to start. defaulted: the documented code default applies when unset. publish-edge: the key addresses (or authenticates to) another domain this service PUBLISHES facts to — see `publishes_events`; unset means that domain is not deployed here, the facts are dropped, and nothing else changes. capability: the key belongs to the named capability; the service runs either way and the capability's tri-state is computed from the env."
         },
         "description": { "type": "string", "minLength": 1 },
         "default": {
@@ -55,6 +55,13 @@
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "The capability this key belongs to (required for class=capability; must name an entry in `capabilities`)."
         },
+        "publishes_events": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$" },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "The carriers this service hands over this edge (required for class=publish-edge; each must be registered in core/flows/contracts/flows.v1/carriers.json, owned by THIS service's domain — gate:config-contract checks both). A PUBLISH EDGE IS NOT A DEPENDENCY, and this field is where the difference is written down: a dependency is a call whose answer the caller needs, a publish is a fact handed over best-effort and swallowed. Without the distinction the only declaration available for a publish target is one of the classes meaning `this service needs this value`, so the sanctioned way for two domains to couple would fail the very gate that exists to keep them apart, and the only way to satisfy it would be to stop telling anyone anything."
+        },
         "secret": {
           "type": "boolean",
           "description": "The value is a credential (P14): never logged, never in goldens; deploy surfaces feed it from a secret store."
@@ -64,6 +71,13 @@
           "items": { "$ref": "#/$defs/Target" },
           "uniqueItems": true,
           "description": "Which deploy surfaces plumb this key (default: all three). An EMPTY array = an in-code dial deliberately not exposed by any deploy surface (still declared, so the undeclared-read scan stays tight)."
+        },
+        "forbidden_values": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "Values this key must NEVER hold in a running deploy — the published placeholder literals a stock compose/helm/lite once supplied. The boot preflight raises ConfigError on a match, so a deployment nobody configured refuses to start instead of coming up green holding a secret every reader of this repository knows (F95: INTERNAL_API_SECRET shipped as `vexa-internal-secret`, the exact value the internal tier compared against). Compared on the stripped value; the refusal names the KEY, never the value."
         }
       },
       "allOf": [
@@ -78,6 +92,15 @@
         {
           "if": { "properties": { "class": { "const": "required-explicit" } }, "required": ["class"] },
           "then": { "not": { "required": ["default"] } }
+        },
+        {
+          "if": { "properties": { "class": { "const": "publish-edge" } }, "required": ["class"] },
+          "then": { "required": ["publishes_events"], "not": { "required": ["default"] } }
+        },
+        {
+          "$comment": "The field is the class's whole content, so it may not be worn by a class that means `this service needs this value` — which is exactly how a publish edge gets quietly re-read as a dependency.",
+          "if": { "required": ["publishes_events"] },
+          "then": { "properties": { "class": { "const": "publish-edge" } } }
         }
       ]
     },

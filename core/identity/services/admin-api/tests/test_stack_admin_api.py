@@ -63,6 +63,19 @@ def _admin(h=None):
     return {"X-Admin-API-Key": ADMIN_TOKEN, **(h or {})}
 
 
+
+def _data(resp_or_dict):
+    """A person's `data` WITHOUT the onboarding stamp.
+
+    Every account now carries `onboarding_completed_at`, written in the same transaction as the
+    account itself so the record that this person was onboarded survives a publish that never lands
+    (`app/events.py`). These assertions are about entitlement, webhooks and side-effect-freedom, so
+    they compare the rest — one helper rather than the stamp appearing in seven literals."""
+    d = resp_or_dict if isinstance(resp_or_dict, dict) else resp_or_dict.json()
+    d = d.get("data", d) if isinstance(d, dict) else d
+    return {k: v for k, v in d.items() if k != "onboarding_completed_at"}
+
+
 def test_golden_identity_flow(client):
     # 1. create user (admin tier)
     r = client.post("/admin/users", headers=_admin(),
@@ -139,7 +152,10 @@ def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client
             "max_concurrent_bots": 7,
         },
     ).json()
-    assert created["data"] == {}
+    # A fresh person carries ONE key: the `onboarding.completed` stamp, written in the same
+    # transaction as the account so the record of that fact survives a publish that never lands.
+    # What this test is about is that nothing ELSE appears and that a read has no side effect.
+    assert set(created["data"]) == {"onboarding_completed_at"}
 
     found = client.get(f"/admin/users/{created['id']}", headers=_admin())
     assert found.status_code == 200, found.text
@@ -159,7 +175,7 @@ def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client
         },
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["data"] == {
+    assert _data(updated) == {
         "webhook_url": "https://example.com/by-id",
         "webhook_events": {"meeting.completed": True},
     }
@@ -167,7 +183,7 @@ def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client
 
     found = client.get(f"/admin/users/{created['id']}", headers=_admin())
     assert found.status_code == 200, found.text
-    assert found.json()["data"] == updated.json()["data"]
+    assert _data(found) == _data(updated)
     assert "never-return-this" not in found.text
 
     assert client.get(f"/admin/users/{created['id']}").status_code == 403
@@ -227,7 +243,7 @@ def test_admin_patch_user_merges_entitlement_without_erasing_private_data(client
     )
     assert patched.status_code == 200, patched.text
     assert patched.json()["max_concurrent_bots"] == 25
-    assert patched.json()["data"] == {
+    assert _data(patched) == {
         "webhook_url": "https://example.com/entitlement",
         "webhook_events": {"meeting.completed": True},
         "subscription_tier": "commitment_25",
@@ -273,7 +289,7 @@ def test_admin_patch_user_merges_entitlement_without_erasing_private_data(client
         headers=_admin(),
     ).json()
     assert unchanged["max_concurrent_bots"] == 25
-    assert unchanged["data"] == patched.json()["data"]
+    assert _data(unchanged) == _data(patched)
 
 
 def test_admin_patch_serializes_with_concurrent_foreign_data_update(
@@ -349,7 +365,7 @@ def test_admin_patch_serializes_with_concurrent_foreign_data_update(
 
     assert patched.status_code == 200, patched.text
     assert patched.json()["max_concurrent_bots"] == 25
-    assert patched.json()["data"] == {
+    assert _data(patched) == {
         "webhook_url": "https://example.com/concurrent",
         "webhook_events": {"meeting.completed": True},
         "subscription_tier": "commitment_25",
@@ -431,7 +447,7 @@ def test_user_webhook_serializes_with_concurrent_platform_billing_update(
         engine.dispose()
 
     assert updated.status_code == 200, updated.text
-    assert updated.json()["data"] == {
+    assert _data(updated) == {
         "subscription_tier": "commitment_25",
         "billing_contract_version": 1,
         "webhook_url": "https://example.com/user-settings",
@@ -487,7 +503,7 @@ def test_admin_patch_accepts_the_typed_platform_billing_contract(client):
     )
     assert patched.status_code == 200, patched.text
     assert patched.json()["max_concurrent_bots"] == 25
-    assert patched.json()["data"] == billing_data
+    assert _data(patched) == billing_data
 
 
 def test_internal_validate_requires_secret(client):

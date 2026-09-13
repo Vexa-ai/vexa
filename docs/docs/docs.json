@@ -33,7 +33,19 @@
           "how-to/custom-stt",
           "how-to/recordings",
           "n8n",
+          "obsidian",
           "interactive-bots"
+        ]
+      },
+      {
+        "group": "Workflows",
+        "pages": [
+          "flows/overview",
+          "flows/authoring",
+          "flows/vocabulary",
+          "flows/examples",
+          "flows/developing",
+          "flows/operations"
         ]
       },
       {
@@ -106,6 +118,7 @@
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",
+          "troubleshooting/completion-reasons",
           "support",
           "sdks",
           "vexa-mcp",

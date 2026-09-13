@@ -91,7 +91,10 @@ async function main(): Promise<void> {
       && spy.hints[1].isEnd === true,
       JSON.stringify(spy.hints));
   }
-  for (const platform of ['zoom', 'jitsi'] as const) {
+  // Zoom is no longer on the mixed transcriber (it rides the per-track lane; its watcher→resolver
+  // path is covered by zoom-speaker-wiring.test.ts) — and Teams rides the CSRC/GMeet lane above.
+  // Only jitsi forwards hints to the legacy mixed recordHint.
+  for (const platform of ['jitsi'] as const) {
     const kind = 'dom-active';
     const spy = mixedSpyFactory();
     const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
@@ -119,8 +122,9 @@ async function main(): Promise<void> {
     await pipe.stop();
   }
   {
-    // The matched/missed binder outcome is still truthful on the legacy Zoom/Jitsi lane.
-    const pipe = createBotPipeline(inv('zoom'), nullSink, {
+    // The matched/missed binder outcome is still truthful on the legacy mixed (Jitsi) lane.
+    // (Zoom left the mixed lane for per-track; Teams rides CSRC — jitsi is the sole legacy mixed.)
+    const pipe = createBotPipeline(inv('jitsi'), nullSink, {
       createMixedTranscriber: (cb) => ChunkedTranscriber.create({
         ...cb,
         makeSegmenter: async (): Promise<BoundarySource> => ({ appendFrame: async () => { /* scripted */ }, reset: () => { /* scripted */ } }),
