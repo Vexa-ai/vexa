@@ -40,16 +40,26 @@ body.login-pf,
 }
 
 /* --- brand header -------------------------------------------------------- */
+/* Stock Keycloak prints the realm's displayName as text here. Swap in the SAME logo the terminal
+   renders on its own surfaces (clients/terminal/public/vexa-logo.svg) so the hand-off to the login
+   page does not look like a hand-off at all. `font-size: 0` hides the text node while leaving the
+   element (and its accessible name) in place — cleaner than a negative text-indent. */
 #kc-header,
 #kc-header-wrapper {
   color: var(--vexa-t1) !important;
-  font-family: var(--vexa-font);
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  padding-bottom: 18px;
+  font-size: 0 !important;
+  line-height: 0;
+  padding-bottom: 22px;
   text-shadow: none;
+}
+
+#kc-header-wrapper {
+  background-image: url("../img/vexa-logo.svg");
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: contain;
+  display: block;
+  height: 46px;
 }
 
 /* --- the card ------------------------------------------------------------ */

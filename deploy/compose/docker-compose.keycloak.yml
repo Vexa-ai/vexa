@@ -63,9 +63,11 @@ services:
     ports:
       - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18101}:8080"
     volumes:
-      # Mount the realm FILE, not the directory: ./keycloak also holds themes/, and Keycloak scans
-      # its import directory — keeping the theme tree out of it avoids surprising the importer.
-      - ./keycloak/realm-vexa.json:/opt/keycloak/data/import/realm-vexa.json:ro
+      # Two DIRECTORY mounts, deliberately: import/ holds only realm JSON so Keycloak's importer
+      # never meets the theme tree. Bind-mounting a single file here instead is a trap — Docker
+      # pre-creates a directory at a missing destination, and the next start then fails with
+      # "not a directory" until the stale entry is cleared by hand.
+      - ./keycloak/import:/opt/keycloak/data/import:ro
       - ./keycloak/themes:/opt/keycloak/themes:ro
     depends_on:
       keycloak-db:
@@ -80,6 +82,7 @@ services:
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-vexa-terminal}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-dev-terminal-secret}
       - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-http://localhost:18101/realms/vexa}
+      - KEYCLOAK_REQUIRE_VERIFIED_EMAIL=${KEYCLOAK_REQUIRE_VERIFIED_EMAIL:-true}
       # NextAuth needs an absolute origin to build the callback URL; the base .env ships this
       # EMPTY, and an empty value makes NextAuth throw ERR_INVALID_URL — which 500s
       # /api/auth/providers and silently hides EVERY sign-in button (Google/Microsoft too, not

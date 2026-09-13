@@ -19,6 +19,29 @@ docker compose -p vexa-v012 -f docker-compose.yml -f docker-compose.keycloak.yml
 Then open the terminal and press **Continue with Keycloak**. The bundled realm ships one dev user:
 `demo` / `demo`. Keycloak's own admin console is on `http://localhost:18101` (`admin` / `admin`).
 
+## Many groups, one deployment — Organizations
+
+`organizationsEnabled` is on. Keycloak 26's Organizations feature lets ONE realm serve many tenants,
+each with **its own identity provider and email domains**, and routes users automatically: someone
+typing `alice@acme.com` is sent to Acme's own SSO without picking anything from a list.
+
+That is deliberately generic. Vexa is not tailored to one institution, so no organization's login is
+baked into this realm — a deployment adds the organizations it actually serves (*Organizations* in the
+admin console, or the `/admin/realms/vexa/organizations` API), and everyone else falls back to the
+realm's own sign-in below.
+
+## Keeping sign-up short
+
+The registration form asks for **email and password only**. Keycloak's stock form also demands first
+and last name; those are removed from the realm's declarative user profile, which is what the form is
+generated from. Combined with `registrationEmailAsUsername`, the email doubles as the username, so
+there is no separate username field either. Nothing downstream needs the names — the terminal derives
+a display name from the address when they are absent.
+
+**Forgot-password is not yours to build.** `resetPasswordAllowed` plus the SMTP settings mean Keycloak
+owns the whole reset flow — the link, the expiry, the form, the re-login. There is no reset UI to write
+or maintain in Vexa.
+
 ## Registration, email verification and 2FA
 
 Self-registration is **on**, and the realm is configured so it is safe:

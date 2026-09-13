@@ -28,6 +28,15 @@ const isKeycloakEnabled = () =>
     process.env.KEYCLOAK_ISSUER
   );
 
+/** Whether a Keycloak identity must assert `email_verified` before it is accepted. Defaults to
+ *  TRUE — a realm that skips address verification has to say so explicitly, because the address is
+ *  what Vexa keys accounts by. Only "false" turns it off. */
+const requireVerifiedEmail = () =>
+  (process.env.KEYCLOAK_REQUIRE_VERIFIED_EMAIL || "true").toLowerCase() !== "false";
+
+const isEmailVerified = (profile: unknown) =>
+  (profile as { email_verified?: boolean } | undefined)?.email_verified === true;
+
 /** Secure cookies behind HTTPS, mirroring the login route's isSecureRequest(). */
 function isSecureRequest(): boolean {
   return (
@@ -80,6 +89,17 @@ export const authOptions: AuthOptions = {
   useSecureCookies: isSecureRequest(),
   pages: { signIn: "/", error: "/" },
   callbacks: {
+    /** Keep the OIDC id_token so logout can END THE PROVIDER SESSION, not just the app's. Clearing
+     *  our own cookies alone leaves the IdP session alive, and on an SSO deploy — where the gate
+     *  hands straight back to the provider — that provider silently re-authenticates and sign-out
+     *  looks broken. `logout` replays this as `id_token_hint`, which is also what lets Keycloak end
+     *  the session outright instead of interrupting with a "do you want to log out?" page. */
+    async jwt({ token, account }) {
+      if (account?.provider === "keycloak" && account.id_token) {
+        (token as { idToken?: string }).idToken = account.id_token as string;
+      }
+      return token;
+    },
     /** The load-bearing step: turn a verified OAuth identity into the terminal's `vexa-token` +
      *  `vexa-user-info` cookies, reusing the admin-api find-or-create+mint flow. Deny on any failure. */
     async signIn({ user, account, profile }) {
@@ -94,7 +114,11 @@ export const authOptions: AuthOptions = {
       // UNVERIFIED address would let a Keycloak account claim someone else's Vexa user by
       // registering their address. Google/Microsoft verify inherently; a self-hosted Keycloak
       // realm may not, so require the claim explicitly rather than trusting the deployment.
-      if (provider === "keycloak" && (profile as { email_verified?: boolean })?.email_verified !== true) {
+      //
+      // Default-on: opting out is a deliberate act, not something a deployment falls into by
+      // forgetting a variable. A realm that does not verify addresses MUST set this to "false" or
+      // every self-registered user is refused here — the two settings only make sense in lockstep.
+      if (provider === "keycloak" && requireVerifiedEmail() && !isEmailVerified(profile)) {
         // eslint-disable-next-line no-console
         console.error(`[terminal-auth] keycloak sign-in denied for ${user.email}: email not verified`);
         return false;

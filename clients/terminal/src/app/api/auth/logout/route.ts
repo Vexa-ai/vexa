@@ -9,10 +9,16 @@
  *  app) is sent to this host but a host-only deletion can't remove it — so logout would "do nothing" and
  *  trap the user at a stale-token 401 until they hand-cleared cookies. Clearing every scope ends that.
  *
- *  Note: this drops the app session only. The OAuth *provider* (Google/Microsoft) keeps its own session
- *  — `prompt=select_account` (see authOptions) is what lets the user then choose a different account. */
-import { NextResponse } from "next/server";
+ *  Note: for Google/Microsoft this drops the app session only — those providers keep their own, and
+ *  `prompt=select_account` (see authOptions) is what lets the user then choose a different account.
+ *  That is NOT sufficient for an OIDC/SSO deploy: there the gate hands straight back to the provider
+ *  with no card in between, so a live provider session silently re-authenticates and sign-out looks
+ *  like it did nothing. So we also return `endSessionUrl` — OIDC RP-Initiated Logout — and the client
+ *  navigates there to end the provider session too. Cookies are still cleared here either way, so a
+ *  client that ignores the URL is no worse off than before. */
+import { NextResponse, type NextRequest } from "next/server";
 import { headers } from "next/headers";
+import { getToken } from "next-auth/jwt";
 import { AUTH_COOKIE, USER_INFO_COOKIE } from "../adminApi";
 
 export const dynamic = "force-dynamic";
@@ -63,10 +69,40 @@ function expireCookie(name: string, secure: boolean, domain?: string): string {
   return parts.join("; ");
 }
 
-export async function POST() {
+/** OIDC RP-Initiated Logout URL for the configured provider, or undefined when SSO is not in use.
+ *  Read the id_token BEFORE the cookies below are expired — it lives in the NextAuth session we are
+ *  about to destroy. `post_logout_redirect_uri` must be registered on the client (the realm ships
+ *  `post.logout.redirect.uris`), otherwise Keycloak refuses the redirect. */
+async function endSessionUrl(req: NextRequest): Promise<string | undefined> {
+  const issuer = (process.env.KEYCLOAK_ISSUER || "").replace(/\/$/, "");
+  if (!issuer) return undefined;
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET }).catch(() => null);
+  const idToken = (token as { idToken?: string } | null)?.idToken;
+
+  const origin = process.env.NEXTAUTH_URL || req.nextUrl.origin;
+  const url = new URL(`${issuer}/protocol/openid-connect/logout`);
+  url.searchParams.set("post_logout_redirect_uri", origin);
+  if (idToken) {
+    // The clean path: the provider ends the session outright, no interstitial.
+    url.searchParams.set("id_token_hint", idToken);
+  } else {
+    // No id_token — a session minted before this route stored one, or a provider that withheld it.
+    // `client_id` is the spec's alternative and still ends the session; the provider may interpose a
+    // confirmation page. Worth it: without SOME end-session URL the user cannot break out of the
+    // silent re-authentication loop at all, which is the bug this exists to fix.
+    url.searchParams.set("client_id", process.env.KEYCLOAK_CLIENT_ID || "");
+  }
+  return url.toString();
+}
+
+export async function POST(req: NextRequest) {
   const host = (await headers()).get("host") || "";
   const httpsDeploy = isSecureRequest();
-  const res = NextResponse.json({ success: true }, { headers: { "Cache-Control": "no-store" } });
+  const ssoLogout = await endSessionUrl(req);
+  const res = NextResponse.json(
+    { success: true, endSessionUrl: ssoLogout },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 
   const emit = (name: string, scopes: (string | undefined)[]) => {
     // `__`-prefixed names MUST carry Secure (prefix rule); plain names were set Secure on an HTTPS deploy

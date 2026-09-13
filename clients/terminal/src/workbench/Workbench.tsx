@@ -228,11 +228,19 @@ function UserProfile() {
   const name = (user?.name || (email ? email.split("@")[0] : "") || "Account").trim();
   const initials = (name.match(/\b[a-z0-9]/gi) || []).slice(0, 2).join("").toUpperCase() || "?";
 
+  // On an SSO deploy, clearing our cookies is only half a sign-out: the identity provider keeps its
+  // own session, and the gate hands straight back to it, so the user would be silently signed back in
+  // and sign-out would look broken. `logout` returns the provider's end-session URL in that case —
+  // navigate there so the provider session ends too; it redirects back here, now genuinely logged out.
   const signOut = () => {
-    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
-      try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
-      window.location.reload();
-    });
+    void fetch("/api/auth/logout", { method: "POST" })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((body: { endSessionUrl?: string } | null) => {
+        try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
+        if (body?.endSessionUrl) window.location.href = body.endSessionUrl;
+        else window.location.reload();
+      });
   };
 
   return (
