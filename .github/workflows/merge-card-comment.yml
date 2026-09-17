@@ -5,6 +5,17 @@
 # plain language" intent. It gates nothing — comment-only.
 # The card also re-renders when a PR comment is created, edited or deleted, keeping the
 # `Human test` row honest.
+# Blocking rows in the displayed card depend on the author's author_association.
+# MEMBER/OWNER/COLLABORATOR PRs are evaluated exactly as before. On external PRs the card
+# requires .github/ROSTER.json peer review: 2 sign-offs, ≥1 an approving review on head;
+# the second may be a `Validated on …` comment by a roster member. It requires value-fsm
+# green on head for runtime changes and exactly one contribution-rights box ticked (not
+# uncertain). `state: value-signed` is the maintainer's record applied at merge, not a
+# precondition. Acceptance and the configurable Human test row keep their existing behavior.
+# The card does not, and cannot, re-check main's other required status checks (gates,
+# contribution-rights, DCO and the security scanners): merge-card is itself one of them,
+# so reading them would be circular. Branch protection already refuses a merge while any is red.
+# The card's own contribution on that axis is the positively-observed value-fsm verdict.
 #
 # pull_request_target (not pull_request) so it can comment on FORK PRs too; it checks out `main`
 # (trusted gate code, never the PR's tree) and reads PR state via the API — no untrusted code runs.

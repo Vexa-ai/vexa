@@ -1,0 +1,4 @@
+{
+  "_comment": "GitHub logins whose approving reviews and `Validated on <lite|compose|helm>, ...` comments count toward the merge card's peer-review row on pull requests from authors who are not MEMBER/OWNER/COLLABORATOR. Filled by the maintainer; every change goes through a pull request so the list has a public audit trail. See scripts/merge-card-gate.mjs and .github/workflows/merge-card.yml.",
+  "reviewers": []
+}
