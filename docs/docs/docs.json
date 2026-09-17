@@ -113,6 +113,7 @@
           "deployment",
           "deployment-lite",
           "deployment-kubernetes",
+          "upgrade-migrate-tool",
           "configuration",
           "authenticated-bots",
           "model-credentials-licensing",
