@@ -22,13 +22,11 @@ import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
+import { platformSlug, resolveSendAddress, meetingUrlField } from "./meetingSendUrl";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
 //    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
 //    decoupled capabilities; this is the one-click way to hand someone both at once. ─────────────────
-function platformSlug(display: string): string {
-  return display === "Google Meet" ? "google_meet" : display.toLowerCase().replace(/\s+/g, "_");
-}
 function ShareSessionButton({ platform, native }: { platform: string; native: string }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState("open");
@@ -328,23 +326,34 @@ export function actionsFor(m: MeetingMock): RowAction[] {
   // The model stores platform DISPLAY-cased ("Google Meet", else the raw API slug like "teams"/"zoom").
   // Stop targets DELETE /bots/{platform}/{native}, so normalise back to the slug — hardcoding google_meet
   // 404s ("No active meeting for this bot") for a live Teams/Zoom bot.
-  const platformSlug = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
+  const slug = platformSlug(m.platform);
+  // Can this row even be addressed? Zoom/jitsi have no server-side URL template, so a row with no
+  // stored link is a guaranteed 422 — decided once, here, instead of inlined per call site (#1681).
+  const address = resolveSendAddress(slug, m.native_id, m.meeting_url);
   const intent = (state: "idle" | "scheduled", at?: string, onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: state === "idle" ? "cancel" : "schedule", actionLabel: state === "idle" ? "Cancel" : "Schedule", native }, fetch(`/api/meetings/${platformSlug}/${encodeURIComponent(native)}/intent`, {
+    runMeetingAction({ actionId: state === "idle" ? "cancel" : "schedule", actionLabel: state === "idle" ? "Cancel" : "Schedule", native }, fetch(`/api/meetings/${slug}/${encodeURIComponent(native)}/intent`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ intent: state, ...(at ? { at } : {}) }),
     }), onFailure);
-  const send = (onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", {
+  const send = (onFailure?: MeetingActionFailureHandler) => {
+    // An unaddressable row (zoom/jitsi with no stored link) is refused HERE, in the surface that
+    // offered the action, with words the user can act on — never by firing a request whose only
+    // possible answer is the API's 422 "use google_meet/teams" (#1681).
+    if (!address.ok) {
+      onFailure?.({ actionId: "send", actionLabel: "Send now", native, message: address.reason });
+      return Promise.resolve();
+    }
+    return runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        platform: platformSlug, native_meeting_id: native,
-        // the row's real link when it has one (zoom/teams NEED it); gmeet can be constructed
-        ...(m.meeting_url ? { meeting_url: m.meeting_url }
-          : platformSlug === "google_meet" ? { meeting_url: `https://meet.google.com/${native}` } : {}),
+        platform: slug, native_meeting_id: native,
+        // the row's real link when it has one (zoom/jitsi NEED it); gmeet is constructed here and
+        // teams server-side, so neither needs one from us
+        ...meetingUrlField(address),
         bot_name: defaultBotName(),
       }),
     }), onFailure);
+  };
   // Delete a PLANNED row — ROW-id addressed (a link-less plan has no platform/native path).
   const del = (onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: "delete", actionLabel: "Delete", native }, fetch(`/api/meetings/${encodeURIComponent(m.id)}`, { method: "DELETE" }), onFailure);
@@ -355,7 +364,7 @@ export function actionsFor(m: MeetingMock): RowAction[] {
     }), onFailure);
   // Stop = the gateway-backed user-stop route DELETE /bots/{platform}/{native} (meeting-api lifecycle/stop_router).
   const stop = (onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/${platformSlug}/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
+    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/${slug}/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
   const schedule = (onFailure?: MeetingActionFailureHandler) => {
     // minimal time picker: prompt for a local datetime, send as ISO. (A richer picker can replace this.)
     const def = new Date(Date.now() + 3600_000).toISOString().slice(0, 16);
