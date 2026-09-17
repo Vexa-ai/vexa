@@ -26,13 +26,13 @@
       "note": "Connection pooler. Wrapper image is MIT; PgBouncer itself is ISC — both Category A."
     },
     {
-      "name": "minio/minio",
+      "name": "quay.io/minio/minio",
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",
-      "reason": "Object store the operator pulls DIRECTLY from MinIO's official registry — it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. A deliberate, reviewed sidecar allowance (ADR-0004). Not a bundled component."
+      "reason": "Object store the operator pulls DIRECTLY from MinIO's own registry (quay.io — MinIO withdrew its Docker Hub repository, #1671) — it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. A deliberate, reviewed sidecar allowance (ADR-0004). Not a bundled component."
     },
     {
-      "name": "minio/mc",
+      "name": "quay.io/minio/mc",
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",
       "reason": "MinIO client, used only by the compose/helm bucket-init Job. Same disposition as minio/minio: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."

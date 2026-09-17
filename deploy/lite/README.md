@@ -27,10 +27,15 @@ host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
 
+It finishes by printing the two credentials you need — the `ADMIN_TOKEN` it minted into the
+repo-root `.env` (mints users and API keys), and the ready-to-use **API key** for the built-in
+`self-host@vexa.ai` user. If the gateway never answers, `make lite` **fails** and prints the
+container's last log lines; it does not report success it did not observe.
+
 ### Transcripts with no token and no GPU — `LOCAL_STT=1`
 
 ```bash
-make -C deploy/lite up LOCAL_STT=1
+make lite LOCAL_STT=1
 ```
 
 Runs a bundled **faster-whisper CPU server on the tiny model** (`vexa-lite-whisper`) on the same
@@ -106,8 +111,14 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 |---|---|---|
 | `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
 | `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
-| `ADMIN_TOKEN` | minted per boot | admin API token (the stack's shared admin secret). It used to default to the published literal `changeme`; the entrypoint now mints a random one per boot when you set none, and admin-api/meeting-api refuse any published placeholder outright. Set it when something OUTSIDE the container has to present it. |
+| `ADMIN_TOKEN` | minted by `make lite` into `.env` | admin API token (the stack's shared admin secret) — it mints users and API keys, so treat it as root on this stack. It used to default to the published literal `changeme`, and admin-api/meeting-api refuse any published placeholder outright. `make lite` now generates a random one into the repo-root `.env` and prints it, so you can actually use it; supply your own by setting it in `.env` before you run. |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
+| `HOST_CLAUDE_CREDENTIALS` | — | **opt-in.** Host path to a `~/.claude/.credentials.json` to bind-mount read-only into the container for agent workers. Empty ⇒ nothing is mounted, even if the file exists on this host. Also settable on the command line: `make lite HOST_CLAUDE_CREDENTIALS=$HOME/.claude/.credentials.json`. Same opt-in contract as [compose](../compose/README.md) |
+
+The MinIO sidecar images are `make` variables too — `MINIO_IMAGE`
+(`quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z`) and `MINIO_MC_IMAGE`. They point at **quay.io**,
+MinIO's own registry: MinIO withdrew its Docker Hub repository, so `minio/minio:*` no longer pulls
+on a machine with no local cache.
 
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
 `WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When

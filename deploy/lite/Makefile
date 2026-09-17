@@ -38,6 +38,25 @@ MINIO_ACCESS_KEY ?= vexa-access-key
 MINIO_SECRET_KEY ?= vexa-secret-key
 MINIO_BUCKET     ?= vexa
 
+# MinIO REMOVED ITS DOCKER HUB REPOSITORY. `minio/minio:latest` and every dated `minio/minio` tag
+# now 404 with "pull access denied … repository does not exist", so a clean machine with no local
+# cache could not finish `make lite` at all — MinIO starts before the app, so nothing of Vexa came
+# up (#1671 item 1). quay.io is MinIO's own registry and still serves the same images. PINNED to a
+# dated release, not `:latest`: an upstream retag is exactly what broke this, and `:latest` after
+# 2025-05 also drops the web console this `--console-address` flag configures.
+MINIO_IMAGE      ?= quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+MINIO_MC_IMAGE   ?= quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+
+# Claude subscription credentials for the agent workers — OPT-IN, on the same terms as compose
+# (deploy/compose/.env.example HOST_CLAUDE_CREDENTIALS, empty by default). lite used to mount
+# ~/.claude/.credentials.json whenever the file merely EXISTED on the host, with no way to decline
+# (#1671 item 4): someone trying Vexa out had their Claude Code accessToken/refreshToken enter a
+# container they never asked to give it to. Set it explicitly — on the command line
+# (`make lite HOST_CLAUDE_CREDENTIALS=$$HOME/.claude/.credentials.json`), in the environment, or in
+# the repo-root .env — or it is not mounted.
+HOST_CLAUDE_CREDENTIALS ?=
+export HOST_CLAUDE_CREDENTIALS
+
 # --- Local CPU STT (LOCAL_STT=1) ---------------------------------------------------------------
 # Transcription in Vexa is always an external OpenAI-compatible /v1/audio/transcriptions service.
 # For a self-host (or a witness box) with NO hosted token and NO GPU, `make up LOCAL_STT=1` runs a
@@ -67,20 +86,58 @@ help:
 # ── Deploy lifecycle ──────────────────────────────────────────────────────────────────────────────
 all: env preflight up init-db test
 	@HOST=$$(hostname -I 2>/dev/null | awk '{print $$1}'); HOST=$${HOST:-localhost}; \
+	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	echo ""; echo "Vexa Lite is running."; \
 	echo "  Terminal:  http://$$HOST:$(HOST_TERMINAL_PORT)"; \
 	echo "  API docs:  http://$$HOST:$(HOST_GATEWAY_PORT)/docs"; \
-	echo "  Agent API: http://$$HOST:$(HOST_AGENT_PORT)"
+	echo "  Agent API: http://$$HOST:$(HOST_AGENT_PORT)"; \
+	echo ""; \
+	echo "  ADMIN_TOKEN (in $(ENV_FILE)) — mints users and API keys:"; \
+	echo "    $$(envv ADMIN_TOKEN)"; \
+	for i in $$(seq 1 24); do \
+		KEY=$$(docker exec $(APP_CONTAINER) sh -c 'cat /run/vexa/key.env 2>/dev/null' 2>/dev/null \
+			| grep -E '^VEXA_API_KEY=' | head -1 | cut -d= -f2-); \
+		[ -n "$$KEY" ] && break; sleep 5; \
+	done; \
+	if [ -n "$$KEY" ]; then \
+		echo "  API key for the built-in self-host@vexa.ai user — use it right now:"; \
+		echo "    $$KEY"; \
+		echo "    curl -s -H \"X-API-Key: $$KEY\" http://$$HOST:$(HOST_GATEWAY_PORT)/bots/status"; \
+	else \
+		echo "  (the self-host API key is not minted yet — \`docker exec $(APP_CONTAINER) cat /run/vexa/key.env\`)"; \
+	fi
 
-## env — ensure a repo-root .env exists (seed from compose/.env if present, else a minimal template).
+## env — ensure a repo-root .env exists AND carries a usable ADMIN_TOKEN.
+##
+## The minimal template used to seed `ADMIN_TOKEN=` EMPTY. The container then minted a random admin
+## token per boot (entrypoint.sh) that nothing outside the container could ever know — so every
+## `/admin/*` call answered `Invalid or missing admin token`, no user could be created, no API key
+## could be issued, and the install came up green while being unable to do anything (#1671 item 2).
+## Mint it HOST-side instead, write it into .env, and print it at the end of `all`. An existing .env
+## whose ADMIN_TOKEN is empty gets one too — that is the shape a pre-fix install left behind.
 env:
-	@if [ ! -f "$(ENV_FILE)" ]; then \
+	@set -e; \
+	if [ ! -f "$(ENV_FILE)" ]; then \
 		if [ -f "$(ROOT)/deploy/compose/.env" ]; then \
 			echo "Seeding $(ENV_FILE) from deploy/compose/.env"; cp "$(ROOT)/deploy/compose/.env" "$(ENV_FILE)"; \
 		else \
 			echo "Creating minimal $(ENV_FILE) (edit TRANSCRIPTION_SERVICE_* for transcripts)"; \
 			printf 'ADMIN_TOKEN=\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=v012\n' > "$(ENV_FILE)"; \
 		fi; \
+	fi; \
+	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	if [ -z "$$(envv ADMIN_TOKEN)" ]; then \
+		TK=$$(openssl rand -hex 24 2>/dev/null \
+			|| python3 -c 'import secrets; print(secrets.token_hex(24))' 2>/dev/null \
+			|| od -An -tx1 -N24 /dev/urandom 2>/dev/null | tr -d ' \n'); \
+		[ -n "$$TK" ] || { echo "ERROR: cannot generate an ADMIN_TOKEN (no openssl, no python3, no /dev/urandom)."; exit 1; }; \
+		if grep -qE '^ADMIN_TOKEN=' "$(ENV_FILE)"; then \
+			TMP=$$(mktemp); sed -E "s|^ADMIN_TOKEN=.*|ADMIN_TOKEN=$$TK|" "$(ENV_FILE)" > "$$TMP"; \
+			cat "$$TMP" > "$(ENV_FILE)"; rm -f "$$TMP"; \
+		else \
+			printf 'ADMIN_TOKEN=%s\n' "$$TK" >> "$(ENV_FILE)"; \
+		fi; \
+		echo "  Minted a random ADMIN_TOKEN into $(ENV_FILE)"; \
 	fi
 
 ## preflight — Docker must be up.
@@ -95,10 +152,11 @@ preflight:
 ## lost — which once shipped `docker run … $IMG` with an EMPTY image (vexa-lite never created,
 ## every front door down). Keep all commentary OUT of the recipe body; annotate here instead.
 ##
-## Claude-credential automount (C2/#502): if the host has ~/.claude/.credentials.json, mount it and
-## point HOST_CLAUDE_CREDENTIALS at the IN-CONTAINER path — in LITE the process backend reads the
-## file directly. (Compose is the opposite: there the var is a docker-HOST path the compose file
-## mounts. Don't copy the semantics across.)
+## Claude-credential mount (C2/#502): OPT-IN ONLY. Set HOST_CLAUDE_CREDENTIALS (make variable,
+## environment, or the repo-root .env) to a host path and it is mounted, with the var repointed at
+## the IN-CONTAINER path — in LITE the process backend reads the file directly. (Compose is the
+## opposite: there the var is a docker-HOST path the compose file mounts. Don't copy the semantics
+## across.) Unset ⇒ nothing is mounted, even when ~/.claude/.credentials.json exists on the host.
 ##
 ## `envv` strips an INLINE COMMENT and trailing space from a .env value. `.env.example` once shipped
 ## `ADMIN_TOKEN=dev-admin-token   # admin-api auth…`; a bare `cut -d= -f2-` kept the comment, and the
@@ -107,10 +165,19 @@ preflight:
 ## `docker run` are QUOTED for the same reason. `$$CLAUDE_MOUNT` is the deliberate exception: it
 ## carries multiple argv words and MUST stay unquoted — do not "fix" it.
 ##
+## The tail of this recipe MUST NOT announce success it did not observe. It used to print
+## "✓ Vexa Lite running" unconditionally: the wait loop's last command is `sleep`, which always
+## succeeds, so a container that failed to start (or never started at all — a missing --env-file
+## aborts `docker run`) still ended on a green tick with all three front doors refusing
+## connections. An install that reports itself healthy while being dead costs more than one that
+## fails loudly, and it masked the other three findings on #1671. The loop now records whether the
+## gateway actually answered, bails early if the container is gone, and exits non-zero with the
+## container's last log lines otherwise (#1671 item 3).
+##
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
-up: preflight
+up: env preflight
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
@@ -119,11 +186,14 @@ up: preflight
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
-	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
-	if [ -f "$$CLAUDE_CREDS" ]; then \
-		echo "  Detected Claude subscription credentials — mounting into container"; \
+	CLAUDE_CREDS="$${HOST_CLAUDE_CREDENTIALS:-$$(envv HOST_CLAUDE_CREDENTIALS)}"; \
+	if [ -z "$$CLAUDE_CREDS" ]; then \
+		CLAUDE_MOUNT=""; \
+	elif [ -f "$$CLAUDE_CREDS" ]; then \
+		echo "  Mounting Claude subscription credentials from $$CLAUDE_CREDS (HOST_CLAUDE_CREDENTIALS)"; \
 		CLAUDE_MOUNT="-v $$CLAUDE_CREDS:/var/lib/vexa/host-claude-credentials:ro -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude-credentials"; \
 	else \
+		echo "  WARNING: HOST_CLAUDE_CREDENTIALS=$$CLAUDE_CREDS does not exist — mounting nothing"; \
 		CLAUDE_MOUNT=""; \
 	fi; \
 	echo "Starting PostgreSQL ($(PG_CONTAINER))..."; \
@@ -142,9 +212,9 @@ up: preflight
 		docker run -d --name $(MINIO_CONTAINER) --network $(NETWORK) --restart unless-stopped \
 			-e MINIO_ROOT_USER=$(MINIO_ACCESS_KEY) -e MINIO_ROOT_PASSWORD=$(MINIO_SECRET_KEY) \
 			-v vexa-lite-miniodata:/data \
-			minio/minio:latest server /data --console-address ":9001" > /dev/null; \
+			$(MINIO_IMAGE) server /data --console-address ":9001" > /dev/null; \
 		sleep 4; \
-		docker run --rm --network $(NETWORK) --entrypoint sh minio/mc:latest -c \
+		docker run --rm --network $(NETWORK) --entrypoint sh $(MINIO_MC_IMAGE) -c \
 			"mc alias set vexa http://$(MINIO_CONTAINER):9000 $(MINIO_ACCESS_KEY) $(MINIO_SECRET_KEY) && mc mb --ignore-existing vexa/$(MINIO_BUCKET)" >/dev/null 2>&1 || true; \
 	fi; echo "  ✓ MinIO ready"; \
 	if [ -n "$(LOCAL_STT)" ]; then \
@@ -176,7 +246,20 @@ up: preflight
 		$$CLAUDE_MOUNT \
 		"$$IMG" > /dev/null; \
 	echo "  Waiting for the gateway (up to 3 min)..."; \
-	for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_GATEWAY_PORT)/health 2>/dev/null && break; sleep 5; done; \
+	UP=0; \
+	for i in $$(seq 1 36); do \
+		if curl -sf -o /dev/null http://localhost:$(HOST_GATEWAY_PORT)/health 2>/dev/null; then UP=1; break; fi; \
+		if [ "$$(docker inspect -f '{{.State.Running}}' $(APP_CONTAINER) 2>/dev/null)" != "true" ]; then \
+			echo "  ✗ $(APP_CONTAINER) is not running — it never started, or it exited during boot."; break; \
+		fi; \
+		sleep 5; \
+	done; \
+	if [ "$$UP" != "1" ]; then \
+		echo "  ✗ Vexa Lite did NOT come up: nothing answered http://localhost:$(HOST_GATEWAY_PORT)/health."; \
+		echo "    Last 40 lines of \`docker logs $(APP_CONTAINER)\`:"; \
+		docker logs --tail 40 $(APP_CONTAINER) 2>&1 | sed 's/^/      /' || true; \
+		exit 1; \
+	fi; \
 	echo "  ✓ Vexa Lite running"
 
 ## init-db — schema converges on each service's startup (admin/meeting ensure_schema); no-op hook.

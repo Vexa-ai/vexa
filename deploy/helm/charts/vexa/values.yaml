@@ -436,9 +436,12 @@ redis:
 
 minio:
   enabled: true
+  # MinIO removed its Docker Hub repository (`minio/minio:*` → "pull access denied", #1671 item 1);
+  # quay.io is MinIO's own registry. Pinned to a dated release rather than `:latest` — an upstream
+  # retag is exactly what broke the Docker Hub path.
   image:
-    repository: minio/minio
-    tag: latest
+    repository: quay.io/minio/minio
+    tag: RELEASE.2025-04-22T22-12-26Z
   accessKey: vexa-access-key
   secretKey: vexa-secret-key
   bucket: vexa
@@ -460,8 +463,8 @@ minio:
   # chart on it. It is a value now; pin it with `repository@sha256:...` in your
   # own values (or via the enterprise node baseline) when you need reproducibility.
   mcImage:
-    repository: minio/mc
-    tag: latest
+    repository: quay.io/minio/mc
+    tag: RELEASE.2025-04-16T18-13-26Z
   # ...and the Job declared no resources at all, so a namespace LimitRange would
   # silently assign it whatever default it likes — the 64Mi-squeeze class.
   initResources:

@@ -50,7 +50,12 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    # MinIO removed its Docker Hub repository — `minio/minio:*` now 404s with "pull access denied"
+    # on any machine without a local cache, which failed `make all` at the datastore (#1671 item 1).
+    # quay.io is MinIO's own registry and serves the same images. Pinned to a dated release, not
+    # `:latest`: an upstream retag is what broke this, and post-2025-05 releases also drop the web
+    # console this `--console-address` flag configures.
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
     command: server /data --console-address ":9001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
@@ -69,7 +74,7 @@ services:
     restart: unless-stopped
 
   minio-init:
-    image: minio/mc:latest
+    image: ${MINIO_MC_IMAGE:-quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z}
     depends_on:
       minio:
         condition: service_healthy
