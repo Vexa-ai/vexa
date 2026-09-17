@@ -79,6 +79,10 @@ about inline `# comments` in `.env` values — it exists because of Lite's `--en
 If `~/.claude/.credentials.json` exists on the host, `make lite` mounts it read-only into the
 container so agents run on your Claude subscription without copying credentials into `.env`.
 
+The MinIO sidecar images are `make` variables too: `MINIO_IMAGE` and `MINIO_MC_IMAGE`, defaulting
+to MinIO's own registry (`quay.io/minio/...`), pinned to a dated release. Override them to use a
+mirror or a different version.
+
 ## Persistence and upgrade
 
 State lives in the sidecars' named volumes and survives app-container replacement:

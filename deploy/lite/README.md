@@ -109,6 +109,11 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 | `ADMIN_TOKEN` | minted per boot | admin API token (the stack's shared admin secret). It used to default to the published literal `changeme`; the entrypoint now mints a random one per boot when you set none, and admin-api/meeting-api refuse any published placeholder outright. Set it when something OUTSIDE the container has to present it. |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 
+The MinIO sidecar images are `make` variables too — `MINIO_IMAGE`
+(`quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z`) and `MINIO_MC_IMAGE`. They point at **quay.io**,
+MinIO's own registry: MinIO withdrew its Docker Hub repository, so `minio/minio:*` no longer pulls
+on a machine with no local cache.
+
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
 `WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
 `LOCAL_STT=1`, the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
