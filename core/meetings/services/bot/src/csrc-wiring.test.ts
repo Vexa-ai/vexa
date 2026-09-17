@@ -24,12 +24,18 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import {
-  startCaptureBridge, makeCsrcSink, makeObservationSink,
-  type CsrcRecord, type CsrcCapableSink, type ObservationRecord, type ObservationCapableSink,
+import type {
+  CsrcRecord, CsrcCapableSink, ObservationRecord, ObservationCapableSink,
 } from './capture-bridge.js';
 import type { Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
+
+// HERMETIC: capture-bridge resolves VEXA_CSRC_INACTIVE_MS at module load, so an ambient override
+// in the developer's shell would fail the 800ms assertions below. Scrub BEFORE the module loads —
+// which is why this import is dynamic (a static one hoists above the delete).
+delete process.env.VEXA_CSRC_INACTIVE_MS;
+const { startCaptureBridge, makeCsrcSink, makeObservationSink, resolveCsrcInactiveMs } =
+  await import('./capture-bridge.js');
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail?: string) => {
@@ -87,10 +93,57 @@ const check = (name: string, cond: boolean, detail?: string) => {
     warnings.some((w) => w.includes('observation-clock-skew')) && stored[2].t >= t, warnings.join(' | '));
 }
 
+// ── the window is resolved from env, and garbage never reaches the sensor ───────────────────────
+// The sensor resolves its option with `??`, which passes NaN through, and a NaN window makes BOTH
+// of its comparisons false: every source is re-deactivated on every poll — the fragmentation this
+// value exists to end, worse and silent. So an unusable override falls back rather than propagating.
+{
+  check('window: no override ⇒ the measured 800ms', resolveCsrcInactiveMs(undefined) === 800,
+    String(resolveCsrcInactiveMs(undefined)));
+  check('window: a usable override wins', resolveCsrcInactiveMs('1200') === 1200,
+    String(resolveCsrcInactiveMs('1200')));
+  check('window: garbage falls back instead of becoming NaN',
+    resolveCsrcInactiveMs('abc') === 800, String(resolveCsrcInactiveMs('abc')));
+  check('window: zero, negative and empty fall back too — none of them is a window',
+    resolveCsrcInactiveMs('0') === 800 && resolveCsrcInactiveMs('-5') === 800 && resolveCsrcInactiveMs('') === 800,
+    `${resolveCsrcInactiveMs('0')}/${resolveCsrcInactiveMs('-5')}/${resolveCsrcInactiveMs('')}`);
+  // A window shorter than one poll is stale before the next tick — the NaN failure mode wearing an
+  // ordinary number. It is rejected at the floor, not accepted because it happens to be positive.
+  check('window: shorter than one 100ms poll is rejected, one poll exactly is kept',
+    resolveCsrcInactiveMs('1') === 800 && resolveCsrcInactiveMs('99') === 800 && resolveCsrcInactiveMs('100') === 100,
+    `${resolveCsrcInactiveMs('1')}/${resolveCsrcInactiveMs('99')}/${resolveCsrcInactiveMs('100')}`);
+  // The ceiling is the floor's mirror: a fat-fingered 600000 would hold every source active for
+  // ten minutes and synthesize essentially no deactivations — the NaN failure mode wearing an
+  // ordinary number, equally silent. 1600ms already merges turns; 10s is generous headroom.
+  check('window: a huge override is rejected at the ceiling, ten seconds exactly is kept',
+    resolveCsrcInactiveMs('600000') === 800 && resolveCsrcInactiveMs('10001') === 800
+    && resolveCsrcInactiveMs('10000') === 10000,
+    `${resolveCsrcInactiveMs('600000')}/${resolveCsrcInactiveMs('10001')}/${resolveCsrcInactiveMs('10000')}`);
+  {
+    const warnings: string[] = [];
+    const used = resolveCsrcInactiveMs('abc', (m) => warnings.push(m));
+    check('window: a rejected override is SAID OUT LOUD, never silently ignored',
+      used === 800 && warnings.length === 1 && warnings[0]!.includes('VEXA_CSRC_INACTIVE_MS="abc"'),
+      JSON.stringify(warnings));
+    const quiet: string[] = [];
+    resolveCsrcInactiveMs(undefined, (m) => quiet.push(m));
+    resolveCsrcInactiveMs('1200', (m) => quiet.push(m));
+    check('window: no override and a good override are both silent — only a REJECTION warns',
+      quiet.length === 0, JSON.stringify(quiet));
+    // Empty and blank are how compose, helm and lite render an UNSET knob (`${VAR:-}`), and how
+    // every other bot tuning knob reads them: no override, silent — never a false alarm on boot.
+    const blank: string[] = [];
+    check('window: empty or blank is "unset" — the default, silently (deploy templates render unset knobs as empty)',
+      resolveCsrcInactiveMs('', (m) => blank.push(m)) === 800
+      && resolveCsrcInactiveMs('   ', (m) => blank.push(m)) === 800
+      && blank.length === 0, JSON.stringify(blank));
+  }
+}
+
 // ── The real bundle (built by build-browser-utils.mjs — turbo test depends on build) ─────────────
 const BUNDLE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'browser-utils.global.js');
 if (!existsSync(BUNDLE)) {
-  console.error(`❌ missing ${BUNDLE} — build the capture bundle first (pnpm --filter @vexa/bot build).`);
+  console.error(`❌ missing ${BUNDLE} — build it first (pnpm --filter @vexa/bot build — its bundler names any capture brick still unbuilt).`);
   process.exit(1);
 }
 
@@ -137,6 +190,19 @@ new Function(readFileSync(BUNDLE, 'utf8'))();
 const utils = g.VexaBrowserUtils as Record<string, unknown> | undefined;
 check('bundle: window.VexaBrowserUtils.createCsrcPoll is exported (RED at base — brick not bundled)',
   typeof utils?.createCsrcPoll === 'function', `keys: ${Object.keys(utils ?? {}).join(',')}`);
+
+// Capture the options the REAL bridge hands the REAL sensor factory. The window the production
+// path runs on is not observable from a transition alone (only from WHEN one is absent), and the
+// number itself is owned by the composition root, not by the sensor — so it is asserted here, on
+// the object that actually crosses. RED when the bridge passes no `inactiveMs` at all.
+type CsrcPollOpts = { inactiveMs?: number; pollMs?: number; now?: () => number; timeOrigin?: () => number;
+  receivers?: () => unknown[]; onTransition: (t: { csrc: number; active: boolean; tMs: number }) => void };
+const realCreateCsrcPoll = utils!.createCsrcPoll as (o: CsrcPollOpts) => unknown;
+let productionCsrcOpts: CsrcPollOpts | undefined;
+(utils as Record<string, unknown>).createCsrcPoll = (o: CsrcPollOpts): unknown => {
+  productionCsrcOpts = o;
+  return realCreateCsrcPoll(o);
+};
 
 // ── Fake Playwright Page + the Node seams ───────────────────────────────────────────────────────
 const page = {
@@ -213,8 +279,41 @@ check('the spine and the stored sidecar agree on WHEN each edge happened',
 check('isolation: NO transition reached pipeline.recordHint — a csrc is an id, never a name',
   hints.length === 0, JSON.stringify(hints));
 
+// ── the MEASURED inactivity window reaches the sensor ────────────────────────────────────────────
+// 400 ms — the sensor's own default — is shorter than the median natural speech pause (measured
+// p50 550 ms), so a turn fragments into 1.67 lane activations. The composition root passes the
+// measured 800 ms instead. Asserted twice: the value that crossed, and what that value DOES.
+check('the bridge passes an explicit inactivity window to the sensor (RED at base: undefined)',
+  productionCsrcOpts?.inactiveMs === 800, `inactiveMs=${String(productionCsrcOpts?.inactiveMs)}`);
+{
+  // Re-drive the sensor over the PRODUCTION options object — same `inactiveMs`, with only the
+  // clock and the receivers replaced, so the window is proven by behaviour and not by a number.
+  let t = 1_900_000_000_000;
+  const edges: Array<{ active: boolean }> = [];
+  let speaking = true;
+  let lastSpoke = t;
+  const poll = realCreateCsrcPoll({
+    ...productionCsrcOpts!,
+    onTransition: (x) => edges.push({ active: x.active }),
+    now: () => t,
+    timeOrigin: () => 0,
+    receivers: () => [{ track: { kind: 'audio' },
+      getContributingSources: () => [{ source: 5, timestamp: speaking ? t : lastSpoke, audioLevel: 0.4 }] }],
+  }) as { poll(): void; destroy(): void };
+  poll.poll();
+  speaking = false;
+  t += 500; poll.poll();
+  check('a 500ms pause — past the sensor default, inside the measured window — does NOT close the turn',
+    edges.length === 1 && edges[0].active === true, JSON.stringify(edges));
+  t += 400; poll.poll();
+  check('past the measured window the deactivation is synthesized',
+    edges.length === 2 && edges[1].active === false, JSON.stringify(edges));
+  poll.destroy();
+}
+
 (g as any).setInterval = realSetInterval;
 (g as any).clearInterval = realClearInterval;
+(utils as Record<string, unknown>).createCsrcPoll = realCreateCsrcPoll;
 g.document = savedDocument;
 
 if (failed) { console.error(`\n❌ csrc-wiring: ${failed} checks FAILED.`); process.exit(1); }
