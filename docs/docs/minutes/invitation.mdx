@@ -1,0 +1,118 @@
+---
+title: "How meetings arrive"
+description: "One address. Inviting the assistant is the whole of it — and no calendar is ever read."
+---
+
+<Note>**Status:** invitation parsing and series binding are built in dev; the mailbox ingest and
+the two binding mechanisms are not yet wired. See [what is real today](/minutes/status).</Note>
+
+## The mechanism
+
+The assistant reads **its own mailbox**. It never reads yours.
+
+You invite it to a meeting the way you invite a colleague. The invitation arrives in that
+mailbox exactly as it arrives for every other attendee, and the address you invited decides
+which workspace the meeting belongs to.
+
+There is no calendar connection to authorise, no OAuth screen, no admin consent, and **no
+credential anywhere in the deployment that can read anyone's calendar.** For a regulated buyer
+that is not a convenience — it is the difference between a pilot that starts this month and one
+that waits on an internal request with no stated lead time.
+
+## One address, ever
+
+The assistant has **one ordinary mailbox** — `vexa@example.com`. Requesting it is a routine
+service-account ticket in any estate; there is no mail-routing change, no subdomain, no connector,
+and nothing else to ask an admin for, ever.
+
+Everyone invites that same address to any meeting. **Which group a meeting belongs to is settled by
+binding, not by address:**
+
+| Mechanism | When | Cost |
+|---|---|---|
+| **`#group:` tag** in the invite description — `#group:architecture-review` | before the meeting | typed once per meeting identity |
+| **Organiser's click** on their artifact — *assign to a group* | after the meeting | one click, once |
+| **Neither** | — | the meeting is **personal**, and stays so |
+
+The binding sticks to the meeting's **calendar identity**: tag a recurring series once and every
+occurrence is attributed to the group from then on — the tag is not re-read, re-typed, or needed
+again. An ad-hoc meeting is tagged (or assigned) individually.
+
+**Unbound is private, always.** Recurrence is not groupness — a weekly 1:1 is recurring and
+private — and the two mistakes are not symmetric: a group meeting kept private costs one click, a
+private meeting fanned out to a group is a breach. Nothing is ever inferred from the title, the
+attendee list, or the subject matter.
+
+### The tag
+
+The description is **organiser-authored**, so the tag carries exactly the authority of the click,
+just earlier — and the group receives its artifacts immediately, with no round-trip. Three
+refusals keep it safe:
+
+- A tag binds only if the organiser is admitted to that group by its membership mode — otherwise
+  knowing a group's name would let anyone write into its record.
+- An unknown group name never creates a group. Typo → personal, with a notice.
+- A tag by anyone other than the organiser does not exist: attendees cannot edit the invitation
+  that is sent.
+
+### The two paths
+
+**Base path — no binding.** Invite → transcript → the meeting lands in the **organiser's personal
+workspace** → the organiser is emailed their artifact — and **every other participant is emailed
+an invitation**: clicking it mints their account and their own personal workspace, with this
+meeting in it — chat is always scoped to a workspace; the meeting is the context it points at,
+never a chat surface of its own. Nobody was onboarded; they attended a meeting and got a door.
+This is how the product spreads inside an organisation — and it is **limited to the
+organisation's email domain**: an outside attendee receives nothing on this path.
+
+The organiser's email also carries *assign to a group*: one click binds the meeting — and its
+series, if recurring — after the fact, and the group path below runs for it.
+
+**Group path — already bound.** The meeting identity already belongs to a group, or the invite
+carried `#group:name` → transcript → the run happens in the **group's workspace**, once per
+participant → **all participants are emailed** their artifact, each also a door into the group's
+chat. Fan-out honours the group's membership mode; outside attendees receive it only if the mode
+says anyone in the meeting.
+
+A group run is a run in the group's workspace from what the group knows — an assignment after the
+fact is a **re-run there, never a forward** of the organiser's personal document.
+
+## Personal meetings need no address of their own
+
+Invite the global `vexa@` address and the meeting is **yours**: you are the only recipient, and
+the artifact is written from your own perspective.
+
+Which person it belongs to is not inferred — **the organiser is a field on the invitation.**
+Whoever scheduled the meeting owns it.
+
+## The invited address is the answer
+
+Which workspace a meeting belongs to is never guessed from the attendee list, the title, or the
+subject matter. **It is whichever address was invited**, and that is settled before the meeting
+starts.
+
+- The group address → that group's members receive artifacts.
+- The global address → you alone do.
+- Neither → the assistant was never there.
+
+After an admin types a group's address once, their calendar client remembers it. By the second
+meeting there is nothing to look up.
+
+## Recurring meetings
+
+An invitation to a recurring series binds the **series**. The assistant attends every occurrence
+until it is uninvited. An update that moves the time moves the booking; a cancellation stops
+attendance.
+
+## What it refuses
+
+**A forwarded invitation does not bind.** The attendee list is authoritative; merely arriving in
+the mailbox is not enough. Otherwise anyone could forward an invitation and put an assistant into
+a meeting its organiser never agreed to. The organiser receives an explanation instead.
+
+**An invitation with no timezone is refused, not guessed.** A floating start time is legal in the
+calendar standard and unambiguous only to the sender. Guessing a default would dial into a group
+an hour off.
+
+**An unresolvable invitation produces no group effect** — a notice to the sender, and nothing
+else. Never a broadcast.

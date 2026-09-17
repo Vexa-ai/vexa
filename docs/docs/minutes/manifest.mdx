@@ -1,0 +1,156 @@
+---
+title: "Vexa Minutes"
+description: "The group accumulates what it knows, meeting after meeting — and each person receives their own extract of it."
+---
+
+<Note>
+**Status: designed and built in dev, not shipped.** This section is the manifest for a product
+under construction. Every page marks what is real. Nothing here is a capability claim about a
+deployment you can buy today.
+</Note>
+
+## The one-sentence version
+
+**The group accumulates what it knows, meeting after meeting — and each person receives their own
+extract of it.**
+
+A group is wherever meetings accumulate. Most are shared — the architecture review, the Monday
+standup, the vendor call — and each has its own address:
+
+> `vexa@example.com` — with `#group:architecture-review` in the description
+
+Putting that address on the calendar invitation, the way you would add a colleague, is the whole
+of the setup. **You also have a group of your own**: invite it with no tag at all,
+and the meeting is yours alone.
+
+Either way the group gets steadily better informed, and when a meeting ends, everyone entitled to
+it receives what changed for *them* because it happened. A single link is the only door into
+more.
+
+## Nobody signs up
+
+**One person sets it up; everyone else is onboarded by receiving something.** The admin creates a
+group — a name, and who belongs — and invites its address to the meeting that group already
+holds. Every member then gets their own extract, and
+[their account comes into being when they click it](/minutes/setup), not before.
+
+Everyone else *receives* it:
+
+- the assistant appears in the meeting, because someone invited its address;
+- an email arrives afterwards, addressed to them specifically;
+- a link in that email opens a conversation, if they want one.
+
+Nobody else installs anything. Nobody else connects a calendar. **Activation happens *to* the
+participant, not *by* them.** A person can get value from this product for months without ever
+having an account — and the moment they want more, one click gives them one.
+
+## How it spreads
+
+**Inside an organisation, attending a meeting is the whole of adoption.**
+
+A colleague joins a call the assistant is in. Afterwards they receive their own extract —
+informed by who they are, from the organisation's own directory, and written from their own
+group. Nobody added them to anything. The next time they hold a meeting of their own, they invite
+`vexa@` to it, and now they have a group. When that work concerns a team, they make it a shared
+group, and everyone in *those* meetings starts receiving extracts too.
+
+The loop runs entirely inside a boundary the organisation already trusts: same employer, same
+directory, same authorisation. **An extract reaching a colleague is an internal tool doing its
+job**, not an unsolicited message from a stranger.
+
+So an admin does not enumerate the organisation. They set up the handful of standing groups that
+already matter, and the rest arrives by attendance.
+
+<Note>
+**Outside that boundary it is a different question, and the default is different.** A guest from
+another company receives nothing unless the group is deliberately opened — and when it is, they
+receive the meeting they attended and none of the group's history.
+</Note>
+
+## What a participant actually receives
+
+Not a summary of the meeting. A summary is the same text for everyone, and most of it is
+already known to the person reading it.
+
+**The artifact is a context delta, addressed to one person: what changed for *you* because this
+meeting happened.** What was decided that affects you. What you committed to. What is now owed
+to you. What moved since last time. It is written whether or not you spoke — being in the group
+is enough for the group to have changed something.
+
+Two people in the same meeting receive different mail.
+
+<Card title="The artifact" icon="envelope" href="/minutes/artifact">
+  What it contains, what it refuses to contain, and why it links to the record.
+</Card>
+
+## Invitation, not integration
+
+The product reads **its own mailbox**. It never reads yours.
+
+There is no calendar integration in any direction — no Graph, no EWS, no iCal feed, and no read
+credential for anyone's calendar anywhere in the deployment. You invite an address to a meeting;
+the invitation lands in that mailbox like any other attendee's copy; **the address you invited is
+the workspace the meeting belongs to.**
+
+The assistant is one ordinary mailbox on your domain. A `#group:` tag in the invite — or the
+organiser's one click afterwards — decides which group a meeting belongs to; untagged means
+assistant, and a meeting invited that way belongs to whoever organised it. **Creating a group
+provisions nothing.**
+
+This removes the single hardest dependency in an enterprise rollout, and it means nothing is ever
+inferred — not from the attendee list, not from the title, not from the subject matter.
+
+<Card title="How meetings arrive" icon="calendar" href="/minutes/invitation">
+  Recurring series, updates, cancellations, and what happens to an invitation we can't resolve.
+</Card>
+
+## One meeting, one workspace
+
+The assistant that writes your artifact has **exactly one** knowledge workspace mounted: the one
+belonging to the address that was invited. Not a composition, not a stack to choose from — one.
+
+That single constraint removes every configuration question a workspace model usually forces.
+Who receives this, where the knowledge is written, and what the assistant is allowed to see are
+all settled *before the meeting starts*, by which address someone put on the invitation.
+
+Your own assistant chat is the one place that sees more — everything you belong to — and it is
+the only one you open deliberately.
+
+<Card title="Workspaces" icon="folder" href="/minutes/workspaces">
+  Six rules, and the one constraint they all follow from: a meeting has exactly one workspace.
+</Card>
+
+## Steering, not configuration
+
+The link in the artifact opens a chat. Reply to it and you change what the product tracks for
+you next time — *"focus on decisions, skip the descriptions"*, *"I care about anything touching
+the migration"*. That instruction is a visible, editable document in your own layer, not opaque
+state you cannot inspect.
+
+Steering a **group's** behaviour works the same way, except the change queues as a proposal and
+the workspace owner accepts or rejects it. Rejection leaves no trace in the knowledge and a full
+trace in the record.
+
+## What it refuses to do
+
+A manifest is as much about refusals as promises.
+
+- **It does not email an artifact for a record that is not a meeting.** A bot left running
+  through a private conversation, a recording of a video playing in a tab — these produce clean,
+  plausible artifacts and must never be delivered. Every record passes an eligibility gate first,
+  and under any doubt it goes to the meeting's creator alone, never to a group.
+- **It does not hide the transcript behind the summary.** Every artifact links to the record it
+  was built from. A confident delta over a bad transcript is worse than no delta at all.
+- **It does not let a machine accept anything.** No auto-approval into shared knowledge.
+- **It does not read your calendar, your mail, or your files** to do any of this.
+- **It does not decide for itself who is included.** Each group states whether it serves a named
+  list, your organisation, or everyone in the group — and an outsider in an open group gets the
+  meeting they attended, never the group's history.
+
+<Card title="The admin's flow" icon="user-gear" href="/minutes/setup">
+  One field, one click, one invitation — and what the first meeting decides for you.
+</Card>
+
+<Card title="What is real today" icon="circle-check" href="/minutes/status">
+  Built, stubbed, and not started — per component, with no rounding up.
+</Card>
