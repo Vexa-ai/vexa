@@ -1,6 +1,6 @@
 ---
 title: "How Vexa compares"
-description: "An honest map of the meeting-capture options — Vexa, Attendee, hosted APIs, local notetakers, DIY — and when each is the right choice."
+description: "An honest map of the meeting-capture options — Vexa, Attendee, MeetingBaaS, hosted APIs, local notetakers, DIY — what Apache-2.0 vs Elastic License 2.0 actually costs you, and when each is the right choice."
 ---
 
 If you're evaluating self-hosted meeting intelligence, you'll find these options. Here is how they
@@ -17,6 +17,11 @@ works org-wide (IT deploys it once; every meeting can be captured, governed, aud
   (Django/Postgres/Redis) under the **Elastic License 2.0**, not an open-source license: ELv2 states
   *"You may not provide the software to third parties as a hosted or managed service."* They also run
   a hosted cloud. Good software; the licence is the difference.
+- **[MeetingBaaS](https://github.com/Meeting-BaaS/meet-teams-bot)** — its bot,
+  [`meet-teams-bot`](https://github.com/Meeting-BaaS/meet-teams-bot/blob/main/LICENSE), carries the
+  **same Elastic License 2.0** (© Spoke SAS) with the same limitation quoted above. The MIT repos
+  around it — the MCP server, transcript viewer, speaking-bot examples — are satellites of the API,
+  not the bot. They also run a hosted service.
 - **Hosted bot APIs** (e.g. Recall.ai) — mature and convenient, but your meetings transit their
   cloud; nothing to self-host.
 
@@ -44,7 +49,7 @@ attribution, scaling.
 | Architecture built for AI-assisted maintenance ([one-concern modules, sealed contracts, golden fixtures](/architecture/modules)) | ✅ | 🟡 conventional | n/a | ❌ | — |
 | **Operability**: how much there is to run, and a one-command journey probe that says whether it works | ✅ 3 shapes · `make probe` | 🟡 one Django image, no journey probe | ✅ nothing to run | 🟡 per-seat install | ❌ all yours |
 | **Evidence an evaluator can check** without asking us | ✅ [sealed contracts, CI gates, CALM model, audit artifacts](/architecture/evaluation) | 🟡 source readable, no published gates | ❌ vendor attestation | ❌ | — |
-| License | **Apache-2.0** (OSI open source) | Elastic License 2.0 (source-available) | proprietary | varies | — |
+| [License](#what-the-licence-difference-actually-means) | **Apache-2.0** (OSI-approved open source) | Elastic License 2.0 (source-available, not OSI-approved) | proprietary | varies | — |
 | **May you resell or embed it in a service you sell?** | ✅ no licence restriction | ❌ ELv2 forbids providing it as a hosted or managed service | ❌ vendor terms | ❌ | ✅ |
 
 *Jitsi* is built and offline-proven, but not yet transcript-proven: live-room acceptance is open
@@ -86,6 +91,54 @@ tell you how much before you commit, in a form you can check without asking them
 (`TRANSCRIPTION_SERVICE_URL`) **and** the model id (`TRANSCRIPTION_MODEL`) — so backends that
 validate the id (Groq, vLLM, OpenAI-compatible gateways) work end-to-end, not just backends that
 ignore it. See [Configuration](/configuration#transcription-stt).
+
+*Licence* — Attendee is not the only ELv2 entrant here. MeetingBaaS's bot carries the same licence
+(above), so both licence rows describe it too. What that difference costs you depends entirely on
+what you intend to do with the software, which is the next section.
+
+## What the licence difference actually means
+
+A licence name is not an argument. Here is what each one lets you do.
+
+**Apache-2.0** (Vexa) is OSI-approved. It grants a *"perpetual, worldwide, non-exclusive, no-charge,
+royalty-free, irrevocable"* copyright licence — and a patent licence on the same terms — to use,
+modify, sublicense and distribute the work
+([§2–§3](https://github.com/Vexa-ai/vexa/blob/main/LICENSE)). There is no field-of-use restriction:
+run it for anyone, build a product on it and sell that product, keep your changes private, grow
+without the terms changing. The obligations are mechanical — include a copy of the licence, keep the
+notices, mark the files you changed (§4).
+
+**Elastic License 2.0** ([Attendee](https://github.com/attendee-labs/attendee/blob/main/LICENSE),
+[MeetingBaaS](https://github.com/Meeting-BaaS/meet-teams-bot/blob/main/LICENSE)) is
+source-available, not OSI-approved. You may read, modify and run it. Its first limitation is the one
+that decides most cases:
+
+> You may not provide the software to third parties as a hosted or managed service, where the
+> service provides users with access to any substantial set of the features or functionality of the
+> software.
+
+Two more are easy to miss: you may not *"move, change, disable, or circumvent the license key
+functionality"*, and you may not *"alter, remove, or obscure any licensing, copyright, or other
+notices of the licensor"*.
+
+Which of those bites depends on what you are building:
+
+| What you plan to do | Apache-2.0 | Elastic License 2.0 |
+|---|:---:|:---:|
+| Run it internally, for your own organisation's meetings | ✅ | ✅ **both fine** |
+| Modify it and keep your changes private | ✅ | ✅ |
+| Embed capture inside a product you sell | ✅ | ❌ the limitation above |
+| Run it for a client, resell it, or white-label it | ✅ | ❌ same |
+| Clear a regulated buyer's legal review on the licence alone | ✅ OSI-approved | ⚠️ bespoke review |
+
+**If you self-host for your own company and nothing else, the licence is not your deciding factor** —
+including when we say it is. It starts deciding the moment the software reaches someone who is not
+your own employee.
+
+One forward-looking note, stated neutrally: licence changes are in practice one-way, so choosing a
+dependency means inheriting its terms for the life of the integration. And this page is a reading of
+the two licence files linked above, not legal advice — if you are embedding or reselling, that is a
+question for your own counsel.
 
 ## When to choose what — honestly
 
