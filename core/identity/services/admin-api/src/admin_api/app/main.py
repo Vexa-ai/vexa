@@ -20,11 +20,12 @@ exercises:
 import hmac
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_serializer, model_validator
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +37,7 @@ from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
+from .transcription_probe import probe_transcription_endpoint
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -259,6 +261,7 @@ class CalendarPatch(BaseModel):
 MODEL_MODES = ("subscription", "custom")
 _MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort")
 _TRANSCRIPTION_FIELDS = ("url", "token")
+_TRANSCRIPTION_PROBE_FIELDS = ("transcription_probe_status", "transcription_probe_at")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
 # no secrets, admin-gated like the other keys.
@@ -318,6 +321,7 @@ class ModelPrefsUpdate(BaseModel):
 class TranscriptionPrefsUpdate(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    skip_probe: Optional[bool] = None
 
 
 def _mask_secret(secret: Optional[str]) -> Optional[str]:
@@ -806,12 +810,16 @@ def create_app() -> FastAPI:
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
-                              db: AsyncSession) -> dict:
+                              db: AsyncSession, *, stamp: Optional[dict] = None,
+                              stamp_keys: tuple = ()) -> dict:
         from sqlalchemy.orm import attributes
         cleaned = _validate_config_fields(update_fields, kind=data_key)
         data = dict(user.data or {})
         data[data_key] = _apply_config_update(data.get(data_key) or {}, cleaned)
-        if not data[data_key]:
+        for key in stamp_keys:
+            data[data_key].pop(key, None)
+        data[data_key].update(stamp or {})
+        if not any(key not in stamp_keys for key in data[data_key]):
             data.pop(data_key, None)  # fully cleared → back to platform/env defaults
         user.data = data
         attributes.flag_modified(user, "data")
@@ -857,8 +865,30 @@ def create_app() -> FastAPI:
                                      user: User = Depends(get_current_user_for_update),
                                      db: AsyncSession = Depends(get_db)):
         """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read."""
-        await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
-        return await get_user_transcription(user)
+        fields = update.model_dump(exclude_unset=True, exclude={"skip_probe"})
+        cleaned = _validate_config_fields(fields, kind="transcription_prefs")
+        data = user.data if isinstance(user.data, dict) else {}
+        prefs = data.get("transcription_prefs") or {}
+        stored = {key: prefs[key] for key in _TRANSCRIPTION_FIELDS if key in prefs}
+        candidate = _apply_config_update(stored, cleaned)
+        probe = None
+        stamp = None
+        if candidate.get("url"):
+            if update.skip_probe:
+                probe = "skipped"
+            else:
+                result = await probe_transcription_endpoint(candidate["url"], candidate.get("token"))
+                if not result.ok:
+                    return JSONResponse(status_code=422,
+                                        content={"probe": result.status, "detail": result.detail})
+                probe = result.status
+            stamp = {
+                "transcription_probe_status": probe,
+                "transcription_probe_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        await _put_user_prefs(cleaned, "transcription_prefs", user, db,
+                              stamp=stamp, stamp_keys=_TRANSCRIPTION_PROBE_FIELDS)
+        return {**await get_user_transcription(user), "probe": probe}
 
     @app.get("/user/transcription")
     async def get_user_transcription(user: User = Depends(get_current_user)):
@@ -868,6 +898,8 @@ def create_app() -> FastAPI:
             "url": prefs.get("url"),
             "token_set": bool(prefs.get("token")),
             "token": _mask_secret(prefs.get("token")),
+            "probe_status": prefs.get("transcription_probe_status"),
+            "probe_at": prefs.get("transcription_probe_at"),
         }
 
     # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
