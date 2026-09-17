@@ -157,6 +157,13 @@
    "targets": ["compose", "helm", "lite"]
   },
   {
+   "key": "BOT_CAPTURE_FAULT_MAX_MS",
+   "class": "defaulted",
+   "default": "(3 x the silence window, clamped to 60000..900000)",
+   "description": "upper bound on the deaf-capture hold that suppresses completed(left_alone); 0 disables the hold; forwarded to spawned bots when set",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
    "key": "BOT_SPEAKER_MIN_AUDIO_SEC",
    "class": "defaulted",
    "default": "(unset — bot default)",

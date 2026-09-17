@@ -59,12 +59,16 @@ def test_meeting_bot_uses_browser_image_from_env(monkeypatch):
 
 def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
     monkeypatch.setenv("BOT_ALONE_SILENCE_WINDOW_MS", "60000")
+    # The deaf-capture hold's upper bound (#1673) travels the same path as the silence window —
+    # an operator who shortens one and cannot reach the other still has an unbounded hold.
+    monkeypatch.setenv("BOT_CAPTURE_FAULT_MAX_MS", "180000")
     monkeypatch.setenv("BOT_SPEAKER_MIN_AUDIO_SEC", "1")
     monkeypatch.setenv("BOT_SPEAKER_CONFIRM_THRESHOLD", "1")
     monkeypatch.delenv("BOT_SPEAKER_SUBMIT_INTERVAL_SEC", raising=False)
     reg = default_registry()
     assert reg.get("meeting-bot").base_env == {
         "BOT_ALONE_SILENCE_WINDOW_MS": "60000",
+        "BOT_CAPTURE_FAULT_MAX_MS": "180000",
         "BOT_SPEAKER_MIN_AUDIO_SEC": "1",
         "BOT_SPEAKER_CONFIRM_THRESHOLD": "1",
     }

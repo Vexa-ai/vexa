@@ -250,6 +250,9 @@ runtime:
     idleTimeoutSec: ""
   # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
   aloneSilenceWindowMs: ""
+  # Upper bound on the deaf-capture hold that suppresses completed(left_alone) (#1673).
+  # Empty = 3x the silence window, clamped to 60s..15m. "0" disables the hold entirely.
+  captureFaultMaxMs: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
