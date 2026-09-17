@@ -32,13 +32,16 @@
 // where the PR number is parsed from the queue ref). A red merge-card blocks the merge with a
 // plain-language card of exactly what's missing.
 //
-// Inputs (env): GITHUB_REPOSITORY; and PR_NUMBERS (space-separated) OR MERGE_GROUP_REF to parse.
+// Inputs (env): GITHUB_REPOSITORY; PR numbers resolve from PR_NUMBERS (space-separated), then
+// MERGE_GROUP_REF, then GITHUB_EVENT_NAME / GITHUB_EVENT_PATH. The event-file read is fail-soft:
+// an unreadable or malformed payload resolves to an empty list, never an exception.
 // Optional: MERGE_CARD_REQUIRE_HUMAN_TEST (1|true|yes makes the human-test row BLOCKING; default
 // off) and MERGE_CARD_AGENT_LOGINS (comma-separated logins that are agents, not humans — a login
 // ending in `[bot]` and a `type: "Bot"` account are already excluded without listing them).
 // Exit 0 = every named PR's card is satisfied; 1 = one or more not; 2 = usage/nothing to check.
 
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const REPO = process.env.GITHUB_REPOSITORY;
@@ -58,14 +61,45 @@ function ghRaw(path) {
 }
 const ghj = (path) => JSON.parse(ghRaw(path));
 
-// Resolve the PR number(s) to check.
-function prNumbers() {
-  const explicit = (process.env.PR_NUMBERS || "").trim();
-  if (explicit) return [...new Set(explicit.split(/\s+/).map(Number).filter(Boolean))];
-  const ref = process.env.MERGE_GROUP_REF || "";
-  // gh-readonly-queue/main/pr-620-<sha>  (a merge group can stack several)
-  return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
+// Resolve only PR-bearing event shapes; plain issues share the same number space.
+export function prNumbersFromEventPayload(eventName, event = {}) {
+  try {
+    let number;
+    if (eventName === "issue_comment") {
+      if (event?.issue?.pull_request == null) return [];
+      number = Number(event.issue.number);
+    } else if (["pull_request", "pull_request_target", "pull_request_review"].includes(eventName)) {
+      number = Number(event?.pull_request?.number);
+    } else if (eventName === "merge_group") {
+      const ref = event?.merge_group?.head_ref;
+      // gh-readonly-queue/main/pr-620-<sha> (a merge group can stack several)
+      return typeof ref === "string"
+        ? [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))]
+        : [];
+    } else return [];
+    return Number.isFinite(number) && number > 0 ? [number] : [];
+  } catch { return []; }
 }
+
+const readEventFile = (path) => JSON.parse(readFileSync(path, "utf8"));
+
+// Explicit inputs take precedence; event I/O cannot throw on the required-check path.
+export function prNumbersFromEnv(env = {}, { readEvent = readEventFile } = {}) {
+  try {
+    const explicit = (env.PR_NUMBERS || "").trim();
+    if (explicit) return [...new Set(explicit.split(/\s+/).map(Number).filter(Boolean))];
+    const ref = env.MERGE_GROUP_REF || "";
+    if (ref) {
+      const nums = prNumbersFromEventPayload("merge_group", { merge_group: { head_ref: ref } });
+      if (nums.length) return nums;
+    }
+    if (env.GITHUB_EVENT_NAME && env.GITHUB_EVENT_PATH)
+      return prNumbersFromEventPayload(env.GITHUB_EVENT_NAME, readEvent(env.GITHUB_EVENT_PATH));
+    return [];
+  } catch { return []; }
+}
+
+const prNumbers = () => prNumbersFromEnv(process.env);
 
 function touchesRuntime(num) {
   for (let page = 1; page <= 10; page++) {
@@ -385,7 +419,7 @@ export function renderCard(c) {
 
 async function main() {
   const nums = prNumbers();
-  if (!nums.length) { console.error("merge-card-gate: no PR number resolved from PR_NUMBERS / MERGE_GROUP_REF"); process.exit(2); }
+  if (!nums.length) { console.error("merge-card-gate: no PR number resolved from PR_NUMBERS / MERGE_GROUP_REF / GITHUB_EVENT_NAME + GITHUB_EVENT_PATH"); process.exit(2); }
 
   let failed = 0;
   for (const num of nums) {

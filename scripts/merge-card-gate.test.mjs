@@ -22,9 +22,113 @@ import {
   cardOk,
   NO_HUMAN_TEST,
   renderCard,
+  prNumbersFromEventPayload,
+  prNumbersFromEnv,
 } from "./merge-card-gate.mjs";
 
 const run = (o) => ({ name: "value-fsm", started_at: "2026-07-16T20:07:14Z", ...o });
+
+const commentEventFixture = JSON.parse(readFileSync(new URL("./fixtures/merge-card-issue-comment-event.json", import.meta.url), "utf8"));
+const commentWorkflow = readFileSync(new URL("../.github/workflows/merge-card-comment.yml", import.meta.url), "utf8");
+const gateWorkflow = readFileSync(new URL("../.github/workflows/merge-card.yml", import.meta.url), "utf8");
+
+test("fixture-pr-number: PR comments resolve and plain issue comments do not", () => {
+  assert.deepEqual(Object.keys(commentEventFixture), ["onPullRequest", "onIssue"]);
+  assert.equal(commentEventFixture.onIssue.issue.number, 4243);
+  assert.deepEqual(prNumbersFromEventPayload("issue_comment", commentEventFixture.onPullRequest), [4242]);
+  assert.deepEqual(prNumbersFromEventPayload("issue_comment", commentEventFixture.onIssue), []);
+});
+
+test("helper-total: missing and malformed payloads never throw", () => {
+  const events = [
+    undefined, null, {}, { issue: {} }, { issue: { pull_request: {} } },
+    { issue: { number: 0, pull_request: {} } },
+    { issue: { number: 7, pull_request: null } },
+    "garbage", 7, [],
+    { get issue() { throw new Error("malformed accessor"); } },
+  ];
+  for (const event of events) {
+    assert.doesNotThrow(() => assert.deepEqual(prNumbersFromEventPayload("issue_comment", event), []));
+  }
+  for (const eventName of ["push", undefined, null]) {
+    assert.deepEqual(prNumbersFromEventPayload(eventName, commentEventFixture.onPullRequest), []);
+  }
+  for (const number of [undefined, null, 0, -1, NaN, Infinity, "nope", Symbol("number"), {}]) {
+    assert.deepEqual(prNumbersFromEventPayload("issue_comment", { issue: { number, pull_request: {} } }), []);
+    assert.deepEqual(prNumbersFromEventPayload("pull_request", { pull_request: { number } }), []);
+  }
+});
+
+test("helper-total: PR events and merge groups resolve deduped numbers in order", () => {
+  for (const eventName of ["pull_request", "pull_request_target", "pull_request_review"]) {
+    assert.deepEqual(prNumbersFromEventPayload(eventName, { pull_request: { number: 7 } }), [7]);
+    assert.deepEqual(prNumbersFromEventPayload(eventName, { pull_request: { number: "8" } }), [8]);
+    for (const event of [undefined, null, {}, { pull_request: {} }])
+      assert.deepEqual(prNumbersFromEventPayload(eventName, event), []);
+  }
+  assert.deepEqual(prNumbersFromEventPayload("issue_comment", { issue: { number: "7", pull_request: {} } }), [7]);
+  for (const [head_ref, expected] of [
+    ["gh-readonly-queue/main/pr-620-abc", [620]],
+    ["gh-readonly-queue/main/pr-620-abc/pr-621-def/pr-620-ghi", [620, 621]],
+    [undefined, []], ["unmatched", []], [42, []],
+  ]) assert.deepEqual(prNumbersFromEventPayload("merge_group", { merge_group: { head_ref } }), expected);
+  assert.deepEqual(prNumbersFromEventPayload("merge_group"), []);
+});
+
+test("env-precedence: explicit numbers and parsed merge refs bypass the event reader", () => {
+  let calls = 0;
+  const readEvent = () => { calls++; return commentEventFixture.onPullRequest; };
+  const env = { GITHUB_EVENT_NAME: "issue_comment", GITHUB_EVENT_PATH: "/does/not/exist" };
+  assert.deepEqual(prNumbersFromEnv({ ...env, PR_NUMBERS: "7" }, { readEvent }), [7]);
+  assert.equal(calls, 0);
+  const MERGE_GROUP_REF = "gh-readonly-queue/main/pr-620-abc/pr-621-def/pr-620-ghi";
+  assert.deepEqual(prNumbersFromEnv({ ...env, PR_NUMBERS: " 7 7 8 nope 0 ", MERGE_GROUP_REF }, { readEvent }), [7, 8]);
+  assert.equal(calls, 0);
+  assert.deepEqual(prNumbersFromEnv({ ...env, MERGE_GROUP_REF }, { readEvent }), [620, 621]);
+  assert.equal(calls, 0);
+  assert.deepEqual(prNumbersFromEnv({ ...env, PR_NUMBERS: " ", MERGE_GROUP_REF: "unparsable" }, { readEvent }), [4242]);
+  assert.equal(calls, 1);
+  assert.deepEqual(prNumbersFromEnv({}, { readEvent }), []);
+  assert.equal(calls, 1);
+});
+
+test("failsoft-reader: unreadable or malformed events yield empty resolution", () => {
+  const env = { GITHUB_EVENT_NAME: "issue_comment", GITHUB_EVENT_PATH: "/nope.json" };
+  for (const readEvent of [
+    () => { throw new Error("EACCES"); },
+    () => undefined,
+    () => "unparsable garbage",
+  ]) assert.doesNotThrow(() => assert.deepEqual(prNumbersFromEnv(env, { readEvent }), []));
+  assert.doesNotThrow(() => assert.deepEqual(prNumbersFromEnv(env), []));
+  for (const env of [undefined, null, {}, { PR_NUMBERS: 7 }])
+    assert.doesNotThrow(() => assert.deepEqual(prNumbersFromEnv(env), []));
+});
+
+test("env-precedence: the event reader receives the configured path", () => {
+  let pathRead;
+  assert.deepEqual(prNumbersFromEnv({
+    GITHUB_EVENT_NAME: "issue_comment", GITHUB_EVENT_PATH: "event.json",
+  }, { readEvent: (path) => { pathRead = path; return commentEventFixture.onPullRequest; } }), [4242]);
+  assert.equal(pathRead, "event.json");
+});
+
+test("draft-preserved: skipped cards update existing comments but cannot create one", () => {
+  assert.match(renderCard({ num: 7, skip: "draft" }), /^_Skipped \(/m);
+  assert.ok(commentWorkflow.includes("const skipped = /^_Skipped \\(/m.test(body);"));
+  assert.match(commentWorkflow, /if \(mine\) await github\.rest\.issues\.updateComment\([^\n]+\);\n\s+else if \(skipped\) core\.info\([^\n]+\);\n\s+else await github\.rest\.issues\.createComment\([^\n]+\);/);
+  assert.equal([...commentWorkflow.matchAll(/createComment\(/g)].length, 1);
+});
+
+test("workflow-text: comment events refresh the sticky card with event-payload resolution", () => {
+  assert.match(commentWorkflow, /^  issue_comment:\n    types: \[created, edited, deleted\]$/m);
+  assert.match(commentWorkflow, /group: merge-card-comment-\$\{\{ github\.event\.pull_request\.number \|\| github\.event\.issue\.number \}\}/);
+  assert.match(commentWorkflow, /if: >-\s+\$\{\{\s+\(github\.event_name == 'issue_comment' && github\.event\.issue\.pull_request != null\) \|\|\s+\(github\.event_name != 'issue_comment' && !github\.event\.pull_request\.draft\)\s+\}\}/);
+  assert.match(commentWorkflow, /^\s+PR_NUMBERS: \$\{\{ github\.event\.pull_request\.number \}\}$/m);
+  assert.match(commentWorkflow, /const issue_number = context\.payload\.pull_request\?\.number \?\? context\.payload\.issue\.number;/);
+  assert.doesNotMatch(gateWorkflow, /issue_comment/);
+  for (const workflow of [commentWorkflow, gateWorkflow])
+    assert.match(workflow, /MERGE_CARD_REQUIRE_HUMAN_TEST: "false"/);
+});
 
 // ── verdictFromRuns — pure, fixture-driven ──────────────────────────────────────────────────────
 

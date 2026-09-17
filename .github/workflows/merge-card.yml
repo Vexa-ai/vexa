@@ -9,6 +9,12 @@
 #
 # Runs on pull_request + pull_request_review (PR-entry) and merge_group (the queue re-check, where
 # the PR number is parsed from the queue ref). See scripts/merge-card-gate.mjs and ADR-0029.
+#
+# PR comment events run against the default branch: their check is bound to main's SHA,
+# so it cannot refresh the PR's required merge-card status, and an exit 1 would fail main.
+# Re-evaluating this check on comments needs the head-bound check mechanism used by
+# contribution-rights.yml (checks: write + explicit check-run publish). That separate change
+# is tracked in #1696 and remains a prerequisite before MERGE_CARD_REQUIRE_HUMAN_TEST is enabled.
 name: merge-card
 
 on:
