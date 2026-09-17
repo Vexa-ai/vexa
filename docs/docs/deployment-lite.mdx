@@ -16,11 +16,11 @@ git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 make lite
 ```
 
-`make lite` (= `make -C deploy/lite all`) writes a minimal `.env` if you don't have one, pulls
-`vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built `vexa-lite:dev` wins when present),
-starts the `vexa-lite-postgres` and `vexa-lite-minio` sidecars on the `vexa-lite-net` Docker
-network, boots the app container, waits on the gateway health endpoint, and probes the three
-front doors:
+`make lite` (= `make -C deploy/lite all`) writes a minimal `.env` if you don't have one — minting a
+random `ADMIN_TOKEN` into it — pulls `vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built
+`vexa-lite:dev` wins when present), starts the `vexa-lite-postgres` and `vexa-lite-minio` sidecars
+on the `vexa-lite-net` Docker network, boots the app container, waits on the gateway health
+endpoint, and probes the three front doors:
 
 | Front door | Port |
 |---|---|
@@ -32,6 +32,12 @@ On first boot Lite mints its own credentials — a `self-host@vexa.ai` user and 
 keys — and hands them to the terminal, so `http://localhost:3001` opens signed in. Set
 `VEXA_API_KEY` in `.env` to bring your own key and skip the minting.
 
+`make lite` **prints both credentials when it finishes**: the `ADMIN_TOKEN` from `.env` (it mints
+users and API keys — treat it as root on this deployment) and the API key for that
+`self-host@vexa.ai` user, ready to paste into a request. If the gateway never answers, `make lite`
+**fails** and prints the app container's last log lines rather than reporting a success it did not
+observe.
+
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
@@ -42,7 +48,7 @@ CPU sidecar:
 
 ```bash
 # CPU Whisper (faster-whisper tiny.en, English-only) on :8083 — for trying it, not for real meetings
-make -C deploy/lite up LOCAL_STT=1
+make lite LOCAL_STT=1
 make -C deploy/lite stt-smoke   # synthesizes speech in a container, asserts a transcript comes back
 ```
 
@@ -76,8 +82,20 @@ Lite reads the repo-root `.env` (via `docker run --env-file`) plus the flags the
 explicitly. Every key in the [configuration reference](/configuration) applies; mind its warning
 about inline `# comments` in `.env` values — it exists because of Lite's `--env-file` semantics.
 
-If `~/.claude/.credentials.json` exists on the host, `make lite` mounts it read-only into the
-container so agents run on your Claude subscription without copying credentials into `.env`.
+To run agents on your own Claude subscription without copying credentials into `.env`, point
+`HOST_CLAUDE_CREDENTIALS` at the file and Lite mounts it read-only into the container:
+
+```bash
+make lite HOST_CLAUDE_CREDENTIALS=$HOME/.claude/.credentials.json
+```
+
+It is **opt-in** — settable on the command line, in the environment, or as a key in the repo-root
+`.env`. Leave it unset and nothing is mounted, whatever exists on the host. This is the same
+contract the [compose deployment](/deployment) has always had.
+
+The MinIO sidecar images are `make` variables too: `MINIO_IMAGE` and `MINIO_MC_IMAGE`, defaulting
+to MinIO's own registry (`quay.io/minio/...`), pinned to a dated release. Override them to use a
+mirror or a different version.
 
 ## Persistence and upgrade
 
