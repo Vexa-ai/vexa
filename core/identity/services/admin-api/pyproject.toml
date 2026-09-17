@@ -12,6 +12,10 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2",
     "redis>=5",
+    # AES-256-GCM for the per-user secret envelope (app/field_crypto.py, #876). Apache-2.0 OR
+    # BSD-3 (FINOS Category A) and already resolved elsewhere in this tree at the same major
+    # (core/meetings/services/mcp/uv.lock pins 50.0.1). The stdlib has no AES.
+    "cryptography>=45,<51",
     "testcontainers[postgres,redis]>=4.0",
     "pytest>=8",
 ]
