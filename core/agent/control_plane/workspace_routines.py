@@ -199,6 +199,41 @@ def set_routine_file_enabled(
     return path
 
 
+def write_routine_file(
+    subject: str,
+    name: str,
+    *,
+    cron: str,
+    prompt: str,
+    workspaces_dir: str | Path = "/workspaces",
+) -> Path:
+    """Author an API-created routine in the same workspace format as an agent-authored routine."""
+    path = _safe_routine_path(workspaces_dir, subject, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frontmatter = yaml.safe_dump(
+        {"enabled": True, "cron": cron, "prompt": prompt},
+        sort_keys=False,
+        default_flow_style=False,
+    ).rstrip()
+    path.write_text(f"---\n{frontmatter}\n---\n")
+    return path
+
+
+def remove_routine_file(
+    subject: str,
+    name: str,
+    *,
+    workspaces_dir: str | Path = "/workspaces",
+) -> bool:
+    """Remove a routine file if it exists, returning whether a file was removed."""
+    path = _safe_routine_path(workspaces_dir, subject, name)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def routine_cards_for_subject(
     subject: str,
     *,
@@ -225,6 +260,15 @@ def routine_cards_for_subject(
     routines_dir = ws / ROUTINES_DIR
     cards: list[dict] = []
     for path in sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []:
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        # Workspace seed explanations such as README.md are not routine definitions. Keep the
+        # listing aligned with set_routine_file_enabled(), which requires YAML frontmatter.
+        frontmatter, _ = _split_frontmatter(text, label=path.as_posix())
+        if not frontmatter:
+            continue
         rid = routine_id_for_workspace_file(subject, path.stem)
         job_card = job_by_rid.get(rid)
         cards.append(_routine_card_from_file(path, subject=subject, job_card=job_card))
