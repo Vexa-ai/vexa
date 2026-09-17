@@ -1,7 +1,15 @@
-# merge-card — choke point 1 of the delivery constitution, enforced. MAIN accepts a PR only when
-# BOTH its value and its diff are accepted (the merge bar): value-fsm green + `state: value-signed`
-# (value), and a fresh non-author review approval (diff). This is a required status check on main
-# (added to branch protection alongside `gates`), so the merge queue will not merge without it.
+# merge-card — required merge bar. Blocking rows depend on the author's author_association.
+# MEMBER/OWNER/COLLABORATOR PRs are evaluated exactly as before: value-fsm green +
+# `state: value-signed`, diff review (including maintainer self-review), and acceptance.
+# External PRs require peer review from .github/ROSTER.json: 2 sign-offs, ≥1 an approving
+# review on head; the second may be a `Validated on …` comment by a roster member. They need
+# value-fsm green on head for runtime changes and exactly one contribution-rights box ticked
+# (not uncertain). `state: value-signed` is the maintainer's record applied at merge, not a
+# precondition. Acceptance remains shared.
+# The card does not, and cannot, re-check the repository's other required status checks on main
+# (gates, contribution-rights, DCO and the security scanners): merge-card is itself one of them,
+# so reading them would be circular. Branch protection already refuses a merge while any is red.
+# The card's own contribution on that axis is the positively-observed value-fsm verdict.
 #
 # The card also carries an INFORMATIONAL `Human test` row (#1687) — who, other than the author, ran
 # the software on their own instance. It renders ✅/❌ and gates nothing; the flag below is what

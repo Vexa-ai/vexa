@@ -1,0 +1,228 @@
+{
+  "roster": {
+    "reviewers": [
+      "Reviewer-A",
+      "Reviewer-B",
+      "Reviewer-C",
+      "Contributor",
+      "Robot[bot]",
+      "Agent"
+    ]
+  },
+  "external": {
+    "pr": {
+      "number": 4242,
+      "author_association": "FIRST_TIMER",
+      "user": {
+        "login": "Contributor"
+      },
+      "head": {
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "body": "## Contribution rights\n- [x] Independent\n  <!-- rights:independent -->\n- [ ] Employer/client\n  <!-- rights:corporate -->\n- [ ] Unsure\n  <!-- rights:uncertain -->\n"
+    },
+    "reviews": [
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "comments": [
+      {
+        "user": {
+          "login": "Reviewer-B",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ]
+  },
+  "member": {
+    "pr": {
+      "number": 4243,
+      "author_association": "MEMBER",
+      "user": {
+        "login": "Maintainer"
+      },
+      "head": {
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "body": "## Contribution rights\n- [ ] Independent\n  <!-- rights:independent -->\n- [ ] Employer/client\n  <!-- rights:corporate -->\n- [ ] Unsure\n  <!-- rights:uncertain -->\n"
+    },
+    "reviews": [
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "comments": [
+      {
+        "user": {
+          "login": "Reviewer-B",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ]
+  },
+  "approvalCases": {
+    "stale": [
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "APPROVED",
+        "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ],
+    "nonRoster": [
+      {
+        "user": {
+          "login": "Visitor"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "changesRequested": [
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "user": {
+          "login": "reviewer-a"
+        },
+        "state": "CHANGES_REQUESTED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "commented": [
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "user": {
+          "login": "reviewer-a"
+        },
+        "state": "COMMENTED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "author": [
+      {
+        "user": {
+          "login": "CONTRIBUTOR"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "dismissed": [
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "APPROVED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "user": {
+          "login": "Reviewer-A"
+        },
+        "state": "DISMISSED",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "validationCases": {
+    "nonRoster": [
+      {
+        "user": {
+          "login": "Visitor",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ],
+    "approver": [
+      {
+        "user": {
+          "login": "reviewer-a",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ],
+    "twoValidations": [
+      {
+        "user": {
+          "login": "Reviewer-B",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      },
+      {
+        "user": {
+          "login": "Reviewer-C",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ],
+    "bot": [
+      {
+        "user": {
+          "login": "Robot[bot]",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ],
+    "agent": [
+      {
+        "user": {
+          "login": "Agent",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ],
+    "duplicate": [
+      {
+        "user": {
+          "login": "Reviewer-B",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      },
+      {
+        "user": {
+          "login": "reviewer-b",
+          "type": "User"
+        },
+        "body": "Validated on lite, smoke test, passed"
+      }
+    ]
+  },
+  "rightsBodies": {
+    "unticked": "## Contribution rights\n- [ ] Independent\n  <!-- rights:independent -->\n- [ ] Employer/client\n  <!-- rights:corporate -->\n- [ ] Unsure\n  <!-- rights:uncertain -->\n",
+    "independent": "## Contribution rights\n- [x] Independent\n  <!-- rights:independent -->\n- [ ] Employer/client\n  <!-- rights:corporate -->\n- [ ] Unsure\n  <!-- rights:uncertain -->\n",
+    "corporate": "## Contribution rights\n- [ ] Independent\n  <!-- rights:independent -->\n- [x] Employer/client\n  <!-- rights:corporate -->\n- [ ] Unsure\n  <!-- rights:uncertain -->\n",
+    "uncertain": "## Contribution rights\n- [ ] Independent\n  <!-- rights:independent -->\n- [ ] Employer/client\n  <!-- rights:corporate -->\n- [x] Unsure\n  <!-- rights:uncertain -->\n",
+    "two": "## Contribution rights\n- [x] Independent\n  <!-- rights:independent -->\n- [ ] Employer/client\n  <!-- rights:corporate -->\n- [x] Unsure\n  <!-- rights:uncertain -->\n"
+  }
+}

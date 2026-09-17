@@ -10,7 +10,7 @@ const DECISION_MARKER = "<!-- vexa-contribution-rights-decision:v1 -->";
 // template writes it -- on a continuation line of the same list item. Locate the marker, then walk
 // back to the checkbox of the item it belongs to. Matching only the marker's own line silently
 // reports zero selections for every correctly filled template.
-function selectedRights(body = "") {
+export function selectedRights(body = "") {
   // Parse ONLY the declaration section. A body may legitimately MENTION these markers -- quoting the
   // template, or documenting this gate itself -- and matching the first occurrence anywhere leaves
   // such a body unable to declare anything, because the prose sits above the real checkbox. The

@@ -1,6 +1,18 @@
 // merge-card-gate — choke point 1 (the merge card), enforced. A PR carries two artifacts judged
 // on different axes; MAIN accepts it only when BOTH are accepted (delivery constitution, merge bar).
-// Three rows GATE (VALUE · DIFF · ACCEPTANCE) and one row INFORMS (HUMAN TEST):
+// Blocking rows depend on the author's author_association. MEMBER/OWNER/COLLABORATOR PRs
+// are evaluated exactly as before (VALUE · DIFF · ACCEPTANCE), as described below.
+// External PRs require .github/ROSTER.json peer review: 2 sign-offs, ≥1 an approving review
+// on head; the second may be a `Validated on …` comment by a roster member. They require
+// value-fsm green on head for runtime changes and exactly one contribution-rights box ticked
+// (not uncertain). `state: value-signed` is the maintainer's record applied at merge, not a
+// precondition. Acceptance and the configurable Human test row are shared by both paths.
+// The card does not, and cannot, re-check main's other required status checks (gates,
+// contribution-rights, DCO and the security scanners): merge-card is itself one of them, so
+// reading them would be circular. Branch protection already refuses a merge while any is red.
+// The card's own contribution on that axis is the positively-observed value-fsm verdict.
+//
+// Member path:
 //
 //   • VALUE accepted  — the observation bundle is real. Runtime PRs: `value-fsm` (pr-value L3)
 //     GREEN on the head sha AND `state: value-signed` (the D9 human sign-off). Non-runtime PRs
@@ -43,6 +55,85 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { selectedRights } from "./contribution-rights-gate.mjs";
+
+export const ROSTER_PATH = ".github/ROSTER.json";
+export const MEMBER_ASSOCIATIONS = ["MEMBER", "OWNER", "COLLABORATOR"];
+
+export function isExternalAuthor(pr) {
+  const association = pr?.author_association;
+  return typeof association === "string" && association.trim() !== ""
+    && !MEMBER_ASSOCIATIONS.includes(association.trim().toUpperCase());
+}
+
+// Resolve against the trusted module checkout, never the PR's tree or an environment override.
+const defaultRosterRead = () => readFileSync(new URL(`../${ROSTER_PATH}`, import.meta.url), "utf8");
+
+export function readRoster(read = defaultRosterRead) {
+  try {
+    const roster = JSON.parse(read());
+    if (!Array.isArray(roster?.reviewers)) throw new Error("reviewers must be an array");
+    const reviewers = [...new Set(roster.reviewers
+      .filter((login) => typeof login === "string" && login.trim())
+      .map((login) => login.trim().toLowerCase()))];
+    return { reviewers, error: null };
+  } catch (e) { return { reviewers: [], error: String(e?.message || e) }; }
+}
+
+export function valueRow({ signed, runtime, valueFsm, external }) {
+  if (!external && !signed) return { ok: false, why: "missing `state: value-signed` (the value sign-off)" };
+  const signedNote = "`state: value-signed` is applied by the maintainer at merge — not required before merge on a PR from an external author";
+  const signedSuffix = signed ? " (already applied)" : "";
+  if (!runtime) return { ok: true, why: external
+    ? `non-runtime — no value-fsm leg; ${signedNote}${signedSuffix}` : "non-runtime + value-signed" };
+  if (valueFsm === "success") return { ok: true, why: external
+    ? `value-fsm green on head — ${signedNote}${signedSuffix}` : "value-fsm green + value-signed" };
+  const prefix = external ? "" : "value-signed but ";
+  return { ok: false, why: valueFsm === "pending" || valueFsm === "absent"
+    ? `${prefix}value-fsm did not reach a terminal verdict on head within the wait budget (still ${valueFsm}) — value-fsm must be green (a label cannot waive it)`
+    : `${prefix}value-fsm is ${valueFsm} on head — value-fsm must be green (a label cannot waive it)` };
+}
+
+export function rosterReviewRow({ reviews, comments, author, head, roster, agentLogins = [] }) {
+  const members = new Set(roster.error ? [] : roster.reviewers.map((login) => login.toLowerCase()));
+  const latest = new Map();
+  // Reserve insertion order even when the first review is COMMENTED; only verdicts replace it.
+  for (const review of reviews || []) {
+    const login = review.user?.login?.toLowerCase();
+    if (!login || login === author?.toLowerCase() || !members.has(login)) continue;
+    if (!latest.has(login)) latest.set(login, null);
+    if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state)) latest.set(login, review);
+  }
+  const approvals = [...latest.values()]
+    .filter((review) => review?.state === "APPROVED" && review.commit_id === head)
+    .map((review) => review.user.login);
+  const counted = new Set(approvals.map((login) => login.toLowerCase()));
+  const validations = humanTestFromComments(comments, { author, agentLogins }).validations.filter((v) => {
+    const login = v.by.toLowerCase();
+    if (!members.has(login) || counted.has(login)) return false;
+    counted.add(login);
+    return true;
+  });
+  const ok = approvals.length >= 1 && approvals.length + validations.length >= 2;
+  const signoffs = [...approvals.map((a) => `@${a} approved on head`),
+    ...validations.map((v) => `@${v.by} validated (${v.shape}) — ${v.ran}, ${v.result}`)];
+  const why = roster.error
+    ? `could not read ${ROSTER_PATH} (${roster.error}) — no roster sign-off can be counted`
+    : roster.reviewers.length === 0
+      ? `${ROSTER_PATH} lists no reviewers — a maintainer must add roster members before a PR from an external author can clear this row`
+      : ok
+        ? `${signoffs.length} roster sign-offs: ${signoffs.join("; ")}`
+        : `${signoffs.length} of 2 roster sign-offs, at least one an approving review on the current head sha: ${signoffs.length ? signoffs.join("; ") : "none yet"} — roster: ${roster.reviewers.map((r) => "@" + r).join(", ")}`;
+  return { ok, why, approvals, validations };
+}
+
+export function rightsRow(prBody) {
+  const selected = selectedRights(prBody || "");
+  if (selected.length === 0) return { ok: false, why: "no contribution-rights box ticked — tick exactly one box in the PR description's Contribution rights section" };
+  if (selected.length > 1) return { ok: false, why: `${selected.length} contribution-rights boxes ticked — tick exactly one` };
+  if (selected[0] === "uncertain") return { ok: false, why: "contribution rights marked uncertain — Vexa will help determine the path; the `contribution-rights` check carries the resolution" };
+  return { ok: true, why: `contribution rights declared: ${selected[0]} — the \`contribution-rights\` check is the authority on DCO and corporate authorisation` };
+}
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
@@ -179,11 +270,10 @@ function authorIsMaintainer(login) {
 // DIFF accepted when EITHER the author is a maintainer (self-review, above) OR a fresh, non-author
 // APPROVED review exists: the reviewer's latest review is APPROVED and was submitted against the
 // current head sha (a later push moves the head and invalidates the approval).
-function diffAccepted(pr) {
+function diffAccepted(pr, reviews) {
   const author = pr.user?.login;
   if (authorIsMaintainer(author)) return { ok: true, maintainer: true };
   const head = pr.head?.sha;
-  const reviews = ghj(`repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
   const latestByUser = new Map();
   for (const r of reviews) {
     if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) continue; // ignore COMMENTED
@@ -324,6 +414,17 @@ function readComments(num) {
   return all;
 }
 
+// Reviews have the same pagination budget as comments; a sign-off on page two counts.
+function readReviews(num) {
+  const all = [];
+  for (let page = 1; page <= 10; page++) {
+    const batch = ghj(`repos/${REPO}/pulls/${num}/reviews?per_page=100&page=${page}`);
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
 // Informational, so the read is fail-SOFT: every other read in card() is gating data and a throw
 // rightly fails the card, but this row must never red a required check it does not gate. An
 // unreadable comments list becomes an unavailable row, not a failed evaluation.
@@ -342,15 +443,16 @@ export function humanTestConfig(env = {}) {
   };
 }
 
-// The verdict, pure over the four rows. VALUE and DIFF always gate; ACCEPTANCE gates when the PR
-// carries a closing reference; HUMAN TEST gates only when `blocking`.
-export function cardOk({ valueOk, diffOk, acceptance, humanTest, blocking = false }) {
-  return Boolean(valueOk) && Boolean(diffOk) && (!acceptance || acceptance.ok) && (!blocking || humanTest.ok);
+// VALUE and DIFF/PEER REVIEW always gate; ACCEPTANCE and RIGHTS gate when present.
+// HUMAN TEST gates only when `blocking`.
+export function cardOk({ valueOk, diffOk, acceptance, humanTest, rights, blocking = false }) {
+  return Boolean(valueOk) && Boolean(diffOk) && (!acceptance || acceptance.ok) && (!rights || rights.ok) && (!blocking || humanTest.ok);
 }
 
 async function card(num, { readClosing = readClosingIssues, readComments: readCmts = readComments } = {}) {
   const pr = ghj(`repos/${REPO}/pulls/${num}`);
-  if (pr.draft) return { num, ok: true, skip: "draft" };
+  const external = isExternalAuthor(pr);
+  if (pr.draft) return { num, external, ok: true, skip: "draft" };
   const labels = (pr.labels || []).map((l) => l.name);
   const signed = labels.includes("state: value-signed");
   const head = pr.head?.sha;
@@ -359,33 +461,41 @@ async function card(num, { readClosing = readClosingIssues, readComments: readCm
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
   const vf = runtime && head ? await waitForTerminalValueFsm(head) : "absent";
 
-  // VALUE
-  let valueOk = false, valueWhy;
-  if (!signed) valueWhy = "missing `state: value-signed` (the value sign-off)";
-  else if (runtime && vf === "success") { valueOk = true; valueWhy = "value-fsm green + value-signed"; }
-  else if (runtime && (vf === "pending" || vf === "absent"))
-    valueWhy = `value-signed but value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green (a label cannot waive it)`;
-  else if (runtime) valueWhy = `value-signed but value-fsm is ${vf} on head — value-fsm must be green (a label cannot waive it)`;
-  else { valueOk = true; valueWhy = "non-runtime + value-signed"; }
+  const { ok: valueOk, why: valueWhy } = valueRow({ signed, runtime, valueFsm: vf, external });
 
-  // DIFF
-  const d = diffAccepted(pr);
-  const diffWhy = d.ok
+  // Share one fail-soft comments read: the informational row still reports all human tests.
+  const { blocking, agentLogins } = humanTestConfig(process.env);
+  let comments = [];
+  const humanTest = humanTestSafely((n) => {
+    const result = readCmts(n);
+    comments = result;
+    return result;
+  }, num, { author: pr.user?.login, agentLogins, blocking });
+
+  // Discard a partial read on failure: unreadable evidence cannot count as a sign-off.
+  let reviews = [], reviewError;
+  try { reviews = readReviews(num); }
+  catch (e) { reviewError = e; }
+  const d = external
+    ? rosterReviewRow({ reviews, comments, author: pr.user?.login, head, roster: readRoster(), agentLogins })
+    : diffAccepted(pr, reviews);
+  if (reviewError && !d.maintainer) {
+    d.ok = false;
+    d.why = `could not read this PR's reviews (${reviewError.message}) — no review approval can be counted`;
+  }
+  const diffWhy = external || reviewError && !d.maintainer ? d.why : d.ok
     ? (d.maintainer
         ? `maintainer self-review — @${pr.user?.login} holds the commit bit (no separate non-author review required)`
         : `approved by @${d.by} on head`)
     : "no non-author approval on the current head sha (a new push dismisses a stale approval)";
+  const rights = external ? rightsRow(pr.body) : null;
 
   // ACCEPTANCE — what would this merge auto-close, and is every closed issue fully delivered?
   const acceptance = acceptanceFromIssues(readClosing(num));
 
-  // HUMAN TEST — who, other than the author, ran this on their own instance (fail-soft, above).
-  const { blocking, agentLogins } = humanTestConfig(process.env);
-  const humanTest = humanTestSafely(readCmts, num, { author: pr.user?.login, agentLogins, blocking });
-
   return {
-    num, ok: cardOk({ valueOk, diffOk: d.ok, acceptance, humanTest, blocking }),
-    valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, humanTest,
+    num, external, ok: cardOk({ valueOk, diffOk: d.ok, acceptance, humanTest, rights, blocking }),
+    valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, rights, humanTest,
   };
 }
 
@@ -404,9 +514,10 @@ export function renderCard(c) {
     `| check | | what it needs |`,
     `|---|---|---|`,
     row("Value", c.valueOk, c.valueWhy),
-    row("Diff", c.diffOk, c.diffWhy),
+    row(c.external ? "Peer review" : "Diff", c.diffOk, c.diffWhy),
     // The row exists only when the PR carries a closing reference — `Part of #N` closes nothing.
     ...(c.acceptance ? [row("Acceptance", c.acceptance.ok, c.acceptance.why)] : []),
+    ...(c.rights ? [row("Rights", c.rights.ok, c.rights.why)] : []),
     // Guarded like the Acceptance row above it: this renderer is exported, so a caller that
     // builds a card without the row must get a three-row card, never a throw.
     ...(c.humanTest ? [row("Human test", c.humanTest.ok, c.humanTest.why)] : []),

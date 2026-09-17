@@ -9,9 +9,13 @@
 // bullet, no ✅) undelivered — the acceptance row must catch both the checkbox and bullet shapes.
 
 import test from "node:test";
+import { runInNewContext } from "node:vm";
+import { pathToFileURL } from "node:url";
+import { selectedRights } from "./contribution-rights-gate.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  ROSTER_PATH, MEMBER_ASSOCIATIONS, isExternalAuthor, readRoster, valueRow, rosterReviewRow, rightsRow,
   verdictFromRuns,
   waitForTerminalValueFsm,
   openAcceptanceLegs,
@@ -433,4 +437,272 @@ test("renderCard without a human-test row renders the three-row card, not a thro
   const rendered = renderCard({ num: 4242, ok: true, valueOk: true, valueWhy: "f", diffOk: true, diffWhy: "f", acceptance: null });
   assert.doesNotMatch(rendered, /Human test/);
   assert.match(rendered, /\| \*\*Diff\*\* \| ✅ \| f \|/);
+});
+
+// The external path: API-shaped fixtures, exact row copy, and offline card wiring.
+const rosterFixture = JSON.parse(readFileSync(new URL("./fixtures/merge-card-roster.json", import.meta.url), "utf8"));
+const gateSource = readFileSync(new URL("./merge-card-gate.mjs", import.meta.url), "utf8");
+const roster = { reviewers: rosterFixture.roster.reviewers.map((s) => s.toLowerCase()), error: null };
+const externalCase = rosterFixture.external;
+const peer = (overrides = {}) => rosterReviewRow({
+  reviews: externalCase.reviews, comments: externalCase.comments,
+  author: externalCase.pr.user.login, head: externalCase.pr.head.sha, roster, ...overrides,
+});
+
+test("roster fixture counts match its registered shape", () => {
+  assert.equal(rosterFixture.roster.reviewers.length, 6);
+  for (const key of ["external", "member"]) {
+    assert.equal(rosterFixture[key].reviews.length, 1);
+    assert.equal(rosterFixture[key].comments.length, 1);
+  }
+  assert.equal(Object.keys(rosterFixture.approvalCases).length, 6);
+  assert.equal(Object.values(rosterFixture.approvalCases).flat().length, 9);
+  assert.equal(Object.keys(rosterFixture.validationCases).length, 6);
+  assert.equal(Object.values(rosterFixture.validationCases).flat().length, 8);
+  assert.equal(Object.keys(rosterFixture.rightsBodies).length, 5);
+  const readme = readFileSync(new URL("./fixtures/README.md", import.meta.url), "utf8");
+  assert.match(readme, /merge-card-roster\.json.*merge-card-gate\.test\.mjs.*6 roster logins; 2 PR cases with 1 review and 1 comment each; 6 approval cases \(9 reviews\); 6 validation cases \(8 comments\); 5 rights bodies/);
+});
+
+test("external vs member associations and malformed reads", () => {
+  assert.equal(isExternalAuthor(externalCase.pr), true);
+  assert.equal(isExternalAuthor(rosterFixture.member.pr), false);
+  assert.deepEqual(MEMBER_ASSOCIATIONS, ["MEMBER", "OWNER", "COLLABORATOR"]);
+  for (const author_association of ["CONTRIBUTOR", "NONE", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", " contributor ", "unknown"])
+    assert.equal(isExternalAuthor({ ...externalCase.pr, author_association }), true);
+  for (const author_association of [...MEMBER_ASSOCIATIONS, "member", "owner", "collaborator", " MEMBER ", null, "", "   ", 7, {}])
+    assert.equal(isExternalAuthor({ ...externalCase.pr, author_association }), false);
+  for (const pr of [{}, undefined, null]) assert.equal(isExternalAuthor(pr), false);
+});
+
+test("member path unchanged: every VALUE condition and both external flag states have exact copy", () => {
+  const note = "`state: value-signed` is applied by the maintainer at merge — not required before merge on a PR from an external author";
+  for (const external of [false, true]) for (const signed of [false, true]) {
+    for (const runtime of [false, true]) for (const valueFsm of ["success", "pending", "absent", "failure"]) {
+      let ok, why;
+      if (!external && !signed) { ok = false; why = "missing `state: value-signed` (the value sign-off)"; }
+      else if (!runtime) {
+        ok = true;
+        why = external ? `non-runtime — no value-fsm leg; ${note}${signed ? " (already applied)" : ""}` : "non-runtime + value-signed";
+      } else if (valueFsm === "success") {
+        ok = true;
+        why = external ? `value-fsm green on head — ${note}${signed ? " (already applied)" : ""}` : "value-fsm green + value-signed";
+      } else {
+        ok = false;
+        const reason = valueFsm === "failure"
+          ? "value-fsm is failure on head — value-fsm must be green (a label cannot waive it)"
+          : `value-fsm did not reach a terminal verdict on head within the wait budget (still ${valueFsm}) — value-fsm must be green (a label cannot waive it)`;
+        why = external ? reason : `value-signed but ${reason}`;
+      }
+      assert.deepEqual(valueRow({ signed, runtime, valueFsm, external }), { ok, why }, JSON.stringify({ signed, runtime, valueFsm, external }));
+    }
+  }
+});
+
+for (const [name, read] of [
+  ["throwing", () => { throw new Error("EACCES"); }],
+  ["unparseable", () => "{"],
+  ["missing reviewers", () => "{}"],
+  ["non-array reviewers", () => '{"reviewers":"nope"}'],
+]) test(`readRoster wraps ${name} reader and blocks peer review`, () => {
+  let result;
+  assert.doesNotThrow(() => { result = readRoster(read); });
+  assert.deepEqual(result.reviewers, []);
+  assert.equal(typeof result.error, "string");
+  assert.ok(result.error.length);
+  const row = peer({ roster: result });
+  assert.equal(row.ok, false);
+  assert.equal(row.why, `could not read .github/ROSTER.json (${result.error}) — no roster sign-off can be counted`);
+});
+
+test("readRoster normalizes only nonempty string entries in first-seen order", () => {
+  assert.deepEqual(readRoster(() => '{"reviewers":["A","a","",7," b "]}'), { reviewers: ["a", "b"], error: null });
+});
+
+test("trusted roster ships empty and names the missing maintainer action", () => {
+  assert.equal(ROSTER_PATH, ".github/ROSTER.json");
+  assert.deepEqual(readRoster(), { reviewers: [], error: null });
+  assert.deepEqual(peer({ roster: readRoster() }), {
+    ok: false, approvals: [], validations: [],
+    why: ".github/ROSTER.json lists no reviewers — a maintainer must add roster members before a PR from an external author can clear this row",
+  });
+});
+
+test("roster current-head approval plus validation is green with exact sign-off copy", () => {
+  const row = peer();
+  assert.equal(row.ok, true);
+  assert.deepEqual(row.approvals, ["Reviewer-A"]);
+  assert.deepEqual(row.validations.map((v) => v.by), ["Reviewer-B"]);
+  assert.equal(row.why, "2 roster sign-offs: @Reviewer-A approved on head; @Reviewer-B validated (lite) — smoke test, passed");
+});
+
+for (const name of ["stale", "nonRoster", "changesRequested", "author", "dismissed"])
+  test(`roster approval excludes ${name} fixture`, () => {
+    const row = peer({ reviews: rosterFixture.approvalCases[name] });
+    assert.deepEqual(row.approvals, []);
+    assert.equal(row.ok, false);
+  });
+
+test("COMMENTED cannot replace a roster approval", () => {
+  assert.deepEqual(peer({ reviews: rosterFixture.approvalCases.commented }).approvals, ["Reviewer-A"]);
+  assert.equal(peer({ reviews: rosterFixture.approvalCases.commented }).ok, true);
+});
+
+test("roster approvals preserve first-seen order, dedupe case, and require distinct people", () => {
+  const a = externalCase.reviews[0];
+  const b = { ...a, user: { login: "Reviewer-B" } };
+  const row = peer({ reviews: [{ ...a, state: "COMMENTED" }, b, a, { ...b, user: { login: "reviewer-b" } }], comments: [] });
+  assert.equal(row.ok, true);
+  assert.deepEqual(row.approvals, ["Reviewer-A", "reviewer-b"]);
+  assert.equal(row.why, "2 roster sign-offs: @Reviewer-A approved on head; @reviewer-b approved on head");
+});
+
+test("validation fixtures exclude non-roster humans, approvers, bots and configured agents", () => {
+  for (const name of ["nonRoster", "approver", "bot", "agent"]) {
+    const row = peer({ comments: rosterFixture.validationCases[name], agentLogins: ["AGENT"] });
+    assert.deepEqual(row.validations, [], name);
+    assert.equal(row.ok, false, name);
+  }
+  const bot = rosterFixture.validationCases.agent[0];
+  assert.deepEqual(peer({ comments: [{ ...bot, user: { ...bot.user, type: "Bot" } }] }).validations, []);
+});
+
+test("two roster validations without an approval stay blocked", () => {
+  const row = peer({ reviews: [], comments: rosterFixture.validationCases.twoValidations });
+  assert.equal(row.validations.length, 2);
+  assert.equal(row.ok, false);
+  assert.match(row.why, /^2 of 2 roster sign-offs, at least one an approving review on the current head sha:/);
+});
+
+test("validation deduplication keeps the first comment per login", () => {
+  const row = peer({ comments: rosterFixture.validationCases.duplicate });
+  assert.equal(row.ok, true);
+  assert.deepEqual(row.validations.map((v) => v.by), ["Reviewer-B"]);
+});
+
+test("empty peer evidence has the exact actionable roster message", () => {
+  assert.equal(peer({ reviews: [], comments: [] }).why,
+    `0 of 2 roster sign-offs, at least one an approving review on the current head sha: none yet — roster: ${roster.reviewers.map((r) => "@" + r).join(", ")}`);
+});
+
+test("rights fixtures: unticked, independent, corporate, uncertain and multiple", () => {
+  const expected = {
+    unticked: { ok: false, why: "no contribution-rights box ticked — tick exactly one box in the PR description's Contribution rights section" },
+    independent: { ok: true, why: "contribution rights declared: independent — the `contribution-rights` check is the authority on DCO and corporate authorisation" },
+    corporate: { ok: true, why: "contribution rights declared: corporate — the `contribution-rights` check is the authority on DCO and corporate authorisation" },
+    uncertain: { ok: false, why: "contribution rights marked uncertain — Vexa will help determine the path; the `contribution-rights` check carries the resolution" },
+    two: { ok: false, why: "2 contribution-rights boxes ticked — tick exactly one" },
+  };
+  for (const [name, body] of Object.entries(rosterFixture.rightsBodies)) assert.deepEqual(rightsRow(body), expected[name]);
+  assert.deepEqual(rightsRow(null), expected.unticked);
+  assert.deepEqual(rightsRow(`- [x] quoted <!-- rights:uncertain -->\n${externalCase.pr.body}`), expected.independent);
+});
+
+test("rights block only when present and cannot waive other blocking rows", () => {
+  const rows = { valueOk: true, diffOk: true, humanTest: { ok: false } };
+  for (const rights of [undefined, null, { ok: true }]) assert.equal(cardOk({ ...rows, rights }), true);
+  assert.equal(cardOk({ ...rows, rights: { ok: false } }), false);
+  assert.equal(cardOk({ ...rows, rights: { ok: true }, blocking: true }), false);
+  assert.equal(cardOk({ ...rows, rights: { ok: true }, acceptance: { ok: false } }), false);
+});
+
+test("three comment headers explain association-dependent rows and required-check circularity", () => {
+  for (const [source, prefix] of [[gateSource, "//"], [gateWorkflow, "#"], [commentWorkflow, "#"]]) {
+    const header = source.split("\n").slice(0, source.split("\n").findIndex((line) => !line.startsWith(prefix))).join("\n");
+    for (const text of ["author_association", "ROSTER.json", "MEMBER/OWNER/COLLABORATOR", "2 sign-offs", "Validated on", "value-fsm", "contribution-rights", "at merge", "circular", "DCO", "security scanners"])
+      assert.ok(header.includes(text), text);
+    assert.match(header, /does not, and cannot, re-check/);
+  }
+  assert.match(gateWorkflow, /does not, and cannot, re-check the repository's other required status checks/);
+});
+
+// Evaluate the actual module with its I/O boundaries replaced; no network, process or scratch files.
+function offlineGate({ pr = externalCase.pr, reviewPages = [externalCase.reviews], comments = externalCase.comments,
+  rosterText = JSON.stringify(rosterFixture.roster), permission = "read", failReviews = false, failComments = false,
+  source = gateSource } = {}) {
+  const calls = [];
+  const context = {
+    URL, pathToFileURL, selectedRights,
+    process: { argv: ["node", "offline-test"], env: { GITHUB_REPOSITORY: "fixture/repo" } },
+    readFileSync: (path) => {
+      assert.equal(String(path), new URL("../.github/ROSTER.json", import.meta.url).href);
+      if (rosterText instanceof Error) throw rosterText;
+      return rosterText;
+    },
+    execSync: (cmd) => {
+      calls.push(cmd);
+      if (cmd.includes("/permission")) return JSON.stringify({ permission });
+      if (cmd.includes("/files?")) return JSON.stringify([{ filename: "core/example.ts" }]);
+      if (cmd.includes("/check-runs?")) return JSON.stringify({ check_runs: [{ name: "value-fsm", status: "completed", conclusion: "success" }] });
+      if (cmd.includes("/reviews?")) {
+        if (failReviews) throw new Error("reviews unavailable");
+        const page = Number(cmd.match(/page=(\d+)"$/)[1]);
+        return JSON.stringify(reviewPages[page - 1] || []);
+      }
+      if (cmd.endsWith(`/pulls/${pr.number}"`)) return JSON.stringify(pr);
+      throw new Error(`Unexpected API call: ${cmd}`);
+    },
+  };
+  runInNewContext(source.replace(/^import .*;\n/gm, "").replace(/\bexport /g, "")
+    .replaceAll("import.meta.url", JSON.stringify(new URL("./merge-card-gate.mjs", import.meta.url).href))
+    + "\nthis.evaluateCard = card; this.render = renderCard; this.readReviews = readReviews;", context);
+  return { calls, context, evaluate: () => context.evaluateCard(pr.number, {
+    readClosing: () => [], readComments: () => { if (failComments) throw new Error("comments unavailable"); return comments; },
+  }) };
+}
+
+test("card wiring: external fixture is green without permission lookup; row order is fixed", async () => {
+  const rig = offlineGate();
+  const card = await rig.evaluate();
+  assert.equal(card.external, true);
+  assert.equal(card.ok, true);
+  assert.equal(rig.calls.some((cmd) => cmd.includes("/permission")), false);
+  assert.equal(JSON.stringify(card.humanTest), JSON.stringify(humanTestFromComments(externalCase.comments, { author: externalCase.pr.user.login })));
+  const rendered = renderCard({ ...card, acceptance: { ok: true, why: "delivered" } });
+  assert.deepEqual([...rendered.matchAll(/\| \*\*(.*?)\*\* \|/g)].map((m) => m[1]), ["Value", "Peer review", "Acceptance", "Rights", "Human test"]);
+  assert.match(rendered, /\*\*Ready to merge\*\*/);
+});
+
+test("card wiring: member path unchanged byte-for-byte with and without maintainer self-review", async () => {
+  for (const permission of ["read", "write"]) {
+    const rig = offlineGate({ pr: { ...rosterFixture.member.pr, labels: [{ name: "state: value-signed" }] }, permission,
+      rosterText: new Error("member must not read roster"), comments: [] });
+    const card = await rig.evaluate();
+    assert.equal(card.external, false);
+    assert.equal(card.rights, null);
+    assert.equal(card.ok, true);
+    const diffWhy = permission === "write"
+      ? "maintainer self-review — @Maintainer holds the commit bit (no separate non-author review required)"
+      : "approved by @Reviewer-A on head";
+    assert.equal(renderCard(card), [
+      "<!-- merge-card -->", "### 🃏 Merge card — #4243", "", "| check | | what it needs |", "|---|---|---|",
+      "| **Value** | ✅ | value-fsm green + value-signed |",
+      `| **Diff** | ✅ | ${diffWhy} |`, `| **Human test** | ❌ | ${noHumanTest} |`, "",
+      "**Ready to merge** — every row above is accepted.", "",
+      "<sub>How a PR reaches merge: [the merge bar](https://docs.vexa.ai/governance/delivery#integration-—-the-merge-bar).</sub>",
+    ].join("\n"));
+  }
+});
+
+test("card wiring: review page two counts, short page stops, and pagination caps at ten", async () => {
+  const fullPage = Array.from({ length: 100 }, () => ({ ...externalCase.reviews[0], state: "COMMENTED" }));
+  const rig = offlineGate({ reviewPages: [fullPage, externalCase.reviews] });
+  assert.equal((await rig.evaluate()).ok, true);
+  assert.equal(rig.calls.filter((cmd) => cmd.includes("/reviews?")).length, 2);
+  const capped = offlineGate({ reviewPages: Array.from({ length: 11 }, () => fullPage) });
+  assert.equal(capped.context.readReviews(4242).length, 1000);
+  assert.equal(capped.calls.length, 10);
+});
+
+test("card wiring: unreadable roster, reviews and validation comments never yield false green", async () => {
+  for (const options of [{ rosterText: new Error("EACCES") }, { failReviews: true }, { failComments: true }]) {
+    const card = await offlineGate(options).evaluate();
+    assert.equal(card.ok, false);
+    assert.equal(card.diffOk, false);
+  }
+  const a = externalCase.reviews[0];
+  const card = await offlineGate({ failComments: true, reviewPages: [[a, { ...a, user: { login: "Reviewer-C" } }]] }).evaluate();
+  assert.equal(card.diffOk, true); // two positively observed approvals need no validation comment
+  assert.equal(card.humanTest.ok, false);
+  assert.equal(card.ok, true); // human-test flag remains informational
 });
