@@ -270,3 +270,52 @@ test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caug
   assert.match(r.out, /lite/);
   assert.match(r.out, /XAUTOCLAIM/);
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// gate:dataflow completeness (P23) — the walker reads the same population as walkDirs(): a name that
+// is skippable (dot-dirs, the SKIP set, *.egg-info) is build residue, never a module. Any pytest gate
+// run in core/flows compiles core/flows/src/*.py into core/flows/src/__pycache__/, which is
+// gitignored; a walker that counted it would make `gates.mjs all` red on its own residue, so the
+// suite could not be run twice in one worktree (Vexa-ai/vexa#1657). Same plant-and-run-the-real-gate
+// discipline as above: the residue is planted in the checkout and the real gate decides. The
+// negative control plants a REAL-looking package in the same place and requires the RED — the fix
+// narrows the population to modules, it does not disarm the anti-drift guard.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+// core/flows is src-laid-out (no services/ or modules/, and core/flows/src is not itself a node), so
+// every directory directly under its src is individually required — exactly where bytecode lands.
+const FLOWS_SRC = "core/flows/src";
+
+// Plants an empty directory, runs fn, and removes only what it created — the withPlanted prune
+// discipline. A dir that already exists (bytecode an earlier gate run left) is left exactly as found;
+// the row then asserts the property on the residue that is really there.
+function withPlantedDir(relPath, fn) {
+  const abs = join(ROOT, relPath);
+  let prune = null;
+  for (let d = abs; !existsSync(d); d = dirname(d)) prune = d;
+  mkdirSync(abs, { recursive: true });
+  try { return fn(); } finally { if (prune) rmSync(prune, { recursive: true, force: true }); }
+}
+
+test("dataflow vacuity: the committed tree is green (a red here invalidates every row below)", () => {
+  const r = runGate("dataflow");
+  assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
+});
+
+test("gate:dataflow GREEN: __pycache__ under a src-laid-out domain is bytecode, not an unregistered module", () => {
+  const r = withPlantedDir(`${FLOWS_SRC}/__pycache__`, () => runGate("dataflow"));
+  assert.equal(r.green, true, `Python bytecode was read as an architecture node — \`gates.mjs all\` cannot run twice in one worktree:\n${r.out}`);
+});
+
+test("gate:dataflow GREEN: .venv and *.egg-info under the same src are build residue too", () => {
+  const r = withPlantedDir(`${FLOWS_SRC}/.venv`,
+    () => withPlantedDir(`${FLOWS_SRC}/zz_planted.egg-info`, () => runGate("dataflow")));
+  assert.equal(r.green, true, `gitignored build residue was read as an architecture node:\n${r.out}`);
+});
+
+test("negative control: a real package dir in the same place still reds, named by path (the guard is narrowed, not disarmed)", () => {
+  const planted = `${FLOWS_SRC}/zz_planted_pkg`;
+  const r = withPlantedDir(planted, () => runGate("dataflow"));
+  assert.equal(r.green, false, "an unregistered package under core/flows/src no longer reds — the completeness guard is inert");
+  assert.match(r.out, rx(`completeness: '${planted}' exists on disk but is not registered`));
+});
