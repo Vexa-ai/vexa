@@ -33,8 +33,9 @@ const commentWorkflow = readFileSync(new URL("../.github/workflows/merge-card-co
 const gateWorkflow = readFileSync(new URL("../.github/workflows/merge-card.yml", import.meta.url), "utf8");
 
 test("fixture-pr-number: PR comments resolve and plain issue comments do not", () => {
-  assert.deepEqual(Object.keys(commentEventFixture), ["onPullRequest", "onIssue"]);
+  for (const key of ["onPullRequest", "onIssue"]) assert.ok(Object.hasOwn(commentEventFixture, key));
   assert.equal(commentEventFixture.onIssue.issue.number, 4243);
+  assert.equal(commentEventFixture.onIssue.issue.pull_request, undefined);
   assert.deepEqual(prNumbersFromEventPayload("issue_comment", commentEventFixture.onPullRequest), [4242]);
   assert.deepEqual(prNumbersFromEventPayload("issue_comment", commentEventFixture.onIssue), []);
 });
@@ -47,8 +48,12 @@ test("helper-total: missing and malformed payloads never throw", () => {
     "garbage", 7, [],
     { get issue() { throw new Error("malformed accessor"); } },
   ];
-  for (const event of events) {
-    assert.doesNotThrow(() => assert.deepEqual(prNumbersFromEventPayload("issue_comment", event), []));
+  // Asserted in two steps on purpose: "it threw" and "it returned the wrong thing" are different
+  // failures, and this is the one test whose whole subject is that it never throws.
+  for (const [i, event] of events.entries()) {
+    let got;
+    assert.doesNotThrow(() => { got = prNumbersFromEventPayload("issue_comment", event); }, `threw on events[${i}]`);
+    assert.deepEqual(got, [], `wrong result for events[${i}]`);
   }
   for (const eventName of ["push", undefined, null]) {
     assert.deepEqual(prNumbersFromEventPayload(eventName, commentEventFixture.onPullRequest), []);
@@ -112,17 +117,30 @@ test("env-precedence: the event reader receives the configured path", () => {
   assert.equal(pathRead, "event.json");
 });
 
-test("draft-preserved: skipped cards update existing comments but cannot create one", () => {
+test("draft-preserved: a skip card is filtered before either write, so no comment is created OR overwritten", () => {
+  // The workflow greps this exact shape out of the rendered card; pinning it here is what stops
+  // the renderer drifting away from the guard silently.
   assert.match(renderCard({ num: 7, skip: "draft" }), /^_Skipped \(/m);
-  assert.ok(commentWorkflow.includes("const skipped = /^_Skipped \\(/m.test(body);"));
-  assert.match(commentWorkflow, /if \(mine\) await github\.rest\.issues\.updateComment\([^\n]+\);\n\s+else if \(skipped\) core\.info\([^\n]+\);\n\s+else await github\.rest\.issues\.createComment\([^\n]+\);/);
+  // The guard returns — it is not an `else` arm — so neither write is reachable for a skip card.
+  const guard = commentWorkflow.match(/^\s*if \(\/\^_Skipped \\\(\/m\.test\(body\)\).*$/m);
+  assert.ok(guard, "the skip-card guard is missing from the upsert step");
+  assert.match(guard[0], /\breturn;/);
+  const guardAt = commentWorkflow.indexOf(guard[0]);
+  for (const write of ["createComment(", "updateComment("])
+    assert.ok(commentWorkflow.indexOf(write) > guardAt, `${write} must sit after the skip-card guard`);
   assert.equal([...commentWorkflow.matchAll(/createComment\(/g)].length, 1);
+});
+
+test("draft-preserved: a comment event reaches only OPEN pull requests, never a merged or closed one", () => {
+  // Without the state test, a comment on any of the repo's historical PRs would post a card on it.
+  assert.match(commentWorkflow, /github\.event\.issue\.state == 'open'/);
 });
 
 test("workflow-text: comment events refresh the sticky card with event-payload resolution", () => {
   assert.match(commentWorkflow, /^  issue_comment:\n    types: \[created, edited, deleted\]$/m);
   assert.match(commentWorkflow, /group: merge-card-comment-\$\{\{ github\.event\.pull_request\.number \|\| github\.event\.issue\.number \}\}/);
-  assert.match(commentWorkflow, /if: >-\s+\$\{\{\s+\(github\.event_name == 'issue_comment' && github\.event\.issue\.pull_request != null\) \|\|\s+\(github\.event_name != 'issue_comment' && !github\.event\.pull_request\.draft\)\s+\}\}/);
+  assert.match(commentWorkflow, /github\.event_name == 'issue_comment' && github\.event\.issue\.pull_request != null/);
+  assert.match(commentWorkflow, /github\.event_name != 'issue_comment' && !github\.event\.pull_request\.draft/);
   assert.match(commentWorkflow, /^\s+PR_NUMBERS: \$\{\{ github\.event\.pull_request\.number \}\}$/m);
   assert.match(commentWorkflow, /const issue_number = context\.payload\.pull_request\?\.number \?\? context\.payload\.issue\.number;/);
   assert.doesNotMatch(gateWorkflow, /issue_comment/);
