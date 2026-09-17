@@ -291,3 +291,67 @@ def test_a_local_path_still_clones_under_its_own_pin(tmp_path):
     dest = tmp_path / "dest"
     workspace_attach._git_clone(str(origin), "main", dest)
     assert (dest / "MARK").read_text() == "x"
+
+
+# ── the REVISION half (R-D15) ────────────────────────────────────────────────────────────────────
+# `repo` says where to fetch from; `ref` says what to check out afterwards, and it lands in argv
+# beside it. `git checkout` reads a leading `-` as an OPTION regardless of parameter position, so an
+# unvalidated ref is an instruction to this process in exactly the way an unvalidated URL was. Same
+# load-bearing assertion as the host half: NO SUBPROCESS RAN.
+
+@pytest.mark.parametrize("ref", [
+    "--upload-pack=touch /tmp/pwned",
+    "-b",
+    "--help",
+    "main;touch /tmp/pwned",
+    "main branch",
+    "refs/heads/../../etc",
+    "main\nrm -rf /",
+    "main`whoami`",
+    "@{upstream}",
+    "a" * 256,
+    "main.lock",
+])
+def test_an_option_shaped_ref_is_refused(ref):
+    with pytest.raises(RepoRefError) as exc:
+        repo_ref.assert_valid_ref(ref)
+    assert exc.value.kind == "ref"
+
+
+@pytest.mark.parametrize("ref", [
+    "", None, "main", "v0.12.27", "release/0.12", "feature_x",
+    "9ef40c426adcbc23c9e2c80ba0e74eef27886406", "refs/heads/main", "a.b-c_d/e",
+])
+def test_an_ordinary_revision_is_accepted(ref):
+    repo_ref.assert_valid_ref(ref)
+
+
+def test_an_option_shaped_ref_never_reaches_git(no_subprocess, tmp_path):
+    """The gate is inside ``_git_clone`` itself, dominating the clone AND the checkout — so a caller
+    arriving through the MCP, a future route, or a test that forgot still cannot reach git with an
+    option in the revision slot."""
+    with pytest.raises(RepoRefError):
+        workspace_attach._git_clone("https://github.com/o/r.git",
+                                    "--upload-pack=touch /tmp/pwned", tmp_path / "dest")
+    assert no_subprocess == []
+
+
+def test_the_checkout_disambiguates_revision_from_path(tmp_path):
+    """A validated ref still goes through ``--``: checkout's revision/pathspec boundary, so a branch
+    named like a file in the tree is read as the branch."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (origin / "README").write_text("x")
+    run("add", "-A")
+    run("commit", "-q", "-m", "seed")
+    run("branch", "README")           # a branch whose name is also a path in the tree
+
+    dest = tmp_path / "dest"
+    workspace_attach._git_clone(str(origin), "README", dest)
+    head = subprocess.run(["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert head == "README"

@@ -50,7 +50,8 @@ After it finishes:
 
 - **Terminal:** `http://YOUR_IP:3001` (the agent-domain browser-CLI workbench)
 - **API:** `http://YOUR_IP:8056` (the gateway — auth, routing) · docs at `/docs`
-- **Agent API:** `http://YOUR_IP:8100`
+- **Agent API:** `http://YOUR_IP:8056/agent/…` — through the gateway, with an API key. Port 8100 is
+  bound to the container's own loopback and is not published.
 
 To stop: `make lite-down` (data volumes are kept; `docker volume rm vexa-lite-pgdata
 vexa-lite-miniodata` to wipe).
@@ -65,7 +66,7 @@ Supervised by `supervisord`:
 | admin-api | 8001 | users + API keys + `/internal/validate` |
 | meeting-api | 8080 | bots, transcripts, recordings (→ MinIO) |
 | runtime | 8090 | spawns bot + agent workers as **child processes** (process backend) |
-| agent-api | **8100** | the agent control plane — dispatch, chat (SSE), routines |
+| agent-api | 8100 | the agent control plane — dispatch, chat (SSE), routines. **Internal:** loopback-bound, no host port; reached at the gateway's `/agent/*` |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
 | redis | 6379 | bus + scheduler + per-dispatch streams (internal) |
 | Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
@@ -142,7 +143,7 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 |---|---|
 | Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
-| Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
+| Agent ↔ gateway | the agent control plane is gateway-fronted: `:8100` is loopback-bound and unpublished, and agent-api requires the gateway's identity marker (`VEXA_REQUIRE_GATEWAY_IDENTITY=1`). Reach it at `http://YOUR_IP:8056/agent/…` with an API key. `make lite HOST_AGENT_PORT=8100` publishes it again for debugging on a trusted host — identity is still required, so a direct caller gets 401 |
 
 ## Smoke probe — "is this install actually working?"
 

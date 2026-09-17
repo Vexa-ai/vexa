@@ -206,6 +206,15 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
     return (ROUTE_SCOPES if table is None else table).get((request.method.upper(), path))
 
 
+#: The marker the gateway STAMPS on every hop it authorized, and strips off every inbound request (it
+#: is in the authority vocabulary below). It carries no secret and is not meant to: it is trustworthy
+#: only because agent-api is reachable ONLY through the gateway — lite binds it to loopback and
+#: publishes no port for it, compose and the chart keep it on an internal network. That reachability
+#: is the boundary; this header is how agent-api can tell which side of it a request came from, which
+#: is what ``VEXA_REQUIRE_GATEWAY_IDENTITY`` turns into a refusal.
+GATEWAY_VERIFIED_HEADER = "x-gateway-verified"
+
+
 # ── the authority-header strip (F95) ─────────────────────────────────────────────
 # Downstream services trust a small vocabulary of headers as AUTHORITY: ``x-user-*`` is the identity
 # the gateway resolved from the api-key, ``x-internal-secret`` is the internal service tier (agent-api
@@ -219,7 +228,7 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
 # any api-key holder. A LIST rots the moment a new authority header is added; a PREFIX rule does not,
 # which is why this matches by family and why every new internal header must be spelled into one.
 _AUTHORITY_HEADER_PREFIXES = ("x-user-", "x-internal-", "x-vexa-internal-")
-_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", "x-gateway-verified"})
+_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", GATEWAY_VERIFIED_HEADER})
 
 
 def _is_authority_header(name: str) -> bool:
@@ -430,6 +439,12 @@ def create_app(
                 headers["x-user-webhook-secret"] = str(user_data["webhook_secret"])
             if user_data.get("webhook_events"):
                 headers["x-user-webhook-events"] = json.dumps(user_data["webhook_events"])
+        # The gateway's signature on this hop: every identity header above was RESOLVED here from a
+        # verified api-key, not copied from the client. Stamped AFTER the strip and only past every
+        # authorization branch — each failure path has already returned — so its presence downstream
+        # means "the gateway put these headers here" and nothing else. agent-api under
+        # VEXA_REQUIRE_GATEWAY_IDENTITY honours identity headers only on a request that carries it.
+        headers[GATEWAY_VERIFIED_HEADER] = "1"
         headers[TRACE_HEADER] = get_trace_id() or ""
         return headers, None
 

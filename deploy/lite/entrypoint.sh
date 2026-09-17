@@ -95,6 +95,16 @@ export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-w
 
 # Agent control plane + worker (BYO inference; credentials brokered by the runtime).
 export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
+# Where agent-api LISTENS, and whether it believes an identity header that did not come from the
+# gateway. The two are one decision. agent-api derives the acting subject from X-User-Id and falls
+# back to VEXA_AGENT_DEFAULT_SUBJECT when there is none, so on the container's own loopback — where
+# only the gateway, the terminal's server side and the runtime's scheduler can reach it — that
+# fallback is the single-user convenience it was written to be. Reachable from the host it is the
+# whole control plane answering to whoever asks. Loopback is therefore the bind, and the gateway's
+# X-Gateway-Verified marker is required, so the fallback cannot be reached from outside this
+# container even if a port is published. Both are overridable for a deliberately open dev box.
+export VEXA_AGENT_API_BIND="${VEXA_AGENT_API_BIND:-127.0.0.1}"
+export VEXA_REQUIRE_GATEWAY_IDENTITY="${VEXA_REQUIRE_GATEWAY_IDENTITY:-1}"
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"

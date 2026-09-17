@@ -59,7 +59,7 @@ from control_plane.workspace_attach import (
     swap_workspace,
     workspace_dir_for,
 )
-from control_plane.repo_ref import RepoRefError, assert_fetchable
+from control_plane.repo_ref import RepoRefError, assert_fetchable, assert_valid_ref
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_origin, remote_status
 from control_plane.workspace_purpose import read_purpose, write_purpose
@@ -1574,6 +1574,7 @@ def create_app(
         # the transport and the host are settled before anything reaches git (see control_plane/repo_ref).
         try:
             assert_fetchable(body.repo)
+            assert_valid_ref(body.ref)      # the revision is caller-supplied too — a 400, not a 502
         except RepoRefError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
@@ -1631,6 +1632,7 @@ def create_app(
         subject = subject_of(request)
         try:
             assert_fetchable(body.repo)     # same gate as swap — see control_plane/repo_ref
+            assert_valid_ref(body.ref)
         except RepoRefError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
