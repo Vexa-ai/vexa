@@ -112,6 +112,7 @@
         "pages": [
           "deployment",
           "deployment-lite",
+          "how-to/validate-a-pr",
           "deployment-kubernetes",
           "configuration",
           "authenticated-bots",

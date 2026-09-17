@@ -1,0 +1,205 @@
+# lite-pr-image — publish a validator-runnable Lite image: vexaai/vexa-lite:pr-<N>.
+#
+# WHY THIS EXISTS. A validator should run the PR's value claim without rebuilding a multi-GB
+# image. pull_request events publish non-drafts (or drafts carrying the validate label),
+# automatically for same-repo branches only. Forks never run here with registry credentials.
+# The MERGE ref puts the change on top of main — the thing that would actually land.
+#
+# WHY DOCKER HUB. release-images.yml already publishes vexaai/* there, using DOCKERHUB_USERNAME
+# and DOCKERHUB_TOKEN. GHCR would give validators a second registry for the same software.
+# WHY SEPARATE FROM pr-value.yml. Its lite-smoke leg executes untrusted PR code without secrets
+# by design. Registry credentials do not belong in that job.
+#
+# This is informational, never a required check. Missing Docker Hub credentials skip publishing
+# and leave the job green — that is a repository-configuration fact, not a defect in a pull
+# request. A build that genuinely fails goes red, where a maintainer can see it; because the check
+# is not required by branch protection, red here blocks no merge.
+# Nightly cleanup follows every page of tags and deletes only validation tags older than
+# RETENTION_DAYS, measured from their last push (last_updated if no push timestamp is supplied).
+# Constitutional guard: it never touches :dev, :latest, :v012, :buildcache or any release tag.
+# The shared build cache is read-only; the ONLY published tag is :pr-<N>.
+name: lite-pr-image
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
+    # The same scope pr-value.yml's lite-smoke leg uses: the inputs the Lite image is built from.
+    # A docs- or governance-only pull request has nothing to run, so it pays no build.
+    paths:
+      - "deploy/lite/**"
+      - "core/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  schedule:
+    - cron: '23 3 * * *'
+
+concurrency:
+  group: lite-pr-image-${{ github.event.pull_request.number || 'cleanup' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RETENTION_DAYS: 14
+
+jobs:
+  publish:
+    # Same-repo branches only: a label on a fork never grants access to credentials.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'validate'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      # The one soft step. A repository without Docker Hub secrets is a configuration fact, not a
+      # defect in somebody's pull request, so it skips and stays green. A build that genuinely
+      # fails does NOT: this check is not required by branch protection, so a red row here informs
+      # without blocking, and a green row that hid a broken image would be worse than useless.
+      - name: Docker Hub credentials present?
+        id: credentials
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing skipped: Docker Hub credentials are missing. Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN as in release-images.yml. This is informational; the PR is not blocked." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+
+      # The MERGE ref — their change on top of current main, which is the thing that would land.
+      - uses: actions/checkout@v4
+        if: steps.credentials.outputs.present == 'true'
+        with:
+          persist-credentials: false
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        if: steps.credentials.outputs.present == 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.credentials.outputs.present == 'true'
+      - uses: docker/login-action@v3
+        if: steps.credentials.outputs.present == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # amd64 only, deliberately: this is a throwaway validation tag, and a multi-arch build
+      # doubles the cold build for a tag that only lives for RETENTION_DAYS.
+      - uses: docker/build-push-action@v6
+        id: build
+        if: steps.credentials.outputs.present == 'true'
+        with:
+          context: .
+          file: deploy/lite/Dockerfile.lite
+          platforms: linux/amd64
+          push: true
+          tags: vexaai/vexa-lite:pr-${{env.PR}}
+          cache-from: type=registry,ref=vexaai/vexa-lite:buildcache
+
+      - name: Summary
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          STEP_RESULTS: ${{ toJSON(steps) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              print("## lite-pr-image", file=summary)
+              if os.environ["BUILD_OUTCOME"] == "success":
+                  pr = os.environ["PR"]
+                  print(f"Published `vexaai/vexa-lite:pr-{pr}` (linux/amd64) from the merge ref of #{pr}.", file=summary)
+                  print(f"Validators: `make lite PR={pr}` from the repository root.", file=summary)
+              else:
+                  print("No image publication confirmed by this run. Publishing failed or was skipped; this informational job does not block the PR.", file=summary)
+              for name, step in json.loads(os.environ["STEP_RESULTS"]).items():
+                  print(f"- {name}: {step['outcome']}", file=summary)
+              print(f"Nightly cleanup removes validation tags older than RETENTION_DAYS ({os.environ['RETENTION_DAYS']} days).", file=summary)
+          PYTHON
+
+  cleanup:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Delete expired validation tags only
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          python3 - <<'PYTHON'
+          import datetime as dt
+          import json
+          import os
+          import re
+          import urllib.request
+
+          base = "https://hub.docker.com/v2/repositories/vexaai/vexa-lite/tags"
+          token = None
+          deleted = 0
+
+          def report(message):
+              print(message)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  print(message, file=summary)
+
+          def request(url, method="GET", body=None):
+              headers = {"Content-Type": "application/json"}
+              if token:
+                  headers["Authorization"] = f"JWT {token}"
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  raw = response.read()
+                  return json.loads(raw) if raw else None
+
+          def expired(tag, cutoff):
+              timestamp = tag.get("tag_last_pushed") or tag.get("last_updated")
+              if not timestamp:
+                  return False
+              pushed = dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+              return pushed < cutoff
+
+          try:
+              days = int(os.environ["RETENTION_DAYS"])
+              report(f"## Validation tag cleanup — RETENTION_DAYS ({days} days)")
+              if not os.environ.get("DH_USER") or not os.environ.get("DH_TOKEN"):
+                  report("Cleanup skipped: Docker Hub credentials are missing.")
+              else:
+                  token = request("https://hub.docker.com/v2/users/login/", "POST", {
+                      "username": os.environ["DH_USER"], "password": os.environ["DH_TOKEN"],
+                  })["token"]
+                  cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+                  page = base + "?page_size=100"
+                  candidates = set()
+                  # Collect all pages before deleting: deletion must not shift page offsets.
+                  while page:
+                      if not page.startswith(base + "?"):
+                          raise ValueError("Unexpected pagination URL")
+                      result = request(page)
+                      for tag in result["results"]:
+                          name = tag["name"]
+                          if re.fullmatch(r"^pr-[0-9]+$", name) and expired(tag, cutoff):
+                              candidates.add(name)
+                      page = result.get("next")
+                  for name in sorted(candidates):
+                      # Recheck age in case the PR published again while we paginated.
+                      if re.fullmatch(r"^pr-[0-9]+$", name):
+                          url = f"{base}/{name}/"
+                          if expired(request(url), cutoff):
+                              request(url, "DELETE")
+                              deleted += 1
+                              report(f"Deleted `{name}`.")
+                  report(f"Cleanup complete: {deleted} validation tags deleted.")
+          except Exception as error:
+              # Do not echo API bodies or credentials; the exception class is enough to triage.
+              report(f"Cleanup stopped ({type(error).__name__}); {deleted} tags deleted. Remaining tags were left in place.")
+          PYTHON

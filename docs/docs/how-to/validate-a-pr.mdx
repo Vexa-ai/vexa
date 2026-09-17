@@ -1,0 +1,72 @@
+---
+title: "Validate a pull request"
+description: "Run a pull request's Lite image and report what happened."
+---
+
+Pick someone else's pull request and read its **Acceptance floor** and **Validation request**
+sections. Those are what you are testing — not the diff. If neither says what to exercise, ask
+the author, which is itself useful work.
+
+## Run it
+
+You need a repository checkout, Make, and a running Docker daemon. Published validation images
+are `linux/amd64`; use an amd64 host or a Docker setup that supports amd64 emulation.
+From the repository root, replace `<N>` with the pull-request number:
+
+```bash
+make lite PR=<N>
+```
+
+This always pulls `vexaai/vexa-lite:pr-<N>`, overriding both a local `vexa-lite:dev` image and
+`.env`'s `IMAGE_TAG`. It starts Lite with its datastore sidecars and probes the front doors.
+See [Vexa Lite](/deployment-lite) for credentials, ports, and transcription setup. For local
+CPU transcription, add `LOCAL_STT=1` to the command.
+
+The `lite-pr-image` workflow publishes the PR's merge ref for same-repository PRs that are
+non-draft or carry the `validate` label. Check its job summary for publication success before
+running the command. The tag moves when the PR is rebuilt; record the image ID with your result:
+
+```bash
+docker inspect vexa-lite --format '{{.Image}}'
+```
+
+Validation images expire under the workflow's `RETENTION_DAYS` policy. Nightly cleanup removes
+expired validation tags; the source of truth is
+[`.github/workflows/lite-pr-image.yml`](https://github.com/Vexa-ai/vexa/blob/main/.github/workflows/lite-pr-image.yml).
+
+### If there is no image
+
+Fork PRs, skipped or failed publishing, and expired tags may have no image to pull. The workflow
+is informational, so a green check alone does not prove an image was published. Read its summary.
+If no image is available, build from the PR as a fallback (replace `<N>`):
+
+```bash
+gh pr checkout <N>
+make -C deploy/lite build && make lite
+```
+
+## Exercise the claim and post the result
+
+Do what the PR says it fixes. Call the endpoint, run the installation, or join a real meeting
+when the claim needs one. Write down what you ran and what happened, including failures and
+anything you did not check.
+
+Post one comment on the PR. Its first line has this exact shape:
+
+```text
+Validated on <shape>, <what I ran>, <result>
+```
+
+Replace `<shape>` with `lite` for this path. Put evidence underneath: image ID, PR commit,
+logs, timings, screenshots, or API responses. For example:
+
+```text
+Validated on lite, created a meeting and fetched its transcript, the response contained the words I spoke
+
+Image ID: <image ID>
+PR commit: <commit>
+Evidence: <response or log excerpt>
+Not checked: <remaining acceptance rows>
+```
+
+A failure belongs in the same shape. “Looks good” and “CI is green” do not say what you ran.
