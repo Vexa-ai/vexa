@@ -8,6 +8,10 @@
       "description": "How the speaker was attributed. chat = an in-meeting chat message captured into the transcript (speaker = the chat sender; text = the message).",
       "enum": ["glow-bound", "provisional-cluster-id", "caption", "merged", "chat"]
     },
+    "SpeakerKind": {
+      "description": "What KIND of participant `speaker` names. A meeting-room system mixes every microphone inside the room hardware, so it joins as ONE participant with ONE display name and every human in that room is attributed to it; this field says so instead of letting a device name read as a person. `room` is EVIDENCE — a room-device pattern matched the display name (see contracts/room-identity/). `person` is a DEFAULT, not evidence: a resolved display name with no room marker, so a room named after a human still reads `person`. `unknown` means there was no name to classify (the binder refused, or the label is provisional). Attribution is UNCHANGED by this field: the room is still one speaker, and the people inside it are NOT separated.",
+      "enum": ["room", "person", "unknown"]
+    },
     "Word": {
       "type": "object",
       "additionalProperties": false,
@@ -28,6 +32,7 @@
         "segment_id": { "type": "string", "description": "stable id: {session_uid}:{speaker_key}:{startMs}" },
         "speaker": { "type": "string", "description": "display name (glow-bound or a provisional label)" },
         "speaker_key": { "type": "string", "description": "per-channel turn key" },
+        "speaker_kind": { "$ref": "#/$defs/SpeakerKind" },
         "text": { "type": "string" },
         "start": { "type": "number" },
         "end": { "type": "number" },
