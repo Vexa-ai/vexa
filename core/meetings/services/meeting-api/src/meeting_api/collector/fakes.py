@@ -189,7 +189,7 @@ class InMemoryTranscriptStore:
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             metadata_filter=None):
-        from .projection import DEFAULT_LIST_LIMIT, list_order_key, project_list_data
+        from .projection import DEFAULT_LIST_LIMIT, has_capture, list_order_key, project_list_data
         mws = member_workspaces or set()
 
         def metadata_matches(m):
@@ -257,6 +257,9 @@ class InMemoryTranscriptStore:
                 # api.v1 MeetingResponse declares these at top level; the values live in `data`.
                 "completion_reason": (m.get("data") or {}).get("completion_reason") if isinstance(m.get("data"), dict) else None,
                 "failure_stage": (m.get("data") or {}).get("failure_stage") if isinstance(m.get("data"), dict) else None,
+                # Capture as a scalar — the list drops the heavy evidence (`recordings`), so this is
+                # where a list consumer reads it (mirrors the real store's `_row`).
+                "has_capture": has_capture(m.get("data")),
                 "shared": not is_owner,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],

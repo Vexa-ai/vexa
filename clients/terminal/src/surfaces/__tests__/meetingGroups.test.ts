@@ -22,8 +22,8 @@ describe("meetingGroupKey", () => {
 describe("groupMeetings", () => {
   it("BUG-1: a scheduled meeting's finished sibling runs do NOT surface as separate meetings", () => {
     const scheduled = m({ id: "S", live_status: "scheduled", calendar_uid: "u1", scheduled_at: "2026-07-10T10:00:00Z" });
-    const oldRun = m({ id: "R1", live_status: "completed", calendar_uid: "u1", start_time: "2026-07-01T10:00:00Z", has_recording: true });
-    const olderRun = m({ id: "R2", live_status: "completed", calendar_uid: "u1", start_time: "2026-06-24T10:00:00Z", has_recording: true });
+    const oldRun = m({ id: "R1", live_status: "completed", calendar_uid: "u1", start_time: "2026-07-01T10:00:00Z", has_capture: true });
+    const olderRun = m({ id: "R2", live_status: "completed", calendar_uid: "u1", start_time: "2026-06-24T10:00:00Z", has_capture: true });
     const [g, ...rest] = groupMeetings([scheduled, oldRun, olderRun]);
     expect(rest).toEqual([]);                       // ONE meeting, not three rows
     expect(g.phase).toBe("prep");                   // the upcoming occurrence carries the state
