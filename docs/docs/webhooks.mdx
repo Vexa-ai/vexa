@@ -63,6 +63,26 @@ Tracked as [#1241](https://github.com/Vexa-ai/vexa/issues/1241).
 
 The typed events are additive: `meeting.status_change` still fires for the same transition.
 
+## Payload
+
+Every delivery is the same envelope:
+
+```json
+{ "event_id": "evt_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+  "event_type": "meeting.completed",
+  "api_version": "2026-03-01",
+  "created_at": "2026-08-18T17:54:03.871648Z",
+  "data": { "meeting": { "id": 12345, "platform": "google_meet", "status": "completed",
+                         "completion_reason": "stopped", "data": { "name": "Weekly sync" } } } }
+```
+
+`data.meeting.data` is the meeting's own blob — its title, notes, `scheduled_at`, connected docs.
+That blob also holds operating state that is not meeting content: your webhook configuration, share
+grants, the reader roster, session material. **None of it rides a delivery.** Keys named like
+credentials (`*_secret`, `*_token`, `*_api_key`, …) are withheld too, including ones added in later
+releases, so build against the fields documented here rather than against whatever a sample happens
+to contain.
+
 ## Signature
 
 Each delivery carries `Content-Type: application/json` and, when a secret is set:
