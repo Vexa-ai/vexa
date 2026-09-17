@@ -33,7 +33,16 @@ MINIO_CONTAINER ?= vexa-lite-minio
 APP_CONTAINER   ?= vexa-lite
 HOST_GATEWAY_PORT   ?= 8056
 HOST_TERMINAL_PORT  ?= 3001
-HOST_AGENT_PORT     ?= 8100
+# agent-api (:8100) is NOT published. It is the unit control plane — dispatch, chat, workspace
+# attach/publish, routines — and it derives the acting subject from the X-User-Id the GATEWAY resolves
+# from a verified api-key. Published directly it is that control plane with no key in front of it, so
+# it is reached through the gateway's /agent/* prefix on HOST_GATEWAY_PORT and bound to the container's
+# own loopback (deploy/lite/supervisord.conf), which is also what makes the gateway's identity marker
+# mean something. Set HOST_AGENT_PORT to publish it anyway — a debugging escape hatch on a trusted
+# host, never a default. Setting it also opens the in-container bind (the port would otherwise publish
+# a loopback nobody can reach); gateway-identity enforcement stays on, so a direct caller gets 401
+# rather than the single-user fallback.
+HOST_AGENT_PORT     ?=
 MINIO_ACCESS_KEY ?= vexa-access-key
 MINIO_SECRET_KEY ?= vexa-secret-key
 MINIO_BUCKET     ?= vexa
@@ -70,7 +79,7 @@ all: env preflight up init-db test
 	echo ""; echo "Vexa Lite is running."; \
 	echo "  Terminal:  http://$$HOST:$(HOST_TERMINAL_PORT)"; \
 	echo "  API docs:  http://$$HOST:$(HOST_GATEWAY_PORT)/docs"; \
-	echo "  Agent API: http://$$HOST:$(HOST_AGENT_PORT)"
+	echo "  Agent API: http://$$HOST:$(HOST_GATEWAY_PORT)/agent  (fronted by the gateway; :8100 is not published)"
 
 ## env — ensure a repo-root .env exists (seed from compose/.env if present, else a minimal template).
 env:
@@ -165,7 +174,8 @@ up: preflight
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
 	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
 		--env-file $(ENV_FILE) \
-		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
+		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 \
+		$(if $(strip $(HOST_AGENT_PORT)),-p $(HOST_AGENT_PORT):8100 -e VEXA_AGENT_API_BIND=0.0.0.0,) \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
@@ -185,7 +195,7 @@ init-db:
 
 ## test — probe the published front doors.
 test:
-	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_TERMINAL_PORT):terminal"; do \
+	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_TERMINAL_PORT):terminal"; do \
 		PORT=$${ep%%:*}; NAME=$${ep##*:}; \
 		if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null || curl -sf -o /dev/null http://localhost:$$PORT/health 2>/dev/null; then \
 			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; FAIL=1; fi; \

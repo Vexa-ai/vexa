@@ -53,6 +53,9 @@ SCHEME_SENTENCE = ("That is not a repository URL we can fetch. Use https://, ssh
 #: …and when it is a path on this server's own disk, which is not a thing a caller may name.
 LOCAL_SENTENCE = ("That is a path on the server, not a repository URL. Use https://, ssh://, or "
                   "git@host:owner/repo.")
+#: …and when the REVISION is something ``git checkout`` would read as an OPTION rather than a branch.
+REF_SENTENCE = ("That is not a branch, tag or commit we can check out. Use a plain branch name, tag "
+                "or commit id.")
 
 #: The transports a caller-supplied repository may name. Everything else — ``ext``, ``file``, ``git``,
 #: ``ftp`` and the whole ``<helper>::`` family — is refused: ``ext::`` runs a shell command and
@@ -75,6 +78,15 @@ _HELPER = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)::")
 _SCP = re.compile(r"^[A-Za-z0-9._-]+@(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):")
 #: The host of a URL, userinfo skipped (``https://token@host/…`` must be read as ``host``).
 _URL_HOST = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/@\s]+@)?([^/\s]+)")
+#: What a caller-supplied REVISION may look like. Anchored, first character alphanumeric — so a value
+#: beginning with ``-`` can never be handed to git, where it would be parsed as an option and not as a
+#: revision at all (``--upload-pack=<command>`` is the family). The body is git's own ordinary ref
+#: alphabet minus everything ``check-ref-format`` already forbids: no space, no control character, no
+#: ``~ ^ : ? * [ \`` and no ``@{``.
+_REF_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+#: A ref may not be longer than this. Nothing legitimate is, and an unbounded caller string becomes an
+#: unbounded argv entry.
+_REF_MAX = 255
 
 
 def _bare_host(host: str) -> str:
@@ -234,6 +246,26 @@ def assert_allowed_scheme(raw: Optional[str]) -> None:
     if _SCP.match(v):
         return
     contained_local_path(v)                 # refuses unless it resolves inside a configured root
+
+
+def assert_valid_ref(raw: Optional[str]) -> None:
+    """Refuse a REVISION that is not one — the second caller-supplied value that reaches a git process.
+
+    ``repo`` says where to fetch from; ``ref`` says what to check out afterwards, and it lands in argv
+    next to it. ``git checkout --upload-pack=…`` and the rest of the option family are not revisions at
+    all: git reads a leading ``-`` as an option no matter which parameter position the string arrived
+    in, so an unvalidated ref is an instruction to this process in exactly the way an unvalidated repo
+    URL was. The refusal is by ALLOW-LIST — the shape a branch, tag or commit id actually has — because
+    a deny-list of option spellings has to anticipate git's whole option table and every version of it.
+
+    Empty is accepted and means "whatever the clone landed on": the caller named no revision, so none
+    is checked out and nothing reaches git.
+    """
+    v = (raw or "").strip()
+    if not v:
+        return
+    if len(v) > _REF_MAX or not _REF_OK.match(v) or ".." in v or v.endswith(".lock"):
+        raise RepoRefError(REF_SENTENCE, kind="ref")
 
 
 def assert_fetchable(raw: Optional[str]) -> None:

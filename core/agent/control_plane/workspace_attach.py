@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from control_plane.repo_ref import assert_public_host
+from control_plane.repo_ref import assert_public_host, assert_valid_ref
 from shared.gitenv import pinned_git_env, scrubbed_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 
@@ -149,9 +149,15 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None)
     so it also covers the MCP, a future route, and a test that forgot — the same stance the token
     redaction takes. The transport allow-list (``pinned_git_env``) is the second half: a URL may not
     reach a transport that runs a command (``ext::``) or reads this host's disk (``file://``), and an
-    ``https`` clone may not redirect down into one."""
+    ``https`` clone may not redirect down into one.
+
+    The REF is settled in the same place and for the same reason: it is caller-supplied, it lands in
+    argv beside the URL, and git reads a leading ``-`` as an option whatever parameter position it
+    arrived in. Validating at this choke point rather than only at the route means a caller reaching
+    the clone through the MCP or a future route cannot put an option in the revision slot."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     assert_public_host(repo_url)      # never make this server fetch its own neighbours (R-D15)
+    assert_valid_ref(ref)             # a revision, never an option in the revision slot (R-D15)
     # scrubbed env: a hook-exported GIT_DIR would re-point every op below at the hook's repo
     # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud; the transport
     # allow-list is pinned to what this URL legitimately needs.
@@ -169,7 +175,9 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None)
             subprocess.run(["git", "-C", str(dest), "remote", "set-url", "origin", repo_url],
                            check=True, capture_output=True, text=True, env=env)
         if ref:
-            subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ref],
+            # Trailing `--` is checkout's revision/pathspec disambiguator: the validated ref is read as
+            # a revision and never as a file, with no pathspec after it.
+            subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ref, "--"],
                            check=True, capture_output=True, text=True, env=env)
     except subprocess.CalledProcessError as exc:
         raise CloneError(redact((exc.stderr or str(exc)).strip())) from None

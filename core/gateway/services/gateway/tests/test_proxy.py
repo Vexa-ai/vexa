@@ -203,13 +203,15 @@ def test_internal_tier_header_is_stripped_from_a_public_request():
         "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
         "x-vexa-internal-api-secret": "vexa-internal-secret",
         "x-admin-api-key": "changeme",
-        "x-gateway-verified": "1",                     # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
+        "x-gateway-verified": "spoofed",               # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
     })
     assert r.status_code == 200
     fwd = downstream.last["headers"]
-    for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret",
-                    "x-admin-api-key", "x-gateway-verified"):
+    for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret", "x-admin-api-key"):
         assert spoofed not in fwd, f"{spoofed} reached the downstream from a public request"
+    # x-gateway-verified is the one authority header the gateway also STAMPS. The client's value must
+    # not survive the strip; what reaches the downstream is the gateway's own, written after it.
+    assert fwd.get("x-gateway-verified") == "1"
     # The strip is by FAMILY, not by a list that rots: a header nobody has invented yet, spelled
     # inside one of the internal families, is stripped for free.
     assert "x-user-id" in fwd and fwd["x-user-id"] == "7"
@@ -529,3 +531,25 @@ def test_user_models_and_transcription_routes_forward_to_admin_api():
         assert downstream.last["url"] == f"http://admin-api{path}"
 
         assert client.get(path).status_code == 401  # no key → the edge refuses
+
+
+def test_gateway_stamps_the_verified_identity_marker():
+    """The half that makes ``VEXA_REQUIRE_GATEWAY_IDENTITY`` enforceable rather than merely declared.
+
+    agent-api under that flag refuses any request without ``x-gateway-verified``, so if the gateway
+    never wrote it the flag could not be switched on in any deployment — the front door would 401
+    itself. The marker is written here, past every authorization branch, on the same hop that resolved
+    the identity headers it vouches for."""
+    client, downstream = _client()
+    r = client.get("/bots/status", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["headers"].get("x-gateway-verified") == "1"
+
+
+def test_unauthorized_requests_never_reach_a_downstream_marker():
+    """The marker means "the gateway authorized this". A request the gateway refused must not produce
+    one at all — proven by the downstream never being called."""
+    client, downstream = _client()
+    assert client.get("/bots/status").status_code == 401     # no key
+    assert client.get("/bots/status", headers={"x-api-key": "nope"}).status_code == 401
+    assert downstream.last is None

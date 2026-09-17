@@ -1122,6 +1122,7 @@ const CONFIG_LITE_UNADOPTED = {
   NEXTAUTH_SECRET: "clients/terminal — NextAuth's signing secret; same",
   JWT_SECRET: "clients/terminal — the session secret; same",
   VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
+  VEXA_AGENT_API_BIND: "[program:agent-api] — the uvicorn --host in supervisord.conf, read by the process supervisor and never by the service; loopback by default so :8100 is not a front door",
 };
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in

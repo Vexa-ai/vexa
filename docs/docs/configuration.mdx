@@ -172,7 +172,9 @@ Point the agent at your own model so no inference leaves the network.
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
-| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Single-user fallback subject, used only when no gateway-resolved `X-User-Id` is present. |
+| `VEXA_REQUIRE_GATEWAY_IDENTITY` | `1` on Lite, off elsewhere | Refuse any request that does not carry the gateway's `X-Gateway-Verified` marker, so identity headers are honoured only when the gateway injected them and the fallback above cannot be reached from outside. |
+| `VEXA_AGENT_API_BIND` | `127.0.0.1` (Lite) | The address agent-api listens on inside the Lite container. agent-api is not a front door: reach it at the gateway's `/agent/*`. |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
