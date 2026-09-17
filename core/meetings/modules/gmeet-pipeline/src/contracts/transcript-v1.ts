@@ -13,6 +13,12 @@
 /** How `speaker` was attributed (schema $defs/Source). */
 export type Source = 'glow-bound' | 'provisional-cluster-id' | 'caption' | 'merged';
 
+/** What KIND of participant `speaker` names (schema $defs/SpeakerKind). `room` is evidence that a
+ *  room-device pattern matched the display name; `person` is the default when no marker is found,
+ *  never a confirmation; `unknown` means there was no name to classify. Attribution is unchanged —
+ *  a room stays one speaker; the people inside it are not separated. */
+export type SpeakerKind = 'room' | 'person' | 'unknown';
+
 /** A single word with meeting-clock timing (seconds) — schema $defs/Word. */
 export interface TimestampedWord {
   word: string;
@@ -30,6 +36,9 @@ export interface TranscriptSegment {
   speaker: string;
   /** per-channel turn key (provenance). */
   speaker_key?: string;
+  /** Additive: is this speaker a meeting-room DEVICE or a person? Stamped by the bot's transcript
+   *  producer (services/bot/src/room-identity.ts) unless a lane already knows. */
+  speaker_kind?: SpeakerKind;
   text: string;
   start: number;            // seconds, meeting clock
   end: number;              // seconds, meeting clock
