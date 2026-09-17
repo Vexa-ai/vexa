@@ -17,7 +17,9 @@ make lite
 ```
 
 `make lite` (= `make -C deploy/lite all`) writes a minimal `.env` if you don't have one, pulls
-`vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built `vexa-lite:dev` wins when present),
+`vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built `vexa-lite:dev` wins when present —
+and `make lite PR=<N>` overrides both, always pulling `vexaai/vexa-lite:pr-<N>`, which is how you
+[validate an open pull request](/how-to/validate-a-pr)), then
 starts the `vexa-lite-postgres` and `vexa-lite-minio` sidecars on the `vexa-lite-net` Docker
 network, boots the app container, waits on the gateway health endpoint, and probes the three
 front doors:

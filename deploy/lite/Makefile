@@ -16,6 +16,12 @@ CONTEXT    := $(ROOT)
 DOCKERHUB_USER ?= vexaai
 IMAGE_NAME     ?= vexa-lite
 TAG            ?= dev
+# PR=<N> — run someone's open pull request instead of a release. `make lite PR=1676` resolves the
+# image to $(DOCKERHUB_USER)/$(IMAGE_NAME):pr-<N> and PULLS it, beating BOTH the local
+# $(LOCAL_TAG) preference and .env's IMAGE_TAG: an explicit pull is the only way a validator can
+# be sure they ran the pull request and not yesterday's build of the same tag. The tag is
+# published by .github/workflows/lite-pr-image.yml and deleted after its RETENTION_DAYS.
+PR             ?=
 LOCAL_TAG      := $(IMAGE_NAME):$(TAG)
 PLATFORMS      ?= linux/amd64,linux/arm64
 BUILDER_NAME   ?= vexa-multiarch
@@ -118,7 +124,7 @@ up: preflight
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
-	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	$(if $(strip $(PR)),IMG=$(DOCKERHUB_USER)/$(IMAGE_NAME):pr-$(strip $(PR)); docker pull $(DOCKERHUB_USER)/$(IMAGE_NAME):pr-$(strip $(PR));,IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG);) \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
 		echo "  Detected Claude subscription credentials — mounting into container"; \
