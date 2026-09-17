@@ -9,7 +9,7 @@
  */
 export { createMixedAudioCapture } from './mixed-audio.js';
 export type { MixedAudioCapture, MixedAudioOptions } from './mixed-audio.js';
-export { installRemoteAudioHook, observedPeerConnections } from './webrtc-audio-hook.js';
+export { installRemoteAudioHook, observedPeerConnections, isUserStreamId } from './webrtc-audio-hook.js';
 export type { WebRtcAudioHookOptions, ObservedPeerConnection } from './webrtc-audio-hook.js';
 export {
   selectTeamsMixStreams, mainAudioProvedSilent,
