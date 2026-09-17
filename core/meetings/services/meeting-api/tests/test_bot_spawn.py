@@ -499,6 +499,36 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
     row = next(iter(repo._meetings.values()))
     assert row["data"]["transcription_provider"] == "customer"
 
+async def test_request_bot_configured_transcription_model_rides_invocation(monkeypatch):
+    """REGRESSION (#1338): a customer-configured STT backend that carries a `model` in the
+    bot-context must ride the invocation — symmetric with the env path's TRANSCRIPTION_MODEL.
+    (Consumer-side regression guard: the spawn side reads the field; #1338 is what makes
+    admin-api actually emit it for a Settings-configured backend.)"""
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-env")
+    monkeypatch.setenv("TRANSCRIPTION_MODEL", "env-model")
+
+    # admin-api resolves the customer backend and carries its served model id
+    async def fake_resolve(user_id):
+        assert user_id == USER
+        return {"transcription": {"url": "https://stt-mine.example.com",
+                                 "model": "customer-stt-model",
+                                 "provider": "customer"}}
+
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
+    # the customer backend's model must ride the invocation (not the env model, not dropped)
+    assert inv["transcriptionModel"] == "customer-stt-model"
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "customer"
 
 async def test_request_bot_env_transcription_stays_without_settings(monkeypatch):
     """No configured backend (unset ADMIN_API_URL / nothing stored) → the pre-Settings env path,
