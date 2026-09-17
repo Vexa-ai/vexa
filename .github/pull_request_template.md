@@ -9,6 +9,33 @@
 
 **Delivers issue:** #
 
+**Peer reviewers:** @
+<!-- Who you are asking to review the diff. Anyone who is not you. A triager
+     (MAINTAINERS.md) satisfies the roster half of the merge rule. Leave it blank and the
+     community board will pick it up — naming someone just makes it faster. -->
+
+## Value claim
+<!-- One or two sentences, three parts, all required. This is what a validator tests — not
+     the diff. "Refactors X" is not a value claim. "Nobody asked for this" is an honest
+     one; write it. -->
+
+- **What job:** <!-- the job this does, in the user's words, not the code's -->
+- **For whom:** <!-- who has that job: a named reporter, a deployment shape, a role -->
+- **How I know:** <!-- the evidence it is real: the issue, the thread, the log, the run -->
+
+## How to validate
+<!-- Write this for a stranger with a laptop and no context. All three lines required.
+     Full playbook: VALIDATION.md -->
+
+- **Run:** `make lite` against this PR (or `make dev` from the branch), then …
+- **Look at:**
+- **Pass means:**
+
+<!-- VALIDATORS: post your result as ONE comment whose FIRST line is exactly
+       Validated on <lite|compose|helm|hosted>, <what you ran>, <result>
+     with the evidence underneath. An agent's tests are not human evidence — a validation
+     names the human who ran it. See VALIDATION.md. -->
+
 ## Contribution rights
 <!-- Select exactly ONE. This is a legal certification: an agent may explain the choices but
      must not select one for you. See CONTRIBUTOR_RIGHTS.md. -->
