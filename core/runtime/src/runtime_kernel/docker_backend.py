@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Optional
 from urllib.parse import quote
 
@@ -40,6 +41,22 @@ def _stop_grace_sec() -> int:
         return max(1, int(float(os.getenv("RUNTIME_STOP_GRACE_SEC", "30"))))
     except ValueError:
         return 30
+
+
+def _reclaim_confirm_sec() -> float:
+    """How long ``cleanup`` waits for a removal-in-progress (DELETE → 409) to actually finish
+    before declaring the reclaim failed. Removal is normally sub-second, but unmounting a fat
+    writable layer on slow storage takes seconds — tunable like the stop grace, clamped to
+    1..120 (an unbounded window would hold a destroy threadpool slot forever)."""
+    try:
+        return min(120.0, max(1.0, float(os.getenv("RUNTIME_RECLAIM_CONFIRM_SEC", "10"))))
+    except ValueError:
+        return 10.0
+
+
+_RECLAIM_POLL_SEC = 0.2
+#: Test seam: the reclaim poll's sleeper (patching the stdlib ``time`` module would be process-wide).
+_reclaim_sleep = time.sleep
 
 
 def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
@@ -384,8 +401,64 @@ class DockerBackend:
     def cleanup(self, h: WorkloadHandle) -> None:
         # Reclaim MUST be truthful: a failed force-delete while the container may still be running
         # would let `destroy` report `destroyed` over a live bot. 404 = already gone (fine).
+        # 409 = another remover is finishing the reclaim (an operator's `rm -f`, a GC, another
+        # deployment sharing the daemon): what truthfulness needs is the container GONE, not our
+        # DELETE to be the one that won — so absence is confirmed within a bounded window, and a
+        # container still present at the deadline raises exactly like any other failed reclaim.
         r = self._req("DELETE", f"/containers/{h._impl}?force=true")  # type: ignore[attr-defined]
-        if r.status_code not in (204, 404):
-            raise RuntimeError(
-                f"docker delete {h._impl} failed ({r.status_code}): {r.text.strip()[:200]}"
+        if r.status_code in (204, 404):
+            return
+        if r.status_code == 409:
+            confirm_sec = _reclaim_confirm_sec()
+            logger.warning(
+                "docker delete %s: removal already in progress (concurrent remover) — "
+                "confirming absence for up to %.0fs", h._impl, confirm_sec,
             )
+            started = time.monotonic()
+            deadline = started + confirm_sec
+            inspected = False
+            # inspect-first, deadline-checked AFTER: the loop can never raise without a terminal
+            # inspect, so a container that vanishes in the window's last moments is still
+            # confirmed rather than misreported as a failed reclaim.
+            while True:
+                status = None
+                try:
+                    # short per-request timeout: the window is the deadline's business — one
+                    # stalled inspect must not stretch the bound by _req's default 30s.
+                    status = self._req(  # type: ignore[attr-defined]
+                        "GET", f"/containers/{h._impl}/json", timeout=2
+                    ).status_code
+                except Exception:
+                    # a daemon blip mid-poll is not a verdict either way — keep confirming
+                    # until the deadline; the raises below stay the only failure paths
+                    logger.debug(
+                        "docker delete %s: inspect failed mid-confirm", h._impl, exc_info=True
+                    )
+                else:
+                    # only a verdict-bearing answer counts as having observed the container:
+                    # a stream of inspect-500s must end as "absence could not be confirmed",
+                    # never as a claim that the container is still present
+                    if status in (200, 404):
+                        inspected = True
+                if status == 404:
+                    logger.info(
+                        "docker delete %s: absence confirmed after %.1fs (another remover "
+                        "finished the reclaim)", h._impl, time.monotonic() - started,
+                    )
+                    return
+                if time.monotonic() >= deadline:
+                    break
+                _reclaim_sleep(_RECLAIM_POLL_SEC)
+            elapsed = time.monotonic() - started
+            if inspected:
+                raise RuntimeError(
+                    f"docker delete {h._impl}: daemon reports a removal in progress, but the "
+                    f"container is still present after {elapsed:.1f}s ({r.text.strip()[:200]})"
+                )
+            raise RuntimeError(
+                f"docker delete {h._impl}: removal in progress, and absence could not be "
+                f"confirmed — every inspect failed for {elapsed:.1f}s (daemon unreachable?)"
+            )
+        raise RuntimeError(
+            f"docker delete {h._impl} failed ({r.status_code}): {r.text.strip()[:200]}"
+        )
