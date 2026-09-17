@@ -38,7 +38,7 @@ import {
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, isPhonePlatform, type CapturePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -46,12 +46,19 @@ import type { Pipeline, TranscriptSink } from './ports.js';
  *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
 export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
 
+/** What the lane factories actually read off an invocation. Identical to `Invocation` except that
+ *  the platform may also be the dial-in one: a phone call never arrives as a dispatched
+ *  invocation.v1 (it is inbound), but it still needs a lane, so the widening lives HERE and never
+ *  in the dispatch contract's mirror. `Invocation` is assignable to it, so every existing caller
+ *  is untouched. */
+export type PipelineInvocation = Omit<Invocation, 'platform'> & { platform: CapturePlatform };
+
 /** Each platform's TRUE hint kind — the binder's lag correction is per-kind
  *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
  *  Teams' voice-level outline is 'dom-outline'; Zoom's active-speaker DOM poll and
  *  jitsi's dominant-speaker signal ride 'dom-active'. Bound once at wiring time —
  *  the page-side watcher and the transcriber never renegotiate it. */
-export function hintKindForPlatform(platform: Platform | string): HintKind {
+export function hintKindForPlatform(platform: CapturePlatform | string): HintKind {
   return platform === 'teams' ? 'dom-outline' : 'dom-active';
 }
 
@@ -410,7 +417,7 @@ function createMixedBotPipeline(
 /** Build the real STT transcribe closure from invocation.v1 — language baked into the call so
  *  the lane never knows about config. transcribeEnabled=false ⇒ a no-op transcribe (the engine
  *  still runs turn gating but emits empty text; recording-only meetings need no STT). */
-export function createTranscribe(inv: Invocation): Transcribe {
+export function createTranscribe(inv: PipelineInvocation): Transcribe {
   if (inv.transcribeEnabled === false || !inv.transcriptionServiceUrl) {
     return async () => ({ text: '', language: inv.language ?? 'en', duration: 0, segments: [] });
   }
@@ -437,7 +444,7 @@ export function createTranscribe(inv: Invocation): Transcribe {
  *     isPerTrackLanePlatform includes it.
  */
 export function createBotPipeline(
-  inv: Invocation,
+  inv: PipelineInvocation,
   sink: TranscriptSink,
   opts: {
     transcribe?: Transcribe;
@@ -459,6 +466,14 @@ export function createBotPipeline(
     return createTeamsBotPipeline(
       transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName,
     );
+  }
+  // DIAL-IN: one call, one stream, ONE speaker — the room. A speakerphone beamforms and mixes
+  // every microphone in the room BEFORE the call leaves it, so there is nothing left to separate
+  // and pyannote would only invent divisions the audio does not carry. The room is therefore a
+  // single per-channel track whose name is known at capture (the room's own label), which is
+  // exactly the per-channel lane's shape — the same lane Google Meet rides, with one channel.
+  if (isPhonePlatform(inv.platform)) {
+    return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
   }
   // Zoom rides the per-channel (gmeet) lane per-track; only Jitsi remains on the legacy mixed
   // segmenter (Teams returned above via its CSRC/GMeet lane).

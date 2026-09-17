@@ -146,6 +146,13 @@
    ]
   },
   {
+   "key": "VEXA_PHONE_PLATFORM",
+   "class": "defaulted",
+   "default": "",
+   "description": "1/true turns on the DIAL-IN (phone) platform: tel:/sip: links parse to platform 'phone' (the Local room case — a conference speakerphone calls a number and the call is the meeting). Unset, a dial-in URI parses to nothing and the four web platforms are byte-for-byte unchanged. SPIKE: there is no SIP trunk behind it yet (docs/adr/0036), so leave it unset outside development",
+   "targets": []
+  },
+  {
    "key": "VEXA_JITSI_HOSTS",
    "class": "defaulted",
    "default": "",

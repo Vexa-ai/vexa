@@ -29,6 +29,28 @@ import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
+/** The dial-in platform: a conference speakerphone calls a number and the call IS the meeting.
+ *  Deliberately NOT a member of `Platform` — `Platform` mirrors invocation.v1's enum, the
+ *  DISPATCH contract, and nothing dispatches a container at a phone call: the call is inbound.
+ *  So `parseInvocation` still refuses `phone` from VEXA_BOT_CONFIG (pinned in phone-adapter.test.ts)
+ *  while the in-process pipeline factory builds its lane. Flag: VEXA_PHONE_PLATFORM=1. */
+export const PHONE_PLATFORM = 'phone';
+
+/** Every source a CAPTURE lane can be built for: the four dispatchable platforms + dial-in. */
+export type CapturePlatform = Platform | typeof PHONE_PLATFORM;
+
+/** Is the dial-in platform turned on for this process? Read at CALL time so tests and reloads
+ *  observe the live env. Mirrors @vexa/join's `phonePlatformEnabled` (same key, same truth). */
+export function phonePlatformEnabled(): boolean {
+  const raw = (process.env.VEXA_PHONE_PLATFORM ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true';
+}
+
+/** True for the dial-in platform. One predicate, so no caller restates the string inline. */
+export function isPhonePlatform(p: CapturePlatform | string): boolean {
+  return p === PHONE_PLATFORM;
+}
+
 /** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
  *  stream + pyannote separation); google_meet rides the per-channel gmeet lane.
  *  The ONE predicate the browser hook, the capture bridge, and the pipeline pick
