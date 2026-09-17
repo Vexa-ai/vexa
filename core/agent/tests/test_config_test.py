@@ -42,26 +42,112 @@ def test_subscription_garbage_file(tmp_path):
 
 # ── custom endpoint ───────────────────────────────────────────────────────────────────────────
 
+MSG_BODY = json.dumps({"type": "message", "content": [{"type": "text", "text": "pong"}]})
+CHAT_BODY = json.dumps({"object": "chat.completion",
+                        "choices": [{"message": {"content": "pong"}}]})
+
+
+def _both_ok(url, payload, headers):
+    return (200, MSG_BODY) if url.endswith("/v1/messages") else (200, CHAT_BODY)
+
+
 def test_custom_endpoint_auth_failure():
     out = ct.test_custom_endpoint("https://gw.example", "bad-key",
                                   post=lambda u, p, h: (401, "{}"))
-    assert not out["ok"] and "Authentication FAILED" in out["summary"]
+    assert not out["ok"] and "rejected" in out["summary"] and "401" in out["summary"]
 
 
-def test_custom_endpoint_ok_anthropic_dialect():
+def test_custom_endpoint_ok_probes_both_call_shapes():
     calls = []
+
+    def post(url, payload, headers):
+        calls.append((url, sorted(headers)))
+        return _both_ok(url, payload, headers)
+
+    out = ct.test_custom_endpoint("https://gw.example/v1/", "k", "m1", post=post)
+    assert out["ok"]
+    # Each shape is probed at the path its adapter really uses, with ONLY its own auth header.
+    assert calls[0][0] == "https://gw.example/v1/v1/messages"
+    assert "x-api-key" in calls[0][1] and "Authorization" not in calls[0][1]
+    assert calls[1][0] == "https://gw.example/v1/chat/completions"
+    assert "Authorization" in calls[1][1] and "x-api-key" not in calls[1][1]
+
+
+def test_openai_only_gateway_is_not_green_1666():
+    """The reported config: a gateway serving ONLY /chat/completions. The harness shape must fail
+    loud — it used to pass because a 404 on /v1/messages silently fell back to the other dialect."""
+    def post(url, payload, headers):
+        return (404, "") if url.endswith("/v1/messages") else (200, CHAT_BODY)
+
+    out = ct.test_custom_endpoint("https://gw.example", "k", post=post)
+    assert not out["ok"] and "no anthropic endpoint" in out["summary"].lower()
+    assert out["shapes"]["completion"]["ok"] is True  # the OpenAI half genuinely works
+
+
+def test_openai_body_at_the_messages_path_is_not_green_1666():
+    """HTTP 200 carrying the OTHER dialect's body — exactly what the claude CLI reports as
+    'empty or malformed response (HTTP 200)'. Status-code grading called this success."""
+    out = ct.test_custom_endpoint("https://gw.example", "k",
+                                  post=lambda u, p, h: (200, CHAT_BODY))
+    assert not out["ok"]
+    assert "OpenAI chat.completion body" in out["summary"]
+
+
+def test_html_from_a_cdn_is_not_green_1666():
+    out = ct.test_custom_endpoint("https://gw.example", "k",
+                                  post=lambda u, p, h: (200, "<!DOCTYPE html><html>blocked"))
+    assert not out["ok"] and "HTML page" in out["summary"]
+
+
+def test_per_dialect_auth_and_endpoints_1666():
+    """The reporter's gateway: both dialects served, different credential on each, and the
+    Messages side on its own host. Configurable now — and the probe proves it end to end."""
+    def post(url, payload, headers):
+        # Exact URLs, so the fake also asserts each shape hit its own endpoint and path.
+        if url == "https://messages.example/v1/messages":
+            return (200, MSG_BODY) if headers.get("x-api-key") == "harness-key" else (401, "{}")
+        assert url == "https://gw.example/v1/chat/completions"
+        return (200, CHAT_BODY) if headers.get("Authorization") == "Bearer chat-key" else (401, "{}")
+
+    out = ct.test_custom_endpoint("https://gw.example/v1", "chat-key", post=post,
+                                  harness_base_url="https://messages.example",
+                                  harness_api_key="harness-key")
+    assert out["ok"], out["summary"]
+
+
+def test_a_401_is_terminal_for_that_shape_not_retried():
+    """No retry on a rejected credential: one request per call shape, full stop (#1666's ~70s
+    'Working' loop is this failure re-sent every ~5s)."""
+    calls = []
+
     def post(url, payload, headers):
         calls.append(url)
-        return 200, "{}"
-    out = ct.test_custom_endpoint("https://gw.example/", "k", "m1", post=post)
-    assert out["ok"] and calls == ["https://gw.example/v1/messages"]
+        return 401, '{"error": {"message": "Missing API key"}}'
 
-
-def test_custom_endpoint_falls_back_to_openai_dialect():
-    def post(url, payload, headers):
-        return (404, "") if url.endswith("/v1/messages") else (200, "{}")
     out = ct.test_custom_endpoint("https://gw.example", "k", post=post)
-    assert out["ok"]
+    assert not out["ok"]
+    assert calls == ["https://gw.example/v1/messages", "https://gw.example/chat/completions"]
+
+
+def test_extra_headers_ride_both_call_shapes_1667():
+    seen = []
+
+    def post(url, payload, headers):
+        seen.append(headers.get("x-provider-session"))
+        return _both_ok(url, payload, headers)
+
+    out = ct.test_custom_endpoint("https://gw.example", "k", post=post,
+                                  headers="x-provider-session: abc123")
+    assert out["ok"] and seen == ["abc123", "abc123"]
+    assert "x-provider-session" in out["summary"]  # names WHICH headers were sent
+    assert "abc123" not in out["summary"]          # never the value
+
+
+def test_parse_extra_headers_forms():
+    assert ct.parse_extra_headers("A: 1\r\nB: 2") == {"A": "1", "B": "2"}
+    assert ct.parse_extra_headers({"A": "1"}) == {"A": "1"}
+    assert ct.parse_extra_headers("garbage") == {}
+    assert ct.parse_extra_headers("") == {}
 
 
 def test_custom_endpoint_unreachable():
@@ -73,14 +159,17 @@ def test_custom_endpoint_unreachable():
 
 def test_run_models_test_routes_custom_vs_subscription(tmp_path):
     out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "k"},
-                             env={}, post=lambda u, p, h: (200, "{}"))
+                             env={}, post=_both_ok)
     assert out["mode"] == "custom" and out["ok"]
     out = ct.run_models_test({}, env={}, creds_path=str(tmp_path / "absent"))
     assert out["mode"] == "subscription" and not out["ok"]
     # secrets never echo in provenance
-    out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "SECRET"},
-                             env={}, post=lambda u, p, h: (200, "{}"))
+    out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "SECRET",
+                              "harness_api_key": "ALSO-SECRET",
+                              "headers": "x-session: HEADER-SECRET"},
+                             env={}, post=_both_ok)
     assert "api_key" not in out["config"] and "SECRET" not in json.dumps(out)
+    assert "HEADER-SECRET" not in json.dumps(out)
 
 
 # ── transcription backend ─────────────────────────────────────────────────────────────────────
@@ -213,3 +302,28 @@ def test_transcription_probe_hits_the_transcriptions_path_once():
         assert seen == [("https://api.openai.com/v1/audio/transcriptions", "sk-good")], (
             f"{configured} → {seen}"
         )
+
+
+def test_completion_probe_follows_the_configured_provider():
+    """An env-configured deployment may run the `anthropic` completion adapter (same endpoint,
+    same dialect as the harness) or `claude-cli` (no HTTP completion at all). Probing
+    /chat/completions regardless would fail a deployment that works."""
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append(url)
+        return _both_ok(url, payload, headers)
+
+    env = {"ANTHROPIC_BASE_URL": "https://gw.example", "ANTHROPIC_AUTH_TOKEN": "k"}
+    out = ct.run_models_test({}, env={**env, "VEXA_LLM_PROVIDER": "anthropic"}, post=post)
+    assert out["ok"] and calls == ["https://gw.example/v1/messages"]  # one shape, one request
+
+    calls.clear()
+    out = ct.run_models_test({}, env={**env, "VEXA_LLM_PROVIDER": "claude-cli"}, post=post)
+    assert out["ok"] and calls == ["https://gw.example/v1/messages"]  # beats ride the CLI
+    assert "completion" not in out["shapes"]
+
+    calls.clear()
+    out = ct.run_models_test({}, env=env, post=post)  # default provider = openai-compat
+    assert out["ok"] and calls == ["https://gw.example/v1/messages",
+                                   "https://gw.example/chat/completions"]

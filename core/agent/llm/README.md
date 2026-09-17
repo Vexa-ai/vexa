@@ -29,6 +29,13 @@ fakes.
 Raw `httpx`, no vendor SDKs — the protocols are ~10 lines each and a pinned SDK is a heavier
 supply-chain surface than the dialect itself.
 
+- **Dialects**: `dialects.py` — what an endpoint ANSWERED, judged by shape rather than status
+  code, plus the extra-header format both call shapes share. The two dialects are not
+  interchangeable (`/chat/completions` + `Authorization: Bearer` + `choices[]` versus
+  `/v1/messages` + `x-api-key` + `content[]`), and a gateway answering HTTP 200 with the other
+  one's body used to fall through to an empty completion with no error at all — Vexa-ai/vexa#1666.
+  The extractors are strict and name which dialect answered.
+
 ## Configuration
 
 | Env var | Meaning | Default |
@@ -38,6 +45,7 @@ supply-chain surface than the dialect itself.
 | `VEXA_LLM_API_KEY` | credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
 | `VEXA_LLM_MODEL` | deployment-default model (free string) | empty → fail-loud at completion call |
 | `VEXA_LLM_MAX_TOKENS` | Messages-API max_tokens | 4096 |
+| `VEXA_LLM_EXTRA_HEADERS` | provider-required extra request headers, `Name: Value` per line (the `ANTHROPIC_CUSTOM_HEADERS` format) — never overrides the auth header | none |
 | `VEXA_RUNNER` | harness adapter key | `claude-code` |
 | `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter ONLY | — |
 

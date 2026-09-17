@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from llm import LLMAuthError, LLMConfigError
+from llm import LLMAuthError, LLMConfigError, LLMError
 from llm.anthropic_api import AnthropicCompletion
 
 
@@ -47,3 +47,65 @@ def test_missing_model_fails_loud(monkeypatch):
     monkeypatch.delenv("VEXA_LLM_MODEL", raising=False)
     with pytest.raises(LLMConfigError):
         AnthropicCompletion(model="").complete("p")
+
+
+# ── #1666: what the endpoint ANSWERED, not just what it returned ──────────────────────────────
+
+def test_openai_body_at_200_fails_by_name_not_empty_text():
+    """The reported cause: a gateway answering the OpenAI shape at /v1/messages. This used to
+    return CompletionResult(text='') — a silent empty beat with no error anywhere."""
+    handler = lambda request: httpx.Response(  # noqa: E731
+        200, json={"object": "chat.completion", "choices": [{"message": {"content": "pong"}}]})
+    with pytest.raises(LLMError) as exc:
+        _adapter(handler).complete("p")
+    assert "DIALECT MISMATCH" in str(exc.value)
+
+
+def test_html_error_page_at_200_names_the_gateway():
+    handler = lambda request: httpx.Response(  # noqa: E731
+        200, text="<html>blocked</html>", headers={"content-type": "text/html"})
+    with pytest.raises(LLMError) as exc:
+        _adapter(handler).complete("p")
+    assert "CDN or gateway" in str(exc.value)
+
+
+# ── #1666: a rejected credential is terminal ──────────────────────────────────────────────────
+
+def test_401_is_not_retried():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(401, json={"error": {"message": "Missing API key"}})
+
+    with pytest.raises(LLMAuthError) as exc:
+        _adapter(handler).complete("p")
+    assert len(calls) == 1                      # one request, no retry loop
+    assert "x-api-key" in str(exc.value)        # names the header the key was sent as
+    assert "Not retried" in str(exc.value)
+
+
+# ── #1667: a provider-required extra header ───────────────────────────────────────────────────
+
+def test_extra_headers_are_sent_and_never_override_auth():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.headers)
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})
+
+    adapter = _adapter(handler, extra_headers="x-provider-session: abc\nx-api-key: hijack")
+    assert adapter.complete("p").text == "ok"
+    assert seen["x-provider-session"] == "abc"
+    assert seen["x-api-key"] == "sk-ant-test"   # config extras never replace the credential
+
+
+def test_extra_headers_from_env(monkeypatch):
+    monkeypatch.setenv("VEXA_LLM_EXTRA_HEADERS", "x-route: eu")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("x-route") == "eu"
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})
+
+    assert AnthropicCompletion(api_key="k", model="m",
+                               transport=httpx.MockTransport(handler)).complete("p").text == "ok"
