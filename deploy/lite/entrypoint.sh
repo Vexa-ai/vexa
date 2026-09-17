@@ -55,6 +55,7 @@ export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
 # profile forwards configured values to every spawned bot process.
 export BOT_ALONE_SILENCE_WINDOW_MS="${BOT_ALONE_SILENCE_WINDOW_MS:-}"
+export BOT_CAPTURE_FAULT_MAX_MS="${BOT_CAPTURE_FAULT_MAX_MS:-}"
 export BOT_SPEAKER_MIN_AUDIO_SEC="${BOT_SPEAKER_MIN_AUDIO_SEC:-}"
 export BOT_SPEAKER_SUBMIT_INTERVAL_SEC="${BOT_SPEAKER_SUBMIT_INTERVAL_SEC:-}"
 export BOT_SPEAKER_CONFIRM_THRESHOLD="${BOT_SPEAKER_CONFIRM_THRESHOLD:-}"
