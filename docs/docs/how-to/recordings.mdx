@@ -74,9 +74,12 @@ curl -X DELETE -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
 
 After the meeting becomes terminal, the owner-scoped delete removes the recording's chunks and
 master from configured primary object storage before removing its metadata (`409` while the meeting
-is still in flight). A storage error leaves the metadata intact so you can safely retry. To erase a
-completed meeting's transcript and every recording together, use
-`DELETE /meetings/{meeting_id}`.
+is still in flight). A storage error leaves the metadata intact so you can safely retry.
+
+This route erases **one recording**. To erase everything a completed meeting left — its transcript,
+the notes and share links derived from it, every recording, and the captured-signal tapes Vexa keeps
+internally for debugging — use `DELETE /meetings/{meeting_id}`. That is the one to call when someone
+asks for a meeting to be deleted; deleting the recordings alone leaves the transcript and the tapes.
 
 Deletion does not promise immediate removal from database snapshots, object-store version history,
 or backups. Those copies expire according to the retention policy of the deployment operator.

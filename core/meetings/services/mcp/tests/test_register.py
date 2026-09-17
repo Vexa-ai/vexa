@@ -1,12 +1,12 @@
 """REGISTRATION — an assembled tool becomes a tool an agent can actually call.
 
 A bound tool is turned into one FastAPI route on this service, carrying `operation_id=<tool name>`,
-which is exactly how this service's own fourteen tools become MCP tools (`FastApiMCP` reads the
+which is exactly how this service's own fifteen tools become MCP tools (`FastApiMCP` reads the
 OpenAPI it generates). One mechanism for both, so an assembled tool and a built-in one are
 indistinguishable to a client — which is the point of assembling rather than proxying.
 
 The forward carries THE CALLER'S IDENTITY and nothing else: the bearer the edge already resolved,
-travelling as `X-API-Key`, exactly as the fourteen do. There is no second credential and no way to
+travelling as `X-API-Key`, exactly as the fifteen do. There is no second credential and no way to
 pass one as an argument (PRD 40.8).
 """
 from __future__ import annotations

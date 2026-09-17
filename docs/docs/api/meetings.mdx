@@ -121,8 +121,15 @@ curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
 
 - For an `idle`/`scheduled` plan, it deletes the plan row.
 - For a `completed`/`failed` meeting, it deletes durable transcript rows, transcript-derived
-  notes/shares, recording objects from primary object storage, and recording metadata. The terminal
-  meeting row remains as lifecycle evidence, but transcript reads return `404`.
+  notes/shares, recording objects from primary object storage, recording metadata, and the
+  **captured-signal tapes** the meeting left (the raw per-channel audio and diagnostics Vexa keeps
+  internally for debugging and replay — every bot session of that meeting, including a tape marked
+  as a kept regression fixture). The terminal meeting row remains as lifecycle evidence, but
+  transcript reads return `404`.
+
+  On the native-key path the response reports the two counts separately — `objects_deleted` for
+  recording objects, `signal_objects_deleted` for tape objects — because they answer different
+  questions: what you could have played back, and what we had kept for ourselves.
 
 Both answer an owner-indistinguishable `404` for an unknown or unowned record. An in-flight meeting
 (`requested` through `stopping`) answers `409`; use `DELETE /bots/{platform}/{native_meeting_id}` to
@@ -135,9 +142,10 @@ when you address meetings by their join-link identity rather than the record id;
 `200` on this path (the by-record-id `DELETE` answers `204`).
 
 <Warning>
-Deletion confirms erasure from the live Postgres/Redis state and configured primary object storage.
-It does **not** claim immediate erasure from database snapshots, object-store version history, or
-other backups; those residuals expire under the operator's deployment retention policy.
+Deletion confirms erasure from the live Postgres/Redis state and configured primary object storage
+— transcripts, recordings, and captured-signal tapes alike. It does **not** claim immediate erasure
+from database snapshots, object-store version history, or other backups; those residuals expire
+under the operator's deployment retention policy.
 </Warning>
 
 ### Set the planned status by native key
