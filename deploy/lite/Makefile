@@ -38,6 +38,15 @@ MINIO_ACCESS_KEY ?= vexa-access-key
 MINIO_SECRET_KEY ?= vexa-secret-key
 MINIO_BUCKET     ?= vexa
 
+# MinIO REMOVED ITS DOCKER HUB REPOSITORY. `minio/minio:latest` and every dated `minio/minio` tag
+# now 404 with "pull access denied … repository does not exist", so a clean machine with no local
+# cache could not finish `make lite` at all — MinIO starts before the app, so nothing of Vexa came
+# up (#1671 item 1). quay.io is MinIO's own registry and still serves the same images. PINNED to a
+# dated release, not `:latest`: an upstream retag is exactly what broke this, and `:latest` after
+# 2025-05 also drops the web console this `--console-address` flag configures.
+MINIO_IMAGE      ?= quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+MINIO_MC_IMAGE   ?= quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+
 # --- Local CPU STT (LOCAL_STT=1) ---------------------------------------------------------------
 # Transcription in Vexa is always an external OpenAI-compatible /v1/audio/transcriptions service.
 # For a self-host (or a witness box) with NO hosted token and NO GPU, `make up LOCAL_STT=1` runs a
@@ -142,9 +151,9 @@ up: preflight
 		docker run -d --name $(MINIO_CONTAINER) --network $(NETWORK) --restart unless-stopped \
 			-e MINIO_ROOT_USER=$(MINIO_ACCESS_KEY) -e MINIO_ROOT_PASSWORD=$(MINIO_SECRET_KEY) \
 			-v vexa-lite-miniodata:/data \
-			minio/minio:latest server /data --console-address ":9001" > /dev/null; \
+			$(MINIO_IMAGE) server /data --console-address ":9001" > /dev/null; \
 		sleep 4; \
-		docker run --rm --network $(NETWORK) --entrypoint sh minio/mc:latest -c \
+		docker run --rm --network $(NETWORK) --entrypoint sh $(MINIO_MC_IMAGE) -c \
 			"mc alias set vexa http://$(MINIO_CONTAINER):9000 $(MINIO_ACCESS_KEY) $(MINIO_SECRET_KEY) && mc mb --ignore-existing vexa/$(MINIO_BUCKET)" >/dev/null 2>&1 || true; \
 	fi; echo "  ✓ MinIO ready"; \
 	if [ -n "$(LOCAL_STT)" ]; then \
