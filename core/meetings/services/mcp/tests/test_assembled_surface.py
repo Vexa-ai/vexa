@@ -1,7 +1,7 @@
 """END TO END — a domain's manifest becomes a tool an agent sees in `tools/list`.
 
 The point of assembling rather than proxying: an assembled tool and one of this service's own
-fourteen are indistinguishable to a client, because both are a route with `operation_id=<name>` that
+fifteen are indistinguishable to a client, because both are a route with `operation_id=<name>` that
 `FastApiMCP` reads out of the same OpenAPI.
 
 The flows manifest used here is THE FILE IN THE REPO — `core/flows/mcp.tools.v1.json`, the same one
@@ -72,7 +72,7 @@ FLOWS_OPENAPI = {"paths": {
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
 }}
 
-BUILT_IN = 14
+BUILT_IN = 15
 
 
 def _boot(**env):
@@ -108,7 +108,7 @@ def test_a_deployment_with_flows_serves_the_flows_tools_beside_the_built_in_ones
     assert len(names) == BUILT_IN + len(declared)
 
 
-def test_a_deployment_without_flows_serves_exactly_the_built_in_fourteen():
+def test_a_deployment_without_flows_serves_exactly_the_built_in_fifteen():
     """Absent, not present-and-failing. An agent that cannot see a tool recovers; one told a tool
     exists and handed a 502 tells the person the product is broken."""
     app = _boot()

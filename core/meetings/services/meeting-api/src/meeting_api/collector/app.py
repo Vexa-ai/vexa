@@ -123,6 +123,7 @@ def build_router(
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
     artifact_object_deleter: Optional[Callable] = None,
+    artifact_signal_deleter: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -608,6 +609,18 @@ def build_router(
                 # scrubbed, so the same owner-scoped request can retry with the original keys.
                 deleted_objects += len(await artifact_object_deleter(recording))
 
+            # The captured-signal tape (#116) lives in its own keyspace and is NOT listed in
+            # ``recordings``, so the loop above cannot reach it — which is exactly how the raw
+            # per-channel PCM of an "erased" meeting survived deletion until the budget janitor
+            # happened to evict it. Swept by prefix, which also converges a repeat whose first
+            # attempt died between the two keyspaces. Still before the DB scrub: a storage failure
+            # here must leave the meeting retryable, not tombstoned with objects behind it.
+            deleted_signal_objects = 0
+            if artifact_signal_deleter is not None:
+                deleted_signal_objects = len(
+                    await artifact_signal_deleter(user_id, meeting_id)
+                )
+
             finalized = await store.finalize_completed_artifact_deletion(user_id, meeting_id)
             if finalized is None:
                 raise HTTPException(status_code=404, detail="Meeting not found")
@@ -616,14 +629,20 @@ def build_router(
                     status_code=409,
                     detail="Meeting artifacts can only be deleted after the lifecycle is terminal",
                 )
+            # The audit line for an irreversible act: who, which meeting, how much went, and in
+            # which keyspace. ``signal_objects`` is counted separately from ``objects`` because the
+            # two answer different questions — what a user could play back, and what we kept for
+            # ourselves — and a retention question about a deleted meeting is usually the second.
             log_event(
                 "meeting_artifacts_deleted", audience="user", span="meetings.artifacts.delete",
                 user_id=user_id, meeting_id=str(meeting_id),
                 fields={"recordings": len(recordings), "objects": deleted_objects,
+                        "signal_objects": deleted_signal_objects,
                         "already_deleted": bool(plan.get("already_deleted"))},
             )
             return {
                 "kind": "artifacts", "objects_deleted": deleted_objects,
+                "signal_objects_deleted": deleted_signal_objects,
                 "already_deleted": bool(plan.get("already_deleted")),
             }
         log_event(
@@ -810,6 +829,11 @@ def build_router(
             body.update({
                 "deleted": "completed_meeting_artifacts",
                 "objects_deleted": receipt["objects_deleted"],
+                # Counted apart from ``objects_deleted`` (#116): those are the recording objects the
+                # caller could have played back, these are the captured-signal tapes Vexa kept for
+                # its own debugging. A retention question about an erased meeting is usually about
+                # the second, and a single total cannot answer it.
+                "signal_objects_deleted": receipt["signal_objects_deleted"],
                 "backup_residuals": "expire_under_deployment_retention_policy",
             })
         return JSONResponse(content=body)

@@ -1,13 +1,13 @@
 """REGISTRATION — an assembled tool becomes one route on this service, and therefore one MCP tool.
 
 `FastApiMCP` derives the MCP surface from this app's OpenAPI: a route with `operation_id=<name>` IS
-a tool called `<name>`. That is how the fourteen built-in tools work, so assembling through the same
+a tool called `<name>`. That is how the fifteen built-in tools work, so assembling through the same
 mechanism makes an assembled tool and a built-in one indistinguishable to a client — which is the
 whole point of assembling rather than proxying, and the reason there is no second code path to keep
 in step.
 
 WHAT TRAVELS: whichever credential the tool's `auth` names, and nothing else (issue #1468).
-`subject` sends the caller's own, as `X-API-Key`, exactly as the fourteen do — the case this edge
+`subject` sends the caller's own, as `X-API-Key`, exactly as the fifteen do — the case this edge
 was built for. `admin` sends the key the DEPLOYMENT holds, in the header the owning domain named,
 and the caller's own credential does NOT travel with it: a door that reads an operator key has no
 use for a person's, and forwarding both would let the weaker one look like it was checked.

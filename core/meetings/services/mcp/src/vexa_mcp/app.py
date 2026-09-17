@@ -624,7 +624,7 @@ def create_app(
                       so the shipped forwarding path runs with no network.
     ``assembly_env`` / ``assembly_transport`` — the same seam for the DISCOVERY hop: which domains
                       this deployment carries, and how their manifests are fetched. `VEXA_MCP_ASSEMBLY_OFF`
-                      skips assembly entirely, which is what the fourteen-tool surface tests want.
+                      skips assembly entirely, which is what the fifteen-tool surface tests want.
     """
     # REFUSE TO BOOT MISCONFIGURED (ADR-0026), the same first move every other adopted service
     # makes. This service shipped with eleven env keys, no declaration and no preflight — the one
@@ -1128,6 +1128,39 @@ def create_app(
         """
         return await make_request("GET", f"{base_url}/recordings/{recording_id}", api_key)
 
+    # The one tool that DESTROYS. Meeting-scoped rather than recording-scoped because that is the
+    # complete erasure an integrator's retention promise is written against — a recording is a
+    # subset of it, and `DELETE /recordings/{id}` is BOT-scoped at the gateway while an agent
+    # integration is normally handed a transcript-scoped key, so a per-recording tool would answer
+    # 403 for exactly the callers that would reach for it. See the README's parity table.
+    @app.delete("/meeting-artifacts", operation_id="delete_meeting_artifacts")
+    async def delete_meeting_artifacts(
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        PERMANENTLY erase a finished meeting's artifacts: its transcript, any notes and share
+        links derived from it, its recordings, and the internal captured-signal tape Vexa keeps
+        for debugging. IRREVERSIBLE — there is no undo and no copy to restore from.
+
+        Only for a meeting that has ENDED. One still running answers 409 — stop the bot first with
+        `stop_bot`, then delete. Unknown or not yours answers 404. The meeting row itself stays, as
+        a record that the meeting happened; everything said in it is gone.
+
+        Do this only when the person you work for asked for THIS meeting to be erased. Never to
+        tidy up, never to free space, never on your own initiative.
+
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
+        """
+        plat, mid = _resolve_identity(
+            "delete_meeting_artifacts", platform, native_meeting_id, meeting_platform, meeting_id
+        )
+        return await make_request("DELETE", f"{base_url}/meetings/{plat}/{mid}", api_key)
+
     @app.post("/report-issue", operation_id="report_issue")
     async def report_issue(
         data: ReportIssue,
@@ -1316,11 +1349,11 @@ def create_app(
     # ---------------------------
     # ASSEMBLY (PRD decision 40) — the tools the DEPLOYED domains declare
     # ---------------------------
-    # The fourteen tools above are this edge's own. Everything else it serves belongs to a domain:
+    # The fifteen tools above are this edge's own. Everything else it serves belongs to a domain:
     # meetings owns the bots and transcripts, identity owns the person, flows owns the reaction
     # engine, agent owns the desks. Each publishes a manifest at `/.well-known/mcp-tools.json`, this
     # asks the ones the deployment names, and every tool becomes a route here with
-    # `operation_id=<name>` — the SAME mechanism the fourteen use, so an assembled tool and a
+    # `operation_id=<name>` — the SAME mechanism the fifteen use, so an assembled tool and a
     # built-in one are indistinguishable to a client.
     #
     # BEFORE `FastApiMCP(app, ...)`, necessarily: the MCP surface is derived from this app's
