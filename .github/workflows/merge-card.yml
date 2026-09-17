@@ -3,6 +3,10 @@
 # (value), and a fresh non-author review approval (diff). This is a required status check on main
 # (added to branch protection alongside `gates`), so the merge queue will not merge without it.
 #
+# The card also carries an INFORMATIONAL `Human test` row (#1687) — who, other than the author, ran
+# the software on their own instance. It renders ✅/❌ and gates nothing; the flag below is what
+# would make it gate.
+#
 # Runs on pull_request + pull_request_review (PR-entry) and merge_group (the queue re-check, where
 # the PR number is parsed from the queue ref). See scripts/merge-card-gate.mjs and ADR-0029.
 name: merge-card
@@ -41,8 +45,13 @@ jobs:
         with: { ref: main }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Value AND diff accepted (the merge card)
+      - name: The merge card — value, diff, acceptance (gating) and human test (informational)
         env:
+          # Both knobs are documented at the top of scripts/merge-card-gate.mjs. The human-test row
+          # informs until this is "true"; MERGE_CARD_AGENT_LOGINS names agent accounts that a
+          # `[bot]` suffix would not catch — this repo names none.
+          MERGE_CARD_REQUIRE_HUMAN_TEST: "false"
+          MERGE_CARD_AGENT_LOGINS: ""
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBERS: ${{ github.event.pull_request.number }}

@@ -1,0 +1,40 @@
+{
+  "pr": { "number": 4242, "user": { "login": "pr-author" } },
+  "comments": [
+    {
+      "body": "LGTM",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-1",
+      "user": { "login": "drive-by", "type": "User" }
+    },
+    {
+      "body": "Validated on lite, joined a 20-minute Teams call and left the bot alone for 12, bot exited left_alone at 6m02s as claimed\n\nLogs attached.",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-2",
+      "user": { "login": "octo-validator", "type": "User" }
+    },
+    {
+      "body": "Validated on compose, POST /meetings then GET /meetings, has_capture true on the Teams row",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-3",
+      "user": { "login": "pr-author", "type": "User" }
+    },
+    {
+      "body": "Validated on helm, upgraded a 3-node k3s with the digest values, all pods came up",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-4",
+      "user": { "login": "vexa-ci[bot]", "type": "Bot" }
+    },
+    {
+      "body": "Validated on lite, looks good",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-5",
+      "user": { "login": "sloppy-validator", "type": "User" }
+    },
+    {
+      "body": "Validated on hosted, ran the hosted API, all good",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-6",
+      "user": { "login": "wrong-shape", "type": "User" }
+    },
+    {
+      "body": "Some preamble about the change.\n\nValidated on lite, ran the smoke, it passed",
+      "html_url": "https://github.com/Vexa-ai/vexa/pull/4242#issuecomment-7",
+      "user": { "login": "buried-line", "type": "User" }
+    }
+  ]
+}
