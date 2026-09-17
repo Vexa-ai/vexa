@@ -3,6 +3,8 @@
 # marker, never a thread of new comments) so a contributor sees "value ✅/❌ · diff ✅/❌ — here's
 # what's left" inline, without digging into check logs. It matches the constitution's "one card,
 # plain language" intent. It gates nothing — comment-only.
+# The card also re-renders when a PR comment is created, edited or deleted, keeping the
+# `Human test` row honest.
 #
 # pull_request_target (not pull_request) so it can comment on FORK PRs too; it checks out `main`
 # (trusted gate code, never the PR's tree) and reads PR state via the API — no untrusted code runs.
@@ -14,18 +16,31 @@ on:
     types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
+  issue_comment:
+    types: [created, edited, deleted]
 
 permissions:
   pull-requests: write   # upsert the one sticky card comment
   issues: read           # the acceptance row reads Closes-target issue bodies
 
+# One group per PR across events: the idempotent card re-reads live API state on every run,
+# so the survivor of a collapsed burst is the freshest read.
 concurrency:
-  group: merge-card-comment-${{ github.event.pull_request.number }}
+  group: merge-card-comment-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   comment:
-    if: ${{ !github.event.pull_request.draft }}
+    # A comment event must reach exactly the PRs the other two triggers already reach: an OPEN
+    # pull request. Without the `state` test every comment on any of this repo's ~1700 historical
+    # PRs — none of which carries a sticky card, merge-card shipped in v0.12.9 — would post a fresh
+    # "Not mergeable yet" card on a PR merged months ago, and pay the value-fsm wait to do it.
+    if: >-
+      ${{
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null
+          && github.event.issue.state == 'open') ||
+        (github.event_name != 'issue_comment' && !github.event.pull_request.draft)
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,6 +56,7 @@ jobs:
           MERGE_CARD_AGENT_LOGINS: ""
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
+          # Empty on issue_comment so the script resolves the PR from the event payload.
           PR_NUMBERS: ${{ github.event.pull_request.number }}
         run: node scripts/merge-card-gate.mjs > card.md || true   # exit 1 when not accepted; the card body is what we want
       - uses: actions/github-script@v7
@@ -49,8 +65,13 @@ jobs:
             const fs = require('fs');
             const body = fs.readFileSync('card.md', 'utf8').trim();
             if (!body.includes('<!-- merge-card -->')) { core.info('no card body — skipping'); return; }
+            // A skip card (draft) says nothing a reader wants. The draft guard in this job's `if:`
+            // cannot see draft state on a comment event, so the stub is filtered here instead —
+            // and it neither creates a comment nor OVERWRITES an informative one on a PR that was
+            // converted back to draft. Checked before the listing so it costs no API call.
+            if (/^_Skipped \(/m.test(body)) { core.info('skip card — leaving any sticky comment untouched'); return; }
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
+            const issue_number = context.payload.pull_request?.number ?? context.payload.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
             const mine = comments.find(c => (c.user?.type === 'Bot') && c.body.includes('<!-- merge-card -->'));
             if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });

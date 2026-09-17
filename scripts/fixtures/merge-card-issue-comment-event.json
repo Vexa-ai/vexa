@@ -1,0 +1,35 @@
+{
+  "onPullRequest": {
+    "action": "created",
+    "issue": {
+      "number": 4242,
+      "title": "Refresh the merge card on validation comments",
+      "state": "open",
+      "pull_request": {
+        "url": "https://api.github.com/repos/Vexa-ai/vexa/pulls/4242",
+        "html_url": "https://github.com/Vexa-ai/vexa/pull/4242",
+        "state": "open"
+      }
+    },
+    "comment": {
+      "id": 9001,
+      "body": "Validated on lite, ran the meeting smoke test, passed",
+      "user": { "login": "octo-validator", "type": "User" }
+    },
+    "repository": { "full_name": "Vexa-ai/vexa" }
+  },
+  "onIssue": {
+    "action": "created",
+    "issue": {
+      "number": 4243,
+      "title": "Refresh the merge card on validation comments",
+      "state": "open"
+    },
+    "comment": {
+      "id": 9002,
+      "body": "Validated on lite, ran the meeting smoke test, passed",
+      "user": { "login": "octo-validator", "type": "User" }
+    },
+    "repository": { "full_name": "Vexa-ai/vexa" }
+  }
+}
