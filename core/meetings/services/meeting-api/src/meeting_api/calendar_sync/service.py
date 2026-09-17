@@ -87,7 +87,8 @@ def _next_occurrence(comp, *, window_start: datetime, window_end: datetime,
     (EXDATE-respecting) for a recurring event. ``None`` when nothing falls in the window.
     ``skip`` = occurrence datetimes claimed by RECURRENCE-ID override components — those
     instances belong to the overrides, never to the master's expansion."""
-    dtstart = _as_utc(comp.get("DTSTART") and comp.get("DTSTART").dt)
+    raw_dtstart = comp.get("DTSTART") and comp.get("DTSTART").dt
+    dtstart = _as_utc(raw_dtstart)
     if dtstart is None:
         return None
     rrule_prop = comp.get("RRULE")
@@ -96,8 +97,16 @@ def _next_occurrence(comp, *, window_start: datetime, window_end: datetime,
 
     from dateutil.rrule import rrulestr
 
+    # Expand in the event's OWN timezone, never in UTC. A recurrence is a WALL-CLOCK rule
+    # ("every Wednesday at 15:00 in Madrid"), so stepping a UTC-normalised DTSTART pins every
+    # instance to the offset the series happened to start with: a rule created in winter fires
+    # an hour late all summer, and one created in summer fires an hour early all winter. The
+    # seed keeps its tzinfo and each occurrence is converted below, where the offset is
+    # recomputed per instance. This also keeps EXDATE comparable: exclusions carry their own
+    # correct offset, so a mismatched expansion silently resurrects cancelled instances.
+    seed = raw_dtstart if isinstance(raw_dtstart, datetime) and raw_dtstart.tzinfo else dtstart
     try:
-        rule = rrulestr(rrule_prop.to_ical().decode(), dtstart=dtstart)
+        rule = rrulestr(rrule_prop.to_ical().decode(), dtstart=seed)
     except (ValueError, TypeError):
         return None
     exdates: set[datetime] = set(skip or ())
