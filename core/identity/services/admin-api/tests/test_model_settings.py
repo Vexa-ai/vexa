@@ -72,11 +72,44 @@ def test_user_models_set_masked_readback_and_clear(client):
     assert cfg["api_key_set"] is True       # untouched
 
 
+def test_per_dialect_fields_round_trip_and_mask(client):
+    """Vexa-ai/vexa#1666/#1667: the Messages-side endpoint + credential and the extra-header map
+    are first-class config. harness_api_key masks like api_key; headers echo their NAMES with the
+    values hidden, and a JSON object is normalized to the stored `Name: Value` line form."""
+    _uid, tok = _user_token(client, email="dialects@vexa.ai")
+    h = {"X-API-Key": tok}
+
+    r = client.put("/user/models", headers=h, json={
+        "mode": "custom", "base_url": "https://gw.example.com/v1", "api_key": "fake-chat-key-1234abcd",
+        "harness_base_url": "https://messages.example.com",
+        "harness_api_key": "fake-harness-key-5678wxyz",
+        "headers": {"x-provider-session": "fake-session-value-9012"},
+    })
+    assert r.status_code == 200, r.text
+    cfg = r.json()
+    assert cfg["harness_base_url"] == "https://messages.example.com"
+    assert cfg["harness_api_key_set"] is True
+    assert "fake-harness-key" not in (cfg["harness_api_key"] or "")
+    assert cfg["headers_set"] is True
+    assert cfg["headers"].startswith("x-provider-session: ********")   # name kept, value hidden
+    assert "fake-session-value" not in cfg["headers"]
+
+    # the internal edge is the ONLY place the values cross in the clear (dispatch consumes them)
+    r = client.get(f"/internal/users/{_uid}/model-config", headers=_internal())
+    models = r.json()["models"]
+    assert models["harness_api_key"] == "fake-harness-key-5678wxyz"
+    assert models["headers"] == "x-provider-session: fake-session-value-9012"  # normalized line form
+
+
 def test_user_models_validation(client):
     _uid, tok = _user_token(client, email="val@vexa.ai")
     h = {"X-API-Key": tok}
     assert client.put("/user/models", headers=h, json={"mode": "yolo"}).status_code == 422
     assert client.put("/user/models", headers=h, json={"base_url": "not-a-url"}).status_code == 422
+    assert client.put("/user/models", headers=h,
+                      json={"harness_base_url": "not-a-url"}).status_code == 422
+    # a header that would silently not arrive is refused at the edge, not stored (#1667)
+    assert client.put("/user/models", headers=h, json={"headers": "garbage"}).status_code == 422
     assert client.put("/user/transcription", headers=h, json={"url": "ftp://x"}).status_code == 422
 
 
