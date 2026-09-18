@@ -4,6 +4,10 @@ Durable product workflows as TWO Postgres tables and ONE leased worker loop. A f
 sealed envelope, becomes exactly one `reaction` row (dedup by constraint), is worked one step at a
 time, and every touch of the outside world leaves an `effect_receipt` a retry consults before acting.
 
+Set `VEXA_FLOWS_DB_URL=postgresql+pg8000://user:password@postgres:5432/flows`.
+The pg8000 driver is BSD-3-Clause (Category A), pure Python and needs no libpq, so no LGPL driver ships in the image.
+The engine translates the URL's optional `sslmode` into the driver's SSL settings.
+
 - **ADR:** the reaction table with receipts IS the engine; Dapr is a possible future executor of the
   same steps, never the foundation. Full design: docs/WORKFLOW-ARCHITECTURE-PRD.md + the published
   architecture page.

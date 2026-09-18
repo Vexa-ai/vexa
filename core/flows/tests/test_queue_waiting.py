@@ -467,7 +467,7 @@ def test_the_standing_notices_are_untouched():
 # genuinely executes against `flows_api.db`.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://queue-waiting:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://queue-waiting:unreachable@127.0.0.1:1/flows"}
 
 
 @pytest.fixture(scope="module")

@@ -17,7 +17,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 # Production-only runtime deps NOT in the (lean) test pyproject: the ASGI server + the async
 # Postgres stack (SQLAlchemy async engine + asyncpg driver) the app binds to the compose Postgres.

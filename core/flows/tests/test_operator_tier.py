@@ -37,7 +37,7 @@ from sqlite_double import SqliteDB
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-operator-tier",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://operator-tier:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://operator-tier:unreachable@127.0.0.1:1/flows"}
 
 #: The narrow key, for the tests that install one. Deliberately not a value in `_ENV`: whichever
 #: test module imports `flows_api` first wins, so an import-time constant is not a thing this file
