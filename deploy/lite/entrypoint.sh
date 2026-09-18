@@ -24,7 +24,7 @@ fi
 
 # ─── Database — DB_* only. Each service builds its own async URL (postgresql+asyncpg://) from these
 #     (admin_api/_database_url, meeting_api/_database_url). We deliberately do NOT export DATABASE_URL:
-#     a plain `postgresql://` would force SQLAlchemy onto the psycopg2 (sync) driver, which lite does
+#     use an explicit async scheme (flows uses pg8000); a bare URL selects a sync driver we do
 #     not install (asyncpg only). For an external managed DB, set DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD.
 export DB_HOST="${DB_HOST:-localhost}"
 export DB_PORT="${DB_PORT:-5432}"
