@@ -66,7 +66,7 @@ def test_the_db_protocol_and_postgres_factory_are_still_the_front_door():
     assert hasattr(flows, "db_from_url")
 
 
-@pytest.mark.parametrize("mode", [None, "disable", "allow", "prefer", "require", "verify-ca", "verify-full"])
+@pytest.mark.parametrize("mode", [None, "", "disable", "Disable", "allow", "prefer", "require", "REQUIRE", "verify-ca", "verify-full"])
 def test_pg8000_ssl_modes_preserve_the_operator_url(mode):
     base = "postgresql+pg8000://u:p@127.0.0.1:1/flows"
     query = "application_name=flow%20worker&tag=a&tag=b&empty="
@@ -74,20 +74,22 @@ def test_pg8000_ssl_modes_preserve_the_operator_url(mode):
 
     clean_url, args = translate_pg8000_url(url)
 
+    # Case and an empty value are operator input (libpq is case-insensitive; empty means unset).
+    m = (mode or "").strip().lower()
     assert clean_url == f"{base}?{query}"
-    if mode in (None, "allow", "prefer"):
+    if m in ("", "allow", "prefer"):
         assert args == {}
-    elif mode == "disable":
+    elif m == "disable":
         assert args == {"ssl_context": False}
     else:
         assert set(args) == {"ssl_context"}
         context = args["ssl_context"]
         assert isinstance(context, ssl.SSLContext)
-        assert context.check_hostname is (mode != "require")
-        assert context.verify_mode == (ssl.CERT_NONE if mode == "require" else ssl.CERT_REQUIRED)
+        assert context.check_hostname is (m != "require")
+        assert context.verify_mode == (ssl.CERT_NONE if m == "require" else ssl.CERT_REQUIRED)
 
 
-@pytest.mark.parametrize("mode", ["invalid", ""])
+@pytest.mark.parametrize("mode", ["invalid", "sslmode-typo"])
 def test_pg8000_rejects_unknown_ssl_modes(mode):
     with pytest.raises(ValueError) as exc:
         translate_pg8000_url(f"postgresql+pg8000://u:p@127.0.0.1:1/flows?sslmode={mode}")

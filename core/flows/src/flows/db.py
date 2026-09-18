@@ -70,8 +70,12 @@ def translate_pg8000_url(url: str) -> tuple[str, dict]:
             mode = pair[0][1]
         else:
             query.append(field)
-    if mode is None:
-        return url, {}
+    # libpq is case-insensitive here and treats an empty value as "not set"; the Helm template
+    # emits `?sslmode=${DB_SSL_MODE}` verbatim, so both shapes are operator input, not defects.
+    mode = mode.strip().lower() if mode is not None else None
+    if not mode:
+        clean_url = urlunsplit(parts._replace(query="&".join(query))) if mode == "" else url
+        return clean_url, {}
 
     clean_url = urlunsplit(parts._replace(query="&".join(query)))
     if mode in ("allow", "prefer"):
