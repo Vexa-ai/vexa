@@ -1,0 +1,34 @@
+{{/*
+Provider configuration for the optional stateless Anthropic-dialect translator.
+Off by default: no third-party translator or fallback is installed implicitly.
+No auth of its own: compose publishes on loopback; Helm keeps a ClusterIP only.
+Keep credentials in environment secrets or the pod's IAM role, never this ConfigMap.
+*/}}
+{{- if .Values.llmShim.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-shim
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-shim
+data:
+  config.yaml: |
+    {{- if .Values.llmShim.config }}
+    {{- .Values.llmShim.config | nindent 4 }}
+    {{- else }}
+    model_list:
+      - model_name: os.environ/LLM_SHIM_MODEL
+        litellm_params:
+          model: os.environ/LLM_SHIM_MODEL
+          custom_llm_provider: hosted_vllm
+          api_base: os.environ/LLM_SHIM_UPSTREAM
+          api_key: os.environ/LLM_SHIM_UPSTREAM_KEY
+          # For Qwen upstreams that require thinking off, supply llmShim.config with:
+          # extra_body:
+          #   chat_template_kwargs:
+          #     enable_thinking: false
+    litellm_settings:
+      drop_params: true
+    {{- end }}
+{{- end }}

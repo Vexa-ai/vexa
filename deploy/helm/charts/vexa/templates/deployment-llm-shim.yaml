@@ -1,0 +1,107 @@
+{{/*
+Stateless Anthropic-dialect translator for operator-selected model providers.
+One shim per namespace by design.
+Off by default: this is an optional third-party compatibility surface.
+No auth of its own: compose publishes on loopback; Helm keeps a ClusterIP only.
+Never expose it publicly; it forwards requests with the upstream credentials.
+*/}}
+{{- if .Values.llmShim.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-shim
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-shim
+spec:
+  replicas: 1
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: llm-shim
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: llm-shim
+      annotations:
+        checksum/llm-shim-config: {{ include (print $.Template.BasePath "/configmap-llm-shim.yaml") . | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: llm-shim
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: {{ .Values.llmShim.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["--config", "/app/config.yaml", "--port", {{ .Values.llmShim.port | quote }}]
+          ports:
+            - name: http
+              containerPort: {{ .Values.llmShim.port }}
+          env:
+            - name: LLM_SHIM_MODEL
+              value: {{ .Values.llmShim.model | quote }}
+            - name: LLM_SHIM_UPSTREAM
+              value: {{ .Values.llmShim.upstream | quote }}
+            - name: LLM_SHIM_UPSTREAM_KEY
+              {{- if .Values.llmShim.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmShim.existingSecret }}
+                  key: LLM_SHIM_UPSTREAM_KEY
+              {{- else }}
+              value: {{ .Values.llmShim.upstreamKey | quote }}
+              {{- end }}
+            {{- with .Values.llmShim.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.llmShim.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: llm-shim
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.llmShim "llm-shim")) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+{{- end }}
