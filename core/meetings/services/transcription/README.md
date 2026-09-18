@@ -21,7 +21,7 @@ It imports only third-party libraries and its own module — no cross-brick edge
 | Route | Purpose |
 |---|---|
 | `POST /v1/audio/transcriptions` | OpenAI Whisper-compatible transcription (multipart audio → verbose_json segments) |
-| `GET /health` | `200` when the model is loaded, `503` otherwise — the LB / compose healthcheck seam |
+| `GET /health` | `200` when the selected backend is ready, `503` otherwise — includes `backend`; Transcribe failures include `reason` |
 | `GET /` | service info (worker id · model · device) |
 
 ## Run
@@ -34,3 +34,12 @@ uv run pytest -q                 # the autonomous contract suite (no GPU, no mod
 Container builds: `Dockerfile` (GPU, `nvidia/cuda` base) and `Dockerfile.cpu` (CPU-only).
 Config (env): `MODEL_SIZE`, `DEVICE` (`cuda`/`cpu`), `COMPUTE_TYPE`, `API_TOKEN`, plus the
 decoding/VAD/backpressure knobs documented in the deploy unit's `.env.example`.
+
+`STT_BACKEND` selects `whisper` (default, model loaded at startup) or `transcribe` (streaming PCM16, no model load).
+For Transcribe, set `AWS_REGION` and provide credentials through the standard AWS chain
+(environment, profile, or IAM). `/health` checks region configuration and credential resolution.
+`TRANSCRIBE_LANGUAGE_DEFAULT` and `TRANSCRIBE_TIMEOUT_S` optionally override the backend defaults;
+the timeout must be positive and below the bot client's 30-second deadline.
+Run `deploy/transcription/docker-compose.transcribe.yml` for a single CPU-container worker;
+it publishes the API directly and forwards environment credentials, including optional session tokens.
+The response retains the Whisper `verbose_json` contract, with optional word timestamps and no speaker labels.

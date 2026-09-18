@@ -61,6 +61,29 @@ TRANSCRIPTION_MODEL=mistralai/Voxtral-Mini-4B-Realtime-2602
 Use the exact model id returned by your gateway's `GET /v1/models`; deployments may expose a
 different Voxtral checkpoint or served name.
 
+## Amazon Transcribe as the engine
+
+Use this engine for managed speech recognition without a GPU or a local model download.
+It keeps the same endpoint, token authentication, and `verbose_json` response.
+From `deploy/transcription`, configure `.env` and export standard AWS credentials (or use the host's IAM role), then run:
+
+```bash
+docker compose -f docker-compose.transcribe.yml up -d --build
+```
+
+| Environment variable | Purpose |
+|---|---|
+| `STT_BACKEND` | Set to `transcribe` by this compose unit; otherwise Whisper is the default. |
+| `AWS_REGION` | Required; choose the region for streaming. |
+| `TRANSCRIBE_LANGUAGE_DEFAULT` | Optional BCP-47 language; blank uses the backend default. |
+| `TRANSCRIBE_TIMEOUT_S` | Optional stream deadline; uses the backend default, must stay below 30 seconds. |
+| `API_TOKEN` | Match Vexa's `TRANSCRIPTION_SERVICE_TOKEN`. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Standard credentials; session token is optional. The SDK also supports profiles and IAM. |
+| `TRANSCRIPTION_LB_PORT` | Published endpoint port, as in the other transcription compose units. |
+
+Point `TRANSCRIPTION_SERVICE_URL` at this worker's published port. `/health` checks region and credential readiness.
+This engine uses **streaming only**, not batch jobs. It requests **no speaker labels**: identity comes from per-participant audio.
+
 ## Example: FunASR or SenseVoice
 
 <Note>

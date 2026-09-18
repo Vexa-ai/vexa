@@ -3,6 +3,18 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "amazon-transcribe"
+version = "0.6.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "awscrt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/3a/f2bf812e8716d25fad092a21e2f01377d00c15e3a1e9be97d132a1d33850/amazon_transcribe-0.6.4.tar.gz", hash = "sha256:89770100e88446a451241f49ad14820bf3113f4545df0a32e82c73455928432c", size = 33687, upload-time = "2025-05-05T10:02:20.156Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/c9/d13edab9292aff456f10250bc9d2ad7584de69d35878574e24631efac630/amazon_transcribe-0.6.4-py3-none-any.whl", hash = "sha256:ba5a27616106e659f031c975da12c331665d122d2518e2018a88b308e66fdee7", size = 41118, upload-time = "2025-05-05T10:02:19.202Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -59,6 +71,28 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/38/c7d9c3e746209a1a695c13e3aa7d817229e84a85d0a84271f313d1befdd3/av-17.1.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:1284addf3c0dd939887a9722dc30df2241a97471ad52c3c507e31583ae22ff02", size = 39490680, upload-time = "2026-06-07T05:52:48.887Z" },
     { url = "https://files.pythonhosted.org/packages/a1/25/9d42da561b7b8f7dabdfaebba07b52977bee58c5c7e4285ac991abcfaa72/av-17.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:ec630be6321b04e317862f6082e84812bbd801e55a3c2298312e3fc8a0a4af4f", size = 28355673, upload-time = "2026-06-07T05:52:51.614Z" },
     { url = "https://files.pythonhosted.org/packages/a8/41/562a61d5a61fba3ffb273a115e249f1d8471b9515c59fcc38b4b9deda238/av-17.1.0-cp314-cp314t-win_arm64.whl", hash = "sha256:b41647e42884bf543b8e8d0a1dabd4d1b006c99183eb1a2d7afc5b01f73eeff4", size = 21324700, upload-time = "2026-06-07T05:52:53.972Z" },
+]
+
+[[package]]
+name = "awscrt"
+version = "0.26.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/db/72989a426cdf2b9f38454b1cdba246b2d2e95a77397ad3df18d1d9d4f5b3/awscrt-0.26.1.tar.gz", hash = "sha256:a8d63a7dcc6484c5c1675b31a8d1b6726c3dc85b13796fb143dfb0072260935e", size = 77265756, upload-time = "2025-04-09T20:51:33.943Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/0b/0894bebe4454959ce70e6a22886af6d9ec8a7de3c51321630b288a4cbd02/awscrt-0.26.1-cp311-abi3-macosx_10_15_universal2.whl", hash = "sha256:02ec2045ae8bb2ed3dcf5a820b14903c7a34f1e9278d810a6a210f761fe69cd9", size = 3215994, upload-time = "2025-04-09T20:50:31.564Z" },
+    { url = "https://files.pythonhosted.org/packages/64/dd/5a8cd31da190aeca9862f51febf0b98932e1101ce7957698e5708c5cdaa4/awscrt-0.26.1-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:15e0d0a3ce2ba5de0830e790c1270944c372f5f3e70facfebb14d3968a467e69", size = 8510940, upload-time = "2025-04-09T20:50:33.528Z" },
+    { url = "https://files.pythonhosted.org/packages/66/89/a63cfe4cb03d55b75674d97280c2e94317d8dbde7418dfe0788e436d36a9/awscrt-0.26.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1a24016bd4b37cf493ac1099330c460f6366e28c364e2e5e9ff8234065fde504", size = 8787937, upload-time = "2025-04-09T20:50:35.568Z" },
+    { url = "https://files.pythonhosted.org/packages/69/08/8b838b0e8c3fb8148193080938f0375bde09ca67be871a3f678f15dcf7de/awscrt-0.26.1-cp311-abi3-musllinux_1_1_aarch64.whl", hash = "sha256:a928c3bfa8a886d65a2bd2bb05f0d98ff6e7d9af5058b5d0cfc8f0a7081bb8e2", size = 8589500, upload-time = "2025-04-09T20:50:38Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/0b/90aa0c895d47601ddfdabfa78b9d43e182ddc135b537009097b1beb2b68a/awscrt-0.26.1-cp311-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:d6cee25700381929220b8ddb1757a08017f7538fd06a4720cfc92ac22da41c20", size = 8977442, upload-time = "2025-04-09T20:50:39.739Z" },
+    { url = "https://files.pythonhosted.org/packages/25/53/8db31969f75f8e1cec1abf362721e6e044848cce48a80122c30a9b7b951c/awscrt-0.26.1-cp311-abi3-win32.whl", hash = "sha256:48e86ef8083425eab55b76cd9056dc0d7816c9939008d44f2aeffa0dfe707103", size = 3678206, upload-time = "2025-04-09T20:50:41.575Z" },
+    { url = "https://files.pythonhosted.org/packages/86/9a/7ea111c776df38abb6a0e9b485416cab0c9ec4abb089f87c7d8366470c74/awscrt-0.26.1-cp311-abi3-win_amd64.whl", hash = "sha256:0c456b55c61bb6ba51e9cef49402f4fdf2a1b9ccf41addd00c6ec69d7b8f501f", size = 3809539, upload-time = "2025-04-09T20:50:42.908Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/79/b24e73ff6ad26e5ef2265ebbba514fe4612bbfb443a7a55f1d61f0e14f35/awscrt-0.26.1-cp313-abi3-macosx_10_15_universal2.whl", hash = "sha256:3f05e1fbbd834f44e5654f58a411f138fcedf3671edcfcd64795ed2a3ee74432", size = 3215180, upload-time = "2025-04-09T20:50:44.212Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/ab/bdff8699e622d2b0dfa2360bc125629ddeadf8365df8e30e2576a826465e/awscrt-0.26.1-cp313-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d11db081a059ac198a2628a49e6acc3f18c75bf08a83090308241ba17e7b290b", size = 8505767, upload-time = "2025-04-09T20:50:45.54Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/a7/dfb26c394ec4ddeeb0cd0c543f05197ec0d948a3ddaafba36fce6581a206/awscrt-0.26.1-cp313-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0e0b8fb0ac48a0178ab7d1bc8ea33862103bfae1f740afcb7c24e9a88116bec7", size = 8784776, upload-time = "2025-04-09T20:50:47.974Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/1b/933866c3a87cf287c5c002f1682c69ccc1f448bf557172ebb955f5c3d275/awscrt-0.26.1-cp313-abi3-musllinux_1_1_aarch64.whl", hash = "sha256:76ec9f19d43766f64a2210807583cf9f48a72ca8e215199ca7dcc1cf17cf77fe", size = 8584536, upload-time = "2025-04-09T20:50:51.125Z" },
+    { url = "https://files.pythonhosted.org/packages/85/aa/5bdc01e7b8c1444ba3ec17b4d254da7ce46622f7d704f34f5bb8ec3a41d2/awscrt-0.26.1-cp313-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:507fa4106d1bbf6b5fbb1c4d287eb832a0459a361eb7f5aa5e5272f15f3e9077", size = 8974509, upload-time = "2025-04-09T20:50:52.868Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/2d/c3146eec592a192b331c5796aee229d98788ce4a89c0827194e97ae2fac0/awscrt-0.26.1-cp313-abi3-win32.whl", hash = "sha256:1ebf5078d1281cfe51cd9ed7f324cb25d58404540c1be0d8794e48a033b01dca", size = 3675889, upload-time = "2025-04-09T20:50:55.622Z" },
+    { url = "https://files.pythonhosted.org/packages/83/f8/7a2de6f30f00cacfae286c98fb0c96ff456e7d1fdfe7d368073c8cd53478/awscrt-0.26.1-cp313-abi3-win_amd64.whl", hash = "sha256:6fbffffee0333f8ae54ed12958c492b37e1803e6c27e6a2fff8f56851f748c45", size = 3804270, upload-time = "2025-04-09T20:50:56.915Z" },
 ]
 
 [[package]]
@@ -966,6 +1000,7 @@ name = "vexa-transcription"
 version = "0.12.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "amazon-transcribe" },
     { name = "fastapi" },
     { name = "faster-whisper" },
     { name = "h11" },
@@ -980,6 +1015,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "amazon-transcribe", specifier = ">=0.6.4" },
     { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "faster-whisper", specifier = ">=1.0.0" },
     { name = "h11", specifier = ">=0.16.0" },

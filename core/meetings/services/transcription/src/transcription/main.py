@@ -1,6 +1,7 @@
 """
 Vexa-Compatible Transcription Service (PoC)
 Implements OpenAI Whisper API format for seamless integration with Vexa
+STT_BACKEND selects the whisper or transcribe engine behind the same API.
 """
 import os
 import io
@@ -18,6 +19,11 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 import uvicorn
 from faster_whisper import WhisperModel
+from transcription import aws_transcribe
+from amazon_transcribe.exceptions import (
+    BadRequestException, InternalFailureException, LimitExceededException,
+    ServiceUnavailableException,
+)
 # faster-whisper uses CTranslate2 internally (no PyTorch needed)
 
 # Logging
@@ -28,6 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
+STT_BACKEND = os.getenv("STT_BACKEND", "whisper")
 WORKER_ID = os.getenv("WORKER_ID", "1")
 MODEL_SIZE = os.getenv("MODEL_SIZE", "large-v3-turbo")
 
@@ -292,6 +299,9 @@ def _is_cpu_unsafe_model_size(model_size: str) -> bool:
 async def startup_event():
     """Initialize Whisper model on startup"""
     global model
+    if STT_BACKEND == "transcribe":
+        logger.info("Transcribe backend selected; readiness is checked by /health")
+        return
     logger.info(f"Worker {WORKER_ID} starting up...")
     logger.info(f"Device: {DEVICE}, Model: {MODEL_SIZE}, Compute: {COMPUTE_TYPE}")
     if DEVICE == "cpu" and _is_cpu_unsafe_model_size(MODEL_SIZE):
@@ -339,8 +349,22 @@ async def startup_event():
 @app.get("/health")
 async def health_check():
     """Health check endpoint for load balancer"""
+    if STT_BACKEND == "transcribe":
+        health_status = {
+            "status": "healthy", "backend": "transcribe",
+            "region": os.getenv("AWS_REGION", "").strip(),
+            "worker_id": WORKER_ID, "timestamp": datetime.utcnow().isoformat(),
+        }
+        try:
+            aws_transcribe.configuration()
+            await aws_transcribe.resolve_credentials()
+        except (ValueError, aws_transcribe.CredentialsUnavailable) as exc:
+            health_status.update(status="unhealthy", reason=str(exc))
+            return JSONResponse(content=health_status, status_code=503)
+        return health_status
     health_status = {
         "status": "healthy" if model is not None else "unhealthy",
+        "backend": "whisper",
         "worker_id": WORKER_ID,
         "timestamp": datetime.utcnow().isoformat(),
         "model": MODEL_SIZE,
@@ -465,6 +489,8 @@ async def transcribe_audio(
             audio_array, sample_rate = sf.read(audio_io, dtype=np.float32)
             logger.info(f"Worker {WORKER_ID} decoded audio - shape: {audio_array.shape}, sample_rate: {sample_rate}")
         except Exception as e:
+            if STT_BACKEND == "transcribe":
+                raise HTTPException(status_code=422, detail="Failed to decode WAV audio") from e
             logger.warning(f"Worker {WORKER_ID} soundfile failed ({e}), trying ffmpeg fallback")
             try:
                 import subprocess, tempfile
@@ -497,6 +523,36 @@ async def transcribe_audio(
         
         # Ensure audio is contiguous array
         audio_array = np.ascontiguousarray(audio_array, dtype=np.float32)
+
+        if STT_BACKEND == "transcribe":
+            try:
+                region, default_language, timeout_s = aws_transcribe.configuration()
+            except ValueError as exc:
+                raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"}) from exc
+            language_code = aws_transcribe.map_language(language, default_language)
+            pcm = np.clip(np.rint(audio_array * 32768), -32768, 32767).astype("<i2").tobytes()
+            try:
+                segments, duration = await aws_transcribe.transcribe_pcm16(
+                    pcm, sample_rate, language_code, region=region, timeout_s=timeout_s,
+                )
+            except aws_transcribe.CredentialsUnavailable as exc:
+                raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"}) from exc
+            except BadRequestException as exc:
+                raise HTTPException(status_code=422, detail=exc.message) from exc
+            except (LimitExceededException, ServiceUnavailableException,
+                    InternalFailureException, asyncio.TimeoutError) as exc:
+                raise HTTPException(
+                    status_code=503, detail=getattr(exc, "message", "Transcription timed out"),
+                    headers={"Retry-After": "1"},
+                ) from exc
+            if "word" not in timestamp_granularities:
+                for segment in segments:
+                    segment.pop("words", None)
+            return {
+                "text": " ".join(s["text"].strip() for s in segments).strip(),
+                "language": language_code, "language_probability": 1.0,
+                "duration": duration, "segments": segments,
+            }
         
         # Transcribe (with optional temperature fallback)
         requested_temp = float(temperature) if temperature else 0.0
