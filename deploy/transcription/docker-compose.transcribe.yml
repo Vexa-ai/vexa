@@ -1,0 +1,18 @@
+services:
+  transcription-worker-1:
+    build:
+      context: ../..
+      dockerfile: core/meetings/services/transcription/Dockerfile.cpu
+    image: vexaai/v012-transcription-transcribe:${IMAGE_TAG:-dev}
+    environment:
+      - STT_BACKEND=transcribe
+      - AWS_REGION=${AWS_REGION:-}
+      - TRANSCRIBE_LANGUAGE_DEFAULT=${TRANSCRIBE_LANGUAGE_DEFAULT:-}
+      - TRANSCRIBE_TIMEOUT_S=${TRANSCRIBE_TIMEOUT_S:-}
+      - API_TOKEN=${API_TOKEN:-}
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+    ports:
+      - "${TRANSCRIPTION_LB_PORT:-8083}:8000"
+    restart: unless-stopped
