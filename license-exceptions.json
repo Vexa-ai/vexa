@@ -4,10 +4,11 @@
     {
       "package": "@img/sharp-libvips",
       "license": "LGPL-3.0-or-later",
-      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it is used unmodified and dynamically linked (a separate .dylib/.so loaded at runtime, never statically bundled into our JS), so it qualifies as FINOS/ASF Category B. It enters transitively via @huggingface/transformers' IMAGE pipeline; Vexa's mixed lane is AUDIO-only and never instantiates it.",
-      "disposition": "Logged exception AND pruned from the deployment artifact (`--no-optional` / omit @img/sharp-*), so no LGPL binary ships.",
-      "scope": "@vexa/mixed-pipeline (transitive, build-time only)",
-      "approved": "ADR-0004"
+      "category": "X",
+      "reason": "libvips native binary behind `sharp`. FINOS and ASF both classify LGPL as Category X, so this is NOT an allowed dependency — it is an OPTIONAL npm dependency that is never installed into any published artifact. It enters two ways: `next` declares `sharp` as an optionalDependency (clients/terminal), and `@huggingface/transformers`' IMAGE pipeline does the same (@vexa/mixed-pipeline). Both lanes omit it at install time.",
+      "disposition": "NOT SHIPPED. clients/terminal/Dockerfile installs with `npm ci --omit=dev --omit=optional`; core/meetings/services/bot/Dockerfile installs with `pnpm install --frozen-lockfile=false --no-optional`. The Terminal never imports `next/image`, and the mixed lane is audio-only, so no code path loads it. Lockfile entries remain because the optional dependency is still declared upstream.",
+      "scope": "clients/terminal (next -> sharp), @vexa/mixed-pipeline (@huggingface/transformers -> sharp) — optional, omitted at install",
+      "approved": "ADR-0004 (revision pending: LGPL moves B -> X)"
     },
     {
       "package": "lightningcss",

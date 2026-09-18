@@ -59,8 +59,9 @@ COPY core ./core
 # drift in this carved build (we're proving the image, not gating the lockfile).
 # allowBuilds in pnpm-workspace.yaml lets esbuild/onnxruntime-node/sharp/protobufjs
 # run their native postinstall; the playwright postinstall no-ops (SKIP flag above).
+# Omit optionals so no LGPL libvips binary ships; the audio lane never loads sharp.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile=false
+    pnpm install --frozen-lockfile=false --no-optional
 
 # Build the page-side capture bricks FIRST. These are NOT bot dependencies
 # (gate:isolation — they are a BROWSER bundle, not a Node import), so the

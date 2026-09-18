@@ -48,7 +48,9 @@ RUN npm run build
 FROM node:22-slim AS deps-prod
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Omit optionals to exclude LGPL @img/sharp-libvips via next -> sharp because next/image is unused.
+# The next start sharp warning is expected because the unused LGPL image dependency is omitted.
+RUN npm ci --omit=dev --omit=optional && npm cache clean --force
 COPY --from=build /app/node_modules/typescript ./node_modules/typescript
 
 # deps-dev: the build stage already holds the full npm ci tree.

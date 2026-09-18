@@ -18,7 +18,7 @@ largely to govern this; we adopt its posture and the ASF licence-category model.
 - **Category A — allowed (auto):** OSI-approved permissive. `Apache-2.0`, `MIT`, `BSD-2-Clause`,
   `BSD-3-Clause`, `ISC`, `0BSD`, `Unlicense`, `CC0-1.0`, `Python-2.0`, `BlueOak-1.0.0`, `Zlib`.
 - **Category B — by exception (logged):** weak / file-scoped copyleft. `MPL-2.0`, `EPL-2.0`,
-  `LGPL-2.1`/`LGPL-3.0`. Allowed **only** when used unmodified and dynamically/separately linked —
+  ~~`LGPL-2.1`/`LGPL-3.0`~~ — superseded by the [2026-09-19 addendum](#addendum-2026-09-19--lgpl-is-category-x). Allowed **only** when used unmodified and dynamically/separately linked —
   never statically bundled into a distributed artifact — with a recorded exception (who/why/scope).
 - **Category X — forbidden:** strong copyleft (`GPL-*`, `AGPL-*`) and source-available / proprietary
   (`BSL`/Business Source, `SSPL`, `Elastic-2.0`, `Commons-Clause`, any non-OSI / "source-available").
@@ -36,10 +36,11 @@ data, not prose.
 
 **Transitive pruning is part of the policy.** Prefer deps with clean trees; where an optional transitive
 dep drags in an encumbered licence for a feature we don't use, prune it at packaging. *Known case:* the
-`@img/sharp-libvips-*` native binary (**LGPL-3.0**) enters via `sharp` ← `@huggingface/transformers`'s
-**image** pipeline — Vexa's mixed lane is **audio-only** and never loads it. It is logged as a Category-B
-exception (`license-exceptions.json`: LGPL, dynamically linked, unmodified — compliant) **and** pruned
-from the deployment artifact (`--no-optional`), so no LGPL binary ships. Audit (2026-06-18): **112 of 113
+`@img/sharp-libvips-*` native binary (**LGPL-3.0**, Category X) enters via `sharp` through the Terminal's
+`next` dependency and `@huggingface/transformers`'s **image** pipeline — the Terminal never imports
+`next/image`, and the mixed lane is **audio-only** and never loads sharp. As of 2026-09-19, both images
+omit optional dependencies at install time, so these LGPL binaries are not shipped; the
+`license-exceptions.json` entry remains for developer installs (see addendum). Audit (2026-06-18): **112 of 113
 npm deps are Category A**; this is the only non-permissive one.
 
 **Baked artifacts are covered outside the dependency gate.** `gate:licenses` scans the resolved
@@ -61,3 +62,10 @@ artifact follows the same three-step record — the packaging-side complement to
   its tree gets the full audit as part of that refactor.
 - Native postinstall builds (`onnxruntime-node`, `protobufjs`) are a separate supply-chain concern
   (pnpm `allowBuilds`), decided per-package; licence-clean ≠ build-script-trusted.
+
+## Addendum 2026-09-19 — LGPL is Category X
+
+`LGPL-2.1` and `LGPL-3.0` are Category X under [FINOS](https://community.finos.org/docs/governance/software-projects/license-categories/) and [ASF](https://www.apache.org/legal/resolved.html), superseding their Category B classification above.
+The Terminal and bot images omit optional dependencies, excluding the unused sharp/libvips image path from shipped artifacts.
+The sharp entry stays in `license-exceptions.json`'s `categoryB` array because developer installs include optionals and the current gate still classifies LGPL as B; its `category: "X"` records policy, not permission to ship.
+Follow-up: teach `scripts/gates.mjs` to distinguish shipped artifacts from installed developer dependencies, then reclassify LGPL as Category X in the gate.
