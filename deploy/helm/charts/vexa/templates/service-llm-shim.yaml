@@ -1,0 +1,24 @@
+{{/*
+ClusterIP front door for the optional Anthropic-dialect translator.
+Off by default: deployments must opt into this third-party surface.
+No auth of its own: compose publishes on loopback; Helm uses no public ingress.
+Never expose it publicly; it forwards requests with the upstream credentials.
+*/}}
+{{- if .Values.llmShim.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-shim
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-shim
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.llmShim.port }}
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-shim
+{{- end }}

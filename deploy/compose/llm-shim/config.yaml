@@ -1,0 +1,41 @@
+# Anthropic-dialect front door for an OpenAI-only model endpoint.
+#
+# WHY THIS EXISTS. The workspace agent runs the Claude Code harness, which speaks the ANTHROPIC
+# Messages dialect (POST /v1/messages). Self-hosted servers — vLLM, Ollama, llama.cpp, TGI — speak
+# only the OPENAI dialect (POST /v1/chat/completions). Hosted gateways like OpenRouter serve BOTH,
+# which is why they "just work"; a self-hosted box does not. This shim is that missing front door,
+# so a deployment can run the whole product on its own model without its traffic leaving the estate.
+#
+# Extracts and meeting cards do NOT need this — they use the completion path, which is
+# OpenAI-native. Only the chat/workspace turns do.
+# NOTE ON SYNTAX: LiteLLM does NOT expand shell-style ${VAR:-default}; it reads `os.environ/NAME`.
+# A ${...} here is taken literally and surfaces as "Invalid model name" — the defaults therefore
+# live in the compose `environment:` block, which docker DOES expand.
+model_list:
+  - model_name: os.environ/LLM_SHIM_MODEL          # the primary: your own endpoint
+    litellm_params:
+      model: os.environ/LLM_SHIM_MODEL
+      # custom_llm_provider pins the OpenAI CHAT-COMPLETIONS dialect. Given as a separate field
+      # rather than a `hosted_vllm/` prefix so it composes with os.environ/. A plain `openai`
+      # provider now prefers /v1/responses, which vLLM does not serve — a 404 that reads as a
+      # dead endpoint when the endpoint is fine.
+      custom_llm_provider: hosted_vllm
+      api_base: os.environ/LLM_SHIM_UPSTREAM
+      api_key: os.environ/LLM_SHIM_UPSTREAM_KEY
+      # Server-specific fields the OpenAI dialect cannot express. EDIT THIS FILE to set them — they
+      # are a fact about YOUR server, not a product default, and there is no env indirection because
+      # a variable that silently does nothing is worse than an edit you can see.
+      #
+      # Self-hosted Qwen NEEDS this: in thinking mode it spends its whole budget reasoning and
+      # returns 0% valid JSON; extracts are structured output, so it is works-vs-does-not.
+      # Uncomment for a Qwen upstream:
+      #
+      # extra_body:
+      #   chat_template_kwargs:
+      #     enable_thinking: false
+litellm_settings:
+  drop_params: true          # a model that lacks a parameter should answer, not 400
+# NO master_key: setting one turns on LiteLLM's virtual-key management, which REQUIRES a database
+# ("No connected db") — a whole stateful component for a stateless translator. Security here is
+# topology instead: the port binds to loopback and the service is reachable only on the compose
+# network. NEVER expose this service publicly; it forwards to your model with your upstream key.

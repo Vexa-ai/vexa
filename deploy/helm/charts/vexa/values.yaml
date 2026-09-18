@@ -314,6 +314,19 @@ agentApi:
     limits:   { cpu: 1000m, memory: 1Gi }
   extraEnv: []
 
+# Optional Anthropic-dialect translator; no auth of its own, keep cluster-internal.
+llmShim:
+  enabled: false
+  image: litellm/litellm:main-v1.97.0
+  port: 4000
+  upstream: ""          # OpenAI-compatible base URL including /v1, or empty when the config file names the provider
+  model: ""             # model id the upstream serves
+  upstreamKey: ""       # plain value; prefer existingSecret
+  existingSecret: ""    # secret with key LLM_SHIM_UPSTREAM_KEY
+  config: ""            # full LiteLLM config YAML; empty uses the shipped default with upstream/model
+  resources: {}
+  extraEnv: []          # list of {name, value} or {name, valueFrom} rendered verbatim into the container
+
 # The user-facing web UI (Next.js custom server). Proxies /ws → gateway, REST/login → agent-api/admin-api.
 terminal:
   enabled: true

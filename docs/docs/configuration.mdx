@@ -175,6 +175,33 @@ Point the agent at your own model so no inference leaves the network.
 | `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
+### The llm-shim: an OpenAI-only model server, or Bedrock, behind the Anthropic dialect
+
+The optional shim translates the agent's Anthropic dialect to an OpenAI-only server or native Bedrock.
+In `deploy/compose`, run `docker compose --profile llm-shim up -d llm-shim`; Helm uses `llmShim.enabled=true`.
+Use the pinned image in the compose file; Helm owns its pin in `llmShim.image`.
+Point in-network callers at `http://llm-shim:4000` and select the configured model id.
+
+| Variable | Purpose |
+|---|---|
+| `LLM_SHIM_IMAGE` | Override the pinned image. |
+| `LLM_SHIM_PORT` | Override the loopback host port. |
+| `LLM_SHIM_CONFIG` | Config path; defaults to `./llm-shim/config.yaml`. |
+| `LLM_SHIM_MODEL` | Upstream model id (`llmShim.model`). |
+| `LLM_SHIM_UPSTREAM` | OpenAI-compatible URL including `/v1` (`llmShim.upstream`). |
+| `LLM_SHIM_UPSTREAM_KEY` | Upstream key; Helm prefers `llmShim.existingSecret`. |
+| `AWS_REGION` / `LLM_SHIM_BEDROCK_MODEL` | Region and model id for the Bedrock example. |
+
+Bedrock: inside the VPC, configure private endpoint DNS and select agent model `bedrock-model`; there is no third-party fallback.
+Compose: select `LLM_SHIM_CONFIG=./llm-shim/config.bedrock.example.yaml`, set the region/model variables, and supply credentials through the AWS chain.
+Helm: put that example YAML in `llmShim.config`, use `extraEnv` for `AWS_REGION` and `LLM_SHIM_BEDROCK_MODEL`, and configure the pod's IAM role for credentials.
+
+**The shim has no auth of its own, by design.** Enabling LiteLLM's key management pulls in a
+required database — a stateful component for a stateless translator. Instead it binds to loopback
+and lives on the compose network only. **Never expose this port publicly:** it forwards to your
+model carrying your upstream key.
+Helm uses a cluster-internal ClusterIP instead of a host binding; namespace isolation requires the operator's network controls.
+
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
 
 Setting `HOST_CLAUDE_CREDENTIALS=~/.claude/.credentials.json` mounts your Claude Code
