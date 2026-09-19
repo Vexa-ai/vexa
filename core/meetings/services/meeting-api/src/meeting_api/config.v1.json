@@ -415,7 +415,7 @@
    "key": "VEXA_SERVICE_AUTHORITY_CONFIG",
    "class": "defaulted",
    "default": "(unset — explicit allow-all OSS behavior)",
-   "description": "JSON service-authority.v1 adapter config: credential-free endpoint URL, contract_version, timeout_ms, response_max_age_seconds, failure_policy=closed, and mode=enforce|observe. When set, unavailable or malformed authority decisions fail closed.",
+   "description": "JSON service-authority.v1 adapter config: credential-free endpoint URL, contract_version, timeout_ms, response_max_age_seconds, failure_policy=closed, and mode=enforce|observe. When set, unavailable or malformed authority decisions fail closed. Optional `unavailable_threshold` (int >= 1, default 3): consecutive one-minute boundaries on which the authority is unreachable before an enforced teardown; below it the outage is recorded (`unavailable_streak`) and the meeting continues; `1` reproduces the previous fail-closed-on-first-failure behaviour; ignored in observe mode.",
    "targets": [
     "compose",
     "helm",

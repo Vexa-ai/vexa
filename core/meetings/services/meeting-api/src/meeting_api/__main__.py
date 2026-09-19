@@ -514,10 +514,11 @@ def _attach_background_loops(
             if observation.faults:
                 log.warning(
                     "service-authority sweep faults=%s decisions=%s "
-                    "teardowns_confirmed=%s",
+                    "teardowns_confirmed=%s unavailable_below_threshold=%s",
                     observation.faults,
                     observation.decisions,
                     observation.teardowns_confirmed,
+                    observation.unavailable_below_threshold,
                 )
 
         while True:
