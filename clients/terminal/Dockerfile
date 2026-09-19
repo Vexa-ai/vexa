@@ -48,7 +48,10 @@ RUN npm run build
 FROM node:22-slim AS deps-prod
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Prune the LGPL @img/sharp-libvips-* binaries (next -> sharp, an optional dependency) after the
+# install: next/image is unused, so nothing loads them. NOT `--omit=optional` — that also drops
+# @next/swc-*, which `next start` then downloads at boot and cannot without network (bbb, 2026-09-19).
+RUN npm ci --omit=dev && rm -rf node_modules/@img/sharp-libvips-* && npm cache clean --force
 COPY --from=build /app/node_modules/typescript ./node_modules/typescript
 
 # deps-dev: the build stage already holds the full npm ci tree.
