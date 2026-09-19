@@ -127,6 +127,13 @@
    "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
   },
   {
+   "key": "TRANSCRIPTION_REQUEST_TIMEOUT_MS",
+   "class": "defaulted",
+   "default": "(unset — the whisper client uses 30000 ms)",
+   "description": "Optional STT request timeout in milliseconds (integer 1000–120000), passed through invocation.v1; unset omits the field. Set directly in meeting-api's environment: Compose service override or Helm meetingApi.extraEnv.",
+   "targets": []
+  },
+  {
    "key": "TRANSCRIPTION_MODEL",
    "class": "defaulted",
    "default": "(unset — the whisper client sends whisper-1)",
