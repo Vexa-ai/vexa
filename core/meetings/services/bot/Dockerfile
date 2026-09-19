@@ -59,9 +59,12 @@ COPY core ./core
 # drift in this carved build (we're proving the image, not gating the lockfile).
 # allowBuilds in pnpm-workspace.yaml lets esbuild/onnxruntime-node/sharp/protobufjs
 # run their native postinstall; the playwright postinstall no-ops (SKIP flag above).
-# Omit optionals so no LGPL libvips binary ships; the audio lane never loads sharp.
+# LGPL libvips (@img/sharp-libvips-*) still ships in this image: @huggingface/transformers imports
+# sharp at module load, so `--no-optional` breaks the build at warm-hf-cache (verified on bbb,
+# 2026-09-19). Removing it needs transformers.js to lazy-load sharp — an open Category-X blocker
+# for the FINOS transfer, tracked in license-exceptions.json and ADR-0004's 2026-09-19 addendum.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile=false --no-optional
+    pnpm install --frozen-lockfile=false
 
 # Build the page-side capture bricks FIRST. These are NOT bot dependencies
 # (gate:isolation — they are a BROWSER bundle, not a Node import), so the

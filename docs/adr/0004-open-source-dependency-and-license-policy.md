@@ -66,6 +66,6 @@ artifact follows the same three-step record — the packaging-side complement to
 ## Addendum 2026-09-19 — LGPL is Category X
 
 `LGPL-2.1` and `LGPL-3.0` are Category X under [FINOS](https://community.finos.org/docs/governance/software-projects/license-categories/) and [ASF](https://www.apache.org/legal/resolved.html), superseding their Category B classification above.
-The Terminal and bot images omit optional dependencies, excluding the unused sharp/libvips image path from shipped artifacts.
+The Terminal image prunes the `@img/sharp-libvips-*` binaries after install (`--omit=optional` was rejected: it also drops `@next/swc-*`, which `next start` then needs the network to fetch). The bot image **still ships them**: `@huggingface/transformers` imports `sharp` at module load, so omitting the binary breaks the image build. That is an open Category-X blocker for the FINOS transfer; the fix is a lazy `sharp` import in transformers.js (upstream patch or fork), not a packaging flag.
 The sharp entry stays in `license-exceptions.json`'s `categoryB` array because developer installs include optionals and the current gate still classifies LGPL as B; its `category: "X"` records policy, not permission to ship.
 Follow-up: teach `scripts/gates.mjs` to distinguish shipped artifacts from installed developer dependencies, then reclassify LGPL as Category X in the gate.
