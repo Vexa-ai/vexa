@@ -5,6 +5,8 @@ user-facing representation goes through ``masked_connection``.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Optional
 from urllib.parse import urlparse
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -12,6 +14,23 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from fastapi import HTTPException, status
 
 MAX_CALENDAR_CONNECTIONS = 10
+
+
+def encode_configs_cursor(user_id: int) -> str:
+    """Opaque, versioned keyset cursor; contains no calendar credentials."""
+    return base64.urlsafe_b64encode(f"v1:{user_id}".encode()).decode().rstrip("=")
+
+
+def decode_configs_cursor(cursor: str) -> int:
+    try:
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        version, value = raw.decode("ascii").split(":")
+        user_id = int(value)
+        if version != "v1" or not 0 < user_id <= 2147483647 or encode_configs_cursor(user_id) != cursor:
+            raise ValueError
+        return user_id
+    except (ValueError, UnicodeError, binascii.Error):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid calendar configs cursor") from None
 
 
 def validate_bot_name(value: str) -> str:

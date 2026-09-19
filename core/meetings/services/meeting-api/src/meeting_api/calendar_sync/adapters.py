@@ -7,10 +7,12 @@ flip can never turn the poller into an internal-network probe. Size-capped: a fe
 ``MAX_ICS_BYTES`` is refused, not parsed.
 
 ``fetch_configs`` asks admin-api's internal edge (X-Internal-Secret) which users have a feed
-connected — the secret URL crosses only this internal hop.
+connected, following every cursor before returning; any failed page skips the entire tick.
+The secret URL crosses only this internal hop; logs contain only the page count.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 MAX_ICS_BYTES = 2 * 1024 * 1024  # 2 MB — a personal calendar feed is KBs; refuse anything huge
@@ -72,14 +74,32 @@ async def fetch_configs(admin_api_url: str, internal_secret: str,
 
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.get(
-                f"{admin_api_url.rstrip('/')}/internal/calendar-configs",
-                headers={"X-Internal-Secret": internal_secret},
-            )
-        if resp.status_code != 200:
-            return None
-        body = resp.json()
-        configs = body.get("configs") if isinstance(body, dict) else None
-        return configs if isinstance(configs, list) else None
+            configs = []
+            params = {"limit": 200}
+            seen = set()
+            pages = 0
+            while True:
+                resp = await client.get(
+                    f"{admin_api_url.rstrip('/')}/internal/calendar-configs",
+                    headers={"X-Internal-Secret": internal_secret}, params=params,
+                )
+                if resp.status_code != 200:
+                    return None
+                body = resp.json()
+                if not isinstance(body, dict) or not isinstance(body.get("configs"), list):
+                    return None
+                configs.extend(body["configs"])
+                pages += 1
+                # An unpaginated older admin-api is compatible only on the first response.
+                if pages > 1 and "next_cursor" not in body:
+                    return None
+                cursor = body.get("next_cursor")
+                if cursor is None:
+                    logging.getLogger(__name__).info("Calendar configs fetched: pages=%d", pages)
+                    return configs
+                if not isinstance(cursor, str) or not cursor or cursor in seen:
+                    return None
+                seen.add(cursor)
+                params["cursor"] = cursor
     except Exception:
         return None
