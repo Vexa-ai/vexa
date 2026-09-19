@@ -1,4 +1,8 @@
-"""Language-neutral service-authority.v1 values at the Python boundary."""
+"""Service-authority values; decisions carry an in-process unavailable threshold.
+
+The recorder owns the persisted unavailable_streak and resets it on a response.
+The threshold is local configuration and does not extend the wire contract.
+"""
 from __future__ import annotations
 
 import json
@@ -252,6 +256,7 @@ class ServiceAuthorityDecision:
     # sanitising) and never interpreted here.
     message: Optional[str] = None
     action_url: Optional[str] = None
+    unavailable_threshold: int = 1
 
     def __post_init__(self) -> None:
         if self.authority_version != AUTHORITY_VERSION:
@@ -375,6 +380,8 @@ class ServiceAuthorityDecision:
         return fields
 
     def to_record(self) -> dict[str, Any]:
+        # The recorder adds last_boundary_at, last_decision_id and unavailable_streak
+        # (consecutive unavailable boundaries, reset to zero on every other reason).
         # Same omit-when-absent rule as the wire: this dict is merged into meeting metadata, and a
         # persisted `"message": null` is indistinguishable from a message that was blanked.
         return {
