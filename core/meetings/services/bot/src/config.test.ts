@@ -56,6 +56,21 @@ for (const g of goldens) {
   check('loadInvocation reads VEXA_BOT_CONFIG', inv.botName === 'Vexa', inv.botName);
 }
 
+// ── optional STT request deadline: schema enforces the millisecond bounds ──
+{
+  const minimal = JSON.parse(readFileSync(join(GOLDEN_DIR, 'Invocation.minimal.json'), 'utf8'));
+  check('absent STT timeout stays omitted',
+    !('transcriptionRequestTimeoutMs' in parseInvocation(JSON.stringify(minimal))));
+  for (const timeout of [1000, 45000, 120000]) {
+    const inv = parseInvocation(JSON.stringify({ ...minimal, transcriptionRequestTimeoutMs: timeout }));
+    check(`STT timeout ${timeout} is preserved`, inv.transcriptionRequestTimeoutMs === timeout);
+  }
+  for (const timeout of [999, 120001, 1000.5, null, '45000', true]) {
+    check(`invalid STT timeout ${JSON.stringify(timeout)} → InvocationError`,
+      throws(() => parseInvocation(JSON.stringify({ ...minimal, transcriptionRequestTimeoutMs: timeout }))) instanceof InvocationError);
+  }
+}
+
 // ── fail-fast (P14) ──
 {
   check('missing env → InvocationError', throws(() => loadInvocation({} as NodeJS.ProcessEnv)) instanceof InvocationError);
