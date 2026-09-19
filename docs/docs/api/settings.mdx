@@ -233,8 +233,14 @@ the feature has never fired at all.
 
 ## Account limits (admin tier)
 
-Concurrency is an account limit, not a self-serve setting: it is changed with the **admin** key on
+Concurrency and the spawn ramp are account limits: they are changed with the **admin** key on
 the admin API, not with your `X-API-Key`.
+
+| Field | Meaning |
+|---|---|
+| `max_concurrent_bots` | Maximum concurrent bots; `0` is depleted. |
+| `ramp_bots` | New bots allowed per window (integer ≥ 0); `0` is depleted. |
+| `ramp_window_s` | Sliding window in seconds (integer ≥ 1). |
 
 ```bash PATCH /admin/users/{user_id}
 curl -X PATCH "$ADMIN/admin/users/1" \

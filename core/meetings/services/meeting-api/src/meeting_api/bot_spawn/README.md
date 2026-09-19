@@ -47,8 +47,9 @@ A pre-check BEFORE the runtime call: count the user's ACTIVE bots (status in
 `{requested, joining, awaiting_admission, active}`, **excluding** infra `browser_session` —
 parent `meetings.py:1091`) and reject the N+1th with `429` (`MaxBotsExceeded`). The cap arrives as
 the gateway's `X-User-Limits` header (resolved upstream from `/internal/validate`, identity.v1).
+Its JSON form also carries `ramp_bots` / `ramp_window_s`: the guarded spawn counts creations of any status (excluding `browser_session`) under the same per-user advisory lock and refuses a depleted ramp with `429` + `Retry-After` seconds; absent ramp fields preserve the ceiling-only behavior, including bare-integer headers.
 The runtime kernel's own `owner_quota` → `QuotaExceeded` (→ 429) is the defense-in-depth BACKSTOP.
-Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
+Join-retry re-spawns and `continue_meeting` sessions count against the same cap, and continued sessions are checked against the ramp.
 
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.

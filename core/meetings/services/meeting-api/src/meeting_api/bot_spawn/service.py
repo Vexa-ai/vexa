@@ -8,6 +8,9 @@ P3 added (all behind the same injected ports, so the flow still runs offline):
   * **max-bots** (P3e) — a per-user concurrency pre-check: count the user's ACTIVE bots (excluding
     infra ``browser_session``) and reject the N+1th with 429 BEFORE spawning; the runtime kernel's
     own ``QuotaExceeded`` remains the defense-in-depth backstop.
+  * **ramp** — optional creation-window allowance enforced by the same guarded store call;
+    continued runs check the same recent-spawn count before reopening. ``RampExceeded`` carries
+    a retry delay and emits ``bot_spawn_ramp_exceeded``.
 
 The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot branch):
   1. construct the meeting URL (or use the supplied one),
@@ -44,6 +47,7 @@ from .ports import (
     AuthSessionNotConfigured,
     DuplicateMeeting,
     MaxBotsExceeded,
+    RampExceeded,
     MeetingRepo,
     MeetingStopped,
     QuotaExceeded,
@@ -422,6 +426,7 @@ async def request_bot(
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
+    ramp: Optional[tuple[int, int]] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
@@ -434,7 +439,7 @@ async def request_bot(
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
-    Raises ``DuplicateMeeting`` (409), ``MaxBotsExceeded`` / ``QuotaExceeded`` (429), or
+    Raises ``DuplicateMeeting`` (409), ``MaxBotsExceeded`` / ``RampExceeded`` / ``QuotaExceeded`` (429), or
     ``SpawnFailed`` (502/failed).
 
     ``continue_meeting`` (P3c): if the prior meeting for (platform, native_id) is TERMINAL, reuse
@@ -676,6 +681,19 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
+        if ramp is not None:
+            ramp_bots, ramp_window_s = ramp
+            # The previous creation already consumed a slot, even when its row is now terminal.
+            count, retry_after_s = ((0, ramp_window_s) if ramp_bots == 0 else
+                                   await repo.count_recent_spawns(user_id, ramp_window_s, None))
+            if count >= ramp_bots:
+                log_event(
+                    "bot_spawn_ramp_exceeded", audience="user", level="warning",
+                    span="bots.create", user_id=user_id,
+                    fields={"ramp_bots": ramp_bots, "ramp_window_s": ramp_window_s,
+                            "retry_after_s": retry_after_s},
+                )
+                raise RampExceeded(user_id, ramp_bots, ramp_window_s, retry_after_s)
         row = await repo.reopen_meeting(
             meeting_id=reused_row["id"],
             data_patch={
@@ -716,7 +734,16 @@ async def request_bot(
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                ramp=ramp,
             )
+        except RampExceeded as e:
+            log_event(
+                "bot_spawn_ramp_exceeded", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"ramp_bots": e.ramp_bots, "ramp_window_s": e.ramp_window_s,
+                        "retry_after_s": e.retry_after_s},
+            )
+            raise
         except MaxBotsExceeded:
             log_event(
                 "bot_spawn_max_bots_exceeded", audience="user", level="warning",

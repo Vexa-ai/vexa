@@ -19,6 +19,8 @@ calendar import of the same Meet that failed to adopt it).
 Failures are LOUD, never silent (P18/P10): a cap/quota rejection or spawn failure stamps
 ``data.auto_join_error`` (+ ``data.auto_join_next_retry`` backoff so one bad row doesn't re-fire
 every tick) — the terminal surfaces it on the meeting row.
+Identity's ramp fields use the same limits resolver as POST /bots and the same guarded spawn;
+the spawn logs ``bot_spawn_ramp_exceeded`` before a ramp refusal is stamped here.
 
 Every dispatch also stamps ``data.auto_join_last_attempt`` BEFORE it is made. That records the
 attempt rather than its outcome, so it outlives outcomes this row never gets to write: a spawn
@@ -52,7 +54,8 @@ from ..service_authority import (
     ServiceAuthorityUnavailable,
 )
 from .env_flags import resolve_spawn_flag
-from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
+from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, RampExceeded, SpawnFailed
+from .router import _ramp_from_mapping
 from .service import DuplicateMeeting, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
@@ -314,6 +317,15 @@ async def auto_join_tick(
         # sync both read to hold the next dispatch for one backoff interval.
         await repo.merge_meeting_data(row["id"], {"auto_join_last_attempt": now.isoformat()})
         try:
+            try:
+                ramp = _ramp_from_mapping(ctx)
+            except Exception as e:
+                ramp = None
+                log_event(
+                    "auto_join_invalid_ramp", audience="operator", level="warning",
+                    span="meetings.auto_join", user_id=user_id, meeting_id=str(row["id"]),
+                    fields={"reason": type(e).__name__},
+                )
             await request_bot(
                 repo, runtime,
                 authority=authority,
@@ -325,6 +337,7 @@ async def auto_join_tick(
                 recording_enabled=recording_enabled,
                 transcribe_enabled=transcribe_enabled,
                 max_concurrent=ctx.get("max_concurrent"),
+                ramp=ramp,
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),
                 webhook_events=ctx.get("webhook_events"),
@@ -343,6 +356,9 @@ async def auto_join_tick(
             log_event("auto_join_stopped", audience="user", span="meetings.auto_join",
                       user_id=user_id, meeting_id=str(row["id"]),
                       fields={"reason": "the user stopped this meeting while the bot was starting"})
+            continue
+        except RampExceeded as e:
+            await _stamp_error(row, str(e))
             continue
         except (MaxBotsExceeded, QuotaExceeded) as e:
             await _stamp_error(row, str(e) or "bot concurrency limit reached")
