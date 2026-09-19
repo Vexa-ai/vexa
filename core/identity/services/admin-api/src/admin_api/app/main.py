@@ -9,7 +9,7 @@ exercises:
     - internal: `X-Internal-Secret` == INTERNAL_API_SECRET, FAIL-CLOSED      → /internal/validate
 
   /internal/validate (the gateway's authz oracle): returns user_id + scopes + max_concurrent +
-  email, plus webhook_url/secret/events from user.data; rejects expired tokens; bumps
+  email, plus ramp_bots/ramp_window_s and webhook_url/secret/events from user.data; rejects expired tokens; bumps
   last_used_at; FAILS CLOSED when INTERNAL_API_SECRET is unset (503) and on a bad secret (403).
 
   Token mint: scoped {bot,tx,browser}. Scopes via JSON body `{"scopes":["bot","tx"]}` or
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, field_serializer, model_validator
+from pydantic import BaseModel, Field, computed_field, field_serializer, model_validator
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
@@ -47,6 +47,25 @@ def _admin_token() -> Optional[str]:
 
 def _internal_secret() -> str:
     return os.environ.get("INTERNAL_API_SECRET", "")
+
+
+def _ramp_defaults() -> tuple[int, int]:
+    return (
+        int(os.getenv("VEXA_RAMP_BOTS_DEFAULT", "2")),
+        int(os.getenv("VEXA_RAMP_WINDOW_S_DEFAULT", "300")),
+    )
+
+
+def resolve_ramp(data: dict, defaults: tuple[int, int]) -> tuple[int, int]:
+    """Coerce stored account dials independently, defaulting invalid values; zero stays depleted."""
+    def resolve(key: str, default: int, minimum: int) -> int:
+        try:
+            value = int(data.get(key, default))
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return value if value >= minimum else default
+
+    return resolve("ramp_bots", defaults[0], 0), resolve("ramp_window_s", defaults[1], 1)
 
 
 def normalise_email(email: str) -> str:
@@ -148,6 +167,8 @@ class PlatformBillingDataPatch(BaseModel):
 
 class UserAdminPatch(BaseModel):
     max_concurrent_bots: Optional[int] = Field(default=None, ge=0)
+    ramp_bots: Optional[int] = Field(default=None, ge=0)
+    ramp_window_s: Optional[int] = Field(default=None, ge=1)
     data: Optional[PlatformBillingDataPatch] = None
 
     model_config = {"extra": "forbid"}
@@ -155,7 +176,8 @@ class UserAdminPatch(BaseModel):
     @model_validator(mode="after")
     def require_change(self):
         has_data = self.data is not None and bool(self.data.model_fields_set)
-        if self.max_concurrent_bots is None and not has_data:
+        if (self.max_concurrent_bots is None and self.ramp_bots is None
+                and self.ramp_window_s is None and not has_data):
             raise ValueError("at least one user field must be supplied")
         return self
 
@@ -166,6 +188,16 @@ class UserResponse(BaseModel):
     name: Optional[str] = None
     max_concurrent_bots: int
     data: Dict[str, Any] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def ramp_bots(self) -> int:
+        return resolve_ramp(self.data, _ramp_defaults())[0]
+
+    @computed_field
+    @property
+    def ramp_window_s(self) -> int:
+        return resolve_ramp(self.data, _ramp_defaults())[1]
 
     @field_serializer("data")
     def omit_webhook_secret(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -560,6 +592,13 @@ def create_app() -> FastAPI:
                 **(user.data or {}),
                 **patch.data.model_dump(exclude_unset=True),
             }
+        ramp_patch = {
+            key: getattr(patch, key)
+            for key in ("ramp_bots", "ramp_window_s")
+            if getattr(patch, key) is not None
+        }
+        if ramp_patch:
+            user.data = {**(user.data or {}), **ramp_patch}
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
@@ -902,16 +941,19 @@ def create_app() -> FastAPI:
         await db.commit()
 
         scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
+        data_blob = user.data if isinstance(user.data, dict) else {}
+        ramp_bots, ramp_window_s = resolve_ramp(data_blob, _ramp_defaults())
         resp = {
             "user_id": user.id,
             "scopes": scopes,
             "max_concurrent": user.max_concurrent_bots,
+            "ramp_bots": ramp_bots,
+            "ramp_window_s": ramp_window_s,
             "email": user.email,
             # DB-backed admin role (bootstrap-claimed on a fresh instance) — the terminal's
             # admin gate reads THIS, with its VEXA_ADMIN_EMAILS allowlist kept as an override.
             "is_admin": (user.data or {}).get("is_admin") is True if isinstance(user.data, dict) else False,
         }
-        data_blob = user.data if isinstance(user.data, dict) else {}
         if data_blob.get("webhook_url"):
             resp["webhook_url"] = data_blob["webhook_url"]
             if data_blob.get("webhook_secret"):
@@ -1235,8 +1277,11 @@ def create_app() -> FastAPI:
         _check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
+        ramp_bots, ramp_window_s = resolve_ramp(data, _ramp_defaults())
         resp: dict = {
             "max_concurrent": user.max_concurrent_bots,
+            "ramp_bots": ramp_bots,
+            "ramp_window_s": ramp_window_s,
             "bot_name": data.get("calendar_bot_name") or "Vexa",
         }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.

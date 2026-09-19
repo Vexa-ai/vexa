@@ -267,6 +267,11 @@ to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` 
 already active on that link; `429` past your concurrency limit — see the
 [concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today.
 
+`ramp_bots` limits new bots per account in a sliding window; `0` means no new bots.
+`ramp_window_s` sets that window in seconds (at least `1`); failed attempts consume slots too; both dials are account settings, not request fields.
+The default is 2 per 300 s, configured by `VEXA_RAMP_BOTS_DEFAULT` and `VEXA_RAMP_WINDOW_S_DEFAULT`.
+A ramp refusal returns `429` with `Retry-After` naming the seconds until the next slot and a string `detail`.
+
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
 `503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the
 backend for your account over the API — [`PUT /user/transcription`](/api/settings#transcription-backend),

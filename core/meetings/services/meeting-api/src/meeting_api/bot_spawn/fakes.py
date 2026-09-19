@@ -13,10 +13,13 @@
 
 NO production logic — they only stand in for Postgres + the runtime kernel so the spawn flow runs
 fully in-process.
+The guarded store also enforces the optional creation-window ramp, with an injectable UTC clock.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from math import ceil
+from typing import Any, Callable, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
 from .ports import (
@@ -24,6 +27,7 @@ from .ports import (
     MaxBotsExceeded,
     MeetingStopped,
     QuotaExceeded,
+    RampExceeded,
     SpawnFailed,
     WorkloadUnknown,
     _archive_completion,
@@ -38,7 +42,8 @@ _TERMINAL_STATUSES = ("completed", "failed")
 class InMemoryMeetingRepo:
     """A dict-backed ``MeetingRepo`` keyed by the synthetic meeting id."""
 
-    def __init__(self):
+    def __init__(self, *, clock: Optional[Callable[[], datetime]] = None):
+        self._clock = clock or (lambda: datetime(2026, 6, 20, 9, tzinfo=timezone.utc))
         self._meetings: dict[int, dict] = {}
         self._next_id = 1
         self.sessions: list[dict] = []  # exposed for assertions (all sessions, all meetings)
@@ -100,17 +105,36 @@ class InMemoryMeetingRepo:
             "start_time": None,
             "end_time": None,
             "data": dict(data or {}),
-            "created_at": "2026-06-20T09:00:00Z",
+            "created_at": self._clock().isoformat().replace("+00:00", "Z"),
             "updated_at": "2026-06-20T09:00:00Z",
         }
         self._meetings[mid] = row
         return dict(row)
 
+    async def count_recent_spawns(
+        self, user_id, window_s, exclude_meeting_id=None, *, _claimable_id=None,
+    ) -> tuple[int, int]:
+        """Clock-controlled count/retry delay, with no suspension point in the fake store."""
+        now = self._clock()
+        recent = [
+            datetime.fromisoformat(m["created_at"].replace("Z", "+00:00"))
+            for m in self._meetings.values()
+            if m["user_id"] == user_id
+            and m["platform"] != "browser_session"
+            and m["id"] not in (exclude_meeting_id, _claimable_id)
+        ]
+        recent = [created for created in recent if created > now - timedelta(seconds=window_s)]
+        retry_after_s = window_s if not recent else max(1, ceil(
+            (min(recent) + timedelta(seconds=window_s) - now).total_seconds()
+        ))
+        return len(recent), retry_after_s
+
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        ramp=None, exclude_meeting_id=None,
     ) -> dict:
-        """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
+        """ATOMIC dedup + cap + ramp + insert (ROB1/ROB2), with an injectable UTC clock.
+        The check and the insert run with NO suspension point
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
         ``count_active_bots`` / ``create_meeting`` methods) cannot interleave concurrent spawns here —
         modelling the real adapter's single-transaction guard (advisory lock + unique partial index)."""
@@ -150,8 +174,19 @@ class InMemoryMeetingRepo:
             and m["native_meeting_id"] == native_meeting_id
             and m["status"] in ("idle", "scheduled")
         ]
-        if planned_rows:
-            row = max(planned_rows, key=lambda m: m["id"])  # newest, like the real adapter
+        claimable = max(planned_rows, key=lambda m: m["id"]) if planned_rows else None
+        if ramp is not None:
+            ramp_bots, ramp_window_s = ramp
+            if ramp_bots == 0:
+                raise RampExceeded(user_id, ramp_bots, ramp_window_s, ramp_window_s)
+            count, retry_after_s = await self.count_recent_spawns(
+                user_id, ramp_window_s, exclude_meeting_id,
+                _claimable_id=claimable["id"] if claimable is not None else None,
+            )
+            if count >= ramp_bots:
+                raise RampExceeded(user_id, ramp_bots, ramp_window_s, retry_after_s)
+        if claimable is not None:
+            row = claimable
             row["status"] = "requested"
             row["end_time"] = None
             row["bot_container_id"] = None
@@ -165,7 +200,7 @@ class InMemoryMeetingRepo:
             planned.pop("stop_requested", None)
             row["data"] = {**planned, **dict(data or {})}
             return dict(row)
-        # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
+        # 3. insert — no suspension since the dedup read, so the check+insert is atomic.
         mid = self._next_id
         self._next_id += 1
         row = {
@@ -179,7 +214,7 @@ class InMemoryMeetingRepo:
             "start_time": None,
             "end_time": None,
             "data": dict(data or {}),
-            "created_at": "2026-06-20T09:00:00Z",
+            "created_at": self._clock().isoformat().replace("+00:00", "Z"),
             "updated_at": "2026-06-20T09:00:00Z",
         }
         self._meetings[mid] = row
