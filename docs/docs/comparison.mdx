@@ -58,8 +58,8 @@ programs inside it, plus two sidecars), **compose** (11 services by default, wit
 and MinIO), and **Helm** (7 Deployments and 2 StatefulSets, requesting **1.55 vCPU / 4 GiB** in
 total before a meeting runs — 1.15 vCPU / 3 GiB if you bring your own datastores). Those counts are
 commands, not claims: `docker compose config --services` and `helm template` produce them on a clean
-clone. `make probe` then runs the whole journey — spawn → join → transcribe → live-view → stop — in
-nine stages with a per-stage verdict, against any of the three. What we do **not** ship: a backup or
+clone. `make probe` then runs the whole journey — ready → spawn → schedule → boot → join → transcribe →
+live-view → stop → log sweep — in nine stages with a per-stage verdict, against any of the three. What we do **not** ship: a backup or
 DR procedure, an automated upgrade path, or a published hardware minimum for Lite and Kubernetes.
 Those are real operator costs and they are enumerated, with the rest, on
 [Architecture review](/architecture/evaluation#3-what-running-it-costs).

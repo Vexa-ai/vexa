@@ -144,11 +144,13 @@ Same partial-update and clearing rules as [model configuration](#model-configura
 
 ## Webhook configuration
 
-<Warning>
-Webhook **delivery** has never been proven against a real external receiver — see
-[Webhooks](/webhooks) for what is and is not established. The configuration endpoints below are
-the settings surface for it; they store what you send.
-</Warning>
+<Note>
+Webhook **delivery** is proven live (an owner-witnessed production walk, 2026-07-19, one POST per
+event at an external receiver); the user-facing **Delivery History** is not — it lists none of them
+([#841](https://github.com/Vexa-ai/vexa/issues/841)). See [Webhooks → What is proven, and what is
+not](/webhooks#what-is-proven-and-what-is-not). The configuration endpoints below are the settings
+surface for it; they store what you send.
+</Note>
 
 ```bash GET /user/webhook
 curl "$API_BASE/user/webhook" -H "X-API-Key: $API_KEY"
