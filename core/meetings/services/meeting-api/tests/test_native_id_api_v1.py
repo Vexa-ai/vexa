@@ -5,7 +5,7 @@ A 0.10 api.v1 client (incl. the shipped 0.10 dashboard) addresses meetings by
 native paths 404'd. These tests drive the SHIPPED collector handlers (offline, in-memory fake)
 proving the restored native-keyed surface:
 
-  * PATCH /meetings/{platform}/{native} — resolves native → newest OWNED row → 200 (rename);
+  * PATCH /meetings/{platform}/{native} — resolves native → unambiguous OWNED row → 200 (rename);
     unknown native → 404; FSM-owned row → 409; a shared (non-owned) row → 404 (never mutable).
   * DELETE /meetings/{platform}/{native} — 200 + row gone; unknown → 404.
   * GET /bots/status — carries BOTH `running` and `running_bots` (sealed golden field), same list.
@@ -15,6 +15,9 @@ Negative control for the acceptance table: the same requests on current v0.12.2 
 return 404 — these tests are the green half of that red→green pair.
 """
 from __future__ import annotations
+
+import copy
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -51,16 +54,18 @@ def test_native_patch_renames_owned_meeting_200():
     assert r.json()["data"]["title"] == "new"
 
 
-def test_native_patch_resolves_to_newest_row():
-    """Several rows on the SAME native link → the native path addresses the NEWEST (spawn-dedup rule)."""
+def test_native_patch_ambiguous_requires_selection():
     client, store = _client()
-    store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle",
-                       created_at="2026-01-01T00:00:00Z")
-    newest = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle",
-                                created_at="2026-06-01T00:00:00Z")
-    r = client.patch(f"/meetings/{PLAT}/{NATIVE}", json={"title": "hit-newest"}, headers=H)
-    assert r.status_code == 200, r.text
-    assert r.json()["id"] == newest
+    older = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle",
+                               created_at="2026-01-01T00:00:00Z")
+    newer = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle",
+                               created_at="2026-06-01T00:00:00Z")
+    response = client.patch(f"/meetings/{PLAT}/{NATIVE}", json={"title": "x"}, headers=H)
+    assert response.status_code == 409
+    selected = client.patch(f"/meetings/{PLAT}/{NATIVE}?meeting_id={older}", json={"title": "x"}, headers=H)
+    assert selected.status_code == 200
+    assert selected.json()["id"] == older
+    assert store._meetings[newer]["data"].get("title") != "x"
 
 
 def test_native_patch_unknown_native_404():
@@ -142,3 +147,71 @@ def test_chat_read_owned_returns_empty_messages():
 def test_chat_read_unowned_404():
     client, _store = _client()
     assert client.get(f"/bots/{PLAT}/{NATIVE}/chat", headers=H).status_code == 404
+
+
+def test_native_delete_ambiguity_and_exact_older_selection():
+    client, store = _client()
+    older = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle",
+                               created_at="2026-01-01T00:00:00Z")
+    newer = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle",
+                               created_at="2026-06-01T00:00:00Z")
+    foreign = store.seed_meeting(user_id=999, platform=PLAT, native_meeting_id=NATIVE, status="idle",
+                                 data={"transcript_viewers": [USER]})
+    response = client.delete(f"/meetings/{PLAT}/{NATIVE}", headers=H)
+    assert response.status_code == 409
+    candidates = response.json()["detail"]["candidates"]
+    assert [r["id"] for r in candidates] == [newer, older]
+    assert candidates[1] == {"id": older, "created_at": "2026-01-01T00:00:00Z", "status": "idle"}
+    assert set(store._meetings) == {older, newer, foreign}
+    for invalid in [foreign, 99999]:
+        assert client.delete(f"/meetings/{PLAT}/{NATIVE}?meeting_id={invalid}", headers=H).status_code == 404
+    assert client.delete(f"/meetings/{PLAT}/{NATIVE}?meeting_id={older}", headers=H).status_code == 200
+    assert set(store._meetings) == {newer, foreign}
+    assert client.delete(f"/meetings/{PLAT}/{NATIVE}", headers=H).status_code == 200
+    assert set(store._meetings) == {foreign}
+
+
+def test_native_annotate_and_read_resolution():
+    client, store = _client()
+    older = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle")
+    newer = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status="idle")
+    path = f"/meetings/{PLAT}/{NATIVE}/annotate"
+    assert client.post(path, json={"title": "x"}, headers=H).status_code == 409
+    response = client.post(path + f"?meeting_id={older}", json={"title": "x"}, headers=H)
+    assert response.status_code == 200
+    assert response.json()["id"] == older
+    assert store._meetings[newer]["data"].get("title") != "x"
+    assert client.get(f"/bots/{PLAT}/{NATIVE}/chat", headers=H).status_code == 200
+
+
+
+@pytest.mark.parametrize('method,suffix,payload', [
+    ('post', '/workspace', {'workspace_id': 'selected-workspace'}),
+    ('post', '/share', {}),
+    ('post', '/docs', {'path': 'notes.md', 'workspace': 'selected-workspace'}),
+    ('delete', '/docs?path=notes.md', None),
+    ('put', '/intent', {'intent': 'scheduled', 'at': '2026-10-01T12:00:00Z'}),
+])
+def test_every_native_write_requires_and_consumes_row_selection(method, suffix, payload):
+    client, store = _client()
+    older = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status='idle',
+                               created_at='2026-01-01T00:00:00Z',
+                               data={'docs': [{'path': 'notes.md', 'workspace': 'original'}]})
+    newer = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE, status='idle',
+                               created_at='2026-06-01T00:00:00Z',
+                               data={'docs': [{'path': 'notes.md', 'workspace': 'original'}]})
+    before = copy.deepcopy(store._meetings)
+    path = f'/meetings/{PLAT}/{NATIVE}{suffix}'
+    kwargs = {'headers': H}
+    if payload is not None:
+        kwargs['json'] = payload
+    response = client.request(method, path, **kwargs)
+    assert response.status_code == 409, response.text
+    assert store._meetings == before
+    joiner = '&' if '?' in path else '?'
+    invalid = client.request(method, path + f'{joiner}meeting_id=99999', **kwargs)
+    assert invalid.status_code == 404, invalid.text
+    selected = client.request(method, path + f'{joiner}meeting_id={older}', **kwargs)
+    assert selected.status_code == 200, selected.text
+    assert store._meetings[newer] == before[newer]
+    assert store._meetings[older] != before[older]

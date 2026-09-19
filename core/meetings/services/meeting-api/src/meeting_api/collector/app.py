@@ -14,6 +14,8 @@ v0.12 carve of the deployed ``services/meeting-api/meeting_api/collector/endpoin
     returns ``{authorized:[{platform, native_id, user_id, meeting_id}], errors:[]}`` — the exact
     shape ``gateway.ports.Authorizer.authorize_subscribe`` consumes (``gateway`` adapters POST
     here, ``_run_multiplex`` reads ``authorized[].{platform,native_id,user_id,meeting_id}``).
+  * **Native-keyed mutations** — ambiguous recurring IDs return 409 with owned candidates;
+    ``?meeting_id=`` selects an exact row for all native-keyed meeting writes.
   * **/health** — liveness ``{status:"ok", service:"transcription-collector"}`` (gate:health).
 
 The caller's identity arrives in the ``x-user-id`` header the gateway injects after it resolves
@@ -493,7 +495,7 @@ def build_router(
     # the FSM is never fought. `scheduled_at: null` clears the time (status flips to `idle`);
     # `meeting_url: null` detaches the link (row becomes link-less). ---
     # --- native-id → owned ROW resolver (#579 C1). Resolve (platform, native) to the caller's
-    # NEWEST OWNED row, exactly the rule the native transcript/authorize paths use (list_meetings is
+    # NEWEST OWNED row for read-only routes, exactly the rule the native transcript/authorize paths use (list_meetings is
     # created_at-desc). OWNER-scoped: `shared` rows (a workspace/transcript-share grant) are excluded
     # so a viewer can never mutate/delete someone else's meeting via the native path. None → 404. ---
     async def _resolve_owned_native(user_id: int, platform: str, native_meeting_id: str):
@@ -504,6 +506,27 @@ def build_router(
                     and m.get("native_meeting_id") == native_meeting_id):
                 return m.get("id")
         return None
+
+    async def _resolve_owned_native_write(user_id: int, platform: str, native_meeting_id: str,
+                                          meeting_id: Optional[int]):
+        """Mutations require an unambiguous owned row; reads retain newest-row semantics."""
+        matches = await store.find_owned_native_meetings(user_id, platform, native_meeting_id)
+        if meeting_id is not None:
+            return meeting_id if any(m["id"] == meeting_id for m in matches) else None
+        if len(matches) > 1:
+            raise HTTPException(status_code=409, detail={
+                "message": "Multiple meetings match; select a row with ?meeting_id=<id>",
+                "candidates": [{key: m.get(key) for key in ("id", "created_at", "status")}
+                               for m in matches],
+            })
+        return matches[0]["id"] if matches else None
+
+    async def _require_owned_native_write(user_id, platform, native_meeting_id, meeting_id):
+        resolved = await _resolve_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
+        if resolved is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}")
+        return resolved
 
     # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
     # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
@@ -663,7 +686,7 @@ def build_router(
 
     # --- native-keyed PATCH/DELETE /meetings/{platform}/{native_meeting_id} (#579 C1) — the sealed
     # api.v1 mutate routes a 0.10 client (incl. the shipped dashboard) calls. Resolve (platform,
-    # native) → the caller's newest OWNED row, then forward to the SAME row-id logic above (which
+    # native) → an unambiguous or explicitly selected OWNED row, then the SAME row-id logic (which
     # refuses an FSM-owned row with 409). Unknown/unowned native → 404. Additive: the int routes are
     # unchanged. DELETE returns 200 + a small body (the sealed native-delete response), NOT the 204
     # the row-id route returns. ---
@@ -701,16 +724,8 @@ def build_router(
             )
         return title, metadata
 
-    # --- POST /meetings/{meeting_id}/annotate → the SAME write, addressed by the identity a
-    # meeting always has. The (platform, native) pair is not one: a Google Meet room code is
-    # reused across sessions, and `_resolve_owned_native` resolves it to the caller's NEWEST row,
-    # so an older meeting on a recurring link could be read but never annotated — an agent that
-    # pulled a transcript had nowhere to write what it learned back (fr_b6340167da32b8b6).
-    #
-    # Three segments against the pair route's four, so on segment count alone neither shadows the
-    # other — the same property `POST /meetings/{meeting_id}/share` already relies on. Owner-scoped
-    # in the store (`annotate_meeting` matches user_id), so an id belonging to someone else is a
-    # 404 exactly as an unowned native pair is.
+    # --- Annotation by stable row ID. Native keys can be reused across sessions; native
+    # mutations require explicit selection when ambiguous. Ownership is rechecked in the store.
     @router.post("/meetings/{meeting_id}/annotate")
     async def annotate_meeting_by_id(
         meeting_id: int,
@@ -750,6 +765,7 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
@@ -758,7 +774,7 @@ def build_router(
             raise HTTPException(status_code=422, detail="invalid JSON body")
         title, metadata = _annotation_from(payload)
 
-        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        meeting_id = await _resolve_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
         if meeting_id is None:
             raise HTTPException(
                 status_code=404,
@@ -773,13 +789,14 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
             payload = await request.json()
         except Exception:
             raise HTTPException(status_code=422, detail="invalid JSON body")
-        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        meeting_id = await _resolve_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
         if meeting_id is None:
             raise HTTPException(
                 status_code=404,
@@ -793,9 +810,10 @@ def build_router(
         platform: str,
         native_meeting_id: str,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        meeting_id = await _resolve_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
         if meeting_id is None:
             raise HTTPException(
                 status_code=404,
@@ -923,6 +941,7 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
@@ -932,7 +951,8 @@ def build_router(
         workspace_id = str(payload.get("workspace_id", "")).strip() if isinstance(payload, dict) else ""
         if not workspace_id:
             raise HTTPException(status_code=422, detail="'workspace_id' is required")
-        bound = await store.bind_workspace(user_id, platform, native_meeting_id, workspace_id)
+        meeting_id = await _require_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
+        bound = await store.bind_workspace(user_id, platform, native_meeting_id, workspace_id, meeting_id=meeting_id)
         if bound is None:
             raise HTTPException(
                 status_code=404,
@@ -1054,6 +1074,7 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
@@ -1061,8 +1082,9 @@ def build_router(
         except Exception:
             payload = {}
         mode, emails, ttl = _share_payload(payload)
-        minted = await store.mint_transcript_share(
-            user_id, platform, native_meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
+        meeting_id = await _require_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
+        minted = await store.mint_transcript_share_by_id(
+            user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
         )
         if minted is None:
             log_event(
@@ -1113,6 +1135,7 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
@@ -1131,7 +1154,8 @@ def build_router(
         for k in ("title", "kind"):
             if payload.get(k) is not None:
                 doc[k] = payload[k]
-        docs = await store.connect_doc(user_id, platform, native_meeting_id, doc)
+        meeting_id = await _require_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
+        docs = await store.connect_doc(user_id, platform, native_meeting_id, doc, meeting_id=meeting_id)
         if docs is None:
             raise HTTPException(
                 status_code=404,
@@ -1152,6 +1176,7 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
         path: Optional[str] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
@@ -1165,7 +1190,8 @@ def build_router(
                 resolved = str(payload.get("path", "")).strip()
         if not resolved:
             raise HTTPException(status_code=422, detail="'path' is required")
-        docs = await store.disconnect_doc(user_id, platform, native_meeting_id, resolved)
+        meeting_id = await _require_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
+        docs = await store.disconnect_doc(user_id, platform, native_meeting_id, resolved, meeting_id=meeting_id)
         if docs is None:
             raise HTTPException(
                 status_code=404,
@@ -1189,6 +1215,7 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        meeting_id: Optional[int] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
@@ -1217,8 +1244,9 @@ def build_router(
         if intent == "scheduled" and not scheduled_at:
             raise HTTPException(status_code=422, detail="'at' is required when intent is 'scheduled'")
 
+        meeting_id = await _require_owned_native_write(user_id, platform, native_meeting_id, meeting_id)
         result = await store.set_intent(
-            user_id, platform, native_meeting_id, intent, scheduled_at=scheduled_at
+            user_id, platform, native_meeting_id, intent, scheduled_at=scheduled_at, meeting_id=meeting_id
         )
         if result is None:
             raise HTTPException(
