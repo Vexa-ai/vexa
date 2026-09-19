@@ -47,6 +47,8 @@ import { PyannoteSegmenter, type BoundaryEvent } from './pyannote-segmenter';
 const MODEL_ID = 'onnx-community/wespeaker-voxceleb-resnet34-LM';
 
 export interface OnnxLocalDiarizerConfig {
+  /** Optional ONNX CPU thread limits; omitted uses library defaults. */
+  sessionOptions?: { intraOpNumThreads: number; interOpNumThreads: number };
   /** Cosine distance threshold for online clustering. Default 0.50.
    *  Lower → more conservative (don't split same voice); higher → more
    *  aggressive splitting. Tuned for fp32 wespeaker-resnet34-LM on tab audio. */
@@ -345,7 +347,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     console.log(`[onnx-diarizer] loading processor (mel-fbank) for ${MODEL_ID}...`);
     const processor = await AutoProcessor.from_pretrained(MODEL_ID);
     console.log(`[onnx-diarizer] loading model (fp32 ONNX, ~25 MB)...`);
-    const model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'fp32', device: 'cpu' });
+    const model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'fp32', device: 'cpu', session_options: cfg.sessionOptions });
     console.log(`[onnx-diarizer] wespeaker model ready (used for embedding + clustering)`);
     const inst = new OnnxLocalDiarizer(model, processor, cfg);
     // Pyannote/segmentation-3.0 is the segmentation source by default.
@@ -355,6 +357,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     if (cfg.usePyannoteSegmentation !== false) {
       console.log(`[onnx-diarizer] loading pyannote/segmentation-3.0 for boundary detection...`);
       inst.pyannoteSegmenter = await PyannoteSegmenter.create({
+        sessionOptions: cfg.sessionOptions,
         inferIntervalMs: cfg.pyannoteInferIntervalMs ?? 500,
         onBoundary: (ev) => {
           inst.pendingPyannoteBoundaries.push(ev);

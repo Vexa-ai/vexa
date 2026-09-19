@@ -1,5 +1,31 @@
 #!/usr/bin/env bash
 # Fetch AMI distant-microphone audio and only_words RTTM references.
+# Pure selection: stdin is the ordered meeting list, $1 is an optional group limit.
+pick_meetings() {
+  local limit=${1:-} meeting group seen=' ' count=0
+  if [ -n "$limit" ] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
+    echo '--limit must be a positive integer' >&2; return 2
+  fi
+  while IFS= read -r meeting || [ -n "$meeting" ]; do
+    meeting=${meeting%$'\r'}
+    [ -n "$meeting" ] || continue
+    [[ "$meeting" == \#* ]] && continue
+    [[ "$meeting" =~ ^[A-Za-z]+[0-9][A-Za-z0-9_-]*$ ]] || {
+      echo "Invalid meeting ID: $meeting" >&2; return 2;
+    }
+    if [ -n "$limit" ]; then
+      group=${meeting%%[0-9]*}
+      [[ "$seen" == *" $group "* ]] && continue
+      [ "$count" -lt "$limit" ] || break
+      seen="$seen$group "
+    fi
+    printf '%s\n' "$meeting"
+    count=$((count + 1))
+  done
+}
+
+# Sourcing exposes only the picker, with no downloads or shell-option changes.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 set -euo pipefail
 out=''
 subset=dev
@@ -41,13 +67,13 @@ trap 'rm -rf "$scratch"' EXIT
 setup=https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main
 mirror=https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus
 curl --fail --location --retry 3 "$setup/lists/$subset.meetings.txt" -o "$scratch/meetings.txt"
+pick_meetings "$limit" < "$scratch/meetings.txt" > "$scratch/selected.txt"
 count=0
 while IFS= read -r meeting || [ -n "$meeting" ]; do
   meeting=${meeting%$'\r'}
   [ -n "$meeting" ] || continue
   [[ "$meeting" == \#* ]] && continue
   [[ "$meeting" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid meeting ID: $meeting" >&2; exit 2; }
-  if [ -n "$limit" ] && [ "$count" -ge "$limit" ]; then break; fi
   if [ "$force" = false ] && { [ -e "$out/$meeting.wav" ] || [ -L "$out/$meeting.wav" ]; }; then
     echo "Refusing to overwrite $out/$meeting.wav; use --force to replace it." >&2
     exit 2
@@ -71,5 +97,5 @@ while IFS= read -r meeting || [ -n "$meeting" ]; do
   fi
   mv "$scratch/reference.rttm" "$out/$meeting.rttm"
   count=$((count + 1))
-done < "$scratch/meetings.txt"
+done < "$scratch/selected.txt"
 echo "Fetched $count fixture pairs into $out"

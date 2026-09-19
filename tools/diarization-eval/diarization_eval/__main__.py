@@ -11,6 +11,9 @@ JSON contains these columns plus candidate, collar, skip_overlap, peak_rss_mb.
 Exit 0: every complete fixture scored; exit 2: any candidate/fixture failure.
 `--collar` is pyannote's total collar width, ±collar/2 around every reference boundary.
 --timeout limits each candidate (CLI > DIAR_CANDIDATE_TIMEOUT_S > 1800 seconds); timeouts fail and continue.
+--candidate-env KEY=VALUE is repeatable and forwards candidate environment overrides.
+sweep --fixtures <dir> --candidate <name> --env KEY=V1,V2 [same options]
+prints exactly value DER miss fa conf files, one corpus aggregate per value, no ALL.
 Model-loading candidates are verified outside the sandbox by the caller.
 """
 

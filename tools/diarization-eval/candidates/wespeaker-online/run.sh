@@ -2,8 +2,8 @@
 # run.sh <input.wav> <output.rttm> — 16 kHz mono PCM16, CPU only.
 # Dependencies (@huggingface/transformers, onnxruntime-node, tsx) come from the mixed-pipeline
 # module's node_modules. Node's ESM resolver ignores NODE_PATH, so the module directory is linked
-# beside main.ts (gitignored) and bare specifiers resolve by the normal walk-up. First real run on
-# bbb (2026-09-19) failed on exactly this before the link existed; --help and tsc never saw it.
+# beside main.ts (gitignored) and bare specifiers resolve by the normal walk-up.
+# DIAR_THREADS is inherited by main.ts and applied to both ONNX model sessions.
 set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../../.." && pwd)"

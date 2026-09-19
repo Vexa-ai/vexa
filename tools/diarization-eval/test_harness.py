@@ -21,9 +21,11 @@ def fixtures(tmp_path):
     return generate_fixtures(tmp_path / "fixtures")
 
 
-def run(fixtures, candidate, tmp_path, *options, candidates_dir=None):
+def run(fixtures, candidate, tmp_path, *options, candidates_dir=None, sweep=False):
     report = tmp_path / "report.json"
     args = ["--fixtures", str(fixtures), "--candidate", candidate, "--json", str(report), *options]
+    if sweep:
+        args.insert(0, "sweep")
     if candidates_dir is None:
         command = [sys.executable, "-m", "diarization_eval", *args]
     else:
@@ -200,3 +202,88 @@ def test_invalid_or_absent_hypothesis_fails(fixtures, tmp_path, body):
     assert result.returncode == 2
     assert [row["file"] for row in rows] == ["ALL"]
     assert "ERROR:" in result.stderr
+
+
+def test_candidate_environment(fixtures, tmp_path):
+    candidates = custom_candidate(tmp_path,
+        '[ "$PROBE_VALUE" = "hello=world" ]\n[ "$SECOND_VALUE" = "two words" ]\n'
+        'cp "$DIAR_REF_RTTM" "$2"')
+    result, rows = run(fixtures, "custom", tmp_path,
+                       "--candidate-env", "PROBE_VALUE=hello=world",
+                       "--candidate-env", "SECOND_VALUE=two words", candidates_dir=candidates)
+    assert result.returncode == 0, result.stderr
+    assert rows[-1]["DER"] == 0
+
+
+def test_sweep_order_and_corpus_der(fixtures, tmp_path):
+    candidates = custom_candidate(tmp_path,
+        'printf "%s\\n" "$MODE" >> "$CALLS"\n'
+        'case "$MODE" in\n'
+        '  ref) cp "$DIAR_REF_RTTM" "$2" ;;\n'
+        '  single) awk \'{$8="one"; print}\' "$DIAR_REF_RTTM" > "$2" ;;\n'
+        '  empty) : > "$2" ;;\nesac')
+    calls = tmp_path / "calls"
+    result, rows = run(fixtures, "custom", tmp_path, "--env", "MODE=single,ref,empty",
+                       "--candidate-env", f"CALLS={calls}", "--collar", "0", "--skip-overlap",
+                       candidates_dir=candidates, sweep=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "value  DER  miss  fa  conf  files",
+        "single  0.4500  0.0000  0.0000  18.0000  2",
+        "ref  0.0000  0.0000  0.0000  0.0000  2",
+        "empty  1.0000  40.0000  0.0000  0.0000  2",
+    ]
+    assert [row["value"] for row in rows] == ["single", "ref", "empty"]
+    assert [row["DER"] for row in rows] == [0.45, 0, 1]
+    assert all(set(row) == set("value DER miss fa conf files".split()) for row in rows)
+    assert calls.read_text().splitlines() == ["single", "single", "ref", "ref", "empty", "empty"]
+
+
+def test_sweep_failure_continues(fixtures, tmp_path):
+    candidates = custom_candidate(tmp_path, '[ "$MODE" != bad ]\ncp "$DIAR_REF_RTTM" "$2"')
+    result, rows = run(fixtures, "custom", tmp_path, "--env", "MODE=bad,good",
+                       candidates_dir=candidates, sweep=True)
+    assert result.returncode == 2
+    assert [row["files"] for row in rows] == [0, 2]
+    assert "ERROR:" in result.stderr
+
+
+@pytest.mark.parametrize("assignment", ["NO_EQUALS", "=value", "NOT-VALID=value"])
+def test_invalid_candidate_environment(fixtures, tmp_path, assignment):
+    result, _ = run(fixtures, "ref", tmp_path, "--candidate-env", assignment)
+    assert result.returncode == 2
+    assert "expected KEY=VALUE" in result.stderr
+
+
+def test_ami_group_picker():
+    result = subprocess.run(["bash", str(ROOT / "test_fetch_ami.sh")], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[:3] == ["IS1008a", "ES2011a", "IB4001"]
+
+
+@pytest.mark.parametrize("level,flags,expected", [(-50, [], 24), (-20, [], -6), (-50, ["--no-gain"], 0)])
+def test_dry_gain_without_models(tmp_path, level, flags, expected):
+    import re
+    import numpy as np
+    from diarization_eval.synth import generate_sine
+
+    fixture = generate_sine(tmp_path / "sine", level_dbfs=level)
+    with wave.open(str(fixture / "sine.wav"), "rb") as wav:
+        assert (wav.getframerate(), wav.getnchannels(), wav.getnframes()) == (16000, 1, 80000)
+        samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2") / 32768
+        assert 20 * np.log10(np.sqrt(np.mean(samples ** 2))) == pytest.approx(level, abs=0.02)
+    guard = tmp_path / "no-models.cjs"
+    guard.write_text("const M = require('node:module'); const load = M._load;\n"
+                     "M._load = function(id, ...args) {\n"
+                     "if (/transformers|onnx-local-diarizer|onnxruntime/.test(id)) "
+                     "throw new Error('MODEL LOAD ATTEMPTED');\n"
+                     "return load.call(this, id, ...args); };\n")
+    output = tmp_path / "unused.rttm"
+    result = subprocess.run([str(ROOT / "candidates/wespeaker-online/run.sh"),
+                             str(fixture / "sine.wav"), str(output), "--dry-gain", *flags],
+                            cwd="/", capture_output=True, text=True, timeout=10,
+                            env={**os.environ, "NODE_OPTIONS": f"--require={guard}"})
+    assert result.returncode == 0, result.stderr
+    assert not output.exists()
+    assert result.stdout == ""
+    assert float(re.search(r"Applied gain: ([+-][\d.]+) dB", result.stderr)[1]) == pytest.approx(expected, abs=0.02)

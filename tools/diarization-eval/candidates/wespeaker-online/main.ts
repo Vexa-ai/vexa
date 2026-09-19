@@ -38,20 +38,47 @@ function decodeWav(bytes: Buffer): Float32Array {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
-    console.log('Usage: run.sh <input.wav> <output.rttm> — 16 kHz mono PCM16, CPU only');
+    console.log('Usage: run.sh <input.wav> <output.rttm> [--no-gain] [--dry-gain] — 16 kHz mono PCM16, CPU only');
     return;
   }
-  if (args.length !== 2) throw new Error('Usage: run.sh <input.wav> <output.rttm>');
+  const flags = args.splice(2);
+  if (args.length !== 2 || flags.some(flag => !['--no-gain', '--dry-gain'].includes(flag))) {
+    throw new Error('Usage: run.sh <input.wav> <output.rttm> [--no-gain] [--dry-gain]');
+  }
   const [wav, output] = args;
   const name = basename(wav, extname(wav));
   if (/\s/.test(name)) throw new Error('RTTM fixture names cannot contain whitespace');
   const audio = decodeWav(await readFile(wav));
+  let sumSquares = 0;
+  for (const sample of audio) sumSquares += sample * sample;
+  const rms = audio.length ? Math.sqrt(sumSquares / audio.length) : 0;
+  const gainDb = flags.includes('--no-gain') || rms === 0 ? 0 : -26 - 20 * Math.log10(rms);
+  const gain = 10 ** (gainDb / 20);
+  for (let i = 0; i < audio.length; i++) audio[i] *= gain;
+  console.error(`Applied gain: ${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(2)} dB`);
+  if (flags.includes('--dry-gain')) return;
+
+  const threadsValue = process.env.DIAR_THREADS;
+  const threads = threadsValue === undefined ? undefined : Number(threadsValue);
+  if (threads !== undefined && (!Number.isSafeInteger(threads) || threads <= 0)) {
+    throw new Error('DIAR_THREADS must be a positive integer');
+  }
+  const thresholdValue = process.env.DIAR_NEW_SPEAKER_THRESHOLD;
+  const newSpeakerThreshold = thresholdValue === undefined ? undefined : Number(thresholdValue);
+  if (newSpeakerThreshold !== undefined && (thresholdValue!.trim() === '' ||
+      !Number.isFinite(newSpeakerThreshold) || newSpeakerThreshold < 0 || newSpeakerThreshold > 2)) {
+    throw new Error('DIAR_NEW_SPEAKER_THRESHOLD must be a cosine distance between 0 and 2');
+  }
+  const sessionOptions = threads === undefined ? undefined : {
+    intraOpNumThreads: threads, interOpNumThreads: threads,
+  };
   // Import and load models only after the CLI and audio have been validated.
   const { env } = await import('@huggingface/transformers');
   env.cacheDir = join(tmpdir(), 'diarization-eval-models');
   const { OnnxLocalDiarizer } = await import('./onnx-local-diarizer');
   const turns: Array<{ tStartMs: number; tEndMs: number; speakerId: string }> = [];
   const diarizer = await OnnxLocalDiarizer.create({
+    sessionOptions, newSpeakerThreshold,
     onCommit: ({ tStartMs, tEndMs, speakerId }) => turns.push({ tStartMs, tEndMs, speakerId }),
   });
   const chunkSamples = 320; // 20 ms, timestamps mark each frame's first sample.

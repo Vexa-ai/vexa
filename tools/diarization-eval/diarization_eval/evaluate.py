@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -62,7 +63,18 @@ def positive_seconds(value):
     return number
 
 
+def environment(value):
+    key, separator, val = value.partition("=")
+    if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\0" in val:
+        raise argparse.ArgumentTypeError("expected KEY=VALUE with a valid environment name")
+    return key, val
+
+
 def main(argv=None, *, candidates_dir=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    sweep = bool(argv and argv[0] == "sweep")
+    if sweep:
+        argv.pop(0)
     candidates = {p.name: p / "run.sh" for p in Path(candidates_dir or CANDIDATES).iterdir()
                   if p.is_dir() and (p / "run.sh").is_file()}
     parser = argparse.ArgumentParser(description=__doc__)
@@ -76,6 +88,10 @@ def main(argv=None, *, candidates_dir=None):
     parser.add_argument("--timeout", type=positive_seconds,
                         default=os.environ.get("DIAR_CANDIDATE_TIMEOUT_S", "1800"),
                         help="candidate wall-time limit in seconds (env DIAR_CANDIDATE_TIMEOUT_S, default 1800)")
+    parser.add_argument("--candidate-env", action="append", type=environment, default=[],
+                        metavar="KEY=VALUE", help="candidate environment override (repeatable)")
+    if sweep:
+        parser.add_argument("--env", required=True, type=environment, metavar="KEY=V1,V2,V3")
     args = parser.parse_args(argv)
     if not args.fixtures.is_dir():
         parser.error(f"fixture directory does not exist: {args.fixtures}")
@@ -88,6 +104,31 @@ def main(argv=None, *, candidates_dir=None):
         else:
             pairs.append((name, wav, ref))
     pairs = pairs[:args.limit]
+    candidate_env = dict(args.candidate_env)
+    failed = False
+    if sweep:
+        key, values = args.env
+        rows = []
+        for value in values.split(","):
+            files, total, run_failed = evaluate(args, candidates, pairs, {**candidate_env, key: value})
+            failed |= run_failed
+            rows.append({"value": value, **{k: total[k] for k in ("DER", "miss", "fa", "conf")},
+                         "files": len(files)})
+        columns = "value DER miss fa conf files".split()
+    else:
+        rows, total, failed = evaluate(args, candidates, pairs, candidate_env)
+        rows.append(total)
+        columns = COLUMNS
+    print("  ".join(columns))
+    for row in rows:
+        print("  ".join(f"{row[key]:.4f}" if key in {"DER", "miss", "fa", "conf", "cand_s", "audio_s"}
+                        else str(row[key]) for key in columns))
+    if args.json:
+        args.json.write_text(json.dumps(rows, indent=2, allow_nan=False) + "\n")
+    return 2 if failed else 0
+
+
+def evaluate(args, candidates, pairs, candidate_env):
     metric = DiarizationErrorRate(collar=args.collar, skip_overlap=args.skip_overlap)
     metadata = {"candidate": args.candidate, "collar": args.collar, "skip_overlap": args.skip_overlap}
     rows = []
@@ -103,7 +144,8 @@ def main(argv=None, *, candidates_dir=None):
                 duration = audio_duration(wav)
                 reference = read_rttm(reference_path, name)
                 env = {**os.environ, "PYTHON": sys.executable, "DIAR_REF_RTTM": str(reference_path),
-                       "PYTHONDONTWRITEBYTECODE": "1", "DIAR_CANDIDATE_TIMEOUT_S": str(args.timeout)}
+                       "PYTHONDONTWRITEBYTECODE": "1", "DIAR_CANDIDATE_TIMEOUT_S": str(args.timeout),
+                       **candidate_env}
                 with (scratch / "candidate.log").open("w+") as log:
                     result = subprocess.run(
                         [sys.executable, str(Path(__file__).with_name("runner.py")),
@@ -129,11 +171,4 @@ def main(argv=None, *, candidates_dir=None):
     total = {"file": "ALL", "DER": abs(metric) if rows else 0.0,
              **{key: sum(row[key] for row in rows) for key in COLUMNS[2:]}, **metadata,
              "peak_rss_mb": max((row["peak_rss_mb"] for row in rows if row["peak_rss_mb"] is not None), default=None)}
-    rows.append(total)
-    print("  ".join(COLUMNS))
-    for row in rows:
-        print("  ".join(f"{row[key]:.4f}" if key in {"DER", "miss", "fa", "conf", "cand_s", "audio_s"}
-                        else str(row[key]) for key in COLUMNS))
-    if args.json:
-        args.json.write_text(json.dumps(rows, indent=2, allow_nan=False) + "\n")
-    return 2 if failed else 0
+    return rows, total, failed

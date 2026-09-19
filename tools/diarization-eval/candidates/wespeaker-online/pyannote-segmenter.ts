@@ -85,6 +85,8 @@ function medianFilter3(arr: number[]): number[] {
 }
 
 export interface PyannoteSegmenterConfig {
+  /** Optional ONNX CPU thread limits; omitted uses library defaults. */
+  sessionOptions?: { intraOpNumThreads: number; interOpNumThreads: number };
   /** How often to run inference. Default 500ms. Lower = lower latency
    *  but more CPU. Forward pass is ~50ms per call on modern CPU. */
   inferIntervalMs?: number;
@@ -146,7 +148,7 @@ export class PyannoteSegmenter {
 
   static async create(cfg: PyannoteSegmenterConfig = {}): Promise<PyannoteSegmenter> {
     const inst = new PyannoteSegmenter(cfg);
-    inst.model = await AutoModel.from_pretrained(PYANNOTE_MODEL_ID, { device: 'cpu' });
+    inst.model = await AutoModel.from_pretrained(PYANNOTE_MODEL_ID, { device: 'cpu', session_options: cfg.sessionOptions });
     inst.processor = await AutoProcessor.from_pretrained(PYANNOTE_MODEL_ID);
     return inst;
   }
