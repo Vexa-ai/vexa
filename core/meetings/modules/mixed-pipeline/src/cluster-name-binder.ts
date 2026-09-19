@@ -268,12 +268,29 @@ export class ClusterNameBinder {
       else if (a.supportMs >= best.supportMs - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
     }
     if (!best) return null;
+    // Whose answer is this? When the loop above separated a NEAR-TIE by recency, the
+    // winner is recency's call, not overlap's — and a two-way near-tie puts confidence
+    // at ~0.5, below MIN_MATCH_CONFIDENCE. The floor would then discard exactly the
+    // answer the tie-break exists to produce ("a previous speaker's still-open turn
+    // can't out-vote the speaker who actually just started"), leaving every such turn
+    // unnamed. Live Zoom evidence (2026-08-25): 499/499 rejections were this one shape
+    // — conf=0.50, coverage=1.00, candidates=2. So a tie the tie-break ACTUALLY
+    // separated is exempt from the confidence floor; support and coverage still apply,
+    // and a tie recency could NOT separate still refuses (blank beats a wrong name).
+    let runnerUp: { supportMs: number; lastStart: number } | null = null;
+    for (const [name, a] of agg) {
+      if (name === best.name) continue;
+      if (!runnerUp || a.supportMs > runnerUp.supportMs) runnerUp = { supportMs: a.supportMs, lastStart: a.lastStart };
+    }
+    const recencySeparated = !!runnerUp
+      && Math.abs(best.supportMs - runnerUp.supportMs) <= RECENCY_TIE_MS
+      && best.lastStart > runnerUp.lastStart;
     const coverage = Math.min(1, best.supportMs / commitDur);
     const confidence = totalSupportMs > 0 ? best.supportMs / totalSupportMs : 0;
     const requiredSupport = Math.min(MIN_MATCH_SUPPORT_MS, commitDur * 0.8);
     if (best.supportMs < requiredSupport) return null;
     if (coverage < MIN_MATCH_COVERAGE) return null;
-    if (confidence < MIN_MATCH_CONFIDENCE) return null;
+    if (!recencySeparated && confidence < MIN_MATCH_CONFIDENCE) return null;
     return { name: best.name, confidence: Math.min(coverage, confidence) };
   }
 
