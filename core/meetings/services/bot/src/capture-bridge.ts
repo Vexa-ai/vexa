@@ -35,7 +35,7 @@ import {
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
-import { getJoinBrowserArgs } from '@vexa/join';
+import { getJoinBrowserArgs, getDisplayFillBrowserArgs, telemostCallFrame } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
@@ -593,6 +593,11 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
   const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  // Telemost's call frame lives inside a messenger shell that gives it whatever width the window
+  // leaves: at Chromium's default window on the bare Xvfb that is 549 px, and the share layout
+  // then carries no participant strip — no outline, no slot, no VAD. Witnessed live for Telemost
+  // only; the other platforms were validated at the default window and keep it.
+  if (inv.platform === 'telemost') args.push(...getDisplayFillBrowserArgs());
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
@@ -642,6 +647,14 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       `try { window.VexaBrowserUtils && window.VexaBrowserUtils.installRemoteAudioHook && window.VexaBrowserUtils.installRemoteAudioHook({}); } catch (e) {}`,
     ).catch(() => { /* non-fatal */ });
   }
+  // Telemost's WHO: the media engine's own slot VAD, read off the call frame's signalling socket —
+  // which exists from the first moments of the call, so the tap must be in place at document start,
+  // like the audio hook above. Every frame gets it; only the engine socket is read.
+  if (inv.platform === 'telemost') {
+    await context.addInitScript(
+      `try { window.VexaBrowserUtils && window.VexaBrowserUtils.installTelemostSignalTap && window.VexaBrowserUtils.installTelemostSignalTap(); } catch (e) {}`,
+    ).catch(() => { /* non-fatal: the watcher falls back to the tiles */ });
+  }
 
   // Observability (L4): route the page-side capture's log(m) → container stdout. gmeet-capture
   // calls window.logBot?.(...) ("stream N connected", "capture started with N stream(s)", …); without
@@ -684,6 +697,16 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
  *   // L4 (O6/VM): live-validated against a real meeting.
  *   Ported from services/vexa-bot/core/src/index.ts:1930, 1947–1957, 1598–1605.
  */
+type Frame = ReturnType<Page['mainFrame']>;
+
+/** Where the page-side capture runs. Telemost renders the call — its WebRTC peers and the
+ *  participants' <audio> elements — in a same-origin iframe inside the messenger shell, so
+ *  capture, recording and their teardown evaluate in that frame; every other platform uses the
+ *  page itself. The `exposeFunction` bindings and the init-script bundle reach every frame. */
+function captureTarget(page: Page, platform: string): Page | Frame {
+  return platform === 'telemost' ? (telemostCallFrame(page as any) as unknown as Frame) : page;
+}
+
 export async function startCaptureBridge(
   page: Page,
   inv: Invocation,
@@ -699,6 +722,7 @@ export async function startCaptureBridge(
   const perTrack = isPerTrackLanePlatform(inv.platform);   // Zoom: per-track through the per-channel lane
   const useMix = mixed && !perTrack;                        // Teams/Jitsi: the pyannote mixed lane
   const jitsi = inv.platform === 'jitsi';
+  const telemost = inv.platform === 'telemost';
   const lane: 'gmeet' | 'mixed' = mixed ? 'mixed' : 'gmeet';
 
   // ── O-TEL-1 raw-signal tap (a DUAL-sink) ──────────────────────────────────────────────────
@@ -796,7 +820,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isPerTrack, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
+  await captureTarget(page, inv.platform).evaluate(async ({ isMixed, isPerTrack, isJitsi, isTelemost, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams/Jitsi ride the WebRTC hook (installRemoteAudioHook, installed pre-nav), which mirrors
@@ -1261,6 +1285,18 @@ export async function startCaptureBridge(
           });
         }
       }
+      if (isTelemost) {
+        // Telemost contributes the WHO signal the mixed audio can't carry: speaking tiles name
+        // the pyannote clusters ('dom-active' hints).
+        if (w.VexaBrowserUtils?.createTelemostSpeakers && !w.__vexaTelemostSpeakers) {
+          w.__vexaTelemostSpeakers = w.VexaBrowserUtils.createTelemostSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[TelemostSpeakers] ' + m),
+            onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
+              w.__vexaSpeakerHint?.(name, tMs, isEnd),
+          });
+        }
+      }
       // (Zoom's watcher lives in the per-track branch above — it feeds the resolver, not the mix.)
       return;
     }
@@ -1282,7 +1318,7 @@ export async function startCaptureBridge(
       await w.__vexaGmeetCapture.start();
       await w.__vexaRemoteAudioReady?.();
     }
-  }, { isMixed: mixed, isPerTrack: perTrack, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName,
+  }, { isMixed: mixed, isPerTrack: perTrack, isJitsi: jitsi, isTelemost: telemost, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName,
       // How long the Teams lane waits for the server mix before capturing every track instead.
       mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000),
       // How long a PICKED mix may stay wholly silent before the lane abandons it for every track.
@@ -1303,7 +1339,7 @@ export async function startCaptureBridge(
   return async () => {
     if (countersTimer) clearInterval(countersTimer);
     activity?.unavailable();
-    await page.evaluate(() => {
+    await captureTarget(page, inv.platform).evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
       try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
@@ -1317,6 +1353,7 @@ export async function startCaptureBridge(
       try { w.__vexaCsrcPoll?.destroy?.(); w.__vexaCsrcPoll = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
+      try { w.__vexaTelemostSpeakers?.destroy?.(); w.__vexaTelemostSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
       try {
@@ -1346,7 +1383,9 @@ export async function startCaptureBridge(
  * closing page just rejects the evaluate. Returns whether a restart was actually requested.
  */
 export async function restartMixedCapture(page: Page): Promise<boolean> {
-  return await page.evaluate(() => {
+  // The mixed capture lives in whichever frame the bridge started it in (the call iframe on
+  // Telemost, the page elsewhere) — ask every frame; only the one holding the rescan answers.
+  const results = await Promise.all(page.frames().map((f) => f.evaluate(() => {
     const w = (globalThis as any) as Record<string, any>;
     if (!w.__vexaMixRescan) return false;   // not the mixed lane (or the bridge is already torn down)
     try {
@@ -1355,7 +1394,8 @@ export async function restartMixedCapture(page: Page): Promise<boolean> {
     w.__vexaMixedCapture = null;            // the rescan re-creates it (and re-signals ready)
     w.logBot?.('[mixed] capture restart requested (deaf-capture guard)');
     return true;
-  }).catch(() => false);
+  }).catch(() => false)));
+  return results.some(Boolean);
 }
 
 /**
@@ -1389,8 +1429,10 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
     recording.chunk(key, chunkSeq, isFinal, format, bytes);
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
-  // Page-side: start the generic recording tap (finds + combines the page audio elements).
-  await page.evaluate(async (timesliceMs) => {
+  // Page-side: start the generic recording tap (finds + combines the page audio elements) — in the
+  // frame the participants' <audio> lives in.
+  const target = captureTarget(page, inv.platform);
+  await target.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
@@ -1406,7 +1448,7 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
 
   // Stop fn: stop the recorder so it flushes the final (isFinal) chunk → master assembly.
   return async () => {
-    await page.evaluate(async () => {
+    await target.evaluate(async () => {
       const w = (globalThis as any) as Record<string, any>;
       try { await w.__vexaRecordingTap?.stop?.(); } catch { /* best-effort */ }
     }).catch(() => { /* page already gone */ });

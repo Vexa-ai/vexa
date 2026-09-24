@@ -13,4 +13,6 @@ Tests use the module's pass/throw style (`npx tsx <file>.test.ts`).
 - `jitsi/join.test.ts` — Jitsi URL and join-flow fixtures
 - `jitsi/password.test.ts` — Jitsi password prompt tests
 - `jitsi/admission.test.ts` — Jitsi admission and lobby fixtures
+- `telemost/join.test.ts` — Telemost URL builder and host recognition
+- `telemost/admission.test.ts` — Telemost DOM admission oracle and typed outcomes
 - `defaultBotName.test.ts` — default-bot-name env reading and joinMeeting wiring

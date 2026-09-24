@@ -104,7 +104,7 @@ When `make all` finishes it prints your key and URLs:
 already signed in to a self-host account. From the
 workbench you can, with no curl:
 
-- **Send a bot** — paste a Meet / Zoom / Teams / Jitsi URL; a bot joins as a participant.
+- **Send a bot** — paste a Meet / Zoom / Teams / Jitsi / Telemost URL; a bot joins as a participant.
 - **Watch the transcript** stream in live, speaker-attributed, draft-then-confirmed.
 - **Chat with your workspace** — ask an agent that has every captured meeting as context, and watch it
   commit what you decide.
@@ -448,6 +448,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 |---|---|
 | Bot joins **Meet / Teams / Zoom** | ✅ Production |
 | Bot joins **Jitsi Meet** (meet.jit.si + self-hosted) | 🆕 Built & offline-proven; live validation pending |
+| Bot joins **Yandex Telemost** (telemost.yandex.ru + Yandex 360) | 🆕 Join, speaker names (grid and screen share) and end-to-end transcripts witnessed live on a compose stack |
 | Real-time transcription (Whisper) + speaker attribution | ✅ Production — attribution is not guaranteed: the binder publishes an empty speaker rather than guessing (~4–7% of rows under heavy crosstalk) |
 | Redis transcript streaming | ✅ Production |
 | Recordings to your own object storage (MinIO) | ✅ Available |

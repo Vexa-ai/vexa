@@ -399,6 +399,17 @@
    ]
   },
   {
+   "unique-id": "telemost-capture",
+   "node-type": "module",
+   "name": "telemost-capture",
+   "description": "telemost-capture — atomic module in meetings",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/telemost-capture"
+    }
+   ]
+  },
+  {
    "unique-id": "whisper",
    "node-type": "module",
    "name": "whisper",
@@ -1409,6 +1420,7 @@
       "recording",
       "remote-browser",
       "teams-capture",
+      "telemost-capture",
       "whisper",
       "zoom-capture",
       "acts.v1",

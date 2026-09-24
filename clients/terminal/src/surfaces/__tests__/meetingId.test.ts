@@ -115,6 +115,28 @@ describe("parseMeetingInput", () => {
     expect(parseMeetingInput("https://jitsi.example.org/a/b")).toBeNull();
   });
 
+  it("parses a Yandex Telemost link (public and Yandex 360 hosts)", () => {
+    expect(parseMeetingInput("https://telemost.yandex.ru/j/12345678901234")).toEqual({
+      platform: "telemost",
+      native_meeting_id: "12345678901234",
+    });
+    expect(parseMeetingInput("https://telemost.360.yandex.ru/j/12345678901234/?utm=x")).toEqual({
+      platform: "telemost",
+      native_meeting_id: "12345678901234",
+    });
+    expect(parseMeetingInput("https://telemost.yandex.ru/@/j/12345678901234")).toEqual({
+      platform: "telemost",
+      native_meeting_id: "12345678901234",
+    });
+    expect(isValidMeetingId("telemost", "12345678901234")).toBe(true);
+    expect(isValidMeetingId("telemost", "abc")).toBe(false);
+  });
+
+  it("does not read a Telemost look-alike host or a non-join path", () => {
+    expect(parseMeetingInput("https://telemost.yandex.ru.evil.example/j/12345678901234")).toBeNull();
+    expect(parseMeetingInput("https://telemost.yandex.ru/")).toBeNull();
+  });
+
   it("returns null for garbage", () => {
     expect(parseMeetingInput("")).toBeNull();
     expect(parseMeetingInput("not a meeting")).toBeNull();

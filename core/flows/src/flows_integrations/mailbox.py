@@ -46,7 +46,7 @@ from flows_steps.common import db_url
 
 POLL_SECONDS = 12
 
-# A meeting link is Meet, Zoom, Teams or Jitsi — the SAME four platforms the rest of the product
+# A meeting link is Meet, Zoom, Teams, Jitsi or Telemost — the SAME platforms the rest of the product
 # accepts (`collector/meeting_link.py`). Meet stays byte-for-byte the pattern it always was (case
 # sensitive, lowercase code); Zoom is the recorded corpus's platform — those invites are
 # zoom.us.
@@ -69,10 +69,12 @@ _JITSI_HOSTS = [h.strip() for h in
                 ("meet.jit.si," + os.environ.get("VEXA_JITSI_HOSTS", "")).split(",") if h.strip()]
 JITSI_URL = re.compile(
     r"https://(?:" + "|".join(re.escape(h) for h in _JITSI_HOSTS) + r")/[^\s<>\"'?#]+")
+# Telemost: the exact public hosts and the one join path, as meeting_link.py matches them.
+TELEMOST_URL = re.compile(r"https://telemost\.(?:360\.)?yandex\.(?:ru|com)/(?:@/)?j/\d{1,32}")
 
 
 def _meeting_url(text: str) -> str | None:
-    for pat in (MEET_URL, ZOOM_URL, TEAMS_URL, JITSI_URL):
+    for pat in (MEET_URL, ZOOM_URL, TEAMS_URL, JITSI_URL, TELEMOST_URL):
         m = pat.search(text)
         if m:
             return m.group(0)

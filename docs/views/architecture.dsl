@@ -17,6 +17,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   module recording
   module remote-browser
   module teams-capture
+  module telemost-capture
   module whisper
   module zoom-capture
   contract acts.v1

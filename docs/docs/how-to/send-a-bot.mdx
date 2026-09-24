@@ -104,6 +104,19 @@ The only thing that changes between platforms is the `platform` value.
       -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://meet.jit.si/MyRoom","bot_name":"Vexa"}'
     ```
   </Tab>
+  <Tab title="Yandex Telemost">
+    Telemost: **join, speaker names (in the grid and with a screen shared) and end-to-end transcripts
+    witnessed live on a compose stack**. The bot joins as a guest, so with the waiting room on (the
+    default for Yandex 360 organisations) the organiser admits it.
+
+    ```bash
+    # the numeric id from the /j/<id> link; send meeting_url too — it names the host
+    # (telemost.yandex.ru, or telemost.360.yandex.ru for Yandex 360)
+    curl -X POST "$API_BASE/bots" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d '{"platform":"telemost","native_meeting_id":"12345678901234","meeting_url":"https://telemost.yandex.ru/j/12345678901234","bot_name":"Vexa"}'
+    ```
+  </Tab>
 </Tabs>
 
 `native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet, the room name for

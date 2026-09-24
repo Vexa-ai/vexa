@@ -355,3 +355,36 @@ class TestHostnameSpoofing:
         assert parse("https://teams.live.com/meet/9361792952021?p=x").platform == "teams"
         assert parse("https://gov.teams.microsoft.us/meet/12345678901234").platform == "teams"
         assert parse("https://contoso.teams.microsoft.com/meet/12345678901234").platform == "teams"
+
+
+class TestTelemost:
+    def test_canonical_link(self):
+        r = parse("https://telemost.yandex.ru/j/12345678901234")
+        assert r.platform == "telemost"
+        assert r.native_meeting_id == "12345678901234"
+        assert r.passcode is None
+        # meeting-api has no Telemost URL template, so the canonical link rides along.
+        assert r.meeting_url == "https://telemost.yandex.ru/j/12345678901234"
+        assert r.warnings == []
+
+    def test_yandex_360_host_kept(self):
+        r = parse("https://telemost.360.yandex.ru/j/12345678901234?utm=x")
+        assert r.native_meeting_id == "12345678901234"
+        assert r.meeting_url == "https://telemost.360.yandex.ru/j/12345678901234"
+
+    def test_address_bar_form_is_canonicalised(self):
+        r = parse("https://telemost.yandex.ru/@/j/12345678901234")
+        assert r.native_meeting_id == "12345678901234"
+        assert r.meeting_url == "https://telemost.yandex.ru/j/12345678901234"
+
+    def test_ten_digit_id_with_passcode_is_not_hosted_zoom(self):
+        r = parse("https://telemost.yandex.ru/j/1234567890?pwd=x")
+        assert r.platform == "telemost"
+        assert r.warnings == []
+
+    def test_non_join_path_rejected(self):
+        assert_422("https://telemost.yandex.ru/", "Telemost")
+        assert_422("https://telemost.yandex.ru/j/abc", "Telemost")
+
+    def test_look_alike_host_is_not_telemost(self):
+        assert_422("https://telemost.yandex.ru.evil.example/j/12345678901234", "unknown provider")

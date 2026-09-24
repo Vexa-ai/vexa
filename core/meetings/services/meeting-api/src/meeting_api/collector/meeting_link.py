@@ -15,6 +15,8 @@ Id formats (mirrors the dashboard join-form):
                   ``VEXA_JITSI_HOSTS``-declared deployments always; *jitsi* / meet-labelled
                   hosts on pasted links only. The room name is deployment-scoped, so the raw
                   URL rides alongside as ``meeting_url`` — never reconstructed from the id.
+  * telemost    → the numeric id of a ``https://telemost.yandex.ru/j/<id>`` link (also the
+                  ``telemost.360.yandex.ru`` host of Yandex 360). Hosts are matched exactly.
 """
 from __future__ import annotations
 
@@ -38,6 +40,14 @@ _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
 # Zoom's own two join paths, on a host that does not say "zoom" — see the hosted-domain branch in
 # ``parse_meeting_url``. Anchored and digit-exact so nothing else can match it.
 _ZOOM_HOSTED_PATH = re.compile(r"^/(?:meeting|j)/(\d{10,11})/?$", re.IGNORECASE)
+# Yandex Telemost: the public hosts (exact — a hosted service, never self-hosted) and its one join
+# path. Its `/j/<digits>` shape overlaps Zoom's hosted path above, so the Telemost branch in
+# ``parse_meeting_url`` runs first.
+_TELEMOST_HOSTS = frozenset({
+    "telemost.yandex.ru", "telemost.yandex.com", "telemost.360.yandex.ru", "telemost.360.yandex.com",
+})
+# `/@/j/<id>` is the address-bar form of a loaded meeting.
+_TELEMOST_PATH = re.compile(r"^(?:/@)?/j/(\d{1,32})/?$")
 
 
 def _host_is(host: str, domain: str) -> bool:
@@ -113,6 +123,9 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
             if short:
                 return ("teams", short.group(1))
             return None
+        if host in _TELEMOST_HOSTS:
+            telemost = _TELEMOST_PATH.match(parsed.path)
+            return ("telemost", telemost.group(1)) if telemost else None
         # Zoom under SOMEBODY ELSE'S hostname — the twin of the MCP link parser's hosted-domain
         # branch, and it must stay in step with it (the two parsers answer the same question on
         # two doors: this one for a pasted/ICS link, that one for `parse_meeting_link`). An

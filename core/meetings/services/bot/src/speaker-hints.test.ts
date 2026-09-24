@@ -74,6 +74,7 @@ async function main(): Promise<void> {
   check("hintKindForPlatform('teams') == 'dom-outline'", hintKindForPlatform('teams') === 'dom-outline');
   check("hintKindForPlatform('zoom') == 'dom-active'", hintKindForPlatform('zoom') === 'dom-active');
   check("hintKindForPlatform('jitsi') == 'dom-active' (jitsi lane preserved)", hintKindForPlatform('jitsi') === 'dom-active');
+  check("hintKindForPlatform('telemost') == 'dom-active'", hintKindForPlatform('telemost') === 'dom-active');
   {
     const spy = teamsSpyFactory();
     const pipe = createBotPipeline(inv('teams'), nullSink, {
@@ -93,8 +94,8 @@ async function main(): Promise<void> {
   }
   // Zoom is no longer on the mixed transcriber (it rides the per-track lane; its watcher→resolver
   // path is covered by zoom-speaker-wiring.test.ts) — and Teams rides the CSRC/GMeet lane above.
-  // Only jitsi forwards hints to the legacy mixed recordHint.
-  for (const platform of ['jitsi'] as const) {
+  // Only jitsi and telemost forward hints to the legacy mixed recordHint.
+  for (const platform of ['jitsi', 'telemost'] as const) {
     const kind = 'dom-active';
     const spy = mixedSpyFactory();
     const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
@@ -108,6 +109,17 @@ async function main(): Promise<void> {
       && spy.hints[1].isEnd === true,
       JSON.stringify(spy.hints));
   }
+
+  // ── the turn spine per platform: Telemost stays on the segmenter (its stray CSRC must not arm it) ──
+  for (const [platform, expected] of [['telemost', 'pyannote'], ['jitsi', 'auto']] as const) {
+    const spy = mixedSpyFactory();
+    const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
+    await pipe.start();
+    const got = (spy.getCb() as any)?.turnSource;
+    await pipe.stop();
+    check(`${platform}: mixed-lane turn spine = '${expected}'`, got === expected, String(got));
+  }
+
 
   // ── C1: counters — received per hint; matched/missed via onHintOutcome ──
   console.log('C1 — hint-hop counters');

@@ -24,7 +24,7 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found all invocation goldens', goldens.length === 3, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 4, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
@@ -47,6 +47,13 @@ for (const g of goldens) {
   const jitsi = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.jitsi.json'), 'utf8'));
   check('jitsi: platform = jitsi', jitsi.platform === 'jitsi', jitsi.platform);
   check('jitsi: meetingUrl carries the deployment host', jitsi.meetingUrl === 'https://meet.jit.si/VexaStandup', String(jitsi.meetingUrl));
+}
+
+// ── typed access on the telemost golden (the platform enum accepts telemost) ──
+{
+  const telemost = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.telemost.json'), 'utf8'));
+  check('telemost: platform = telemost', telemost.platform === 'telemost', telemost.platform);
+  check('telemost: meetingUrl is the /j/<id> link', telemost.meetingUrl === 'https://telemost.yandex.ru/j/12345678901234', String(telemost.meetingUrl));
 }
 
 // ── the env helper (P7: config by env) ──

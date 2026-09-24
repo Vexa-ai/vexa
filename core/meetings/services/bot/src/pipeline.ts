@@ -38,7 +38,7 @@ import {
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, mixedTurnSourceFor, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -318,6 +318,7 @@ function createMixedBotPipeline(
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
   selfName?: string,
+  turnSource: 'auto' | 'pyannote' = 'auto',
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -369,12 +370,11 @@ function createMixedBotPipeline(
         // C1 hop 4: the binder's instantaneous verdict per hint — a hint with no
         // overlapping turn increments `missed` (loudly, on the periodic counter line).
         onHintOutcome: (o) => { if (o.outcome === 'matched') hintCounters.matched++; else hintCounters.missed++; },
-        // ARM THE TRANSPORT SPINE. 'auto', never 'csrc': a client that does not mix server-side
-        // emits no contributing sources at all, and a spine with nothing to say would produce an
-        // empty transcript rather than a degraded one. So pyannote carries the meeting until the
-        // transport speaks, the transport takes over when it does, and it hands back — mid-meeting,
-        // on the same ring — if it goes silent under continuing speech.
-        turnSource: 'auto',
+        // THE TRANSPORT SPINE, per platform (mixedTurnSourceFor). 'auto', never 'csrc': pyannote
+        // carries the meeting until the transport speaks, the transport takes over when it does, and
+        // it hands back — mid-meeting, on the same ring — if it goes silent under continuing speech.
+        // A platform that does not mix server-side stays on 'pyannote'.
+        turnSource,
         selfName,
         onObservation: (o: TurnSourceObservation) => {
           // A transcript cannot say which spine produced it, so the switch is DATA beside the
@@ -460,13 +460,13 @@ export function createBotPipeline(
       transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName,
     );
   }
-  // Zoom rides the per-channel (gmeet) lane per-track; only Jitsi remains on the legacy mixed
+  // Zoom rides the per-channel (gmeet) lane per-track; Jitsi and Telemost remain on the legacy mixed
   // segmenter (Teams returned above via its CSRC/GMeet lane).
   if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
-      inv.botName,
+      inv.botName, mixedTurnSourceFor(inv.platform),
     );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

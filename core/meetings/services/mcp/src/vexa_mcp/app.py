@@ -284,12 +284,14 @@ class RequestMeetingBot(BaseModel):
             "- Zoom: ALWAYS pass meeting_url (the full join link, host included) — meeting-api needs the\n"
             "  host to build the join; a bare numeric id is rejected (422)\n"
             "- Jitsi: ALWAYS pass meeting_url (the full room URL) — a jitsi room is deployment-scoped,\n"
-            "  so a bare room name is rejected (422); the id is derived from the URL"
+            "  so a bare room name is rejected (422); the id is derived from the URL\n"
+            "- Yandex Telemost: ALWAYS pass meeting_url (https://telemost.yandex.ru/j/<id>); the id is\n"
+            "  derived from the URL"
         ),
     )
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
     bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
-    platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'teams', 'zoom', 'jitsi'). Default is 'google_meet'.")
+    platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'teams', 'zoom', 'jitsi', 'telemost'). Default is 'google_meet'.")
     passcode: Optional[str] = Field(
         None,
         description=(
@@ -399,7 +401,7 @@ class ReportIssue(BaseModel):
     )
     platform: Optional[str] = Field(
         None,
-        description="Platform of that meeting: 'google_meet', 'teams', 'zoom' or 'jitsi'.",
+        description="Platform of that meeting: 'google_meet', 'teams', 'zoom', 'jitsi' or 'telemost'.",
     )
     severity: Optional[int] = Field(
         None,
@@ -459,7 +461,7 @@ class ReportIssue(BaseModel):
 # failed. The canonical names below are the ones every tool returns; the old spellings stay as
 # deprecated aliases so no existing client breaks.
 _PLATFORM_DESC = (
-    "Meeting platform: google_meet, teams, zoom, jitsi. Same value that request_meeting_bot, "
+    "Meeting platform: google_meet, teams, zoom, jitsi, telemost. Same value that request_meeting_bot, "
     "list_meetings and parse_meeting_link return as `platform`. Defaults to google_meet."
 )
 _ID_DESC = (
@@ -486,7 +488,7 @@ _DB_ID_DESC = (
 #: mistake, and answering it with an empty result set is the worst possible reply: a cold-start
 #: agent reported that `platform="webex"` returned a confident `count: 0`, indistinguishable from
 #: "nobody said that". Silence that looks like an answer is worse than an error.
-VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi")
+VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi", "telemost")
 
 
 def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
@@ -579,7 +581,7 @@ VEXA_INSTRUCTIONS = """\
 Start every session with whats_waiting: it is the queue of what your person's Vexa needs right now, \
 and for a new person it holds their first step. Follow what it says before anything else.
 
-Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi) and \
+Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi, Yandex Telemost) and \
 gives you the transcript while the meeting is still running.
 
 The canonical flow:

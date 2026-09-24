@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 
-export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
+export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi' | 'telemost';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
 /** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
@@ -34,7 +34,7 @@ export type TranscriptionTier = 'realtime' | 'deferred';
  *  The ONE predicate the browser hook, the capture bridge, and the pipeline pick
  *  must all agree on — never restate it inline. */
 export function isMixedLanePlatform(p: Platform | string): boolean {
-  return p === 'zoom' || p === 'teams' || p === 'jitsi';
+  return p === 'zoom' || p === 'teams' || p === 'jitsi' || p === 'telemost';
 }
 
 /** True for mixed-lane platforms whose per-participant WebRTC streams are confirmed stable
@@ -46,6 +46,16 @@ export function isMixedLanePlatform(p: Platform | string): boolean {
 export function isPerTrackLanePlatform(p: Platform | string): boolean {
   return p === 'zoom';
 }
+
+/** The mixed lane's turn spine per platform. 'auto' lets the RTP transport (CSRC) take over the turn
+ *  edges once it reports contributing sources — right where a server MIXES the audio and labels each
+ *  packet with its sources. Telemost does not mix: live, a whole call yielded one or two stray CSRC
+ *  transitions, enough to arm a spine that carries no speaker structure — every turn went unnamed. Its
+ *  turns stay on the segmenter, named by the hints. */
+export function mixedTurnSourceFor(p: Platform | string): 'auto' | 'pyannote' {
+  return p === 'telemost' ? 'pyannote' : 'auto';
+}
+
 
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
