@@ -2278,7 +2278,8 @@ def create_app(
         rejected tokens, and the zero-balance-external-account case that 402s every segment."""
         from control_plane import config_test as _ct
         subject = subject_of(request)
-        url, token, source = "", "", "env"
+        # The model rides with whichever backend serves the spawn — bot_spawn's own rule.
+        url, token, model, source = "", "", "", "env"
         settings = dispatcher.settings
         admin = (settings.admin_api_url or "").rstrip("/")
         if admin:  # same internal edge bot_spawn uses (bot-context carries the resolved override)
@@ -2292,14 +2293,16 @@ def create_app(
                 t = body.get("transcription") or {}
                 if t.get("url") or t.get("token"):
                     url, token, source = t.get("url") or "", t.get("token") or "", "settings"
+                    model = t.get("model") or ""
             except Exception:
                 pass  # fall through to env — the probe result still says what was tested
         if not url:
             url = os.environ.get("TRANSCRIPTION_SERVICE_URL", "")
             token = token or os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
+            model = os.environ.get("TRANSCRIPTION_MODEL", "")
         elif not token:
             token = os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
-        return _ct.run_transcription_test(url, token, source)
+        return _ct.run_transcription_test(url, token, source, model)
     return app
 
 

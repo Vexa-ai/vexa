@@ -130,7 +130,7 @@
    "key": "TRANSCRIPTION_MODEL",
    "class": "defaulted",
    "default": "(unset — the whisper client sends whisper-1)",
-   "description": "STT model id bot_spawn threads into the invocation (the OpenAI-compatible `model` form part) — required by backends that validate model ids (Groq, vLLM); ignored by the bundled deploy/transcription unit. Helm plumbing is a declared follow-up (deploy/helm/README.md) — use extraEnv there for now",
+   "description": "STT model id bot_spawn threads into the invocation (the OpenAI-compatible `model` form part), and the one the stt probe's audio asks for — required by backends that validate model ids (Groq, vLLM); ignored by the bundled deploy/transcription unit. Helm plumbing is a declared follow-up (deploy/helm/README.md) — use extraEnv there for now",
    "targets": [
     "compose",
     "lite"
@@ -678,6 +678,7 @@
       404
      ],
      "payload": "audio",
+     "payload_model_key": "TRANSCRIPTION_MODEL",
      "exhausted_statuses": [
       402
      ]

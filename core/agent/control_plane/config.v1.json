@@ -356,6 +356,15 @@
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "TRANSCRIPTION_MODEL",
+      "class": "defaulted",
+      "default": "(unset — the probe asks for whisper-1)",
+      "description": "Settings→Models Test button: the model id the env-backend round-trip asks for — the same `model` form part bot_spawn threads into the bot for that backend, so a backend that validates model ids tests green exactly when bots will transcribe (rides in via env_file .env)",
+      "targets": [
+        "compose"
+      ]
     }
   ],
   "capabilities": {
