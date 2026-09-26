@@ -531,7 +531,7 @@ wheels = [
 
 [[package]]
 name = "fastapi-guard"
-version = "8.0.0"
+version = "8.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -539,9 +539,9 @@ dependencies = [
     { name = "starlette" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0a/c5/0262c5ce89466108c991a0e50d0af171e8aa6bb98bb1f58e055734d9c738/fastapi_guard-8.0.0.tar.gz", hash = "sha256:74a20c416095187b1fd2fb37d54f81c5edc182c1cf69e558379287d56e546bae", size = 59853, upload-time = "2026-09-04T19:33:47.613Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/c9/fc9e751b6bc906587ce44bd17ba12d6beb872ddfae4881f571bdd8ee2973/fastapi_guard-8.0.2.tar.gz", hash = "sha256:4f1b862dd95b902c0fd5bbce8caa6fb33d18d0deb3dbd391111c5cddb26a8e84", size = 66612, upload-time = "2026-09-26T13:20:55.294Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2f/30/d54cccab3329f3a8bc52681c3d7d87f5ef6a56ff4b371eaa48f07331bacb/fastapi_guard-8.0.0-py3-none-any.whl", hash = "sha256:303ec3a13d222919add084320d1c2fa8cef3aa20a159b69c25878583b4a4f63c", size = 31512, upload-time = "2026-09-04T19:33:46.071Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/c7/f949c9832310d4d89225cbe0381460a04ab97e14cb21f9435049819abe41/fastapi_guard-8.0.2-py3-none-any.whl", hash = "sha256:0c7e2cc8d268cf884082ab6577bcada4d9134bf04e26abdca9c62391f6cc42d9", size = 32716, upload-time = "2026-09-26T13:20:54.223Z" },
 ]
 
 [[package]]
