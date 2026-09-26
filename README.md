@@ -23,6 +23,10 @@ Sandboxed knowledge agents are self-hosted only — [self-host Vexa](#-quickstar
 
 ---
 
+**[Connect your agent](https://vexa.ai/connect?utm_source=github&utm_medium=readme)**
+· **[Get an API key](https://vexa.ai/start?utm_source=github&utm_medium=readme)**
+· **[Talk to the founder](https://cal.com/dmitrygrankin/web)**
+
 ## Why Vexa
 
 Every meeting-AI tool you can buy sends your conversations to *their* cloud and rents you
@@ -60,7 +64,7 @@ curl -X POST "https://api.cloud.vexa.ai/bots" \
   -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
 ```
 
-New accounts get **$5 of free bot credit, no card required** — about 16 hours of bot time at
+New accounts get **$2 of free bot credit, no card required** — about 6 hours of bot time at
 $0.30/hr ([pricing](https://vexa.ai/pricing)). More calls: [Send a bot](https://docs.vexa.ai/how-to/send-a-bot).
 
 ### Or self-host the whole stack
