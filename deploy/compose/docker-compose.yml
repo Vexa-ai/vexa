@@ -49,9 +49,18 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # MinIO deleted every community image from Docker Hub AND quay (the repos are gone and
+  # digest pulls are refused anonymously, so `minio/minio:latest` / `minio/mc:latest` are
+  # unpullable everywhere as of 2026-09). The Bitnami legacy catalog is the last source that
+  # still serves both images anonymously; both are pinned tag+digest. The Bitnami server's
+  # default command runs `minio server` on MINIO_DATA_DIR=/bitnami/minio/data (hence no
+  # `command:` here and the volume mount path), it runs as uid 1001, and the console is
+  # stripped from community builds, so nothing listens on the published 9001 (mapping kept
+  # so MINIO_CONSOLE_HOST_PORT stays plumbed). Healthcheck probes the S3 port directly:
+  # bash is guaranteed (the image entrypoint is a bash script); upstream `mc ready local`
+  # relied on an mc binary and an alias this image does not preconfigure.
   minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
@@ -59,17 +68,17 @@ services:
       - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     healthcheck:
-      test: ["CMD-SHELL", "mc ready local || curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000"]
       interval: 5s
       timeout: 5s
       retries: 5
     volumes:
-      - minio-data:/data
+      - minio-data:/bitnami/minio/data
     networks: [vexa]
     restart: unless-stopped
 
   minio-init:
-    image: minio/mc:latest
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3@sha256:73bd39f7899a0cef12b8dd5df13aa93a3ed1aaa44236542442e9ac76819ac158
     depends_on:
       minio:
         condition: service_healthy
