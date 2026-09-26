@@ -8,7 +8,7 @@
 
 A bot joins your Google Meet, Microsoft Teams, and Zoom calls and streams speaker-attributed
 transcripts in real time — through our API or one *you* host — then feeds sandboxed agents that build
-a Markdown knowledge base your team owns. Apache-2.0, air-gap-ready. (Jitsi: join + capture
+a Markdown knowledge base your team owns. Apache-2.0, runs self-hosted with no egress. (Jitsi: join + capture
 offline-proven, live validation pending — [#883](https://github.com/Vexa-ai/vexa/issues/883).)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -44,8 +44,8 @@ No one else has all three:
    portable, diffable, greppable. Knowledge as code.
 
 3. **Agents work it, safely.** Sandboxed coding agents read and write that repo like
-   developers — isolated ephemeral containers, no egress, thousands in parallel, on Docker
-   or your Kubernetes.
+   developers — isolated ephemeral containers scoped to the workspaces they're granted, thousands
+   in parallel, on Docker or your Kubernetes.
 
 > **Only here for the transcription API?** It's a complete standalone product — send a bot,
 > read the stream, ignore the agent lane entirely.
@@ -156,9 +156,10 @@ A CLI coding agent is just a process on Linux. The **runtime** makes that a mult
 sandboxed execution layer safe to point at real business data — the same engine that already
 spawns Vexa's meeting bots in production.
 
-- **Isolated.** Every dispatch gets its own container: no egress except brokered tools, and
-  only its granted workspaces exist in its filesystem — enforced by the substrate, not by the
-  agent. Agents never run in the control plane.
+- **Isolated.** Every dispatch gets its own container, and only its granted workspaces exist in
+  its filesystem — enforced by the substrate, not by the agent. Agents never run in the control
+  plane. Network egress is yours to restrict: the shipped Compose and Helm defaults don't
+  firewall agent containers.
 - **Ephemeral.** A container lives while it works and is reaped on idle; continuity is a
   session file in the workspace. Sub-second starts, thousands in parallel.
 - **Orchestration-agnostic.** One `runtime.v1` lifecycle, pluggable substrate — the same
@@ -321,7 +322,9 @@ container, bound to loopback:
   (faster-whisper, OpenAI-compatible) from `deploy/transcription` on any GPU box and point `.env` at it.
   Or use a free hosted token at [vexa.ai/account](https://vexa.ai/account) while testing.
 - **Bring your own inference** — point the agent at your own LLM endpoint; no inference leaves the network.
-- **Air-gapped** — everything in-VPC, **zero egress** — the posture the regulated verticals require.
+- **No egress** — everything in-VPC with self-hosted STT and your own LLM endpoint. Not a certified
+  air gap: [what a stock install still calls](https://docs.vexa.ai/security-compliance#what-calls-out-by-default),
+  and how to close each.
 - **Targets** — `make all` (pulls) · `make dev` (builds from this checkout) · `make lite` ·
   `make probe` (full-journey smoke) · `make down` · `make help`. Expose the Terminal via a TLS reverse proxy for
   production; full guide in the [docs](https://docs.vexa.ai).
@@ -362,7 +365,7 @@ honestly, trade-offs and all, in [How Vexa compares](https://docs.vexa.ai/compar
 ## 🏦 For regulated enterprises
 
 For banks, healthcare, government, and anyone in a regulated industry, the meeting-AI question
-isn't "which cloud" — it's "how do we get this **without** a cloud." Vexa is **air-gapped meeting
+isn't "which cloud" — it's "how do we get this **without** a cloud." Vexa is **self-hosted meeting
 intelligence** — the sovereign alternative to Microsoft Copilot — built for exactly that buyer.
 
 You don't compete with a notes app here — you replace **Microsoft 365 Copilot** and **Zoom AI
@@ -370,17 +373,19 @@ Companion** on the axes they structurally can't move:
 
 | | **Microsoft 365 Copilot / Zoom AI Companion** | **Vexa** |
 |---|---|---|
-| Deployment | Vendor cloud only | Your cloud, your VPC, or **fully air-gapped** |
+| Deployment | Vendor cloud only | Your cloud or your VPC, with **no egress** |
 | Models | Vendor-hosted, fixed | **Bring your own** — local or hosted LLMs |
 | Commercial model | Rented, per-seat subscription | **Owned** — Apache-2.0, no per-seat tax |
 | Adaptable | Generic; no custom vocabulary; vendor roadmap queue | **Your engineers extend it directly** — domain vocabulary, underserved languages, custom workflows |
 | Meeting platforms | Teams-only / Zoom-only | **Meet + Teams + Zoom** (+ Jitsi, live validation pending) |
-| Data control | Transits the vendor's cloud | **Never leaves your perimeter** |
+| Data control | Transits the vendor's cloud | **Stays in your perimeter** with self-hosted STT and your own LLM |
 | Extensibility | Closed black box | Open source, API-first |
 
 What that means in practice:
 
-- **Air-gapped** — fully offline, your infrastructure, your models. Nothing phones home.
+- **No egress** — your infrastructure, your models. Claude Code's telemetry and update checks are
+  off in the agent images; [Security & compliance](https://docs.vexa.ai/security-compliance#what-calls-out-by-default)
+  lists every call a stock install still makes and how to close it.
 - **Adaptive** — your engineers implement requirements directly: domain vocabulary, underserved
   languages, custom workflows. No vendor feature queue.
 - **Owned, not rented** — deploy once, extend without asking permission. No per-seat tax.
@@ -399,7 +404,7 @@ What that means in practice:
 
 Full review page: [Security & compliance](https://docs.vexa.ai/security-compliance) in the docs.
 
-> Regulated banks and Fortune-500s run Vexa fully air-gapped on their own OpenShift and local LLMs today.
+> Regulated banks and Fortune-500s run Vexa self-hosted on their own OpenShift with local LLMs today.
 
 ---
 

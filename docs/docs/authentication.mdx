@@ -29,11 +29,12 @@ stack is ready — copy it from the `make all` output and use it as your `X-API-
 
 ### Minting more keys
 
-To mint additional keys, use the `provision-token` make target with your `ADMIN_TOKEN` (it's set in
-`.env`, default `dev-admin-token` — **change it before exposing anything**):
+To mint additional keys, use the `provision-token` make target with your `ADMIN_TOKEN` (it's in
+`deploy/compose/.env` — `make all` generates a random one when the line is empty):
 
 ```bash
-make -s provision-token ADMIN_TOKEN=dev-admin-token
+cd deploy/compose
+make -s provision-token ADMIN_TOKEN=$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)
 # → prints a freshly minted vxa_... API key
 ```
 
@@ -43,7 +44,7 @@ directly for finer control over users and scopes:
 
 ```bash
 export ADMIN=http://localhost:18057
-export ADMIN_TOKEN=dev-admin-token        # your ADMIN_TOKEN from .env
+export ADMIN_TOKEN=<your ADMIN_TOKEN from deploy/compose/.env>
 
 # 1. create (or find) a user
 curl -X POST "$ADMIN/admin/users" \

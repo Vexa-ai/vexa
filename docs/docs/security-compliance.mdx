@@ -30,13 +30,33 @@ transit a vendor's infrastructure. This page collects what a security review ask
   [Model credentials & licensing](/model-credentials-licensing).
 - **Own, don't rent.** Apache-2.0. Transcripts and derived knowledge are Markdown in a git
   repo you hold — leaving the product does not orphan the data.
+- **Raw-audio tapes are off unless you turn them on.** With `CAPTURE_SIGNAL_ENABLED=true` (or the
+  identity `diagnostics.capture_signal` setting), every bot also keeps its raw capture — audio,
+  STT round-trips, transcript, bot log — under `signal/` in your object store for offline replay,
+  whether or not the meeting is recorded. See [Configuration](/configuration#transcription-stt).
+
+### What calls out by default
+
+A stock self-hosted install makes these outbound calls until you close them:
+
+| Call | When | How to close it |
+|---|---|---|
+| The agent's model endpoint (`api.anthropic.com`) | Every agent turn on the default `claude-code` runner | Point `ANTHROPIC_BASE_URL` at your own endpoint, or run `VEXA_RUNNER=openai-agent` against yours ([Agent inference](/configuration#agent-inference-bring-your-own)) |
+| Claude Code's domain check (`api.anthropic.com`) | Before an agent fetches a URL with its WebFetch tool | Not covered by the image settings below; on a network that blocks Anthropic, WebFetch fails instead |
+| Hugging Face | First start of the [transcription unit](/deployment#transcription-the-separate-gpu-unit), to download its model | Pre-load the model into the unit's `transcription-models` volume (`/app/models`) |
+| Vexa's hosted transcription (`transcription.vexa.ai`) | When first-run setup is saved on its pre-selected **Vexa hosted transcription** option | Pick **OpenAI-compatible endpoint** and enter your own STT URL |
+
+Claude Code's own background traffic — telemetry, error reporting, update checks — is switched off
+in the agent images (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`,
+`DISABLE_ERROR_REPORTING`, `DISABLE_AUTOUPDATER`).
 
 ## Trust model
 
 - **Agents are untrusted by design.** They are prompt-injectable, so they enforce nothing
-  themselves. Every agent runs in an **isolated, ephemeral container** with no egress except
-  brokered tools, scoped to only the workspaces it was granted — agents never run in the
-  control plane. See [Identity & trust](/architecture/identity-and-trust).
+  themselves. Every agent runs in an **isolated, ephemeral container** scoped to only the
+  workspaces it was granted — agents never run in the control plane. The shipped Compose and
+  Helm defaults do **not** restrict an agent container's network access; enforce egress with
+  your firewall or a Kubernetes NetworkPolicy. See [Identity & trust](/architecture/identity-and-trust).
 - **Trusted vs untrusted input.** You, in chat, write to the workspace directly (git is the
   undo). Untrusted input — an email, a web page — runs **propose-only**: the agent suggests,
   a human approves, trusted code applies. Irreversible effects (send, order) are always gated.
@@ -64,6 +84,10 @@ is the guided read of that table — what each artifact proves, what it does not
 At-rest encryption for workspaces, transcripts, and tokens is **planned, not shipped** — today
 you bring your own disk/volume encryption. Mid-call bot control endpoints are not wired in the
 open-core stack. Track both on the [status page](/roadmap/status).
+
+When raw-audio tapes are on, deleting a meeting or its recording does **not** remove the meeting's
+tape under `signal/`. Tapes are evicted oldest-first once they exceed a 50 GiB budget
+(`SIGNAL_TAPE_BUDGET_BYTES`); tapes promoted into the regression library are never evicted.
 
 ## Reporting a vulnerability
 
