@@ -36,6 +36,18 @@
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",
       "reason": "MinIO client, used only by the compose/helm bucket-init Job. Same disposition as minio/minio: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."
+    },
+    {
+      "name": "bitnamilegacy/minio",
+      "license": "AGPL-3.0-or-later",
+      "disposition": "sidecar",
+      "reason": "MinIO server via Bitnami's legacy catalog, pinned tag+digest by deploy-owned compose and the Lite Makefile since MinIO deleted their community images from Docker Hub and quay (PR #1324). Bitnami's packaging is Apache-2.0 but the server it ships is AGPL-3.0-or-later; same disposition as minio/minio: operator-pulled directly in CI, never redistributed inside a vexaai/* artifact (ADR-0004)."
+    },
+    {
+      "name": "bitnamilegacy/minio-client",
+      "license": "AGPL-3.0-or-later",
+      "disposition": "sidecar",
+      "reason": "MinIO client (mc) via Bitnami's legacy catalog, pinned tag+digest by deploy-owned compose and the Lite Makefile for bucket init; same disposition as minio/mc: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."
     }
   ],
   "bundled": [

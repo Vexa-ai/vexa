@@ -49,9 +49,18 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # MinIO deleted every community image from Docker Hub AND quay (the repos are gone and
+  # digest pulls are refused anonymously, so `minio/minio:latest` / `minio/mc:latest` are
+  # unpullable everywhere as of 2026-09). The Bitnami legacy catalog is the last source that
+  # still serves both images anonymously; both are pinned tag+digest. The Bitnami server's
+  # default command runs `minio server` on MINIO_DATA_DIR=/bitnami/minio/data (hence no
+  # `command:` here and the volume mount path), it runs as uid 1001, and the console is
+  # stripped from community builds, so nothing listens on the published 9001 (mapping kept
+  # so MINIO_CONSOLE_HOST_PORT stays plumbed). Healthcheck probes the S3 port directly:
+  # bash is guaranteed (the image entrypoint is a bash script); upstream `mc ready local`
+  # relied on an mc binary and an alias this image does not preconfigure.
   minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
@@ -59,17 +68,17 @@ services:
       - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     healthcheck:
-      test: ["CMD-SHELL", "mc ready local || curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000"]
       interval: 5s
       timeout: 5s
       retries: 5
     volumes:
-      - minio-data:/data
+      - minio-data:/bitnami/minio/data
     networks: [vexa]
     restart: unless-stopped
 
   minio-init:
-    image: minio/mc:latest
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3@sha256:73bd39f7899a0cef12b8dd5df13aa93a3ed1aaa44236542442e9ac76819ac158
     depends_on:
       minio:
         condition: service_healthy
@@ -429,14 +438,17 @@ services:
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
       # nobody). Opt out with GUARD_ENABLED=false in .env; all keys interpolate from .env.
-      # GUARD_WS_ENABLED is the optional /ws hook (off, opt-in): in-memory per-process — does
-      # NOT share ban/rate-limit state with the Redis-backed HTTP layer, and under uvicorn
-      # --workers N>1 each worker keeps an independent WS ban set.
+      # GUARD_WS_ENABLED is the optional /ws connect guard (off, opt-in), run directly by
+      # fastapi-guard's own guard_websocket with the SAME SecurityConfig as the HTTP layer.
+      # Requires GUARD_ENABLED=true - boot refuses otherwise, naming both vars. The ban
+      # store and rate window are Redis-shared when GUARD_ENABLE_REDIS=true, per-process
+      # otherwise.
       - GUARD_ENABLED=${GUARD_ENABLED:-true}
       - GUARD_WS_ENABLED=${GUARD_WS_ENABLED:-false}
       - GUARD_ENABLE_REDIS=${GUARD_ENABLE_REDIS:-true}
       - GUARD_RATE_LIMIT_RPM=${GUARD_RATE_LIMIT_RPM:-600}
       - GUARD_RATE_LIMIT_WINDOW=${GUARD_RATE_LIMIT_WINDOW:-60}
+      - GUARD_AUTO_BAN_RATE_LIMIT=${GUARD_AUTO_BAN_RATE_LIMIT:-true}
       - GUARD_AUTO_BAN_THRESHOLD=${GUARD_AUTO_BAN_THRESHOLD:-10}
       - GUARD_AUTO_BAN_DURATION=${GUARD_AUTO_BAN_DURATION:-3600}
       - GUARD_IP_WHITELIST=${GUARD_IP_WHITELIST:-}
@@ -445,6 +457,7 @@ services:
       - GUARD_TRUST_X_FORWARDED_PROTO=${GUARD_TRUST_X_FORWARDED_PROTO:-false}
       - GUARD_BLOCKED_COUNTRIES=${GUARD_BLOCKED_COUNTRIES:-}
       - GUARD_BLOCK_CLOUD_PROVIDERS=${GUARD_BLOCK_CLOUD_PROVIDERS:-}
+      - GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=${GUARD_BLOCK_CLOUD_PROVIDERS_STRICT:-false}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
       interval: 10s
