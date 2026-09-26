@@ -30,7 +30,8 @@
      "change-me",
      "CHANGE-ME",
      "default",
-     "secret"
+     "secret",
+     "dev-admin-token"
    ]
   },
   {

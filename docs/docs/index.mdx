@@ -68,7 +68,7 @@ them.
 - **Captures meetings natively** — real-time transcripts from [Google Meet, Zoom, and Teams](/core/meetings), no plugins or recorders. **Whisper included**. Jitsi joins and captures (offline-proven), but live transcript validation is still pending — [#883](https://github.com/Vexa-ai/vexa/issues/883).
 - **Meets you at your calendar** — [connect a secret ICS address](/how-to/calendar-sync) and upcoming meetings import automatically; the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start. [Plan a meeting](/how-to/plan-a-meeting) ahead and share its prep workspace with the people you're meeting.
 - **Turns knowledge into code** — meetings and emails become a living, Markdown [workspace](/concepts#workspace) that agents treat as their working directory.
-- **Runs agents safely** — every [agent](/core/agents) executes in an isolated, ephemeral [container](/concepts#container): no egress except through brokered tools, thousands in parallel, no lateral movement.
+- **Runs agents safely** — every [agent](/core/agents) executes in an isolated, ephemeral [container](/concepts#container) scoped to the workspaces it was granted, thousands in parallel.
 - **Cloud-native deployment** — self-host the whole stack with [Docker Compose](/deployment) on a single Linux host.
 - **Stays in your environment** — open-source, self-hostable, and able to run with [no egress](/deployment#no-egress) via bring-your-own inference and a bundled STT unit. Recordings and agent state never leave infrastructure you control.
 

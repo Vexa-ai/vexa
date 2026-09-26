@@ -263,12 +263,13 @@ _TRANSCRIPTION_FIELDS = ("url", "token")
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
 # no secrets, admin-gated like the other keys.
 _SETUP_FIELDS = ("models", "transcription", "completed")
-# "diagnostics" carries the operator kill switches for capture-side telemetry. Today one field:
+# "diagnostics" carries the operator switches for capture-side telemetry. Today one field:
 # capture_signal — whether a spawned bot tees its raw captured-signal.v1 stream to durable storage
-# (the offline-replay fixture tape). It is the ONLY control-plane knob on fixture collection, and it
-# is a KILL switch, not an enable switch: absence means ON everywhere (see _resolve_capture_signal).
-# Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
-# default) because _validate_config_fields' one rulebook is string-only.
+# (the offline-replay fixture tape). An explicit decision in EITHER direction: "true" tapes, "false"
+# does not. Absence is no decision, and the spawn falls back to the deployment's own default
+# (meeting-api CAPTURE_SIGNAL_ENABLED, off unless set) — see _resolve_capture_signal.
+# Written as a STRING like every other settings field ("" clears back to the deployment default)
+# because _validate_config_fields' one rulebook is string-only.
 _DIAGNOSTICS_FIELDS = ("capture_signal",)
 # "global_setup" is THE INSTANCE GATE (PRD S9 decision 17; founder 2026-09-02: "global needs to be
 # setup by admin, it just should not let him start the service before that"). `state` is "completed"
@@ -399,19 +400,22 @@ def _as_flag(value) -> Optional[bool]:
     return None
 
 
-def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> bool:
-    """Whether this user's bots tee the captured-signal tape: user > platform_settings > DEFAULT ON.
+def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> Optional[bool]:
+    """Identity's decision on whether this user's bots tee the captured-signal tape:
+    user > platform_settings, or ``None`` when neither states one.
 
-    DEFAULT ON is the product decision, not an accident of config: prod meetings are the fixture
-    source, so absence of any flag means capture. The flag exists to STOP collection fleet-wide with
-    no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and per-user
-    (``users.data["diagnostics"]["capture_signal"]``) for an account that must not be taped.
+    A tape is raw meeting audio kept beside the user's recording, so identity never invents a
+    default for it: ``None`` leaves the choice to the deployment (meeting-api's
+    ``CAPTURE_SIGNAL_ENABLED``, off unless an operator set it). The platform setting switches a whole
+    deployment with no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "true"}``,
+    or ``"false"``); the per-user flag (``users.data["diagnostics"]["capture_signal"]``) decides for
+    one account in either direction.
     """
     for source in (user_data.get("diagnostics") or {}, platform_diagnostics or {}):
         flag = _as_flag(source.get("capture_signal") if isinstance(source, dict) else None)
         if flag is not None:
             return flag
-    return True
+    return None
 
 
 def create_app() -> FastAPI:
@@ -1240,12 +1244,11 @@ def create_app() -> FastAPI:
             "bot_name": data.get("calendar_bot_name") or "Vexa",
         }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
-        # ALWAYS present in the response — a missing key downstream is indistinguishable from an
-        # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here
-        # rather than inferred there.
-        resp["capture_signal"] = _resolve_capture_signal(
-            data, await _platform_setting("diagnostics", db)
-        )
+        # Present only when a user or platform setting DECIDED it. Absent means no decision here,
+        # which bot_spawn treats exactly like an unreachable identity: the deployment default.
+        capture_signal = _resolve_capture_signal(data, await _platform_setting("diagnostics", db))
+        if capture_signal is not None:
+            resp["capture_signal"] = capture_signal
         if data.get("webhook_url"):
             resp["webhook_url"] = data["webhook_url"]
             if data.get("webhook_secret"):

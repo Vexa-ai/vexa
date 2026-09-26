@@ -32,6 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g @anthropic-ai/claude-code && \
     apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+# The CLI's background calls are off: telemetry, error reports, auto-update checks, release notes,
+# feature flags. Still called: the model endpoint (ANTHROPIC_BASE_URL, default api.anthropic.com)
+# and, when the agent uses WebFetch, Anthropic's domain check. Any non-empty value opts out — set
+# one to empty on the container to turn it back on.
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    DISABLE_TELEMETRY=1 \
+    DISABLE_ERROR_REPORTING=1 \
+    DISABLE_AUTOUPDATER=1
 
 # The worker's own packages (NO control_plane): worker + llm + shared + contracts, copied to /app so
 # `PYTHONPATH=/app` resolves them as top-level imports. llm/ is the provider-agnostic ports module

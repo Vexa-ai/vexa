@@ -21,8 +21,8 @@ A CLI coding agent is just a **process on Linux** — it reads files, runs comma
 simplicity is exactly why it reshaped software work: no special runtime, nothing to integrate. We change
 two things, and nothing else:
 
-- **Put it in a container** — now it is *safe* (isolated, no egress except through brokered tools, no
-  lateral movement) and *scalable* (ephemeral, thousands in parallel).
+- **Put it in a container** — now it is *safe* (isolated, and only its granted workspaces exist in its
+  filesystem) and *scalable* (ephemeral, thousands in parallel).
 - **Point it at business data** instead of dev prompts — give it a [workspace](/concepts#workspace) of
   Markdown instead of a code repo, and the same loop treats **knowledge as code**.
 

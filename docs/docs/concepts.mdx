@@ -47,8 +47,8 @@ backend. See [Agents](/core/agents).
 ## Container
 
 The isolated, ephemeral unit an agent runs in, spawned by the [runtime](/core/runtime). Sub-second to
-start, reaped on idle, no egress except through brokered tools — thousands run in parallel with no
-lateral movement. Its live output streams to the client over a per-dispatch channel.
+start, reaped on idle, and only the workspaces it was granted exist in its filesystem — thousands run in
+parallel. Its live output streams to the client over a per-dispatch channel.
 
 ## Identity
 

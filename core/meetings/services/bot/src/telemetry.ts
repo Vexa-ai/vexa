@@ -433,7 +433,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   const maxBuffer = opts.maxBufferBytes ?? DEFAULT_MAX_BUFFER;
 
   // ── the size cap ──────────────────────────────────────────────────────────────────────────────
-  // Fixture collection is default ON, so EVERY prod meeting writes into the pod's ephemeral
+  // Wherever fixture collection is on, EVERY meeting writes into the pod's ephemeral
   // storage. Unbounded, one pathological meeting (a 6-hour room, a wedged leave) fills the disk —
   // and a bot that dies of a full disk is a lost MEETING, not just a lost fixture. So the tape has
   // a ceiling, and reaching it stops the TAPE and nothing else: no throw into capture, no leave, no

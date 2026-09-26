@@ -1181,36 +1181,48 @@ def test_passcode_is_not_written_onto_non_teams_join_urls(monkeypatch):
 
 # ── O-TEL-1: what the spawn resolves when identity answers, and when it does not ─────────────────
 
-async def test_spawn_defaults_capture_signal_on_when_identity_is_unreachable(monkeypatch):
-    """No ADMIN_API_URL / a 500 / an admin-api that predates the field → the tape still runs.
+@pytest.mark.parametrize("deployment_flag,expected", [(None, False), ("true", True), ("false", False)])
+async def test_spawn_uses_the_deployment_default_when_identity_is_unreachable(
+        monkeypatch, deployment_flag, expected):
+    """No ADMIN_API_URL / a 500 → no decision from identity, so the DEPLOYMENT decides.
 
-    The failure this forbids is silent: a transient identity blip turns fixture collection off
-    fleet-wide, prod looks entirely healthy, and nobody notices until someone asks why no fixtures
-    arrived. The bot-context lookup is best-effort by contract, so its failure mode must be the
-    product default, not the absence of one.
+    Unset, that is OFF: a self-hosted install tapes nothing it was not told to. A deployment whose
+    operator set ``CAPTURE_SIGNAL_ENABLED=true`` keeps taping through the blip, so a transient
+    identity failure cannot silently stop collection where it was deliberately turned on.
     """
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    if deployment_flag is None:
+        monkeypatch.delenv("CAPTURE_SIGNAL_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("CAPTURE_SIGNAL_ENABLED", deployment_flag)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     await request_bot(repo, runtime, user_id=USER, platform="google_meet",
                       native_meeting_id="ctx-unreachable", redis_url="redis://redis:6379/0",
                       token_secret=SECRET)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
-    assert inv["captureSignalEnabled"] is True
+    # An explicit false, never an omission: the bot must not fall back to its own env default.
+    assert inv["captureSignalEnabled"] is expected
 
 
-@pytest.mark.parametrize("ctx,expected,slug", [
-    ({"capture_signal": True}, True, "on"),
-    ({"capture_signal": False}, False, "off"),
-    ({}, True, "absent"),                     # an older admin-api has no such key → default ON
-    ({"capture_signal": "false"}, True, "str"),   # only a real boolean false is the kill switch
+@pytest.mark.parametrize("ctx,deployment_flag,expected,slug", [
+    ({"capture_signal": True}, None, True, "on"),            # identity enables over an off deployment
+    ({"capture_signal": False}, "true", False, "off"),       # identity stops an enabled deployment
+    ({}, None, False, "absent"),                             # no decision → deployment default (off)
+    ({}, "true", True, "absent-enabled"),                    # no decision → deployment default (on)
+    ({"capture_signal": "true"}, None, False, "str"),        # only a real boolean is a decision
 ])
-async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, expected, slug):
+async def test_spawn_threads_capture_signal_from_bot_context(
+        monkeypatch, ctx, deployment_flag, expected, slug):
     """One hop, two readers: the same best-effort bot-context call feeds the STT backend AND the
     tape flag. The string case is deliberate — identity normalizes the settings string into a real
-    boolean, so a string arriving here means a contract drift, and defaulting ON is the safe read."""
+    boolean, so a string arriving here means a contract drift, and it is read as no decision."""
     from meeting_api.bot_spawn import service as spawn_service
 
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    if deployment_flag is None:
+        monkeypatch.delenv("CAPTURE_SIGNAL_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("CAPTURE_SIGNAL_ENABLED", deployment_flag)
 
     async def fake_ctx(_user_id):
         return ctx

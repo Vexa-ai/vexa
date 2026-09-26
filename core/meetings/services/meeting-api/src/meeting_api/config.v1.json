@@ -14,7 +14,8 @@
      "change-me",
      "CHANGE-ME",
      "default",
-     "secret"
+     "secret",
+     "dev-admin-token"
    ]
   },
   {
@@ -168,6 +169,16 @@
    "class": "defaulted",
    "default": "false",
    "description": "deployment-scoped authenticated-bot knob: when true, EVERY POST /bots spawn carries the invocation.v1 auth block so the bot restores the provisioned browser session (make login) and joins signed-in. Demands the BOT_USERDATA_S3_PATH + BOT_S3_* keys — incomplete config answers a typed 503 (never a silent anonymous join).",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "CAPTURE_SIGNAL_ENABLED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "O-TEL-1: the deployment's default for captured-signal tapes — whether a spawned bot tees its RAW capture stream (per-channel audio, speaker events, STT round-trips, its transcript and log) to object storage under `signal/` for offline replay. Independent of recording_enabled. Applies when identity states no decision (no user or platform `diagnostics.capture_signal` setting, or identity unreachable); an explicit setting wins in either direction. OFF unless set, because a tape is raw meeting audio kept beside the user's recording.",
    "targets": [
     "compose",
     "helm"
@@ -623,7 +634,7 @@
    "key": "SIGNAL_TAPE_BUDGET_BYTES",
    "class": "defaulted",
    "default": "53687091200 (50 GiB)",
-   "description": "O-TEL-1: the captured-signal tape KEEP budget in bytes. Fixture collection is default ON, so the bound lives here rather than on the capture path — the janitor evicts oldest-unpromoted tapes under the `signal/` prefix until total tape bytes fit. Promoted tapes (a PROMOTED marker object beside them) are NEVER evicted; if promotion alone exceeds the budget the sweep deletes nothing and logs signal_tape_budget_unreclaimable for a human to decide",
+   "description": "O-TEL-1: the captured-signal tape KEEP budget in bytes. Where collection is enabled every meeting tapes, so the bound lives here rather than on the capture path — the janitor evicts oldest-unpromoted tapes under the `signal/` prefix until total tape bytes fit. Promoted tapes (a PROMOTED marker object beside them) are NEVER evicted; if promotion alone exceeds the budget the sweep deletes nothing and logs signal_tape_budget_unreclaimable for a human to decide",
    "targets": []
   },
   {

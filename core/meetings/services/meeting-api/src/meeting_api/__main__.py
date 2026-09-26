@@ -658,9 +658,9 @@ def _attach_background_loops(
                 log.exception("calendar sync tick failed")
             await asyncio.sleep(calendar_interval)
 
-    # Captured-signal tape budget (O-TEL-1). Fixture collection is default ON, so the bound lives on
-    # the KEEP side: this sweep is the only thing standing between "every prod meeting tapes" and an
-    # object store that grows without limit. It deletes ONLY under the `signal/` prefix, and only
+    # Captured-signal tape budget (O-TEL-1). Where fixture collection is enabled every meeting tapes,
+    # so the bound lives on the KEEP side: this sweep is the only thing standing between "every
+    # meeting tapes" and an object store that grows without limit. It deletes ONLY under the `signal/` prefix, and only
     # tapes carrying no PROMOTED marker — recordings are never within its reach.
     signal_janitor_interval = float(os.getenv("SIGNAL_TAPE_JANITOR_INTERVAL_S", "900"))
     signal_min_age_s = float(os.getenv("SIGNAL_TAPE_MIN_AGE_S", "600"))

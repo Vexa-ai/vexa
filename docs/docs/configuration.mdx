@@ -22,6 +22,7 @@ are public.
 | `TRANSCRIPTION_MODEL` | `whisper-1` | STT model id sent on every transcription request (the OpenAI-compatible `model` field). **Set it when the backend validates model ids** — Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1` / `gpt-4o-transcribe`), vLLM/LiteLLM (the served name) — or every request fails `model_not_found`. Ignored by the bundled `deploy/transcription` unit, whose model is its own `MODEL_SIZE`. |
 | `TRANSCRIBE_ENABLED` | `true` | Deployment-level default for a spawn's `transcribe_enabled` when `POST /bots` does not say. Resolution: **explicit request body wins** → else this env → else `true`. Set `false` for a deliberately no-STT deployment: bots spawn **capture-only** instead of answering 503. Leaving it **empty means `true`** — only an explicit `false`/`0`/`no`/`off` opts out. |
 | `RECORDING_ENABLED` | `true` | Deployment-level default for a spawn's recording when `POST /bots` does not say. Same empty-means-default rule as above. |
+| `CAPTURE_SIGNAL_ENABLED` | `false` | Captured-signal tapes for offline replay. When `true`, every spawned bot keeps its **raw** capture — per-channel audio, STT round-trips, transcript, bot log — under `signal/` in your object store, **whether or not the meeting is recorded**. A tape is not removed when its meeting or recording is deleted; the oldest are evicted above a 50 GiB budget (`SIGNAL_TAPE_BUDGET_BYTES`). An identity `diagnostics.capture_signal` setting (platform-wide, or per user) overrides this in either direction. Helm: `meetingApi.captureSignalEnabled`. |
 | `BOT_ALONE_SILENCE_WINDOW_MS` | `600000` | Active-phase remote-audio silence window before the bot leaves with `completed(left_alone)`. Forwarded to spawned bots. A request's `automatic_leave.max_time_left_alone` overrides it. |
 | `BOT_SPEAKER_MIN_AUDIO_SEC` | `2` | Google Meet minimum audio window before submitting to STT. Lower values reduce first-transcript latency but increase request frequency. |
 | `BOT_SPEAKER_SUBMIT_INTERVAL_SEC` | `2` | Google Meet speaker-stream submission interval. |
@@ -104,13 +105,15 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ADMIN_TOKEN` | none — you must set it | Admin API key (`X-Admin-API-Key`) — mints users and tokens, and signs every per-spawn MeetingToken (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). |
-| `INTERNAL_API_SECRET` | none — you must set it | Shared secret for service-to-service calls. |
+| `ADMIN_TOKEN` | none — generated if empty | Admin API key (`X-Admin-API-Key`) — mints users and tokens, and signs every per-spawn MeetingToken (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). |
+| `INTERNAL_API_SECRET` | none — generated if empty | Shared secret for service-to-service calls. |
 
-Neither has a default any more. Both services **refuse to boot** on a placeholder literal
-(`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …): a value
-published in this repository is not a secret, and a stack running on one comes up green while
-anyone who read the repo can mint an API key for any account. Generate each with
+Neither has a default. On Docker Compose, `make all` / `make dev` generate each into `.env` when it
+is empty (`deploy/compose/mint-dev-env.sh`, which never overwrites a value you set). Both services
+**refuse to boot** on a placeholder literal (`changeme`, `vexa-internal-secret`,
+`lite-internal-secret`, `dev-admin-token`, `default`, `secret`, …): a value published in this
+repository is not a secret, and a stack running on one comes up green while anyone who read the
+repo can mint an API key for any account. To set your own, generate each with
 `openssl rand -hex 32` and set the same `ADMIN_TOKEN` on every service that shares the tier.
 | `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
@@ -172,7 +175,7 @@ Point the agent at your own model so no inference leaves the network.
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
-| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+| `VEXA_AGENT_DEFAULT_SUBJECT` | — | Leave unset: the gateway fronts agent-api and injects `X-User-Id`, and a request without it is refused (401). Only for a gateway-less single-user deploy — it answers **every** headerless caller as this one subject, so it must stay unset wherever more than one person uses the stack. |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)

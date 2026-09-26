@@ -204,8 +204,9 @@ What is real and checkable:
 - **A pre-auth edge guard on by default** on compose and Helm — per-IP throttle (600 req/min),
   auto-ban, allow/deny lists — with an explicit kill switch (`GUARD_ENABLED`,
   `gateway.guard.enabled`).
-- **Agents are untrusted by design:** ephemeral isolated container, no egress except brokered
-  tools, propose-only on untrusted input, irreversible effects gated.
+- **Agents are untrusted by design:** ephemeral isolated container scoped to its granted
+  workspaces, propose-only on untrusted input, irreversible effects gated. Its network access is
+  not restricted by the shipped defaults — see [what calls out by default](/security-compliance#what-calls-out-by-default).
 - **Procurement artifacts resolve**, and they are files, not assertions:
   [`architecture.calm.json`](https://github.com/Vexa-ai/vexa/tree/main/architecture.calm.json) (FINOS
   CALM), [`SECURITY.md`](https://github.com/Vexa-ai/vexa/tree/main/SECURITY.md),

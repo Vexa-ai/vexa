@@ -74,6 +74,17 @@ def test_preflight_refuses_to_boot_without_admin_token(monkeypatch):
     assert "ADMIN_TOKEN" in str(ei.value), "the boot error must NAME the missing required key"
 
 
+def test_preflight_refuses_the_example_admin_token(monkeypatch):
+    """`dev-admin-token` is printed in this repository and sits in older compose `.env` files. It
+    signs every MeetingToken, so a stack still running on it is refused like every other published
+    placeholder — naming the key, never echoing the value."""
+    monkeypatch.setenv("ADMIN_TOKEN", "dev-admin-token")
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight()
+    assert "ADMIN_TOKEN" in str(ei.value)
+    assert "dev-admin-token" not in str(ei.value), "a refusal must never echo the value"
+
+
 def test_preflight_reports_capability_rows(monkeypatch):
     # STT env-configured (conftest) + a passing probe → the boot report carries the rows.
     monkeypatch.setattr(cp, "_run_probe", lambda spec, env: {"ok": True, "status": 405})

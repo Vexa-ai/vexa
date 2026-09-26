@@ -202,6 +202,10 @@ meetingApi:
   systemWebhookUrl: ""
   systemWebhookAllowPrivateHttp: "false"
   systemWebhookTimeoutSeconds: "10"
+  # Captured-signal tapes: "true" makes every spawned bot keep its RAW capture (audio, STT
+  # round-trips, transcript, bot log) under signal/ in object storage, recorded meeting or not.
+  # Off by default; an identity diagnostics.capture_signal setting overrides it either way.
+  captureSignalEnabled: "false"
   # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
   # values are SCOPED userdata-store credentials, never the deployment's admin S3 creds.
@@ -301,7 +305,10 @@ agentApi:
   service:
     type: ClusterIP
     port: 8100
-  defaultSubject: "u_live"      # VEXA_AGENT_DEFAULT_SUBJECT single-user fallback until gateway fronts agent-api
+  # VEXA_AGENT_DEFAULT_SUBJECT — leave empty: the gateway fronts agent-api and injects X-User-Id, so a
+  # headerless request is refused (401). Set only for a gateway-less single-user deploy; it answers
+  # every headerless caller as this one subject.
+  defaultSubject: ""
   logLevel: "info"
   # Workspace store the worker mounts and agent-api reads. On k3s (local-path = RWO) keep agentApi at
   # replicaCount 1; full agent-worker dispatch on k8s needs RWX storage (see README — follow-up).

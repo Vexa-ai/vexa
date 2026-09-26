@@ -128,6 +128,9 @@ spec:
               value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
+            # Captured-signal tapes (deployment default, off) — raw capture kept under signal/.
+            - name: CAPTURE_SIGNAL_ENABLED
+              value: {{ .Values.meetingApi.captureSignalEnabled | default "false" | quote }}
             # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
             - name: BOT_AUTHENTICATED
               value: {{ .Values.meetingApi.botAuthenticated | default "false" | quote }}

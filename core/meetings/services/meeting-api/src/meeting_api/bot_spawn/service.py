@@ -224,15 +224,20 @@ def _transcription_from_context(ctx: dict) -> dict:
 
 
 def _capture_signal_from_context(ctx: dict) -> bool:
-    """Whether this spawn tapes its raw captured-signal stream — DEFAULT ON.
+    """Whether this spawn tapes its raw captured-signal stream.
 
-    admin-api resolves user > platform_settings > default-on and ALWAYS states the key, so anything
-    other than an explicit ``False`` here means we could not read a decision: unreachable identity,
-    an older admin-api that predates the field, or an unset ADMIN_API_URL. All of those default ON,
-    because prod meetings are the fixture source and a transient identity blip must not silently
-    turn collection off fleet-wide. The kill switch is an explicit ``false``, nothing else.
+    Identity's decision wins in either direction: admin-api states ``capture_signal`` (a real
+    boolean) only when a user or platform setting decided it. Anything else — no decision, an
+    unreachable identity, an unset ADMIN_API_URL — falls back to this deployment's
+    ``CAPTURE_SIGNAL_ENABLED``, OFF unless the operator set it. A tape is raw meeting audio kept
+    independently of the user's recording, so keeping one is always an explicit operator decision;
+    a deployment that enabled it keeps taping through an identity blip, and one that did not never
+    starts because of one.
     """
-    return ctx.get("capture_signal") is not False
+    decided = ctx.get("capture_signal")
+    if isinstance(decided, bool):
+        return decided
+    return env_flag("CAPTURE_SIGNAL_ENABLED", default=False)
 
 
 def _bot_name_from_context(ctx: dict) -> Optional[str]:
@@ -470,7 +475,7 @@ async def request_bot(
     bot_context = await _fetch_bot_context(user_id)
     configured = _transcription_from_context(bot_context)
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
-    # Default ON: only an explicit false from identity stops the tape.
+    # Identity's explicit decision, else the deployment's CAPTURE_SIGNAL_ENABLED (off unless set).
     capture_signal_enabled = _capture_signal_from_context(bot_context)
     # THE NAME THIS PERSON'S BOT SHOWS UP AS — third reader of the same one hop. Precedence is
     # auto-join's, unchanged: an explicit name on THIS request, then this person's default from
@@ -763,8 +768,9 @@ async def request_bot(
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
-        # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
-        # record still yields a fixture. Both ride the same upload endpoint below.
+        # O-TEL-1: the tape is INDEPENDENT of recording_enabled — where collection is enabled, a
+        # meeting the user never asked to record still yields a fixture. Both ride the same upload
+        # endpoint below.
         capture_signal_enabled=capture_signal_enabled,
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,

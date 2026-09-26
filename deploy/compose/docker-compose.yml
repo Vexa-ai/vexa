@@ -242,11 +242,11 @@ services:
       # every service that REFUSES it at boot; these two lines kept it, so an unconfigured stack
       # still PRESENTED the published literal as internal-tier authority. Unset is unset (A19).
       - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
-      # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
-      # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
-      # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
-      # agent-api and X-User-Id is always present — then a missing header fails closed (401).
-      - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
+      # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id, and the terminal
+      # reaches it through the gateway. Unset, a request with no X-User-Id fails closed (401). Setting this
+      # is only for a gateway-less single-user deploy: it answers EVERY headerless caller as that one
+      # subject, so it must stay unset wherever more than one person uses the stack.
+      - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -339,6 +339,10 @@ services:
       # capture-only bots instead of 503-ing every default POST /bots.
       - TRANSCRIBE_ENABLED=${TRANSCRIBE_ENABLED:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
+      # Captured-signal tapes (off by default): true makes every spawned bot keep its RAW capture —
+      # audio, STT round-trips, transcript, bot log — under `signal/` in object storage, whether or
+      # not the meeting is recorded. An identity `diagnostics.capture_signal` setting overrides it.
+      - CAPTURE_SIGNAL_ENABLED=${CAPTURE_SIGNAL_ENABLED:-false}
       # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
       # provisioned browser session (make login) from the userdata store and joins signed-in.
       # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
