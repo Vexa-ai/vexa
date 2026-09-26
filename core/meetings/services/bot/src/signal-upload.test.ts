@@ -1,8 +1,8 @@
 /**
  * O-TEL-1c — the tape's DELIVER half + the recorder's size cap. OFFLINE, NO browser/redis/whisper.
  *
- * Everything here is about ONE property: fixture collection is default ON in prod, so the tape must
- * be incapable of harming the meeting it is taping. That splits into two halves:
+ * Everything here is about ONE property: wherever fixture collection is on, every meeting tapes, so
+ * the tape must be incapable of harming the meeting it is taping. That splits into two halves:
  *
  *   • the CAP (telemetry.ts) — a runaway tape stops writing and the meeting carries on. A bot that
  *     dies of a full disk is a lost MEETING; a capped tape is only a shorter fixture.

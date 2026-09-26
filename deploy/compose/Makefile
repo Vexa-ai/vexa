@@ -64,12 +64,14 @@ stack-test-v010:
 
 ## up — the INSTALL entrypoint: PULLS the published, release-validated images (#569 — what users
 ## run must be the bytes the release machinery proved; a local build must never shadow a published
-## :v012 pointer). Seeds .env from .env.example if absent, pulls everything (services + the
+## :v012 pointer). Seeds .env from .env.example if absent and generates every empty stack secret
+## (mint-dev-env.sh — never overwrites a value you set), pulls everything (services + the
 ## build-only agent-worker profile + the bot), brings the stack up WITHOUT building, then mints +
 ## prints an API key. Building from source is `make dev` (images tagged :dev, never v012 names).
 up:
 	@$(MAKE) --no-print-directory _preflight
-	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
+	@[ -f .env ] || echo "→ no .env found; seeding from .env.example"
+	@./mint-dev-env.sh
 	$(COMPOSE) pull
 	@_tag=$$(grep -E '^IMAGE_TAG=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
 	 echo "→ pulling spawn-time images (agent-worker is a build-only compose profile pull skips)"; \
@@ -87,7 +89,8 @@ up:
 ## interpolated refs (AGENT_WORKER_IMAGE etc.) follow IMAGE_TAG=dev coherently.
 dev:
 	@$(MAKE) --no-print-directory _preflight
-	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
+	@[ -f .env ] || echo "→ no .env found; seeding from .env.example"
+	@./mint-dev-env.sh
 	IMAGE_TAG=dev $(COMPOSE) up -d --build
 	@# Every remaining step must RUN and the target must exit non-zero naming EVERY gap. A failed
 	@# agent-worker build (a transient apt flake, #716) must NOT abort BEFORE the bot-image check —

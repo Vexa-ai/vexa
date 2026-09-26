@@ -2,14 +2,14 @@
 # mint-dev-env.sh — seed deploy/compose/.env from .env.example and MINT every secret the stack
 # refuses to run without. Since 0.12.27 the services refuse to boot on an empty or published
 # placeholder for these keys (config.v1 `forbidden_values`); a fresh checkout therefore needs real
-# values before `docker compose up`. CI's value leg and release-validate call this instead of a bare
-# `cp`; self-hosters may call it too — it never overwrites an existing non-empty value.
+# values before `docker compose up`. `make all` / `make dev`, CI's value leg and release-validate
+# all seed through this instead of a bare `cp` — it never overwrites an existing non-empty value.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 env_file="${1:-$here/.env}"
 [ -f "$env_file" ] || cp "$here/.env.example" "$env_file"
 mint() { openssl rand -hex 32; }
-for key in INTERNAL_API_SECRET VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY; do
+for key in ADMIN_TOKEN INTERNAL_API_SECRET VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY; do
   if grep -qE "^${key}=\s*$" "$env_file"; then
     v="$(mint)"
     # portable in-place edit (GNU and BSD sed)

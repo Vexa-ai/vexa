@@ -58,6 +58,16 @@ def test_preflight_refuses_the_published_placeholder():
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
 
 
+def test_preflight_refuses_the_example_admin_token():
+    """`dev-admin-token` is printed in this repository and sits in older compose `.env` files. The
+    admin token mints an API key for any user, so a stack still running on that literal is refused
+    like every other published placeholder — naming the key, never echoing the value."""
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "ADMIN_API_TOKEN": "dev-admin-token"})
+    assert "ADMIN_API_TOKEN" in str(ei.value)
+    assert "dev-admin-token" not in str(ei.value), "a refusal must never echo the value"
+
+
 def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     """PRD decision 42 item 2 — A PUBLISH EDGE IS NOT A DEPENDENCY, proven at the boot layer.
 

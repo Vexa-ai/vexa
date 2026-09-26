@@ -1,7 +1,7 @@
 """The captured-signal tape budget — rolling eviction over the ``signal/`` prefix (O-TEL-1).
 
-Fixture collection is DEFAULT ON, so the bound cannot live on the capture side: every prod meeting
-tapes, and the only question is how much we keep. This is that answer — a keep-side budget with
+Where fixture collection is enabled, every meeting tapes, so the bound cannot live on the capture
+side: the only question is how much we keep. This is that answer — a keep-side budget with
 rolling eviction. Newest in, oldest unpromoted out. Curation decides what survives (promote a tape
 into the regression library and it is never evicted), not the capture path, which stays dumb.
 
