@@ -23,7 +23,7 @@ make lite
 ```
 
 Provisions PostgreSQL and storage (versitygw) sidecars, pulls/builds the lite image, starts everything on the
-host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
+`vexa-lite-net` bridge network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
 

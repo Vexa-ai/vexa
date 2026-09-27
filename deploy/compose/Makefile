@@ -225,11 +225,13 @@ _creds_check:
 LEGACY_MINIO_CONTAINER ?= $(PROJECT)-minio-1
 LEGACY_MINIO_VOLUME    ?= $(PROJECT)_minio-data
 LEGACY_MINIO_IMAGE     ?=
+# Empty uses MINIO_BUCKET from .env (or vexa); overrides both migration bucket defaults.
+MIGRATE_BUCKET        ?=
 migrate-storage:
 	@set -e; \
 	envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	AK=$$(envv MINIO_ACCESS_KEY); AK=$${AK:-vexa-access-key}; SK=$$(envv MINIO_SECRET_KEY); SK=$${SK:-vexa-secret-key}; \
-	BK=$$(envv MINIO_BUCKET); BK=$${BK:-vexa}; TAG=$$(envv IMAGE_TAG); TAG=$${IMAGE_TAG:-$${TAG:-dev}}; \
+	BK="$(MIGRATE_BUCKET)"; BK=$${BK:-$$(envv MINIO_BUCKET)}; BK=$${BK:-vexa}; TAG=$$(envv IMAGE_TAG); TAG=$${IMAGE_TAG:-$${TAG:-dev}}; \
 	$(COMPOSE) up -d --no-build storage; \
 	NETWORK=$(PROJECT)_vexa LEGACY_VOLUME=$(LEGACY_MINIO_VOLUME) LEGACY_CONTAINER=$(LEGACY_MINIO_CONTAINER) \
 	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$$AK}" \

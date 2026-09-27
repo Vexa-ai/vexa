@@ -235,8 +235,9 @@ write is rejected, check that the dispatch's trigger is `message`/`scheduled` (w
 - `make all` brings the compose stack up health-gated; tail the logs with `make logs` or
   `docker compose -p vexa-v012 logs -f` to see which service is wedged.
 - Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
-- Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
-  postgres + storage volumes too), then `make all`.
+- Wipe and restart from clean: `make down`, then `make all`. The Compose `make down` runs
+  `docker compose down -v --remove-orphans` and deletes the stack's named volumes, including
+  Postgres and storage; this removes the database and recordings in those volumes.
 
 ## Scaling meeting-api to more than one replica
 

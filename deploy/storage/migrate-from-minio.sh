@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Copy recordings from a MinIO-era install into the new storage (versitygw), verifying every object.
 # Called by `make -C deploy/lite migrate-storage` and `make -C deploy/compose migrate-storage`, which
-# set the variables below. It never deletes or rewrites anything: the old volume keeps every object,
-# and a re-run copies only what an earlier run has not yet verified.
+# set the variables below. The copy never changes or deletes objects in the old storage.
+# A second copy copies only objects new or changed in the old storage since the first copy;
+# it never overwrites or re-creates anything the new storage changed or deleted after the switch.
+# Those objects are listed in summary.json.
 #
 # MinIO keeps its data in its own on-disk format, not as plain files, so reading the old volume needs
 # a running MinIO. In order of preference this script uses: the install's MinIO container if it is
@@ -34,6 +36,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+check_temporary_minio() {
+  [ -n "$tmp" ] || return 0
+  if [ "$(docker inspect -f '{{.State.Running}}' "$tmp" 2>/dev/null)" != "true" ]; then
+    say "STOP: temporary MinIO '$tmp' crashed while opening volume '$LEGACY_VOLUME'."
+    docker logs --tail 30 "$tmp" 2>&1
+    say "  Check these logs and use a MinIO server image compatible with this volume, then retry: $RETRY_HINT"
+    exit 3  # EXIT cleanup removes the container after its logs are printed.
+  fi
+}
+
 running=$(docker inspect -f '{{.State.Running}}' "$LEGACY_CONTAINER" 2>/dev/null || echo absent)
 if [ "$running" = "true" ]; then
   src_host="$LEGACY_CONTAINER"
@@ -61,18 +73,37 @@ else
     say "  Otherwise you need a MinIO server image you trust that can open this volume. Guide: $DOC"
     exit 3
   fi
+  if ! volume_users=$(docker ps -q --filter "volume=$LEGACY_VOLUME"); then
+    say "STOP: cannot check running containers using volume '$LEGACY_VOLUME'."
+    say "  Restore Docker access and retry: $RETRY_HINT. No temporary MinIO was started."
+    exit 3
+  fi
+  if [ -n "$volume_users" ]; then
+    say "STOP: volume '$LEGACY_VOLUME' is used by a running container. No temporary MinIO was started."
+    say "  Set LEGACY_MINIO_CONTAINER to the running MinIO, or stop every container using this volume before retrying: $RETRY_HINT"
+    exit 3
+  fi
+  if ! docker run --rm --network none -v "$LEGACY_VOLUME:/v:ro" \
+      --entrypoint /bin/sh "$img" -c 'test -f /v/.minio.sys/format.json'; then
+    say "STOP: read-only probe of volume '$LEGACY_VOLUME' could not find .minio.sys/format.json. No temporary MinIO was started."
+    say "  Check LEGACY_MINIO_VOLUME names the old MinIO data volume and LEGACY_MINIO_IMAGE can read it, then retry: $RETRY_HINT"
+    exit 3
+  fi
   tmp="${NAME_PREFIX}-minio-migrate"
   docker rm -f "$tmp" >/dev/null 2>&1
   if ! docker run -d --name "$tmp" --network "$NETWORK" \
       -e MINIO_ROOT_USER="$LEGACY_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$LEGACY_SECRET_KEY" \
       -v "$LEGACY_VOLUME:/data" "$img" server /data >/dev/null; then
-    tmp=""
     say "STOP: the image '$img' did not start a MinIO server on volume '$LEGACY_VOLUME'. Nothing was copied, changed or deleted."
     say "  Set LEGACY_MINIO_IMAGE to a MinIO server image that can open this volume and run again. Guide: $DOC"
     exit 3
   fi
   src_host="$tmp"
   say "started a temporary MinIO '$tmp' ($img) on volume '$LEGACY_VOLUME'; it is removed when the copy ends"
+  for attempt in 1 2 3; do
+    sleep 1
+    check_temporary_minio
+  done
 fi
 
 export SRC_ENDPOINT="http://${src_host}:9000" SRC_ACCESS_KEY="$LEGACY_ACCESS_KEY" SRC_SECRET_KEY="$LEGACY_SECRET_KEY" SRC_BUCKET="$LEGACY_BUCKET"
@@ -85,6 +116,7 @@ docker run --rm --name "${NAME_PREFIX}-storage-copy" --network "$NETWORK" \
   -v "$TOOLS_DIR:/vexa-storage-tools:ro" -v "$STORAGE_VOLUME:/srv/vexa-storage" \
   --entrypoint "$RUN_PYTHON" "$RUN_IMAGE" /vexa-storage-tools/s3_copy.py ${COPY_ARGS:-}
 rc=$?
+[ "$rc" = 3 ] && check_temporary_minio
 case $rc in
   0) say "Done. The old volume '$LEGACY_VOLUME' was only read; keep it until you have played recordings back."
      say "  Report: volume '$STORAGE_VOLUME', migration-from-minio/summary.json" ;;

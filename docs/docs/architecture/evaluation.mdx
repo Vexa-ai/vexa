@@ -86,13 +86,13 @@ Three shapes, all in-tree, none requiring a GPU for the control plane:
 | Shape | What you actually run | Stateful |
 |---|---|---|
 | **Lite** | 1 app container — 13 supervised programs inside it — plus 2 sidecars | Postgres, versitygw |
-| **Compose** | 11 services by default (13 declared, 2 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, versitygw, 4 named volumes |
+| **Compose** | 13 services by default (16 declared, 3 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, versitygw, 4 named volumes |
 | **Kubernetes** | 7 Deployments, 2 StatefulSets (Postgres, MinIO) and an init Job; bots and agents are bare Pods | as above, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
 
 Every count in that table is a command, not a claim. On a clean clone, before you install anything:
 
 ```bash
-docker compose -f deploy/compose/docker-compose.yml config --services   # 11 lines
+docker compose -f deploy/compose/docker-compose.yml config --services   # 13 with no profiles enabled
 helm template vexa deploy/helm/charts/vexa | grep -E '^kind:' | sort | uniq -c
 grep -c '^\[program:' deploy/lite/supervisord.conf                      # 13
 ```

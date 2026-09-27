@@ -10,9 +10,10 @@ settings; only the server behind them changed.
 
 An install that ran MinIO keeps its recordings in the MinIO volume, in MinIO's own on-disk format
 rather than as plain files, so moving them needs a MinIO process that can read that volume. Vexa
-ships the copy. It reads every object through that MinIO, writes it to the new storage, reads it
-back and compares SHA-256 hashes. A second run skips what the first one verified, and nothing is
-deleted on either side.
+ships the copy. It reads objects through that MinIO, writes them to the new storage, reads them
+back and compares SHA-256 hashes. A manifest records the verified source and target state so
+reruns preserve changes and deletions in the new storage and report them in `summary.json`.
+Nothing is deleted on either side.
 
 What you need:
 
@@ -27,6 +28,7 @@ git pull
 make lite                            # stops and explains: recordings from the MinIO sidecar were found
 make -C deploy/lite migrate-storage  # copies and verifies every object
 make lite                            # starts on the new storage
+make -C deploy/lite migrate-storage  # copy #2 after the switch
 ```
 
 1. While volume `vexa-lite-miniodata` exists and the new volume records no completed copy,
@@ -34,13 +36,29 @@ make lite                            # starts on the new storage
 2. `migrate-storage` starts the new storage sidecar (`vexa-lite-storage`, volume
    `vexa-lite-storagedata`) and reads through `vexa-lite-minio` if it is running. If that container
    is stopped, it starts a temporary MinIO on the old volume from that container's image, and removes
-   it when the copy ends. The run finishes with
-   `VERIFIED: all <n> source objects (<bytes> bytes) are in the target with equal SHA-256.` and
-   records that in `migration-from-minio/` in the new volume.
+   it when the copy ends. A successful run prints `VERIFIED` with the count of verified objects
+   and the count of changes or deletions left alone in the new storage, and saves its report in
+   `migration-from-minio/summary.json` in the new volume.
 3. `make lite` then starts Vexa on the new storage.
+4. The second `migrate-storage` copies what the old Lite recorded between copy #1 and the switch
+   and never overwrites what the new storage wrote or re-creates what it deleted.
 
 If you ran the old Lite with non-default MinIO credentials or bucket, pass them again:
 `LEGACY_MINIO_ACCESS_KEY`, `LEGACY_MINIO_SECRET_KEY`, `LEGACY_MINIO_BUCKET`.
+
+Once you are satisfied with playback and the copy report, retire the old MinIO container:
+
+```bash
+docker rm -f vexa-lite-minio
+```
+
+Keep the old volume while you need it for rollback, then remove it:
+
+```bash
+docker volume rm vexa-lite-miniodata
+```
+
+Deletions made after the upgrade never reach the old volume.
 
 To start without the old recordings instead, run `make -C deploy/lite up STORAGE_MIGRATION=skip`
 once. That choice is recorded, so later runs do not ask again, and the old volume is not touched.
@@ -48,16 +66,38 @@ once. That choice is recorded, so later runs do not ask again, and the old volum
 ## Compose
 
 Do not run `make down` first: in `deploy/compose` it runs `docker compose down -v`, which deletes the
-stack's named volumes, the MinIO volume included. Run these in `deploy/compose`:
+stack's named volumes (including MinIO with the old Compose file). Run these in `deploy/compose`:
 
 ```bash
 git pull
 docker compose up -d                  # new `storage` service; .env still points meeting-api at MinIO
 make migrate-storage                  # copy #1 while meeting-api keeps using the old MinIO
-sed -i 's/^MINIO_ENDPOINT=minio:9000$/MINIO_ENDPOINT=storage:9000/' .env
-docker compose up -d                  # meeting-api now writes to the new storage
-make migrate-storage                  # copy #2: only what was recorded in between
 ```
+
+If authenticated bots use the in-stack MinIO and `BOT_S3_BUCKET` is set to a different bucket
+from `MINIO_BUCKET`, copy that bucket too before switching:
+
+```bash
+make migrate-storage MIGRATE_BUCKET=<bot-bucket>
+```
+
+`MIGRATE_BUCKET` sets both the source bucket default and the target bucket for this copy;
+without it, the target uses `.env`'s `MINIO_BUCKET` (default `vexa`). An explicit
+`LEGACY_MINIO_BUCKET` still overrides the source bucket.
+
+Switch the endpoints in `.env`. The second line changes `BOT_S3_ENDPOINT` only when it points
+at the in-stack MinIO; an external bot store stays as configured.
+
+```bash
+sed -i.bak 's/^MINIO_ENDPOINT=minio:9000$/MINIO_ENDPOINT=storage:9000/' .env && rm .env.bak
+sed -i.bak 's|^BOT_S3_ENDPOINT=http://minio:9000$|BOT_S3_ENDPOINT=http://storage:9000|' .env && rm .env.bak
+docker compose up -d                  # meeting-api now writes to the new storage
+make migrate-storage                  # copy #2 after the switch
+```
+
+If you copied a separate bot bucket, repeat `make migrate-storage MIGRATE_BUCKET=<bot-bucket>`
+now for its second copy too. With `BOT_S3_ENDPOINT=http://storage:9000`, `storage-init` provisions
+the configured bot credentials and their prefix policy on the new storage.
 
 - Compose does not stop a container whose service left the file. It warns
   `Found orphan containers (vexa-v012-minio-init-1, vexa-v012-minio-1) for this project`, and that
@@ -69,7 +109,10 @@ make migrate-storage                  # copy #2: only what was recorded in betwe
   leaves stopped), so no recording is sent to a store that is gone. Start the old container again
   (`docker start vexa-v012-minio-1`) if it still exists and run `docker compose up -d` again;
   otherwise see [If the old MinIO container is gone](#if-the-old-minio-container-is-gone).
-- The second copy skips every object the first one verified and copies only the newer ones.
+- The second copy copies only objects new or changed in the old storage since the first copy;
+  it never overwrites or re-creates anything the new storage changed or deleted after the switch.
+  Those objects are listed in `summary.json`, along with objects deleted at the source since an
+  earlier copy. Conflicts stay in their respective stores; the reports do not fail the copy.
 - Check that an old recording plays:
   `curl -H "X-API-Key: $API_KEY" -o /dev/null -w '%{http_code}\n' "$API_BASE/recordings/<id>/media/<media_file_id>/raw"`.
 
@@ -106,12 +149,13 @@ server running and patched is up to you. Lite always uses its own storage sideca
 
 ## Rolling back
 
-The old MinIO volume is never deleted, so the previous Vexa version finds every recording made
-before the upgrade. Recordings made after it exist only in the new storage. Copy them back into the
-old MinIO **before** you check out the previous version, while the old MinIO container still runs
-(Lite never stops it; Compose keeps it until you pass `--remove-orphans`). The copy verifies every
-object the same way and deletes nothing. Replace the keys with your own if you changed them, and
-`<tag>` with your `IMAGE_TAG`.
+Before retiring the old container or removing its volume, you can copy recordings back from the
+new storage into the old MinIO **before** checking out the previous version. The commands below
+use a fresh manifest: missing objects are copied and verified, identical objects are adopted,
+and different objects already in MinIO are left alone and reported in `changed_on_both_sides`.
+Review the copy output before rolling back; it can report `VERIFIED` with conflicts, and it does
+not propagate deletions. Replace the keys with your own if you changed them, and `<tag>` with
+your `IMAGE_TAG`.
 
 Compose, from `deploy/compose` (project `vexa-v012`):
 
