@@ -497,6 +497,31 @@ if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set minio.
   echo "  OK: minio.enabled=false beside storage.s3 renders (MinIO-off values keep working)"
 else echo "  FAIL: minio.enabled=false beside storage.s3 does not render"; fail=1; fi
 
+# Render the Install command's actual --set flags, substituting only its generated secrets and
+# bucket placeholder. Parse the flags as data: never execute commands copied from the docs.
+INSTALL_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+INSTALL_ARGS=()
+while read -r flag value; do
+  INSTALL_ARGS+=("$flag" "$value")
+done < <(awk -v secret="$INSTALL_SECRET" '
+  /^helm install vexa / { install=1; next }
+  install && /^```/ { exit }
+  install {
+    sub(/[[:space:]]*\\$/, "")
+    gsub(/"\$\(openssl rand -hex 32\)"/, secret)
+    sub(/<your bucket>/, "b")
+    print
+  }
+' "$HELM_DIR/../../docs/docs/deployment-kubernetes.mdx")
+if INSTALL="$(helm template vexa "$CHART" -n vexa "${INSTALL_ARGS[@]}" 2>&1)" && [ -n "$INSTALL" ]; then
+  echo "  OK: documented Install command flags render successfully"
+  exact 0 'CHANGE_ME' "documented Install has no published admin token" "$INSTALL"
+  exact 4 "^  (ADMIN_API_TOKEN|INTERNAL_API_SECRET|VEXA_DISPATCH_SIGNING_KEY|NEXTAUTH_SECRET): \"$INSTALL_SECRET\"$" \
+    "documented Install supplies all four secrets" "$INSTALL"
+else
+  echo "  FAIL: documented Install command flags did not render: $INSTALL"; fail=1
+fi
+
 # Negative controls — each MUST fail to render, with the message that names the fix.
 refuse() {  # refuse <label> <expected-message-regex> <helm args...>
   local label="$1" want="$2" out; shift 2
@@ -511,11 +536,20 @@ refuse "stale minio.enabled=true" 'minio\.enabled=true is no longer supported.*d
   -f "$CHART/values-test.yaml" --set minio.enabled=true
 refuse "endpoint without a scheme" 'storage\.s3\.endpoint must be a full URL' \
   -f "$CHART/values-test.yaml" --set storage.s3.endpoint=minio:9000
+refuse "region with whitespace" 'storage\.s3\.region must be a region name such as us-east-1' \
+  -f "$CHART/values-test.yaml" --set 'storage.s3.region=us east'
+refuse "region with an INI injection" 'storage\.s3\.region must be a region name such as us-east-1' \
+  -f "$CHART/values-test.yaml" --set $'storage.s3.region=us-east-1\nca_bundle=/tmp/other-ca'
 refuse "no existingSecret" 'missing: storage\.s3\.existingSecret' \
   -f "$CHART/values-test.yaml" --set storage.s3.existingSecret=
 refuse "CA bundle named twice" 'set configMapName or secretName, not both' \
   -f "$CHART/values-test.yaml" --set storage.s3.caBundle.configMapName=a --set storage.s3.caBundle.secretName=b
 refuse "extraEnv still setting S3_ENDPOINT" 'meetingApi\.extraEnv sets S3_ENDPOINT' \
   -f "$CHART/values-test.yaml" --set-json 'meetingApi.extraEnv=[{"name":"S3_ENDPOINT","value":"http://old"}]'
+for k in AWS_DEFAULT_REGION AWS_CA_BUNDLE AWS_PROFILE AWS_SHARED_CREDENTIALS_FILE; do
+  refuse "extraEnv setting $k" \
+    "meetingApi\\.extraEnv sets $k, which the chart now sets from storage\\.s3\\. Put the value in storage\\.s3 and remove it from meetingApi\\.extraEnv\\." \
+    -f "$CHART/values-test.yaml" --set "meetingApi.extraEnv[0].name=$k" --set 'meetingApi.extraEnv[0].value=override'
+done
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

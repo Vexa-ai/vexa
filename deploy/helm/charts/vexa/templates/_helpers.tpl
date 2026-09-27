@@ -264,8 +264,9 @@ storage inside a pod.
   2. storage.s3 without endpoint, bucket or existingSecret (every missing key named at once);
   3. an endpoint that is not a full http(s) URL, a region that could not be a region, or a CA
      bundle named twice;
-  4. meetingApi.extraEnv setting a storage variable the chart now sets from storage.s3 — Kubernetes
-     would let the later duplicate win, silently overriding storage.s3.
+  4. meetingApi.extraEnv setting a storage variable the chart now sets from storage.s3, or an AWS
+     variable that overrides the mounted client config — Kubernetes accepts duplicate env names,
+     and botocore prefers environment settings and shared-credentials profiles to the config.
 */}}
 {{- define "vexa.storage.validate" -}}
 {{- $minio := .Values.minio | default dict -}}
@@ -292,7 +293,7 @@ storage inside a pod.
 {{- if and $s3.caConfigMap $s3.caSecret -}}
 {{- fail "storage.s3.caBundle: set configMapName or secretName, not both" -}}
 {{- end -}}
-{{- $chartSet := list "S3_ENDPOINT" "S3_ACCESS_KEY" "S3_SECRET_KEY" "MINIO_ENDPOINT" "MINIO_SECURE" "MINIO_BUCKET" "MINIO_ACCESS_KEY" "MINIO_SECRET_KEY" "STORAGE_BACKEND" "AWS_CONFIG_FILE" -}}
+{{- $chartSet := list "S3_ENDPOINT" "S3_ACCESS_KEY" "S3_SECRET_KEY" "MINIO_ENDPOINT" "MINIO_SECURE" "MINIO_BUCKET" "MINIO_ACCESS_KEY" "MINIO_SECRET_KEY" "STORAGE_BACKEND" "AWS_CONFIG_FILE" "AWS_DEFAULT_REGION" "AWS_CA_BUNDLE" "AWS_PROFILE" "AWS_SHARED_CREDENTIALS_FILE" -}}
 {{- $clash := list -}}
 {{- range .Values.meetingApi.extraEnv -}}
 {{- if has .name $chartSet -}}

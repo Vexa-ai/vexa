@@ -35,8 +35,9 @@ global:
   #       whenUnsatisfiable: ScheduleAnyway
   topologySpreadConstraints: []
   podSecurityContext: {}
-  # Hardened defaults: block privilege escalation, drop all caps. Images run non-root via their
-  # Dockerfile USER. Override per-component only if a workload genuinely needs a cap back.
+  # No pod security context is set by default; service images run as root. Set
+  # global.podSecurityContext / global.securityContext to run as a non-root UID.
+  # Container defaults block privilege escalation and drop all capabilities.
   securityContext:
     allowPrivilegeEscalation: false
     capabilities:

@@ -22,9 +22,10 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
 
-Hardened defaults throughout: containers run non-root with all capabilities dropped,
-PodDisruptionBudgets on the control plane, and rolling updates that never take the last
-replica down.
+The chart sets no pod security context by default and the service images run as root; set
+`global.podSecurityContext` / `global.securityContext` to run as a non-root UID.
+Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
+rolling updates that never take the last replica down.
 
 ## Install
 
@@ -39,10 +40,15 @@ kubectl -n vexa create secret generic vexa-s3 \
   --from-literal=AWS_SECRET_ACCESS_KEY='<secret access key>'
 helm install vexa deploy/helm/charts/vexa -n vexa \
   --set secrets.internalApiSecret="$(openssl rand -hex 32)" \
+  --set secrets.adminApiToken="$(openssl rand -hex 32)" \
+  --set secrets.dispatchSigningKey="$(openssl rand -hex 32)" \
+  --set secrets.nextauthSecret="$(openssl rand -hex 32)" \
   --set storage.s3.endpoint=https://s3.eu-central-1.amazonaws.com \
   --set storage.s3.bucket=<your bucket> \
   --set storage.s3.existingSecret=vexa-s3
 ```
+
+Keep these four secret values: every later `helm upgrade` must pass the same ones (or use `--reuse-values`).
 
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
@@ -74,6 +80,9 @@ runs no object store of its own and has no fallback to storage inside a pod: unt
 an endpoint, a bucket and a Secret, `helm install`, `helm upgrade` and `helm template` refuse to
 render and name the missing values.
 
+Use an `https://` endpoint for any store outside the cluster.
+The bucket must not allow anonymous (public) read or list access.
+
 ```yaml
 storage:
   s3:
@@ -100,7 +109,7 @@ back: the API answers `500` (not `404`), and meeting-api's log names the S3 erro
 `SignatureDoesNotMatch`.
 
 Set these values here, not through `meetingApi.extraEnv`: the chart refuses to render when
-`extraEnv` sets one of the storage variables it sets itself (see
+`extraEnv` sets one of the chart's storage variables or an AWS override of the mounted client config (see
 [Configuration](/configuration#object-storage-on-kubernetes)).
 
 ### Upgrading from the built-in MinIO
@@ -127,6 +136,8 @@ these steps.
    carry your release name (`<release>-vexa-minio`). Keep every key as it is — recordings are found
    by key, and the new bucket's name does not matter. `s3 sync` copies only what changed, so run both
    commands again just before the upgrade to pick up recordings made in between.
+   Run the final `s3 sync` commands and `helm upgrade` while nothing is recording (no bot in a meeting).
+   Chunks written after the final sync stay only on the retained MinIO volume.
 3. **Upgrade** with `storage.s3` set and `minio` removed from your values:
 
    ```bash
@@ -145,6 +156,7 @@ these steps.
    delete a hook the chart no longer declares. Delete both when you no longer need them
    (`kubectl -n vexa delete job vexa-vexa-minio-init`, `kubectl -n vexa delete pvc
    data-vexa-vexa-minio-0`); with most storage classes, deleting the PVC also deletes the volume.
+   Remove the local recording copies with `rm -rf ./vexa-objects`.
 
 `helm rollback` to the MinIO-era revision recreates the StatefulSet, which attaches the retained PVC
 again and serves the objects on it — provided the MinIO images that revision names can still be
