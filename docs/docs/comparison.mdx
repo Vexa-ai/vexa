@@ -55,7 +55,7 @@ Meet, Teams and Zoom are production. See [Status](/roadmap/status#capability-tru
 *Operability* is the row most often argued with a number and no source, so here are ours. The
 control plane is GPU-free and ships in three sizes: **Lite** (one app container, 13 supervised
 programs inside it, plus two sidecars), **compose** (11 services by default, with Postgres, Valkey
-and MinIO), and **Helm** (7 Deployments and 2 StatefulSets, requesting **1.55 vCPU / 4 GiB** in
+and versitygw storage), and **Helm** (7 Deployments and 2 StatefulSets, requesting **1.55 vCPU / 4 GiB** in
 total before a meeting runs — 1.15 vCPU / 3 GiB if you bring your own datastores). Those counts are
 commands, not claims: `docker compose config --services` and `helm template` produce them on a clean
 clone. `make probe` then runs the whole journey — spawn → join → transcribe → live-view → stop — in

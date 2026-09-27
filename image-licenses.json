@@ -26,6 +26,12 @@
       "note": "Connection pooler. Wrapper image is MIT; PgBouncer itself is ISC — both Category A."
     },
     {
+      "name": "versity/versitygw",
+      "license": "Apache-2.0",
+      "disposition": "sidecar",
+      "note": "Object storage for Lite and Compose (the `storage` sidecar): versitygw with its POSIX backend, recordings as plain files in a local volume. Apache-2.0 is Category A. Pinned by tag and digest in deploy/compose/docker-compose.yml and deploy/lite/Makefile (the Lite Makefile is outside this gate's scan surface)."
+    },
+    {
       "name": "minio/minio",
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",

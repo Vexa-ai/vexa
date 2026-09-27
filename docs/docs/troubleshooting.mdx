@@ -236,7 +236,7 @@ write is rejected, check that the dispatch's trigger is `message`/`scheduled` (w
   `docker compose -p vexa-v012 logs -f` to see which service is wedged.
 - Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
 - Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
-  postgres + minio volumes too), then `make all`.
+  postgres + storage volumes too), then `make all`.
 
 ## Scaling meeting-api to more than one replica
 

@@ -355,7 +355,7 @@ function gateCompose() {
 // holds (max-bots never overspills), every FSM reaches terminal under contention. OPT-IN + green-or-skip:
 // runs ONLY when COMPOSE_STRESS=1 (heavy → not in the routine `all`; `all` skips it green). Set
 // MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev too; delegates to the same real-stack runner (stress_test.py
-// runs as part of the session). On a shared host (bbb) pass COMPOSE_PROJECT + MINIO_HOST_PORT to isolate.
+// runs as part of the session). On a shared host (bbb) pass COMPOSE_PROJECT + STORAGE_HOST_PORT to isolate.
 function gateComposeStress() {
   if (process.env.COMPOSE_STRESS !== "1") {
     console.log("  ✓ gate:compose-stress — opt-in (COMPOSE_STRESS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");

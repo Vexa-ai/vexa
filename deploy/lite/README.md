@@ -1,7 +1,7 @@
 # Vexa Lite (v0.12)
 
 The whole v0.12 control plane in **one container**. The simplest way to self-host — `make lite`
-from the repo root provisions PostgreSQL + MinIO and runs everything else in a single image.
+from the repo root provisions PostgreSQL + a storage sidecar (versitygw) and runs everything else in a single image.
 
 ## Why
 
@@ -22,7 +22,7 @@ From the repo root:
 make lite
 ```
 
-Provisions a PostgreSQL + MinIO sidecar, pulls/builds the lite image, starts everything on the
+Provisions PostgreSQL and storage (versitygw) sidecars, pulls/builds the lite image, starts everything on the
 host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
@@ -53,7 +53,8 @@ After it finishes:
 - **Agent API:** `http://YOUR_IP:8100`
 
 To stop: `make lite-down` (data volumes are kept; `docker volume rm vexa-lite-pgdata
-vexa-lite-miniodata` to wipe).
+vexa-lite-storagedata` to wipe). A Lite that ran MinIO copies its recordings with
+`make -C deploy/lite migrate-storage` first ([upgrade guide](../../docs/docs/upgrade-from-minio.mdx)).
 
 ## What's inside
 
@@ -63,7 +64,7 @@ Supervised by `supervisord`:
 |---|---|---|
 | gateway | **8056** | the one front door — auth, scopes, routing, `/ws` fan-out |
 | admin-api | 8001 | users + API keys + `/internal/validate` |
-| meeting-api | 8080 | bots, transcripts, recordings (→ MinIO) |
+| meeting-api | 8080 | bots, transcripts, recordings (→ storage sidecar, S3) |
 | runtime | 8090 | spawns bot + agent workers as **child processes** (process backend) |
 | agent-api | **8100** | the agent control plane — dispatch, chat (SSE), routines |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
@@ -71,8 +72,8 @@ Supervised by `supervisord`:
 | Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
 | x11vnc · noVNC | 5900 / 6080 | browser view (debugging) |
 
-External (the `make lite` sidecars): **PostgreSQL** (metadata) and **MinIO** (recordings +
-agent workspaces).
+External (the `make lite` sidecars): **PostgreSQL** (metadata) and **storage** — versitygw, an S3
+server that keeps recordings as plain files in volume `vexa-lite-storagedata`.
 
 ### Architecture
 
@@ -91,7 +92,7 @@ agent workspaces).
 +--------------------------------------------------------------+
         |                    |                    |
         v                    v                    v
-   Transcription        PostgreSQL             MinIO
+   Transcription        PostgreSQL        storage (versitygw)
      (external)         (sidecar)             (sidecar)
 ```
 
@@ -131,7 +132,7 @@ docker exec vexa-lite ps aux | grep dist/index.js # running bot processes
 |---|---|---|
 | Bot / agent isolation | POSIX (per-subject uid, 0700 tiers, per-share gids) | separate containers (per-mount binds) |
 | Docker socket | not needed | required (runtime spawns over it) |
-| Datastores | postgres + minio sidecars | in-stack |
+| Datastores | postgres + storage (versitygw) sidecars | in-stack |
 | Setup | `make lite` | `make all` |
 
 Outgrow lite? Switch to [compose](../compose/README.md) — same images, same contracts.

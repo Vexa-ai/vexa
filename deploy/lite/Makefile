@@ -1,10 +1,11 @@
 # =============================================================================
 # Vexa Lite (v0.12) — single-container build + deploy
 # =============================================================================
-# `make lite` (from repo root) → this Makefile's `all`: provisions PostgreSQL + MinIO sidecar
-# containers, pulls/builds the all-in-one image, runs it on the host network with the process
-# backend, and verifies the front doors. The app image is lean; postgres/minio stay external.
-.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke
+# `make lite` (from repo root) → this Makefile's `all`: provisions the PostgreSQL + storage sidecar
+# containers (storage = versitygw, an S3 server that keeps recordings as plain files in a volume),
+# pulls/builds the all-in-one image, runs it with the process backend, and verifies the front doors.
+# The app image is lean; postgres and storage stay external.
+.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke storage-up migrate-storage _storage-legacy-check
 
 # --- Paths ---
 ROOT       := $(shell git rev-parse --show-toplevel)
@@ -25,18 +26,35 @@ LAST_TAG_FILE  := $(ROOT)/deploy/lite/.last-tag
 
 # --- Network + sidecars + storage defaults ---
 # A user-defined bridge so the app's INTERNAL services live on the container's own loopback (no host
-# port collisions); only the front doors are published. postgres/minio join the same bridge and the
-# app reaches them by container name. Override HOST_*_PORT to avoid conflicts on a busy host.
-NETWORK         ?= vexa-lite-net
-PG_CONTAINER    ?= vexa-lite-postgres
-MINIO_CONTAINER ?= vexa-lite-minio
-APP_CONTAINER   ?= vexa-lite
+# port collisions); only the front doors are published. postgres and storage join the same bridge and
+# the app reaches them by container name. Override HOST_*_PORT to avoid conflicts on a busy host.
+NETWORK           ?= vexa-lite-net
+PG_CONTAINER      ?= vexa-lite-postgres
+STORAGE_CONTAINER ?= vexa-lite-storage
+APP_CONTAINER     ?= vexa-lite
+PG_VOLUME         ?= vexa-lite-pgdata
 HOST_GATEWAY_PORT   ?= 8056
 HOST_TERMINAL_PORT  ?= 3001
 HOST_AGENT_PORT     ?= 8100
+# Storage: versitygw (Apache-2.0) with its POSIX backend, pinned by digest. Objects are plain files
+# under data/<bucket>/ in STORAGE_VOLUME; S3 metadata (content type, ETag) rides in extended
+# attributes, so back the volume up with an attribute-preserving copy (rsync -aX, cp -a).
+# meeting-api keeps its MINIO_* variable names; they now point at this sidecar.
+STORAGE_IMAGE     ?= versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
+STORAGE_VOLUME    ?= vexa-lite-storagedata
 MINIO_ACCESS_KEY ?= vexa-access-key
 MINIO_SECRET_KEY ?= vexa-secret-key
 MINIO_BUCKET     ?= vexa
+# Upgrading a Lite that ran the MinIO sidecar: its volume is only ever read (make migrate-storage).
+# `make up` refuses to start on the new, empty storage while that volume holds recordings that were
+# not copied; STORAGE_MIGRATION=skip starts without them (the old volume stays untouched).
+LEGACY_MINIO_CONTAINER  ?= vexa-lite-minio
+LEGACY_MINIO_VOLUME     ?= vexa-lite-miniodata
+LEGACY_MINIO_IMAGE      ?=
+LEGACY_MINIO_ACCESS_KEY ?= $(MINIO_ACCESS_KEY)
+LEGACY_MINIO_SECRET_KEY ?= $(MINIO_SECRET_KEY)
+LEGACY_MINIO_BUCKET     ?= $(MINIO_BUCKET)
+STORAGE_MIGRATION ?=
 
 # --- Local CPU STT (LOCAL_STT=1) ---------------------------------------------------------------
 # Transcription in Vexa is always an external OpenAI-compatible /v1/audio/transcriptions service.
@@ -60,6 +78,7 @@ help:
 	@echo "Vexa Lite (v0.12)"
 	@echo "  make -C deploy/lite all     # provision + run + verify (this is `make lite` from root)"
 	@echo "  make -C deploy/lite down    # stop + remove app + sidecars"
+	@echo "  make -C deploy/lite migrate-storage  # copy recordings from a pre-versitygw (MinIO) Lite, verified"
 	@echo "  make -C deploy/lite build   # build the image locally (tagged :dev)"
 	@echo "  make -C deploy/lite push    # multi-arch build+push, move the 'dev' tag"
 	@echo "  make -C deploy/lite test    # probe the front doors"
@@ -87,7 +106,72 @@ env:
 preflight:
 	@docker info > /dev/null 2>&1 || { echo "ERROR: Docker is not running."; exit 1; }
 
-## up — a bridge network, postgres + minio sidecars (by name), then the all-in-one container with
+## _storage-legacy-check — the upgrade guard. A Lite that ran the MinIO sidecar keeps its recordings in
+## LEGACY_MINIO_VOLUME, which the new storage cannot read. Starting on the empty new storage would make
+## every old recording 404, so `up` stops and names the two ways forward, unless `make migrate-storage`
+## finished (migration-from-minio/COMPLETE in STORAGE_VOLUME) or the operator chose STORAGE_MIGRATION=skip
+## once (recorded as migration-from-minio/SKIPPED). The legacy volume is never written by this Makefile.
+_storage-legacy-check:
+	@if docker volume inspect $(LEGACY_MINIO_VOLUME) >/dev/null 2>&1; then \
+		if docker run --rm -v $(STORAGE_VOLUME):/s --entrypoint /bin/sh $(STORAGE_IMAGE) -c 'test -f /s/migration-from-minio/COMPLETE || test -f /s/migration-from-minio/SKIPPED'; then \
+			exit 0; \
+		elif [ "$(STORAGE_MIGRATION)" = "skip" ]; then \
+			docker run --rm -v $(STORAGE_VOLUME):/s --entrypoint /bin/sh $(STORAGE_IMAGE) -c 'mkdir -p /s/migration-from-minio && date -u +%FT%TZ > /s/migration-from-minio/SKIPPED'; \
+			echo "  ! Starting WITHOUT the recordings in MinIO volume $(LEGACY_MINIO_VOLUME) (STORAGE_MIGRATION=skip); that volume is untouched."; \
+		else \
+			echo ""; \
+			echo "  ✗ This machine has recordings from Lite's former MinIO sidecar (volume $(LEGACY_MINIO_VOLUME))."; \
+			echo "    Lite now stores recordings with versitygw in volume $(STORAGE_VOLUME), which does not have them yet."; \
+			echo "    Copy them first (every object is verified by SHA-256; the old volume is only read):"; \
+			echo "        make -C deploy/lite migrate-storage"; \
+			echo "    Or start without them (the old volume stays untouched):"; \
+			echo "        make -C deploy/lite up STORAGE_MIGRATION=skip"; \
+			echo "    Guide: https://docs.vexa.ai/upgrade-from-minio"; \
+			exit 1; \
+		fi; \
+	fi
+
+## storage-up — the storage sidecar: versitygw with its POSIX backend on STORAGE_VOLUME (data/ holds the
+## buckets as directories, iam/ the gateway's account file), then the bucket. `versitygw admin
+## create-bucket` exits 1 when the bucket already exists, so BucketAlreadyOwnedByYou also counts as ready.
+## Its S3 port (with the admin API on the same port) is reachable only on NETWORK, never published.
+storage-up: preflight
+	@set -e; \
+	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
+	echo "Starting storage ($(STORAGE_CONTAINER), versitygw)..."; \
+	if ! docker ps -q -f name=^$(STORAGE_CONTAINER)$$ | grep -q .; then \
+		docker rm -f $(STORAGE_CONTAINER) 2>/dev/null || true; \
+		docker run -d --name $(STORAGE_CONTAINER) --network $(NETWORK) --restart unless-stopped \
+			-e ROOT_ACCESS_KEY="$(MINIO_ACCESS_KEY)" -e ROOT_SECRET_KEY="$(MINIO_SECRET_KEY)" \
+			-v $(STORAGE_VOLUME):/srv/vexa-storage --entrypoint /bin/sh $(STORAGE_IMAGE) -c \
+			'mkdir -p /srv/vexa-storage/data /srv/vexa-storage/iam && exec versitygw --port :9000 --health /health --iam-dir /srv/vexa-storage/iam --quiet posix /srv/vexa-storage/data' > /dev/null; \
+	fi; \
+	for i in $$(seq 1 30); do docker exec $(STORAGE_CONTAINER) wget -q -O /dev/null http://127.0.0.1:9000/health 2>/dev/null && break; sleep 1; done; \
+	out=$$(docker run --rm --network $(NETWORK) -e ADMIN_ACCESS_KEY="$(MINIO_ACCESS_KEY)" -e ADMIN_SECRET_KEY="$(MINIO_SECRET_KEY)" \
+		$(STORAGE_IMAGE) admin --endpoint-url http://$(STORAGE_CONTAINER):9000 create-bucket --bucket $(MINIO_BUCKET) --owner "$(MINIO_ACCESS_KEY)" 2>&1) \
+		|| echo "$$out" | grep -q BucketAlreadyOwnedByYou \
+		|| { echo "  ✗ storage: could not create bucket $(MINIO_BUCKET): $$out"; exit 1; }; \
+	echo "  ✓ Storage ready (bucket $(MINIO_BUCKET), volume $(STORAGE_VOLUME))"
+
+## migrate-storage — copy every object from the MinIO sidecar of an older Lite into the new storage and
+## verify each by SHA-256 (deploy/storage/migrate-from-minio.sh + s3_copy.py, run with the Lite image's
+## Python). Resumable; never deletes. Reads through the old container if it still runs, else a temporary
+## MinIO on the old volume from a locally present image (LEGACY_MINIO_IMAGE); stops clearly without one.
+migrate-storage: preflight storage-up
+	@set -e; \
+	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
+	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	NETWORK=$(NETWORK) LEGACY_VOLUME=$(LEGACY_MINIO_VOLUME) LEGACY_CONTAINER=$(LEGACY_MINIO_CONTAINER) \
+	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$(LEGACY_MINIO_ACCESS_KEY)" \
+	LEGACY_SECRET_KEY="$(LEGACY_MINIO_SECRET_KEY)" LEGACY_BUCKET=$(LEGACY_MINIO_BUCKET) \
+	TARGET_ENDPOINT=http://$(STORAGE_CONTAINER):9000 TARGET_ACCESS_KEY="$(MINIO_ACCESS_KEY)" \
+	TARGET_SECRET_KEY="$(MINIO_SECRET_KEY)" TARGET_BUCKET=$(MINIO_BUCKET) STORAGE_VOLUME=$(STORAGE_VOLUME) \
+	RUN_IMAGE="$$IMG" RUN_PYTHON=/opt/venvs/meeting/bin/python TOOLS_DIR=$(ROOT)/deploy/storage \
+	NAME_PREFIX=$(APP_CONTAINER) RETRY_HINT="make -C deploy/lite migrate-storage" COPY_ARGS="$(COPY_ARGS)" \
+	$(ROOT)/deploy/storage/migrate-from-minio.sh
+
+## up — a bridge network, postgres + storage sidecars (by name), then the all-in-one container with
 ## only the front doors published. Internal services live on the container's own loopback.
 ##
 ## The recipe is ONE `\`-continued shell command: a bare `#` line inside it (no trailing `\`) ends
@@ -110,7 +194,7 @@ preflight:
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
-up: preflight
+up: preflight _storage-legacy-check storage-up
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
@@ -132,21 +216,10 @@ up: preflight
 		docker run -d --name $(PG_CONTAINER) --network $(NETWORK) --restart unless-stopped \
 			-e POSTGRES_DB=vexa -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
 			-e TZ=UTC -e PGTZ=UTC \
-			-v vexa-lite-pgdata:/var/lib/postgresql/data \
+			-v $(PG_VOLUME):/var/lib/postgresql/data \
 			postgres:17-alpine -c idle_in_transaction_session_timeout=60000 > /dev/null; \
 		for i in $$(seq 1 24); do docker exec $(PG_CONTAINER) pg_isready -U postgres -d vexa -q 2>/dev/null && break; sleep 2; done; \
 	fi; echo "  ✓ PostgreSQL ready"; \
-	echo "Starting MinIO ($(MINIO_CONTAINER))..."; \
-	if ! docker ps -q -f name=$(MINIO_CONTAINER) | grep -q .; then \
-		docker rm -f $(MINIO_CONTAINER) 2>/dev/null || true; \
-		docker run -d --name $(MINIO_CONTAINER) --network $(NETWORK) --restart unless-stopped \
-			-e MINIO_ROOT_USER=$(MINIO_ACCESS_KEY) -e MINIO_ROOT_PASSWORD=$(MINIO_SECRET_KEY) \
-			-v vexa-lite-miniodata:/data \
-			minio/minio:latest server /data --console-address ":9001" > /dev/null; \
-		sleep 4; \
-		docker run --rm --network $(NETWORK) --entrypoint sh minio/mc:latest -c \
-			"mc alias set vexa http://$(MINIO_CONTAINER):9000 $(MINIO_ACCESS_KEY) $(MINIO_SECRET_KEY) && mc mb --ignore-existing vexa/$(MINIO_BUCKET)" >/dev/null 2>&1 || true; \
-	fi; echo "  ✓ MinIO ready"; \
 	if [ -n "$(LOCAL_STT)" ]; then \
 		echo "Starting local CPU STT ($(WHISPER_CONTAINER), $(WHISPER_MODEL))..."; \
 		if ! docker ps -q -f name=$(WHISPER_CONTAINER) | grep -q .; then \
@@ -169,8 +242,8 @@ up: preflight
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
-		-e MINIO_ENDPOINT=$(MINIO_CONTAINER):9000 -e MINIO_ACCESS_KEY=$(MINIO_ACCESS_KEY) \
-		-e MINIO_SECRET_KEY=$(MINIO_SECRET_KEY) -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
+		-e MINIO_ENDPOINT=$(STORAGE_CONTAINER):9000 -e MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" \
+		-e MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
 		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
 		-e TERMINAL_PUBLIC_URL=http://localhost:$(HOST_TERMINAL_PORT) \
 		$$CLAUDE_MOUNT \
@@ -191,10 +264,11 @@ test:
 			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; FAIL=1; fi; \
 	done; exit $$FAIL
 
-## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-miniodata` to wipe).
+## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-storagedata` to wipe).
+## A MinIO sidecar left by an older Lite (LEGACY_MINIO_CONTAINER) and its volume are not touched.
 down:
 	@echo "Stopping Vexa Lite..."
-	@docker rm -f $(APP_CONTAINER) $(PG_CONTAINER) $(MINIO_CONTAINER) $(WHISPER_CONTAINER) 2>/dev/null || true
+	@docker rm -f $(APP_CONTAINER) $(PG_CONTAINER) $(STORAGE_CONTAINER) $(WHISPER_CONTAINER) 2>/dev/null || true
 	@docker network rm $(NETWORK) 2>/dev/null || true
 	@echo "  ✓ Stopped (data volumes kept)"
 

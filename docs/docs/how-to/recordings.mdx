@@ -11,7 +11,8 @@ See the [capability truth table](/roadmap/status#capability-truth-table).
 </Note>
 
 Alongside the diarized transcript, each meeting's **audio recording** is uploaded to object storage — on a
-self-host, your own MinIO bucket, so it never leaves your environment. The recording is the meeting audio,
+self-host, storage you run, so it never leaves your environment (Lite and Compose keep it as plain files in
+a local volume). The recording is the meeting audio,
 stored separately from the transcript (speaker separation lives in the transcript as text — there is no
 per-speaker audio).
 
@@ -63,8 +64,47 @@ curl -I -H "X-API-Key: $API_KEY" -H "Range: bytes=0-1023" \
 
 ## Where it's stored
 
-Recordings live in the bucket configured by `MINIO_*` ([Configuration](/configuration#database-storage)).
-On a self-host that's infrastructure you control; a no-egress deployment keeps recordings entirely in-VPC.
+meeting-api writes recordings over S3 to the bucket configured by `MINIO_*`
+([Configuration](/configuration#database-storage)); clients only ever receive the bytes through the
+API above. On a self-host that's infrastructure you control; a no-egress deployment keeps recordings
+entirely in-VPC.
+
+Lite and Compose run that S3 store themselves: versitygw, whose POSIX backend keeps each object as a
+plain file. The volume holds the bucket as a directory:
+
+| Deployment | Volume | Recording files |
+|---|---|---|
+| Lite | `vexa-lite-storagedata` | `data/vexa/recordings/<user_id>/<recording_id>/<session_uid>/audio/` |
+| Compose | `<project>_storage-data` (default `vexa-v012_storage-data`) | same layout |
+
+Each recording directory holds the uploaded chunks (`000000.wav`, `000001.wav`, …) and, once the
+recording has been read or finalized, the assembled `master.wav`. The content type and ETag of each
+object are stored in the file's extended attributes (`user.*`), not in the file.
+
+## Backups
+
+Back up the storage volume together with Postgres: the recordings list comes from Postgres, the
+audio from the volume, and a recording plays only when both are restored.
+
+Copy the volume with a tool that keeps extended attributes — `rsync -aX` or `cp -a` — onto a
+filesystem that supports them (ext4 and XFS do; FAT, exFAT and many network shares do not). Stop the
+storage container first so no upload is caught half-written:
+
+```bash
+# Compose (default project name vexa-v012)
+docker compose stop storage
+docker run --rm -v vexa-v012_storage-data:/src:ro -v "$PWD/vexa-backup":/dst alpine \
+  sh -c 'apk add --no-cache rsync >/dev/null && rsync -aX /src/ /dst/storage-data/'
+docker compose start storage
+```
+
+On Lite, stop `vexa-lite-storage` with `docker stop`, copy volume `vexa-lite-storagedata` the same
+way, then `docker start vexa-lite-storage`. To restore, stop the storage container, copy back into
+the empty volume with `rsync -aX`, and start it again.
+
+A copy that drops the attributes (plain `cp -r`) still plays back through Vexa, which sets the audio
+content type from the recording's format, but an S3 client reading the store directly then sees no
+content type and no ETag for those objects.
 
 ## Delete a recording
 

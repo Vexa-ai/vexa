@@ -8,7 +8,7 @@ from `.env.example` on first `make all`). Defaults below are what the stack fall
 variable is unset — fine for local evaluation, **not** for anything exposed.
 
 <Warning>
-Change every secret (`ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB and MinIO credentials,
+Change every secret (`ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB and storage credentials,
 `VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`) before putting the stack on a network. The defaults
 are public.
 </Warning>
@@ -155,11 +155,23 @@ which is why the runtime variable is the better knob. Direct `joinMeeting` calle
 whose accounting is `Σ (replicas × (pool_size + max_overflow)) + reserved ≤ max_connections`.
 The defaults (`5` / `10`) match that budget.
 </Note>
-| `MINIO_ENDPOINT` | `minio:9000` | Object storage endpoint (recordings + workspaces). |
-| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | MinIO credentials. |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `vexa-access-key` / `vexa-secret-key` | MinIO root credentials. |
-| `MINIO_BUCKET` | `vexa` | Bucket holding recordings and agent workspaces. |
-| `MINIO_SECURE` | `false` | Use TLS to reach MinIO. |
+### Object storage (recordings)
+
+Recordings are stored over S3. Lite and Compose run the store themselves: versitygw
+(`versity/versitygw`, Apache-2.0), whose POSIX backend keeps each object as a plain file in a
+local volume. The variables keep their historical `MINIO_*` names; no MinIO runs in Lite or
+Compose.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MINIO_ENDPOINT` | `storage:9000` | Where meeting-api stores recordings: `host:port`, or a full `http(s)://` URL. The default is the Compose `storage` service; Lite sets `vexa-lite-storage:9000` itself. Point it at your own S3-compatible store to use that instead. |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | The S3 key pair meeting-api uses. In Lite and Compose it is also the storage server's root key pair, so these are the credentials to change. |
+| `MINIO_BUCKET` | `vexa` | Bucket holding recordings; created on bring-up if missing (Compose `storage-init`, Lite `make up`). |
+| `MINIO_SECURE` | `false` | Use `https://` when `MINIO_ENDPOINT` is a bare `host:port`. |
+| `STORAGE_HOST_PORT` | `18900` | Compose only: the storage S3 port on `127.0.0.1` (see [Ports](#ports)). |
+
+Upgrading an install that ran MinIO: [Upgrade from MinIO](/upgrade-from-minio). Backups:
+[Recordings → Backups](/how-to/recordings#backups).
 
 ## Agent inference (bring your own)
 
@@ -260,7 +272,7 @@ Host ports the compose stack publishes on `127.0.0.1` (override any of them in `
 | `RUNTIME_API_PORT` | `18090` | runtime |
 | `AGENT_API_PORT` | `18100` | agent-api |
 | `TERMINAL_PORT` | `13000` | web UI / terminal |
-| `MINIO_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` | `9000` / `9001` | MinIO API / console |
+| `STORAGE_HOST_PORT` | `18900` | storage (versitygw) S3 API; no web console |
 
 <Note>
 The gateway (`:18056`) is the one front door; the terminal web workbench is at `:13000`. The other host

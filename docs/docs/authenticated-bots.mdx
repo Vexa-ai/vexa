@@ -22,7 +22,7 @@ uploaded to your deployment's userdata storage.
 
 ```bash
 export BOT_USERDATA_S3_PATH=userdata/bot-identity-1   # a dedicated prefix per bot identity
-export BOT_S3_ENDPOINT=http://localhost:9000          # your deployment's MinIO/S3
+export BOT_S3_ENDPOINT=http://localhost:18900         # compose: the storage service's loopback port
 export BOT_S3_BUCKET=vexa
 export BOT_S3_ACCESS_KEY=...                          # SCOPED userdata credentials — see security
 export BOT_S3_SECRET_KEY=...
@@ -49,7 +49,7 @@ Authenticated mode is a **deployment property**: set it once on `meeting-api` an
 # meeting-api environment (compose: deploy/compose .env; helm: meeting-api env values)
 BOT_AUTHENTICATED=true
 BOT_USERDATA_S3_PATH=userdata/bot-identity-1
-BOT_S3_ENDPOINT=http://minio:9000        # as reachable FROM the bot containers
+BOT_S3_ENDPOINT=http://storage:9000      # as reachable FROM the bot containers
 BOT_S3_BUCKET=vexa
 BOT_S3_ACCESS_KEY=...
 BOT_S3_SECRET_KEY=...
@@ -131,12 +131,17 @@ s3://<BOT_S3_BUCKET>/<BOT_USERDATA_S3_PATH>/browser-data/
   inspect` on the bot host, or read access to the runtime API, can see them — which is exactly why
   they must be scoped to the userdata prefix and nothing else. Secret *values* are never printed
   in bot logs.
-- The session subset is not otherwise encrypted at rest beyond what your S3/MinIO deployment
-  provides.
+- The session subset is not otherwise encrypted at rest beyond what your S3 storage provides; on
+  Compose that is versitygw, which writes it as plain files in the `storage-data` volume.
 
 ## Availability by deployment surface
 
-- **Compose** — supported as above; MinIO is in the stack.
+- **Compose** — supported as above; the in-stack `storage` service (versitygw) is the userdata
+  store. Choose a key pair for `BOT_S3_ACCESS_KEY` / `BOT_S3_SECRET_KEY` (different from
+  `MINIO_ACCESS_KEY`) and set `BOT_S3_ENDPOINT=http://storage:9000`: on bring-up, `storage-init`
+  creates that account, attaches a bucket policy that limits it to `BOT_USERDATA_S3_PATH`, and
+  checks the limit (its own prefix readable and writable; recordings and other prefixes denied).
+  If the check fails it exits 1, and `docker compose up` stops before starting meeting-api.
 - **Kubernetes/Helm** — set the same `BOT_AUTHENTICATED` / `BOT_*` env on the meeting-api
   deployment (values → env); point the S3 vars at storage the bot pods can reach.
 - **Lite** — the single-container build does not package a userdata store or the provisioning

@@ -41,10 +41,11 @@ This is usually the first question, so here is the whole path with nothing elide
 | `collector` → Postgres | consumer group `collector_group`; rows in `meetings`, `transcriptions`, `meeting_sessions` |
 | `collector` → per-meeting redis stream | single writer |
 | Gateway `/ws` → your clients | WebSocket (`ws.v1`) |
-| Recordings | bot chunks → meeting-api stitches → S3/MinIO |
+| Recordings | bot chunks → meeting-api stitches → S3 (versitygw in Lite and Compose) |
 
-**At rest:** Postgres holds users, tokens, meetings, transcripts. S3/MinIO holds recordings, agent
-workspaces, and authenticated-bot browser profiles. Redis holds the streams and the bot command bus.
+**At rest:** Postgres holds users, tokens, meetings, transcripts. The S3 store (versitygw in Lite and
+Compose; the chart's MinIO or your own S3 under Helm) holds recordings and authenticated-bot browser
+profiles; agent workspaces sit on a volume. Redis holds the streams and the bot command bus.
 
 ### The egress answer, precisely
 
@@ -84,8 +85,8 @@ Three shapes, all in-tree, none requiring a GPU for the control plane:
 
 | Shape | What you actually run | Stateful |
 |---|---|---|
-| **Lite** | 1 app container — 13 supervised programs inside it — plus 2 sidecars | Postgres, MinIO |
-| **Compose** | 11 services by default (13 declared, 2 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, MinIO, 4 named volumes |
+| **Lite** | 1 app container — 13 supervised programs inside it — plus 2 sidecars | Postgres, versitygw |
+| **Compose** | 11 services by default (13 declared, 2 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, versitygw, 4 named volumes |
 | **Kubernetes** | 7 Deployments, 2 StatefulSets (Postgres, MinIO) and an init Job; bots and agents are bare Pods | as above, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
 
 Every count in that table is a command, not a claim. On a clean clone, before you install anything:
@@ -138,8 +139,9 @@ is no separate migration step.
 
 Say this part out loud, because an architecture review will find it anyway:
 
-- **No backup, restore, or DR procedure is documented.** Postgres and S3/MinIO are yours to back
-  up by your own standard. Nothing in the tree does it for you.
+- **No backup, restore, or DR procedure is documented** beyond copying the Lite or Compose
+  recordings volume ([Recordings → Backups](/how-to/recordings#backups)). Postgres and your S3 are
+  yours to back up by your own standard. Nothing in the tree does it for you.
 - **No automated upgrade path** — no operator, no version-check service. Upgrades are the manual
   step above.
 - **No published hardware minimum for Lite or Kubernetes.** The one hardware figure in the docs

@@ -1,0 +1,136 @@
+---
+title: "Upgrade from MinIO"
+description: "Move recordings from the MinIO sidecar of an older Lite or Compose install into the new storage, checked object by object."
+---
+
+Lite and Compose used to run MinIO for recordings. MinIO no longer publishes its community images,
+so both now run **versitygw** (`versity/versitygw`, Apache-2.0): an S3 server that keeps each
+recording as a plain file in a local volume. meeting-api still speaks S3 with the same `MINIO_*`
+settings; only the server behind them changed.
+
+An install that ran MinIO keeps its recordings in the MinIO volume, in MinIO's own on-disk format
+rather than as plain files, so moving them needs a MinIO process that can read that volume. Vexa
+ships the copy. It reads every object through that MinIO, writes it to the new storage, reads it
+back and compares SHA-256 hashes. A second run skips what the first one verified, and nothing is
+deleted on either side.
+
+What you need:
+
+- The old MinIO container, running or stopped. Upgrading leaves it in place. If it is gone, the
+  MinIO image it ran must still be listed by `docker image ls`; the copy never pulls an image.
+- Free disk space for a second copy of your recordings.
+
+## Lite
+
+```bash
+git pull
+make lite                            # stops and explains: recordings from the MinIO sidecar were found
+make -C deploy/lite migrate-storage  # copies and verifies every object
+make lite                            # starts on the new storage
+```
+
+1. While volume `vexa-lite-miniodata` exists and the new volume records no completed copy,
+   `make lite` stops before starting anything and prints the two ways forward.
+2. `migrate-storage` starts the new storage sidecar (`vexa-lite-storage`, volume
+   `vexa-lite-storagedata`) and reads through `vexa-lite-minio` if it is running. If that container
+   is stopped, it starts a temporary MinIO on the old volume from that container's image, and removes
+   it when the copy ends. The run finishes with
+   `VERIFIED: all <n> source objects (<bytes> bytes) are in the target with equal SHA-256.` and
+   records that in `migration-from-minio/` in the new volume.
+3. `make lite` then starts Vexa on the new storage.
+
+If you ran the old Lite with non-default MinIO credentials or bucket, pass them again:
+`LEGACY_MINIO_ACCESS_KEY`, `LEGACY_MINIO_SECRET_KEY`, `LEGACY_MINIO_BUCKET`.
+
+To start without the old recordings instead, run `make -C deploy/lite up STORAGE_MIGRATION=skip`
+once. That choice is recorded, so later runs do not ask again, and the old volume is not touched.
+
+## Compose
+
+Do not run `make down` first: in `deploy/compose` it runs `docker compose down -v`, which deletes the
+stack's named volumes, the MinIO volume included. Run these in `deploy/compose`:
+
+```bash
+git pull
+docker compose up -d                  # new `storage` service; .env still points meeting-api at MinIO
+make migrate-storage                  # copy #1 while meeting-api keeps using the old MinIO
+sed -i 's/^MINIO_ENDPOINT=minio:9000$/MINIO_ENDPOINT=storage:9000/' .env
+docker compose up -d                  # meeting-api now writes to the new storage
+make migrate-storage                  # copy #2: only what was recorded in between
+```
+
+- Compose does not stop a container whose service left the file. It warns
+  `Found orphan containers (vexa-v012-minio-init-1, vexa-v012-minio-1) for this project`, and that
+  MinIO keeps serving recordings until you switch. The copy reads through it. The new storage publishes `127.0.0.1:18900`, not MinIO's
+  `9000`, so both can run side by side.
+- Your `.env` still says `MINIO_ENDPOINT=minio:9000`. While that MinIO answers, `storage-init` logs a
+  warning and the stack runs on MinIO as before. If it does not answer, `storage-init` exits 1 and
+  `docker compose up` stops before it recreates meeting-api, so no recording is sent to a store that
+  is gone. Start the old container again (`docker start vexa-v012-minio-1`) if it still exists;
+  otherwise see [If the old MinIO container is gone](#if-the-old-minio-container-is-gone).
+- The second copy skips every object the first one verified and copies only the newer ones.
+- Check that an old recording plays:
+  `curl -H "X-API-Key: $API_KEY" -o /dev/null -w '%{http_code}\n' "$API_BASE/recordings/<id>/media/<media_file_id>/raw"`.
+
+When you are satisfied, `docker compose up -d --remove-orphans` removes the old MinIO container.
+Its volume, `vexa-v012_minio-data`, stays until you run `docker volume rm vexa-v012_minio-data`;
+`docker compose down -v` with the new file does not remove it. `make down` in `deploy/compose` runs
+`docker compose down -v`, which deletes the stack's own volumes: Postgres and the new storage.
+
+If you use your own project name, set `PROJECT=<name>` on the `make` line. Non-default MinIO
+credentials in `.env` are read from `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`, which the old MinIO and
+the new storage both use.
+
+## If the old MinIO container is gone
+
+Both `migrate-storage` targets then stop with
+`STOP: cannot start a MinIO to read volume '<volume>'` and change nothing. If `docker image ls` still
+lists the MinIO image your install ran, name it:
+
+```bash
+make -C deploy/lite migrate-storage LEGACY_MINIO_IMAGE=<image>      # Lite
+make -C deploy/compose migrate-storage LEGACY_MINIO_IMAGE=<image>   # Compose
+```
+
+The target starts a temporary MinIO from that image on the old volume and removes it afterwards.
+Without such an image you need a MinIO server build you trust that can open the volume; Vexa no
+longer ships one.
+
+## Keep your recordings on your own S3
+
+Compose can store recordings on any S3-compatible service you run, including a MinIO you manage
+yourself: set `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` and `MINIO_BUCKET` to it.
+`storage-init` then only checks that the bucket answers and leaves your store alone; keeping that
+server running and patched is up to you. Lite always uses its own storage sidecar.
+
+## Rolling back
+
+The old MinIO volume is never deleted, so the previous Vexa version finds every recording made
+before the upgrade. Recordings made after it exist only in the new storage. Copy them back into the
+old MinIO **before** you check out the previous version, while the old MinIO container still runs
+(Lite never stops it; Compose keeps it until you pass `--remove-orphans`). The copy verifies every
+object the same way and deletes nothing. Replace the keys with your own if you changed them, and
+`<tag>` with your `IMAGE_TAG`.
+
+Compose, from `deploy/compose` (project `vexa-v012`):
+
+```bash
+docker run --rm --network vexa-v012_vexa -v "$PWD/../storage":/t:ro \
+  -e SRC_ENDPOINT=http://storage:9000 -e DST_ENDPOINT=http://minio:9000 \
+  -e SRC_ACCESS_KEY=vexa-access-key -e SRC_SECRET_KEY=vexa-secret-key -e SRC_BUCKET=vexa \
+  -e DST_ACCESS_KEY=vexa-access-key -e DST_SECRET_KEY=vexa-secret-key -e DST_BUCKET=vexa \
+  -e STATE_DIR=/tmp/rollback vexaai/v012-meeting-api:<tag> python /t/s3_copy.py
+```
+
+Lite, from the repository root:
+
+```bash
+docker run --rm --network vexa-lite-net -v "$PWD/deploy/storage":/t:ro \
+  -e SRC_ENDPOINT=http://vexa-lite-storage:9000 -e DST_ENDPOINT=http://vexa-lite-minio:9000 \
+  -e SRC_ACCESS_KEY=vexa-access-key -e SRC_SECRET_KEY=vexa-secret-key -e SRC_BUCKET=vexa \
+  -e DST_ACCESS_KEY=vexa-access-key -e DST_SECRET_KEY=vexa-secret-key -e DST_BUCKET=vexa \
+  -e STATE_DIR=/tmp/rollback --entrypoint /opt/venvs/meeting/bin/python vexaai/vexa-lite:<tag> /t/s3_copy.py
+```
+
+Then check out the previous version and start it as before: Compose after setting
+`MINIO_ENDPOINT=minio:9000` in `.env` again, Lite with `make lite`.
