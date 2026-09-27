@@ -47,6 +47,26 @@ helm install vexa deploy/helm/charts/vexa -n vexa \
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
+### Is this install actually working? — `make probe SURFACE=helm`
+
+The standing full-journey smoke probe drives spawn → schedule → boot → join → transcribe →
+live-view → stop through the gateway front door, then sweeps every deployment's logs once. Each
+stage prints Expected / Actual / Verdict; a red stage names where the journey broke and fails the
+command, so you get a truthful install verdict in minutes with no meeting and no humans.
+
+```bash
+make probe SURFACE=helm                                        # port-forwards gateway + admin-api
+GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # or drive a NodePort directly
+```
+
+It mints its API key from the release secret's `ADMIN_API_TOKEN` (or pass `VEXA_API_KEY`). The
+same journey runs on the other surfaces: `make probe` (compose, the fast default) and
+`make probe SURFACE=lite`.
+
 ## Object storage
 
 meeting-api stores recordings in **your** bucket, on AWS S3 or any S3-compatible service. The chart
@@ -118,32 +138,17 @@ these steps.
    `meetingApi.extraEnv`, move those settings into `storage.s3`. Anything else aimed at the old
    MinIO Service, such as `meetingApi.botS3Endpoint` for [authenticated bots](/authenticated-bots),
    needs a new endpoint.
-4. **Play back an old recording**, then retire the old volume. The upgrade deletes the MinIO
-   StatefulSet, its Service and its bucket Job, but not its data: the PVC `data-vexa-vexa-minio-0`
-   was created by the StatefulSet, not by Helm, so Helm does not delete it. It stays bound, with the
-   old objects on it, mounted by nothing. Delete it when you no longer need it
-   (`kubectl -n vexa delete pvc data-vexa-vexa-minio-0`); with most storage classes that also deletes
-   the volume.
+4. **Play back an old recording**, then clean up. The upgrade deletes the MinIO StatefulSet and its
+   Service, but not the data: the PVC `data-vexa-vexa-minio-0` was created by the StatefulSet, not by
+   Helm, so Helm does not delete it. It stays bound, with the old objects on it, mounted by nothing.
+   The completed bucket Job `vexa-vexa-minio-init` stays too: it was a Helm hook, and Helm does not
+   delete a hook the chart no longer declares. Delete both when you no longer need them
+   (`kubectl -n vexa delete job vexa-vexa-minio-init`, `kubectl -n vexa delete pvc
+   data-vexa-vexa-minio-0`); with most storage classes, deleting the PVC also deletes the volume.
 
-**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
-account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
-required. Self-hosted: `make all` prints a key when the stack comes up.
-
-### Is this install actually working? — `make probe SURFACE=helm`
-
-The standing full-journey smoke probe drives spawn → schedule → boot → join → transcribe →
-live-view → stop through the gateway front door, then sweeps every deployment's logs once. Each
-stage prints Expected / Actual / Verdict; a red stage names where the journey broke and fails the
-command, so you get a truthful install verdict in minutes with no meeting and no humans.
-
-```bash
-make probe SURFACE=helm                                        # port-forwards gateway + admin-api
-GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # or drive a NodePort directly
-```
-
-It mints its API key from the release secret's `ADMIN_API_TOKEN` (or pass `VEXA_API_KEY`). The
-same journey runs on the other surfaces: `make probe` (compose, the fast default) and
-`make probe SURFACE=lite`.
+`helm rollback` to the MinIO-era revision recreates the StatefulSet, which attaches the retained PVC
+again and serves the objects on it — provided the MinIO images that revision names can still be
+pulled. Recordings made after the upgrade are in your bucket, not on that volume.
 
 ## The runtime on Kubernetes
 
