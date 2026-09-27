@@ -220,16 +220,16 @@ test("image-licenses RED: a bundled component under a source-available licence (
   assert.match(r.out, /redis/);
 });
 
-const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
+const PGBOUNCER_TPL = "deploy/helm/charts/vexa/templates/deployment-pgbouncer.yaml";
 
 test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
   // The gate must read helm templates, not only compose + values — a literal `image:` in a template
   // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
-  // #1321 moved the mc image from a template literal to values (minio.mcImage) — the template
-  // line is now templated. The test's subject is unchanged: inject a LITERAL pin into the
-  // template and require the gate to read it.
-  const r = withEdited(MINIO_JOB,
-    "image: {{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}",
+  // Anchored on the pgbouncer template since the MinIO bucket-init Job it used to edit left the
+  // chart (storage.s3). The test's subject is unchanged: inject a LITERAL pin into a template and
+  // require the gate to read it.
+  const r = withEdited(PGBOUNCER_TPL,
+    'image: "{{ .Values.pgbouncer.image }}"',
     "image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
@@ -244,9 +244,9 @@ test("image-licenses RED: an undeclared structured Helm repository/tag pin reds"
     "    repository: somevendor/unaudited",
     "    tag: 1.2",
     "",
-    "minio:",
+    "ingress:",
   ].join("\n");
-  const r = withEdited(VALUES, "minio:\n", injected, () => runGate("image-licenses"));
+  const r = withEdited(VALUES, "\ningress:\n", `\n${injected}\n`, () => runGate("image-licenses"));
   assert.equal(r.green, false, "a structured Helm repository/tag image pin sailed through");
   assert.match(r.out, /undeclared pinned image/);
   assert.match(r.out, /somevendor\/unaudited:1\.2/);

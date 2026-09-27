@@ -231,3 +231,76 @@ become non-blocking. Industry-standard Redis-as-stream-buffer config.
 {{- required "INVALID redis.durability config: stopWritesOnBgsaveError=yes requires appendonly=yes (paired AOF + BGSAVE durability invariant — see v0.10.5 Pack C.5). Without AOF, blocking writes on BGSAVE failure means writes that arrive while BGSAVE is failing have no durable record anywhere." "" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Object storage — storage.s3, the operator's own S3-compatible bucket (the only place recordings go).
+
+vexa.s3 resolves storage.s3 with its defaults applied IN THE TEMPLATE, as YAML for `fromYaml`:
+  {{- $s3 := include "vexa.s3" . | fromYaml }}
+In-template defaults, nil-safe on a missing `storage` key, because `helm upgrade --reuse-values`
+renders with the PREVIOUS chart's default values: from a MinIO-era release there is no `storage`
+block at all, and a nil dereference would bury the guard's message under a template error.
+*/}}
+{{- define "vexa.s3" -}}
+{{- $s3 := (.Values.storage | default dict).s3 | default dict -}}
+{{- $ca := $s3.caBundle | default dict -}}
+endpoint: {{ $s3.endpoint | default "" | toString | trim | quote }}
+bucket: {{ $s3.bucket | default "" | toString | trim | quote }}
+region: {{ $s3.region | default "us-east-1" | toString | trim | quote }}
+pathStyle: {{ ne (toString $s3.forcePathStyle) "false" }}
+existingSecret: {{ $s3.existingSecret | default "" | toString | trim | quote }}
+accessKeyIdKey: {{ $s3.accessKeyIdKey | default "AWS_ACCESS_KEY_ID" | quote }}
+secretAccessKeyKey: {{ $s3.secretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" | quote }}
+caConfigMap: {{ $ca.configMapName | default "" | quote }}
+caSecret: {{ $ca.secretName | default "" | quote }}
+caKey: {{ $ca.key | default "ca.crt" | quote }}
+{{- end -}}
+
+{{/*
+vexa.storage.validate — render-time guards, called from templates/validate-storage.yaml. Each one
+stops install/upgrade/template with a message that names what to set; none of them falls back to
+storage inside a pod.
+  1. a stale `minio.enabled: true` — the built-in MinIO is gone from this chart;
+  2. storage.s3 without endpoint, bucket or existingSecret (every missing key named at once);
+  3. an endpoint that is not a full http(s) URL, a region that could not be a region, or a CA
+     bundle named twice;
+  4. meetingApi.extraEnv setting a storage variable the chart now sets from storage.s3 — Kubernetes
+     would let the later duplicate win, silently overriding storage.s3.
+*/}}
+{{- define "vexa.storage.validate" -}}
+{{- $minio := .Values.minio | default dict -}}
+{{- if eq (toString $minio.enabled) "true" -}}
+{{- fail (printf "minio.enabled=true is no longer supported: this chart no longer runs MinIO, whose images can no longer be pulled. Recordings are stored in your own S3-compatible bucket: set storage.s3.endpoint, storage.s3.bucket and storage.s3.existingSecret, and remove minio.enabled from your values (with --reuse-values, which keeps the previous chart's defaults, pass --set minio.enabled=false). If this release ran the built-in MinIO, copy its objects to your bucket before you upgrade; the upgrade does not delete the PVC data-%s-0. Steps: https://docs.vexa.ai/deployment-kubernetes#upgrading-from-the-built-in-minio" (include "vexa.componentName" (list . "minio"))) -}}
+{{- end -}}
+{{- if .Values.meetingApi.enabled -}}
+{{- $s3 := include "vexa.s3" . | fromYaml -}}
+{{- $missing := list -}}
+{{- range $k := list "endpoint" "bucket" "existingSecret" -}}
+{{- if not (get $s3 $k) -}}
+{{- $missing = append $missing (printf "storage.s3.%s" $k) -}}
+{{- end -}}
+{{- end -}}
+{{- if $missing -}}
+{{- fail (printf "storage.s3 is incomplete, missing: %s. Vexa stores recordings in your own S3-compatible bucket and this chart runs no object store. Set storage.s3.endpoint (a full URL, e.g. https://s3.eu-central-1.amazonaws.com), storage.s3.bucket (an existing bucket) and storage.s3.existingSecret (a Secret holding the keys %s and %s). Upgrading a release that ran the built-in MinIO? Copy its objects to your bucket first: https://docs.vexa.ai/deployment-kubernetes#upgrading-from-the-built-in-minio" (join ", " $missing) $s3.accessKeyIdKey $s3.secretAccessKeyKey) -}}
+{{- end -}}
+{{- if not (regexMatch "^https?://[^/?#\\s]+(/\\S*)?$" (lower $s3.endpoint)) -}}
+{{- fail (printf "storage.s3.endpoint must be a full URL starting with https:// or http:// (got %q)" $s3.endpoint) -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+$" $s3.region) -}}
+{{- fail (printf "storage.s3.region must be a region name such as us-east-1 (got %q)" $s3.region) -}}
+{{- end -}}
+{{- if and $s3.caConfigMap $s3.caSecret -}}
+{{- fail "storage.s3.caBundle: set configMapName or secretName, not both" -}}
+{{- end -}}
+{{- $chartSet := list "S3_ENDPOINT" "S3_ACCESS_KEY" "S3_SECRET_KEY" "MINIO_ENDPOINT" "MINIO_SECURE" "MINIO_BUCKET" "MINIO_ACCESS_KEY" "MINIO_SECRET_KEY" "STORAGE_BACKEND" "AWS_CONFIG_FILE" -}}
+{{- $clash := list -}}
+{{- range .Values.meetingApi.extraEnv -}}
+{{- if has .name $chartSet -}}
+{{- $clash = append $clash .name -}}
+{{- end -}}
+{{- end -}}
+{{- if $clash -}}
+{{- fail (printf "meetingApi.extraEnv sets %s, which the chart now sets from storage.s3. Put the value in storage.s3 and remove it from meetingApi.extraEnv." (join ", " $clash)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

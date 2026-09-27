@@ -87,13 +87,15 @@ Three shapes, all in-tree, none requiring a GPU for the control plane:
 |---|---|---|
 | **Lite** | 1 app container — 13 supervised programs inside it — plus 2 sidecars | Postgres, versitygw |
 | **Compose** | 13 services by default (16 declared, 3 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, versitygw, 4 named volumes |
-| **Kubernetes** | 7 Deployments, 2 StatefulSets (Postgres, MinIO) and an init Job; bots and agents are bare Pods | as above, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
+| **Kubernetes** | 7 Deployments and 1 StatefulSet (Postgres); bots and agents are bare Pods | Postgres 17, Valkey 8, recordings in your own S3 bucket, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
 
 Every count in that table is a command, not a claim. On a clean clone, before you install anything:
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml config --services   # 13 with no profiles enabled
-helm template vexa deploy/helm/charts/vexa | grep -E '^kind:' | sort | uniq -c
+helm template vexa deploy/helm/charts/vexa --set secrets.internalApiSecret=x \
+  --set storage.s3.endpoint=https://s3.example.com --set storage.s3.bucket=b \
+  --set storage.s3.existingSecret=s | grep -E '^kind:' | sort | uniq -c
 grep -c '^\[program:' deploy/lite/supervisord.conf                      # 13
 ```
 
@@ -111,12 +113,13 @@ Helm's shipped resource requests, which is the number a capacity plan wants:
 | runtime | 1 | 50m / 256Mi | 500m / 768Mi |
 | agent-api | 1 | 100m / 256Mi | 1000m / 1Gi |
 | **application tier** | | **1150m / 3 GiB** | 7500m / 7.75 GiB |
-| postgres · valkey · minio (bundled, default-on) | 1 each | 400m / 1 GiB | 5500m / 6 GiB |
-| **whole default render** | | **1550m / 4 GiB** | **13000m / 13.75 GiB** |
+| postgres · valkey (bundled, default-on) | 1 each | 300m / 768 MiB | 5000m / 5 GiB |
+| **whole default render** | | **1450m / 3.75 GiB** | **12500m / 12.75 GiB** |
 
-So **1.55 vCPU and 4 GiB requested**, and a burst ceiling of 13 vCPU / 13.75 GiB, before a single
-meeting runs. Point the chart at an external Postgres and object store and you schedule the
-application tier only — 1.15 vCPU / 3 GiB. Meetings and agent dispatches are ephemeral Pods on top,
+So **1.45 vCPU and 3.75 GiB requested**, and a burst ceiling of 12.5 vCPU / 12.75 GiB, before a
+single meeting runs. Object storage is always your own S3 bucket, outside these figures. Point the
+chart at an external Postgres and Valkey and you schedule the application tier only — 1.15 vCPU /
+3 GiB. Meetings and agent dispatches are ephemeral Pods on top,
 and are **not** in either figure.
 
 **Configuration surface.** `deploy/compose/.env.example` declares **77 variables**. `make all` seeds

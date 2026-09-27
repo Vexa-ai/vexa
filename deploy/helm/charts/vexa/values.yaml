@@ -1,13 +1,15 @@
 # Default values for the Vexa v0.12 Helm chart.
 #
 # The v0.12 carved control plane = 5 long-running services (gateway · admin-api · meeting-api ·
-# runtime · agent-api) + infra (postgres · redis · minio + a minio-init bucket Job). The runtime
+# runtime · agent-api) + infra (postgres · redis). Recordings go to YOUR S3-compatible bucket
+# (`storage.s3`, required) — the chart runs no object store. The runtime
 # spawns the bot and the agent-worker ON DEMAND (they are NOT services here): with
 # runtime.backend=k8s it launches them as Pods under its ServiceAccount/RBAC; with backend=docker
 # (compose/desktop) via the host docker socket. Images are the compose `vexaai/v012-*` repos.
 #
-# Production overrides: set `global.imageTag` to a pinned YYMMDD-HHMM tag, fill `secrets`, and point
-# `database`/`redisConfig` at managed infra (postgres.enabled=false / redis.enabled=false).
+# Production overrides: set `global.imageTag` to a pinned YYMMDD-HHMM tag, fill `secrets`, set
+# `storage.s3`, and point `database`/`redisConfig` at managed infra (postgres.enabled=false /
+# redis.enabled=false).
 
 global:
   imageTag: ""              # When set, overrides every service image tag (build-once promotion).
@@ -96,6 +98,34 @@ redisConfig:
   url: ""           # auto-filled when redis.enabled=true, else REQUIRED
   host: ""
   port: 6379
+
+# Object storage — REQUIRED. meeting-api stores recordings in YOUR bucket on AWS S3 or any
+# S3-compatible store. The chart runs no object store and has no pod-local fallback: rendering
+# fails while endpoint, bucket or existingSecret is empty, and a stale `minio.enabled: true` (the
+# removed built-in MinIO) fails with the upgrade steps. The bucket must already exist; the chart
+# never creates it. Docs: https://docs.vexa.ai/deployment-kubernetes#object-storage
+storage:
+  s3:
+    endpoint: ""              # REQUIRED, a full URL: https://s3.eu-central-1.amazonaws.com
+    bucket: ""                # REQUIRED, an existing bucket
+    region: "us-east-1"       # SigV4 signing region; most S3-compatible stores accept us-east-1
+    # true: path-style requests (https://host/bucket/key).
+    # false: virtual-hosted style (https://bucket.host/key), which needs DNS for bucket.host.
+    forcePathStyle: true
+    # REQUIRED: a Secret you create in the release namespace, holding the access key pair:
+    #   kubectl -n vexa create secret generic vexa-s3 \
+    #     --from-literal=AWS_ACCESS_KEY_ID=… --from-literal=AWS_SECRET_ACCESS_KEY=…
+    existingSecret: ""
+    accessKeyIdKey: AWS_ACCESS_KEY_ID          # the Secret key holding the access key id
+    secretAccessKeyKey: AWS_SECRET_ACCESS_KEY  # the Secret key holding the secret access key
+    # A private CA for an https endpoint: name a ConfigMap OR a Secret in the release namespace (not
+    # both) and the key holding the PEM bundle. It replaces the default trust store for S3 calls.
+    # OpenShift: a ConfigMap labelled config.openshift.io/inject-trusted-cabundle=true receives the
+    # cluster's trusted bundle under the key ca-bundle.crt.
+    caBundle:
+      configMapName: ""
+      secretName: ""
+      key: ca.crt
 
 # Model ids brokered into agents/bots (empty ⇒ provider default). Mirrors compose ANTHROPIC_*/VEXA_*.
 models:
@@ -211,7 +241,6 @@ meetingApi:
   botS3Bucket: ""
   botS3AccessKey: ""
   botS3SecretKey: ""
-  minioSecure: "false"
   logLevel: "info"
   resources:
     requests: { cpu: 200m, memory: 512Mi }
@@ -433,40 +462,6 @@ redis:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1000m, memory: 1Gi }
-
-minio:
-  enabled: true
-  image:
-    repository: minio/minio
-    tag: latest
-  accessKey: vexa-access-key
-  secretKey: vexa-secret-key
-  bucket: vexa
-  persistence:
-    size: 10Gi
-    storageClassName: ""
-  service:
-    # ClusterIP keeps MinIO internal (prod fronts it via ingress). Switch to NodePort on dev/k3s to
-    # reach presigned download URLs browser-side, then set meetingApi presigning accordingly.
-    type: ClusterIP
-    port: 9000
-    nodePort: ""
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits:   { cpu: 500m, memory: 1Gi }
-  # The bucket-init Job's client image. It used to be hardcoded `minio/mc:latest`
-  # in templates/job-minio-init.yaml, so no deployment could pin it and an
-  # enterprise delivery gate that requires digest-pinned images refused the whole
-  # chart on it. It is a value now; pin it with `repository@sha256:...` in your
-  # own values (or via the enterprise node baseline) when you need reproducibility.
-  mcImage:
-    repository: minio/mc
-    tag: latest
-  # ...and the Job declared no resources at all, so a namespace LimitRange would
-  # silently assign it whatever default it likes — the 64Mi-squeeze class.
-  initResources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits:   { cpu: 200m, memory: 256Mi }
 
 # ---------- Ingress (optional; fronts the terminal web UI by default) ----------
 # The terminal is the human front door (it proxies /ws → gateway and /api → agent-api/admin-api

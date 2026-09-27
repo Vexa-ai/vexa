@@ -173,6 +173,22 @@ Compose.
 Upgrading an install that ran MinIO: [Upgrade from MinIO](/upgrade-from-minio). Backups:
 [Recordings → Backups](/how-to/recordings#backups).
 
+### Object storage on Kubernetes
+
+On Helm, meeting-api's storage variables come from the chart's `storage.s3` values — see
+[Kubernetes → Object storage](/deployment-kubernetes#object-storage). The chart refuses to render
+when `meetingApi.extraEnv` also sets one of them.
+
+| meeting-api variable | Set by the chart from |
+|---|---|
+| `S3_ENDPOINT`, `MINIO_ENDPOINT` | `storage.s3.endpoint` |
+| `MINIO_SECURE` | `true` when that endpoint starts with `https://` |
+| `MINIO_BUCKET` | `storage.s3.bucket` |
+| `S3_ACCESS_KEY`, `MINIO_ACCESS_KEY` | the `storage.s3.accessKeyIdKey` key of the `storage.s3.existingSecret` Secret |
+| `S3_SECRET_KEY`, `MINIO_SECRET_KEY` | the `storage.s3.secretAccessKeyKey` key of the same Secret |
+| `STORAGE_BACKEND` | `s3` — the label stamped on each new recording's metadata |
+| `AWS_CONFIG_FILE` | `/etc/vexa/s3/config`, a mounted file with `storage.s3.region`, the addressing style from `storage.s3.forcePathStyle` and, when set, `storage.s3.caBundle` |
+
 ## Agent inference (bring your own)
 
 Point the agent at your own model so no inference leaves the network.

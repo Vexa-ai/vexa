@@ -1,0 +1,6 @@
+{{- /*
+Render-time guards for object storage (vexa.storage.validate in _helpers.tpl). This file renders no
+manifest: a failing guard stops helm install, helm upgrade and helm template with a message that
+names what to set.
+*/ -}}
+{{- include "vexa.storage.validate" . -}}
