@@ -65,8 +65,9 @@ make migrate-storage                  # copy #2: only what was recorded in betwe
   `9000`, so both can run side by side.
 - Your `.env` still says `MINIO_ENDPOINT=minio:9000`. While that MinIO answers, `storage-init` logs a
   warning and the stack runs on MinIO as before. If it does not answer, `storage-init` exits 1 and
-  `docker compose up` stops before it recreates meeting-api, so no recording is sent to a store that
-  is gone. Start the old container again (`docker start vexa-v012-minio-1`) if it still exists;
+  `docker compose up` does not start meeting-api (it replaces the running container with one it
+  leaves stopped), so no recording is sent to a store that is gone. Start the old container again
+  (`docker start vexa-v012-minio-1`) if it still exists and run `docker compose up -d` again;
   otherwise see [If the old MinIO container is gone](#if-the-old-minio-container-is-gone).
 - The second copy skips every object the first one verified and copies only the newer ones.
 - Check that an old recording plays:

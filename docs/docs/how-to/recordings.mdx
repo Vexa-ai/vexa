@@ -103,8 +103,8 @@ way, then `docker start vexa-lite-storage`. To restore, stop the storage contain
 the empty volume with `rsync -aX`, and start it again.
 
 A copy that drops the attributes (plain `cp -r`) still plays back through Vexa, which sets the audio
-content type from the recording's format, but an S3 client reading the store directly then sees no
-content type and no ETag for those objects.
+content type from the recording's format, but an S3 client reading the store directly then gets a
+generic content type instead of `audio/wav`, and no ETag, for those objects.
 
 ## Delete a recording
 

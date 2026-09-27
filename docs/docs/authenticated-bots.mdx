@@ -141,7 +141,7 @@ s3://<BOT_S3_BUCKET>/<BOT_USERDATA_S3_PATH>/browser-data/
   `MINIO_ACCESS_KEY`) and set `BOT_S3_ENDPOINT=http://storage:9000`: on bring-up, `storage-init`
   creates that account, attaches a bucket policy that limits it to `BOT_USERDATA_S3_PATH`, and
   checks the limit (its own prefix readable and writable; recordings and other prefixes denied).
-  If the check fails it exits 1, and `docker compose up` stops before starting meeting-api.
+  If the check fails it exits 1, and `docker compose up` does not start meeting-api.
 - **Kubernetes/Helm** — set the same `BOT_AUTHENTICATED` / `BOT_*` env on the meeting-api
   deployment (values → env); point the S3 vars at storage the bot pods can reach.
 - **Lite** — the single-container build does not package a userdata store or the provisioning
