@@ -14,7 +14,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down build ps logs bot _preflight _bot_check _creds_check _access
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -39,7 +39,7 @@ stack-test-bot:
 	COMPOSE_BOT=1 ./bin/stack-test
 
 ## stack-test-stress — the control plane under CONCURRENT load (A:V2): N mock bots at once, no cap overspill.
-## Needs mock-bot:dev. Tune STRESS_N / STRESS_CAP. Pass COMPOSE_PROJECT + MINIO_HOST_PORT to isolate on a shared dev host.
+## Needs mock-bot:dev. Tune STRESS_N / STRESS_CAP. Pass COMPOSE_PROJECT + STORAGE_HOST_PORT to isolate on a shared dev host.
 stack-test-stress:
 	COMPOSE_STRESS=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test
 
@@ -77,7 +77,8 @@ up:
 	 _bi=$$(grep -E '^BROWSER_IMAGE=' .env | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
 	 _bi=$$(printf '%s' "$$_bi" | sed "s/\$${IMAGE_TAG}/$$_tag/; s/\$$IMAGE_TAG/$$_tag/"); \
 	 case "$$_bi" in vexaai/*) docker pull "$$_bi";; esac
-	$(COMPOSE) up -d --no-build
+	$(COMPOSE) up -d --no-build || { $(MAKE) --no-print-directory _storage_note; exit 1; }
+	@$(MAKE) --no-print-directory _storage_note
 	@$(MAKE) --no-print-directory _bot_check
 	@$(MAKE) --no-print-directory _creds_check
 	@$(MAKE) --no-print-directory _access
@@ -88,7 +89,8 @@ up:
 dev:
 	@$(MAKE) --no-print-directory _preflight
 	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
-	IMAGE_TAG=dev $(COMPOSE) up -d --build
+	IMAGE_TAG=dev $(COMPOSE) up -d --build || { $(MAKE) --no-print-directory _storage_note; exit 1; }
+	@$(MAKE) --no-print-directory _storage_note
 	@# Every remaining step must RUN and the target must exit non-zero naming EVERY gap. A failed
 	@# agent-worker build (a transient apt flake, #716) must NOT abort BEFORE the bot-image check —
 	@# that is exactly how a stack came up "healthy" but spawned dead bots with no signal (#718 C4).
@@ -103,6 +105,10 @@ dev:
 	   echo "  The stack is up, but spawned bots may fail to start until every item above is resolved."; \
 	   exit 1; \
 	 fi
+
+## _storage_note — surface the latest storage WARNING or STOP without failing if logs are unavailable.
+_storage_note:
+	@$(COMPOSE) logs --no-log-prefix --tail 20 storage-init 2>/dev/null | grep -E '^\[storage-init\] (WARNING|STOP):' | tail -n 1 || true
 
 ## digest-audit — the #569 negative control: every vexaai/*:$IMAGE_TAG image on this host must
 ## carry a RepoDigest (= came from the registry). A locally-built image has NO RepoDigest, so a
@@ -215,8 +221,51 @@ _creds_check:
 	   echo "═══════════════════════════════════════════════════════════"; \
 	   echo ""; \
 	 fi
+## migrate-storage — upgrading a stack that ran MinIO: copy every object from the old MinIO into the
+## `storage` service and verify each one by SHA-256 (deploy/storage/migrate-from-minio.sh + s3_copy.py,
+## run with the meeting-api image's Python). Resumable; deletes nothing; the old volume is only read.
+## It reads through the old `minio` container while Compose still runs it as an orphan, else through a
+## temporary MinIO started from that container's image, else LEGACY_MINIO_IMAGE if it is on this
+## machine (nothing is pulled). Credentials default to the .env MINIO_* values, which both servers use.
+## Guide: docs/docs/upgrade-from-minio.mdx.
+LEGACY_MINIO_CONTAINER ?= $(PROJECT)-minio-1
+LEGACY_MINIO_VOLUME    ?= $(PROJECT)_minio-data
+LEGACY_MINIO_IMAGE     ?=
+# Empty uses MINIO_BUCKET from .env (or vexa); overrides both migration bucket defaults.
+MIGRATE_BUCKET        ?=
+migrate-storage:
+	@set -e; \
+	envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	AK=$$(envv MINIO_ACCESS_KEY); AK=$${AK:-vexa-access-key}; SK=$$(envv MINIO_SECRET_KEY); SK=$${SK:-vexa-secret-key}; \
+	BK="$(MIGRATE_BUCKET)"; BK=$${BK:-$$(envv MINIO_BUCKET)}; BK=$${BK:-vexa}; TAG=$$(envv IMAGE_TAG); TAG=$${IMAGE_TAG:-$${TAG:-dev}}; \
+	$(COMPOSE) up -d --no-build storage; \
+	NETWORK=$(PROJECT)_vexa LEGACY_VOLUME=$(LEGACY_MINIO_VOLUME) LEGACY_CONTAINER=$(LEGACY_MINIO_CONTAINER) \
+	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$$AK}" \
+	LEGACY_SECRET_KEY="$${LEGACY_MINIO_SECRET_KEY:-$$SK}" LEGACY_BUCKET="$${LEGACY_MINIO_BUCKET:-$$BK}" \
+	TARGET_ENDPOINT=http://storage:9000 TARGET_ACCESS_KEY="$$AK" TARGET_SECRET_KEY="$$SK" TARGET_BUCKET="$$BK" \
+	STORAGE_VOLUME=$(PROJECT)_storage-data RUN_IMAGE="vexaai/v012-meeting-api:$$TAG" RUN_PYTHON=python \
+	TOOLS_DIR=$(REPO_ROOT)/deploy/storage NAME_PREFIX=$(PROJECT) RETRY_HINT="make -C deploy/compose migrate-storage" \
+	COPY_ARGS="$(COPY_ARGS)" $(REPO_ROOT)/deploy/storage/migrate-from-minio.sh
+
+## down — remove containers and the network; keep all data volumes.
 down:
+	$(COMPOSE) down --remove-orphans
+
+## destroy — explicitly delete this stack's data volumes, including the database and recordings.
+destroy:
+ifeq ($(DESTROY),yes)
 	$(COMPOSE) down -v --remove-orphans
+	@echo "Deleted stack volumes: $(PROJECT)_redis-data $(PROJECT)_postgres-data $(PROJECT)_storage-data $(PROJECT)_agent-workspaces"
+else
+	@echo "Refusing to delete data volumes. Use make destroy DESTROY=yes to delete the database, recordings, Redis data and agent workspaces."
+	@exit 1
+endif
+
+help:
+	@echo "  make up                         # pull and start the stack"
+	@echo "  make down                       # stop/remove containers; keep data volumes"
+	@echo "  make destroy DESTROY=yes        # delete stack data volumes (database, recordings, Redis, agent workspaces)"
+	@echo "  make migrate-storage            # copy and verify recordings from an older MinIO install"
 
 ## _access — wait for admin-api, mint the self-host API key, print it + the URLs (used by `up`).
 _access:

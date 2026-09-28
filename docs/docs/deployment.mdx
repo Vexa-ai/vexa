@@ -52,7 +52,7 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
 | **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
 | **terminal** (`:13000`) | the web workbench — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
-| redis (Valkey) · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
+| redis (Valkey) · postgres · **storage** (versitygw) | bus + scheduler · metadata · recordings, stored as plain files in the `storage-data` volume |
 
 The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
 meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), then reaps them. The
@@ -66,9 +66,20 @@ absent).
   default `POST /bots` answers **503** (refuse loud). Capture-only: set `TRANSCRIBE_ENABLED=false`
   or pass `{"transcribe_enabled": false}` on the spawn. See
   [Configuration](/configuration#transcription-stt).
-- **Object storage** — MinIO (`MINIO_*`): meeting recordings and agent workspaces live in your bucket.
-  The default `MINIO_HOST_PORT=9000` is a common port — if it's already taken on your host
-  (`make all` fails with `bind … 127.0.0.1:9000 … address already in use`), set a free port in `.env`.
+- **Object storage** — the `storage` service runs versitygw (`versity/versitygw`, Apache-2.0,
+  pinned by tag and digest), an S3 server whose POSIX backend keeps every recording as a plain file
+  in the `storage-data` volume. meeting-api reaches it over S3 with the `MINIO_*` settings (the
+  variable names are unchanged): `MINIO_ENDPOINT=storage:9000`, and `MINIO_ACCESS_KEY` /
+  `MINIO_SECRET_KEY` are the server's root credentials, so change both before exposing the stack.
+  The one-shot `storage-init` ensures the bucket exists and verifies a PUT/GET/DELETE probe under
+  `.vexa-storage-init/` before meeting-api starts. The storage S3 port is published on loopback only, at
+  `STORAGE_HOST_PORT` (default `18900`). To keep recordings in your own S3 instead, point
+  `S3_ENDPOINT` (or `MINIO_ENDPOINT`) at it; the same readiness check applies
+  ([Configuration](/configuration#database-storage)). Back the volume up
+  with an attribute-preserving copy ([Recordings → Backups](/how-to/recordings#backups)).
+  Upgrading a stack that ran MinIO: old recordings stay in the old volume and do not play back
+  from the new storage until copied with `make -C deploy/compose migrate-storage`. Update the old
+  `.env` endpoint as described in [Where your recordings live now](/upgrade-from-minio).
 - **Agent inference** — bring your own: point the agent at your endpoint so no inference leaves the
   network (`VEXA_AGENT_MODEL` / mounted credentials).
 - **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.
@@ -170,7 +181,7 @@ The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no
 
 ## No egress
 
-Everything runs inside your perimeter: gateway + services + redis/postgres/minio on your host, the
+Everything runs inside your perimeter: gateway + services + redis/postgres/storage on your host, the
 [transcription unit](#transcription-the-separate-gpu-unit) on your own GPU or CPU, **BYO inference**,
 recordings in your object storage. A bundled STT unit means the audio path never calls out — the
 posture the regulated verticals ask for.

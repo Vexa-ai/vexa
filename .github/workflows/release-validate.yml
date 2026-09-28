@@ -832,6 +832,18 @@ jobs:
           # poll until it answers, then wait for node readiness.
           for i in $(seq 1 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 5; done
           kubectl wait --for=condition=Ready node --all --timeout=300s
+      # The chart stores recordings in the operator's own S3 and runs no object store, so this leg
+      # starts one that exists only in the test: versitygw (POSIX backend, pinned by digest) with a
+      # Secret of random credentials — the Secret values-test.yaml names as storage.s3.existingSecret.
+      - name: Test-only S3 fixture
+        run: |
+          set -euo pipefail
+          kubectl create namespace vexa
+          kubectl -n vexa create secret generic s3-fixture-credentials \
+            --from-literal=AWS_ACCESS_KEY_ID="$(openssl rand -hex 10)" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$(openssl rand -hex 20)"
+          kubectl -n vexa apply -f deploy/helm/tests/s3-fixture.yaml
+          kubectl -n vexa wait --for=condition=complete job/s3-fixture-bucket --timeout=300s
       - name: helm install from published images
         run: |
           helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --create-namespace \
@@ -850,12 +862,21 @@ jobs:
             exit 1
           fi
           echo "✓ gateway healthy, all pods Running"
+      - name: Recording round trip into the fixture bucket
+        run: |
+          set -euo pipefail
+          kubectl -n vexa exec -i deploy/vexa-vexa-meeting-api -c meeting-api -- \
+            env GATEWAY_URL=http://vexa-vexa-gateway:8000 python3 - all \
+            < deploy/helm/tests/recording_roundtrip.py
+          echo "✓ upload → finalize → playback → delete through the API, objects in the fixture bucket"
       - name: Cluster state on failure
         if: failure()
         run: |
           kubectl -n vexa get pods -o wide || true
           kubectl -n vexa get events --sort-by=.lastTimestamp | tail -50 || true
           kubectl -n vexa describe pods | tail -150 || true
+          kubectl -n vexa logs deploy/s3-fixture --tail=50 || true
+          kubectl -n vexa logs deploy/vexa-vexa-meeting-api --tail=100 || true
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # The guarantee block (delivery.mdx ship bar, owner-approved canon 2026-07-13) — GENERATED
