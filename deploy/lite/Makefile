@@ -30,6 +30,7 @@ LAST_TAG_FILE  := $(ROOT)/deploy/lite/.last-tag
 # the app reaches them by container name. Override HOST_*_PORT to avoid conflicts on a busy host.
 NETWORK           ?= vexa-lite-net
 PG_CONTAINER      ?= vexa-lite-postgres
+PG_IMAGE          ?= postgres:17-alpine
 STORAGE_CONTAINER ?= vexa-lite-storage
 APP_CONTAINER     ?= vexa-lite
 PG_VOLUME         ?= vexa-lite-pgdata
@@ -190,7 +191,7 @@ up: preflight storage-up
 			-e POSTGRES_DB=vexa -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
 			-e TZ=UTC -e PGTZ=UTC \
 			-v $(PG_VOLUME):/var/lib/postgresql/data \
-			postgres:17-alpine -c idle_in_transaction_session_timeout=60000 > /dev/null; \
+			$(PG_IMAGE) -c idle_in_transaction_session_timeout=60000 > /dev/null; \
 		for i in $$(seq 1 24); do docker exec $(PG_CONTAINER) pg_isready -U postgres -d vexa -q 2>/dev/null && break; sleep 2; done; \
 	fi; echo "  ✓ PostgreSQL ready"; \
 	if [ -n "$(LOCAL_STT)" ]; then \

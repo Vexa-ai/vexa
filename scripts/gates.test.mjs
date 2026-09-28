@@ -163,6 +163,7 @@ test("an entrypoint.sh export that no adopted declaration carries is RED, named 
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";
+const LITE_MAKEFILE = "deploy/lite/Makefile";
 const IMG_MANIFEST = "image-licenses.json";
 
 // ── gate:runtime-parity ─────────────────────────────────────────────────────────────────────────
@@ -193,6 +194,21 @@ test("runtime-parity RED (#637 class): a compose pin below a used command's floo
 test("image-licenses vacuity: the committed tree (Valkey everywhere) is green", () => {
   const r = runGate("image-licenses");
   assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
+});
+
+test("image-licenses RED: an undeclared Lite Makefile image variable reds", () => {
+  const r = withEdited(LITE_MAKEFILE, /$/, "\nEVIL_IMAGE ?= evil/agpl-thing:1.0\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "an undeclared Lite image variable passed the gate");
+  assert.match(r.out, /undeclared pinned image/);
+  assert.match(r.out, /evil\/agpl-thing/);
+  assert.match(r.out, /deploy\/lite\/Makefile/);
+});
+
+test("image-licenses GREEN: Lite recipe assignments are not image variables", () => {
+  const r = withEdited(LITE_MAKEFILE, /$/, "\n\tFOO_IMAGE=evil/agpl-thing:1.0 true\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, true, `a shell recipe assignment red the image gate:\n${r.out}`);
 });
 
 test("image-licenses RED: an undeclared pinned image (a stray redis:7.4) reds", () => {
