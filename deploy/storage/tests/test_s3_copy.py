@@ -136,7 +136,7 @@ def test_fresh_copy_and_pagination(copy_run, capsys):
     assert summary["copied_this_run"] == 5
     assert summary["copied_bytes_this_run"] == sum(map(len, c.src.objects.values()))
     assert summary["adopted"] == 0
-    assert json.loads((c.state / "COMPLETE").read_text()) == summary
+    assert not (c.state / "COMPLETE").exists()
     assert all(summary[name] == [] for name in REPORTS)
     output = capsys.readouterr().out
     line = next(line for line in output.splitlines() if line.startswith("COPY-SUMMARY "))

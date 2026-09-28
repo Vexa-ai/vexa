@@ -53,8 +53,9 @@ After it finishes:
 - **Agent API:** `http://YOUR_IP:8100`
 
 To stop: `make lite-down` (data volumes are kept; `docker volume rm vexa-lite-pgdata
-vexa-lite-storagedata` to wipe). A Lite that ran MinIO copies its recordings with
-`make -C deploy/lite migrate-storage` first ([upgrade guide](../../docs/docs/upgrade-from-minio.mdx)).
+vexa-lite-storagedata` to wipe). After a MinIO upgrade, startup uses the new storage and leaves
+`vexa-lite-miniodata` untouched. Old recordings do not play back until copied with the opt-in
+`make -C deploy/lite migrate-storage` ([upgrade guide](../../docs/docs/upgrade-from-minio.mdx)).
 
 ## What's inside
 

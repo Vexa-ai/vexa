@@ -11,7 +11,7 @@ summary.json. Nothing is deleted on either side, ever.
 Configuration comes from the environment, so no secret appears in a process list:
   SRC_ENDPOINT SRC_ACCESS_KEY SRC_SECRET_KEY SRC_BUCKET    the old store (read only)
   DST_ENDPOINT DST_ACCESS_KEY DST_SECRET_KEY DST_BUCKET    the new store
-  STATE_DIR                                                manifest.jsonl, summary.json, COMPLETE
+  STATE_DIR                                                manifest.jsonl, summary.json
 
 Options: --dry-run (list and compare, copy nothing) - --reverify (re-hash verified target objects
 whose size and ETag still match the manifest) - --prefix P (only keys under P).
@@ -122,7 +122,6 @@ def main() -> int:
     state = env("STATE_DIR")
     os.makedirs(state, exist_ok=True)
     manifest_path = os.path.join(state, "manifest.jsonl")
-    complete_path = os.path.join(state, "COMPLETE")
     src, dst = client("SRC"), client("DST")
     sb, db = env("SRC_BUCKET"), env("DST_BUCKET")
 
@@ -190,8 +189,6 @@ def main() -> int:
                 say(f"{name}: {len(keys)}")
         return 0
 
-    if os.path.exists(complete_path):
-        os.remove(complete_path)  # re-earned below only if this run verifies everything again
     failed: list[dict] = []
     copied = copied_bytes = adopted = 0
     with open(manifest_path, "a") as manifest:
@@ -273,9 +270,6 @@ def main() -> int:
     }
     with open(os.path.join(state, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
-    if ok and not args.prefix:
-        with open(complete_path, "w") as f:
-            json.dump(summary, f, indent=2)
     print("COPY-SUMMARY " + json.dumps({k: summary[k] for k in ("result", "source", "target", "copied_this_run",
                                                                  "already_verified", "seconds", "adopted")}), flush=True)
     if not ok:

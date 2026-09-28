@@ -5,7 +5,7 @@
 # containers (storage = versitygw, an S3 server that keeps recordings as plain files in a volume),
 # pulls/builds the all-in-one image, runs it with the process backend, and verifies the front doors.
 # The app image is lean; postgres and storage stay external.
-.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke storage-up migrate-storage _storage-legacy-check
+.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke storage-up migrate-storage
 
 # --- Paths ---
 ROOT       := $(shell git rev-parse --show-toplevel)
@@ -45,16 +45,13 @@ STORAGE_VOLUME    ?= vexa-lite-storagedata
 MINIO_ACCESS_KEY ?= vexa-access-key
 MINIO_SECRET_KEY ?= vexa-secret-key
 MINIO_BUCKET     ?= vexa
-# Upgrading a Lite that ran the MinIO sidecar: its volume is only ever read (make migrate-storage).
-# `make up` refuses to start on the new, empty storage while that volume holds recordings that were
-# not copied; STORAGE_MIGRATION=skip starts without them (the old volume stays untouched).
+# Opt-in copy from an older Lite: only migrate-storage uses the legacy container and volume.
 LEGACY_MINIO_CONTAINER  ?= vexa-lite-minio
 LEGACY_MINIO_VOLUME     ?= vexa-lite-miniodata
 LEGACY_MINIO_IMAGE      ?=
 LEGACY_MINIO_ACCESS_KEY ?= $(MINIO_ACCESS_KEY)
 LEGACY_MINIO_SECRET_KEY ?= $(MINIO_SECRET_KEY)
 LEGACY_MINIO_BUCKET     ?= $(MINIO_BUCKET)
-STORAGE_MIGRATION ?=
 
 # --- Local CPU STT (LOCAL_STT=1) ---------------------------------------------------------------
 # Transcription in Vexa is always an external OpenAI-compatible /v1/audio/transcriptions service.
@@ -105,31 +102,6 @@ env:
 ## preflight — Docker must be up.
 preflight:
 	@docker info > /dev/null 2>&1 || { echo "ERROR: Docker is not running."; exit 1; }
-
-## _storage-legacy-check — the upgrade guard. A Lite that ran the MinIO sidecar keeps its recordings in
-## LEGACY_MINIO_VOLUME, which the new storage cannot read. Starting on the empty new storage would make
-## every old recording 404, so `up` stops and names the two ways forward, unless `make migrate-storage`
-## finished (migration-from-minio/COMPLETE in STORAGE_VOLUME) or the operator chose STORAGE_MIGRATION=skip
-## once (recorded as migration-from-minio/SKIPPED). The legacy volume is never written by this Makefile.
-_storage-legacy-check:
-	@if docker volume inspect $(LEGACY_MINIO_VOLUME) >/dev/null 2>&1; then \
-		if docker run --rm -v $(STORAGE_VOLUME):/s --entrypoint /bin/sh $(STORAGE_IMAGE) -c 'test -f /s/migration-from-minio/COMPLETE || test -f /s/migration-from-minio/SKIPPED'; then \
-			exit 0; \
-		elif [ "$(STORAGE_MIGRATION)" = "skip" ]; then \
-			docker run --rm -v $(STORAGE_VOLUME):/s --entrypoint /bin/sh $(STORAGE_IMAGE) -c 'mkdir -p /s/migration-from-minio && date -u +%FT%TZ > /s/migration-from-minio/SKIPPED'; \
-			echo "  ! Starting WITHOUT the recordings in MinIO volume $(LEGACY_MINIO_VOLUME) (STORAGE_MIGRATION=skip); that volume is untouched."; \
-		else \
-			echo ""; \
-			echo "  ✗ This machine has recordings from Lite's former MinIO sidecar (volume $(LEGACY_MINIO_VOLUME))."; \
-			echo "    Lite now stores recordings with versitygw in volume $(STORAGE_VOLUME), which does not have them yet."; \
-			echo "    Copy them first (every object is verified by SHA-256; the old volume is only read):"; \
-			echo "        make -C deploy/lite migrate-storage"; \
-			echo "    Or start without them (the old volume stays untouched):"; \
-			echo "        make -C deploy/lite up STORAGE_MIGRATION=skip"; \
-			echo "    Guide: https://docs.vexa.ai/upgrade-from-minio"; \
-			exit 1; \
-		fi; \
-	fi
 
 ## storage-up — the storage sidecar: versitygw with its POSIX backend on STORAGE_VOLUME (data/ holds the
 ## buckets as directories, iam/ the gateway's account file), then the bucket. `versitygw admin
@@ -194,7 +166,7 @@ migrate-storage: preflight storage-up
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
-up: preflight _storage-legacy-check storage-up
+up: preflight storage-up
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \

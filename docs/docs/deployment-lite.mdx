@@ -102,11 +102,10 @@ deploys are reproducible), then `make lite` again — it replaces the app contai
 sidecars and their volumes untouched. Schema converges in-process on service startup; there is no
 separate migration step.
 
-**Coming from a Lite that ran MinIO** (volume `vexa-lite-miniodata`): `make lite` stops before
-starting anything and asks you to copy the recordings first with
-`make -C deploy/lite migrate-storage`, which checks every object by SHA-256 and never deletes the
-old volume. [Upgrade from MinIO](/upgrade-from-minio) walks through it, including what to do if
-the old MinIO container is gone.
+**Coming from a Lite that ran MinIO**: old recordings stay in `vexa-lite-miniodata` and do not
+play back until copied. `make lite` starts on the new storage without inspecting the old volume.
+Run `make -C deploy/lite migrate-storage` to copy and verify objects by SHA-256; it never deletes
+the old volume. [Where your recordings live now](/upgrade-from-minio) covers the copy and rollback.
 
 ```bash
 make -C deploy/lite down                                  # containers go, volumes stay

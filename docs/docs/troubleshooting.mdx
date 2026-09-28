@@ -235,9 +235,14 @@ write is rejected, check that the dispatch's trigger is `message`/`scheduled` (w
 - `make all` brings the compose stack up health-gated; tail the logs with `make logs` or
   `docker compose -p vexa-v012 logs -f` to see which service is wedged.
 - Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
-- Wipe and restart from clean: `make down`, then `make all`. The Compose `make down` runs
-  `docker compose down -v --remove-orphans` and deletes the stack's named volumes, including
-  Postgres and storage; this removes the database and recordings in those volumes.
+- Stop and restart: `make down`, then `make all`. Compose `make down` keeps data volumes.
+  To deliberately wipe the stack, use `make -C deploy/compose destroy DESTROY=yes`, then
+  `make all`. Destroy removes the database, recordings, Redis data and agent workspaces.
+- Storage readiness failed → inspect `docker compose -p vexa-v012 logs storage-init` from
+  `deploy/compose`. The failure names the configured endpoint, bucket and failed operation.
+  Check credentials and bucket/probe permissions. After a MinIO upgrade, old recordings remain
+  in the old volume; update the endpoint and copy them with the
+  [migration tool](/upgrade-from-minio) to restore playback from the new storage.
 
 ## Scaling meeting-api to more than one replica
 

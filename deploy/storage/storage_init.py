@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
-"""Prepare the S3 store meeting-api writes to: the one-shot init for Lite and Compose storage.
+"""Prepare and verify the S3 store meeting-api writes to during Compose bring-up.
 
-Runs once per bring-up inside an image that already carries boto3 (meeting-api in Compose, the
-Lite image in Lite), so it ships no extra image. Idempotent: re-running it changes nothing.
+Runs inside the meeting-api image, which already carries boto3. Safe to re-run.
 
 1. Resolve the endpoint meeting-api will use, the way meeting-api resolves it: S3_ENDPOINT, else
    MINIO_ENDPOINT (host:port) with MINIO_SECURE.
-2. That endpoint is this stack's storage service (STORAGE_ENDPOINT) -> create the bucket if it is
-   missing.
-   It is the old MinIO service name (LEGACY_MINIO_HOST, default `minio`) -> the install was upgraded
-   but its .env still points at the MinIO it used to run. While that MinIO still answers, warn and
-   carry on (recordings keep working; nothing is split). When it does not answer, stop with the
-   upgrade steps: a stack that starts writing recordings to a store that is not there loses them.
-   Anything else is the operator's own S3: check that the bucket answers; never create or change it.
+2. Ensure the bucket exists, then PUT, GET (compare bytes), and DELETE a unique probe under
+   .vexa-storage-init/. Every endpoint must pass, including operator-managed S3 stores.
 3. Authenticated bots configured against this storage (BOT_S3_ENDPOINT on the storage host, with
    BOT_S3_ACCESS_KEY / BOT_S3_SECRET_KEY / BOT_USERDATA_S3_PATH) -> create or update that scoped
    account, attach a bucket policy that limits it to its own prefix, and prove the limit: its own
    prefix is readable and writable, everything else in the bucket is denied.
 
-Exit codes: 0 ready (or a warning printed) - 1 the stack must not start (message says why).
+Exit codes: 0 ready - 1 the stack must not start (message says why).
 """
 from __future__ import annotations
 
@@ -30,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from urllib.parse import quote, urlparse
+from uuid import uuid4
 from xml.sax.saxutils import escape
 
 import boto3
@@ -47,13 +42,13 @@ def say(msg: str) -> None:
 
 
 def endpoint_meeting_api_uses() -> str:
-    explicit = os.getenv("S3_ENDPOINT", "").strip()
+    explicit = os.getenv("S3_ENDPOINT")
     if explicit:
         return explicit
-    ep = os.getenv("MINIO_ENDPOINT", "").strip()
+    ep = os.getenv("MINIO_ENDPOINT", "minio:9000")
     if ep.startswith(("http://", "https://")):
         return ep
-    scheme = "https" if os.getenv("MINIO_SECURE", "false").strip().lower() == "true" else "http"
+    scheme = "https" if os.getenv("MINIO_SECURE", "false").lower() == "true" else "http"
     return f"{scheme}://{ep}"
 
 
@@ -104,6 +99,55 @@ def ensure_bucket(c, bucket: str) -> str:
         raise
 
 
+def check_readiness(endpoint: str, access: str, secret: str, bucket: str) -> bool:
+    """Prove bucket access and object I/O without touching any recording keys."""
+    step = "connect"
+    c = None
+    key = f".vexa-storage-init/{uuid4().hex}"
+    payload = b"vexa storage readiness"
+    probe_written = False
+    try:
+        c = client(endpoint, access, secret)
+        step = "HEAD bucket"
+        try:
+            c.head_bucket(Bucket=bucket)
+        except ClientError as e:
+            if code_of(e) not in ("404", "NoSuchBucket", "NotFound"):
+                raise
+            step = "CREATE bucket"
+            try:
+                c.create_bucket(Bucket=bucket)
+            except ClientError as e:
+                if code_of(e) != "BucketAlreadyOwnedByYou":
+                    raise
+        step = "PUT probe"
+        c.put_object(Bucket=bucket, Key=key, Body=payload)
+        probe_written = True
+        step = "GET probe"
+        body = c.get_object(Bucket=bucket, Key=key)["Body"]
+        try:
+            actual = body.read()
+        finally:
+            body.close()
+        step = "compare bytes"
+        if actual != payload:
+            raise ValueError("probe bytes differ")
+        step = "DELETE probe"
+        c.delete_object(Bucket=bucket, Key=key)
+    except (BotoCoreError, ClientError, ValueError, OSError) as e:
+        cleanup = ""
+        if probe_written and step != "DELETE probe":
+            try:
+                c.delete_object(Bucket=bucket, Key=key)
+            except (BotoCoreError, ClientError, OSError) as cleanup_error:
+                cleanup = f"; DELETE probe cleanup also failed ({code_of(cleanup_error)})"
+        say(f"STOP: endpoint {endpoint}, bucket '{bucket}', step {step} failed ({code_of(e)}){cleanup}. "
+            f"For installs upgraded from MinIO, see {UPGRADE_DOC}")
+        return False
+    say(f"Ready: endpoint {endpoint}, bucket '{bucket}'; PUT/GET bytes verified and probe deleted.")
+    return True
+
+
 # versitygw admin API: PATCH requests on the S3 port, SigV4-signed with the root key, XML bodies.
 def admin(endpoint: str, access: str, secret: str, path: str, body: bytes) -> tuple[int, str]:
     url = endpoint.rstrip("/") + path
@@ -149,11 +193,12 @@ def userdata_policy(bucket: str, prefix: str, principal: str) -> dict:
 
 
 def prove_scope(endpoint: str, ak: str, sk: str, bucket: str, prefix: str, root) -> list[str]:
-    """Own prefix: put/get/list/delete allowed. A real object under recordings/ and the bucket root: denied."""
+    """Own prefix: allowed. A probe outside it and listings of recordings/ and the bucket: denied."""
     c = client(endpoint, ak, sk)
-    other = "recordings/.vexa-scope-check"
+    nonce = uuid4().hex
+    other = f".vexa-storage-init/{nonce}/scope"
     root.put_object(Bucket=bucket, Key=other, Body=b"not yours")
-    probe = f"{prefix}/.vexa-scope-check"
+    probe = f"{prefix}/.vexa-scope-check-{nonce}"
     bad: list[str] = []
 
     def allowed(label, fn):
@@ -175,49 +220,23 @@ def prove_scope(endpoint: str, ak: str, sk: str, bucket: str, prefix: str, root)
     allowed("delete own prefix", lambda: c.delete_object(Bucket=bucket, Key=probe))
     denied("list recordings/", lambda: c.list_objects_v2(Bucket=bucket, Prefix="recordings/"))
     denied("list the whole bucket", lambda: c.list_objects_v2(Bucket=bucket))
-    denied("get an object under recordings/", lambda: c.get_object(Bucket=bucket, Key=other)["Body"].read())
-    denied("overwrite an object under recordings/", lambda: c.put_object(Bucket=bucket, Key=other, Body=b"x"))
-    denied("delete an object under recordings/", lambda: c.delete_object(Bucket=bucket, Key=other))
+    denied("get an object outside own prefix", lambda: c.get_object(Bucket=bucket, Key=other)["Body"].read())
+    denied("overwrite an object outside own prefix", lambda: c.put_object(Bucket=bucket, Key=other, Body=b"x"))
+    denied("delete an object outside own prefix", lambda: c.delete_object(Bucket=bucket, Key=other))
     if root.get_object(Bucket=bucket, Key=other)["Body"].read() != b"not yours":
-        bad.append("an object under recordings/ changed during the check")
+        bad.append("an object outside own prefix changed during the check")
     root.delete_object(Bucket=bucket, Key=other)
     return bad
 
 
 def main() -> int:
     storage_ep = os.getenv("STORAGE_ENDPOINT", "http://storage:9000").strip()
-    legacy_host = os.getenv("LEGACY_MINIO_HOST", "minio").strip().lower()
     ep = endpoint_meeting_api_uses()
     access = os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ACCESS_KEY", "")
     secret = os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_SECRET_KEY", "")
-    bucket = os.getenv("MINIO_BUCKET", "vexa")
-    host = hostport(ep)[0]
-
-    if hostport(ep) == hostport(storage_ep):
-        c = client(ep, access, secret)
-        if not wait_ready(c, f"storage at {ep}"):
-            return 1
-        say(f"bucket '{bucket}' {ensure_bucket(c, bucket)} on {ep}")
-    elif legacy_host and host == legacy_host:
-        c = client(ep, access, secret)
-        try:
-            c.head_bucket(Bucket=bucket)
-            say(f"WARNING: meeting-api still stores recordings in the old MinIO at {ep} (MINIO_ENDPOINT in .env). "
-                f"This stack no longer runs MinIO. Copy the recordings into the new storage and switch: {UPGRADE_DOC}")
-        except (ClientError, BotoCoreError) as e:
-            say(f"STOP: .env points meeting-api at the old MinIO ({ep}), which does not answer ({code_of(e)}). "
-                "This stack no longer runs MinIO, so recordings would have nowhere to go. Nothing was changed.")
-            say(f"  Keep your recordings: follow {UPGRADE_DOC} (copy them from the old MinIO volume, then set "
-                f"MINIO_ENDPOINT={urlparse(storage_ep).netloc}).")
-            say(f"  Fresh start without the old recordings: set MINIO_ENDPOINT={urlparse(storage_ep).netloc} in .env.")
-            return 1
-    else:
-        c = client(ep, access, secret)
-        try:
-            c.head_bucket(Bucket=bucket)
-            say(f"meeting-api uses your own S3 at {ep}; bucket '{bucket}' answers. The storage service is unused.")
-        except (ClientError, BotoCoreError) as e:
-            say(f"WARNING: meeting-api uses your own S3 at {ep}, but bucket '{bucket}' does not answer ({code_of(e)}).")
+    bucket = os.getenv("MINIO_BUCKET", os.getenv("RECORDING_BUCKET", "vexa"))
+    if not check_readiness(ep, access, secret, bucket):
+        return 1
 
     bot_ep = os.getenv("BOT_S3_ENDPOINT", "").strip()
     bot_ak, bot_sk = os.getenv("BOT_S3_ACCESS_KEY", "").strip(), os.getenv("BOT_S3_SECRET_KEY", "").strip()

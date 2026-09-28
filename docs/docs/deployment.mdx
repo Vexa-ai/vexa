@@ -71,11 +71,15 @@ absent).
   in the `storage-data` volume. meeting-api reaches it over S3 with the `MINIO_*` settings (the
   variable names are unchanged): `MINIO_ENDPOINT=storage:9000`, and `MINIO_ACCESS_KEY` /
   `MINIO_SECRET_KEY` are the server's root credentials, so change both before exposing the stack.
-  The one-shot `storage-init` creates the bucket. Its S3 port is published on loopback only, at
+  The one-shot `storage-init` ensures the bucket exists and verifies a PUT/GET/DELETE probe under
+  `.vexa-storage-init/` before meeting-api starts. The storage S3 port is published on loopback only, at
   `STORAGE_HOST_PORT` (default `18900`). To keep recordings in your own S3 instead, point
-  `MINIO_ENDPOINT` at it ([Configuration](/configuration#database-storage)). Back the volume up
+  `S3_ENDPOINT` (or `MINIO_ENDPOINT`) at it; the same readiness check applies
+  ([Configuration](/configuration#database-storage)). Back the volume up
   with an attribute-preserving copy ([Recordings → Backups](/how-to/recordings#backups)).
-  Upgrading a stack that ran MinIO: [Upgrade from MinIO](/upgrade-from-minio).
+  Upgrading a stack that ran MinIO: old recordings stay in the old volume and do not play back
+  from the new storage until copied with `make -C deploy/compose migrate-storage`. Update the old
+  `.env` endpoint as described in [Where your recordings live now](/upgrade-from-minio).
 - **Agent inference** — bring your own: point the agent at your endpoint so no inference leaves the
   network (`VEXA_AGENT_MODEL` / mounted credentials).
 - **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.

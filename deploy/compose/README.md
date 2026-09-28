@@ -62,8 +62,19 @@ docker compose -f deploy/compose/docker-compose.yml build
 docker compose -f deploy/compose/docker-compose.yml up -d
 # poll until healthy, then:
 curl -sf http://localhost:18056/health   # gateway
-docker compose -f deploy/compose/docker-compose.yml down -v
+docker compose -f deploy/compose/docker-compose.yml down
 ```
+
+`make -C deploy/compose down` removes containers and keeps data volumes. To deliberately delete
+the database, recordings, Redis data and agent workspaces, use
+`make -C deploy/compose destroy DESTROY=yes`. `make -C deploy/compose help` lists both commands.
+
+Storage readiness checks the same endpoint as meeting-api (`S3_ENDPOINT`, else `MINIO_ENDPOINT`
+with `MINIO_SECURE`), creates the bucket if absent, and verifies a PUT/GET/DELETE probe outside
+`recordings/`. Any failure prevents meeting-api from starting. After a MinIO upgrade, old
+recordings stay in the old volume and do not play back from the new storage until copied with
+`make -C deploy/compose migrate-storage`. Update `.env`'s old endpoint to `storage:9000` as shown
+in the [upgrade guide](../../docs/docs/upgrade-from-minio.mdx).
 
 `.env.example` documents every variable (faithful to the 0.11 `deploy/compose` names: `DB_*`,
 `REDIS_URL`, `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, `MINIO_*`, `BROWSER_IMAGE`/`AGENT_IMAGE`,

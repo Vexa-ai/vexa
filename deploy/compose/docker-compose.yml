@@ -79,12 +79,10 @@ services:
     restart: unless-stopped
 
   storage-init:
-    # One-shot and idempotent (deploy/storage/storage_init.py, run with the meeting-api image's
-    # Python + boto3, so no extra image): creates the bucket on this storage; when authenticated bots
-    # point BOT_S3_ENDPOINT here, creates their scoped account plus a bucket policy that limits it to
-    # BOT_USERDATA_S3_PATH and proves the limit. It exits 1, holding meeting-api back, when .env still
-    # points MINIO_ENDPOINT at the old `minio` service and nothing answers there — an upgraded stack
-    # must not start writing recordings to a store that is gone (docs: /upgrade-from-minio).
+    # Checks the endpoint meeting-api uses (deploy/storage/storage_init.py, with its Python + boto3):
+    # ensures the bucket exists and PUTs/GETs/DELETEs a probe under .vexa-storage-init/, comparing bytes.
+    # Any failure holds meeting-api back. When authenticated bots point BOT_S3_ENDPOINT here, also
+    # creates their scoped account and bucket policy limited to BOT_USERDATA_S3_PATH, then proves it.
     build:
       context: ../..
       dockerfile: core/meetings/services/meeting-api/Dockerfile
@@ -95,6 +93,9 @@ services:
         condition: service_healthy
     environment:
       - STORAGE_ENDPOINT=http://storage:9000
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
@@ -391,6 +392,9 @@ services:
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}

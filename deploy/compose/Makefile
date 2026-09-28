@@ -14,7 +14,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down build ps logs bot _preflight _bot_check _creds_check _access migrate-storage
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access migrate-storage
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -241,8 +241,25 @@ migrate-storage:
 	TOOLS_DIR=$(REPO_ROOT)/deploy/storage NAME_PREFIX=$(PROJECT) RETRY_HINT="make -C deploy/compose migrate-storage" \
 	COPY_ARGS="$(COPY_ARGS)" $(REPO_ROOT)/deploy/storage/migrate-from-minio.sh
 
+## down — remove containers and the network; keep all data volumes.
 down:
+	$(COMPOSE) down --remove-orphans
+
+## destroy — explicitly delete this stack's data volumes, including the database and recordings.
+destroy:
+ifeq ($(DESTROY),yes)
 	$(COMPOSE) down -v --remove-orphans
+	@echo "Deleted stack volumes: $(PROJECT)_redis-data $(PROJECT)_postgres-data $(PROJECT)_storage-data $(PROJECT)_agent-workspaces"
+else
+	@echo "Refusing to delete data volumes. Use make destroy DESTROY=yes to delete the database, recordings, Redis data and agent workspaces."
+	@exit 1
+endif
+
+help:
+	@echo "  make up                         # pull and start the stack"
+	@echo "  make down                       # stop/remove containers; keep data volumes"
+	@echo "  make destroy DESTROY=yes        # delete stack data volumes (database, recordings, Redis, agent workspaces)"
+	@echo "  make migrate-storage            # copy and verify recordings from an older MinIO install"
 
 ## _access — wait for admin-api, mint the self-host API key, print it + the URLs (used by `up`).
 _access:
