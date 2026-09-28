@@ -17,8 +17,8 @@ pull, and CI's runtime lanes have failed at the MinIO download since 2026-09-13.
 
 ## Decision
 
-1. One storage interface and one implementation: S3. No application code or sealed contract
-   changes; meeting-api and the bots keep their `MINIO_*` and `BOT_S3_*` variables.
+1. One storage interface and one implementation: S3. No application code or API contract changes;
+   meeting-api and the bots keep their `MINIO_*` and `BOT_S3_*` variables.
 2. Lite and Compose run **versitygw** (Apache-2.0) with its POSIX backend as the storage sidecar,
    pinned by digest. Objects are plain files in a local volume, with metadata in extended
    attributes.
@@ -27,16 +27,18 @@ pull, and CI's runtime lanes have failed at the MinIO download since 2026-09-13.
    the chart ships no evaluation store. A stale `minio.enabled: true` fails with an upgrade message;
    the chart never falls back to pod-local storage.
 4. Hosted production keeps its existing object storage.
-5. Existing installs keep their data where it is. An upgrade never writes or deletes the old MinIO
-   volume or PVC, and the start path carries no migration logic. Old recordings do not play back
+5. Existing installs keep their data where it is. An upgrade never deletes the old MinIO volume or
+   PVC, and never writes to it unless `.env` still points at a running old MinIO, which the start-up
+   warning names. The start path carries no migration logic. Old recordings do not play back
    until the operator copies them: on Lite and Compose with the opt-in script
    (`make migrate-storage`), which verifies every object by SHA-256 and deletes nothing; on Helm
    with the steps in the Kubernetes guide. The upgrade guide says where recordings live now.
 6. Every Compose start checks the store meeting-api will use: the bucket, then PUT, GET (bytes
    compared) and DELETE of a probe outside the recordings prefix. Any failure stops the stack before
-   meeting-api starts. Compose and Lite print one WARNING line at every start while recordings go to
-   a store other than the bundled one.
-7. `make down` keeps data volumes. Deleting them is `make destroy DESTROY=yes`.
+   meeting-api starts, and `make up` prints the failing step. `make up`, `make dev` and `make lite`
+   print one WARNING line at every start while recordings go to a store other than the bundled one.
+7. Compose's `make down` keeps data volumes; deleting them is `make destroy DESTROY=yes`. Lite's
+   `down` already kept its volumes.
 8. Nothing Vexa ships references a MinIO image. The `minio/minio` and `minio/mc` entries leave
    `image-licenses.json`, versitygw is recorded as Category A, and the image-licence gate also scans
    the image variables in the Lite Makefile.
