@@ -161,13 +161,46 @@ def test_target_changes_are_preserved(copy_run, new_data, args, capsys):
     capsys.readouterr()
     assert c.run(*args) == 0
     assert c.dst.objects.get(key) == new_data
-    assert key not in c.dst.reads
+    assert c.dst.reads.count(key) == int(new_data is not None and len(new_data) == original["dst_size"])
     assert len(c.dst.uploads) == 5
     assert c.manifest()[key] == original
     c.assert_report(report, [key])
     output = capsys.readouterr().out
     assert f"{report}: 1" in output
     assert "1 changed or deleted in the new storage" in output
+
+
+@pytest.mark.parametrize("args", [(), ("--reverify",)])
+@pytest.mark.parametrize("same_bytes", [True, False])
+def test_changed_etag_is_checked_against_verified_bytes(copy_run, args, same_bytes):
+    c, key = copy_run, "recordings/0"
+    assert c.run() == 0
+    original = c.manifest()[key]
+    manifest_path = c.state / "manifest.jsonl"
+    before = manifest_path.read_text()
+    if not same_bytes:
+        c.dst.objects[key] = b"edited!"
+    c.dst.listing_overrides[key] = {"ETag": '"new-etag"'}
+    c.src.reads.clear()
+    c.dst.reads.clear()
+
+    assert c.run(*args) == 0
+    assert c.dst.reads.count(key) == 1
+    assert c.src.reads == []
+    assert len(c.dst.uploads) == 5
+    assert c.summary()["copied_bytes_this_run"] == c.summary()["adopted"] == 0
+    c.assert_report("changed_in_target_after_copy", [] if same_bytes else [key])
+    if same_bytes:
+        corrected = {**original, "dst_etag": "new-etag"}
+        assert c.manifest()[key] == corrected
+        assert manifest_path.read_text() == before + json.dumps(corrected) + "\n"
+        c.dst.reads.clear()
+        assert c.run() == 0
+        assert c.dst.reads == []
+        assert manifest_path.read_text() == before + json.dumps(corrected) + "\n"
+    else:
+        assert manifest_path.read_text() == before
+        assert c.dst.objects[key] == b"edited!"
 
 
 @pytest.mark.parametrize("new_data", [b"source!", b"new source recording"])

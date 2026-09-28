@@ -167,7 +167,10 @@ def main() -> int:
             if t is None:
                 reports["deleted_in_target_after_copy"].append(key)
             elif not target_matches(v, t):
-                reports["changed_in_target_after_copy"].append(key)
+                if v.get("dst_etag") is not None and v.get("dst_size") == t["size"]:
+                    todo.append((key, "refresh-etag"))
+                else:
+                    reports["changed_in_target_after_copy"].append(key)
             elif args.reverify:
                 todo.append((key, "reverify"))
         elif v is not None:
@@ -179,7 +182,7 @@ def main() -> int:
             todo.append((key, "adopt" if t is not None else "copy"))
     say(f"to copy: {sum(action == 'copy' for _, action in todo)} · "
         f"to compare for adoption: {sum(action == 'adopt' for _, action in todo)} · "
-        f"to reverify: {sum(action == 'reverify' for _, action in todo)} · already verified: {skipped}")
+        f"to reverify: {sum(action in ('reverify', 'refresh-etag') for _, action in todo)} · already verified: {skipped}")
     if args.dry_run:
         for key, action in todo[:50]:
             label = "compare for adoption" if action == "adopt" else action
@@ -195,6 +198,16 @@ def main() -> int:
         for i, (key, action) in enumerate(todo, 1):
             s = source[key]
             try:
+                if action == "refresh-etag":
+                    dst_sha, m = sha_of(dst, db, key)
+                    if (dst_sha, m) != (verified[key]["sha256"], verified[key]["dst_size"]):
+                        reports["changed_in_target_after_copy"].append(key)
+                        continue
+                    rec = {**verified[key], "dst_etag": target[key]["etag"]}
+                    manifest.write(json.dumps(rec) + "\n")
+                    manifest.flush()
+                    verified[key] = rec
+                    continue
                 if action == "reverify":
                     dst_sha, m = sha_of(dst, db, key)
                     if (dst_sha, m) != (verified[key]["sha256"], verified[key]["dst_size"]):

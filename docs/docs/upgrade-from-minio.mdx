@@ -5,8 +5,11 @@ description: "Find recordings from an older MinIO install and copy them into Lit
 
 Lite and Compose now store new recordings in **versitygw**, in a new volume. If you upgraded
 from MinIO, your old recordings stay in the old MinIO volume and **do not play back until copied**
-to the new storage. Starting or stopping this release leaves that old volume untouched; it does
-not copy or delete your old recordings. Use the opt-in script below to copy them.
+to the new storage: the API answers HTTP 500 until they are copied. This release never writes
+the old volume itself and does not copy or delete your old recordings. However, if Compose's
+`.env` still has `MINIO_ENDPOINT=minio:9000` and the old MinIO container is running, meeting-api
+keeps writing **new recordings to the old MinIO volume**. Change `.env` before starting, as
+shown below. Use the opt-in script to copy the old recordings.
 
 ## Find your recordings
 
@@ -87,6 +90,9 @@ Confirm `MINIO_ENDPOINT=storage:9000`. If the old value is quoted, includes a UR
 an inline comment, edit that line to this value manually. `S3_ENDPOINT`, when nonempty, takes
 precedence: clear it to use `MINIO_ENDPOINT`, or keep it if you intend to use your own S3 store.
 The bot edit applies only to the in-stack MinIO endpoint; keep an external bot store as configured.
+Check the startup line from storage-init: `Ready: endpoint …` must name the new storage
+(`Ready: endpoint http://storage:9000` for the default stack). A line naming
+`http://minio:9000` means the stack is still using the old MinIO.
 
 Compose leaves the old MinIO container running as an orphan on `make up`; the copy reads through
 it. The new storage publishes `127.0.0.1:18900`, so it can run alongside MinIO's port `9000`.
@@ -129,6 +135,10 @@ what is missing; it does not copy or delete recordings. You need a MinIO server 
 that can open the old volume. If no old volume exists, the tool reports nothing to migrate.
 
 ## Stop the stack or retire MinIO
+
+**Never remove the old MinIO container or its volume until the script's last run ends with
+VERIFIED.** The script also copies recordings written to the old MinIO after the upgrade;
+switch endpoints and rerun it to capture those recordings before retiring MinIO.
 
 Compose `make down` removes containers (including orphans) and keeps data volumes. Lite
 `make -C deploy/lite down` keeps data volumes too. Compose's separate

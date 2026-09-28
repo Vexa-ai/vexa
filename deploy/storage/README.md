@@ -26,13 +26,22 @@ up with an attribute-preserving copy (`rsync -aX`, `cp -a`); a plain copy keeps 
 that metadata. One S3 rule follows from files: a key and a "folder" of the same name
 (`a/b` and `a/b/c`) cannot both exist. Vexa's keys never do that.
 
-Startup does not inspect migration receipts or old volumes. Old recordings stay in the MinIO
-volume and do not play back from the new storage until copied. Operator guide:
+Startup does not inspect migration receipts or write the old volume itself. If Compose's `.env`
+still has `MINIO_ENDPOINT=minio:9000` and the old MinIO is running, meeting-api keeps writing new
+recordings there. Change `.env` first and check that storage-init's `Ready: endpoint …` line
+names the new storage. Old recordings stay in the MinIO volume and do not play back until copied
+to the new storage (the API answers HTTP 500). Operator guide:
 [Where your recordings live now](../../docs/docs/upgrade-from-minio.mdx).
+
+Never remove the old MinIO container or its volume until the script's last run ends with
+**VERIFIED**. The script also copies recordings written to the old MinIO after the upgrade;
+switch endpoints and rerun it before retiring MinIO. Review reported conflicts and check playback.
 
 Copy tests: [tests/README.md](tests/README.md). The summary reports
 `changed_in_target_after_copy`, `deleted_in_target_after_copy`, `changed_on_both_sides`, and
 `deleted_at_source_after_copy` (up to 1000 keys each; stdout gives each full count).
 These reports do not fail the run: completion requires every source key to be verified against
 its current source state or explicitly reported, with no verification failures. `--reverify`
-hashes only previously verified target objects whose size and ETag still match the manifest.
+hashes previously verified target objects whose size and ETag still match the manifest.
+When only a verified target's ETag differs, the script hashes it even without `--reverify`:
+identical bytes update the manifest's ETag; different bytes are reported as changed.
