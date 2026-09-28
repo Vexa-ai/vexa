@@ -59,8 +59,9 @@ profile-gated, with Postgres, Valkey
 and versitygw storage), and **Helm** (7 Deployments and 1 StatefulSet, requesting **1.45 vCPU / 3.75 GiB** in
 total before a meeting runs — 1.15 vCPU / 3 GiB if you bring your own datastores; recordings always
 go to your own S3 bucket). Those counts are
-commands, not claims: `docker compose config --services` and `helm template` produce them on a clean
-clone. `make probe` then runs the whole journey — spawn → join → transcribe → live-view → stop — in
+commands, not claims: `docker compose config --services` and `helm template` (with the placeholder
+values on the [evaluation page](/architecture/evaluation)) produce them on a clean clone.
+`make probe` then runs the whole journey — spawn → join → transcribe → live-view → stop — in
 nine stages with a per-stage verdict, against any of the three. What we do **not** ship: a backup or
 DR procedure, an automated upgrade path, or a published hardware minimum for Lite and Kubernetes.
 Those are real operator costs and they are enumerated, with the rest, on

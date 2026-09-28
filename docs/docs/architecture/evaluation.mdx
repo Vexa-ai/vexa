@@ -44,7 +44,7 @@ This is usually the first question, so here is the whole path with nothing elide
 | Recordings | bot chunks → meeting-api stitches → S3 (versitygw in Lite and Compose) |
 
 **At rest:** Postgres holds users, tokens, meetings, transcripts. The S3 store (versitygw in Lite and
-Compose; the chart's MinIO or your own S3 under Helm) holds recordings and authenticated-bot browser
+Compose; your own S3 under Helm) holds recordings and authenticated-bot browser
 profiles; agent workspaces sit on a volume. Redis holds the streams and the bot command bus.
 
 ### The egress answer, precisely

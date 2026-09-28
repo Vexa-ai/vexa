@@ -7,8 +7,9 @@
   volume. An ETag-only change with identical bytes updates the manifest without a false report.
   Compose checks its configured
   recording endpoint with a bucket check and a PUT/GET/DELETE probe before meeting-api starts;
-  update an old `.env` endpoint to `MINIO_ENDPOINT=storage:9000` before starting and check that
-  storage-init's `Ready: endpoint …` line names the new storage. Never remove the old MinIO
+  update an old `.env` endpoint to `MINIO_ENDPOINT=storage:9000` before starting; `make up` then
+  prints no storage line for the bundled store, a WARNING line naming any other store, or the STOP
+  line if the store did not answer. Never remove the old MinIO
   container or its volume until the script's last run ends with **VERIFIED**; reruns also copy
   recordings written to the old MinIO after the upgrade. Compose
   `make down` keeps data volumes; `make destroy DESTROY=yes` explicitly deletes the current

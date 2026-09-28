@@ -8,3 +8,4 @@ Dependencies: pytest and the copy tool's boto3/botocore; no S3 service or Docker
 bucket creation, verified probe I/O, failures that prevent startup, and probes outside recordings.
 
 Run from the repository root with `python -m pytest -q deploy/storage/tests`.
+CI runs the suite through `gate:python`.

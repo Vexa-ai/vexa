@@ -544,10 +544,14 @@ function gateImageLicenses() {
 
   const liteMakefile = join(ROOT, "deploy", "lite", "Makefile");
   if (existsSync(liteMakefile)) {
+    // Scan ?=, :=, ::=, = with optional export/override; not target-specific assignments, define blocks or \-continued values.
     for (const line of readFileSync(liteMakefile, "utf8").split(/\r?\n/)) {
       if (line.startsWith("\t")) continue;
-      const assignment = line.match(/^[ \t]*[A-Za-z_][A-Za-z0-9_]*_IMAGE[ \t]*(?:\?=|::?=|=)[ \t]*([^\s#]+)/);
-      if (assignment) recordImage(assignment[1], rel(liteMakefile));
+      const assignment = line.match(/^[ \t]*(?:(?:export|override)[ \t]+)*[A-Za-z_][A-Za-z0-9_]*_IMAGE[ \t]*(?:\?=|::?=|=)[ \t]*([^\s#]+)/);
+      if (assignment) {
+        const value = assignment[1];
+        recordImage(/[/@:$]/.test(value) ? value : `${value}:latest`, rel(liteMakefile));
+      }
     }
   }
 

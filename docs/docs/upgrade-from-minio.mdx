@@ -38,6 +38,9 @@ passes readiness, whenever its host or port differs from the bundled storage:
 [storage-init] WARNING: recordings go to <endpoint> (bucket '<bucket>'), not the bundled storage at <storage_endpoint>. Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio
 ```
 
+If the configured store does not answer, `make up` and `make dev` stop and print storage-init's
+`STOP:` line instead.
+
 Lite prints this line at the end of `up` (also part of `make lite`) whenever `.env` has a
 non-empty `S3_ENDPOINT`:
 
@@ -112,9 +115,11 @@ Confirm `MINIO_ENDPOINT=storage:9000`. If the old value is quoted, includes a UR
 an inline comment, edit that line to this value manually. `S3_ENDPOINT`, when nonempty, takes
 precedence: clear it to use `MINIO_ENDPOINT`, or keep it if you intend to use your own S3 store.
 The bot edit applies only to the in-stack MinIO endpoint; keep an external bot store as configured.
-Check the startup line from storage-init: `Ready: endpoint …` must name the new storage
-(`Ready: endpoint http://storage:9000` for the default stack). A line naming
-`http://minio:9000` means the stack is still using the old MinIO.
+Then run `make up`. With the bundled storage it prints no storage line. A `[storage-init] WARNING:`
+line naming `http://minio:9000` means the stack is still using the old MinIO; a `[storage-init] STOP:`
+line means the configured store did not answer and meeting-api was not started.
+`docker compose -p vexa-v012 logs storage-init` shows the whole check, which ends in
+`Ready: endpoint http://storage:9000` for the default stack.
 
 Compose leaves the old MinIO container running as an orphan on `make up`; the copy reads through
 it. The new storage publishes `127.0.0.1:18900`, so it can run alongside MinIO's port `9000`.

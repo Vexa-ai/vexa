@@ -196,12 +196,29 @@ test("image-licenses vacuity: the committed tree (Valkey everywhere) is green", 
   assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
 });
 
-test("image-licenses RED: an undeclared Lite Makefile image variable reds", () => {
-  const r = withEdited(LITE_MAKEFILE, /$/, "\nEVIL_IMAGE ?= evil/agpl-thing:1.0\n",
+for (const assignment of [
+  "EVIL_IMAGE ?= evil/agpl-thing:1.0",
+  "EVIL_IMAGE := evil/agpl-thing:1.0",
+  "EVIL_IMAGE = evil/agpl-thing:1.0",
+  "export EVIL_IMAGE ?= evil/agpl-thing:1.0",
+  "override EVIL_IMAGE := evil/agpl-thing:1.0",
+]) {
+  test(`image-licenses RED: an undeclared Lite Makefile image variable reds (${assignment})`, () => {
+    const r = withEdited(LITE_MAKEFILE, /$/, `\n${assignment}\n`,
+      () => runGate("image-licenses"));
+    assert.equal(r.green, false, "an undeclared Lite image variable passed the gate");
+    assert.match(r.out, /undeclared pinned image/);
+    assert.match(r.out, /evil\/agpl-thing/);
+    assert.match(r.out, /deploy\/lite\/Makefile/);
+  });
+}
+
+test("image-licenses RED: an undeclared bare Lite Makefile image name reds", () => {
+  const r = withEdited(LITE_MAKEFILE, /$/, "\nEVIL_IMAGE ?= evilbare\n",
     () => runGate("image-licenses"));
-  assert.equal(r.green, false, "an undeclared Lite image variable passed the gate");
+  assert.equal(r.green, false, "an undeclared bare Lite image name passed the gate");
   assert.match(r.out, /undeclared pinned image/);
-  assert.match(r.out, /evil\/agpl-thing/);
+  assert.match(r.out, /evilbare/);
   assert.match(r.out, /deploy\/lite\/Makefile/);
 });
 

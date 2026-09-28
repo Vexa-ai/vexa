@@ -1,3 +1,5 @@
+LITE_MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
+
 # =============================================================================
 # Vexa Lite (v0.12) — single-container build + deploy
 # =============================================================================
@@ -225,15 +227,18 @@ up: preflight storage-up
 	echo "  Waiting for the gateway (up to 3 min)..."; \
 	for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_GATEWAY_PORT)/health 2>/dev/null && break; sleep 5; done; \
 	echo "  ✓ Vexa Lite running"
-	@$(MAKE) --no-print-directory storage-where
+	@$(MAKE) --no-print-directory -f $(LITE_MAKEFILE) storage-where
 
 ## storage-where — report an explicit recording store without requiring Docker.
 storage-where:
-	@envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
-	endpoint=$$(envv S3_ENDPOINT); \
+	@endpoint=$$(awk '/^[[:space:]]*S3_ENDPOINT=/ { sub(/^[^=]*=/, ""); sub(/\r$$/, ""); value=$$0 } END { print value }' "$(ENV_FILE)" 2>/dev/null); \
 	if [ -n "$$endpoint" ]; then \
-		printf '%s\n' "WARNING: recordings go to $$endpoint (S3_ENDPOINT in $(ENV_FILE)), not the bundled storage ($(STORAGE_CONTAINER)). Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio"; \
-	fi
+		host=$$(printf '%s' "$$endpoint" | sed -E 's|^[^:/]+://||; s|[:/].*$$||' | tr '[:upper:]' '[:lower:]'); \
+		bundled=$$(printf '%s' '$(STORAGE_CONTAINER)' | tr '[:upper:]' '[:lower:]'); \
+		if [ "$$host" != "$$bundled" ]; then \
+			printf '%s\n' "WARNING: recordings go to $$endpoint (S3_ENDPOINT in $(ENV_FILE)), not the bundled storage ($(STORAGE_CONTAINER)). Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio"; \
+		fi; \
+	fi; true
 
 ## init-db — schema converges on each service's startup (admin/meeting ensure_schema); no-op hook.
 init-db:

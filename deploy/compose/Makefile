@@ -77,7 +77,7 @@ up:
 	 _bi=$$(grep -E '^BROWSER_IMAGE=' .env | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
 	 _bi=$$(printf '%s' "$$_bi" | sed "s/\$${IMAGE_TAG}/$$_tag/; s/\$$IMAGE_TAG/$$_tag/"); \
 	 case "$$_bi" in vexaai/*) docker pull "$$_bi";; esac
-	$(COMPOSE) up -d --no-build
+	$(COMPOSE) up -d --no-build || { $(MAKE) --no-print-directory _storage_note; exit 1; }
 	@$(MAKE) --no-print-directory _storage_note
 	@$(MAKE) --no-print-directory _bot_check
 	@$(MAKE) --no-print-directory _creds_check
@@ -89,7 +89,7 @@ up:
 dev:
 	@$(MAKE) --no-print-directory _preflight
 	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
-	IMAGE_TAG=dev $(COMPOSE) up -d --build
+	IMAGE_TAG=dev $(COMPOSE) up -d --build || { $(MAKE) --no-print-directory _storage_note; exit 1; }
 	@$(MAKE) --no-print-directory _storage_note
 	@# Every remaining step must RUN and the target must exit non-zero naming EVERY gap. A failed
 	@# agent-worker build (a transient apt flake, #716) must NOT abort BEFORE the bot-image check —
@@ -106,9 +106,9 @@ dev:
 	   exit 1; \
 	 fi
 
-## _storage_note — surface the latest storage warning without failing startup if logs are unavailable.
+## _storage_note — surface the latest storage WARNING or STOP without failing if logs are unavailable.
 _storage_note:
-	@$(COMPOSE) logs --no-log-prefix --tail 20 storage-init 2>/dev/null | grep -F '[storage-init] WARNING:' | tail -n 1 || true
+	@$(COMPOSE) logs --no-log-prefix --tail 20 storage-init 2>/dev/null | grep -E '^\[storage-init\] (WARNING|STOP):' | tail -n 1 || true
 
 ## digest-audit — the #569 negative control: every vexaai/*:$IMAGE_TAG image on this host must
 ## carry a RepoDigest (= came from the registry). A locally-built image has NO RepoDigest, so a

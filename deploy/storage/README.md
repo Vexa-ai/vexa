@@ -28,8 +28,9 @@ that metadata. One S3 rule follows from files: a key and a "folder" of the same 
 
 Startup does not inspect migration receipts or write the old volume itself. If Compose's `.env`
 still has `MINIO_ENDPOINT=minio:9000` and the old MinIO is running, meeting-api keeps writing new
-recordings there. Change `.env` first and check that storage-init's `Ready: endpoint …` line
-names the new storage. Old recordings stay in the MinIO volume and do not play back until copied
+recordings there. Change `.env` first; `make up` then prints no storage line for the bundled store,
+a WARNING line naming any other store, or the STOP line if the store did not answer.
+Old recordings stay in the MinIO volume and do not play back until copied
 to the new storage (the API answers HTTP 500). Operator guide:
 [Where your recordings live now](../../docs/docs/upgrade-from-minio.mdx).
 
