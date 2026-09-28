@@ -5,7 +5,7 @@
 # containers (storage = versitygw, an S3 server that keeps recordings as plain files in a volume),
 # pulls/builds the all-in-one image, runs it with the process backend, and verifies the front doors.
 # The app image is lean; postgres and storage stay external.
-.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke storage-up migrate-storage
+.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke storage-up storage-where migrate-storage
 
 # --- Paths ---
 ROOT       := $(shell git rev-parse --show-toplevel)
@@ -76,6 +76,7 @@ help:
 	@echo "  make -C deploy/lite all     # provision + run + verify (this is `make lite` from root)"
 	@echo "  make -C deploy/lite down    # stop + remove app + sidecars"
 	@echo "  make -C deploy/lite migrate-storage  # copy recordings from a pre-versitygw (MinIO) Lite, verified"
+	@echo "  make -C deploy/lite storage-where    # warn if .env selects an S3 endpoint"
 	@echo "  make -C deploy/lite build   # build the image locally (tagged :dev)"
 	@echo "  make -C deploy/lite push    # multi-arch build+push, move the 'dev' tag"
 	@echo "  make -C deploy/lite test    # probe the front doors"
@@ -223,6 +224,15 @@ up: preflight storage-up
 	echo "  Waiting for the gateway (up to 3 min)..."; \
 	for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_GATEWAY_PORT)/health 2>/dev/null && break; sleep 5; done; \
 	echo "  ✓ Vexa Lite running"
+	@$(MAKE) --no-print-directory storage-where
+
+## storage-where — report an explicit recording store without requiring Docker.
+storage-where:
+	@envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	endpoint=$$(envv S3_ENDPOINT); \
+	if [ -n "$$endpoint" ]; then \
+		printf '%s\n' "WARNING: recordings go to $$endpoint (S3_ENDPOINT in $(ENV_FILE)), not the bundled storage ($(STORAGE_CONTAINER)). Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio"; \
+	fi
 
 ## init-db — schema converges on each service's startup (admin/meeting ensure_schema); no-op hook.
 init-db:

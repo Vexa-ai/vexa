@@ -237,6 +237,9 @@ def main() -> int:
     bucket = os.getenv("MINIO_BUCKET", os.getenv("RECORDING_BUCKET", "vexa"))
     if not check_readiness(ep, access, secret, bucket):
         return 1
+    if hostport(ep) != hostport(storage_ep):
+        say(f"WARNING: recordings go to {ep} (bucket '{bucket}'), not the bundled storage at {storage_ep}. "
+            f"Expected if that is your own S3; if this install was upgraded from MinIO, see {UPGRADE_DOC}")
 
     bot_ep = os.getenv("BOT_S3_ENDPOINT", "").strip()
     bot_ak, bot_sk = os.getenv("BOT_S3_ACCESS_KEY", "").strip(), os.getenv("BOT_S3_SECRET_KEY", "").strip()

@@ -29,6 +29,27 @@ versitygw speaks S3 and keeps object metadata in extended attributes. Back up it
 an attribute-preserving copy (`rsync -aX`, `cp -a`). MinIO's volume is not a directory of plain
 S3 objects: copying its files directly into versitygw is not a migration.
 
+## The storage warning at start-up
+
+Compose prints this line in `make up` and `make dev` after the configured recording store
+passes readiness, whenever its host or port differs from the bundled storage:
+
+```text
+[storage-init] WARNING: recordings go to <endpoint> (bucket '<bucket>'), not the bundled storage at <storage_endpoint>. Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio
+```
+
+Lite prints this line at the end of `up` (also part of `make lite`) whenever `.env` has a
+non-empty `S3_ENDPOINT`:
+
+```text
+WARNING: recordings go to <endpoint> (S3_ENDPOINT in <env_file>), not the bundled storage (<storage_container>). Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio
+```
+
+The warning repeats on every start while that configuration remains; it does not block startup
+or migrate recordings. If it names your own S3, there is nothing to do. If it names
+`http://minio:9000` in Compose or an old MinIO address, your `.env` still points at the old MinIO
+and new recordings are going there. Change `.env` as shown below and restart.
+
 ## Copy the old recordings
 
 The standalone tool is `deploy/storage/migrate-from-minio.sh`, invoked by `make migrate-storage`
@@ -53,15 +74,16 @@ failures; it can include conflicts. Review the report and play old recordings be
 
 ### Lite
 
-From the repository root, after checking out the new release:
+From the repository root, after checking out the new release, clear `S3_ENDPOINT` in `.env`
+if it points at the old MinIO (`S3_ENDPOINT=`). Then start and copy:
 
 ```bash
 make lite
 make -C deploy/lite migrate-storage
 ```
 
-`make lite` starts `vexa-lite-storage` and the app on the new storage. The copy reads through
-`vexa-lite-minio` if it is running. Otherwise it starts a temporary MinIO on the old volume
+With `S3_ENDPOINT` empty or absent, `make lite` starts `vexa-lite-storage` and the app on the
+new storage. The copy reads through `vexa-lite-minio` if it is running. Otherwise it starts a temporary MinIO on the old volume
 using the stopped container's image, then removes the temporary container after the copy.
 You can run the copy before switching the app, too; repeat it after switching to capture any
 recordings the old app wrote between the first copy and the switch.

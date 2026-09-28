@@ -90,6 +90,39 @@ def test_endpoint_resolution(monkeypatch, env, expected):
     assert storage_init.endpoint_meeting_api_uses() == expected
 
 
+@pytest.mark.parametrize("env,warning_endpoint", [
+    ({}, None),
+    ({"S3_ENDPOINT": "https://s3.example.com"}, "https://s3.example.com"),
+    ({"MINIO_ENDPOINT": "minio:9000"}, "http://minio:9000"),
+    ({"S3_ENDPOINT": "http://STORAGE:9000"}, None),
+    ({"S3_ENDPOINT": "http://storage:9001"}, "http://storage:9001"),
+])
+def test_storage_warning_on_every_run(store, monkeypatch, capsys, env, warning_endpoint):
+    monkeypatch.setenv("STORAGE_ENDPOINT", "http://storage:9000")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    for _ in range(2):
+        assert storage_init.main() == 0
+        warnings = [line for line in capsys.readouterr().out.splitlines() if "WARNING" in line]
+        if warning_endpoint is None:
+            assert warnings == []
+        else:
+            assert warnings == [
+                f"[storage-init] WARNING: recordings go to {warning_endpoint} (bucket 'test-recordings'), "
+                "not the bundled storage at http://storage:9000. Expected if that is your own S3; "
+                f"if this install was upgraded from MinIO, see {storage_init.UPGRADE_DOC}"
+            ]
+
+
+def test_readiness_failure_stops_without_warning(store, monkeypatch, capsys):
+    monkeypatch.setenv("S3_ENDPOINT", "https://s3.example.com")
+    store.fail = "PUT probe"
+    assert storage_init.main() == 1
+    output = capsys.readouterr().out
+    assert "[storage-init] STOP:" in output
+    assert "WARNING" not in output
+
+
 @pytest.mark.parametrize("endpoint", ["http://storage:9000", "http://minio:9000", "https://s3.invalid"])
 def test_unreachable_endpoint_fails_closed(store, monkeypatch, capsys, endpoint):
     monkeypatch.setenv("S3_ENDPOINT", endpoint)

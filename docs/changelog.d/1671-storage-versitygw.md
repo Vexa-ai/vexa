@@ -13,3 +13,5 @@
   recordings written to the old MinIO after the upgrade. Compose
   `make down` keeps data volumes; `make destroy DESTROY=yes` explicitly deletes the current
   stack's volumes. See [Where your recordings live now](/upgrade-from-minio).
+- Compose startup prints a WARNING when the ready recording endpoint differs from bundled storage;
+  Lite startup prints one when `.env` sets a non-empty `S3_ENDPOINT`. Each names the store and links the upgrade guide.

@@ -14,7 +14,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access migrate-storage
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -78,6 +78,7 @@ up:
 	 _bi=$$(printf '%s' "$$_bi" | sed "s/\$${IMAGE_TAG}/$$_tag/; s/\$$IMAGE_TAG/$$_tag/"); \
 	 case "$$_bi" in vexaai/*) docker pull "$$_bi";; esac
 	$(COMPOSE) up -d --no-build
+	@$(MAKE) --no-print-directory _storage_note
 	@$(MAKE) --no-print-directory _bot_check
 	@$(MAKE) --no-print-directory _creds_check
 	@$(MAKE) --no-print-directory _access
@@ -89,6 +90,7 @@ dev:
 	@$(MAKE) --no-print-directory _preflight
 	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
 	IMAGE_TAG=dev $(COMPOSE) up -d --build
+	@$(MAKE) --no-print-directory _storage_note
 	@# Every remaining step must RUN and the target must exit non-zero naming EVERY gap. A failed
 	@# agent-worker build (a transient apt flake, #716) must NOT abort BEFORE the bot-image check —
 	@# that is exactly how a stack came up "healthy" but spawned dead bots with no signal (#718 C4).
@@ -103,6 +105,10 @@ dev:
 	   echo "  The stack is up, but spawned bots may fail to start until every item above is resolved."; \
 	   exit 1; \
 	 fi
+
+## _storage_note — surface the latest storage warning without failing startup if logs are unavailable.
+_storage_note:
+	@$(COMPOSE) logs --no-log-prefix --tail 20 storage-init 2>/dev/null | grep -F '[storage-init] WARNING:' | tail -n 1 || true
 
 ## digest-audit — the #569 negative control: every vexaai/*:$IMAGE_TAG image on this host must
 ## carry a RepoDigest (= came from the registry). A locally-built image has NO RepoDigest, so a
