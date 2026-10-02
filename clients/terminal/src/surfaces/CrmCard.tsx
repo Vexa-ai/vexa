@@ -3,11 +3,11 @@ import { MdxDoc } from "../ui-kit/MdxDoc";
 import { type as ty } from "../minutes/tokens";
 export type CardField = {field: string; label?: string; format?: string; currency?: string};
 export type CardLayout = {title_field?: string; sections: {title: string; fields: CardField[]}[]; show_narrative?: boolean; show_related?: boolean};
-export type CardRecord = {id: string; object_type: string; revision: number; sources?: {system: string; source_id: string}[]; fields: Record<string, unknown>; narrative: string | null; links?: {field: string; record_id: string; label: string}[]; card?: {version: number; layout: CardLayout | null}};
+export type CardRecord = {id: string; object_type: string; revision: number; sources?: {system: string; source_id: string}[]; fields: Record<string, unknown>; narrative: string | null; links?: {field: string; record_id: string; object_type?: string; label: string}[]; card?: {version: number; layout: CardLayout | null}};
 export function fieldLabel(name: string) {return name.replace(/__c$/, "").replace(/_/g," ").replace(/([a-z])([A-Z])/g,"$1 $2").replace(/Id$/, "").trim();}
 const technical = /^(Id|OwnerId|CreatedById|LastModifiedById|RecordTypeId|IsDeleted|SystemModstamp|CreatedDate|LastModifiedDate)$/;
 function defaultLayout(record: CardRecord): CardLayout {
-  const fields = Object.keys(record.fields).filter(f => !technical.test(f) && !['Name','Subject','Description'].includes(f) && record.fields[f] !== null);
+  const fields = Object.keys(record.fields).filter(f => !technical.test(f) && !['Name','name','Subject','FirstName','LastName','Description'].includes(f) && record.fields[f] !== null && record.fields[f] !== '');
   return {title_field: 'Name' in record.fields ? 'Name' : 'Subject', show_narrative: true, show_related: true, sections: [
     {title: 'Overview', fields: fields.slice(0,12).map(field => ({field, format: /Amount|AUM/.test(field) ? 'currency' : /Date/.test(field) ? 'date' : /Probability/.test(field) ? 'percent' : /Stage|Status/.test(field) ? 'badge' : typeof record.fields[field] === 'number' ? 'number' : 'text'}))},
     ...('Description' in record.fields ? [{title: 'About', fields: [{field:'Description',label:'',format:'markdown'}]}] : []),
@@ -34,25 +34,36 @@ function prose(value: unknown): string {
 }
 export function cardDocument(record: CardRecord): string {
   const layout = record.card?.layout || defaultLayout(record);
-  const title = record.fields[layout.title_field || 'Name'] || record.fields.Name || record.fields.Subject || record.object_type;
+  const title = record.fields[layout.title_field || 'Name'] || record.fields.Name || record.fields.name || record.fields.Subject || [record.fields.FirstName,record.fields.LastName].filter(Boolean).join(' ') || fieldLabel(record.object_type);
   const body = [`# ${prose(title)}`];
+  if (layout.show_narrative !== false && record.narrative) body.push('## Description',record.narrative);
+  const renderedLinks = new Set<string>();
   for (const section of layout.sections) {
-    const fields = section.fields.filter(f => Object.hasOwn(record.fields,f.field));
+    const fields = section.fields.filter(f => Object.hasOwn(record.fields,f.field) && record.fields[f.field] !== null && record.fields[f.field] !== '');
     if (!fields.length) continue;
     if (section.title) body.push(`## ${prose(section.title)}`);
     for (const field of fields) {
       const label = field.label || (field.format === 'markdown' ? '' : fieldLabel(field.field));
-      const links = record.links?.filter(l => l.field === field.field) || [];
+      const links = field.format === 'markdown' ? [] : record.links?.filter(l => l.field === field.field) || [];
+      links.forEach(l => renderedLinks.add(l.record_id));
       const value = links.length
         ? links.map(l => `[${prose(l.label)}](/crm?record=${encodeURIComponent(l.record_id)})`).join(', ')
         : field.format === 'markdown' ? String(record.fields[field.field] ?? '') : prose(formatValue(record.fields[field.field],field));
       body.push(label ? `**${prose(label)}:** ${value}` : value);
     }
   }
-  if (layout.show_narrative !== false && record.narrative !== null) body.push('## Description',record.narrative || 'No description yet.');
-  const links = record.links?.filter(l => !['CreatedById','LastModifiedById','RecordTypeId'].includes(l.field)) || [];
+  const links = record.links?.filter(l => !['CreatedById','LastModifiedById','RecordTypeId'].includes(l.field) && !renderedLinks.has(l.record_id) && !/(History|Share)$/.test(l.object_type || '') && l.object_type !== 'RecordType') || [];
   if (layout.show_related !== false && links.length) {
-    body.push('## Related records',links.map(l => `- **${prose(fieldLabel(l.field))}:** [${prose(l.label)}](/crm?record=${encodeURIComponent(l.record_id)})`).join('\n'));
+    body.push('## Connections');
+    const groups = new Map<string, Map<string, typeof links[number]>>();
+    for (const link of links) {
+      const group = link.field === 'Referenced by' ? 'Referenced by' : fieldLabel(link.object_type || link.field);
+      if (!groups.has(group)) groups.set(group,new Map());
+      groups.get(group)!.set(link.record_id,link);
+    }
+    for (const [group, items] of groups) {
+      body.push(`### ${prose(group)}`,Array.from(items.values()).map(l => `- [${prose(l.label)}](/crm?record=${encodeURIComponent(l.record_id)})`).join('\n'));
+    }
   }
   return body.join('\n\n');
 }

@@ -182,3 +182,18 @@ def test_description_code_samples_are_not_graph_links():
     assert crm_references(f'`{link}`\n```md\n{link}\n````')==[]
     assert crm_references(f'```\n{link}')==[]
     assert crm_references('!'+link)==[]
+
+def test_native_references_and_incoming_connections_respect_fields(store):
+    target=make(store)
+    with store.engine.begin() as c:
+        definition={'type':'object','properties':{'name':{'type':'string'},'parent':{'type':'string','referenceTo':['Company']}},'required':['name'],'additionalProperties':False}
+        c.execute(s.object_types.update().where(s.object_types.c.tenant_id=='one').values(definition=definition))
+    child=store.create('one','owner','Company',{'name':'Connected company','parent':target},reason='fixture')['record_id']
+    assert any(l['record_id']==target for l in store.get('one','owner',child)['links'])
+    assert any(l['record_id']==child for l in store.get('one','owner',target)['links'])
+    assert store.get('one','reader',target)['links']==[]
+    store.change('one','owner',child,1,{'parent':''},reason='unlink')
+    assert store.get('one','owner',target)['links']==[]
+    foreign=store.create('two','owner','Company',{'name':'Other tenant'},reason='fixture')['record_id']
+    store.change('one','owner',child,2,{'parent':foreign},reason='unresolved reference')
+    assert store.get('one','owner',child)['links']==[]

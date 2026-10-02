@@ -21,3 +21,19 @@ it('renders the native Markdown description and graph backlinks',async()=>{
  expect(screen.getByText('Markdown').tagName).toBe('STRONG');
  expect(screen.getByRole('link',{name:'Source account'}).getAttribute('href')).toBe('/crm?record=source');
 });
+it('puts narrative first, names people, omits empty fields and deduplicates connections',async()=>{
+ const {cardDocument}=await import('../../surfaces/CrmCard');
+ const doc=cardDocument({id:'p',object_type:'Contact',revision:1,fields:{FirstName:'Ada',LastName:'Example',Email:'',Title:'Partner'},narrative:'## Background\n\nA sourced profile.',links:[{field:'Related via AccountId',object_type:'Opportunity',record_id:'o',label:'Expansion'},{field:'Description',object_type:'Opportunity',record_id:'o',label:'Expansion'}]});
+ expect(doc.startsWith('# Ada Example')).toBe(true);
+ expect(doc.indexOf('A sourced profile')).toBeLessThan(doc.indexOf('## Overview'));
+ expect(doc).not.toContain('**Email:**');
+ expect(doc).toContain('### Opportunity');
+ expect(doc.match(/\[Expansion\]/g)).toHaveLength(1);
+});
+
+it('keeps source description prose when native narrative creates Description graph edges',async()=>{
+ const {cardDocument}=await import('../../surfaces/CrmCard');
+ const doc=cardDocument({id:'a',object_type:'Account',revision:1,fields:{Name:'Account',Description:'Original source prose'},narrative:'Native body',links:[{field:'Description',record_id:'b',object_type:'Account',label:'Linked account'}]});
+ expect(doc).toContain('Original source prose');
+ expect(doc).toContain('[Linked account]');
+});

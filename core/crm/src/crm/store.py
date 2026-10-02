@@ -134,15 +134,16 @@ class Store:
                     target=self._visible(policy,self._row(c,tenant,link['target_id']))
                 except NotFound:continue
                 result['links'].append({'field':link['kind'],'record_id':target['id'],
-                    'object_type':target['object_type'], 'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['object_type']})
+                    'object_type':target['object_type'], 'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['fields'].get('Title') or target['object_type']})
             for link in c.execute(select(s.relationships).where(s.relationships.c.tenant_id==tenant,
-                    s.relationships.c.target_domain=='crm',s.relationships.c.target_id==record_id,
-                    s.relationships.c.kind=='Description')).mappings():
+                    s.relationships.c.target_domain=='crm',s.relationships.c.target_id==record_id)).mappings():
                 try:source=self._visible(policy,self._row(c,tenant,link['record_id']))
                 except NotFound:continue
-                if source['narrative'] is None:continue
-                result['links'].append({'field':'Referenced by','record_id':source['id'],
-                    'object_type':source['object_type'],'label':source['fields'].get('Name') or source['fields'].get('name') or source['fields'].get('Subject') or ' '.join(str(source['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or source['object_type']})
+                if link['kind']=='Description':
+                    if source['narrative'] is None:continue
+                elif link['kind'] not in source['fields']:continue
+                result['links'].append({'field':'Referenced by' if link['kind']=='Description' else 'Related via '+link['kind'],'record_id':source['id'],
+                    'object_type':source['object_type'],'label':source['fields'].get('Name') or source['fields'].get('name') or source['fields'].get('Subject') or ' '.join(str(source['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or source['fields'].get('Title') or source['object_type']})
             can_write=False
             try:can_write=bool(self._rights(policy,row,'write'))
             except NotFound:pass
@@ -210,7 +211,7 @@ class Store:
                 target=targets.get(link['target_id'])
                 if target and link['kind'] in record['fields']:
                     record.setdefault('links',[]).append({'field':link['kind'],'record_id':target['id'],
-                        'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['object_type']})
+                        'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['fields'].get('Title') or target['object_type']})
             card=self._card(c,tenant,object_type)
             readable=set(definition.get('properties',{})) if '*' in allowed else set(allowed)
             return {'records':result,'next_offset':offset+limit if len(rows)>limit else None,
@@ -255,6 +256,14 @@ class Store:
             targets=field.get('referenceTo',[])
             value=row['fields'].get(name)
             if not targets or not value:continue
+            # Native records can reference another record by its stable CRM ID.
+            target=c.execute(select(s.records.c.id).where(s.records.c.tenant_id==tenant,
+                s.records.c.id==value,s.records.c.object_type.in_(targets),
+                s.records.c.deleted==False)).scalar_one_or_none()
+            if target:
+                c.execute(s.relationships.insert().values(tenant_id=tenant,id=str(uuid4()),record_id=row['id'],
+                    kind=name,target_domain='crm',target_id=target))
+                continue
             # Source references resolve within the importing source org, never across orgs.
             sources=c.execute(select(s.source_mappings.c.system,s.source_mappings.c.org_id).where(
                 s.source_mappings.c.tenant_id==tenant,s.source_mappings.c.record_id==row['id'])).all()
