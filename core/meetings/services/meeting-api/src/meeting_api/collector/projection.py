@@ -41,6 +41,8 @@ two tiers of response omissions, and the default page size that bounds an otherw
 """
 from __future__ import annotations
 
+import json
+
 from typing import Any, Dict, Optional
 
 # Heavy per-meeting ``data`` keys the list NEVER renders — dropped from list rows. Everything else
@@ -290,3 +292,42 @@ def project_list_data(
     if isinstance(sources, list):
         projected["calendar_sources"] = sources
     return projected
+
+
+# --- caller-supplied metadata: bounds -------------------------------------------------------
+# Arbitrary caller JSON, persisted to a JSONB column, GIN-indexed on write, and echoed in EVERY
+# list response. Unbounded, one caller's junk becomes everyone's cost forever. Measured on the
+# dogfood stack before these caps existed: a 10 MB value was accepted in 3s, after which
+# `GET /meetings` returned 10.3 MB on every call — and an MCP client feeds that straight into a
+# model's context window, so the read side is the real blast radius, not the disk.
+#
+# The bounds are checked against the MERGED result, never the patch alone: a cap on each write is
+# not a cap at all when writes merge (100 calls of 15 KB is 1.5 MB).
+#
+# 16 KB is generous for what this field is FOR — join keys, tags, an agent's own short summary.
+# Anything larger is a document, and a document belongs behind a link the metadata points at.
+_MAX_METADATA_BYTES = 16 * 1024
+_MAX_METADATA_KEYS = 64
+_MAX_METADATA_KEY_CHARS = 128
+
+
+def check_metadata_bounds(merged: dict) -> Optional[str]:
+    """Return a human-readable reason the merged metadata is out of bounds, or None if it fits."""
+    if len(merged) > _MAX_METADATA_KEYS:
+        return f"too many metadata keys: {len(merged)} (max {_MAX_METADATA_KEYS})"
+    for key in merged:
+        if len(str(key)) > _MAX_METADATA_KEY_CHARS:
+            return (
+                f"metadata key too long: {len(str(key))} chars "
+                f"(max {_MAX_METADATA_KEY_CHARS}) — {str(key)[:40]}…"
+            )
+    try:
+        size = len(json.dumps(merged).encode("utf-8"))
+    except (TypeError, ValueError):
+        return "metadata must be JSON-serializable"
+    if size > _MAX_METADATA_BYTES:
+        return (
+            f"metadata too large: {size} bytes after merge (max {_MAX_METADATA_BYTES}). "
+            "Store large content elsewhere and put a reference here."
+        )
+    return None

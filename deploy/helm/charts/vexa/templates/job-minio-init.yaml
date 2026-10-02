@@ -28,8 +28,10 @@ spec:
       {{- end }}
       containers:
         - name: minio-init
-          image: minio/mc:latest
-          imagePullPolicy: IfNotPresent
+          image: {{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          resources:
+            {{- toYaml .Values.minio.initResources | nindent 12 }}
           # v0.10.5 Pack A.3 — replace `sleep 5` with poll-until-ready (#249).
           # On a fresh PVC, MinIO can take 30+ seconds to attach + initialize.
           # Hardcoded 5s sleep races MinIO startup → `mc mb` runs against an

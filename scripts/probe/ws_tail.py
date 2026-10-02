@@ -32,10 +32,20 @@ with open(out_file, "w") as out:
     except Exception as e:  # noqa: BLE001 — the probe reads this line as the failure evidence
         out.write(json.dumps({"type": "probe-error", "error": str(e)}) + "\n")
         sys.exit(1)
-    ws.send_text(json.dumps({"action": "subscribe",
-                             "meetings": [{"platform": platform, "native_id": native_id}]}))
+    # The listener starts BEFORE the spawn, so the first subscribe races meeting-row creation:
+    # the collector's authorize refuses a row it cannot see yet, and a refused subscribe is
+    # never acked (vexa#1354 — 3 of 5 station runs). Re-send until acked: subscribe is
+    # idempotent server-side, so the retry converges the moment the row becomes visible.
+    def _subscribe():
+        ws.send_text(json.dumps({"action": "subscribe",
+                                 "meetings": [{"platform": platform, "native_id": native_id}]}))
+    _subscribe()
+    last_sub = time.time()
     deadline = time.time() + float(seconds)
     while time.time() < deadline:
+        if not acked and time.time() - last_sub >= 5.0:
+            _subscribe()
+            last_sub = time.time()
         try:
             raw = ws.recv_text(timeout=min(5.0, max(0.5, deadline - time.time())))
         except TimeoutError:

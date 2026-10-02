@@ -74,10 +74,23 @@ The only thing that changes between platforms is the `platform` value.
   </Tab>
   <Tab title="Microsoft Teams">
     ```bash
+    # the meeting ID and its passcode, as Teams shows them in the invite
     curl -X POST "$API_BASE/bots" \
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-      -d '{"platform":"teams","native_meeting_id":"<meeting-id>","bot_name":"Vexa"}'
+      -d '{"platform":"teams","native_meeting_id":"397421056486982","passcode":"X8hcQVTnGNpGelJLSv","bot_name":"Vexa"}'
     ```
+
+    Teams meetings come addressed two ways, and both are valid `native_meeting_id`s:
+
+    - the **numeric meeting ID** (10–15 digits) Teams prints next to a **passcode** — pass the
+      passcode in `passcode`, never glued onto the id;
+    - the **thread id** out of a classic `…/l/meetup-join/19:meeting_…@thread.v2` link, which
+      carries its own credential and takes no separate passcode.
+
+    On a non-default Teams cloud — `teams.live.com` for personal meetings, `gov.` / `dod.`
+    `teams.microsoft.us` for GCC-High and DoD — add `teams_base_host`, or the bot builds its URL
+    on the world-wide host and joins a different Teams. Sending the full `meeting_url` instead
+    settles both the host and the passcode on its own.
   </Tab>
   <Tab title="Jitsi Meet">
     Jitsi is **join + capture offline-proven; live validation pending** — Meet, Zoom and Teams are
@@ -107,7 +120,13 @@ curl -X POST "$API_BASE/bots" \
 
 A URL that isn't a recognizable meeting link is refused with a `422` naming the missing
 `native_meeting_id`; if you supply both `platform` and `meeting_url` and they disagree, that's a
-`422` too. An explicit `native_meeting_id` always wins — the URL never overrides it.
+`422` too. An explicit `native_meeting_id` always wins — the URL never overrides it. A passcode
+already in the URL's query also wins over a separate `passcode` field.
+
+The passcode field is spelled **`passcode`**. `password`, `meeting_password` and the other
+near-misses are refused with a `422` naming the field to use — a passcode we cannot read is a
+passcode the bot would join without, and a `201` that means "joined nothing" costs more to debug
+than an error does.
 
 Optional: `language` (ISO code) and `task` (`transcribe` default, or `translate`). Language works in
 two modes:

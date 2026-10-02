@@ -8,6 +8,7 @@ export type ModelPrefs = {
   mode?: "subscription" | "custom" | null;
   model?: string | null;
   meeting_model?: string | null;
+  effort?: string | null; // reasoning-effort pin (low|medium|high|xhigh) for the agent harness
   base_url?: string | null;
   api_key_set?: boolean;
   api_key?: string | null; // masked on read (********abcd) — write-only in the clear

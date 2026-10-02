@@ -29,6 +29,35 @@ export interface JoinResult {
   outcome: JoinOutcome;
   /** The human cause text (e.g. the AdmissionError message). Rides onto lifecycle.v1 `reason`. */
   reason?: string;
+  /** The measurements + platform signal behind the verdict (#1059/#1058). Optional: a driver that
+   *  supplies none still produces a classified terminal, just a less precise one. */
+  signals?: JoinSignals;
+}
+
+/** What the join attempt OBSERVED, as opposed to what it concluded (#1059, #1058).
+ *
+ *  The verdict enum alone cannot tell a ~20s platform refusal from a ~13min lobby expiry — both
+ *  arrive as a non-admission — so the two production populations collapsed into one label. These
+ *  are the measurements that separate them, gathered by the driver (the only layer holding a clock
+ *  that starts when navigation does) and classified by `join-evidence.ts`.
+ *
+ *  Every field is optional and every consumer treats absence as "not measured", never as zero: a
+ *  fabricated timing is worse than a missing one. */
+export interface JoinSignals {
+  /** ms from join start to the FIRST lobby/`awaiting_admission` report. Absent ⇒ never got there. */
+  timeToLobbyMs?: number;
+  /** ms spent waiting in the lobby before the verdict landed. */
+  timeInLobbyMs?: number;
+  /** ms from join start to the verdict — the "time to death" #1058 measured in production. */
+  totalMs?: number;
+  /** The lobby budget the control plane ISSUED for this run (`automaticLeave.waitingRoomTimeout`).
+   *  A wait is only an expiry relative to the deadline we ourselves handed the bot. */
+  lobbyBudgetMs?: number;
+  /** Did the bot ever observe the waiting room? `false` is a POSITIVE finding (it was on the page
+   *  and no lobby appeared), distinct from `undefined` (nobody looked). */
+  reachedLobby?: boolean;
+  /** The raw platform signal that triggered the verdict — the DOM state or the thrown message. */
+  detail?: string;
 }
 
 /** Drives the platform join. The real adapter wraps @vexa/join.joinMeeting + admission
@@ -46,6 +75,12 @@ export interface JoinDriver {
    *  ask-to-join (Teams/Meet have a Cancel affordance) and, as a guaranteed drop, close the page so
    *  the request is abandoned even where no cancel button is reachable. Best-effort; never throws. */
   withdraw(reason: string): Promise<void>;
+  /** The `JoinSignals` as of the last join attempt's exit (#1059). OPTIONAL — a driver that does not
+   *  measure simply reports less. It exists because the two paths that lose a `JoinResult` entirely
+   *  still need evidence: a non-`AdmissionError` THROW (its stack unwinds past every return) and a
+   *  pre-active ABORT (the user stopped us mid-lobby, so the join never returns at all). MUST NOT
+   *  throw — the orchestrator calls it while already handling a failure. */
+  lastSignals?(): JoinSignals | undefined;
 }
 
 /** The capture → lane → STT → transcript/recording engine. The orchestrator starts/stops

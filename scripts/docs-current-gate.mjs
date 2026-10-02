@@ -22,7 +22,7 @@ const isSurface = (p) => SURFACE_FILES.includes(p) || SURFACE_PREFIXES.some((pre
 const isDocs = (p) => p.startsWith("docs/") || p.endsWith(".mdx");
 const NONE_LABEL = "docs: none";
 
-function ghRaw(path) { let e; for (let i = 0; i < 3; i++) { try { return execSync(`gh api "${path}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch (x) { e = x; } } throw e; }
+function ghRaw(path) { let e; for (let i = 0; i < 3; i++) { try { return execSync(`gh api "${path}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 }); } catch (x) { e = x; } } throw e; }
 const ghj = (path) => JSON.parse(ghRaw(path));
 
 function prNumbers() {

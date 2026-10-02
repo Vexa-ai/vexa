@@ -1,0 +1,366 @@
+"""THE QUEUE — what flows is holding for ONE PERSON (PRD decision 42.2).
+
+*"what is waiting — maybe it's flows?"* (founder, 2026-09-03 07:43Z; agreed.) What is waiting is
+the set of pending REACTIONS flows already holds for this subject. Nothing is unioned at the edge:
+other domains publish events, and flow definitions decide what waits.
+
+That ruling is what this module is. Three properties follow from it, and each one is a defect the
+four-source version had:
+
+1. **It exists in every profile.** Two of the old tool's four sources were agent-api reads, so the
+   verb could not ship in the `no-agents` product (decision 40.6) — it would be absent from most of
+   the eight domain configurations, or present and answering half. A read over `reaction` is a read
+   over flows' own table, and flows is in every profile.
+
+2. **A short queue is no longer ambiguous.** Every item names the FLOW that produced it and carries
+   a TYPED reason, so *"nothing is waiting"* and *"that part of the machine is not deployed here"*
+   are different answers rather than the same empty list. `not_present` is in the vocabulary for
+   exactly that: a reaction the engine terminated because a domain was absent (`flows/model.py`
+   `NotPresent`) is something the person is owed a sentence about, not something to hide.
+
+3. **The words are not here.** Everything a person hears is resolved from `behavior/queue/`, the
+   same private-mount-then-showcase order `flows_defs/production.py` already reads prompts through.
+   A tool body holding two hundred lines of product copy is a rebuild and a deploy away from every
+   rewrite, which is the thing PRD §3.8 exists to stop.
+
+**THE COPY IS ALSO THE FILTER, and that is the load-bearing idea.** A person's reactions include a
+great deal of plumbing — an `invite_intake` parked at `await_start` three hours before a call is
+pending, and is nobody's business. Rather than a keyword list in a tool deciding what is
+interesting, a pending reaction is SPOKEN when behavior has something to say about it and COUNTED
+when it does not. Which reactions reach a person is then an admin's file, editable without a
+deploy, and the machinery holds no opinion about it at all.
+
+**The friction first-run ask is dropped** (ruling 8/9, founder 2026-09-03 08:53Z): there is no
+`friction.first_run` event, no flow and no copy file for one — *a flow that fires once per person
+is a heavy way to say hello*. The enforcement is not this comment: every item this module emits
+carries the `reaction_id` it came from, so an item nobody's reaction produced cannot be built here.
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import re
+import time
+from typing import Callable, Optional
+
+from flows_timeline import concerns, resolve_identity
+from flows_timeline.model import loads
+from flows_timeline.service import SCAN_ROWS
+
+#: The typed reason vocabulary. Derived from the reaction's own STATUS and from the prefix the
+#: engine writes — never from a keyword list over free text, which is what the rig's tool did and
+#: what made "smtp" and "timeout" load-bearing English inside a Python file.
+TYPE_HUMAN = "human"                 # blocked: a person has to answer before anything moves
+TYPE_FAILED = "failed"               # failed, with a reason worth an eye
+TYPE_NOT_PRESENT = "not_present"     # terminal because a domain is not deployed (decision 40.7)
+TYPE_PENDING = "pending"             # in flight, nothing owed by anybody
+
+#: Reactions that have not finished, or finished badly. `done` is deliberately absent here and
+#: handled separately below: an ordinary completion is not waiting for anyone.
+UNFINISHED = ("admitted", "running", "retrying", "blocked", "failed")
+
+#: How far back a terminal `not_present` reaction still counts as something to say. Without a
+#: horizon the queue would grow monotonically on a deployment that simply does not run a domain —
+#: the person would be told the same absence forever, which is noise, not information.
+NOT_PRESENT_WINDOW_S = 86_400
+
+#: What `NotPresent.reason` looks like on the row: `"<domain>:not_present"`, optionally followed by
+#: `" — <detail>"` (`flows/model.py`). Matching the SHAPE the engine writes rather than searching
+#: for a word is what keeps this structural: if the spelling changes, this stops matching loudly
+#: instead of quietly classifying a failure as a deployment fact.
+_NOT_PRESENT = re.compile(r"^([a-z][a-z0-9_]*):not_present(?:\s+—\s+(?P<detail>.*))?$", re.S)
+
+_COLS = ("reaction_id", "flow", "flow_version", "step", "status", "attempt", "reason",
+         "next_run_at", "created_at", "updated_at", "subject_refs")
+
+
+def typed_reason(status: str, reason: Optional[str]) -> dict:
+    """The reason, as data. STRUCTURAL: the status and the engine's own prefix decide the type."""
+    text = str(reason or "").strip()
+    m = _NOT_PRESENT.match(text)
+    if m:
+        return {"type": TYPE_NOT_PRESENT, "domain": m.group(1),
+                "detail": (m.group("detail") or "").strip()}
+    if status == "blocked":
+        return {"type": TYPE_HUMAN, "detail": text}
+    if status == "failed":
+        return {"type": TYPE_FAILED, "detail": text}
+    return {"type": TYPE_PENDING, "detail": text}
+
+
+def _rows(db, sql: str, params: dict) -> list[dict]:
+    return [dict(zip(_COLS, r)) for r in db.execute(sql, params)]
+
+
+def pending(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
+            scan: int = SCAN_ROWS, identity: Optional[Callable] = None):
+    """This subject's unfinished reactions, plus the recently-absent ones. ``None`` when nobody
+    answers to ``subject``.
+
+    FAILS CLOSED, like `flows_timeline.list_reactions` and for the same reason: an unresolvable
+    subject that fell through to the unscoped read is how a scoping bug becomes the leak the scope
+    was added to close (R-D07, R-D12).
+
+    Scoping is on the uid AND the email — see `flows_timeline.model.concerns`: the invite lineage
+    carries an organizer address and no uid, the completed lineage carries a uid and no address,
+    and matching on one of them silently returns half of a person's day.
+
+    The SCAN is bounded and the filter is in Python, the shape `list_reactions` and `read_flows`
+    already use: `subject_refs` is a JSON blob with no index to push a predicate into.
+    """
+    now = time.time() if now is None else float(now)
+    uid, email = (identity or resolve_identity)(subject)
+    # NO UID IS UNRESOLVED, not a smaller answer (B1/P21). `resolve_identity` fails SOFT: asked
+    # about an address while admin-api is down or slow, it hands back the address it was given and
+    # an EMPTY uid, and this projection then scoped on the address alone — which returns exactly
+    # the rows that carry that spelling and silently drops the whole completed lineage, because
+    # that lineage carries a uid and no address (`flows_timeline.model.concerns`). A person was
+    # told `waiting: 0` from a half-scoped query, and "nothing is waiting for you" and "we could
+    # not work out who you are" are different facts of which only one is about them. The docstring
+    # below named this failure; nothing detected it.
+    #
+    # THE MIRROR CASE IS NOT THE SAME CASE and is deliberately left alone: a uid with no address is
+    # a real account shape — identity's `/internal/validate` legitimately answers a user_id and an
+    # empty email — where an address with no uid is a lookup that did not happen or a person this
+    # instance has no account for. One is a state, the other is an absence of an answer.
+    if not uid:
+        return None
+    states = ",".join(f"'{s}'" for s in UNFINISHED)      # a fixed literal set, never caller input
+    rows = _rows(db, f"SELECT {', '.join(_COLS)} FROM reaction "
+                     f"WHERE status IN ({states}) "
+                     f"   OR (status = 'done' AND reason IS NOT NULL AND updated_at >= :floor) "
+                     f"ORDER BY updated_at DESC LIMIT {int(scan)}",
+                 {"floor": now - NOT_PRESENT_WINDOW_S})
+    out = []
+    for r in rows:
+        if not concerns(loads(r["subject_refs"]), uid, email):
+            continue
+        reason = typed_reason(r["status"], r["reason"])
+        # A `done` row is only here if it is a deployment fact. Anything else that finished is
+        # finished, and telling a person about it is telling them about our plumbing.
+        if r["status"] == "done" and reason["type"] != TYPE_NOT_PRESENT:
+            continue
+        out.append({k: v for k, v in r.items() if k != "subject_refs"} | {"reason": reason})
+    return out[:limit]
+
+
+# ── the words, which are behavior's ───────────────────────────────────────────────────────────
+#: The behavior tree's directory for this surface. `<flow>.<reason type>.md` first, then
+#: `_<reason type>.md` — `behavior/queue/README.md` is the contract.
+KIND = "queue"
+
+
+def _roots() -> list[pathlib.Path]:
+    """Private mount first, then the in-repo showcase — the order `flows_defs.production._prompt`
+    already reads prompts through, minus its `_global` half.
+
+    The `_global` half is deliberately absent: it is fetched over agent-api, and this queue must
+    answer in a deployment that has no agent domain. A copy lookup that needed the agent door would
+    reintroduce the exact coupling decision 42.2 removed.
+    """
+    out = []
+    private = (os.environ.get("VEXA_BEHAVIOR_DIR") or "").strip()
+    if private:
+        out.append(pathlib.Path(private) / KIND)
+    here = pathlib.Path(__file__).resolve()
+    # checkout: <root>/core/flows/src/flows_queue.py; the image is shallower (/app/src/…)
+    candidates = [pathlib.Path("/"), pathlib.Path("/app")]
+    if len(here.parents) > 3:
+        candidates.append(here.parents[3])
+    out += [c / "behavior" / KIND for c in candidates]
+    return out
+
+
+#: The front-matter fence a say-file may open with. Everything about it is deliberately small: one
+#: `key: value` per line, between two `---` rules, at the very top or not at all.
+_FENCE = "---"
+#: The words that mean yes. A value this does not recognise means NO — a flag nobody can read is a
+#: flag that is off, never one that is guessed on.
+_TRUE = frozenset({"true", "yes", "on", "1"})
+
+
+class Say(str):
+    """A say-file's words, plus the attributes its front-matter declared.
+
+    A `str` SUBCLASS rather than a pair, and that is the whole compatibility story: every existing
+    caller of `say()` — the projection, the tests, anything a private tree wires in — keeps getting
+    something that compares, formats and serialises as the text it always was. The attributes ride
+    on it for the callers that ask.
+    """
+
+    notice: bool = False
+
+    def __new__(cls, text: str = "", *, notice: bool = False) -> "Say":
+        self = super().__new__(cls, text)
+        self.notice = bool(notice)
+        return self
+
+
+def parse(raw: str) -> Say:
+    """A say-file's text, with its front-matter read off the top.
+
+    A file with no fence is its own text and declares nothing, which is every file written before
+    this existed — the flag is ADDITIVE by construction, so a behavior tree that never heard of it
+    behaves exactly as it did.
+
+    UNPARSEABLE IS UNFLAGGED, NEVER UNSPOKEN. A fence that never closes, or a line that is not
+    `key: value`, leaves the words intact and the attributes at their defaults: the failure of a
+    flag must never be the failure of the sentence a person was owed.
+    """
+    text = (raw or "").strip()
+    if not text.startswith(_FENCE):
+        return Say(text)
+    lines = text.splitlines()
+    close = next((i for i in range(1, len(lines)) if lines[i].strip() == _FENCE), None)
+    if close is None:                      # a fence that never closes is not front-matter
+        return Say(text)
+    attrs = {}
+    for line in lines[1:close]:
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            attrs[key.strip().lower()] = value.strip().strip("\"'")
+    body = "\n".join(lines[close + 1:]).strip()
+    return Say(body, notice=attrs.get("notice", "").lower() in _TRUE)
+
+
+def say(flow: str, reason_type: str) -> Say:
+    """What a person hears about this item, or "" when behavior has nothing to say about it.
+
+    "" IS AN ANSWER, and it is the filter (see the module docstring): a pending reaction behavior
+    is silent about is counted, never spoken. Adding `behavior/queue/<flow>.<type>.md` is how an
+    admin makes one situation of one flow person-facing, and deleting it is how they stop it — no
+    deploy either way.
+
+    The flow-and-type key rather than a flow key: *"the write-up is being prepared"* and *"the
+    write-up failed"* are the same flow and opposite sentences, and a file keyed on the flow alone
+    would say the first one to somebody the second had happened to.
+
+    The returned :class:`Say` is a string carrying whatever the file's front-matter declared — see
+    `parse`, and `behavior/queue/README.md` for the one attribute there is.
+    """
+    for name in (f"{flow}.{reason_type}.md", f"_{reason_type}.md"):
+        for root in _roots():
+            f = root / name
+            try:
+                if f.is_file():
+                    text = f.read_text(encoding="utf-8").strip()
+                    if text:
+                        return parse(text)
+            except OSError:                # an unreadable mount is not a reason to fail a read
+                continue
+    return Say("")
+
+
+def _spoken(rows: list, copy: Optional[Callable]) -> tuple:
+    """``(items, quiet)`` — the rows behavior has words for, and the count of the ones it does not.
+
+    ONE reader of the copy tree for both projections below, so `waiting` and `notices` can never
+    disagree about which items are spoken or about what they say.
+
+    `copy` is the injection seam the tests already use and it may hand back a plain string, which
+    is what every caller wrote before front-matter existed; `Say` normalises it to an unflagged one.
+    """
+    speak = copy or say
+    items, quiet = [], 0
+    for r in rows:
+        words = speak(r["flow"], r["reason"]["type"])
+        if not words:
+            quiet += 1
+            continue
+        words = words if isinstance(words, Say) else Say(words)
+        items.append({"id": r["reaction_id"], "flow": r["flow"],
+                      "flow_version": r["flow_version"], "step": r["step"],
+                      "status": r["status"], "reason": r["reason"],
+                      "since": r["updated_at"], "next_run_at": r["next_run_at"],
+                      "say": str(words),
+                      # DECLARED BY THE COPY, and therefore by an admin's file rather than by a
+                      # deploy — the same place, and the same edit, that decides whether an item is
+                      # spoken at all. See `behavior/queue/README.md`.
+                      "notice": words.notice})
+    return items, quiet
+
+
+def _one_absence_per_flow(items: list) -> list:
+    """Collapse a flow's `not_present` items to the newest one. Everything else passes through.
+
+    A deployment that does not run a domain answers `not_present` for EVERY reaction that reaches
+    it, so on a no-agent deployment each completed meeting adds one more `post_meeting`
+    /`agent:not_present` item — all of them the same sentence, saying the same thing about the same
+    deployment. Three of them were in one person's queue on 2026-09-05 (fr_e612b14fba618eea) and
+    the count only goes up.
+
+    `NOT_PRESENT_WINDOW_S` already keeps the queue finite; this is the other half, and it is a
+    different question — the horizon bounds how LONG an absence is news, this bounds how many
+    TIMES it is news at once. `notices()` below has collapsed the identical case since it was
+    written (two reactions of one flow say the identical sentence, "which reads as two different
+    things being true"); `waiting()` simply never did.
+
+    ONLY `not_present`, and only per flow. A pending item is a distinct thing in flight and a
+    failed one is a distinct thing to look at, so both keep one item each — but an absence is a
+    fact about the DEPLOYMENT, not about the meeting that ran into it, and there is nothing a
+    person can do about the second copy that they could not do about the first. The copy already
+    says so: `behavior/queue/_not_present.md` reads "Say it once, plainly."
+
+    The newest survives so `since` is the most recent occurrence rather than the first.
+    """
+    seen: set = set()
+    out = []
+    for item in items:
+        if item["reason"]["type"] != TYPE_NOT_PRESENT:
+            out.append(item)
+            continue
+        key = (item["flow"], item["reason"].get("domain"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[float] = None,
+            limit: int = 50, identity: Optional[Callable] = None,
+            copy: Optional[Callable] = None) -> dict:
+    """THE PROJECTION the route serves. Data plus behavior's words — no product opinion here.
+
+    `flows` is what this deployment could ever react to, and it is in the answer for the reason
+    § 9 of the destination design gives: it is what makes a short queue legible. "Nothing is
+    waiting" against a list that has no `live_meeting` in it says something different from the same
+    empty queue against a list that has one, and neither answer needs a field the tool invents.
+
+    The collapse happens HERE and not in `pending()`, deliberately: `pending()` is shared with
+    `notices()`, which rides out on the meeting tools' results, and a filter placed there would
+    silently change what an agent that never asked receives.
+    """
+    rows = pending(db, subject=subject, now=now, limit=limit, identity=identity)
+    if rows is None:
+        return {"subject": subject, "unresolved": True, "waiting": 0, "items": [],
+                "quiet": 0, "flows": flows or []}
+    items, quiet = _spoken(rows, copy)
+    items = _one_absence_per_flow(items)
+    return {"subject": subject, "waiting": len(items), "items": items,
+            # COUNTED, NOT HIDDEN: an operator asking why a queue is short must be able to tell
+            # "nothing is happening" from "behavior is silent about what is happening".
+            "quiet": quiet, "flows": flows or []}
+
+
+def notices(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
+            identity: Optional[Callable] = None, copy: Optional[Callable] = None) -> dict:
+    """THE STANDING NOTICES only — the say text of every waiting item whose copy declared itself one.
+
+    A SEPARATE, SMALLER ANSWER rather than a filter over `waiting`, because of WHO CALLS IT and how
+    often: this is meant to ride along with unrelated work, on every call, so it answers with the
+    least it can — a list of strings — and carries no reaction ids, no flow names, no steps and no
+    typed reasons. A caller that wants any of those wants `waiting`, and should ask for it.
+
+    DEDUPED, IN ORDER. Two reactions of the same flow resolve to the same file and would otherwise
+    say the identical sentence twice in one result, which reads as two different things being true.
+    """
+    rows = pending(db, subject=subject, now=now, limit=limit, identity=identity)
+    if rows is None:
+        return {"subject": subject, "unresolved": True, "notices": []}
+    items, _ = _spoken(rows, copy)
+    out = []
+    for item in items:
+        if item["notice"] and item["say"] not in out:
+            out.append(item["say"])
+    return {"subject": subject, "notices": out}

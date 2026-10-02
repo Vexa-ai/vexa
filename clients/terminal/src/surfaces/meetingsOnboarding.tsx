@@ -177,8 +177,8 @@ function DropBotInline() {
         else if (r.status === 401) setMsg("Not signed in — sign in and retry.");
         else {
           // Everything else used to land as `Couldn't send (403): {"code":"service_not_allowed",…}`
-          // — the raw denial payload, in the user's face. A service-authority refusal now gets its
-          // own panel; the rest still goes through the presenter seam.
+          // — the raw denial payload, in the user's face. A refusal from the deciding service now
+          // gets its own panel; the rest still goes through the presenter seam.
           const state = resolveJoinError(await readApiFailure(r, "/api/bots"));
           if (state.kind === "denial") { setDenial(state.presentation); setMsg(null); }
           else setMsg(state.headline);

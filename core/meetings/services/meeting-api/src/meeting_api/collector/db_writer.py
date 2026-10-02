@@ -37,6 +37,26 @@ Additions over the parent:
     from the persisted ``source_cursor``. Redis was the ONLY home of the processed doc before
     this — stopping the bot made the processed output unreachable over REST.
 
+RESTORED ON THIS RELEASE, AND WHY — read this before deleting it again. The drain was removed once
+with the justification "PRD decision 34 removed the producer: nothing writes that stream". On this
+candidate that sentence is FALSE, and it is checkable in three places, all of which
+``tests/test_db_writer.py::test_the_processed_notes_producer_is_still_here`` asserts from source:
+
+  * ``core/agent/control_plane/dispatch.py`` still stamps ``VEXA_TRANSCRIPT_STREAM`` on a meeting
+    dispatch, so the meeting worker still runs;
+  * ``core/agent/worker/engine.py`` still passes ``proc_stream=f"proc:meeting:{row_id}"`` into
+    ``serve_meeting`` — unconditionally, on that path;
+  * ``core/agent/worker/meeting.py`` still ``xadd``s each cleaned note onto it, and still emits the
+    ``view_end`` marker.
+
+The removal commit that made the claim true (``f95d4d5e0``) is NOT in this branch's ancestry; the
+docstring travelled here without the code it described. With the producer alive and the drain gone,
+``proc:meeting:{id}`` fills up in redis and ``data.processed.views[]`` is never written — so the
+terminal's durable notes pane and the schedule digest's ``notes`` flag are permanently empty the
+moment the bot stops. That is the exact bug the drain was written for. **If the producer is ever
+actually removed, delete the producer and this drain in ONE change** — the failure mode being
+avoided here is a half-applied removal, in either direction.
+
 The persisted processed shape is ADDRESSABLE and VERSIONED (multi-consumer, per the release DoD):
 ``data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}`` — ``params``
 records the processing metadata APPLIED (provider/model/pipeline, stamped by the producing worker

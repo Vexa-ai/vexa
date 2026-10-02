@@ -108,6 +108,42 @@
    ]
   },
   {
+   "key": "RUNTIME_BOT_CPU",
+   "class": "defaulted",
+   "default": "(unset — the meeting-bot class declares no cpu, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: CPU cores every SPAWNED meeting-bot Pod declares. runtime.v1 carries one value per dimension, so it sets BOTH the container's request and its limit (Guaranteed QoS) — the declaration a namespace ResourceQuota admits on (#1005). Unset/empty ⇒ no cpu declared (the pre-#1005 unbounded spawn); a non-numeric value is fatal at boot",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_BOT_MEMORY_MB",
+   "class": "defaulted",
+   "default": "(unset — the meeting-bot class declares no memory, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: memory (MiB) every SPAWNED meeting-bot Pod declares, as BOTH request and limit. A HARD ceiling — a bot exceeding it is OOM-killed mid-meeting — so size it for real meetings, not for the smallest node. Unset/empty ⇒ no memory declared; a non-numeric value is fatal at boot (#1005)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_AGENT_WORKER_CPU",
+   "class": "defaulted",
+   "default": "(unset — the agent-worker class declares no cpu, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: CPU cores every SPAWNED agent-worker Pod declares, as BOTH request and limit. Sized INDEPENDENTLY of the meeting bot — a code harness is not a browser — so an operator can right-size each class alone (#1005). Unset/empty ⇒ no cpu declared; a non-numeric value is fatal at boot",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_AGENT_WORKER_MEMORY_MB",
+   "class": "defaulted",
+   "default": "(unset — the agent-worker class declares no memory, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: memory (MiB) every SPAWNED agent-worker Pod declares, as BOTH request and limit. Unset/empty ⇒ no memory declared; a non-numeric value is fatal at boot (#1005)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
    "key": "BROWSER_IMAGE",
    "class": "capability",
    "capability": "bot_spawn",

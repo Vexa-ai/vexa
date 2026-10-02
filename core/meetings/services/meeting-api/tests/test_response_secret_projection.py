@@ -21,8 +21,15 @@ Stripped for everyone else: a transcript-share recipient was given a transcript,
 endpoint configuration, and must not be able to enumerate who ELSE the meeting was shared with.
 
 Both load-bearing cases have a test on every edge (list · meeting detail · transcript detail · PATCH
-echo): the owner keeps tier 2, a second user holding nothing but a redeemed share link keeps
-neither, and nobody at all sees tier 1.
+echo · **the spawn response**): the owner keeps tier 2, a second user holding nothing but a redeemed
+share link keeps neither, and nobody at all sees tier 1.
+
+``POST /bots`` is the edge that was missing, and it is the worst one to miss: the spawn request is
+the one that WRITES the signing secret onto the row, and its 201 handed the secret straight back
+(found in production 2026-09-05 through the MCP's ``request_meeting_bot`` result,
+fr_2261a6306224c6f8). ``bot_spawn.service._meeting_response`` built the response body by copying
+``row["data"]`` verbatim rather than going through this module — which is the whole argument for
+having ONE projection: a route does not leak by deciding to, it leaks by not calling.
 
 The projection is a RESPONSE-edge transform and must not disturb the stored row — the delivery path
 reads the signing secret out of the meeting row at send time — so the last two tests sign a real
@@ -422,3 +429,88 @@ def test_webhook_sink_delivers_with_the_row_secret_end_to_end():
         captured["body"] if isinstance(captured["body"], bytes) else captured["body"].encode(),
         captured["headers"], SECRET,
     ), "the receiver's verification must still pass with the owner's secret"
+
+
+# ── the SPAWN edge · POST /bots, the request that writes the secret in the first place ───────────
+
+def _spawn_client(monkeypatch):
+    """The shipped ``POST /bots`` router over the in-memory fakes — same construction as
+    ``test_bot_spawn._client``, offline (no DB, no runtime kernel)."""
+    from fastapi import FastAPI
+
+    from meeting_api.bot_spawn import build_router
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    repo = InMemoryMeetingRepo()
+    app = FastAPI()
+    app.include_router(build_router(repo, FakeRuntimeClient()))
+    return repo, TestClient(app)
+
+
+def _spawn(client):
+    """Spawn exactly as the gateway drives it: the per-user webhook config arrives as the three
+    ``x-user-webhook-*`` headers (gateway app.py — it reads them off identity's
+    ``/internal/validate`` and forwards them so ``bot_spawn`` can persist them on the row)."""
+    import json as _json
+
+    return client.post(
+        "/bots",
+        headers={
+            "x-user-id": str(OWNER),
+            "x-user-webhook-url": HOOK,
+            "x-user-webhook-secret": SECRET,
+            "x-user-webhook-events": _json.dumps(EVENTS),
+        },
+        json={"platform": PLAT, "native_meeting_id": NID},
+    )
+
+
+def test_the_spawn_response_does_not_hand_back_the_secret_it_just_stored(monkeypatch):
+    """THE friction. A caller configures a webhook, asks for a bot, and the 201 read their own
+    signing secret back out of ``data`` in clear — through the public gateway, and therefore
+    through the MCP tool result, into a calling model's context and its logs."""
+    _repo, client = _spawn_client(monkeypatch)
+    r = _spawn(client)
+    assert r.status_code == 201, r.text
+    _assert_no_credentials(r.json()["data"], where="POST /bots (spawn response)")
+    assert SECRET not in r.text, "the signing secret's value rode the spawn response body"
+
+
+def test_the_spawn_response_still_carries_the_owners_own_webhook_config(monkeypatch):
+    """Tier 2 on the spawn edge: the spawner IS the owner, so the v0.10 contract's fields stay.
+    The fix must be a strip of tier 1, not a blanket erasure of ``data`` on this route."""
+    _repo, client = _spawn_client(monkeypatch)
+    data = _spawn(client).json()["data"]
+    _assert_owner_private_present(data, where="POST /bots (spawn response)")
+
+
+def test_the_spawn_response_still_carries_the_meetings_own_content(monkeypatch):
+    """And the keys the caller actually asked for survive — ``constructed_meeting_url`` is read
+    straight off ``data`` by ``_meeting_response`` and by every client that renders a join link."""
+    _repo, client = _spawn_client(monkeypatch)
+    body = _spawn(client).json()
+    assert body["constructed_meeting_url"] == f"https://meet.google.com/{NID}"
+    assert body["data"]["constructed_meeting_url"] == f"https://meet.google.com/{NID}"
+    assert body["data"]["transcribe_enabled"] is True
+
+
+def test_the_spawn_stores_the_secret_even_though_it_does_not_return_it(monkeypatch):
+    """The property the fix must not cost: the lifecycle callback signs from the STORED row. A
+    projection that reached the row instead of the response would silently unsign every webhook
+    this deployment ever delivers — which no response-shape test would catch."""
+    from meeting_api.webhooks.delivery import sign_payload, verify_signature
+
+    repo, client = _spawn_client(monkeypatch)
+    meeting_id = _spawn(client).json()["id"]
+
+    stored = repo._meetings[meeting_id]["data"]
+    assert stored["webhook_secret"] == SECRET, "the spawn must still persist the signing secret"
+    assert stored["webhook_url"] == HOOK
+
+    body, ts = b'{"event_type":"meeting.completed"}', "1750000000"
+    headers = {"X-Webhook-Signature": sign_payload(body, stored["webhook_secret"], ts),
+               "X-Webhook-Timestamp": ts}
+    assert verify_signature(body, headers, SECRET), "delivery must still sign with the row's secret"

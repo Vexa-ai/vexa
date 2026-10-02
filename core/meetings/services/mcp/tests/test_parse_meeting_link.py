@@ -65,7 +65,11 @@ class TestTeamsPersonal:
         assert r.platform == "teams"
         assert r.native_meeting_id == "9361792952021"
         assert r.passcode == "abc12345"
-        assert r.teams_base_host is None
+        # The host rides along, like every other short-link parse. A personal meeting id lives on
+        # teams.live.com and the id alone does not say so, so whoever rebuilds the join URL from
+        # (id, passcode) — bot_spawn's construct_meeting_url — would default to the world-wide
+        # enterprise host and send the bot to a different Teams (#892).
+        assert r.teams_base_host == "teams.live.com"
         assert r.meeting_url is None
 
     def test_no_passcode_warns(self):
@@ -146,10 +150,10 @@ class TestTeamsEnterpriseLong:
 
 class TestZoom:
     def test_standard_meeting(self):
-        r = parse("https://zoom.us/j/12345678901?pwd=Abc123")
+        r = parse("https://zoom.us/j/12345678901?pwd=placeholder-passcode")
         assert r.platform == "zoom"
         assert r.native_meeting_id == "12345678901"
-        assert r.passcode == "Abc123"
+        assert r.passcode == "placeholder-passcode"
 
     def test_regional_subdomain(self):
         assert parse("https://us02web.zoom.us/j/12345678901").native_meeting_id == "12345678901"
@@ -179,6 +183,60 @@ class TestZoom:
 
     def test_zoom_events_rejected(self):
         assert_422("https://events.zoom.us/ev/abc123", "zoom events")
+
+    def test_password_spelling_is_read_as_well_as_pwd(self):
+        """A dropped passcode is invisible: the bot sits in a prompt nobody can see."""
+        r = parse("https://zoom.us/j/12345678901?password=placeholder-passcode")
+        assert r.passcode == "placeholder-passcode"
+
+
+class TestZoomHostedDomains:
+    """Zoom served under somebody else's hostname (fr_042129f5d53aa543).
+
+    An organisation can front its Zoom tenancy on its own domain, and the link it hands out then
+    carries no "zoom" anywhere. Recognised on the PATH SHAPE — Zoom's own two join paths, a 10-11
+    digit id, AND a passcode — never on the hostname, because the hostname is the part that was
+    replaced. Narrow on purpose: answering a wrong platform confidently is worse than the 422.
+    """
+
+    #: The exact link that 422'd in production, 2026-09-05.
+    LFX = ("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284"
+           "?password=placeholder-passcode-not-a-secret")
+
+    def test_the_linux_foundation_link_that_422d(self):
+        r = parse(self.LFX)
+        assert r.platform == "zoom"
+        assert r.native_meeting_id == "96088138284"
+        assert r.passcode == "placeholder-passcode-not-a-secret"
+
+    def test_the_hosted_read_says_so(self):
+        """A host we inferred rather than recognised is reported, the way the jitsi inference is."""
+        assert any("path shape" in w for w in parse(self.LFX).warnings)
+
+    def test_the_j_path_on_a_hosted_domain(self):
+        r = parse("https://meetings.example.org/j/98765432101?pwd=placeholder-pwd")
+        assert (r.platform, r.native_meeting_id, r.passcode) == ("zoom", "98765432101", "placeholder-pwd")
+
+    def test_without_a_passcode_it_is_not_claimed(self):
+        """THE negative case. A bare numeric path on an unknown host is not a meeting — the
+        passcode is what makes the shape recognizable, so it stays a 422."""
+        assert_422("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284",
+                   "unknown provider")
+
+    def test_a_nine_digit_id_is_not_claimed(self):
+        """9-digit legacy ids are accepted on zoom.us, where the HOST already proves the platform.
+        On an unknown host the id length is part of the evidence, so the shape stays 10-11."""
+        assert_422("https://portal.example.org/meeting/123456789?password=x", "unknown provider")
+
+    def test_an_ordinary_page_with_a_number_in_it_is_not_claimed(self):
+        assert_422("https://news.example.org/article/96088138284?password=x", "unknown provider")
+
+    def test_a_declared_jitsi_host_is_not_overruled(self, monkeypatch):
+        """An operator who named a host in VEXA_JITSI_HOSTS has said what it is, and a heuristic
+        must not overrule them. The link still fails — a two-segment path is not a jitsi room —
+        but it fails as JITSI, which is the branch that owns that host."""
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "video.corp.example")
+        assert_422("https://video.corp.example/j/12345678901?pwd=x", "jitsi")
 
 
 class TestJitsi:
@@ -244,3 +302,56 @@ class TestMisc:
 
     def test_unknown_provider_rejected(self):
         assert_422("https://example.com/meeting/123", "unknown provider")
+
+
+class TestHostnameSpoofing:
+    """A hostname matched by SUBSTRING can be spoofed from both ends, and both ends are cheap:
+    the attacker owns the registrable domain in ``zoom.us.evil.example`` and owns the label in
+    ``notzoom.us``. Either one used to satisfy ``"zoom.us" in host`` /
+    ``host.endswith("teams.live.com")``. The parser now compares the parsed ``hostname``
+    exactly, or as a dot-separated subdomain of a listed host
+    (CodeQL py/incomplete-url-substring-sanitization).
+    """
+
+    def test_zoom_suffix_spoof_is_not_a_recognised_zoom_host(self):
+        # /wc/join is a zoom.us-only path shape: on a host that is not zoom.us it is nothing.
+        assert_422("https://zoom.us.evil.example/wc/join/12345678901", "unknown provider")
+
+    def test_zoom_prefix_spoof_is_not_claimed(self):
+        assert_422("https://notzoom.us/wc/join/12345678901", "unknown provider")
+        assert_422("https://notzoomgov.com/wc/join/12345678901", "unknown provider")
+
+    def test_zoomgov_suffix_spoof_is_not_claimed(self):
+        assert_422("https://zoomgov.com.evil.example/wc/join/12345678901", "unknown provider")
+
+    def test_a_spoofed_host_gets_no_zoom_only_leniency(self):
+        """9-digit ids are accepted on zoom.us because the HOST proves the platform. A spoofed
+        host has proved nothing, so it does not inherit that leniency."""
+        assert_422("https://zoom.us.evil.example/j/123456789?pwd=x", "unknown provider")
+
+    def test_teams_live_suffix_spoof_is_not_claimed(self):
+        assert_422("https://teams.live.com.evil.example/meet/9361792952021?p=x",
+                   "unknown provider")
+
+    def test_teams_live_prefix_spoof_is_not_claimed(self):
+        assert_422("https://eviltteams.live.com/meet/9361792952021?p=x", "unknown provider")
+
+    def test_teams_enterprise_prefix_spoof_is_not_claimed(self):
+        assert_422("https://notteams.microsoft.com/meet/9361792952021?p=x", "unknown provider")
+        assert_422("https://notteams.microsoft.us/meet/9361792952021?p=x", "unknown provider")
+
+    def test_google_meet_suffix_spoof_is_not_google_meet(self):
+        assert parse("https://meet.google.com.evil.example/abc-defg-hij").platform != "google_meet"
+
+    # …and every legitimate host in the same shapes still parses.
+
+    def test_vanity_and_gov_zoom_subdomains_still_parse(self):
+        assert parse("https://us02web.zoom.us/j/12345678901").native_meeting_id == "12345678901"
+        assert parse("https://zoom.us/j/12345678901").native_meeting_id == "12345678901"
+        assert parse("https://frbmeetings.zoomgov.com/j/12345678901").native_meeting_id == "12345678901"
+        assert parse("https://zoomgov.com/j/12345678901").native_meeting_id == "12345678901"
+
+    def test_teams_hosts_still_parse(self):
+        assert parse("https://teams.live.com/meet/9361792952021?p=x").platform == "teams"
+        assert parse("https://gov.teams.microsoft.us/meet/12345678901234").platform == "teams"
+        assert parse("https://contoso.teams.microsoft.com/meet/12345678901234").platform == "teams"

@@ -365,8 +365,14 @@ async def test_multichunk_plus_empty_final_raw_serves_master_not_signal_chunk():
     assert len(recs) == 1
     rec = recs[0]
     rid, mf = rec["id"], _first_audio(rec)
-    # A3 defence-in-depth: the LISTED pointer must never be the zero-byte final-signal chunk.
-    assert not mf["storage_path"].endswith(f"/audio/{n:06d}.wav"), mf["storage_path"]
+    # A3 defence-in-depth: the stored pointer must never be the zero-byte final-signal chunk.
+    # Read off the DETAIL route: `storage_path` is upload bookkeeping and the list row no longer
+    # carries it (fr_db203061a7a1d953) — the property is about what is stored, not about which
+    # route shows it.
+    detail = client.get(f"/recordings/{rid}", headers=_HDRS)
+    assert detail.status_code == 200, detail.text
+    detail_mf = _first_audio(detail.json())
+    assert not detail_mf["storage_path"].endswith(f"/audio/{n:06d}.wav"), detail_mf["storage_path"]
 
     # Hit /raw DIRECTLY (no prior /master) — finalize-on-read must assemble + serve the master.
     raw = client.get(f"/recordings/{rid}/media/{mf['id']}/raw?type=audio", headers=_HDRS)

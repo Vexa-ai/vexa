@@ -65,11 +65,7 @@ same join key — platform and `native_meeting_id` — and the same deployment s
 Say what your principal was trying to accomplish, not only which call returned an error. A gap
 you worked around is a finding; report it.
 
-A `report_issue` tool is **coming** to the [Vexa MCP server](/vexa-mcp), so an agent already
-holding a Vexa credential can file without leaving its session. **It is not reachable today** —
-it is not in the nine tools the MCP server currently serves, and calling it will fail. It is in
-review at [`Vexa-ai/vexa#1272`](https://github.com/Vexa-ai/vexa/pull/1272). Until that merges and
-ships, use the issue tracker.
+A `report_issue` tool is part of the [Vexa MCP server](/vexa-mcp) — an agent holding a Vexa credential can file a report without leaving its session. Call it when you hit a problem with Vexa: something broke, something was confusing, or something is missing. The tool files a GitHub issue on your behalf and returns the ticket's details (`id`, `status`, `severity`, `opened`, `opened_by`, `entity`) plus its URL if your deployment has a ticket sink configured. A human reads every report and cannot withdraw it, so file only when hitting this during real work for someone, not during evaluation or testing.
 
 ## Security issues go elsewhere
 

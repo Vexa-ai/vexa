@@ -1,0 +1,75 @@
+{
+  "$id": "https://vexa.ai/contracts/flows.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "flows.v1",
+  "description": "THE CARRIER CENSUS. A carrier is an event type with exactly ONE producing domain: the domain that knows the fact publishes it, fire-and-forget, and a flow definition decides what happens next. This is the only way two domains couple, because a publish edge is not a dependency — a domain that publishes into flows does not depend on flows and works with no flows deployed at all. Registering a carrier promises three things: who owns it, the refs a consumer may rely on, and how often it fires. The third is the one that matters most: exactly_once_per_subject means the producer holds a durable stamp and will not re-emit, and it is required wherever a consumer takes an irreversible action.",
+  "$ref": "#/$defs/CarrierRegistry",
+  "$defs": {
+    "Domain": {
+      "enum": ["identity", "meetings", "flows", "agent", "runtime"],
+      "description": "The producing domain. It is the OWNER of the fact, not the transport: `onboarding.completed` is identity's because a person entering is identity's to know, regardless of who is told."
+    },
+    "Cardinality": {
+      "enum": ["exactly_once_per_subject", "once_per_occurrence"],
+      "description": "exactly_once_per_subject: the producer holds a durable stamp on the subject and will never re-emit — required wherever a consumer bills, provisions, or otherwise takes an irreversible action. once_per_occurrence: the fact describes an event that can genuinely happen again (a second meeting is a second fact), so a consumer that must not act twice dedupes on `source_event_id` itself."
+    },
+    "Carrier": {
+      "type": "object",
+      "required": ["event", "owner", "cardinality", "refs", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "description": "The `event_type` string on the wire — the same value a flow definition names in its `EventType`."
+        },
+        "owner": { "$ref": "#/$defs/Domain" },
+        "cardinality": { "$ref": "#/$defs/Cardinality" },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "The `subject_refs` keys a consumer may rely on being present. Every one of them is STATED by the producer rather than left for a consumer to infer, because a consumer that infers a field is a second place the answer lives — and the two places disagree the first time either changes."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "source_event_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the producer keys the fact for dedup. flows admits on `(source_event_id, flow)`, so a redelivery is a no-op there as well as at the producer — two guards for one thing, deliberately."
+        },
+        "stamp": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the producer's durable record of having emitted this fact lives (required in spirit for exactly_once_per_subject: the guarantee is the stamp, not the code path). Written in the SAME transaction as the thing it describes, so the record survives a publish that never lands and a later sweep can replay from it."
+        },
+        "published_by": {
+          "enum": ["repository", "private"],
+          "default": "repository",
+          "description": "WHERE THE PRODUCER LIVES, and it exists because the census is checked against this repository in both directions. `repository` (the meaning when the field is absent) says a producer in THIS tree declares the publish — a domain manifest's `publishes_events`, or a `config.v1` publish-edge key — and the census test requires one to be there. `private` says the producing surface is NOT in this cut: the fact is real, the consumer contract is real, and a deployment that mounts that domain receives it, but no declaration can exist here to point at. It is a statement about the TREE, never about the fact, and it is the narrow honest answer to a question that otherwise has only dishonest ones — deleting the entry (a consumer contract that describes a fact this deployment can still receive), or leaving it looking like an unproduced wish (which is exactly what the census's other direction exists to catch, so it would have to be switched off for everybody)."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "An exactly-once carrier without a named stamp is a promise with nothing behind it — the guarantee has to be a durable fact somebody can point at, not a shape of the code that happens to publish today.",
+          "if": { "properties": { "cardinality": { "const": "exactly_once_per_subject" } }, "required": ["cardinality"] },
+          "then": { "required": ["stamp"] }
+        }
+      ]
+    },
+    "CarrierRegistry": {
+      "type": "object",
+      "required": ["contract", "carriers"],
+      "additionalProperties": false,
+      "properties": {
+        "contract": { "const": "flows.v1" },
+        "carriers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Carrier" },
+          "description": "Every carrier this deployment's domains publish. A census, not a wish: an entry here asserts that some domain publishes this fact today."
+        }
+      }
+    }
+  }
+}

@@ -107,3 +107,115 @@ class TestConstructMeetingUrl:
 
     def test_zoom_still_requires_explicit_url(self):
         assert construct_meeting_url("zoom", "84335626851") is None
+
+
+class TestParseZoomHostedDomain:
+    """Zoom served under somebody else's hostname — the twin of the MCP link parser's
+    hosted-domain branch (fr_042129f5d53aa543), kept in step with it deliberately: the two
+    parsers answer the same question on two doors, and a link that parses on one and 422s on the
+    other is the worst of both.
+
+    Matched on the PATH SHAPE plus a passcode parameter, never on the hostname — the hostname is
+    the part a hosted front door replaces.
+    """
+
+    LFX = ("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284"
+           "?password=placeholder-passcode-not-a-secret")
+
+    def test_the_linux_foundation_link(self):
+        assert parse_meeting_url(self.LFX) == ("zoom", "96088138284")
+
+    def test_a_host_that_does_not_say_zoom_at_all(self):
+        assert parse_meeting_url("https://meetings.example.org/j/98765432101?pwd=placeholder-pwd") == (
+            "zoom", "98765432101",
+        )
+
+    def test_without_a_passcode_it_is_not_claimed(self):
+        """The negative case: a bare numeric path on an unknown host is not a meeting."""
+        assert parse_meeting_url("https://meetings.example.org/meeting/98765432101") is None
+
+    def test_an_ordinary_page_with_a_number_in_it_is_not_claimed(self):
+        assert parse_meeting_url("https://news.example.org/article/96088138284?password=x") is None
+
+    def test_the_ics_free_text_scan_does_not_infer_it(self):
+        """``generic_hosts=False`` exists so a calendar description full of arbitrary links does
+        not import one as a meeting; a hostname-free inference is exactly what it excludes."""
+        hostname_free = "https://meetings.example.org/j/98765432101?pwd=placeholder-pwd"
+        assert parse_meeting_url(hostname_free, generic_hosts=False) is None
+        assert find_meeting_link(f"join here {hostname_free} thanks") is None
+        # The LFX host is a different case and is unaffected: it literally contains "zoom", so the
+        # long-standing hostname branch claims it in every mode, free-text scan included.
+        assert find_meeting_link(f"join here {self.LFX} thanks") == (
+            "zoom", "96088138284", self.LFX,
+        )
+
+    def test_a_declared_jitsi_host_is_not_overruled(self, monkeypatch):
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "video.corp.example")
+        assert parse_meeting_url("https://video.corp.example/j/12345678901?pwd=x") is None
+
+
+class TestHostnameSpoofing:
+    """A hostname matched by SUBSTRING can be spoofed from both ends, and both ends are cheap:
+    the attacker owns the registrable domain in ``teams.live.com.evil.example`` and owns the
+    label in ``evilteams.live.com``. Either one used to satisfy ``"teams.live.com" in host``.
+    The parser now compares the parsed ``hostname`` exactly, or as a dot-separated subdomain of
+    a listed host (CodeQL py/incomplete-url-substring-sanitization).
+
+    The assertion that matters is that the spoof is not answered with the REAL platform — a
+    caller acting on ``("teams", <id>)`` sends a bot to Microsoft on an attacker's say-so.
+    """
+
+    def test_google_meet_suffix_spoof_is_not_google_meet(self):
+        # Falls through to the pasted-link jitsi naming heuristic (the host does carry a "meet"
+        # label), which is honest about what it is — what it must never do is claim google_meet.
+        got = parse_meeting_url("https://meet.google.com.evil.example/abc-defg-hij")
+        assert got != ("google_meet", "abc-defg-hij")
+        assert got is None or got[0] == "jitsi"
+
+    def test_google_meet_in_the_path_is_not_google_meet(self):
+        assert parse_meeting_url("https://evil.example/meet.google.com/abc-defg-hij") is None
+
+    def test_teams_suffix_spoof_is_not_claimed(self):
+        assert parse_meeting_url(
+            "https://teams.live.com.evil.example/l/meetup-join/19:meeting_AbCd@thread.v2"
+        ) is None
+        assert parse_meeting_url(
+            "https://teams.microsoft.com.evil.example/meet/9361792952021?p=x"
+        ) is None
+
+    def test_teams_prefix_spoof_is_not_claimed(self):
+        assert parse_meeting_url("https://eviltteams.live.com/meet/9361792952021?p=x") is None
+        assert parse_meeting_url("https://notteams.microsoft.com/meet/9361792952021?p=x") is None
+
+    def test_real_teams_subdomains_still_parse(self):
+        assert parse_meeting_url("https://teams.live.com/meet/9361792952021?p=abc") == (
+            "teams", "9361792952021",
+        )
+        assert parse_meeting_url("https://eu.teams.microsoft.com/meet/9361792952021?p=abc") == (
+            "teams", "9361792952021",
+        )
+
+    def test_google_meet_itself_still_parses(self):
+        assert parse_meeting_url("https://meet.google.com/abc-defg-hij") == (
+            "google_meet", "abc-defg-hij",
+        )
+
+
+class TestTeamsThreadIdIsBounded:
+    """The thread-id scan runs ``.search()`` over caller-supplied text, so the repeat is bounded
+    (CodeQL py/polynomial-redos). The bound is far above any real id; what it removes is the
+    quadratic retry an attacker-chosen string would otherwise buy."""
+
+    def test_a_realistic_thread_id_parses(self):
+        thread = "19:meeting_" + "M" * 90 + "@thread.v2"
+        assert parse_meeting_url(f"https://teams.microsoft.com/l/meetup-join/{thread}") == (
+            "teams", thread,
+        )
+
+    def test_an_adversarial_string_terminates(self):
+        import time
+
+        payload = "19:meeting_" + "a" * 40000
+        start = time.monotonic()
+        assert parse_meeting_url(f"https://teams.microsoft.com/l/meetup-join/{payload}") is None
+        assert time.monotonic() - start < 2.0

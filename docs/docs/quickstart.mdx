@@ -38,7 +38,7 @@ with one command.
 - On Apple Silicon: arm64 images are published best-effort (not yet CI-validated) — see
   [Deployment](/deployment#quick-start-docker-compose) for details.
 - A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
-  [self-host transcription](/deployment#air-gapped) on a GPU. Default spawns **require** STT and
+  [self-host transcription](/deployment#no-egress) on a GPU. Default spawns **require** STT and
   answer `503` when it is unset; capture-only is `{"transcribe_enabled": false}` on `POST /bots`
   (or `TRANSCRIBE_ENABLED=false` for the whole deployment). See
   [Configuration](/configuration#transcription-stt).
@@ -161,6 +161,6 @@ cycle. Full walkthrough: [Calendar sync](/how-to/calendar-sync). Complete endpoi
     Mint, scope, and rotate API keys for the full stack.
   </Card>
   <Card title="Deploy to production" icon="server" href="/deployment">
-    Docker Compose self-host, configuration, and air-gapped transcription.
+    Docker Compose self-host, configuration, and no-egress transcription.
   </Card>
 </CardGroup>

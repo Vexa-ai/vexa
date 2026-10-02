@@ -18,6 +18,10 @@ ws://localhost:18056/ws?api_key=<API_KEY>
 
 A missing key gets a `missing_api_key` error frame; an invalid key is rejected with close code **4401**.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ## Subscribe
 
 Send a `subscribe` action naming the meetings you want. The socket multiplexes — subscribe to several at

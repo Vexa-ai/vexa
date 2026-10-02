@@ -1,12 +1,13 @@
-/** Default bot name shown in the terminal surfaces.
+/** Default bot name for terminal join requests.
  *
- *  NEXT_PUBLIC_DEFAULT_BOT_NAME sets the meeting bot name the terminal sends to the API
- *  when joining meetings. In client-bundled code Next.js inlines NEXT_PUBLIC_* at build time,
- *  so the knob takes effect per deployment build — which matches this feature's intent
- *  (a per-deployment default), and the call-time function keeps tests correct.
+ *  Returns `undefined` when unset so `JSON.stringify({ bot_name: defaultBotName() })` omits the field
+ *  and meeting-api names the bot from `DEFAULT_BOT_NAME` — the knob operators can change with a
+ *  restart. An explicit `bot_name` in a request still wins over both.
  *
- *  Read via a function (not a module constant) so tests that set the env after load observe it.
+ *  `NEXT_PUBLIC_DEFAULT_BOT_NAME` is inlined into the bundle at build time (the Dockerfile takes it as
+ *  a build arg), so setting it pins a name into the image and makes a rename cost a rebuild.
  */
-export function defaultBotName(): string {
-  return process.env.NEXT_PUBLIC_DEFAULT_BOT_NAME?.trim() || "Vexa";
+export function defaultBotName(): string | undefined {
+  const name = process.env.NEXT_PUBLIC_DEFAULT_BOT_NAME?.trim();
+  return name || undefined;
 }

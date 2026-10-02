@@ -21,6 +21,19 @@ export async function dismissZoomPopups(page: Page): Promise<void> {
     // Doesn't block joining but spams logs and remains on screen
     // until manually dismissed. Click any of OK / Dismiss / Got it / Continue.
     { selector: '.zm-modal:has-text("mic is muted") button:has-text("OK"), .zm-modal:has-text("mic is muted") button:has-text("Got it"), .zm-modal:has-text("mic is muted") button:has-text("Dismiss"), .zm-modal:has-text("mic is muted") button:has-text("Continue")', label: 'mic-muted advisory' },
+    // Zoom advisory toast (confirmed live, in the recording frame): "For a better meeting
+    // experience, enable the option 'Use graphics/hardware acceleration' under browser system
+    // settings. Learn more". A dark non-blocking bar pinned top-center over the meeting — so it
+    // lands in the recording — dismissed only by an ✕ close control (NOT a text button), with a
+    // "Learn more" link we must never click. Anchored on the distinctive word "acceleration"
+    // (the wrapper class drifts across client builds) inside any of Zoom's notification/toast/modal
+    // shapes, then the close control by aria-label or a "close" class — never "Learn more".
+    { selector: [
+        ':is([class*="notification"], [class*="toast"], [class*="alert"], [class*="tip"], .zm-modal, [role="alert"], [role="dialog"]):has-text("acceleration") [aria-label*="close" i]',
+        ':is([class*="notification"], [class*="toast"], [class*="alert"], [class*="tip"], .zm-modal, [role="alert"], [role="dialog"]):has-text("acceleration") [class*="close" i]',
+        ':is([class*="notification"], [class*="toast"], [class*="alert"], [class*="tip"], .zm-modal, [role="alert"], [role="dialog"]):has-text("acceleration") :is(button, [role="button"]):has-text("Dismiss")',
+        ':is([class*="notification"], [class*="toast"], [class*="alert"], [class*="tip"], .zm-modal, [role="alert"], [role="dialog"]):has-text("acceleration") :is(button, [role="button"]):has-text("Got it")',
+      ].join(', '), label: 'hardware-acceleration advisory' },
   ];
 
   for (const { selector, label } of dismissTargets) {

@@ -397,7 +397,7 @@ async function main(): Promise<void> {
     // Let the tail play out: the lane's TTL finalize and its roll are heartbeat-driven, and a tape
     // that simply stops would leave the last turn's pending tail unexamined.
     await clock.advanceTo(evs.length ? evs[evs.length - 1].t + 30_000 : clock.now());
-    console.log(`virtual time: ${clock.heartbeatsFired()} heartbeat(s) fired across the tape`);
+    console.log(`virtual time: ${clock.heartbeatsFired()} heartbeat(s) fired, ${clock.advancedMs()}ms of lane clock advanced, across the tape`);
   }
   await tc.dispose();
 

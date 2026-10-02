@@ -64,7 +64,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
+        run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
       # No COMPOSE_NO_BUILD: the stack builds FROM THIS PR's TREE — that is the point.

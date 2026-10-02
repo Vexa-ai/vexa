@@ -48,6 +48,15 @@ def _bare(path: Path) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def _local_push_targets_allowed(tmp_path, monkeypatch):
+    """This file pushes to a LOCAL bare repo so the suite never touches the network. A scheme-less
+    path is refused as a push target by default — it is a location on the SERVER, and a caller who
+    can name one can make this process carry their PAT to it (see control_plane/repo_ref). The
+    self-host opt-in is what makes the local-bare-repo fixture legal; every test here inherits it."""
+    monkeypatch.setenv("VEXA_ALLOW_LOCAL_REPO_ROOT", str(tmp_path))
+
+
 def test_publish_creates_repo_and_pushes_full_history(tmp_path):
     """The create path: the injected creator is called with the caller's args and its returned URL is
     pushed to — full history, head sha returned, repo_url token-free."""
@@ -131,12 +140,15 @@ def test_token_never_persisted_and_errors_redacted(tmp_path):
     _run(ws, "remote", "add", "origin", "https://example.com/keep.git")
     bare = _bare(tmp_path / "remote.git")
 
-    publish_workspace(root, "u1", token=TOKEN, remote_url=f"file://{bare}")
+    # A plain path, not `file://…`: an explicit file transport is refused everywhere now (it is one of
+    # the two git "URLs" that are not network fetches at all), while a path under an opted-in local
+    # root is exactly the self-host case this fixture stands in for.
+    publish_workspace(root, "u1", token=TOKEN, remote_url=str(bare))
 
     cfg = (ws / ".git" / "config").read_text()
     assert TOKEN not in cfg
     assert _run(ws, "remote", "get-url", "origin") == "https://example.com/keep.git"
-    assert _run(ws, "remote", "get-url", PUBLISH_REMOTE) == f"file://{bare}"
+    assert _run(ws, "remote", "get-url", PUBLISH_REMOTE) == str(bare)
 
     # a failing push (bogus remote) surfaces a token-free error
     with pytest.raises(PublishError) as ei:

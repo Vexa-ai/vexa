@@ -11,7 +11,7 @@ The mapping lives in [`../manifest.sh`](../manifest.sh) under `CARVE_OVERRIDES`
 
 | File | Replaces | Why |
 |---|---|---|
-| `Makefile` | root `Makefile` | Compose-only entrypoint (`make all` / `down`). The mono's root Makefile references `deploy/lite`, which is excluded from the carve. |
+| _(none for the root Makefile)_ | — | `deploy/` is carved whole since the v0.12.26 train, so the mono's root Makefile is valid as-is. |
 
 Keep this layer minimal — prefer fixing the source in the mono so the carve
 stays a faithful subset. Use an override only when the file genuinely must

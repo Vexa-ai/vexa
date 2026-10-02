@@ -19,7 +19,7 @@ from .backend import Backend, WorkloadHandle
 from .clock import Clock, SystemClock
 from .models import RuntimeEvent, RuntimeState, StopReason, WorkloadSpec, WorkloadStatus
 from .process_backend import ProcessBackend
-from .profiles import ProfileRegistry, Runnable, default_registry
+from .profiles import Profile, ProfileRegistry, Runnable, default_registry
 from .store import (
     InMemoryStore,
     OwnerResolver,
@@ -196,7 +196,14 @@ class Runtime:
             # layered on top so an explicit spec value always wins. Without this merge the base_env
             # never reaches the spawned pod and chart-set tuning is dead config (issue #771).
             effective_env = {**profile.base_env, **spec.env}
-            self._handles[spec.workloadId] = self.backend.start(spec.workloadId, runnable, effective_env)
+            # Resource intent must cross the Backend port or it is dead contract: the schema accepts
+            # `resources`, and a quota-controlled namespace rejects every container that declares
+            # none. The spec's own sizing wins; otherwise the profile's deployment default (the
+            # chart's per-class sizing) applies; neither ⇒ None, today's unsized spawn.
+            effective_resources = spec.resources or profile.resources
+            self._handles[spec.workloadId] = self.backend.start(
+                spec.workloadId, runnable, effective_env, effective_resources,
+            )
         except Exception as exc:
             # Record the honest terminal state (persist + emit) FIRST — GET /workloads and the
             # callback stream must still see stopped/start_failed — THEN raise so the API answers a
@@ -289,12 +296,16 @@ def _coerce_registry(profiles) -> ProfileRegistry:
         return default_registry()
     if isinstance(profiles, ProfileRegistry):
         return profiles
-    runnables: dict[str, Runnable] = {}
+    resolved: dict[str, object] = {}
     for name, value in profiles.items():
-        if isinstance(value, Runnable):
-            runnables[name] = value
+        # A full Profile carries the deployment defaults (timeouts, base env, per-class sizing); a
+        # bare Runnable or command list is the shorthand for "how to run it, nothing configured".
+        if isinstance(value, (Profile, Runnable)):
+            resolved[name] = value
         elif isinstance(value, list):
-            runnables[name] = Runnable(command=value)
+            resolved[name] = Runnable(command=value)
         else:
-            raise TypeError(f"profile {name!r}: expected Runnable or command list, got {type(value)}")
-    return ProfileRegistry(runnables)
+            raise TypeError(
+                f"profile {name!r}: expected Profile, Runnable or command list, got {type(value)}"
+            )
+    return ProfileRegistry(resolved)

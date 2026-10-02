@@ -82,6 +82,8 @@ loaded and there is no network:
 - `ending-context.smoke.test.ts` — speech-end cuts send a small trailing context pad
   to STT so final words survive, while transcript timestamps stay clipped to the
   committed speech boundary.
+- `text-only-stt.smoke.test.ts` — the minimum custom-STT response (`text` without
+  provider timestamps) spans the submitted speech window and remains publishable.
 - `short-ui-switch.smoke.test.ts` — a short isolated Zoom/Teams UI speaker switch
   right after a different speaker stays provisional rather than stamping a wrong name;
   a longer turn by the new speaker still binds.

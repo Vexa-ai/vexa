@@ -32,6 +32,29 @@ const receipt = (o) => ({
 });
 const digestErrs = (r) => validateReceipt(r, V).errs.filter((e) => /truncated image digest/.test(e));
 
+// ── the candidate rule (the release, or one of ITS candidates) ─────────────────────────────
+
+const candErrs = (r) => validateReceipt(r, V).errs.filter((e) => /^candidate /.test(e));
+
+test("GREEN: candidate === version (witnessed after publish) passes", () => {
+  assert.equal(candErrs(receipt({ candidate: V })).length, 0);
+});
+
+test("GREEN: a candidate OF this release passes — the stable publish copies the witnessed bytes", () => {
+  assert.equal(candErrs(receipt({ candidate: `${V}-rc.5` })).length, 0);
+  assert.equal(candErrs(receipt({ candidate: `${V}-rc.18` })).length, 0);
+});
+
+test("RED: a candidate of a DIFFERENT release is rejected", () => {
+  const errs = candErrs(receipt({ candidate: "v9.9.8-rc.1" }));
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /not v9\.9\.9 nor a v9\.9\.9-rc/);
+});
+
+test("RED: a version PREFIX is not a candidate of it (v9.9.9 vs v9.9.90-rc.1)", () => {
+  assert.equal(candErrs(receipt({ candidate: "v9.9.90-rc.1" })).length, 1);
+});
+
 // ── the truncated-digest rule — RED shapes ──────────────────────────────────────────────────────
 
 test("RED: 8-hex prefix + ellipsis in deployment (the shipped v0.12.10 shape) flags, naming the field", () => {

@@ -3,7 +3,7 @@
 This directory contains release-time instruments that do not enter any Vexa
 runtime image.
 
-`candidate-image-map.mjs` validates a frozen ten-image candidate map and proves
+`candidate-image-map.mjs` validates a frozen candidate map (eleven images under schema 2, ten under schema 1) and proves
 that the source paths copied by each release Dockerfile are tree-identical to
 that image's witnessed build source. Root-context images include
 `.dockerignore`, because it shapes the bytes Docker receives. A difference is a

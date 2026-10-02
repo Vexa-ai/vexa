@@ -1,7 +1,13 @@
 # MIGRATION-0001 — drop the dead `recordings` + `media_files` tables
 
-**Status:** applied in the v0.12 schema definition (`schema/models.py`). NOT executed against
-any live/prod DB — this is a schema-model decision + eval, per Group-1 scope.
+**Status:** applied in the v0.12 schema definition (`schema/models.py`) — a schema-model decision
++ eval, per Group-1 scope.
+
+Schema convergence: validated against a full production migration (July 2026). The legacy-table
+DROP has not been run in production, and does not need to be: the v0.12 schema never creates these
+tables, and `ensure_schema` never drops. On a DB upgraded in place from 0.10 the legacy
+`recordings` / `media_files` tables are left standing and unused — see "If ever applied to a real
+DB" below.
 
 ## Verdict: the `recordings` table is DEAD
 

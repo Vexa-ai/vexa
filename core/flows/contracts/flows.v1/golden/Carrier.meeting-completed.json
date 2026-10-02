@@ -1,0 +1,14 @@
+{
+  "event": "meeting.completed",
+  "owner": "meetings",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "uid",
+    "meeting_id",
+    "native",
+    "platform",
+    "completion_reason"
+  ],
+  "source_event_id": "done-<meeting_id> — keyed to the meeting, matching invite_intake's own emit_completed id so a redelivery, or the second producer described below, dedupes at the flows intake",
+  "description": "A meeting finished and its transcript is ready to work with; triggers post_meeting. HANDED OVER FROM FLOWS (F168/F181), on the same terms as meeting.started: meeting-api now publishes it (meeting_api/events.py, config.v1 publish-edge) from its own lifecycle callback the instant a meeting's DB row flips to completed — the fix for an ad hoc (MCP-dispatched) meeting that previously reached no flow at all, because only invite_intake's own emit_completed ever told flows a meeting finished. invite_intake v3's emit_completed keeps running for calendar-intake meetings and dedupes against meeting-api's publish at admission (same source_event_id), not here. refs correction: the census entry this golden mirrors previously read [\"subject\", \"meeting_id\"], but neither producer has ever emitted a `subject` key — both use `uid` (flows_defs/production.py ctx.prior[\"ensure_user\"][\"uid\"]; meeting-api's own user_id column, the same identity user id space). native is required (post_meeting's process_meeting step reads ctx.refs[\"native\"] with no .get() fallback); platform/completion_reason are extra context neither producer's own consumer strictly needs today. meeting-api's publish carries no participants/group (its domain holds no invite) — for a calendar-intake meeting where meeting-api's publish wins the admission race (it typically does: it fires the instant the row completes, while invite_intake's own emit_completed only fires on its next poll tick), process_meeting's room-read degrades to an EMPTY room rather than to invite order. Flagged in the filed issue, not silently absorbed."
+}

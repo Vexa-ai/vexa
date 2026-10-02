@@ -30,6 +30,7 @@ from typing import Callable, Optional
 from shared.adapters import GitPushError, push_with_token
 from shared.gitenv import scrubbed_git_env
 
+from control_plane.repo_ref import assert_fetchable
 from control_plane.workspace_attach import SEED_SLOT, _safe_subject_dir, attached_workspaces
 
 log = logging.getLogger(__name__)
@@ -209,6 +210,9 @@ def publish_workspace(
     created = False
     if remote_url:
         remote_url = remote_url.strip()
+        # A caller-supplied push target is the same instruction-to-this-server as a clone source: it
+        # carries the caller's PAT to whatever host it names. RepoRefError is a ValueError → API 400.
+        assert_fetchable(remote_url)
     else:
         name = (repo_name or "").strip()
         if not _REPO_NAME_RE.match(name):

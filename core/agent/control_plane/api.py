@@ -59,6 +59,7 @@ from control_plane.workspace_attach import (
     swap_workspace,
     workspace_dir_for,
 )
+from control_plane.repo_ref import RepoRefError, assert_fetchable
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_origin, remote_status
 from control_plane.workspace_purpose import read_purpose, write_purpose
@@ -1569,6 +1570,12 @@ def create_app(
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
         subject = subject_of(request)
+        # The repository is a caller-supplied instruction to THIS SERVER to go and fetch something, so
+        # the transport and the host are settled before anything reaches git (see control_plane/repo_ref).
+        try:
+            assert_fetchable(body.repo)
+        except RepoRefError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
         try:
             result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
@@ -1622,6 +1629,10 @@ def create_app(
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
         subject = subject_of(request)
+        try:
+            assert_fetchable(body.repo)     # same gate as swap — see control_plane/repo_ref
+        except RepoRefError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
         try:
             result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",

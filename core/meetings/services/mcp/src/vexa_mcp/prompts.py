@@ -24,12 +24,12 @@ PROMPTS: Dict[str, mcp_types.Prompt] = {
                 required=False,
             ),
             mcp_types.PromptArgument(
-                name="meeting_platform",
+                name="platform",
                 description="google_meet | teams | zoom (optional if meeting_url is provided).",
                 required=False,
             ),
             mcp_types.PromptArgument(
-                name="meeting_id",
+                name="native_meeting_id",
                 description="Native meeting ID (optional if meeting_url is provided).",
                 required=False,
             ),
@@ -45,8 +45,8 @@ PROMPTS: Dict[str, mcp_types.Prompt] = {
         title="Vexa: During Meeting",
         description="Check bot status and retrieve current transcript snapshot.",
         arguments=[
-            mcp_types.PromptArgument(name="meeting_platform", description="google_meet | teams | zoom", required=True),
-            mcp_types.PromptArgument(name="meeting_id", description="Native meeting ID", required=True),
+            mcp_types.PromptArgument(name="platform", description="google_meet | teams | zoom", required=True),
+            mcp_types.PromptArgument(name="native_meeting_id", description="The platform's own meeting id — exactly the `native_meeting_id` the tools return", required=True),
         ],
     ),
     "vexa.post_meeting": mcp_types.Prompt(
@@ -54,8 +54,8 @@ PROMPTS: Dict[str, mcp_types.Prompt] = {
         title="Vexa: Post Meeting",
         description="Fetch transcript + recordings and produce follow-ups.",
         arguments=[
-            mcp_types.PromptArgument(name="meeting_platform", description="google_meet | teams | zoom", required=True),
-            mcp_types.PromptArgument(name="meeting_id", description="Native meeting ID", required=True),
+            mcp_types.PromptArgument(name="platform", description="google_meet | teams | zoom", required=True),
+            mcp_types.PromptArgument(name="native_meeting_id", description="The platform's own meeting id — exactly the `native_meeting_id` the tools return", required=True),
         ],
     ),
     "vexa.teams_link_help": mcp_types.Prompt(
@@ -77,8 +77,8 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
 
     if name == "vexa.meeting_prep":
         meeting_url = (args.get("meeting_url") or "").strip()
-        meeting_platform = (args.get("meeting_platform") or "").strip()
-        meeting_id = (args.get("meeting_id") or "").strip()
+        platform = (args.get("platform") or "").strip()
+        native_meeting_id = (args.get("native_meeting_id") or "").strip()
         notes = (args.get("notes") or "").strip()
 
         return mcp_types.GetPromptResult(
@@ -98,8 +98,8 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
                         "- Keep any provided notes in the conversation for the post-meeting summary "
                         "(storing notes on the meeting record is not available via this MCP yet).\n\n"
                         f"Input:\n- meeting_url: {meeting_url or '(none)'}\n"
-                        f"- meeting_platform: {meeting_platform or '(none)'}\n"
-                        f"- meeting_id: {meeting_id or '(none)'}\n"
+                        f"- platform: {platform or '(none)'}\n"
+                        f"- native_meeting_id: {native_meeting_id or '(none)'}\n"
                         f"- notes: {notes or '(none)'}\n\n"
                         "Now do the tool calls and tell me what you did and what to do next."
                     ),
@@ -108,8 +108,8 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
         )
 
     if name == "vexa.during_meeting":
-        meeting_platform = (args.get("meeting_platform") or "").strip()
-        meeting_id = (args.get("meeting_id") or "").strip()
+        platform = (args.get("platform") or "").strip()
+        native_meeting_id = (args.get("native_meeting_id") or "").strip()
         return mcp_types.GetPromptResult(
             description="During-meeting helper prompt using Vexa MCP tools.",
             messages=[
@@ -117,7 +117,7 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
                     role="user",
                     content=t(
                         "You are my during-meeting assistant using Vexa.\n\n"
-                        f"Meeting: platform={meeting_platform}, id={meeting_id}\n\n"
+                        f"Meeting: platform={platform}, id={native_meeting_id}\n\n"
                         "Steps:\n"
                         "- Call `get_bot_status` to confirm the bot is active / requested.\n"
                         "- Call `get_meeting_transcript` to fetch the current transcript snapshot.\n"
@@ -130,8 +130,8 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
         )
 
     if name == "vexa.post_meeting":
-        meeting_platform = (args.get("meeting_platform") or "").strip()
-        meeting_id = (args.get("meeting_id") or "").strip()
+        platform = (args.get("platform") or "").strip()
+        native_meeting_id = (args.get("native_meeting_id") or "").strip()
         return mcp_types.GetPromptResult(
             description="Post-meeting helper prompt using Vexa MCP tools.",
             messages=[
@@ -139,7 +139,7 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
                     role="user",
                     content=t(
                         "You are my post-meeting assistant using Vexa.\n\n"
-                        f"Meeting: platform={meeting_platform}, id={meeting_id}\n\n"
+                        f"Meeting: platform={platform}, id={native_meeting_id}\n\n"
                         "Steps:\n"
                         "- Call `get_meeting_transcript` to fetch the meeting status, notes, and segments.\n"
                         "- Call `list_recordings` (optionally `get_recording`) if recordings are expected.\n"

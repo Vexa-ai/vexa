@@ -14,8 +14,8 @@ header:
 
 project:
   name: Vexa
-  homepage: https://core.vexa.ai
-  roadmap: https://docs.vexa.ai/roadmap/status
+  homepage: https://terminal.vexa.ai
+  roadmap: https://docs.core.vexa.ai/roadmap/status
   administrators:
     - name: Dmitry Grankin
       affiliation: Vexa
@@ -26,6 +26,10 @@ project:
       affiliation: Morgan Stanley
       email: Peter.Smulovics@morganstanley.com
       social: https://github.com/psmulovics
+      primary: false
+    - name: Preeti Gupta
+      affiliation: Citi
+      social: https://github.com/preetiagarwal26
       primary: false
   documentation:
     quickstart-guide: https://github.com/Vexa-ai/vexa-core#quickstart

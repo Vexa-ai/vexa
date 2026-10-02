@@ -11,7 +11,12 @@ This is the seam every agent surface (sessions · routines · workspace · chat)
 from fastapi.testclient import TestClient
 
 from gateway import create_app
-from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
+from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis, needs_agent
+
+# EVERY test here names the agent domain explicitly and asserts its proxy. A build that ships no
+# agent manifest has no such surface, and an app that NAMED it would rightly refuse to boot — so
+# the file reports as skipped there, with the reason, rather than passing on a fiction.
+pytestmark = needs_agent
 
 AUTH = {"x-api-key": VALID_KEY}
 
@@ -107,16 +112,16 @@ def test_chat_keyless_is_401():
 
 
 def test_meeting_stream_is_streamed_with_injected_user():
-    """GET /api/meeting/stream (the live transcript+copilot SSE) is streamed (not buffered by the
+    """GET /api/meeting/stream (the live transcript SSE) is streamed (not buffered by the
     catch-all) and carries the injected X-User-Id, with its query (meeting_id/session_uid) forwarded."""
     client, downstream = _client(FakeDownstream(stream_chunks=[
         b'data: {"type":"transcript","text":"hello"}\n\n',
-        b'data: {"type":"copilot","text":"note"}\n\n',
+        b'data: {"type":"meeting-end"}\n\n',
     ]))
     r = client.get("/agent/meeting/stream?meeting_id=m1&session_uid=s1", headers=AUTH)
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
-    assert '"type":"transcript"' in r.text and '"type":"copilot"' in r.text
+    assert '"type":"transcript"' in r.text and '"type":"meeting-end"' in r.text
     assert downstream.last["url"] == "http://agent-api/api/meeting/stream"
     assert downstream.last["params"] == {"meeting_id": "m1", "session_uid": "s1"}
     assert downstream.last["headers"]["x-user-id"] == "7"

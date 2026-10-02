@@ -554,3 +554,58 @@ async def test_rest_after_completion_with_redis_wiped_serves_transcript_and_proc
     assert [n["text"] for n in views[0]["doc"]["notes"]] == ["Closing words, cleaned."]
     assert views[0]["params"] == {"model": "claude-x"}
     assert_api_conforms("TranscriptionResponse", body)
+
+
+# ── A18: the drain's justification for being GONE was false, and this is the check ─────────────
+
+def test_the_processed_notes_producer_is_still_here():
+    """THE FINDING. The drain was deleted with the justification "PRD decision 34 removed the
+    producer: nothing writes that stream". On this candidate the producer is alive in all three of
+    its parts, so the claim was false and `data.processed.views[]` simply stopped being written —
+    the terminal's durable notes pane and the schedule digest's `notes` flag go permanently empty
+    the moment the bot stops, which is the exact bug the drain exists for.
+
+    Read from SOURCE, deliberately: this is a cross-domain claim about the AGENT domain (meetings ⊥
+    agent — no import, no call), and the only honest way to check "does anybody still write this
+    stream" is to look. If the producer is genuinely removed one day, this test fails and the drain
+    goes with it — in ONE change. A half-applied removal, in either direction, is the failure."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[5]
+    dispatch = (root / "core/agent/control_plane/dispatch.py").read_text()
+    engine = (root / "core/agent/worker/engine.py").read_text()
+    worker = (root / "core/agent/worker/meeting.py").read_text()
+
+    assert "VEXA_TRANSCRIPT_STREAM" in dispatch, (
+        "the meeting worker is no longer dispatched — if that is true, delete the drain too")
+    assert 'proc_stream=f"proc:meeting:{row_id}"' in engine, (
+        "the worker is no longer given a proc stream — if that is true, delete the drain too")
+    assert "stream.xadd(proc_stream, fields)" in worker, (
+        "nothing xadds cleaned notes any more — if that is true, delete the drain too")
+
+
+def test_the_drain_and_its_pending_re_drain_are_wired_into_the_tick_and_the_finalize():
+    """The two call sites the removal took out. Asserted from source rather than only through
+    behaviour, because the behavioural tests above pass a sink that implements the merge — and the
+    defect was that nothing ever CALLED it."""
+    import inspect
+
+    from meeting_api.collector import db_writer as dw
+
+    assert "flush_meeting_processed" in inspect.getsource(dw.db_writer_tick)
+    assert "PROC_PENDING_KEY" in inspect.getsource(dw.db_writer_tick)
+    assert "flush_meeting_processed" in inspect.getsource(dw.finalize_meeting)
+
+
+def test_the_grace_period_is_declared_config(monkeypatch):
+    """`PROC_PENDING_GRACE_SEC` is read from the environment, so gate:config-contract requires it in
+    meeting-api's declaration — an undeclared env read is a value an operator can set that reaches
+    nothing (or, here, one they cannot set at all)."""
+    import json
+    import pathlib
+
+    decl = json.loads((pathlib.Path(__file__).resolve().parents[1]
+                       / "src/meeting_api/config.v1.json").read_text())
+    entry = next((k for k in decl["keys"] if k["key"] == "PROC_PENDING_GRACE_SEC"), None)
+    assert entry is not None, "PROC_PENDING_GRACE_SEC is read by db_writer.py and declared nowhere"
+    assert entry["class"] == "defaulted" and entry["default"] == "120"

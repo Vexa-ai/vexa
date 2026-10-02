@@ -967,14 +967,216 @@ def test_native_meeting_id_with_url_chars_is_422_not_join_failure(monkeypatch):
         )
         assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
 
-    # POSITIVE CONTROL — the bare id + a separate passcode still spawns (the meeting-13564 pattern:
-    # pass the passcode in its own field, not glued onto the id).
+    # POSITIVE CONTROL — the id the refusal RECOMMENDS is accepted: a bare id plus a separate
+    # passcode is not itself refused by this guard.
+    #
+    # This control proves acceptance and NOTHING MORE, which is exactly how far it should be read:
+    # it asserts an HTTP status, so it cannot see the URL the bot is handed. The refusal above
+    # sends callers down this path, so the path's real end — a passcode-bearing Teams URL in the
+    # invocation — is proven where it actually lives, one test below.
     repo = InMemoryMeetingRepo()
     ok = _client(repo).post("/bots", headers=HEADERS, json={
         "platform": "teams", "native_meeting_id": "397421056486982",
         "passcode": "X8hcQVTnGNpGelJLSv",
     })
     assert ok.status_code == 201, f"bare id + separate passcode was refused: {ok.text}"
+
+
+# ── #892: the separate Teams passcode, from the request body to the URL the bot navigates ────────
+#
+# The seam these tests hold is route → invocation: what `POST /bots` puts in BOT_CONFIG.meetingUrl,
+# which is the string `joinMicrosoftTeams` calls `page.goto` with. A 201 says the request was
+# accepted; only this says the bot was given an address it can join.
+
+TEAMS_SHORT_ID = "397421056486982"
+TEAMS_PASSCODE = "X8hcQVTnGNpGelJLSv"
+TEAMS_THREAD_ID = "19:meeting_AbC-dEf_123@thread.v2"
+
+
+def _spawned_invocation(runtime) -> dict:
+    """The invocation the spawn actually handed the runtime (BOT_CONFIG)."""
+    return json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+
+
+def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monkeypatch):
+    """#892 A1 — a bare Teams meeting id + its separate `passcode` reaches the bot as the URL
+    Teams itself would hand out: `…/meet/<id>?p=<passcode>`.
+
+    PRE-FIX this asserted-nothing path produced `https://teams.microsoft.com/l/meetup-join/
+    397421056486982` — wrong on both counts. `/l/meetup-join/` is the THREAD-id deep link, not the
+    short id's path, and `construct_meeting_url` took no passcode at all, so there was no seam for
+    the credential to arrive through. The old positive control saw none of that because it stopped
+    at the 201."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    runtime = FakeRuntimeClient()
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "passcode": TEAMS_PASSCODE,
+    })
+    assert r.status_code == 201, r.text
+    inv = _spawned_invocation(runtime)
+    assert inv["meetingUrl"] == f"https://teams.microsoft.com/meet/{TEAMS_SHORT_ID}?p={TEAMS_PASSCODE}", (
+        f"the bot was handed {inv['meetingUrl']!r}"
+    )
+    # The passcode still rides the invocation's own field too — zoom/jitsi read it from there, and
+    # dropping it would trade one silent loss for another.
+    assert inv["passcode"] == TEAMS_PASSCODE
+
+
+def test_teams_thread_id_keeps_the_meetup_join_deep_link(monkeypatch):
+    """#892 A- — the OTHER Teams id shape is untouched. A `19:…@thread.v2` id joins at
+    `/l/meetup-join/`, carries no separate passcode, and must not be rerouted by the short-id
+    rule."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    runtime = FakeRuntimeClient()
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_THREAD_ID,
+    })
+    assert r.status_code == 201, r.text
+    assert _spawned_invocation(runtime)["meetingUrl"] == (
+        f"https://teams.microsoft.com/l/meetup-join/{TEAMS_THREAD_ID}"
+    )
+
+
+def test_teams_passcode_never_reaches_meeting_readback(monkeypatch):
+    """#892 A4 — the passcode is on the URL the BOT gets and on nothing that is stored or read
+    back. `constructed_meeting_url` is persisted in `meeting.data` and returned on every
+    MeetingResponse (and re-sent verbatim by the dashboard's send-bot), so a credential there
+    would leak on a path nobody is looking at."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "passcode": TEAMS_PASSCODE,
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["constructed_meeting_url"] == f"https://teams.microsoft.com/meet/{TEAMS_SHORT_ID}"
+    # …and nowhere in the persisted row either.
+    assert TEAMS_PASSCODE not in json.dumps(repo._meetings, default=str)
+    # Positive control for the negative: the bot DID get it, so this test cannot pass by the
+    # passcode having gone missing everywhere.
+    assert TEAMS_PASSCODE in _spawned_invocation(runtime)["meetingUrl"]
+
+
+def test_teams_base_host_selects_the_web_client_and_rejects_anything_else(monkeypatch):
+    """#892 A1 — `teams_base_host` is a DECLARED api.v1 field that the MCP link parser fills for
+    every short link it parses (gov/dod clouds, teams.live.com personal meetings). It was read by
+    nobody, so a GCC-High caller's bare id was rebuilt on the world-wide host — a different Teams.
+    The bot navigates this host, so an unrecognized one is a typed 422, not a passthrough."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    for host in ("gov.teams.microsoft.us", "teams.live.com"):
+        runtime = FakeRuntimeClient()
+        r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+            "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID,
+            "passcode": TEAMS_PASSCODE, "teams_base_host": host,
+        })
+        assert r.status_code == 201, r.text
+        assert _spawned_invocation(runtime)["meetingUrl"] == (
+            f"https://{host}/meet/{TEAMS_SHORT_ID}?p={TEAMS_PASSCODE}"
+        )
+
+    for hostile in ("evil.example.com", "teams.microsoft.com.evil.example.com", "127.0.0.1"):
+        repo = InMemoryMeetingRepo()
+        r = _client(repo).post("/bots", headers=HEADERS, json={
+            "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "teams_base_host": hostile,
+        })
+        assert r.status_code == 422, f"{hostile!r} expected 422, got {r.status_code} {r.text}"
+        assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+
+def test_password_aliases_are_422_not_a_silently_dropped_credential(monkeypatch):
+    """#892 A2 — the customer's own words: "a validation error instead of silent drop would save a
+    lot of debugging". `POST /bots` with `meeting_password` returned 201 and dropped the code, so
+    the bot joined nothing and the response said it worked. Refuse before any DB/runtime work and
+    name the field that does work."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    for alias in ("password", "meeting_password", "meetingPassword", "pwd", "pass_code"):
+        repo = InMemoryMeetingRepo()
+        r = _client(repo).post("/bots", headers=HEADERS, json={
+            "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, alias: TEAMS_PASSCODE,
+        })
+        assert r.status_code == 422, f"{alias!r} expected 422, got {r.status_code} {r.text}"
+        detail = r.json()["detail"]
+        assert alias in detail and "passcode" in detail, (
+            f"the refusal must name the offending key and the real field, got: {detail}"
+        )
+        assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+    # NEGATIVE CONTROL — the guard fires on a SUPPLIED credential, not on the key's presence. A
+    # client that emits `"password": null`/`""` for an unset field asked for nothing; 422-ing it
+    # would break working integrations over an absent value.
+    for empty in (None, "", "   "):
+        r = _client().post("/bots", headers=HEADERS, json={
+            "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "password": empty,
+        })
+        assert r.status_code == 201, f"empty alias {empty!r} was refused: {r.text}"
+
+    # …and the api.v1 body stays OPEN: an undeclared key that is not a credential still rides
+    # through (`continue_meeting` is exactly that, and the dashboard sends it).
+    r = _client().post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "some_future_field": "x",
+    })
+    assert r.status_code == 201, f"the open request body was narrowed: {r.text}"
+
+
+def test_full_meeting_url_with_passcode_query_stays_green(monkeypatch):
+    """#892 A3 — the path that ALREADY worked keeps working, both ways in: URL-only derivation,
+    and a URL with its explicit-ID companion. A caller-supplied URL is authoritative — it passes
+    through untouched, and its own `?p=` is never overwritten by a separate `passcode`."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    url = f"https://teams.microsoft.com/meet/{TEAMS_SHORT_ID}?p={TEAMS_PASSCODE}"
+
+    # URL only — platform and id derived, passcode read off the query.
+    runtime = FakeRuntimeClient()
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={"meeting_url": url})
+    assert r.status_code == 201, r.text
+    inv = _spawned_invocation(runtime)
+    assert inv["meetingUrl"] == url and inv["passcode"] == TEAMS_PASSCODE
+    assert r.json()["native_meeting_id"] == TEAMS_SHORT_ID
+
+    # URL + its explicit id companion.
+    runtime = FakeRuntimeClient()
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "meeting_url": url,
+    })
+    assert r.status_code == 201, r.text
+    assert _spawned_invocation(runtime)["meetingUrl"] == url
+
+    # The URL's own passcode WINS over a separate one — the caller pasting a link holds the
+    # authoritative credential, and a stale `passcode` field must not rewrite it.
+    runtime = FakeRuntimeClient()
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+        "meeting_url": url, "passcode": "stale-and-wrong",
+    })
+    assert r.status_code == 201, r.text
+    assert _spawned_invocation(runtime)["meetingUrl"] == url
+
+
+def test_passcode_is_not_written_onto_non_teams_join_urls(monkeypatch):
+    """#892 A- — zoom and jitsi TYPE their passcode into a page (`join/src/zoom/join.ts`,
+    `join/src/jitsi/password.ts`) off the invocation's `passcode` field. Appending `?p=` to their
+    URLs would corrupt a working join, so the URL rewrite is Teams-short-link-only."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    cases = [
+        ("zoom", "9351274713", "https://zoom.us/j/9351274713"),
+        ("jitsi", "VexaStandup", "https://meet.jit.si/VexaStandup"),
+    ]
+    for platform, native_id, url in cases:
+        runtime = FakeRuntimeClient()
+        r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+            "platform": platform, "native_meeting_id": native_id,
+            "meeting_url": url, "passcode": TEAMS_PASSCODE,
+        })
+        assert r.status_code == 201, r.text
+        inv = _spawned_invocation(runtime)
+        assert inv["meetingUrl"] == url, f"{platform} URL was rewritten: {inv['meetingUrl']!r}"
+        assert inv["passcode"] == TEAMS_PASSCODE
+
+    # Google Meet constructs from the id and takes no passcode in its URL either.
+    runtime = FakeRuntimeClient()
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "abc-defg-hij", "passcode": TEAMS_PASSCODE,
+    })
+    assert r.status_code == 201, r.text
+    assert _spawned_invocation(runtime)["meetingUrl"] == "https://meet.google.com/abc-defg-hij"
 
 
 # ── O-TEL-1: what the spawn resolves when identity answers, and when it does not ─────────────────

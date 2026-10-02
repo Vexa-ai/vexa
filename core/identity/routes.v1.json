@@ -1,0 +1,100 @@
+{
+  "contract": "routes.v1",
+  "domain": "identity",
+  "owner": "core/identity",
+  "edge": "gateway",
+  "note": "The person's own account surface: calendar connections, webhook config, model and transcription preferences.",
+  "presence_env": "ADMIN_API_URL",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/user/calendar",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/user/calendar",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/calendars",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/user/calendars",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/calendars/{calendar_id}",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/user/calendars/{calendar_id}",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/models",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/user/models",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/transcription",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/user/transcription",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/user/webhook",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/user/webhook",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    }
+  ]
+}

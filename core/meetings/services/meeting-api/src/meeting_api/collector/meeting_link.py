@@ -25,11 +25,41 @@ from urllib.parse import unquote, urlparse
 
 _GMEET_ID = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
 _ZOOM_ID = re.compile(r"\d{9,11}")
-_TEAMS_THREAD = re.compile(r"19:meeting_[^@%\s/]+@thread\.v2", re.IGNORECASE)
+# The repeat is BOUNDED on purpose. Unbounded (`[^@%\s/]+@thread\.v2`) this pattern is scanned
+# with `.search()` over caller-supplied text, so every start offset that fails at `@thread.v2`
+# is retried at the next one — quadratic in the input length on a string an attacker chooses
+# (CodeQL py/polynomial-redos). A Teams thread id is a fixed-shape base64ish blob well under
+# 256 characters, so the cap costs nothing and makes the scan linear-bounded.
+_TEAMS_THREAD = re.compile(r"19:meeting_[^@%\s/]{1,256}@thread\.v2", re.IGNORECASE)
 _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 # A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
 # room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
+# Zoom's own two join paths, on a host that does not say "zoom" — see the hosted-domain branch in
+# ``parse_meeting_url``. Anchored and digit-exact so nothing else can match it.
+_ZOOM_HOSTED_PATH = re.compile(r"^/(?:meeting|j)/(\d{10,11})/?$", re.IGNORECASE)
+
+
+def _host_is(host: str, domain: str) -> bool:
+    """True when ``host`` IS ``domain`` or a subdomain of it — never a substring test.
+
+    ``"teams.live.com" in host`` also accepts ``teams.live.com.evil.example`` (the attacker owns
+    the registrable domain) and ``evil-teams.live.com``; the same hole exists for every hostname
+    checked with ``in`` or a bare ``endswith``. CodeQL calls it incomplete URL substring
+    sanitization, and the fix is to compare the parsed ``hostname`` exactly, allowing only an
+    explicit dot-separated subdomain."""
+    return host == domain or host.endswith("." + domain)
+
+
+def _has_passcode_param(query: str) -> bool:
+    """True when the query string carries a Zoom passcode under either spelling.
+
+    Required by the hosted-domain branch: the passcode is what makes a bare `/meeting/<digits>`
+    path recognizably a Zoom join link rather than an arbitrary numeric route."""
+    from urllib.parse import parse_qs
+
+    params = parse_qs(query or "")
+    return bool((params.get("password") or [""])[0] or (params.get("pwd") or [""])[0])
 
 
 def _configured_jitsi_hosts() -> set[str]:
@@ -61,13 +91,19 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
     parsed = urlparse(value)
     host = (parsed.hostname or "").lower()
     if host:
-        if "meet.google.com" in host:
+        if _host_is(host, "meet.google.com"):
             code = next((p for p in reversed(parsed.path.split("/")) if p), "").lower()
             return ("google_meet", code) if _GMEET_ID.match(code) else None
+        # Deliberately a NAME heuristic, not a domain allowlist: it is what claims a vanity or
+        # hosted Zoom front door whose hostname still says "zoom" (zoom-lfx.platform.
+        # linuxfoundation.org), including in the ICS free-text scan where the path-shape branch
+        # below is switched off. It is not a trust decision — the only thing taken from the URL
+        # is a 9-11 digit meeting id — so it is not the substring-sanitization defect that the
+        # exact-host checks around it fix.
         if "zoom" in host:
             m = _ZOOM_ID.search(parsed.path) or _ZOOM_ID.search(parsed.query)
             return ("zoom", m.group(0)) if m else None
-        if "teams.microsoft.com" in host or "teams.live.com" in host:
+        if _host_is(host, "teams.microsoft.com") or _host_is(host, "teams.live.com"):
             # Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
             thread = _TEAMS_THREAD.search(unquote(value))
             if thread:
@@ -77,6 +113,23 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
             if short:
                 return ("teams", short.group(1))
             return None
+        # Zoom under SOMEBODY ELSE'S hostname — the twin of the MCP link parser's hosted-domain
+        # branch, and it must stay in step with it (the two parsers answer the same question on
+        # two doors: this one for a pasted/ICS link, that one for `parse_meeting_link`). An
+        # organisation can front its Zoom tenancy on its own domain, and the link then carries no
+        # "zoom" anywhere — the Linux Foundation's is
+        # zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>.
+        #
+        # Matched on the PATH SHAPE (Zoom's own two join paths, a 10-11 digit id) AND a passcode
+        # parameter, never on the hostname — the hostname is the part that was replaced. The
+        # narrowness is the point: a site with a numeric path segment must not be read as a
+        # meeting. Declared-Jitsi hosts are exempt, and `generic_hosts=False` (the ICS free-text
+        # scan) skips this entirely for the reason that flag exists — an event description full of
+        # arbitrary links must not import one as a meeting.
+        if generic_hosts and host not in _configured_jitsi_hosts() and host != "meet.jit.si":
+            hosted = _ZOOM_HOSTED_PATH.match(parsed.path)
+            if hosted and _has_passcode_param(parsed.query):
+                return ("zoom", hosted.group(1))
         # Jitsi: the canonical public deployment, plus (for a deliberately pasted link) the common
         # self-hosted conventions — a host containing "jitsi", or a bare ``meet.*`` host (jitsi's
         # own recommended naming). Known platforms are matched ABOVE, so this only fires for
