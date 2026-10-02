@@ -12,7 +12,6 @@ from .store import CRMError, Store
 
 class Body(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    tenant_id: str = Field(min_length=1, description='CRM tenant identifier. Membership is verified for the authenticated caller.')
 class Describe(Body):
     object_type: str = Field(default='', description='Optional object type; omit to discover permitted object types.')
 class Search(Body):
@@ -60,8 +59,17 @@ class Identity:
         except (httpx.HTTPError, ValueError) as e:
             raise HTTPException(503,'Identity service unavailable') from e
 
-def create_app(store: Store, identity):
+def create_app(store: Store, identity, tenant_id: str):
+    if not tenant_id or not tenant_id.strip():
+        raise ValueError("CRM_TENANT_ID is required")
     app=FastAPI(title='Vexa CRM',version='0.13.1')
+    @app.middleware('http')
+    async def check_binding(request, call_next):
+        binding=request.headers.get('x-crm-tenant')
+        if binding is not None and binding != tenant_id:
+            return JSONResponse(status_code=403,content={'detail':'CRM instance binding mismatch'})
+        return await call_next(request)
+
     @app.exception_handler(CRMError)
     async def error(request, exc):
         return JSONResponse(status_code=exc.status, content={'detail':str(exc)})
@@ -73,39 +81,40 @@ def create_app(store: Store, identity):
         return json.loads((Path(__file__).resolve().parents[2]/'mcp.tools.v1.json').read_text())
     @app.post('/describe',operation_id='crm_describe')
     def describe(body: Describe, actor=Depends(identity)):
-        """Discover CRM object types and readable fields for this tenant and caller. Use before filtering or writing unfamiliar fields."""
-        return store.describe(body.tenant_id,actor,body.object_type or None)
+        """Discover CRM object types and readable fields in this instance. The tenant is configured by the server; never ask the user to choose one. Use before filtering or writing unfamiliar fields."""
+        return store.describe(tenant_id,actor,body.object_type or None)
     @app.post('/search',operation_id='crm_search')
     def search(body: Search, actor=Depends(identity)):
         """Find authorized CRM records with equality filters and pagination. Results include stable IDs and revisions. Restricted fields cannot be used as filters."""
-        return store.search(body.tenant_id,actor,body.object_type,body.filters,body.limit,body.offset)
+        return store.search(tenant_id,actor,body.object_type,body.filters,body.limit,body.offset)
     @app.post('/read',operation_id='crm_read')
     def read(body: Read, actor=Depends(identity)):
         """Read permitted fields, source evidence, links, pending proposals and current revision. Top-level id is the native UUID for subsequent calls; fields.Id is the imported source ID. Use href for the native Minutes record link. Read before changing an existing record."""
-        return store.get(body.tenant_id,actor,body.record_id)
+        return store.get(tenant_id,actor,body.record_id)
     @app.post('/change',operation_id='crm_change')
     def change(body: Change, actor=Depends(identity)):
         """Create a record, update readable/writable fields, or submit a proposal. Updates require the revision returned by crm_read. Include a reason and source evidence; proposal does not mean saved. Permission and review policy are server-enforced."""
         if body.action=='create':
             if not body.idempotency_key:raise HTTPException(400,'Create requires an idempotency_key')
-            return store.create(body.tenant_id,actor,body.object_type,body.fields,body.narrative or '',body.reason,body.evidence,body.idempotency_key)
-        return store.change(body.tenant_id,actor,body.record_id,body.expected_revision,body.fields,body.narrative,body.reason,body.evidence,body.action=='propose')
+            return store.create(tenant_id,actor,body.object_type,body.fields,body.narrative or '',body.reason,body.evidence,body.idempotency_key)
+        return store.change(tenant_id,actor,body.record_id,body.expected_revision,body.fields,body.narrative,body.reason,body.evidence,body.action=='propose')
     @app.post('/history',operation_id='crm_history')
     def history(body: Read, actor=Depends(identity)):
         """Read up to 100 recent record revisions. Current access permissions filter historical values too."""
-        return store.history(body.tenant_id,actor,body.record_id)
+        return store.history(tenant_id,actor,body.record_id)
     @app.post('/review',operation_id='crm_review')
     def review(body: Review, actor=Depends(identity)):
         """Accept or reject a pending proposal when the caller has review and record-write rights. Acceptance conflicts if the record changed since proposal creation."""
-        return store.review(body.tenant_id,actor,body.proposal_id,body.accept)
+        return store.review(tenant_id,actor,body.proposal_id,body.accept)
     return app
 
 def configured_app():
     url=os.environ.get('CRM_DATABASE_URL','')
     base=os.environ.get('ADMIN_API_URL','')
     secret=os.environ.get('INTERNAL_API_SECRET','')
-    if not all((url,base,secret)):
-        raise RuntimeError('CRM_DATABASE_URL, ADMIN_API_URL and INTERNAL_API_SECRET are required for CRM service')
+    tenant_id=os.environ.get('CRM_TENANT_ID','').strip()
+    if not all((url,base,secret,tenant_id)):
+        raise RuntimeError('CRM_DATABASE_URL, ADMIN_API_URL, INTERNAL_API_SECRET and CRM_TENANT_ID are required for CRM service')
     if not url.startswith('postgresql+psycopg://'):
         raise RuntimeError('CRM deployment requires PostgreSQL')
-    return create_app(Store(create_engine(url,pool_pre_ping=True,pool_size=2,max_overflow=3)),Identity(base,secret))
+    return create_app(Store(create_engine(url,pool_pre_ping=True,pool_size=2,max_overflow=3)),Identity(base,secret),tenant_id)

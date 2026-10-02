@@ -84,7 +84,7 @@ class Store:
             policy = self._policy(c, tenant, actor)
             row=self._row(c, tenant, record_id)
             result=self._visible(policy,row)
-            result['href']='/crm?'+urlencode({'tenant':tenant,'record':record_id})
+            result['href']='/crm?'+urlencode({'record':record_id})
             result['sources']=[dict(r) for r in c.execute(select(s.source_mappings.c.system,
                 s.source_mappings.c.org_id,s.source_mappings.c.object_type,s.source_mappings.c.source_id).where(
                 s.source_mappings.c.tenant_id==tenant,s.source_mappings.c.record_id==record_id)).mappings()]

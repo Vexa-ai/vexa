@@ -22,7 +22,6 @@
         "path": "/describe"
       },
       "arguments": [
-        "tenant_id",
         "object_type"
       ]
     },
@@ -39,7 +38,6 @@
         "path": "/search"
       },
       "arguments": [
-        "tenant_id",
         "object_type",
         "filters",
         "limit",
@@ -59,7 +57,6 @@
         "path": "/read"
       },
       "arguments": [
-        "tenant_id",
         "record_id"
       ]
     },
@@ -76,7 +73,6 @@
         "path": "/change"
       },
       "arguments": [
-        "tenant_id",
         "action",
         "object_type",
         "record_id",
@@ -101,7 +97,6 @@
         "path": "/history"
       },
       "arguments": [
-        "tenant_id",
         "record_id"
       ]
     },
@@ -118,7 +113,6 @@
         "path": "/review"
       },
       "arguments": [
-        "tenant_id",
         "proposal_id",
         "accept"
       ]

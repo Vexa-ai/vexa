@@ -24,13 +24,14 @@ Grant the runtime role schema usage and SELECT on CRM tables; INSERT/UPDATE on
 records, relationships, proposals and outbox; DELETE on relationships; INSERT on
 revisions. Do not grant DDL, revision UPDATE/DELETE/TRUNCATE, policy writes or
 import writes to the runtime role. The revision trigger also rejects mutation.
-Run `python -m crm` with the runtime database URL, `ADMIN_API_URL` and
+Run `python -m crm` with the runtime database URL, `ADMIN_API_URL`, `CRM_TENANT_ID` and
 `INTERNAL_API_SECRET`. It serves port 8300. Existing core database tables are
 neither migrated nor joined.
 
 Configure `CRM_API_URL` on MCP and Minutes only when the module is deployed.
-Minutes also accepts `CRM_DEFAULT_TENANT`; `/crm?tenant=...&record=...` opens an
-individual record. `/api/crm` forwards the signed-in person's credential and
+Each instance is bound to one `CRM_TENANT_ID` on the CRM service and control MCP.
+Agents and the UI never select tenants; attempts to supply `tenant_id` are rejected.
+`/crm?record=...` opens an individual record. `/api/crm` forwards the signed-in person's credential and
 rejects cross-origin browser requests. No deployment-key fallback is used.
 A configured CRM outage leaves other MCP tools available and CRM calls fail
 explicitly; an unconfigured CRM contributes no tools or page.
