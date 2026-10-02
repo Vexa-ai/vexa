@@ -19,8 +19,10 @@ def test_unavailable_optional_crm_keeps_existing_mcp_bootable():
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
         assembly,specs,bases=discover(client,env={'ADMIN_API_URL':'http://identity','CRM_API_URL':'http://crm','VEXA_MCP_BOOT_PROBE_ATTEMPTS':'1'})
     tools=verify(assembly,specs)
-    assert {t.name for t in tools}=={'crm_describe','crm_search','crm_read','crm_change','crm_history','crm_review'}
+    assert {t.name for t in tools}=={'crm_describe','crm_search','crm_read','crm_change','crm_history','crm_review','crm_configure'}
     assert all(t.tool.auth=='subject' for t in tools)
+    configure=next(t for t in tools if t.name=='crm_configure')
+    assert configure.parameters['layout']['type']=='object'
 
 
 def test_bundled_crm_manifest_matches_domain():

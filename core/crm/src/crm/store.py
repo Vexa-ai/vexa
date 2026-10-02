@@ -2,10 +2,12 @@
 from datetime import datetime, timezone
 from uuid import uuid4, uuid5, NAMESPACE_URL
 import json
+import hashlib
 from urllib.parse import urlencode
 from jsonschema import Draft202012Validator
-from sqlalchemy import select, update, delete, or_, false
+from sqlalchemy import select, update, delete, or_, false, text
 from . import schema as s
+from .cards import CardLayout, visible_layout
 
 class CRMError(Exception):
     status = 400
@@ -62,6 +64,37 @@ class Store:
         result['narrative'] = row['narrative'] if '*' in fields else None
         return result
 
+    def _card(self, c, tenant, kind):
+        row = c.execute(select(s.card_layouts).where(s.card_layouts.c.tenant_id == tenant,
+            s.card_layouts.c.object_type == kind).order_by(s.card_layouts.c.version.desc()).limit(1)).mappings().first()
+        return {'version': row['version'], 'layout': row['layout']} if row else {'version': 0, 'layout': None}
+
+    def configure(self, tenant, actor, object_type, layout=None, expected_version=0, reason=''):
+        with self.engine.begin() as c:
+            policy = self._policy(c, tenant, actor)
+            if not policy.get('admin'):
+                raise Forbidden('CRM administrator rights required to configure shared cards')
+            # Serialize the first insert too, without granting writes on imported definitions.
+            if self.engine.dialect.name == 'postgresql':
+                lock = int.from_bytes(hashlib.sha256(json.dumps([tenant, object_type]).encode()).digest()[:8], 'big', signed=True)
+                c.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': lock})
+            definition = c.execute(select(s.object_types.c.definition).where(
+                s.object_types.c.tenant_id == tenant, s.object_types.c.name == object_type)).scalar_one_or_none()
+            if definition is None: raise NotFound('Unknown object type')
+            current = self._card(c, tenant, object_type)
+            if layout is None: return current
+            if expected_version != current['version']: raise Conflict('Card layout changed; read configuration again')
+            if not reason.strip(): raise CRMError('Configuration changes require a reason')
+            try: layout = CardLayout.model_validate(layout).model_dump()
+            except ValueError as e: raise CRMError('Invalid card layout: '+str(e)) from e
+            properties = definition.get('properties', {})
+            references = [layout['title_field']] + [f['field'] for sec in layout['sections'] for f in sec['fields']]
+            if any(name and name not in properties for name in references): raise CRMError('Unknown field in card layout')
+            version = current['version'] + 1
+            c.execute(s.card_layouts.insert().values(tenant_id=tenant, object_type=object_type, version=version,
+                layout=layout, actor_id=actor, reason=reason, created_at=datetime.now(timezone.utc).isoformat()))
+            return {'version': version, 'layout': layout}
+
     def describe(self, tenant, actor, object_type=None):
         with self.engine.connect() as c:
             policy = self._policy(c, tenant, actor)
@@ -84,6 +117,8 @@ class Store:
             policy = self._policy(c, tenant, actor)
             row=self._row(c, tenant, record_id)
             result=self._visible(policy,row)
+            card=self._card(c,tenant,row['object_type'])
+            result['card']={**card,'layout':visible_layout(card['layout'],result['fields']) if card['layout'] else None}
             result['href']='/crm?'+urlencode({'record':record_id})
             result['sources']=[dict(r) for r in c.execute(select(s.source_mappings.c.system,
                 s.source_mappings.c.org_id,s.source_mappings.c.object_type,s.source_mappings.c.source_id).where(
@@ -96,7 +131,7 @@ class Store:
                     target=self._visible(policy,self._row(c,tenant,link['target_id']))
                 except NotFound:continue
                 result['links'].append({'field':link['kind'],'record_id':target['id'],
-                    'object_type':target['object_type'], 'label':target['fields'].get('Name',target['object_type'])})
+                    'object_type':target['object_type'], 'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['object_type']})
             can_write=False
             try:can_write=bool(self._rights(policy,row,'write'))
             except NotFound:pass

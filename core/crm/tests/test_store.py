@@ -122,3 +122,20 @@ def test_review_queue_is_scoped_and_includes_the_change_before_acceptance(store)
     store.review('one','owner',proposal,False)
     assert store.get('one','owner',rid)['proposals']==[]
     assert store.get('one','owner',rid)['revision']==1
+
+def test_card_configuration_is_versioned_and_does_not_change_records(store):
+    rid=make(store)
+    layout={'title_field':'name','sections':[{'title':'Overview','fields':[{'field':'revenue','format':'currency'},{'field':'name'}]}]}
+    assert store.configure('one','owner','Company')['version']==0
+    saved=store.configure('one','owner','Company',layout,0,'Readable card')
+    assert saved['version']==1
+    with pytest.raises(Conflict):store.configure('one','owner','Company',layout,0,'Stale layout')
+    with pytest.raises(Forbidden):store.configure('one','agent','Company',layout,1,'Not admin')
+    with pytest.raises(CRMError):store.configure('one','owner','Company',{'sections':[{'fields':[{'field':'secret'}]}]},1,'Bad field')
+    assert store.get('one','owner',rid)['revision']==1
+    assert store.get('one','owner',rid)['fields']['revenue']==100
+    restricted=store.get('one','reader',rid)['card']['layout']
+    assert [f['field'] for f in restricted['sections'][0]['fields']]==['name']
+    assert store.configure('two','owner','Company')['version']==0
+    store.configure('one','owner','Company',layout,1,'Second layout')
+    with store.engine.connect() as c:assert c.scalar(select(func.count()).select_from(s.card_layouts))==2

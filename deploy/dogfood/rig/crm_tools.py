@@ -69,3 +69,9 @@ def register_crm_tools(mcp, *, base_url, subject, scope, user_key, http, guard, 
     def crm_review(proposal_id: str, accept: bool) -> str:
         """Accept or reject a pending CRM proposal with reviewer rights. Stale proposals conflict; acceptance creates a new revision."""
         return call('review', proposal_id=proposal_id, accept=accept)
+
+    @mcp.tool()
+    @guard
+    def crm_configure(object_type: str, layout: dict | None = None, expected_version: int = 0, reason: str = '') -> str:
+        """Configure shared CRM cards as an administrator. Omit layout to read current version. To save pass expected_version and reason. Layout: {title_field: 'Name', sections: [{title: 'Overview', fields: [{field: 'Amount', label: 'Investment', format: 'currency', currency: 'USD'}]}], show_narrative: true, show_related: true}. Formats: text, markdown, number, currency, percent (0..100), date, badge. Discover actual fields with crm_describe. Changes presentation only, never records or access. Reopen the card to see changes."""
+        return call('configure', object_type=object_type, layout=layout or {}, expected_version=expected_version, reason=reason)

@@ -31,10 +31,10 @@ def test_api_mutations_conflicts_and_cross_tenant(store):
     assert client.post('/read',headers=hdr,json={'tenant_id':'two','record_id':rid}).status_code==422
     assert client.post('/read',headers=hdr,json={'record_id':rid,'actor':'owner'}).status_code==422
 
-def test_six_tools_match_openapi(store):
+def test_tools_match_openapi(store):
     client=client_for(store)
     manifest=client.get('/.well-known/mcp-tools.json').json()
-    assert len(manifest['tools'])==6
+    assert len(manifest['tools'])==7
     spec=client.get('/openapi.json').json()
     for tool in manifest['tools']:
         assert tool['auth']=='subject'
@@ -54,3 +54,13 @@ def test_control_binding_cannot_disagree_with_service(store):
     client=client_for(store)
     assert client.post('/describe',json={},headers={'X-API-Key':'owner','X-CRM-Tenant':'two'}).status_code==403
     assert client.post('/describe',json={},headers={'X-API-Key':'owner','X-CRM-Tenant':'one'}).status_code==200
+
+def test_configuration_http_validation_and_permissions(store):
+    client=client_for(store)
+    body={'object_type':'Company','layout':{'title_field':'name','sections':[{'title':'Overview','fields':[{'field':'name'}]}]},'expected_version':0,'reason':'Readable card'}
+    assert client.post('/configure',json=body,headers={'X-API-Key':'reader'}).status_code==403
+    assert client.post('/configure',json=body,headers={'X-API-Key':'owner'}).status_code==200
+    assert client.post('/configure',json=body,headers={'X-API-Key':'owner'}).status_code==409
+    body['expected_version']=1;body['layout']['script']='alert(1)'
+    assert client.post('/configure',json=body,headers={'X-API-Key':'owner'}).status_code==400
+    assert client.post('/configure',json={'object_type':'Company'},headers={'X-API-Key':'owner'}).json()['version']==1

@@ -2,7 +2,7 @@
 import { cookies } from "next/headers";
 import { AUTH_COOKIE } from "../auth/adminApi";
 export const dynamic = "force-dynamic";
-const operations = new Set(["describe", "search", "read", "change", "history", "review"]);
+const operations = new Set(["describe", "search", "read", "change", "history", "review", "configure"]);
 export async function POST(req: Request) {
   const base = process.env.CRM_API_URL;
   if (!base) return Response.json({ detail: "CRM is not enabled" }, { status: 404 });

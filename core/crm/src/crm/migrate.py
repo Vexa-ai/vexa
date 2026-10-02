@@ -14,6 +14,9 @@ def migrate(engine):
             LANGUAGE plpgsql AS $$ BEGIN
               RAISE EXCEPTION 'CRM revisions are append-only';
             END $$'''))
+        c.execute(text('DROP TRIGGER IF EXISTS crm_card_layouts_immutable ON crm_card_layouts'))
+        c.execute(text('''CREATE TRIGGER crm_card_layouts_immutable BEFORE UPDATE OR DELETE OR TRUNCATE
+            ON crm_card_layouts FOR EACH STATEMENT EXECUTE FUNCTION crm_history_immutable()'''))
         c.execute(text('DROP TRIGGER IF EXISTS crm_revisions_immutable ON crm_revisions'))
         c.execute(text('''CREATE TRIGGER crm_revisions_immutable BEFORE UPDATE OR DELETE OR TRUNCATE
             ON crm_revisions FOR EACH STATEMENT EXECUTE FUNCTION crm_history_immutable()'''))

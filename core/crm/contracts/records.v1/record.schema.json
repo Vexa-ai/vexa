@@ -155,6 +155,129 @@
     },
     "href": {
       "type": "string"
+    },
+    "card": {
+      "type": "object",
+      "required": [
+        "version",
+        "layout"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "title_field": {
+                  "default": "Name",
+                  "maxLength": 120,
+                  "title": "Title Field",
+                  "type": "string"
+                },
+                "sections": {
+                  "items": {
+                    "$ref": "#/$defs/CardSection"
+                  },
+                  "maxItems": 12,
+                  "title": "Sections",
+                  "type": "array"
+                },
+                "show_narrative": {
+                  "default": true,
+                  "title": "Show Narrative",
+                  "type": "boolean"
+                },
+                "show_related": {
+                  "default": true,
+                  "title": "Show Related",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "sections"
+              ],
+              "title": "CardLayout",
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "CardField": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Label",
+          "type": "string"
+        },
+        "format": {
+          "default": "text",
+          "enum": [
+            "text",
+            "markdown",
+            "number",
+            "currency",
+            "percent",
+            "date",
+            "badge"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "currency": {
+          "default": "USD",
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "title": "CardField",
+      "type": "object"
+    },
+    "CardSection": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Title",
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/CardField"
+          },
+          "maxItems": 40,
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "title": "CardSection",
+      "type": "object"
     }
   }
 }

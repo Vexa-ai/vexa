@@ -17,7 +17,7 @@ it('renders an authorized card and follows related records without replacing the
   render(<CrmPanel recordId="a" onClose={close} onCollapse={()=>{}} />);
   await screen.findByRole('heading',{name:'First account'});
   expect(screen.queryByRole('button',{name:'Browse records'})).toBeNull();
-  fireEvent.click(screen.getByRole('button',{name:'Parent: Related account'}));
+  fireEvent.click(screen.getByRole('button',{name:'Parent Related account'}));
   await screen.findByRole('heading',{name:'Related account'});
   expect(window.location.href).toBe(before);
   fireEvent.click(screen.getByRole('button',{name:'Back to pages'}));

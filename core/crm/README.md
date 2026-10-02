@@ -38,7 +38,7 @@ explicitly; an unconfigured CRM contributes no tools or page.
 `compose.example.yaml` illustrates the optional service wiring; network names and
 identity URLs must match the deployment. It is not a database provisioner.
 
-## Six operations
+## Operations
 
 | MCP tool | HTTP | Purpose |
 |---|---|---|
@@ -47,9 +47,10 @@ identity URLs must match the deployment. It is not a database provisioner.
 | `crm_read` | POST `/read` | Fields, narrative, sources, permitted links and pending proposals |
 | `crm_change` | POST `/change` | Create, update or propose with reason and evidence |
 | `crm_history` | POST `/history` | Immutable revisions filtered by current permissions |
+| `crm_configure` | POST `/configure` | Read or version shared card layouts (CRM admin) |
 | `crm_review` | POST `/review` | Accept or reject; stale acceptance conflicts |
 
-Every call requires `tenant_id` and a real identity credential. Caller-supplied
+Every call uses the instance-bound tenant and a real identity credential. Caller-supplied
 subject headers are ignored. Create requires a stable `idempotency_key`; reuse
 it for the same create retry. Update/propose require `expected_revision` from a
 read. The service validates typed fields against the object's JSON Schema.
@@ -111,3 +112,25 @@ restoration by submitting the old values as a **new** change; there is no histor
 rewrite endpoint. No-CRM deployments retain existing workspace and meeting paths.
 The development proof covers a Minutes Compose deployment; Helm/Lite distribution,
 arbitrary source-org parity and production migration are separate acceptance work.
+
+## Configurable cards
+
+Minutes uses the shared Markdown renderer with readable labels, formatted values
+and permitted record links. Technical fields are collapsed under All fields.
+Administrators call `crm_configure(object_type)` to read the current version,
+then supply `expected_version`, `reason` and `layout` to save:
+
+```json
+{"title_field":"Name","sections":[{"title":"Overview","fields":[
+  {"field":"Amount","label":"Investment","format":"currency","currency":"USD"},
+  {"field":"Description","format":"markdown"}
+]}],"show_narrative":true,"show_related":true}
+```
+
+Formats: text, markdown, number, currency, percent (0–100), date and badge.
+Layouts reference existing fields; no executable templates. `crm_read` filters
+configuration by field permissions. Reopen or refresh the card after configuring.
+Layouts apply to all records of that type in the configured tenant.
+Run the CRM migration to add `crm_card_layouts`, then grant runtime SELECT and
+INSERT on that table only. Layout revisions are append-only, independent of
+record history. Stale layout versions return 409. Core Vexa tables stay unchanged.

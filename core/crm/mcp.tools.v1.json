@@ -116,6 +116,25 @@
         "proposal_id",
         "accept"
       ]
+    },
+    {
+      "name": "crm_configure",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/configure"
+      },
+      "arguments": [
+        "object_type",
+        "layout",
+        "expected_version",
+        "reason"
+      ]
     }
   ]
 }

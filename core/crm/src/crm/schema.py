@@ -53,3 +53,10 @@ Index("crm_records_by_owner", records.c.tenant_id, records.c.owner_id, records.c
 
 Index("crm_sources_by_record", source_mappings.c.tenant_id, source_mappings.c.record_id)
 Index("crm_links_by_record", relationships.c.tenant_id, relationships.c.record_id)
+
+# Layout revisions are independent of record data and imported object definitions.
+card_layouts = Table('crm_card_layouts', metadata, tenant(), Column('object_type', String, primary_key=True),
+    Column('version', Integer, primary_key=True), Column('layout', Document, nullable=False),
+    Column('actor_id', String, nullable=False), Column('reason', Text, nullable=False),
+    Column('created_at', String, nullable=False),
+    ForeignKeyConstraint(['tenant_id', 'object_type'], ['crm_object_definitions.tenant_id', 'crm_object_definitions.name']))

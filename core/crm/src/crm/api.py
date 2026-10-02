@@ -1,4 +1,4 @@
-"""Six subject-authenticated operations; MCP assembles this same OpenAPI surface."""
+"""Subject-authenticated operations; MCP assembles this same OpenAPI surface."""
 import json
 import os
 from pathlib import Path
@@ -31,6 +31,11 @@ class Change(Body):
     narrative: str | None = None
     reason: str = Field(min_length=1)
     evidence: list[dict] = Field(default_factory=list)
+class Configure(Body):
+    object_type: str
+    layout: dict = Field(default_factory=dict, description="Card layout: {title_field: 'Name', sections: [{title: 'Overview', fields: [{field: 'Amount', label: 'Investment', format: 'currency', currency: 'USD'}]}], show_narrative: true, show_related: true}. Field formats: text, markdown, number, currency, percent (0..100), date, badge.")
+    expected_version: int = Field(default=0, ge=0)
+    reason: str = Field(default='', max_length=2000)
 class Review(Body):
     proposal_id: str
     accept: bool
@@ -106,6 +111,10 @@ def create_app(store: Store, identity, tenant_id: str):
     def review(body: Review, actor=Depends(identity)):
         """Accept or reject a pending proposal when the caller has review and record-write rights. Acceptance conflicts if the record changed since proposal creation."""
         return store.review(tenant_id,actor,body.proposal_id,body.accept)
+    @app.post('/configure',operation_id='crm_configure')
+    def configure(body: Configure, actor=Depends(identity)):
+        """Read or configure a shared per-object card layout (CRM administrators only). Omit layout to read its version; send a layout with expected_version and reason to save. Sections reference real fields; formats are text, markdown, number, currency, percent, date or badge. This changes presentation, never record values or access."""
+        return store.configure(tenant_id,actor,body.object_type,body.layout or None,body.expected_version,body.reason)
     return app
 
 def configured_app():

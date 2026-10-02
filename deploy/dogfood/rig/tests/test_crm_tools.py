@@ -29,9 +29,9 @@ def test_disabled_registers_nothing():
     register_crm_tools(mcp, base_url='', subject=None, scope=None, user_key=None, http=None, guard=None)
     assert not mcp.tools
 
-def test_six_tools_forward_subject_and_revision(surface):
+def test_tools_forward_subject_and_revision(surface):
     state, tools = surface
-    assert len(tools) == 6
+    assert len(tools) == 7
     tools['crm_change']('propose','Meeting evidence',record_id='r1',expected_revision=4,fields={'Name':'new'})
     args, kw = state.calls[0]
     assert args == ('POST','http://crm:8300/change')
@@ -72,3 +72,11 @@ def test_enabled_crm_requires_explicit_instance_binding(monkeypatch):
     monkeypatch.delenv('CRM_TENANT_ID',raising=False)
     with pytest.raises(ValueError,match='CRM_TENANT_ID'):
         register_crm_tools(MCP(),base_url='http://crm',subject=None,scope=None,user_key=None,http=None,guard=None)
+
+def test_card_configuration_forwards_version_and_layout(surface):
+    state, tools=surface
+    layout={'title_field':'Name','sections':[]}
+    tools['crm_configure']('Account',layout,3,'Simplify layout')
+    args,kw=state.calls[0]
+    assert args==('POST','http://crm:8300/configure')
+    assert kw['body']=={'object_type':'Account','layout':layout,'expected_version':3,'reason':'Simplify layout'}

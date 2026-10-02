@@ -117,6 +117,25 @@
           "proposal_id",
           "accept"
         ]
+      },
+      {
+        "name": "crm_configure",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/configure"
+        },
+        "arguments": [
+          "object_type",
+          "layout",
+          "expected_version",
+          "reason"
+        ]
       }
     ]
   },
@@ -380,6 +399,43 @@
             }
           }
         }
+      },
+      "/configure": {
+        "post": {
+          "summary": "Configure",
+          "description": "Read or configure a shared per-object card layout (CRM administrators only). Omit layout to read its version; send a layout with expected_version and reason to save. Sections reference real fields; formats are text, markdown, number, currency, percent, date or badge. This changes presentation, never record values or access.",
+          "operationId": "crm_configure",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Configure"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "components": {
@@ -455,6 +511,38 @@
             "reason"
           ],
           "title": "Change"
+        },
+        "Configure": {
+          "properties": {
+            "object_type": {
+              "type": "string",
+              "title": "Object Type"
+            },
+            "layout": {
+              "additionalProperties": true,
+              "type": "object",
+              "title": "Layout",
+              "description": "Card layout: {title_field: 'Name', sections: [{title: 'Overview', fields: [{field: 'Amount', label: 'Investment', format: 'currency', currency: 'USD'}]}], show_narrative: true, show_related: true}. Field formats: text, markdown, number, currency, percent (0..100), date, badge."
+            },
+            "expected_version": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Expected Version",
+              "default": 0
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 2000,
+              "title": "Reason",
+              "default": ""
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "object_type"
+          ],
+          "title": "Configure"
         },
         "Describe": {
           "properties": {
