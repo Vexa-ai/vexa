@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
 
 const sha = "a".repeat(40);
 const oldSha = "b".repeat(40);
@@ -309,7 +309,7 @@ test("an unregistered author with an earlier merged declaration passes, naming t
   assert.match(verdict.summary, /merged PR #77/);
 });
 
-test("an earlier PR counts only with a valid declaration", () => {
+test("an earlier PR counts only with an independent declaration", () => {
   const earlier = (selected, extra = {}) => ({ number: 77, body: body(selected), html_url: "u", ...extra });
   const onEarlier = (fields) => {
     const comment = decision(fields);
@@ -319,10 +319,26 @@ test("an earlier PR counts only with a valid declaration", () => {
   assert.equal(mergedDeclaration(earlier("none"), [], config), null);
   assert.equal(mergedDeclaration(earlier("uncertain"), [], config), null);
   assert.equal(mergedDeclaration(earlier("corporate"), [], config), null, "corporate without a verifier receipt");
-  assert.equal(mergedDeclaration(earlier("corporate"), [onEarlier({})], config).receipt, "VCR-2026-0001");
+  assert.equal(mergedDeclaration(earlier("corporate"), [onEarlier({})], config), null,
+    "a verified corporate receipt is bound to its PR and head; it never carries forward");
   assert.equal(mergedDeclaration(earlier("independent"), [onEarlier({ type: "review" })], config), null, "unresolved review");
   const cleared = [onEarlier({ type: "review", created: 1 }), onEarlier({ type: "cleared", receipt: "", created: 2 })];
   assert.equal(mergedDeclaration(earlier("independent"), cleared, config).path, "independent");
+});
+
+test("an earlier PR body counts only when every edit is the author's own", () => {
+  const history = (author, editors, totalCount = editors.length) => ({
+    author: { login: author },
+    userContentEdits: { totalCount, nodes: editors.map((login) => ({ editor: login ? { login } : null })) },
+  });
+  assert.equal(editedOnlyByAuthor(history("Returning-Dev", []), "returning-dev"), true, "never edited: the creation body");
+  assert.equal(editedOnlyByAuthor(history("returning-dev", ["returning-dev", "Returning-Dev"]), "returning-dev"), true);
+  assert.equal(editedOnlyByAuthor(history("returning-dev", ["returning-dev", "maintainer"]), "returning-dev"), false,
+    "a box ticked by a maintainer edit is not the author's declaration");
+  assert.equal(editedOnlyByAuthor(history("returning-dev", ["returning-dev", null]), "returning-dev"), false, "unknown editor");
+  assert.equal(editedOnlyByAuthor(history("returning-dev", ["returning-dev"], 101), "returning-dev"), false, "history not read in full");
+  assert.equal(editedOnlyByAuthor(history("someone-else", []), "returning-dev"), false);
+  assert.equal(editedOnlyByAuthor(undefined, "returning-dev"), false);
 });
 
 test("a first-time author still needs exactly one selection", () => {
@@ -415,14 +431,24 @@ test("run: a registered author's PR passes with no box after reading commit auth
   }
 });
 
-test("run: an unregistered author is found through an earlier merged PR", async () => {
+const editHistory = (editors) => ({
+  data: { repository: { pullRequest: {
+    author: { login: "returning-dev" },
+    userContentEdits: { totalCount: editors.length, nodes: editors.map((login) => ({ editor: { login } })) },
+  } } },
+});
+const earlierPrs = { items: [
+  { number: 70, user: { login: "returning-dev" }, body: body("none"), pull_request: { merged_at: "2026-09-01T00:00:00Z" } },
+  { number: 71, user: { login: "returning-dev" }, body: body("corporate"), pull_request: { merged_at: "2026-09-01T00:00:00Z" } },
+  { number: 77, user: { login: "returning-dev" }, body: body("independent"), html_url: "https://github.com/Vexa-ai/vexa/pull/77", pull_request: { merged_at: "2026-09-02T00:00:00Z" } },
+] };
+
+test("run: an unregistered author is found through an earlier merged PR they declared on themselves", async () => {
   const mock = mockGitHub([
     [/\/issues\/101\/comments/, []],
     [/\/issues\/77\/comments/, []],
-    [/\/search\/issues/, { items: [
-      { number: 70, user: { login: "returning-dev" }, body: body("none"), pull_request: { merged_at: "2026-09-01T00:00:00Z" } },
-      { number: 77, user: { login: "returning-dev" }, body: body("independent"), html_url: "https://github.com/Vexa-ai/vexa/pull/77", pull_request: { merged_at: "2026-09-02T00:00:00Z" } },
-    ] }],
+    [/\/search\/issues/, earlierPrs],
+    [/\/graphql$/, editHistory(["returning-dev", "returning-dev"])],
     [/\/pulls\/101\/commits/, [{ author: { login: "returning-dev" } }]],
   ]);
   try {
@@ -431,6 +457,24 @@ test("run: an unregistered author is found through an earlier merged PR", async 
     assert.match(mock.published().output.summary, /merged PR #77/);
     const search = decodeURIComponent(mock.calls.find((c) => c.url.includes("/search/")).url);
     assert.match(search, /repo:Vexa-ai\/vexa is:pr is:merged author:returning-dev/);
+    const graphql = mock.calls.filter((c) => c.url.endsWith("/graphql"));
+    assert.deepEqual(graphql.map((c) => JSON.parse(c.options.body).variables.number), [77], "only the independent candidate is checked");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("run: an earlier box ticked by a maintainer edit does not carry forward", async () => {
+  const mock = mockGitHub([
+    [/\/issues\/101\/comments/, []],
+    [/\/issues\/77\/comments/, []],
+    [/\/search\/issues/, earlierPrs],
+    [/\/graphql$/, editHistory(["returning-dev", "maintainer"])],
+  ]);
+  try {
+    const event = { repository: { full_name: "Vexa-ai/vexa" }, pull_request: authored("returning-dev") };
+    assert.equal(await run({ event, config: registry, token: "t", apiBase: "https://example.test" }), false);
+    assert.match(mock.published().output.summary, /needed once per contributor/);
   } finally {
     mock.restore();
   }

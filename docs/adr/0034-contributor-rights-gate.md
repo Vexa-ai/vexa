@@ -45,8 +45,9 @@ rewritten merely to add sign-offs.
 Founder ruling: the choice is made once per contributor, not on every pull request. The gate now
 passes a pull request without a selection when its author is listed in the `contributors` map of
 `.github/contribution-rights.json`, or when an earlier merged pull request by the same author carried
-a valid declaration (one independent box with no unresolved review, or a verified corporate
-receipt). The check names the entry or pull request it relied on. Maintainers add entries by pull
+an independent declaration with no unresolved review and a body edited only by that author. A
+head-bound corporate receipt never carries forward; corporate standing comes only from the registry.
+The check names the entry or pull request it relied on. Maintainers add entries by pull
 request; a corporate entry carries its `VCR-` receipt and is added only when the private-register
 authorization covers future contributions. The registry is read from the default branch, so a pull
 request cannot register its own author.
