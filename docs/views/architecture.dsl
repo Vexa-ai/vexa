@@ -95,6 +95,11 @@ system flows  # the reaction engine; owns the reaction row and its effect receip
   data-asset flows-rows
   contract flows.v1
 
+system crm  # Optional metadata-driven records, permissions, source mappings and revision history; customer schemas remain configuration.
+  service crm-api
+  data-asset records.v1
+  database crm-db [writers: crm-api]
+
 edges:
   bot -write-> segments-stream
   bot -write-> tc-mutable
@@ -150,6 +155,11 @@ edges:
   flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
   flows-worker -req-> gateway
   flows-worker -req-> admin-api
+  crm-api -req-> crm-db  # Optional CRM integration; record authorization remains in CRM.
+  crm-api -req-> admin-api  # Optional CRM integration; record authorization remains in CRM.
+  mcp -req-> crm-api  # Optional CRM integration; record authorization remains in CRM.
+  terminal -req-> crm-api  # Optional CRM integration; record authorization remains in CRM.
+  crm-api -req-> flows-api  # Optional CRM integration; record authorization remains in CRM.
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

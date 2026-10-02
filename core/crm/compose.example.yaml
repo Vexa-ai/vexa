@@ -1,0 +1,17 @@
+# Include only when enabling CRM. Provision its database and roles before starting.
+services:
+  crm:
+    build:
+      context: ../../core/crm
+    environment:
+      CRM_DATABASE_URL: ${CRM_DATABASE_URL:?dedicated runtime database credential required}
+      ADMIN_API_URL: ${ADMIN_API_URL:?identity service URL required}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?identity validation secret required}
+    restart: unless-stopped
+  mcp:
+    environment:
+      CRM_API_URL: http://crm:8300
+  terminal:
+    environment:
+      CRM_API_URL: http://crm:8300
+      CRM_DEFAULT_TENANT: ${CRM_DEFAULT_TENANT:?CRM tenant required}

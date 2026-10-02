@@ -462,7 +462,12 @@ def entity_index_preamble(mounts: list[dict]) -> str:
         return ""
     return (
         "## Entities you already hold, and the rule about writing them\n\n"
-        "**A name without a page gets one NOW.** The moment this turn learns something durable about "
+        "**CRM routing comes first when CRM tools are available.** Account-specific people, companies, "
+        "products, opportunities and account facts belong in CRM. Discover the schema and find the "
+        "record, then update or propose there with source evidence. Keep only record links and reusable "
+        "strategy/playbooks in workspaces; never mirror account fields or use a workspace to bypass "
+        "CRM permissions or an outage. If CRM is not configured, the workspace entity rule below applies.\n"
+        "**For knowledge outside CRM: A name without a page gets one NOW.** The moment this turn learns something durable about "
         "a person, company, meeting, project or decision, call `entity_upsert(kind, name, facts, "
         "source)` — it creates the page if it does not exist and appends a dated entry if it does, "
         "so there is nothing to check first and nothing to merge by hand. Call it on a maybe: a fact "
@@ -648,7 +653,8 @@ def entity_file_shape() -> str:
 
     per_kind = "; ".join(f"{k} → " + " / ".join(v) for k, v in CARD_SECTIONS.items())
     return (
-        "If `entity_upsert` is not available to you, write the page yourself — the workspace is "
+        "For account data owned by CRM, use CRM tools; do not use this file fallback, including when CRM is unavailable. "
+        "For workspace-owned knowledge: if `entity_upsert` is not available to you, write the page yourself — the workspace is "
         "mounted — and write THE SAME CARD it would have written, never a dated log.\n"
         "`kg/entities/<kind>/<slug>.md`, kind one of person/company/meeting/project/decision, slug "
         "kebab-case of the name. Frontmatter `type`, `id`, `title`, `aliases: []`, "
@@ -1962,6 +1968,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 {"type": "turn-complete", "turn_id": turn_id})})
             return
         tool_calls, upserts = 0, 0
+        crm_touched = False
         # What the phase's pre-pass reads: the person's message and the agent's answer, and NOT the
         # tool results.
         #
@@ -1986,6 +1993,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             if t == "tool-call":
                 tool_calls += 1
                 tool_name = str(ev.get("tool") or "")
+                if tool_name.rsplit("__",1)[-1] in {"crm_describe","crm_search","crm_read","crm_change","crm_history","crm_review"}:
+                    crm_touched = True
                 if tool_name.endswith("entity_upsert"):
                     upserts += 1
                 gone = removed_page_slugs(tool_name, ev.get("args"))
@@ -2055,7 +2064,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # phase used to run here regardless, upserting every name the transcript mentioned onto
         # the desk (four pages on 2026-09-06), and the flow's own guard then failed the step for
         # exactly that. `room_run()` is the platform's positive signal for such a run.
-        if writeback is not None and not room_run():
+        # CRM owns account facts. This automatic name-to-page phase cannot classify mixed
+        # evidence, so a CRM turn skips it; deliberate workspace strategy writes still work.
+        if writeback is not None and not room_run() and not crm_touched:
             try:
                 if should_write_back(prompt, tool_calls, upserts=upserts):
                     candidates = writeback_candidates(said, removed=removed_slugs)

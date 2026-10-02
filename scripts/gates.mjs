@@ -890,7 +890,7 @@ function gateDataflow() {
   // (a2) completeness — the model covers EVERY real service/module/contract/client (no drift), and no
   // node points at a path that no longer exists (no phantom). This is the anti-drift guard: add a module
   // without registering it here and CI goes red.
-  const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
+  const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { if (SKIP.has(n)) return false; try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
   const required = new Set();
   const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
   for (const dom of lsdirs("core")) {

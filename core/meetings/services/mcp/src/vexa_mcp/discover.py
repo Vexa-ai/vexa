@@ -1,6 +1,6 @@
 """DISCOVERY — asking the deployed domains what they serve, at startup.
 
-The manifests are not baked into this image. Each domain serves its own at
+Deployed domains publish their own manifests. The optional CRM domain additionally carries a versioned fallback snapshot. Each domain serves its own at
 ``/.well-known/mcp-tools.json``, and its OpenAPI beside it, so the surface this edge presents is the
 surface the RUNNING builds actually have. A deployment cannot advertise a tool the service behind it
 does not serve, because the service is the one that said it did.
@@ -11,7 +11,8 @@ meetings, flows and agent — and it needs no profile name, because a profile na
 to say something the URLs already say.
 
 FAIL DIRECTIONS, both deliberate and opposite:
-  * a domain that IS configured and does not answer FAILS THE BOOT, by name. "The meetings tools are
+  * CRM configured but unavailable uses its bundled surface; calls report the service outage.
+  * Other domains that ARE configured and do not answer FAIL THE BOOT, by name. "The meetings tools are
     missing" must never be something a person discovers by asking for one.
   * a domain that is NOT configured contributes nothing and is not asked. Its tools are absent, and
     absent is a state an agent recovers from.
@@ -32,6 +33,8 @@ zero so the retry path is exercised without the wait.
 from __future__ import annotations
 
 import os
+import json
+from pathlib import Path
 import time
 from typing import Dict, Optional, Set, Tuple
 
@@ -46,6 +49,7 @@ DOMAIN_URL_ENV = {
     "meetings": "MEETING_API_URL",
     "flows": "FLOWS_API_URL",
     "agent": "AGENT_API_URL",
+    "crm": "CRM_API_URL",
 }
 MANIFEST_PATH = "/.well-known/mcp-tools.json"
 OPENAPI_PATH = "/openapi.json"
@@ -159,6 +163,13 @@ def discover(client: httpx.Client, *, env: Optional[dict] = None
         try:
             doc = _probe(client, f"{base}{MANIFEST_PATH}", attempts=attempts, pause=pause)
         except DomainSilent as silent:
+            if domain == "crm":
+                # CRM is optional even during an outage. Its versioned bundled contract
+                # retains the six tools; calls report 503 while other domains keep working.
+                snapshot = json.loads(Path(__file__).with_name("crm_surface.json").read_text())
+                manifests.append(snapshot["manifest"])
+                openapi[domain] = snapshot["openapi"]
+                continue
             # THE FAIL DIRECTION THIS MODULE'S DOCSTRING PROMISES. Configured and never answering is
             # a whole domain's tools gone, and gone quietly — the one outcome nobody can diagnose
             # from the outside, because a short tools/list looks exactly like a small deployment.
@@ -171,6 +182,11 @@ def discover(client: httpx.Client, *, env: Optional[dict] = None
         try:
             spec = _probe(client, f"{base}{OPENAPI_PATH}", attempts=attempts, pause=pause)
         except DomainSilent as silent:
+            if domain == "crm":
+                snapshot = json.loads(Path(__file__).with_name("crm_surface.json").read_text())
+                manifests[-1] = snapshot["manifest"]
+                openapi[domain] = snapshot["openapi"]
+                continue
             raise _silent(domain, base, "OpenAPI", silent) from silent
         if spec is None:
             raise ManifestError(

@@ -37,6 +37,10 @@ flowchart LR
     flows_api["flows-api"]
     flows_worker["flows-worker"]
   end
+  subgraph crm["crm"]
+    crm_api["crm-api"]
+    crm_db["crm-db"]
+  end
   slim["slim"]
   extension["extension"]
   terminal["terminal"]
@@ -65,3 +69,8 @@ flowchart LR
   flows_worker -->|""| agent_api
   flows_worker -->|""| gateway
   flows_worker -->|""| admin_api
+  crm_api -->|""| crm_db
+  crm_api -->|""| admin_api
+  mcp -->|""| crm_api
+  terminal -->|""| crm_api
+  crm_api -->|""| flows_api

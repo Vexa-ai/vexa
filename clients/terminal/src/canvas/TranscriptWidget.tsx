@@ -17,7 +17,7 @@
  *  ui-kit keeps knowing nothing about meetings. */
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
 import { CanvasActionsProvider } from "./actions";
-import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
+import { HighlightButton, useTermRenderer } from "./TranscriptTermControls";
 import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
 function WidgetBody({ meetingId }: { meetingId: string }) {
