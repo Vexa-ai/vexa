@@ -1,0 +1,480 @@
+---
+title: "Upgrade migration tool"
+description: "The two database steps schema convergence cannot perform on a live 0.10 install — inspected, planned and executed by `python -m admin_api.migrate`, with every statement it issues shown here verbatim."
+---
+
+Upgrading a populated 0.10.x database to 0.12.x needs two operations that the admin-api's own
+schema convergence structurally cannot perform. `python -m admin_api.migrate` performs exactly
+those two and nothing else.
+
+This page documents what the tool reads, what it writes, and the exact SQL it issues. Every
+statement below is the string the tool executes — it is not a paraphrase.
+
+## What convergence does, and where it stops
+
+The admin-api runs `ensure_schema()`
+([`core/identity/services/admin-api/src/admin_api/schema/sync.py`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/sync.py))
+on every boot. It converges the database to the SQLAlchemy models: create missing tables, add
+missing columns, backfill token scopes, add missing indexes. It runs inside **one transaction**
+and is **additive** — it never drops a table or a column, and it never rewrites the value of an
+existing row.
+
+Two consequences follow, and they are the whole reason this tool exists:
+
+| Step | Why convergence cannot do it |
+|---|---|
+| Retire duplicate **active** meeting rows | Convergence never rewrites existing row values. |
+| Build `uq_meeting_active_user_platform_native` **CONCURRENTLY** | Postgres refuses `CREATE INDEX CONCURRENTLY` inside a transaction block, and convergence is one transaction. |
+
+The rest of the 0.10 → 0.12 schema delta is additive and applies itself on the next admin-api
+boot, including the token-scope backfill
+([MIGRATION-0004](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0004-backfill-token-scopes.md)),
+which grandfathers pre-scope 0.10 API keys to the full scope set.
+
+On 0.12.23 and later, a UNIQUE index that cannot be created raises `SchemaInvariantError` and
+**aborts admin-api startup**. A database holding two or more active meetings on the same
+`(user_id, platform, platform_specific_id)` therefore stops the upgrade at boot.
+
+## Invocation
+
+```bash
+# read-only: what is the delta, and is it safe to deploy?
+python -m admin_api.migrate check
+
+# print the statements that would run — writes nothing
+python -m admin_api.migrate run
+
+# execute them
+python -m admin_api.migrate run --fix
+```
+
+Run it from the admin-api image, which already carries the code and the driver:
+
+```bash
+docker compose run --rm admin-api python -m admin_api.migrate check
+# Kubernetes
+kubectl exec deploy/vexa-admin-api -- python -m admin_api.migrate check
+```
+
+`check` is the default verb: a bare invocation runs it.
+
+### Connection
+
+`--dsn URL`, else `DATABASE_URL`, else the same `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` /
+`DB_PASSWORD` variables the admin-api itself reads. An `asyncpg` URL is rewritten to `psycopg`:
+the index build needs a real autocommit connection. Receipts and JSON print the URL with the
+password replaced by `***`.
+
+### Options
+
+| Flag | Verb | Effect |
+|---|---|---|
+| `--fix` | `run` | Execute. Without it, `run` prints the statements and writes nothing. |
+| `--keep-strategy newest\|live-bot` | `run` | Which row survives a duplicate group. Default `newest`. |
+| `--keep-meeting-id ID` | `run` | Force this meeting id to survive in its group. Repeatable. Overrides the strategy. |
+| `--retire-status failed\|completed` | `run` | Terminal status written to losing rows. Default `failed`. |
+| `--json` | both | Machine-readable report on stdout. |
+| `--receipt PATH` | both | Write the plain-text receipt to `PATH`. |
+| `--dsn URL` | both | Connection string. |
+
+### Exit codes
+
+| Code | Verdict | Meaning |
+|---|---|---|
+| `0` | `GO` | Nothing left for this tool to do. Safe to deploy 0.12. |
+| `10` | `ACTION_REQUIRED` | `run --fix` closes the gap. Also the exit of a dry run with work pending. |
+| `20` | `STOP` | A human must act first. `run` refuses to proceed. |
+| `1` | — | Execution failure. |
+| `2` | — | Usage error. |
+
+## Phase 1 — `check`: what it reads
+
+`check` opens **one transaction and immediately marks it `READ ONLY`**, so the database itself
+rejects any write, and rolls it back at the end. It issues these statements and no others.
+
+```sql
+SET TRANSACTION READ ONLY
+```
+
+**Server version, tables, columns, indexes.** `SHOW server_version`, plus the SQLAlchemy
+inspector's catalogue reads, compared against the model metadata to produce the additive delta
+convergence will apply on the next boot: missing tables, missing columns, missing indexes, and
+whether the dead 0.10 `recordings` / `media_files` tables are still present.
+
+**Duplicate active meetings.**
+
+```sql
+SELECT user_id, platform, platform_specific_id,
+       count(*) AS active_dups,
+       array_agg(id ORDER BY created_at DESC, id DESC) AS meeting_ids
+FROM meetings
+WHERE status NOT IN ('completed', 'failed')
+  AND platform_specific_id IS NOT NULL
+GROUP BY user_id, platform, platform_specific_id
+HAVING count(*) > 1
+ORDER BY active_dups DESC
+```
+
+`platform_specific_id IS NOT NULL` because a unique index treats NULLs as distinct: rows with a
+NULL native id never collide, and the tool never touches them. `status NOT IN ('completed',
+'failed')` is the index's own partial predicate — terminal rows are outside the index and are
+likewise never touched.
+
+**Dedup index state.**
+
+```sql
+SELECT i.indisvalid, i.indisunique, i.indisready, pg_get_indexdef(i.indexrelid) AS indexdef
+FROM pg_index i
+JOIN pg_class c ON c.oid = i.indexrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relname = :index_name
+  AND n.nspname = current_schema()
+```
+
+`indisvalid = false` is the corpse a failed `CONCURRENTLY` build leaves behind. It enforces
+nothing, and the tool treats it as work to redo, not as a present index.
+
+**Concurrent-bot limits — report only.**
+
+```sql
+SELECT max_concurrent_bots AS current_limit, count(*) AS users
+FROM users
+GROUP BY max_concurrent_bots
+ORDER BY current_limit
+```
+
+```sql
+SELECT column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'users'
+  AND column_name = 'max_concurrent_bots'
+```
+
+**Token scopes — report only.**
+
+```sql
+SELECT count(*) AS empty_scope_tokens
+FROM api_tokens
+WHERE scopes = '{}'::text[] OR scopes IS NULL
+```
+
+## `max_concurrent_bots` is a product knob, not a migration step
+
+0.10 shipped `max_concurrent_bots` with a column default of `1`. 0.12 ships `3`. Convergence
+does not change an existing column's default and does not rewrite existing rows, so an upgraded
+database keeps `1` for every account that already existed.
+
+**This tool reports that and never writes it.** How many bots an account may run concurrently is
+a decision about your deployment, not a consequence of the schema version. Nothing in 0.12 fails
+because an account is still at `1`.
+
+If you decide to raise it, the raise-only statement is one line
+([MIGRATION-0003](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0003-default-max-concurrent-bots-3.md)):
+
+```sql
+UPDATE users SET max_concurrent_bots = 3 WHERE max_concurrent_bots < 3;
+```
+
+and, for direct inserts that rely on the column default:
+
+```sql
+ALTER TABLE users ALTER COLUMN max_concurrent_bots SET DEFAULT 3;
+```
+
+The `WHERE max_concurrent_bots < 3` predicate leaves accounts already granted more than 3
+untouched, and makes the statement idempotent.
+
+## Phase 2 — the dedup
+
+### The keep rule
+
+Within each duplicate group the tool ranks the rows and keeps rank 1. The default rule is
+**keep-newest**: `created_at DESC, id DESC`. The ordering ends in `id DESC`, so no two rows in a
+group can ever rank equally — the outcome is deterministic and a dry run predicts the fix exactly.
+
+| `--keep-strategy` | `ORDER BY` |
+|---|---|
+| `newest` (default) | `(id = ANY(:keep_ids)) DESC, created_at DESC, id DESC` |
+| `live-bot` | `(id = ANY(:keep_ids)) DESC, (bot_container_id IS NOT NULL) DESC, created_at DESC, id DESC` |
+
+`live-bot` prefers a row that still carries a bot container id, falling back to newest. Use it
+when the newest row is a spawn attempt and an older row is the one actually running.
+
+`--keep-meeting-id ID` is the leading term in both orderings: any id you name wins its group
+outright. With no ids given, `:keep_ids` is an empty array and the term is false for every row.
+
+The plan query, executed read-only:
+
+```sql
+WITH ranked AS (
+  SELECT id, user_id, platform, platform_specific_id, status, bot_container_id, created_at,
+         row_number() OVER (
+           PARTITION BY user_id, platform, platform_specific_id
+           ORDER BY (id = ANY(:keep_ids)) DESC, created_at DESC, id DESC
+         ) AS rn
+  FROM meetings
+  WHERE status NOT IN ('completed', 'failed')
+    AND platform_specific_id IS NOT NULL
+)
+SELECT id, user_id, platform, platform_specific_id, status, bot_container_id, created_at, rn
+FROM ranked
+WHERE (user_id, platform, platform_specific_id) IN (
+        SELECT user_id, platform, platform_specific_id
+        FROM ranked
+        GROUP BY user_id, platform, platform_specific_id
+        HAVING count(*) > 1
+      )
+ORDER BY user_id, platform, platform_specific_id, rn
+```
+
+Every row it returns appears in the receipt, one line each, marked `KEEP` (rank 1) or `RETIRE`.
+
+### The write
+
+Only under `--fix`, in one transaction, over the exact id list printed above:
+
+```sql
+UPDATE meetings m
+SET status = :retire_status,
+    data   = jsonb_set(coalesce(m.data, '{}'::jsonb), '{dedup}', (:stamp)::jsonb)
+WHERE m.id = ANY(:loser_ids)
+RETURNING m.id, m.user_id, m.platform, m.platform_specific_id, m.status
+```
+
+The ids are computed by the plan query and bound explicitly; the `UPDATE` does not recompute
+which rows lose. `RETURNING` supplies the row-by-row execution log.
+
+`:stamp` records why the row was retired:
+
+```json
+{
+  "reason": "rob1_rob2_active_dedup",
+  "migration": "0002",
+  "tool": "admin_api.migrate",
+  "keep_strategy": "newest",
+  "at": "2026-08-26T09:57:47.357541+00:00"
+}
+```
+
+Every touched row stays findable afterwards:
+
+```sql
+SELECT * FROM meetings WHERE data ? 'dedup';
+```
+
+`--retire-status` accepts only `failed` or `completed`. Those are exactly the two statuses the
+index's partial predicate excludes; any other value would leave the row inside the index and the
+build would still fail. The tool refuses anything else.
+
+## Phase 3 — the index
+
+```sql
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_meeting_active_user_platform_native
+ON meetings (user_id, platform, platform_specific_id)
+WHERE status NOT IN ('completed', 'failed')
+```
+
+**Why `CONCURRENTLY`, and why outside a transaction.** A plain `CREATE INDEX` takes a lock that
+blocks every write to `meetings` for the duration of the build. `meetings` is the table every bot
+spawn writes to, so on a live deployment that is an outage for the length of the build.
+`CONCURRENTLY` builds without blocking writes — and Postgres refuses it inside a transaction
+block. The tool issues it on a connection explicitly set to `AUTOCOMMIT`; there is no surrounding
+transaction to refuse.
+
+**What the index is for.** At most one active meeting per `(user_id, platform,
+platform_specific_id)`. It is the database-level backstop for spawn dedup: `create_meeting_guarded`
+holds an advisory transaction lock that serialises same-process spawns, and this index catches the
+cross-process race the advisory lock cannot. The resulting `IntegrityError` becomes
+`DuplicateMeeting` (HTTP 409). Terminal rows are outside the partial predicate, so a user can
+re-meet the same native id once the prior run ends.
+
+**Verification.** Immediately after the build, the tool re-reads `pg_index` and requires
+`indisvalid` and `indisunique`. If either is false it raises rather than reporting success — an
+INVALID index enforces nothing, and a silent one is the exact failure the index exists to prevent.
+
+**A previous failed build.** If `check` finds the index present but INVALID, `run --fix` drops it
+first and rebuilds:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS uq_meeting_active_user_platform_native
+```
+
+This is the only case in which the tool drops anything.
+
+## Abort conditions
+
+`run` refuses to proceed in these cases.
+
+| Condition | Verdict | What the tool does |
+|---|---|---|
+| An index of a **different shape** already holds the name `uq_meeting_active_user_platform_native` | `STOP` | Prints the existing definition and stops. It will not drop an index it did not build. Inspect it, drop it by hand, re-run. |
+| Duplicates remain after the dedup `UPDATE` | exit `1` | Does not attempt the index build. |
+| The index does not verify as VALID and UNIQUE after the build | exit `1` | Reports the state and the `DROP INDEX CONCURRENTLY` needed before a retry. |
+| `--retire-status` outside `failed` / `completed` | exit `2` | Rejects the argument before connecting. |
+
+The shape test is structural, not string equality: Postgres re-renders `pg_get_indexdef` with its
+own casts, so the tool requires that the index is UNIQUE, covers `(user_id, platform,
+platform_specific_id)` in that order, and carries a `WHERE` predicate.
+
+## Idempotency
+
+Re-running is safe and is a no-op:
+
+- The dedup plan query returns nothing once every group has one active row, so the `UPDATE` is
+  never issued.
+- The index build carries `IF NOT EXISTS`, and the tool skips the phase entirely when it already
+  observes a VALID index.
+- With both true, the verdict is `GO` and the `EXECUTED` section of the receipt reads
+  `(nothing — already converged)`.
+
+A `check` after a successful `run --fix` exits `0`.
+
+## Ordering against the deploy
+
+Run `check`, then `run --fix`, **before** deploying 0.12 to a populated database. With the index
+already present, the admin-api's convergence finds it by name and no-ops — the failure path that
+aborts startup never triggers.
+
+Token scopes are the other direction: MIGRATION-0004 is applied by convergence itself, on the
+first 0.12 boot. Nothing to run by hand.
+
+## The receipt
+
+Every invocation produces a plain-text receipt: to stdout by default, and to a file with
+`--receipt PATH`. A dry run produces one too, marked `DRY-RUN`, listing the statements that were
+**not** executed. The sections are fixed:
+
+| Section | Contents |
+|---|---|
+| Header | Tool version, verb, mode, UTC timestamp, database (password removed), server version |
+| `STATE READ` | Tables, additive delta, index state, duplicate groups with their meeting ids, concurrent-bot histogram, token-scope count |
+| `VERDICT (before)` | `GO` / `ACTION_REQUIRED` / `STOP`, with reasons, actions and blockers |
+| `DEDUP PLAN (row by row)` | One line per row in a duplicate group: `KEEP` or `RETIRE`, rank, key, status, container id, created_at |
+| `NOT EXECUTED (dry run)` | The verbatim statements a dry run declined to issue |
+| `EXECUTED` | Each statement verbatim, its bound parameters, rowcount, duration, and the rows it touched |
+| `VERDICT (after)` | The re-read verdict after execution |
+
+A `run --fix` receipt, abridged:
+
+```text
+==============================================================================
+admin_api.migrate v1 — receipt
+==============================================================================
+verb           : run
+mode           : EXECUTED (--fix)
+generated (UTC): 2026-08-26T09:57:47.422171+00:00
+database       : postgresql+psycopg://vexa:***@db:5432/vexa
+server_version : 16.13
+
+==============================================================================
+DEDUP PLAN (row by row)
+==============================================================================
+  KEEP   meeting_id=3 rank=1 user=1 platform=google_meet native=aaa-bbb-ccc status=active bot_container_id=c-newest created_at=2026-08-01 12:20:00
+  RETIRE meeting_id=2 rank=2 user=1 platform=google_meet native=aaa-bbb-ccc status=requested bot_container_id=None created_at=2026-08-01 12:10:00
+  RETIRE meeting_id=1 rank=3 user=1 platform=google_meet native=aaa-bbb-ccc status=active bot_container_id=None created_at=2026-08-01 12:00:00
+  KEEP   meeting_id=5 rank=1 user=2 platform=zoom native=999888777 status=active bot_container_id=None created_at=2026-08-01 12:05:00
+  RETIRE meeting_id=4 rank=2 user=2 platform=zoom native=999888777 status=requested bot_container_id=None created_at=2026-08-01 12:00:00
+
+==============================================================================
+EXECUTED
+==============================================================================
+------------------------------------------------------------------------------
+UPDATE meetings m
+SET status = :retire_status,
+    data   = jsonb_set(coalesce(m.data, '{}'::jsonb), '{dedup}', (:stamp)::jsonb)
+WHERE m.id = ANY(:loser_ids)
+RETURNING m.id, m.user_id, m.platform, m.platform_specific_id, m.status
+  params    : {'retire_status': 'failed', 'stamp': '{"reason": "rob1_rob2_active_dedup", ...}', 'loser_ids': [2, 1, 4]}
+  rowcount  : 3
+  duration  : 0.002s
+  meeting 1 → status=failed
+  meeting 2 → status=failed
+  meeting 4 → status=failed
+------------------------------------------------------------------------------
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_meeting_active_user_platform_native
+ON meetings (user_id, platform, platform_specific_id)
+WHERE status NOT IN ('completed', 'failed')
+  rowcount  : 0
+  duration  : 4.318s
+  verified: indisvalid=t indisunique=t
+
+==============================================================================
+VERDICT (after)
+==============================================================================
+GO
+```
+
+## Machine-readable output
+
+`--json` emits a stable document. Top-level keys: `tool`, `tool_version`, `generated_at`,
+`database`, `verdict`, `reasons`, `actions`, `blockers`, `schema_delta`,
+`duplicate_active_meetings`, `dedup_index`, `max_concurrent_bots`, `token_scopes`, `notes`, and
+`dedup_plan` when a plan exists.
+
+```json
+{
+  "tool": "admin_api.migrate",
+  "tool_version": "1",
+  "verdict": "ACTION_REQUIRED",
+  "reasons": [
+    "3 active meeting row(s) across 2 duplicate key(s). A UNIQUE index cannot be built over them, and on 0.12.23+ a failed UNIQUE index aborts admin-api startup."
+  ],
+  "actions": [
+    "retire 3 losing row(s) to a terminal status",
+    "build the dedup index with CREATE UNIQUE INDEX CONCURRENTLY"
+  ],
+  "blockers": [],
+  "duplicate_active_meetings": {
+    "groups": 2,
+    "rows_to_retire": 3,
+    "detail": [
+      {
+        "user_id": 1,
+        "platform": "google_meet",
+        "platform_specific_id": "aaa-bbb-ccc",
+        "active_rows": 3,
+        "meeting_ids": [3, 2, 1]
+      }
+    ]
+  },
+  "dedup_index": {
+    "name": "uq_meeting_active_user_platform_native",
+    "present": false,
+    "valid": false,
+    "unique": false,
+    "shape_ok": false,
+    "definition": null
+  },
+  "max_concurrent_bots": {
+    "note": "report only — this tool never writes this column (product knob, not a migration step). See MIGRATION-0003 for the one-line SQL.",
+    "column_default": "1",
+    "histogram": [{"limit": 1, "users": 2}],
+    "accounts_at_1": 2
+  }
+}
+```
+
+## Rollback
+
+Drop the index and revert the deploy:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS uq_meeting_active_user_platform_native;
+```
+
+The dedup is not automatically reversed. Every retired row carries `data.dedup`, so the affected
+set is exactly `SELECT * FROM meetings WHERE data ? 'dedup'` and the prior status of each is
+recoverable from a backup taken before the run. Retired rows are non-terminal spawns that the new
+constraint would have rejected anyway.
+
+## Source
+
+| | |
+|---|---|
+| Tool | [`core/identity/services/admin-api/src/admin_api/migrate/`](https://github.com/Vexa-ai/vexa/tree/main/core/identity/services/admin-api/src/admin_api/migrate) |
+| Every statement, as one constant each | [`migrate/sql.py`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/migrate/sql.py) |
+| Convergence | [`schema/sync.py`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/sync.py) |
+| Dedup index rationale | [MIGRATION-0002](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0002-meeting-active-dedup-index.md) |
+| Concurrent-bot default | [MIGRATION-0003](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0003-default-max-concurrent-bots-3.md) |
+| Token-scope backfill | [MIGRATION-0004](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0004-backfill-token-scopes.md) |
