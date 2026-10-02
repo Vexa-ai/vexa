@@ -1,4 +1,5 @@
 {{- if .Values.meetingApi.enabled }}
+{{- $s3 := include "vexa.s3" . | fromYaml }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +19,11 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: meeting-api
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        # Roll the pods when storage.s3 changes: boto3 reads its config file once per process.
+        checksum/storage-s3: {{ include "vexa.s3" . | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.meetingApi.terminationGracePeriodSeconds | default 30 }}
       securityContext:
@@ -114,18 +119,46 @@ spec:
               value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
             - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
               value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
-            {{- if .Values.minio.enabled }}
+            # Object storage: storage.s3, the operator's own bucket (vexa.storage.validate refuses to
+            # render without it). meeting-api's own names for it: S3_ENDPOINT/S3_*_KEY are the
+            # explicit S3 settings; MINIO_BUCKET is the bucket it reads first, and MINIO_ACCESS_KEY/
+            # MINIO_SECRET_KEY are the keys its config.v1 `object_storage` capability (the /health
+            # row) is declared on. Each pair carries the same value, from the same Secret key.
+            - name: S3_ENDPOINT
+              value: {{ $s3.endpoint | quote }}
             - name: MINIO_ENDPOINT
-              value: "{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }}"
-            - name: MINIO_ACCESS_KEY
-              value: {{ .Values.minio.accessKey | quote }}
-            - name: MINIO_SECRET_KEY
-              value: {{ .Values.minio.secretKey | quote }}
-            - name: MINIO_BUCKET
-              value: {{ .Values.minio.bucket | quote }}
-            {{- end }}
+              value: {{ $s3.endpoint | quote }}
             - name: MINIO_SECURE
-              value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
+              value: {{ hasPrefix "https://" (lower $s3.endpoint) | ternary "true" "false" | quote }}
+            - name: MINIO_BUCKET
+              value: {{ $s3.bucket | quote }}
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.existingSecret | quote }}
+                  key: {{ $s3.accessKeyIdKey | quote }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.existingSecret | quote }}
+                  key: {{ $s3.secretAccessKeyKey | quote }}
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.existingSecret | quote }}
+                  key: {{ $s3.accessKeyIdKey | quote }}
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.existingSecret | quote }}
+                  key: {{ $s3.secretAccessKeyKey | quote }}
+            # The storage label stamped on each new recording's metadata (informational; reads do
+            # not route on it). Recordings made with the built-in MinIO keep their "minio" label.
+            - name: STORAGE_BACKEND
+              value: "s3"
+            # boto3 reads the addressing style, signing region and CA bundle from this file.
+            - name: AWS_CONFIG_FILE
+              value: /etc/vexa/s3/config
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
             # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
@@ -166,8 +199,39 @@ spec:
             initialDelaySeconds: 45
             periodSeconds: 20
             timeoutSeconds: 5
+          volumeMounts:
+            - name: s3-client
+              mountPath: /etc/vexa/s3
+              readOnly: true
+            {{- if or $s3.caConfigMap $s3.caSecret }}
+            - name: s3-ca
+              mountPath: /etc/vexa/s3-ca
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.meetingApi.resources | nindent 12 }}
+      volumes:
+        - name: s3-client
+          configMap:
+            name: {{ include "vexa.componentName" (list . "s3-client") }}
+            defaultMode: 0444
+        {{- if $s3.caConfigMap }}
+        - name: s3-ca
+          configMap:
+            name: {{ $s3.caConfigMap | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ $s3.caKey | quote }}
+                path: ca.crt
+        {{- else if $s3.caSecret }}
+        - name: s3-ca
+          secret:
+            secretName: {{ $s3.caSecret | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ $s3.caKey | quote }}
+                path: ca.crt
+        {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
