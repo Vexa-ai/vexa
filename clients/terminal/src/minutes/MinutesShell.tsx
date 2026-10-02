@@ -192,7 +192,8 @@ export function MinutesShell() {
   const [crmRecord, setCrmRecord] = useState<string | null>(null);
   useEffect(() => {
     const open = (event: Event) => {
-      const id = (event as CustomEvent<{ recordId?: string }>).detail?.recordId;
+      const detail = (event as CustomEvent<{ recordId?: string; href?: string }>).detail;
+      const id = detail?.href || (detail?.recordId ? `/crm?record=${encodeURIComponent(detail.recordId)}` : "");
       if (!id) return;
       event.preventDefault(); readerChoseFocus.current = true; setCrmRecord(id); setPagesCollapsed(false);
     };

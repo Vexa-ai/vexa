@@ -24,7 +24,7 @@ it('opens the CRM panel without navigating the chat or workspace', () => {
   render(<InternalLink href="/crm?record=record-123">Deal</InternalLink>);
   fireEvent.click(screen.getByRole('link', {name: 'Deal'}));
   expect(opened).toHaveBeenCalledOnce();
-  expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({recordId: 'record-123'});
+  expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({recordId: 'record-123', href: '/crm?record=record-123'});
   expect(window.location.href).toBe(before);
   window.removeEventListener(OPEN_CRM_RECORD, opened);
 });

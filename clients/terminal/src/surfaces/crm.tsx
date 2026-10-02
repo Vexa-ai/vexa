@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { CrmTable } from "./CrmTable";
 import { CrmCard, CardLayout } from "./CrmCard";
 import { type as ty } from "../minutes/tokens";
 import { ASK_CHAT_EVENT } from "../canvas/actions";
@@ -13,9 +14,11 @@ async function call(operation: string, args: Record<string, unknown>) {
   if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : `CRM request failed (${response.status})`);
   return data;
 }
-export function CrmView({ initialRecord = "", embedded = false }: { initialRecord?: string; embedded?: boolean }) {
+export function CrmView({ initialRecord = "", initialObject = "", initialFilters = "{}", embedded = false }: { initialRecord?: string; initialObject?: string; initialFilters?: string; embedded?: boolean }) {
   const [objects, setObjects] = useState<string[]>([]);
-  const [kind, setKind] = useState("Account");
+  const [kind, setKind] = useState(initialObject || "Account");
+  const [tableLayout, setTableLayout] = useState<CardLayout | null>(null);
+  const [listed, setListed] = useState(false);
   const [records, setRecords] = useState<RecordView[]>([]);
   const [selected, setSelected] = useState<RecordView | null>(null);
   const [history, setHistory] = useState<Revision[]>([]);
@@ -30,38 +33,39 @@ export function CrmView({ initialRecord = "", embedded = false }: { initialRecor
     finally { setBusy(false); }
   }
   async function loadSchema() {
-    setSelected(null); setRecords([]); setHistory([]);
+    setSelected(null); setRecords([]); setListed(false); setHistory([]);
     const data = await call("describe", {});
     setObjects(data.objects.map((o: { object_type: string }) => o.object_type).sort());
   }
-  async function list(at = 0) {
-    const data = await call("search", { object_type: kind, limit: 20, offset: at });
+  async function list(at = 0, objectType = kind) {
+    const filters = objectType === initialObject ? JSON.parse(initialFilters) : {};
+    if (!filters || typeof filters !== "object" || Array.isArray(filters)) throw new Error("Invalid CRM table filters");
+    const data = await call("search", { object_type: objectType, filters, limit: 20, offset: at });
+    setTableLayout(data.card?.layout || null); setListed(true); setKind(objectType);
     setRecords(data.records); setOffset(at); setNext(data.next_offset); setSelected(null); setHistory([]);
   }
   async function read(id: string) {
     const data = await call("read", { record_id: id });
     if (!embedded) window.history.replaceState(null, "", `/crm?${new URLSearchParams({ record: id })}`);
-    setSelected(data); setKind(data.object_type); setHistory([]);
+    setSelected(data); setHistory([]);
   }
-  useEffect(() => { void run(async () => { await loadSchema(); if (initialRecord) await read(initialRecord); }); }, []); // initial deployment selection only
+  useEffect(() => { void run(async () => { await loadSchema(); if (initialRecord) await read(initialRecord); else if (initialObject) await list(); }); }, []); // initial deployment selection only
   const button = { ...ty.control, padding: "8px 12px", background: "var(--panel)", color: "var(--t1)", border: "1px solid var(--line)", borderRadius: 6 };
   const input = { ...button, minWidth: 0 };
   return <main style={{ maxWidth: 1200, margin: "0 auto", padding: embedded ? "18px 20px 40px" : 32, color: "var(--t1)" }}>
     {!embedded && <><header style={{ display: "flex", alignItems: "center", gap: 24, marginBottom: 24 }}><a href="/">← Minutes</a><h1>CRM</h1><span>Preview</span></header>
     <form onSubmit={e => { e.preventDefault(); void run(loadSchema); }} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
       <button style={button} disabled={busy}>Refresh</button>
-      <select aria-label="Record type" style={input} value={kind} onChange={e => { setKind(e.target.value); setRecords([]); setSelected(null); }}>
+      <select aria-label="Record type" style={input} value={kind} onChange={e => { setKind(e.target.value); setRecords([]); setListed(false); setSelected(null); }}>
         {!objects.includes(kind) && <option>{kind}</option>}{objects.map(name => <option key={name}>{name}</option>)}
       </select>
       <button type="button" style={button} disabled={busy || !objects.length} onClick={() => void run(() => list())}>Browse records</button>
     </form></>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     <div style={{ display: "grid", gridTemplateColumns: embedded ? "1fr" : "repeat(auto-fit, minmax(min(100%, 350px), 1fr))", gap: 28, marginTop: embedded ? 0 : 24 }}>
-      {!embedded && <section aria-label="Records"><h2>{kind}</h2>{records.map(record => <button key={record.id} style={{ ...button, display: "block", width: "100%", textAlign: "left", marginBottom: 6 }} disabled={busy} onClick={() => void run(() => read(record.id))}>
-        {String(record.fields.Name || record.fields.Subject || record.fields.External_Id__c || record.id)}
-      </button>)}
+      {!selected && listed && <section aria-label="Records" style={{minWidth:0}}><CrmTable records={records} objectType={kind} layout={tableLayout} busy={busy} onRead={id => void run(() => read(id))} />
       <div style={{ display: "flex", gap: 8 }}><button style={button} disabled={busy || offset === 0} onClick={() => void run(() => list(Math.max(0, offset - 20)))}>Previous</button><button style={button} disabled={busy || next === null} onClick={() => void run(() => list(next!))}>Next</button></div></section>}
-      {selected && <section aria-label="Record details"><CrmCard record={selected} busy={busy} onRead={id => void run(() => read(id))} />
+      {selected && <section aria-label="Record details">{embedded && !listed && <button style={button} disabled={busy} onClick={() => void run(() => list(0, selected.object_type))}>Browse {selected.object_type}</button>}{listed && <button style={button} disabled={busy} onClick={() => {setSelected(null);setHistory([]);}}>← Back to table</button>}<CrmCard record={selected} busy={busy} onRead={id => void run(() => read(id))} />
         {embedded && <div style={{display:"flex",gap:12,margin:"12px 0"}}>{["Update record", "Configure card"].map(action => <button key={action} style={{...ty.control,background:"none",border:0,padding:0,color:"var(--t2)",cursor:"pointer"}} disabled={busy} onClick={() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT,{detail:{
           display: action,
           prompt: action === "Configure card"

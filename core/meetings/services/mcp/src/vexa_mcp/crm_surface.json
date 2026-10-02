@@ -218,7 +218,7 @@
       "/search": {
         "post": {
           "summary": "Search",
-          "description": "Find authorized CRM records with equality filters and pagination. Results include stable IDs and revisions. Restricted fields cannot be used as filters.",
+          "description": "Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Present href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters.",
           "operationId": "crm_search",
           "requestBody": {
             "content": {

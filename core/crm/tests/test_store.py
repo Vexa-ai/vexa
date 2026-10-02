@@ -136,6 +136,13 @@ def test_card_configuration_is_versioned_and_does_not_change_records(store):
     assert store.get('one','owner',rid)['fields']['revenue']==100
     restricted=store.get('one','reader',rid)['card']['layout']
     assert [f['field'] for f in restricted['sections'][0]['fields']]==['name']
+    table=store.search('one','reader','Company',{'name':'Acme'})
+    assert [f['field'] for f in table['card']['layout']['sections'][0]['fields']]==['name']
+    from urllib.parse import urlparse, parse_qs
+    import json
+    query=parse_qs(urlparse(table['href']).query)
+    assert query['object']==['Company']
+    assert json.loads(query['filters'][0])=={'name':'Acme'}
     assert store.configure('two','owner','Company')['version']==0
     store.configure('one','owner','Company',layout,1,'Second layout')
     with store.engine.connect() as c:assert c.scalar(select(func.count()).select_from(s.card_layouts))==2

@@ -182,7 +182,27 @@ class Store:
                 query=query.where(column==value)
             rows=c.execute(query.offset(offset).limit(limit+1)).mappings().all()
             result=[self._visible(policy,dict(row)) for row in rows[:limit]]
-            return {'records':result,'next_offset':offset+limit if len(rows)>limit else None}
+            by_id={record['id']:record for record in result}
+            links=c.execute(select(s.relationships).where(s.relationships.c.tenant_id==tenant,
+                s.relationships.c.record_id.in_(by_id),s.relationships.c.target_domain=='crm')).mappings().all() if by_id else []
+            target_ids={link['target_id'] for link in links}
+            targets={}
+            if target_ids:
+                for target in c.execute(select(s.records).where(s.records.c.tenant_id==tenant,
+                        s.records.c.id.in_(target_ids),s.records.c.deleted==False)).mappings():
+                    try:targets[target['id']]=self._visible(policy,dict(target))
+                    except NotFound:pass
+            for link in links:
+                record=by_id[link['record_id']]
+                target=targets.get(link['target_id'])
+                if target and link['kind'] in record['fields']:
+                    record.setdefault('links',[]).append({'field':link['kind'],'record_id':target['id'],
+                        'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['object_type']})
+            card=self._card(c,tenant,object_type)
+            readable=set(definition.get('properties',{})) if '*' in allowed else set(allowed)
+            return {'records':result,'next_offset':offset+limit if len(rows)>limit else None,
+                    'card':{**card,'layout':visible_layout(card['layout'],readable) if card['layout'] else None},
+                    'href':'/crm?'+urlencode({'object':object_type,'filters':json.dumps(filters or {},separators=(',',':'))})}
 
     def _validate(self, definition, fields):
         errors = sorted(Draft202012Validator(definition).iter_errors(fields), key=lambda e: str(e.path))

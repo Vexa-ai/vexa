@@ -90,7 +90,7 @@ def create_app(store: Store, identity, tenant_id: str):
         return store.describe(tenant_id,actor,body.object_type or None)
     @app.post('/search',operation_id='crm_search')
     def search(body: Search, actor=Depends(identity)):
-        """Find authorized CRM records with equality filters and pagination. Results include stable IDs and revisions. Restricted fields cannot be used as filters."""
+        """Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Present href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters."""
         return store.search(tenant_id,actor,body.object_type,body.filters,body.limit,body.offset)
     @app.post('/read',operation_id='crm_read')
     def read(body: Read, actor=Depends(identity)):
