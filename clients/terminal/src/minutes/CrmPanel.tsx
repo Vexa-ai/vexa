@@ -9,6 +9,6 @@ export function CrmPanel({ recordId, onClose, onCollapse }: { recordId: string; 
       <button style={{...ty.control,background:"none",border:0,color:"var(--t2)",cursor:"pointer"}} onClick={onClose}>Back to pages</button>
       <button style={{...ty.control,background:"none",border:0,color:"var(--t2)",cursor:"pointer"}} aria-label="Hide CRM panel" onClick={onCollapse}>Hide</button>
     </header>
-    <div style={{ overflow: "auto", flex: 1, minHeight: 0 }}><CrmView key={recordId} initialRecord={query.get("record") || ""} initialObject={query.get("object") || ""} initialFilters={query.get("filters") || "{}"} embedded /></div>
+    <div style={{ overflow: "auto", flex: 1, minHeight: 0 }}><CrmView key={recordId} initialName={query.get("name") || ""} initialRecord={query.get("record") || ""} initialObject={query.get("object") || ""} initialFilters={query.get("filters") || "{}"} embedded /></div>
   </aside>;
 }

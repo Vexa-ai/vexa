@@ -218,13 +218,49 @@
       "/search": {
         "post": {
           "summary": "Search",
-          "description": "Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Present href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters.",
+          "description": "Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Use each record href for entity links instead of workspace wikilinks. Present the top-level href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters.",
           "operationId": "crm_search",
           "requestBody": {
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Search"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/resolve": {
+        "post": {
+          "summary": "Resolve Name",
+          "operationId": "resolve_name_resolve_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resolve"
                 }
               }
             },
@@ -583,6 +619,22 @@
             "record_id"
           ],
           "title": "Read"
+        },
+        "Resolve": {
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Name"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "title": "Resolve"
         },
         "Review": {
           "properties": {

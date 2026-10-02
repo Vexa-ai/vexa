@@ -14,7 +14,7 @@ async function call(operation: string, args: Record<string, unknown>) {
   if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : `CRM request failed (${response.status})`);
   return data;
 }
-export function CrmView({ initialRecord = "", initialObject = "", initialFilters = "{}", embedded = false }: { initialRecord?: string; initialObject?: string; initialFilters?: string; embedded?: boolean }) {
+export function CrmView({ initialName = "", initialRecord = "", initialObject = "", initialFilters = "{}", embedded = false }: { initialName?: string; initialRecord?: string; initialObject?: string; initialFilters?: string; embedded?: boolean }) {
   const [objects, setObjects] = useState<string[]>([]);
   const [kind, setKind] = useState(initialObject || "Account");
   const [tableLayout, setTableLayout] = useState<CardLayout | null>(null);
@@ -49,7 +49,11 @@ export function CrmView({ initialRecord = "", initialObject = "", initialFilters
     if (!embedded) window.history.replaceState(null, "", `/crm?${new URLSearchParams({ record: id })}`);
     setSelected(data); setHistory([]);
   }
-  useEffect(() => { void run(async () => { await loadSchema(); if (initialRecord) await read(initialRecord); else if (initialObject) await list(); }); }, []); // initial deployment selection only
+  useEffect(() => { void run(async () => { await loadSchema(); if (initialRecord) await read(initialRecord); else if (initialName) {
+      const data=await call("resolve",{name:initialName});
+      if (data.records.length===1) await read(data.records[0].id);
+      else {setRecords(data.records);setKind(`Matches for ${initialName}`);setListed(true);setNext(null);}
+    } else if (initialObject) await list(); }); }, []); // initial deployment selection only
   const button = { ...ty.control, padding: "8px 12px", background: "var(--panel)", color: "var(--t1)", border: "1px solid var(--line)", borderRadius: 6 };
   const input = { ...button, minWidth: 0 };
   return <main style={{ maxWidth: 1200, margin: "0 auto", padding: embedded ? "18px 20px 40px" : 32, color: "var(--t1)" }}>

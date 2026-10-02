@@ -182,6 +182,7 @@ class Store:
                 query=query.where(column==value)
             rows=c.execute(query.offset(offset).limit(limit+1)).mappings().all()
             result=[self._visible(policy,dict(row)) for row in rows[:limit]]
+            for record in result:record['href']='/crm?'+urlencode({'record':record['id']})
             by_id={record['id']:record for record in result}
             links=c.execute(select(s.relationships).where(s.relationships.c.tenant_id==tenant,
                 s.relationships.c.record_id.in_(by_id),s.relationships.c.target_domain=='crm')).mappings().all() if by_id else []
@@ -203,6 +204,30 @@ class Store:
             return {'records':result,'next_offset':offset+limit if len(rows)>limit else None,
                     'card':{**card,'layout':visible_layout(card['layout'],readable) if card['layout'] else None},
                     'href':'/crm?'+urlencode({'object':object_type,'filters':json.dumps(filters or {},separators=(',',':'))})}
+
+    def resolve_name(self, tenant, actor, name):
+        """Case-insensitive entity names, preferring exact matches over readable prefixes."""
+        from sqlalchemy import func
+        name=name.strip().casefold()
+        if not name:raise CRMError('Entity name is required')
+        with self.engine.connect() as c:
+            policy=self._policy(c,tenant,actor)
+            fields=s.records.c.fields
+            full_name=func.trim(func.coalesce(fields['FirstName'].as_string(),'')+' '+func.coalesce(fields['LastName'].as_string(),''))
+            query=select(s.records).where(s.records.c.tenant_id==tenant,s.records.c.deleted==False,
+                or_(*[func.lower(fields[k].as_string()).startswith(name,autoescape=True) for k in ('Name','name','Subject')],func.lower(full_name).startswith(name,autoescape=True))).order_by(s.records.c.id)
+            matches=[];prefixes=[]
+            for row in c.execute(query).mappings():
+                try:record=self._visible(policy,dict(row))
+                except NotFound:continue
+                visible=record['fields']
+                labels=[str(visible.get(k) or '') for k in ('Name','name','Subject')]
+                labels.append(' '.join(str(visible.get(k) or '') for k in ('FirstName','LastName')).strip())
+                exact=any(label.casefold()==name for label in labels)
+                if not exact and not any(label.casefold().startswith(name) for label in labels):continue
+                record['href']='/crm?'+urlencode({'record':record['id']})
+                (matches if exact else prefixes).append(record)
+            return {'records':matches or prefixes}
 
     def _validate(self, definition, fields):
         errors = sorted(Draft202012Validator(definition).iter_errors(fields), key=lambda e: str(e.path))

@@ -38,7 +38,7 @@ def register_crm_tools(mcp, *, base_url, subject, scope, user_key, http, guard, 
     @guard
     def crm_search(object_type: str, filters: dict | None = None,
                    limit: int = 20, offset: int = 0) -> str:
-        """Find permitted CRM records using equality filters on readable fields. Returns stable IDs, revisions and href; paginate with offset. Present href as a Markdown link to open the live CRM table in the Minutes sidebar. Table columns follow the shared crm_configure layout."""
+        """Find permitted CRM records using equality filters on readable fields. Returns stable IDs, revisions and href; paginate with offset. Use each record href for entity links instead of workspace wikilinks. Present the top-level href as a Markdown link to open the live CRM table in the Minutes sidebar. Table columns follow the shared crm_configure layout."""
         return call('search', object_type=object_type, filters=filters or {}, limit=limit, offset=offset)
 
     @mcp.tool()

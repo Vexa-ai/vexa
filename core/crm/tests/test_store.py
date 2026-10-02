@@ -146,3 +146,16 @@ def test_card_configuration_is_versioned_and_does_not_change_records(store):
     assert store.configure('two','owner','Company')['version']==0
     store.configure('one','owner','Company',layout,1,'Second layout')
     with store.engine.connect() as c:assert c.scalar(select(func.count()).select_from(s.card_layouts))==2
+
+def test_resolve_name_respects_field_access_tenant_and_ambiguity(store):
+    rid=make(store)
+    assert store.resolve_name('one','reader','ACME')['records'][0]['id']==rid
+    assert store.resolve_name('two','owner','Acme')['records']==[]
+    store.create('one','owner','Company',{'name':'Acme Capital','revenue':2},reason='prefix fixture')
+    assert store.resolve_name('one','reader','Acme')['records'][0]['id']==rid
+    assert len(store.resolve_name('one','reader','Acm')['records'])==2
+    second=make(store)
+    assert len(store.resolve_name('one','reader','Acme')['records'])==2
+    with store.engine.begin() as c:
+        c.execute(s.policies.update().where(s.policies.c.subject_id=='reader').values(policy={'active':True,'objects':{'Company':{'read':'all','read_fields':['revenue']}}}))
+    assert store.resolve_name('one','reader','Acme')['records']==[]

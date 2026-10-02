@@ -19,6 +19,8 @@ class Search(Body):
     filters: dict = Field(default_factory=dict, description='Equality filters on readable fields; discover field names with crm_describe.')
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
+class Resolve(Body):
+    name: str = Field(min_length=1, max_length=300)
 class Read(Body):
     record_id: str
 class Change(Body):
@@ -90,8 +92,11 @@ def create_app(store: Store, identity, tenant_id: str):
         return store.describe(tenant_id,actor,body.object_type or None)
     @app.post('/search',operation_id='crm_search')
     def search(body: Search, actor=Depends(identity)):
-        """Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Present href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters."""
+        """Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Use each record href for entity links instead of workspace wikilinks. Present the top-level href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters."""
         return store.search(tenant_id,actor,body.object_type,body.filters,body.limit,body.offset)
+    @app.post('/resolve')
+    def resolve_name(body: Resolve, actor=Depends(identity)):
+        return store.resolve_name(tenant_id,actor,body.name)
     @app.post('/read',operation_id='crm_read')
     def read(body: Read, actor=Depends(identity)):
         """Read permitted fields, source evidence, links, pending proposals and current revision. Top-level id is the native UUID for subsequent calls; fields.Id is the imported source ID. Use href for the native Minutes record link. Read before changing an existing record."""

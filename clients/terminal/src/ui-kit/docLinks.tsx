@@ -397,6 +397,29 @@ export function Wikilink({ title }: { title: string }) {
  *  Resolves against the doc's workspace (DocMetaContext); a title that matches no entity
  *  doc renders muted with a "not found" tooltip instead of a dead click. */
 function EntityWikilink({ title }: { title: string }) {
+  const [crm, setCrm] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let active=true;setCrm(undefined);
+    fetch("/api/crm",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operation:"resolve",name:title})})
+      .then(async response=>{
+        const data=await response.json();
+        if (!active) return;
+        if (response.status===404 && data.detail==="CRM is not enabled") {setCrm(null);return;}
+        const matches=data.records;
+        if (response.ok && Array.isArray(matches)) {
+          setCrm(matches.length===1 ? matches[0].href : matches.length>1 ? `/crm?name=${encodeURIComponent(title)}` : null);
+        } else setCrm(`/crm?name=${encodeURIComponent(title)}`);
+      }).catch(()=>{if(active)setCrm(`/crm?name=${encodeURIComponent(title)}`);});
+    return ()=>{active=false;};
+  },[title]);
+  if (crm) return <a href={crm} title={`Open ${title} in CRM`} onClick={event=>{
+    if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey) return;
+    if(openCrmRecord(crm))event.preventDefault();
+  }} style={{display:"inline-flex",alignItems:"center",gap:5,border:"1px solid var(--line)",borderRadius:999,padding:"0.5px 9px 0.5px 7px",color:"var(--accent)",fontSize:"0.92em",fontWeight:500,lineHeight:1.45}}><Icon name="link" size={11}/>{title}</a>;
+  if (crm===undefined) return <span aria-busy="true">{title}</span>;
+  return <WorkspaceEntityWikilink title={title}/>;
+}
+function WorkspaceEntityWikilink({ title }: { title: string }) {
   const [hover, setHover] = useState(false);
   const meta = useContext(DocMetaContext);
   // undefined = resolving, null = not found, ResolvedDoc = found

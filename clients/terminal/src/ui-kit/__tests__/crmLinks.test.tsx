@@ -28,3 +28,35 @@ it('opens the CRM panel without navigating the chat or workspace', () => {
   expect(window.location.href).toBe(before);
   window.removeEventListener(OPEN_CRM_RECORD, opened);
 });
+
+it('resolves an entity wikilink to a CRM card before a workspace document',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,status:200,json:async()=>({records:[{href:'/crm?record=crm-account'}]})})));
+  const {Wikilink}=await import('../docLinks');
+  render(<Wikilink title="Aldmere Strategic Investment Corporation"/>);
+  const link=await screen.findByRole('link',{name:'Aldmere Strategic Investment Corporation'});
+  expect(link.getAttribute('href')).toBe('/crm?record=crm-account');
+  vi.unstubAllGlobals();
+});
+it('offers CRM name matches rather than guessing among duplicates',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,status:200,json:async()=>({records:[{href:'/crm?record=a'},{href:'/crm?record=b'}]})})));
+  const {Wikilink}=await import('../docLinks');
+  render(<Wikilink title="Shared name"/>);
+  expect((await screen.findByRole('link',{name:'Shared name'})).getAttribute('href')).toBe('/crm?name=Shared%20name');
+  vi.unstubAllGlobals();
+});
+it('keeps workspace resolution when the CRM module is disabled',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,status:404,json:async()=>({detail:'CRM is not enabled'})})));
+  const {Wikilink}=await import('../docLinks');
+  render(<Wikilink title="Workspace-only strategy"/>);
+  const link=await screen.findByRole('link',{name:'Workspace-only strategy'});
+  expect(link.getAttribute('title')).toContain('No doc for');
+  expect(link.getAttribute('href')).toBeNull();
+  vi.unstubAllGlobals();
+});
+it('does not fall back to workspace pages on CRM failures',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,status:503,json:async()=>({detail:'CRM is temporarily unavailable'})})));
+  const {Wikilink}=await import('../docLinks');
+  render(<Wikilink title="Unavailable account"/>);
+  expect((await screen.findByRole('link',{name:'Unavailable account'})).getAttribute('href')).toBe('/crm?name=Unavailable%20account');
+  vi.unstubAllGlobals();
+});
