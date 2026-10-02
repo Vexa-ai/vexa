@@ -4,14 +4,15 @@ description: "Vexa's declare-once DCO path for individuals and head-bound author
 ---
 
 Vexa asks each contributor for one conscious rights choice, on their first pull request, and
-automates the remaining mechanics. Later pull requests need no selection once the contributor is
-listed in `.github/contribution-rights.json` or selected Independent themselves on an earlier
-merged pull request. Corporate standing comes only from the registry. The canonical policy and operational commands live in
+automates the remaining mechanics. Later pull requests need no selection once the contributor has
+selected Independent themselves on a merged pull request; the gate finds it automatically. The
+registry in `.github/contribution-rights.json` holds only the maintainer's standing and corporate
+authorizations that cover future work. The canonical policy and operational commands live in
 [`CONTRIBUTOR_RIGHTS.md`](https://github.com/Vexa-ai/vexa/blob/main/CONTRIBUTOR_RIGHTS.md).
 
 | Path | Contributor action | Merge evidence |
 |---|---|---|
-| Independent | Select the declaration once and sign each commit with `git commit --signoff` | Declaration or registry entry plus the required DCO check; no individual CLA |
+| Independent | Select the declaration once and sign each commit with `git commit --signoff` | Declaration, once, plus the required DCO check; no individual CLA |
 | Employer/client-controlled | Select the corporate path and provide a legal/IP contact privately | Individual DCO plus a private authorization receipt bound to the current PR head |
 | Unsure | Select unsure as early as possible | Rights review resolves the path before merge |
 

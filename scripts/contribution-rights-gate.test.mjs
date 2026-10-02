@@ -394,12 +394,15 @@ test("grandfathering is unchanged", () => {
   assert.equal(evaluatePullRequest(authored("known-dev", { number: 100 }), [], registry, {}).ok, true);
 });
 
-test("the shipped registry is well-formed and names the maintainer as independent", () => {
+test("the shipped registry holds only the maintainer's standing and corporate authorizations", () => {
   const shipped = JSON.parse(readFileSync(new URL("../.github/contribution-rights.json", import.meta.url), "utf8"));
+  const maintainers = shipped.verifiers.map((login) => login.toLowerCase());
   for (const [login, entry] of Object.entries(shipped.contributors)) {
     assert.ok(registeredStanding(login, shipped), `invalid registry entry for ${login}`);
     assert.match(entry.declared, /^\d{4}-\d{2}-\d{2}$/, `declared date for ${login}`);
     assert.ok(entry.source, `source for ${login}`);
+    assert.ok(entry.path === "corporate" || maintainers.includes(login.toLowerCase()),
+      `${login}: independent contributors are found from their merged PRs, never added by hand`);
   }
   assert.equal(registeredStanding("dmitriyg228", shipped).path, "independent");
 });
