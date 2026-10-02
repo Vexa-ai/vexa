@@ -513,6 +513,7 @@ export function WorkspaceRef({ token }: { token: string }) {
 export function InternalLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
+  if (isCrmHref(href)) return <a href={href} style={{ color: "var(--blue)", textDecoration: "underline" }}>{children}</a>;
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
@@ -533,7 +534,8 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
     if (!href) return;
     // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
     // anything else (javascript:, data:, //host) is untrusted-doc content — ignore
-    if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
+    if (isCrmHref(href)) window.location.assign(href);
+    else if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
     else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
   };
   return (
@@ -555,3 +557,6 @@ export function CardGroup({ cols = 2, children }: { cols?: number; children?: Re
 /** True when an href points inside the workspace (no scheme, not an anchor, not //host). */
 export const isInternalHref = (href?: string): boolean =>
   Boolean(href) && !/^[a-z][a-z0-9+.-]*:/i.test(href!) && !href!.startsWith("#") && !href!.startsWith("//");
+
+/** Native CRM routes retain their tenant and record query instead of resolving as workspace files. */
+export const isCrmHref = (href: string): boolean => /^\/crm(?:[?#]|$)/.test(href);
