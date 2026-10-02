@@ -21,7 +21,8 @@ make lite
 `vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built `vexa-lite:dev` wins when present),
 starts the `vexa-lite-postgres` and `vexa-lite-storage` sidecars on the `vexa-lite-net` Docker
 network, boots the app container, waits on the gateway health endpoint, and probes the three
-front doors:
+front doors, giving each up to two minutes to answer (on first boot the terminal restarts once the
+self-host key is minted):
 
 | Front door | Port |
 |---|---|

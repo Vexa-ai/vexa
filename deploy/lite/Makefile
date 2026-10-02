@@ -244,12 +244,17 @@ storage-where:
 init-db:
 	@echo "  ✓ Schema converges in-process on service startup"
 
-## test — probe the published front doors.
+## test — probe the published front doors. Each door gets up to TEST_WAIT_SECONDS to answer: on first
+## boot provision-key.sh restarts the dashboard and terminal once the self-host key is minted.
+TEST_WAIT_SECONDS ?= 120
 test:
 	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_TERMINAL_PORT):terminal"; do \
-		PORT=$${ep%%:*}; NAME=$${ep##*:}; \
-		if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null || curl -sf -o /dev/null http://localhost:$$PORT/health 2>/dev/null; then \
-			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; FAIL=1; fi; \
+		PORT=$${ep%%:*}; NAME=$${ep##*:}; OK=0; WAITED=0; \
+		while :; do \
+			if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null || curl -sf -o /dev/null http://localhost:$$PORT/health 2>/dev/null; then OK=1; break; fi; \
+			[ $$WAITED -ge $(TEST_WAIT_SECONDS) ] && break; sleep 5; WAITED=$$((WAITED + 5)); \
+		done; \
+		if [ $$OK = 1 ]; then echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding after $(TEST_WAIT_SECONDS)s (:$$PORT)"; FAIL=1; fi; \
 	done; exit $$FAIL
 
 ## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-storagedata` to wipe).
