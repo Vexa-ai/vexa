@@ -16,6 +16,7 @@
 import { useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "./index";
 import { isWsRef } from "./wsLinks";
+import { openCrmRecord } from "./crmNavigation";
 import { WsLink } from "./WsLink";
 // The link vocabulary both renderers share. Re-exported below so every existing importer of
 // docLinks keeps working — the extraction is about the dependency graph, not about the API.
@@ -513,7 +514,7 @@ export function WorkspaceRef({ token }: { token: string }) {
 export function InternalLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
-  if (isCrmHref(href)) return <a href={href} style={{ color: "var(--blue)", textDecoration: "underline" }}>{children}</a>;
+  if (isCrmHref(href)) return <a href={href} onClick={e => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && openCrmRecord(href)) e.preventDefault(); }} style={{ color: "var(--blue)", textDecoration: "underline" }}>{children}</a>;
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
@@ -534,7 +535,7 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
     if (!href) return;
     // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
     // anything else (javascript:, data:, //host) is untrusted-doc content — ignore
-    if (isCrmHref(href)) window.location.assign(href);
+    if (isCrmHref(href)) { if (!openCrmRecord(href)) window.location.assign(href); }
     else if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
     else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
   };

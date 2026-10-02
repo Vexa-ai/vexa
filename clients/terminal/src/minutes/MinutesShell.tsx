@@ -23,6 +23,8 @@ import {
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
+import { CrmPanel } from "./CrmPanel";
+import { OPEN_CRM_RECORD } from "../ui-kit/crmNavigation";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
@@ -187,6 +189,17 @@ export function MinutesShell() {
       return !!localStorage.getItem("vexa.openMeetingRef") || !!localStorage.getItem("vexa.pendingPreset") || !!localStorage.getItem(VIEW_KEY);
     } catch { return false; }
   });
+  const [crmRecord, setCrmRecord] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const id = (event as CustomEvent<{ recordId?: string }>).detail?.recordId;
+      if (!id) return;
+      event.preventDefault(); readerChoseFocus.current = true; setCrmRecord(id); setPagesCollapsed(false);
+    };
+    window.addEventListener(OPEN_CRM_RECORD, open);
+    return () => window.removeEventListener(OPEN_CRM_RECORD, open);
+  }, []);
+  useEffect(() => { setCrmRecord(null); }, [sel.chatId]);
   const [docPath, setDocPath] = useState("README.md");
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
   // What KIND of thing is in front. A meeting tab is not a document: nothing is fetched for it and
@@ -775,6 +788,7 @@ export function MinutesShell() {
   const readerChoseFocus = useRef(false);
 
   const openPage = useCallback((pg: Page) => {
+    setCrmRecord(null);
     const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
     // What this person actually opens is the desk README's ordering signal — and the only place
     // that knows it is here. Fire-and-forget; a usage signal is never worth a millisecond of the
@@ -1553,6 +1567,7 @@ export function MinutesShell() {
       </div>}
       {pagesCollapsed
         ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
+        : crmRecord ? <CrmPanel recordId={crmRecord} onClose={() => setCrmRecord(null)} onCollapse={() => collapsePages(true)} />
         : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
             onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
             listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}

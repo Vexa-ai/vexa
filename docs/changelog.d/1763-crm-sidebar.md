@@ -1,0 +1,1 @@
+Clicking a CRM record link in Minutes opens its card in the right sidebar while keeping the chat visible. The card shares the record renderer, related links, proposal review and history with the standalone CRM page. Back to pages restores workspace browsing.
