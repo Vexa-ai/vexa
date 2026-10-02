@@ -381,6 +381,47 @@ const TEAMS_ENABLE_CAPTIONS = process.env.VEXA_TEAMS_ENABLE_CAPTIONS === '1';
 /** How many times to try the menu path before giving up (each attempt is ~3 s of UI waits). */
 const TEAMS_ENABLE_CAPTIONS_ATTEMPTS = Math.max(1, Number(process.env.VEXA_TEAMS_ENABLE_CAPTIONS_ATTEMPTS || 3));
 
+/** The sensor's poll cadence (`CSRC_POLL_MS`). Not imported: this file must not pull the page-side
+ *  bundle into the Node build. Kept as the floor only, so a drift there is a slacker floor here,
+ *  never a wrong window. */
+const CSRC_MIN_INACTIVE_MS = 100;
+/** No plausible window is 10 s: the measurement below shows 1600 ms already merges distinct
+ *  turns, so a huge override is a typo wearing a number — the NaN failure mode again, silent. */
+const CSRC_MAX_INACTIVE_MS = 10_000;
+/**
+ * The measured window — how long the transport sensor holds a source active after its last
+ * observed contribution. One name, so the fallback, the message and the default cannot drift.
+ *
+ * The sensor's own default is 400 ms (`CSRC_INACTIVE_MS` in @vexa/mixed-capture-core) — a value
+ * sized to span a packet gap. A speech PAUSE is longer. Measured in a downstream deployment on
+ * real Teams sessions and replayed through the Teams CSRC channelizer (#1383 carries the
+ * measurement; it is not reproduced in this tree): entry-timestamp staleness during natural
+ * pauses is p50 550 ms, so at 400 ms the MEDIAN pause trips a synthesized deactivation and one
+ * speech phase fragments; 400 ms yields 1.67 lane activations per real turn, 800 ms yields 1.13 —
+ * the knee — for 1.8 pp more contamination; 1600 ms starts merging distinct turns. So the
+ * production window is 800 ms.
+ *
+ * The number lives HERE, at the composition root; the sensor owns the `inactiveMs` seam and its
+ * packet-gap default, nothing more. Overridable via VEXA_CSRC_INACTIVE_MS: the deployment renders
+ * it onto the runtime (compose, helm `runtime.csrcInactiveMs`, lite — see docs/configuration),
+ * the runtime kernel forwards it to spawned bots through profiles.py's tuning allowlist, and the
+ * lite/process backend inherits the host env directly.
+ */
+const CSRC_DEFAULT_INACTIVE_MS = 800;
+export function resolveCsrcInactiveMs(raw: string | undefined, warn: (m: string) => void = () => { /* silent */ }): number {
+  // Unset and blank are both "no override": compose, helm and lite render an UNSET knob as an
+  // empty string (`${VAR:-}`), and every other bot tuning knob reads it that way. A NON-blank value
+  // is an intent — usable ⇒ honoured; unusable ⇒ said out loud and replaced by the measured default.
+  if (raw === undefined || raw.trim() === '') return CSRC_DEFAULT_INACTIVE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < CSRC_MIN_INACTIVE_MS || n > CSRC_MAX_INACTIVE_MS) {
+    warn(`[bot] VEXA_CSRC_INACTIVE_MS=${JSON.stringify(raw)} is not a usable window (finite, ${CSRC_MIN_INACTIVE_MS}..${CSRC_MAX_INACTIVE_MS}ms) — using the measured ${CSRC_DEFAULT_INACTIVE_MS}ms`);
+    return CSRC_DEFAULT_INACTIVE_MS;
+  }
+  return n;
+}
+const CSRC_RESOLVED_INACTIVE_MS = resolveCsrcInactiveMs(process.env.VEXA_CSRC_INACTIVE_MS, (m) => console.warn(m));
+
 /** Outcome of one enable attempt. `already-on` and `clicked` are successes; `failed` carries WHY,
  *  because "captions never appeared" has two very different causes — the menu path changed, or the
  *  tenant blocks captions — and only the reason distinguishes them on the first live run. */
@@ -796,7 +837,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isPerTrack, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
+  await page.evaluate(async ({ isMixed, isPerTrack, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms, csrcInactiveMs }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams/Jitsi ride the WebRTC hook (installRemoteAudioHook, installed pre-nav), which mirrors
@@ -1159,6 +1200,9 @@ export async function startCaptureBridge(
               w.logBot?.('[Csrc] observation ' + JSON.stringify(o));
               w.__vexaObservation?.('csrc', o, Date.now());
             },
+            // The MEASURED pause window, passed in rather than defaulted: the sensor's own 400 ms
+            // is shorter than the median natural speech pause (p50 550 ms) and fragments a turn.
+            inactiveMs: csrcInactiveMs,
             log: (m: string) => w.logBot?.('[Csrc] ' + m),
           });
         } catch (e: any) {
@@ -1287,7 +1331,9 @@ export async function startCaptureBridge(
       mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000),
       // How long a PICKED mix may stay wholly silent before the lane abandons it for every track.
       mainAudioSilenceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_SILENCE_MS || 20000),
-      mainAudioEnergyRms: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_ENERGY_RMS || 0.006) }).catch((e) => {
+      mainAudioEnergyRms: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_ENERGY_RMS || 0.006),
+      // The measured inactivity window — a parameter the sensor accepts, never a fork of it.
+      csrcInactiveMs: CSRC_RESOLVED_INACTIVE_MS }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
