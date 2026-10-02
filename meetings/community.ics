@@ -1,0 +1,30 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Vexa//Community Triage and Review//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+X-WR-CALNAME:Vexa community triage & review
+X-WR-TIMEZONE:UTC
+REFRESH-INTERVAL;VALUE=DURATION:PT12H
+X-PUBLISHED-TTL:PT12H
+BEGIN:VEVENT
+UID:community-triage@vexa.ai
+DTSTAMP:20260917T120000Z
+DTSTART:20260930T140000Z
+DTEND:20260930T144500Z
+RRULE:FREQ=WEEKLY;BYDAY=WE
+SUMMARY:Vexa community triage & review
+DESCRIPTION:Open weekly session on the Vexa OSS queue. We walk open pull 
+ requests and issues oldest first\; each leaves with an owner and a label
+ \, or is closed. Bring a pull request\, or pick one from the board and r
+ un it. Transcribed by a Vexa bot\; minutes published as a GitHub Discuss
+ ion the same day.\n\nGovernance: https://github.com/Vexa-ai/vexa/blob/ma
+ in/GOVERNANCE.md\nHow to validate: https://github.com/Vexa-ai/vexa/blob/
+ main/VALIDATION.md\nMinutes: https://github.com/Vexa-ai/vexa/discussions
+LOCATION:VEXA_COMMUNITY_MEET_URL
+URL:VEXA_COMMUNITY_MEET_URL
+X-GOOGLE-CONFERENCE:VEXA_COMMUNITY_MEET_URL
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+END:VCALENDAR

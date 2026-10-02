@@ -1,0 +1,126 @@
+# lite-pr-image — publish a validator-runnable Lite image for one PR: vexaai/vexa-lite:pr-<N>.
+#
+# WHY THIS EXISTS. GOVERNANCE.md's merge rule requires that a human who did not write the change
+# runs it on their own instance. Today that means every validator rebuilds a multi-GB image
+# (~45 min cold), which is the single biggest reason external PRs go unvalidated. One published
+# tag turns "build it" into `IMAGE_TAG=pr-<N> make lite`.
+#
+# WHY IT IS A SEPARATE WORKFLOW AND NOT THREE LINES IN pr-value.yml. pr-value's lite-smoke leg
+# already builds exactly this image from the PR tree — but it runs on `pull_request` with NO
+# secrets BY DESIGN, because it executes untrusted PR code. Registry credentials must never live
+# in that job: it would hand every PR author a push token. So this workflow instead:
+#
+#   • runs on workflow_dispatch, so a MAINTAINER OR TRIAGER decides which PR gets an image —
+#     that is what makes it usable for FORK PRs at all; and
+#   • runs automatically only for same-repo PRs, where the branch is already ours.
+#
+# It publishes ONLY a :pr-<N> tag. Constitutional guard: it never touches :dev, :latest, :v012,
+# :buildcache or any release tag, and it is not a required check — a failure here blocks nothing.
+name: lite-pr-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to build and publish as vexaai/vexa-lite:pr-<N>"
+        required: true
+        type: string
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    paths:
+      - "deploy/lite/**"
+      - "core/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+concurrency:
+  group: lite-pr-image-${{ inputs.pr || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  publish:
+    # The automatic path is same-repo only. Forks come through workflow_dispatch, where a human
+    # has decided to build that PR's code — never implicitly, with credentials, on a push.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PR: ${{ inputs.pr || github.event.pull_request.number }}
+    steps:
+      - name: Docker Hub credentials present?
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "::error title=Docker Hub secrets missing::lite-pr-image cannot publish. See release-images.yml for the same two repository secrets."
+            exit 1
+          fi
+          echo "✓ Docker Hub credentials configured"
+
+      # The MERGE ref — their change on top of current main, which is the thing that would land.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr || github.event.pull_request.number }}/merge
+
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # amd64 only, deliberately: this is a throwaway validation tag, and a multi-arch build
+      # doubles a 45-minute cold build for a tag that is deleted in 45 days.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/lite/Dockerfile.lite
+          platforms: linux/amd64
+          push: true
+          tags: vexaai/vexa-lite:pr-${{ env.PR }}
+          cache-from: type=registry,ref=vexaai/vexa-lite:buildcache
+
+      - name: Tell the PR how to run it
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const n = process.env.PR;
+            const marker = "<!-- lite-pr-image -->";
+            const body = [
+              `This pull request is runnable on your own machine:`,
+              "",
+              "```bash",
+              `echo "IMAGE_TAG=pr-${n}" >> .env && make lite`,
+              "```",
+              "",
+              `Image: \`vexaai/vexa-lite:pr-${n}\` (linux/amd64). What to exercise and the exact`,
+              `comment to post: [VALIDATION.md](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/VALIDATION.md).`,
+              marker,
+            ].join("\n");
+            // Sticky: update our own comment rather than adding one per push.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: Number(n), per_page: 100,
+            });
+            const mine = comments.find((c) => (c.body || "").includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: Number(n), body });
+            }
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## lite-pr-image"
+            echo
+            echo "Published \`vexaai/vexa-lite:pr-${PR}\` (linux/amd64) from the merge ref of #${PR}."
+            echo "Validators: \`echo \"IMAGE_TAG=pr-${PR}\" >> .env && make lite\`."
+          } >> "$GITHUB_STEP_SUMMARY"

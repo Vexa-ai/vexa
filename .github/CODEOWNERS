@@ -1,0 +1,36 @@
+# CODEOWNERS — who GitHub automatically asks to review what.
+#
+# DELIBERATELY NOT `*`. A catch-all owner auto-requests the maintainer on every
+# pull request, which is precisely the bottleneck GOVERNANCE.md exists to remove:
+# one reviewer cannot clear a queue that grows faster than one person reviews.
+# Ordinary changes go to the community board and are picked up there.
+#
+# What IS listed below is the set of paths GOVERNANCE.md § "The merge rule"
+# reserves for the maintainer's own security-and-architecture read. Those get an
+# automatic review request because forgetting one is expensive.
+#
+# As triagers are admitted at the weekly community meeting (MAINTAINERS.md),
+# their areas are added here so a pull request reaches someone who knows that
+# code without anyone having to ask. Adding a line is a pull request like any other.
+#
+# NOTE: this file REQUESTS reviews. It grants no permission and gates no merge —
+# the merge rule is in GOVERNANCE.md.
+
+# Governance and the contributor-facing contract
+/GOVERNANCE.md              @DmitriyG228
+/MAINTAINERS.md             @DmitriyG228
+/CODE_OF_CONDUCT.md         @DmitriyG228
+/CONTRIBUTOR_RIGHTS.md      @DmitriyG228
+/SECURITY.md                @DmitriyG228
+/VALIDATION.md              @DmitriyG228
+/CONTRIBUTING.md            @DmitriyG228
+/LICENSE                    @DmitriyG228
+
+# CI, release and supply chain
+/.github/                   @DmitriyG228
+/release/                   @DmitriyG228
+/scripts/                   @DmitriyG228
+
+# Core paths — the merge rule requires two human validations here
+/core/gateway/              @DmitriyG228
+/core/identity/             @DmitriyG228

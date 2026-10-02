@@ -471,6 +471,11 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 
 - **Docs** — [docs.vexa.ai](https://docs.vexa.ai)
 - **Discord** — [discord.gg/Ga9duGkVz9](https://discord.gg/Ga9duGkVz9)
+- **Weekly community triage & review** — every Wednesday, 14:00 UTC, 45 min, open to anyone, no
+  invitation: join `<MEET_URL>` · [calendar](meetings/community.ics) ·
+  [minutes](https://github.com/Vexa-ai/vexa/discussions). We walk the open PRs and issues oldest
+  first. How the project is run: [`GOVERNANCE.md`](GOVERNANCE.md). How to run a PR before it merges:
+  [`VALIDATION.md`](VALIDATION.md).
 - **Roadmap** — the [board](https://github.com/orgs/Vexa-ai/projects/2), grouped by contributor
   lane, with [milestones](https://github.com/Vexa-ai/vexa/milestones) as the version gates.
 - **Contributing** — [how delivery works](https://docs.vexa.ai/governance/delivery): prepared issues
