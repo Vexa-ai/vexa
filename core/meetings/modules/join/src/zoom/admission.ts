@@ -5,6 +5,7 @@ import { BotConfig } from "../_host";
 import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
 import {
   zoomLeaveButtonSelector,
+  zoomInMeetingMarkers,
   zoomMeetingAppSelector,
   zoomWaitingRoomTexts,
   zoomRemovalTexts,
@@ -47,28 +48,40 @@ async function detectZoomBotBlock(page: Page): Promise<string | null> {
 
 /**
  * Check if the bot is confirmed inside the meeting.
- * Primary:   Leave button visible (footer is showing). Strong positive —
- *            this control never renders in the waiting room.
- * Fallback1: .meeting-app container present (footer may be auto-hidden).
- * Fallback2: live <audio> elements AND no pre-join-page indicators —
- *            Zoom Web preloads audio streams on the pre-join page itself
- *            (local mic preview), so audio presence alone is NOT enough.
- *            Require the pre-join name input AND join button to be absent.
- *            (Observed 2026-04-26 meeting_id=31: bot was at
- *            "Enter Meeting Info"/passcode-entry screen with 3 live audio
- *            elements; an earlier audio-only fallback falsely reported
- *            admitted, status=active appeared on the dashboard while the
- *            bot was actually still pre-join.)
  *
- * IMPORTANT — waiting-room exclusion runs before BOTH fallbacks:
- * Zoom renders the waiting room INSIDE `.meeting-app` (so fallback 1
- * fires false-positive there), and the bot's mic-preview audio stays live
- * across the pre-join → waiting-room transition while pre-join DOM
- * indicators are already gone (so fallback 2 fires false-positive too).
- * Without the exclusion, the bot reports admitted and the dashboard skips
- * the `awaiting_admission` state entirely. Observed 2026-04-26
- * meeting_id=36: screenshot showed "Host has joined. We've let them know
- * you're here." while the bot reported admitted=true.
+ * Signal order, strongest first:
+ *   1. Leave button VISIBLE — footer is showing. Never renders in the lobby.
+ *   2. Any in-meeting footer marker PRESENT in the DOM (zoomInMeetingMarkers),
+ *      with no pre-join form. Presence, not visibility: Zoom's footer toolbar
+ *      auto-hides after a few seconds without pointer movement, which makes
+ *      every isVisible() probe lie about a bot that is genuinely in the call.
+ *   3. Lobby text — only consulted once 1 and 2 have found nothing. It then
+ *      vetoes the weak fallback below.
+ *   4. Weak fallback: `.meeting-app` shell, no lobby copy, no pre-join form.
+ *
+ * WHY 2 OUTRANKS 3. zoomWaitingRoomTexts contains substrings as generic as
+ * 'Please wait' and 'waiting room'. Zoom renders those in-meeting too
+ * (connecting-audio toasts, host-control notices) and can leave lobby copy in
+ * the DOM after admission. Previously the text probe ran BEFORE both fallbacks,
+ * so a bot admitted seconds earlier — footer already auto-hidden — returned
+ * "not admitted" and its caller left the meeting. Footer markers never render
+ * in the lobby, so they are safe to rank above a fuzzy text match.
+ *
+ * WHY 3 STILL VETOES 4. Zoom renders the waiting room INSIDE `.meeting-app`,
+ * so the container alone reports admitted while the bot is still in the lobby,
+ * and the dashboard skips `awaiting_admission` entirely. Observed 2026-04-26
+ * meeting_id=36: screenshot showed "Host has joined. We've let them know you're
+ * here." while the bot reported admitted=true. `.meeting-app` therefore stays a
+ * WEAK signal and is deliberately excluded from zoomInMeetingMarkers.
+ *
+ * The pre-join guard is retained throughout: observed 2026-04-26 meeting_id=31,
+ * bot at the "Enter Meeting Info"/passcode screen while an earlier audio-only
+ * fallback reported admitted.
+ *
+ * The former live-<audio>/srcObject fallback is REMOVED: modern Zoom Web routes
+ * audio through the Web Audio API and no longer creates <audio> elements with
+ * srcObject (#318), so that branch could never return true. It read as a third
+ * layer of protection while contributing nothing.
  */
 async function isAdmitted(page: Page): Promise<boolean> {
   try {
@@ -77,40 +90,48 @@ async function isAdmitted(page: Page): Promise<boolean> {
     const leaveBtn = page.locator(zoomLeaveButtonSelector).first();
     if (await leaveBtn.isVisible({ timeout: 500 })) return true;
 
-    // Before the weaker fallbacks, rule out the waiting room. The
-    // waiting-room text is the most reliable disambiguator — it appears
-    // ONLY in the waiting room.
-    const inWaitingRoom = await page.evaluate((texts: string[]) => {
+    // Everything below in ONE page.evaluate, so all signals read a single
+    // consistent DOM snapshot instead of racing Zoom's UI transitions.
+    const state = await page.evaluate((cfg: { inMeeting: string[]; waiting: string[]; meetingApp: string }) => {
+      const present = cfg.inMeeting.filter(s => {
+        try { return !!document.querySelector(s); } catch { return false; }
+      });
       const bodyText = document.body?.innerText || '';
-      return texts.some(t => bodyText.includes(t));
-    }, zoomWaitingRoomTexts).catch(() => false);
-    if (inWaitingRoom) return false;
-
-    // Fallback 1: footer may be auto-hidden — check for the meeting app shell
-    const meetingApp = page.locator(zoomMeetingAppSelector).first();
-    if (await meetingApp.isVisible({ timeout: 500 })) return true;
-
-    // Fallback 2: live <audio> elements AND no pre-join indicators.
-    // Distinguishes "in meeting, audio routing" from "pre-join page with
-    // mic preview audio".
-    const state = await page.evaluate(() => {
-      const liveAudioCount = Array.from(document.querySelectorAll('audio'))
-        .filter((el: any) =>
-          !el.paused &&
-          el.srcObject instanceof MediaStream &&
-          el.srcObject.getAudioTracks().length > 0 &&
-          el.srcObject.getAudioTracks()[0].readyState === 'live')
-        .length;
+      const waitingHit = cfg.waiting.find(t => bodyText.includes(t)) || null;
       const preJoinPresent = !!(
         document.querySelector('#input-for-name') ||
         document.querySelector('button.preview-join-button') ||
         document.querySelector('input[placeholder*="passcode" i], input[placeholder*="password" i]')
       );
-      const bodyText = (document.body?.innerText || '').toLowerCase();
-      const preJoinTextHints = ['enter meeting info', 'meeting passcode'].some(t => bodyText.includes(t));
-      return { liveAudioCount, preJoinPresent, preJoinTextHints };
-    }).catch(() => ({ liveAudioCount: 0, preJoinPresent: true, preJoinTextHints: true }));
-    return state.liveAudioCount > 0 && !state.preJoinPresent && !state.preJoinTextHints;
+      const meetingAppPresent = !!document.querySelector(cfg.meetingApp);
+      return { present, waitingHit, preJoinPresent, meetingAppPresent };
+    }, { inMeeting: zoomInMeetingMarkers, waiting: zoomWaitingRoomTexts, meetingApp: zoomMeetingAppSelector })
+      .catch(() => ({ present: [] as string[], waitingHit: null as string | null, preJoinPresent: true, meetingAppPresent: false }));
+
+    // Hard DOM evidence of the in-meeting footer OUTRANKS the text probe.
+    //
+    // Previously the innerText match returned false BEFORE these markers were
+    // consulted, and zoomWaitingRoomTexts contains substrings as generic as
+    // 'Please wait' and 'waiting room' which Zoom also renders in-meeting
+    // (connecting-audio toasts, host-control notices) and can leave in the DOM
+    // after admission. Combined with the footer toolbar auto-hiding — which
+    // defeats the isVisible() probe above — a bot that had just been admitted
+    // returned "not admitted" and left the call.
+    //
+    // The pre-join form is the one exception: if the name/passcode form is on
+    // screen we are demonstrably not in the meeting, whatever else matched.
+    if (state.present.length > 0 && !state.preJoinPresent) return true;
+
+    // No footer evidence — now the lobby text is meaningful, and must veto the
+    // weak fallback below. Zoom renders the waiting room INSIDE `.meeting-app`,
+    // so without this the container alone would report admitted while still in
+    // the lobby (observed 2026-04-26 meeting_id=36).
+    if (state.waitingHit) return false;
+
+    // Weak fallback: meeting shell, no lobby copy, no pre-join form.
+    if (state.meetingAppPresent && !state.preJoinPresent) return true;
+
+    return false;
   } catch {
     return false;
   }
@@ -249,12 +270,17 @@ export async function waitForZoomMeetingAdmission(
 
 export async function checkForZoomAdmissionSilent(page: Page): Promise<boolean> {
   if (!page) return false;
-  // Retry up to 3 times with 1s delay — Zoom UI may briefly hide elements
-  // during popup dismissals, tooltips, or layout transitions after admission.
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Retry with a wider window — the lobby -> in-call DOM swap can take longer
+  // than the old 2s budget allowed. This check only ever gates a decision to
+  // LEAVE a meeting we believe we are in, so being slow to conclude "not
+  // admitted" is far cheaper than being wrong: a real ejection persists and is
+  // caught on a later attempt, while a premature false reads to the user as the
+  // bot abandoning a live call seconds after being let in.
+  const ATTEMPTS = 6;
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (await isAdmitted(page)) return true;
-    if (attempt < 2) {
-      await page.waitForTimeout(1000);
+    if (attempt < ATTEMPTS - 1) {
+      await page.waitForTimeout(1500);
     }
   }
   return false;
