@@ -57,7 +57,7 @@ long-running compose service.
 ## Usage
 
 ```bash
-cp .env.example .env            # edit secrets/ports/DOCKER_GID
+./deploy/compose/mint-dev-env.sh   # seeds .env, mints the secrets the services refuse to boot without; then edit ports/DOCKER_GID
 docker compose -f deploy/compose/docker-compose.yml build
 docker compose -f deploy/compose/docker-compose.yml up -d
 # poll until healthy, then:

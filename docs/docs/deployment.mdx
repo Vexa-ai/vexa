@@ -29,7 +29,9 @@ make all      # full stack via Docker Compose — each service in its own contai
 make bot      # build the meeting bot FROM SOURCE — required before a bot can join a meeting
 ```
 
-`make all` seeds `.env` from `.env.example`, brings the stack up, and **prints an API key plus the
+`make all` seeds `.env` from `.env.example`, mints the secrets the services refuse to boot without
+(`INTERNAL_API_SECRET`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY` — a value you already set is kept),
+brings the stack up, and **prints an API key plus the
 service URLs** when it's done. The **meeting bot is built from source** (`make bot`), **not pulled** —
 the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is **not compatible** with
 this stack's `lifecycle.v1` (bots reach `joining` then fail). `make all` warns loudly if the bot image
