@@ -1,6 +1,7 @@
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CrmPanel } from '../CrmPanel';
+import { ASK_CHAT_EVENT } from '../../canvas/actions';
 afterEach(() => {cleanup(); vi.unstubAllGlobals();});
 it('renders an authorized card and follows related records without replacing the chat URL', async () => {
   vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
@@ -15,10 +16,14 @@ it('renders an authorized card and follows related records without replacing the
   }));
   const close = vi.fn(); const before = window.location.href;
   render(<CrmPanel recordId="a" onClose={close} onCollapse={()=>{}} />);
-  await screen.findByRole('heading',{name:'First account'});
+  await screen.findByText('First account', {selector:'div'});
   expect(screen.queryByRole('button',{name:'Browse records'})).toBeNull();
-  fireEvent.click(screen.getByRole('button',{name:'Parent Related account'}));
-  await screen.findByRole('heading',{name:'Related account'});
+  expect(screen.queryByLabelText('New value')).toBeNull();
+  const ask=vi.fn();window.addEventListener(ASK_CHAT_EVENT,ask,{once:true});
+  fireEvent.click(screen.getByRole('button',{name:'Configure card'}));
+  expect((ask.mock.calls[0][0] as CustomEvent).detail.prompt).toContain('object type Account');
+  fireEvent.click(screen.getByRole('link',{name:'Related account'}));
+  await screen.findByText('Related account', {selector:'div'});
   expect(window.location.href).toBe(before);
   fireEvent.click(screen.getByRole('button',{name:'Back to pages'}));
   expect(close).toHaveBeenCalledOnce();

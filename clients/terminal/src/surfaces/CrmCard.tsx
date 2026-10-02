@@ -1,5 +1,6 @@
 "use client";
-import { Markdown } from "../ui-kit/Markdown";
+import { MdxDoc } from "../ui-kit/MdxDoc";
+import { type as ty } from "../minutes/tokens";
 export type CardField = {field: string; label?: string; format?: string; currency?: string};
 export type CardLayout = {title_field?: string; sections: {title: string; fields: CardField[]}[]; show_narrative?: boolean; show_related?: boolean};
 export type CardRecord = {id: string; object_type: string; revision: number; sources?: {system: string; source_id: string}[]; fields: Record<string, unknown>; narrative: string | null; links?: {field: string; record_id: string; label: string}[]; card?: {version: number; layout: CardLayout | null}};
@@ -26,34 +27,49 @@ export function formatValue(value: unknown, field: CardField): string {
   }
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
-export function CrmCard({record, onRead, busy}: {record: CardRecord; onRead: (id:string)=>void; busy: boolean}) {
+
+/** Treat field text as text; only fields explicitly configured as Markdown carry markup. */
+function prose(value: unknown): string {
+  return String(value ?? '').replace(/[\\`*_{}\[\]<>()#!|]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+}
+export function cardDocument(record: CardRecord): string {
   const layout = record.card?.layout || defaultLayout(record);
-  const related = record.links?.filter(link => !['CreatedById','LastModifiedById','RecordTypeId'].includes(link.field)) || [];
-  const linkStyle = {color:'var(--blue)', background:'none',border:0,padding:0,cursor:'pointer',textAlign:'left' as const,font:'inherit'};
-  function renderField(field: CardField) {
-    const links = record.links?.filter(l => l.field === field.field) || [];
-    if (links.length) return links.map(link => <button key={link.record_id} style={linkStyle} disabled={busy} onClick={()=>onRead(link.record_id)}>{link.label}</button>);
-    const value = formatValue(record.fields[field.field],field);
-    if (field.format === 'markdown') return <Markdown>{value}</Markdown>;
-    if (field.format === 'badge') return <span style={{display:'inline-block',border:'1px solid var(--line)',background:'var(--panel2)',borderRadius:20,padding:'2px 9px',fontSize:12}}>{value}</span>;
-    return value;
+  const title = record.fields[layout.title_field || 'Name'] || record.fields.Name || record.fields.Subject || record.object_type;
+  const body = [`# ${prose(title)}`];
+  for (const section of layout.sections) {
+    const fields = section.fields.filter(f => Object.hasOwn(record.fields,f.field));
+    if (!fields.length) continue;
+    if (section.title) body.push(`## ${prose(section.title)}`);
+    for (const field of fields) {
+      const label = field.label || (field.format === 'markdown' ? '' : fieldLabel(field.field));
+      const links = record.links?.filter(l => l.field === field.field) || [];
+      const value = links.length
+        ? links.map(l => `[${prose(l.label)}](/crm?record=${encodeURIComponent(l.record_id)})`).join(', ')
+        : field.format === 'markdown' ? String(record.fields[field.field] ?? '') : prose(formatValue(record.fields[field.field],field));
+      body.push(label ? `**${prose(label)}:** ${value}` : value);
+    }
   }
-  return <article style={{fontSize:14,lineHeight:1.6,overflowWrap:'anywhere'}}>
-    <p style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--t3)',margin:'0 0 6px'}}>{fieldLabel(record.object_type)} · Revision {record.revision}</p>
-    <h2 style={{fontSize:24,lineHeight:1.25,fontWeight:600,margin:'0 0 24px'}}>{String(record.fields[layout.title_field || 'Name'] || record.fields.Name || record.fields.Subject || record.object_type)}</h2>
-    {layout.sections.map((section,i) => {
-      const fields = section.fields.filter(f => Object.hasOwn(record.fields,f.field));
-      if (!fields.length) return null;
-      return <section key={i} style={{marginBottom:24}}>
-        {section.title && <h3 style={{fontSize:15,fontWeight:600,margin:'0 0 10px'}}>{section.title}</h3>}
-        <dl style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,180px),1fr))',gap:'14px 24px',margin:0}}>{fields.map((field,j)=><div key={j} style={{gridColumn:field.format==='markdown'?'1 / -1':undefined}}>
-          <dt style={{fontSize:12,color:'var(--t3)',marginBottom:3}}>{field.label === undefined ? fieldLabel(field.field) : field.label || (field.format === 'markdown' ? '' : fieldLabel(field.field))}</dt>
-          <dd style={{margin:0}}>{renderField(field)}</dd>
-        </div>)}</dl>
-      </section>;
-    })}
-    {layout.show_narrative !== false && record.narrative && <section style={{marginBottom:24}}><h3 style={{fontSize:15}}>Notes</h3><Markdown>{record.narrative}</Markdown></section>}
-    {layout.show_related !== false && !!related.length && <nav aria-label="Related records" style={{marginBottom:24}}><h3 style={{fontSize:15}}>Related records</h3><div style={{display:'flex',flexWrap:'wrap',gap:8}}>{related.map(link=><button key={link.field+link.record_id} disabled={busy} onClick={()=>onRead(link.record_id)} style={{...linkStyle,border:'1px solid var(--line)',borderRadius:8,padding:'8px 12px'}}><span style={{display:'block',fontSize:11,color:'var(--t3)'}}>{fieldLabel(link.field)}</span>{link.label}</button>)}</div></nav>}
-    <details style={{margin:'20px 0',color:'var(--t2)',fontSize:12}}><summary style={{cursor:'pointer'}}>All fields · {Object.keys(record.fields).length}</summary><dl>{Object.entries(record.fields).map(([name,value])=><div key={name} style={{padding:'6px 0',borderBottom:'1px solid var(--line)'}}><dt>{name}</dt><dd style={{margin:0}}>{formatValue(value,{field:name})}</dd></div>)}</dl>{record.sources?.map(source => <p key={source.system+source.source_id}>Source: {source.system} · {source.source_id}</p>)}</details>
+  if (layout.show_narrative !== false && record.narrative) body.push('## Notes',record.narrative);
+  const links = record.links?.filter(l => !['CreatedById','LastModifiedById','RecordTypeId'].includes(l.field)) || [];
+  if (layout.show_related !== false && links.length) {
+    body.push('## Related records',links.map(l => `- **${prose(fieldLabel(l.field))}:** [${prose(l.label)}](/crm?record=${encodeURIComponent(l.record_id)})`).join('\n'));
+  }
+  return body.join('\n\n');
+}
+export function CrmCard({record, onRead, busy}: {record: CardRecord; onRead: (id:string)=>void; busy: boolean}) {
+  return <article data-crm-document style={{...ty.body,lineHeight:1.6,color:'var(--t1)',overflowWrap:'anywhere'}} onClickCapture={event => {
+    const anchor = (event.target as Element).closest('a[href]');
+    const href = anchor?.getAttribute('href');
+    if (!href?.startsWith('/crm?') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const id = new URL(href,window.location.origin).searchParams.get('record');
+    if (!id) return;
+    event.preventDefault();event.stopPropagation();if (!busy) onRead(id);
+  }}>
+    <div style={ty.meta}>{fieldLabel(record.object_type)} · Revision {record.revision}</div>
+    <MdxDoc>{cardDocument(record)}</MdxDoc>
+    <details style={{...ty.meta,margin:'12px 0'}}><summary style={{cursor:'pointer'}}>All fields · {Object.keys(record.fields).length}</summary>
+      <MdxDoc>{Object.entries(record.fields).map(([name,value]) => `**${prose(name)}:** ${prose(formatValue(value,{field:name}))}`).join('\n\n')}</MdxDoc>
+      {record.sources?.map(source=><p key={source.system+source.source_id}>Source: {source.system} · {source.source_id}</p>)}
+    </details>
   </article>;
 }
