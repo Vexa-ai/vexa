@@ -4,6 +4,7 @@ where the docker daemon is unavailable (e.g. CI without Docker)."""
 import shutil
 import os
 import subprocess
+import time
 import uuid
 
 import pytest
@@ -56,5 +57,54 @@ def test_docker_backend_real_container_lifecycle():
         rt.destroy(wid)
         assert rt.get(wid).state is RuntimeState.destroyed
         assert not _exists(name)                              # container actually removed
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
+def test_docker_reclaim_races_a_real_concurrent_remover(caplog):
+    # The staged race behind the 409 reclaim contract, against the REAL daemon: another remover
+    # force-deletes the container at the same moment cleanup does. Whichever DELETE loses gets
+    # 409 "removal already in progress"; cleanup must succeed either way, and only because the
+    # container is provably GONE. The fat writable layer widens the removal window so the race
+    # reliably overlaps.
+    import threading
+
+    from runtime_kernel.backend import WorkloadHandle
+    from runtime_kernel.docker_backend import DockerBackend
+
+    name = f"vexa-rt-reclaimtest-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)  # clean slate
+    try:
+        subprocess.run(
+            ["docker", "run", "-d", "--name", name, "alpine",
+             "sh", "-c", "dd if=/dev/zero of=/big bs=1M count=300 2>/dev/null && sleep 300"],
+            check=True, capture_output=True,
+        )
+        # wait for the layer to be written, so removal has real work to do
+        for _ in range(100):
+            probe = subprocess.run(
+                ["docker", "exec", name, "test", "-f", "/big"], capture_output=True
+            )
+            if probe.returncode == 0:
+                break
+            time.sleep(0.1)
+        remover = threading.Thread(
+            target=subprocess.run, args=(["docker", "rm", "-f", name],),
+            kwargs={"capture_output": True},
+        )
+        remover.start()
+        # head start: let the remover's DELETE get in flight (CLI startup + API call), so
+        # cleanup's own DELETE arrives mid-removal and takes the 409 confirm-absence path —
+        # the fat layer keeps the removal window open far longer than this delay
+        time.sleep(0.5)
+        with caplog.at_level("WARNING", logger="runtime_kernel.docker_backend"):
+            DockerBackend().cleanup(WorkloadHandle(name, name))  # must not raise, whoever wins
+        remover.join(timeout=60)
+        assert not _exists(name)                              # absence, the only success condition
+        if not any("removal already in progress" in r.getMessage() for r in caplog.records):
+            # a lost race is still a valid pass of the invariant (cleanup succeeded, container
+            # gone) but it never entered the 409 branch — say so instead of passing silently;
+            # the scripted suite pins the branch deterministically either way
+            pytest.skip("race did not overlap on this host — 409 branch pinned by the scripted suite")
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
