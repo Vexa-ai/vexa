@@ -203,9 +203,11 @@ const envNumber = (name: string, fallback: number): number => {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 
-/** How long a source may go quiet before its turn is closed. The sensor already waits 400ms before
- *  declaring a deactivation, so this is the SECOND grace: it spans a breath, a DTX gap, a dropped
- *  packet train. Too small shatters a sentence into turns; too large merges a real handoff. */
+/** How long a source may go quiet before its turn is closed. The sensor already waits
+ *  CSRC_INACTIVE_MS (800 ms, measured on live Teams) before declaring a deactivation, so this is
+ *  the SECOND grace: it spans a breath, a DTX gap, a dropped packet train. Too small shatters a
+ *  sentence into turns; too large merges a real handoff. Combined worst-case close latency is the
+ *  sum of both graces (~1.4 s at the defaults). */
 export const CSRC_HYSTERESIS_MS = envNumber('VEXA_CSRC_HYSTERESIS_MS', 600);
 /** Energetic audio this long with NOT ONE transition ⇒ the transport stopped talking to us while
  *  the meeting continued. Measured in audio time, on frames that carry energy, so an honestly
