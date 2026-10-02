@@ -16,6 +16,7 @@
 import { useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "./index";
 import { isWsRef } from "./wsLinks";
+import { openCrmRecord } from "./crmNavigation";
 import { WsLink } from "./WsLink";
 // The link vocabulary both renderers share. Re-exported below so every existing importer of
 // docLinks keeps working — the extraction is about the dependency graph, not about the API.
@@ -396,6 +397,29 @@ export function Wikilink({ title }: { title: string }) {
  *  Resolves against the doc's workspace (DocMetaContext); a title that matches no entity
  *  doc renders muted with a "not found" tooltip instead of a dead click. */
 function EntityWikilink({ title }: { title: string }) {
+  const [crm, setCrm] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let active=true;setCrm(undefined);
+    fetch("/api/crm",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operation:"resolve",name:title})})
+      .then(async response=>{
+        const data=await response.json();
+        if (!active) return;
+        if (response.status===404 && data.detail==="CRM is not enabled") {setCrm(null);return;}
+        const matches=data.records;
+        if (response.ok && Array.isArray(matches)) {
+          setCrm(matches.length===1 ? matches[0].href : matches.length>1 ? `/crm?name=${encodeURIComponent(title)}` : null);
+        } else setCrm(`/crm?name=${encodeURIComponent(title)}`);
+      }).catch(()=>{if(active)setCrm(`/crm?name=${encodeURIComponent(title)}`);});
+    return ()=>{active=false;};
+  },[title]);
+  if (crm) return <a href={crm} title={`Open ${title} in CRM`} onClick={event=>{
+    if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey) return;
+    if(openCrmRecord(crm))event.preventDefault();
+  }} style={{display:"inline-flex",alignItems:"center",gap:5,border:"1px solid var(--line)",borderRadius:999,padding:"0.5px 9px 0.5px 7px",color:"var(--accent)",fontSize:"0.92em",fontWeight:500,lineHeight:1.45}}><Icon name="link" size={11}/>{title}</a>;
+  if (crm===undefined) return <span aria-busy="true">{title}</span>;
+  return <WorkspaceEntityWikilink title={title}/>;
+}
+function WorkspaceEntityWikilink({ title }: { title: string }) {
   const [hover, setHover] = useState(false);
   const meta = useContext(DocMetaContext);
   // undefined = resolving, null = not found, ResolvedDoc = found
@@ -513,6 +537,7 @@ export function WorkspaceRef({ token }: { token: string }) {
 export function InternalLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
+  if (isCrmHref(href)) return <a href={href} onClick={e => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && openCrmRecord(href)) e.preventDefault(); }} style={{ color: "var(--blue)", textDecoration: "underline" }}>{children}</a>;
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
@@ -533,7 +558,8 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
     if (!href) return;
     // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
     // anything else (javascript:, data:, //host) is untrusted-doc content — ignore
-    if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
+    if (isCrmHref(href)) { if (!openCrmRecord(href)) window.location.assign(href); }
+    else if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
     else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
   };
   return (
@@ -555,3 +581,6 @@ export function CardGroup({ cols = 2, children }: { cols?: number; children?: Re
 /** True when an href points inside the workspace (no scheme, not an anchor, not //host). */
 export const isInternalHref = (href?: string): boolean =>
   Boolean(href) && !/^[a-z][a-z0-9+.-]*:/i.test(href!) && !href!.startsWith("#") && !href!.startsWith("//");
+
+/** Native CRM routes retain their tenant and record query instead of resolving as workspace files. */
+export const isCrmHref = (href: string): boolean => /^\/crm(?:[?#]|$)/.test(href);

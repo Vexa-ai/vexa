@@ -1331,6 +1331,66 @@
      "domain": "flows"
     }
    ]
+  },
+  {
+   "unique-id": "crm",
+   "node-type": "system",
+   "name": "crm",
+   "description": "Optional metadata-driven records, permissions, source mappings and revision history; customer schemas remain configuration.",
+   "metadata": [
+    {
+     "path": "core/crm"
+    }
+   ]
+  },
+  {
+   "unique-id": "crm-api",
+   "node-type": "service",
+   "name": "crm-api",
+   "description": "Record HTTP and import operations; separate database and verified identity.",
+   "interfaces": [
+    {
+     "unique-id": "crm-rest",
+     "type": "api"
+    }
+   ],
+   "metadata": [
+    {
+     "path": "core/crm/src/crm"
+    }
+   ]
+  },
+  {
+   "unique-id": "records.v1",
+   "node-type": "data-asset",
+   "name": "records.v1",
+   "description": "Permission-filtered CRM record wire contract.",
+   "metadata": [
+    {
+     "path": "core/crm/contracts/records.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "crm-db",
+   "node-type": "database",
+   "name": "crm-db",
+   "description": "Separate CRM PostgreSQL database, role and migrations; no core database foreign keys.",
+   "controls": {
+    "ownership": {
+     "description": "CRM is the sole writer of its separate optional database.",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "crm-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
   }
  ],
  "relationships": [
@@ -2535,6 +2595,89 @@
       "flows-api",
       "flows-worker"
      ]
+    }
+   }
+  },
+  {
+   "unique-id": "crm-contains",
+   "relationship-type": {
+    "composed-of": {
+     "container": "crm",
+     "nodes": [
+      "crm-api",
+      "records.v1",
+      "crm-db"
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "crm-api-calls-crm-db",
+   "description": "Optional CRM integration; record authorization remains in CRM.",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "crm-db"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "crm-api-calls-admin-api",
+   "description": "Optional CRM integration; record authorization remains in CRM.",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "admin-api"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "mcp-calls-crm-api",
+   "description": "Optional CRM integration; record authorization remains in CRM.",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "mcp"
+     },
+     "destination": {
+      "node": "crm-api"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "terminal-calls-crm-api",
+   "description": "Optional CRM integration; record authorization remains in CRM.",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "terminal"
+     },
+     "destination": {
+      "node": "crm-api"
+     }
+    }
+   }
+  },
+  {
+   "unique-id": "crm-api-calls-flows-api",
+   "description": "Optional CRM integration; record authorization remains in CRM.",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "flows-api"
+     }
     }
    }
   }

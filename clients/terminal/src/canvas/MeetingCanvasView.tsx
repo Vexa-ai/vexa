@@ -6,7 +6,7 @@ import { CanvasActionsProvider } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
 import { TranscriptExtend } from "./TranscriptExtend";
-import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
+import { HighlightButton, useTermRenderer } from "./TranscriptTermControls";
 import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
 export const MEETING_CANVAS_CONTENT_INSET = 18;

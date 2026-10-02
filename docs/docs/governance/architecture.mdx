@@ -9,9 +9,10 @@ description: "The build constitution: principles P1–P23, each naming the pract
 > *and* the CI gate that enforces it** — so no rule lives by convention alone. If a rule is not
 > gated, it is aspirational; treat closing that gap as work.
 >
-> Scope note: `crm` and `retrieval` are **deferred**, and there is no `memory` domain. A workspace
-> is a *user-owned git repo* (data, not platform code); `crm` is an *application* — one entity schema
-> over a workspace (see **P11**) — not a platform domain. This doc governs what we build now.
+> Scope note: `retrieval` remains deferred and there is no `memory` domain. A workspace is a
+> user-owned git repository. Optional `core/crm` provides generic record storage, authorization,
+> revisions and source mappings in its own database. Sales object definitions and imported access
+> policy are configuration at the edge (P11), not fixed business policy in the platform.
 
 ---
 

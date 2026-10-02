@@ -160,6 +160,8 @@ def test_every_dispatch_carries_the_rule_and_the_index(tmp_path):
                     today="2026-09-02")
     E.write_index(desk, "desk-1")
     txt = engine.entity_index_preamble([{"slug": "desk-1", "path": str(desk), "write": True}])
+    assert "CRM routing comes first when CRM tools are available" in txt
+    assert "never mirror account fields" in txt
     assert "A name without a page gets one NOW" in txt
     assert "Facts carry a source" in txt
     assert "kg/MISSING.md`, never invented" in txt
@@ -209,3 +211,20 @@ def test_the_preamble_ships_on_the_turn_prompt(tmp_path, monkeypatch):
 
     list(engine.run_turn_over_workspace(tmp_path, "hello", harness=H(), commit=False))
     assert "A name without a page gets one NOW" in seen["prompt"]
+
+@pytest.mark.parametrize('tool',['crm_read','mcp__vexa__crm_search','mcp__vexa__crm_change'])
+def test_crm_turn_never_triggers_automatic_workspace_entity_copy(monkeypatch,tool):
+    monkeypatch.delenv('VEXA_WRITEBACK',raising=False)
+    monkeypatch.setattr(engine,'writeback_candidates',lambda *a,**kw:['A CRM account'])
+    called=[]
+    def turn(_):
+        yield {'type':'tool-call','tool':tool,'args':{},'callId':'crm'}
+        yield {'type':'message-delta','text':'A CRM account has a next step.'}
+        yield {'type':'done','reply':'A CRM account has a next step.','sessionId':'crm'}
+    def writeback(_):
+        called.append(True)
+        yield {'type':'done','reply':'copied'}
+    stream=FakeStream();_serve(stream,turn,writeback)
+    assert not called
+    assert not any(e.get('phase')=='writeback' for e in events(stream))
+    assert any(e['type']=='turn-complete' for e in events(stream))

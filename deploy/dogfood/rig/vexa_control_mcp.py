@@ -5963,6 +5963,12 @@ def _transport_security():
 # Stateless means each request stands alone: no session handshake to reject, no server memory to
 # outlive, and a restart is invisible to a client mid-turn. The cost is server-initiated streaming,
 # which this server does not use — every tool here answers in one response.
+# Optional domain: the CRM service enforces tenant, record and field access.
+from crm_tools import register_crm_tools
+register_crm_tools(mcp, base_url=os.environ.get("CRM_API_URL", ""),
+                   subject=me, scope=CALL_SCOPE.get, user_key=_user_key,
+                   http=lambda *a, **kw: _http(*a, **kw), guard=_anon_guard)
+
 app = AUTH_MIDDLEWARE(mcp.streamable_http_app(
     transport_security=_transport_security(), stateless_http=True))
 

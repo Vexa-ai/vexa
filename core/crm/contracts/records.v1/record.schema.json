@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vexa:crm:record:v1",
+  "title": "CRM Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "tenant_id",
+    "object_type",
+    "revision",
+    "fields",
+    "narrative",
+    "sources",
+    "quarantined"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "object_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "fields": {
+      "type": "object"
+    },
+    "narrative": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "quarantined": {
+      "type": "boolean"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "system",
+          "org_id",
+          "object_type",
+          "source_id"
+        ],
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1
+          },
+          "org_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "object_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "field",
+          "record_id",
+          "object_type",
+          "label"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "object",
+      "properties": {
+        "can_review": {
+          "type": "boolean"
+        },
+        "can_update": {
+          "type": "boolean"
+        },
+        "can_propose": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "base_revision",
+          "fields",
+          "reason",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "base_revision": {
+            "type": "integer"
+          },
+          "fields": {
+            "type": "object"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "narrative": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "href": {
+      "type": "string"
+    },
+    "card": {
+      "type": "object",
+      "required": [
+        "version",
+        "layout"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "title_field": {
+                  "default": "Name",
+                  "maxLength": 120,
+                  "title": "Title Field",
+                  "type": "string"
+                },
+                "sections": {
+                  "items": {
+                    "$ref": "#/$defs/CardSection"
+                  },
+                  "maxItems": 12,
+                  "title": "Sections",
+                  "type": "array"
+                },
+                "show_narrative": {
+                  "default": true,
+                  "title": "Show Narrative",
+                  "type": "boolean"
+                },
+                "show_related": {
+                  "default": true,
+                  "title": "Show Related",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "sections"
+              ],
+              "title": "CardLayout",
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "CardField": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Label",
+          "type": "string"
+        },
+        "format": {
+          "default": "text",
+          "enum": [
+            "text",
+            "markdown",
+            "number",
+            "currency",
+            "percent",
+            "date",
+            "badge"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "currency": {
+          "default": "USD",
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "title": "CardField",
+      "type": "object"
+    },
+    "CardSection": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Title",
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/CardField"
+          },
+          "maxItems": 40,
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "title": "CardSection",
+      "type": "object"
+    }
+  }
+}

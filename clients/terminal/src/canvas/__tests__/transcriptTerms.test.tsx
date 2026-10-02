@@ -18,7 +18,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT } from "../actions";
 import { LiveTranscriptEngine } from "../LiveTranscriptEngine";
-import { HighlightButton, TermText, useTermRenderer } from "../TranscriptTerms";
+import { HighlightButton, TermText, useTermRenderer } from "../TranscriptTermControls";
 import {
   loadTerms, mergeTerms, notePageWritten, promoteWritten, recordTerms, resetTerms, TERMS_EVENT,
   termsCursor, termsFor, termSpans, type TranscriptTerm,

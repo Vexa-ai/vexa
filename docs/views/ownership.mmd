@@ -17,6 +17,8 @@ flowchart LR
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
   flows_rows[("flows-rows")]
+  records_v1[("records.v1")]
+  crm_db[("crm-db")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -48,3 +50,4 @@ flowchart LR
   flows_worker -->|write| flows_rows
   flows_api -->|write| flows_rows
   flows_api -.->|read| flows_rows
+  crm_api -.->|read| crm_db

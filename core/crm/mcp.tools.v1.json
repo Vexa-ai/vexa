@@ -1,0 +1,140 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "crm",
+  "source": "oss",
+  "owner": "core/crm",
+  "base_url_env": "CRM_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
+  "tools": [
+    {
+      "name": "crm_describe",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/describe"
+      },
+      "arguments": [
+        "object_type"
+      ]
+    },
+    {
+      "name": "crm_search",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/search"
+      },
+      "arguments": [
+        "object_type",
+        "filters",
+        "limit",
+        "offset"
+      ]
+    },
+    {
+      "name": "crm_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/read"
+      },
+      "arguments": [
+        "record_id"
+      ]
+    },
+    {
+      "name": "crm_change",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/change"
+      },
+      "arguments": [
+        "action",
+        "object_type",
+        "record_id",
+        "expected_revision",
+        "fields",
+        "narrative",
+        "reason",
+        "evidence",
+        "idempotency_key"
+      ]
+    },
+    {
+      "name": "crm_history",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/history"
+      },
+      "arguments": [
+        "record_id"
+      ]
+    },
+    {
+      "name": "crm_review",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/review"
+      },
+      "arguments": [
+        "proposal_id",
+        "accept"
+      ]
+    },
+    {
+      "name": "crm_configure",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/configure"
+      },
+      "arguments": [
+        "object_type",
+        "layout",
+        "expected_version",
+        "reason"
+      ]
+    }
+  ]
+}

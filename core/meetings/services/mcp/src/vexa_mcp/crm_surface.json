@@ -1,0 +1,735 @@
+{
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "crm",
+    "source": "oss",
+    "owner": "core/crm",
+    "base_url_env": "CRM_API_URL",
+    "served_at": "/.well-known/mcp-tools.json",
+    "depends_on": [
+      "identity"
+    ],
+    "tools": [
+      {
+        "name": "crm_describe",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/describe"
+        },
+        "arguments": [
+          "object_type"
+        ]
+      },
+      {
+        "name": "crm_search",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/search"
+        },
+        "arguments": [
+          "object_type",
+          "filters",
+          "limit",
+          "offset"
+        ]
+      },
+      {
+        "name": "crm_read",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/read"
+        },
+        "arguments": [
+          "record_id"
+        ]
+      },
+      {
+        "name": "crm_change",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/change"
+        },
+        "arguments": [
+          "action",
+          "object_type",
+          "record_id",
+          "expected_revision",
+          "fields",
+          "narrative",
+          "reason",
+          "evidence",
+          "idempotency_key"
+        ]
+      },
+      {
+        "name": "crm_history",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/history"
+        },
+        "arguments": [
+          "record_id"
+        ]
+      },
+      {
+        "name": "crm_review",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/review"
+        },
+        "arguments": [
+          "proposal_id",
+          "accept"
+        ]
+      },
+      {
+        "name": "crm_configure",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "crm"
+        ],
+        "route": {
+          "method": "POST",
+          "path": "/configure"
+        },
+        "arguments": [
+          "object_type",
+          "layout",
+          "expected_version",
+          "reason"
+        ]
+      }
+    ]
+  },
+  "openapi": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Vexa CRM",
+      "version": "0.13.1"
+    },
+    "paths": {
+      "/health": {
+        "get": {
+          "summary": "Health",
+          "operationId": "health_health_get",
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            }
+          }
+        }
+      },
+      "/.well-known/mcp-tools.json": {
+        "get": {
+          "summary": "Manifest",
+          "operationId": "manifest__well_known_mcp_tools_json_get",
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            }
+          }
+        }
+      },
+      "/describe": {
+        "post": {
+          "summary": "Describe",
+          "description": "Discover CRM object types and readable fields in this instance. The tenant is configured by the server; never ask the user to choose one. Use before filtering or writing unfamiliar fields.",
+          "operationId": "crm_describe",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Describe"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/search": {
+        "post": {
+          "summary": "Search",
+          "description": "Find authorized CRM records with equality filters and pagination. Results include stable IDs, revisions and href. Use each record href for entity links instead of workspace wikilinks. Present the top-level href as a Markdown link to open a live CRM table in the Minutes sidebar; clicking a record opens its card. Table columns follow the shared crm_configure layout. Restricted fields cannot be used as filters.",
+          "operationId": "crm_search",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Search"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/resolve": {
+        "post": {
+          "summary": "Resolve Name",
+          "operationId": "resolve_name_resolve_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resolve"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/read": {
+        "post": {
+          "summary": "Read",
+          "description": "Read permitted fields, source evidence, links, pending proposals and current revision. Top-level id is the native UUID for subsequent calls; fields.Id is the imported source ID. Use href for the native Minutes record link. Read before changing an existing record.",
+          "operationId": "crm_read",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Read"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/change": {
+        "post": {
+          "summary": "Change",
+          "description": "Create a record, update readable/writable fields, or submit a proposal. Updates require the revision returned by crm_read. Include a reason and source evidence; proposal does not mean saved. Permission and review policy are server-enforced.",
+          "operationId": "crm_change",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Change"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/history": {
+        "post": {
+          "summary": "History",
+          "description": "Read up to 100 recent record revisions. Current access permissions filter historical values too.",
+          "operationId": "crm_history",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Read"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/review": {
+        "post": {
+          "summary": "Review",
+          "description": "Accept or reject a pending proposal when the caller has review and record-write rights. Acceptance conflicts if the record changed since proposal creation.",
+          "operationId": "crm_review",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Review"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/configure": {
+        "post": {
+          "summary": "Configure",
+          "description": "Read or configure a shared per-object card layout (CRM administrators only). Omit layout to read its version; send a layout with expected_version and reason to save. Sections reference real fields; formats are text, markdown, number, currency, percent, date or badge. This changes presentation, never record values or access.",
+          "operationId": "crm_configure",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Configure"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "Change": {
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "propose"
+              ],
+              "title": "Action"
+            },
+            "idempotency_key": {
+              "type": "string",
+              "maxLength": 200,
+              "title": "Idempotency Key",
+              "description": "Required for create: stable caller-generated key reused when retrying the same request.",
+              "default": ""
+            },
+            "object_type": {
+              "type": "string",
+              "title": "Object Type",
+              "default": ""
+            },
+            "record_id": {
+              "type": "string",
+              "title": "Record Id",
+              "default": ""
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "default": 0
+            },
+            "fields": {
+              "additionalProperties": true,
+              "type": "object",
+              "title": "Fields"
+            },
+            "narrative": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Narrative",
+              "description": "Native Markdown description of this CRM record. Supports headings, lists, tables, [[Entity names]], workspace links and stable [label](/crm?record=UUID) links. Stable CRM links are indexed as relationships with backlinks. Author connected descriptions: search for mentioned people, companies and products, then link verified matches using their returned CRM href. Reuse workspace document links for shared knowledge. Within authorized entity-creation work, create missing entity records from evidence and link them; do not invent identities, facts or URLs. Preserve ambiguity rather than choosing a similar name. Use [[Entity names]] for workspace-style unresolved references. Bold names alone are not links. Null preserves the description; empty string clears it. Requires current revision and reason."
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Reason"
+            },
+            "evidence": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array",
+              "title": "Evidence"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "action",
+            "reason"
+          ],
+          "title": "Change"
+        },
+        "Configure": {
+          "properties": {
+            "object_type": {
+              "type": "string",
+              "title": "Object Type"
+            },
+            "layout": {
+              "additionalProperties": true,
+              "type": "object",
+              "title": "Layout",
+              "description": "Card layout: {title_field: 'Name', sections: [{title: 'Overview', fields: [{field: 'Amount', label: 'Investment', format: 'currency', currency: 'USD'}]}], show_narrative: true, show_related: true}. Field formats: text, markdown, number, currency, percent (0..100), date, badge."
+            },
+            "expected_version": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Expected Version",
+              "default": 0
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 2000,
+              "title": "Reason",
+              "default": ""
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "object_type"
+          ],
+          "title": "Configure"
+        },
+        "Describe": {
+          "properties": {
+            "object_type": {
+              "type": "string",
+              "title": "Object Type",
+              "description": "Optional object type; omit to discover permitted object types.",
+              "default": ""
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "title": "Describe"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "type": "array",
+              "title": "Detail"
+            }
+          },
+          "type": "object",
+          "title": "HTTPValidationError"
+        },
+        "Read": {
+          "properties": {
+            "record_id": {
+              "type": "string",
+              "title": "Record Id"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "record_id"
+          ],
+          "title": "Read"
+        },
+        "Resolve": {
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Name"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "title": "Resolve"
+        },
+        "Review": {
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "title": "Proposal Id"
+            },
+            "accept": {
+              "type": "boolean",
+              "title": "Accept"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "proposal_id",
+            "accept"
+          ],
+          "title": "Review"
+        },
+        "Search": {
+          "properties": {
+            "object_type": {
+              "type": "string",
+              "title": "Object Type"
+            },
+            "filters": {
+              "additionalProperties": true,
+              "type": "object",
+              "title": "Filters",
+              "description": "Equality filters on readable fields; discover field names with crm_describe."
+            },
+            "limit": {
+              "type": "integer",
+              "maximum": 100.0,
+              "minimum": 1.0,
+              "title": "Limit",
+              "default": 20
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Offset",
+              "default": 0
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "object_type"
+          ],
+          "title": "Search"
+        },
+        "ValidationError": {
+          "properties": {
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "type": "array",
+              "title": "Location"
+            },
+            "msg": {
+              "type": "string",
+              "title": "Message"
+            },
+            "type": {
+              "type": "string",
+              "title": "Error Type"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "ctx": {
+              "type": "object",
+              "title": "Context"
+            }
+          },
+          "type": "object",
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError"
+        }
+      }
+    }
+  }
+}
