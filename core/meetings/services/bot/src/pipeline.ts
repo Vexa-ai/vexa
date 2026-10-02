@@ -38,7 +38,7 @@ import {
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, hintCutsTurnsFor, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -267,6 +267,7 @@ function createTeamsBotPipeline(
   createTranscriber: TeamsTranscriberFactory = (options) => new TeamsCsrcGmeetPipeline(options),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
   selfName?: string,
+  hintCutsTurns = false,
 ): BotPipeline {
   const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
   const reportError = onError ?? ((error: unknown) => console.error(`[bot] pipeline(teams-csrc): ${String(error)}`));
@@ -318,6 +319,7 @@ function createMixedBotPipeline(
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
   selfName?: string,
+  hintCutsTurns = false,
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -375,6 +377,10 @@ function createMixedBotPipeline(
         // transport speaks, the transport takes over when it does, and it hands back — mid-meeting,
         // on the same ring — if it goes silent under continuing speech.
         turnSource: 'auto',
+        // The platform's start-hints cut turns where the hint is the server's voice verdict
+        // (hintCutsTurnsFor) — the pyannote spine alone leaves a no-pause takeover in the previous
+        // speaker's turn.
+        hintCutsTurns,
         selfName,
         onObservation: (o: TurnSourceObservation) => {
           // A transcript cannot say which spine produced it, so the switch is DATA beside the
@@ -466,7 +472,7 @@ export function createBotPipeline(
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
-      inv.botName,
+      inv.botName, hintCutsTurnsFor(inv.platform),
     );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

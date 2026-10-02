@@ -47,6 +47,14 @@ export function isPerTrackLanePlatform(p: Platform | string): boolean {
   return p === 'zoom';
 }
 
+/** Whether the platform's speaking hint cuts the mixed lane's turns. True where the hint is the
+ *  server's own voice verdict for a named participant (Jitsi's dominant speaker, which follows a new
+ *  voice within ~0.2 s): a speaker taking over without a pause then gets their own turn instead of
+ *  the tail of the previous speaker's. A tile that lights on noise must not cut. */
+export function hintCutsTurnsFor(p: Platform | string): boolean {
+  return p === 'jitsi';
+}
+
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
   noOneJoinedTimeout?: number;
