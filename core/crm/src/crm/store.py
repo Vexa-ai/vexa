@@ -126,12 +126,23 @@ class Store:
             result['links']=[]
             for link in c.execute(select(s.relationships).where(s.relationships.c.tenant_id==tenant,
                     s.relationships.c.record_id==record_id)).mappings():
-                if link['kind'] not in result['fields'] or link['target_domain']!='crm':continue
+                if link['target_domain']!='crm':continue
+                if link['kind']=='Description':
+                    if result['narrative'] is None:continue
+                elif link['kind'] not in result['fields']:continue
                 try:
                     target=self._visible(policy,self._row(c,tenant,link['target_id']))
                 except NotFound:continue
                 result['links'].append({'field':link['kind'],'record_id':target['id'],
                     'object_type':target['object_type'], 'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['object_type']})
+            for link in c.execute(select(s.relationships).where(s.relationships.c.tenant_id==tenant,
+                    s.relationships.c.target_domain=='crm',s.relationships.c.target_id==record_id,
+                    s.relationships.c.kind=='Description')).mappings():
+                try:source=self._visible(policy,self._row(c,tenant,link['record_id']))
+                except NotFound:continue
+                if source['narrative'] is None:continue
+                result['links'].append({'field':'Referenced by','record_id':source['id'],
+                    'object_type':source['object_type'],'label':source['fields'].get('Name') or source['fields'].get('name') or source['fields'].get('Subject') or ' '.join(str(source['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or source['object_type']})
             can_write=False
             try:can_write=bool(self._rights(policy,row,'write'))
             except NotFound:pass
@@ -145,6 +156,7 @@ class Store:
             for proposal in c.execute(query).mappings():
                 result['proposals'].append({'id':proposal['id'],'base_revision':proposal['base_revision'],
                     'fields':{k:v for k,v in proposal['patch']['fields'].items() if '*' in allowed or k in allowed},
+                    'narrative':proposal['patch'].get('narrative') if '*' in allowed else None,
                     'reason':proposal['reason'] if '*' in allowed else None,
                     'evidence':proposal['evidence'] if '*' in allowed else []})
             return result
@@ -254,6 +266,15 @@ class Store:
                     c.execute(s.relationships.insert().values(tenant_id=tenant,id=str(uuid4()),record_id=row['id'],
                         kind=name,target_domain='crm',target_id=target))
 
+        # Stable Markdown record URLs are graph edges; prose and workspace URLs stay in the document.
+        from .markdown_links import crm_references
+        for target in crm_references(row['narrative']):
+            exists=c.execute(select(s.records.c.id).where(s.records.c.tenant_id==tenant,
+                s.records.c.id==target,s.records.c.deleted==False)).scalar_one_or_none()
+            if exists:
+                c.execute(s.relationships.insert().values(tenant_id=tenant,id=str(uuid4()),record_id=row['id'],
+                    kind='Description',target_domain='crm',target_id=target))
+
     def _revision(self, c, tenant, actor, before, after, reason, evidence):
         c.execute(s.revisions.insert().values(tenant_id=tenant, record_id=after['id'], revision=after['revision'],
             actor_id=actor, created_at=datetime.now(timezone.utc).isoformat(), reason=reason,
@@ -289,6 +310,7 @@ class Store:
             row=dict(tenant_id=tenant,id=record_id,object_type=object_type,owner_id=actor,
                      revision=1,fields=fields,narrative=narrative,quarantined=False,deleted=False)
             c.execute(s.records.insert().values(**row))
+            self._sync_relationships(c,row)
             self._revision(c,tenant,actor,None,row,reason,evidence or [])
             return {'status':'saved','record_id':row['id'],'revision':1}
 

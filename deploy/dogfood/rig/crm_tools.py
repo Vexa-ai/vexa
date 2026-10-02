@@ -53,7 +53,7 @@ def register_crm_tools(mcp, *, base_url, subject, scope, user_key, http, guard, 
                    object_type: str = '', record_id: str = '', expected_revision: int = 0,
                    fields: dict | None = None, narrative: str | None = None,
                    evidence: list[dict] | None = None, idempotency_key: str = "") -> str:
-        """Create, update or propose a CRM change with a reason and evidence. Create requires a stable idempotency_key for safe retries. Read first and pass expected_revision; proposals require review and are not saved edits."""
+        """Create, update or propose a CRM change with a reason and evidence. narrative is the native Markdown Description: headings, tables, [[Entity names]], workspace links and stable [label](/crm?record=UUID) links. Stable CRM links create graph relationships and backlinks. Omit narrative to preserve it; empty string clears it. Create requires a stable idempotency_key for safe retries. Read first and pass expected_revision; proposals require review and are not saved edits."""
         return call('change', action=action, reason=reason, object_type=object_type,
                     record_id=record_id, expected_revision=expected_revision, fields=fields or {},
                     narrative=narrative, evidence=evidence or [], idempotency_key=idempotency_key)

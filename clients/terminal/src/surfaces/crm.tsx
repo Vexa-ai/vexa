@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
+import { MdxDoc } from "../ui-kit/MdxDoc";
 import { CrmTable } from "./CrmTable";
 import { CrmCard, CardLayout } from "./CrmCard";
 import { type as ty } from "../minutes/tokens";
 import { ASK_CHAT_EVENT } from "../canvas/actions";
 
-type Proposal = { id: string; base_revision: number; fields: Record<string, unknown>; reason: string | null; evidence: Record<string, unknown>[] };
+type Proposal = { narrative?: string | null; id: string; base_revision: number; fields: Record<string, unknown>; reason: string | null; evidence: Record<string, unknown>[] };
 type RecordView = { card?: {version: number; layout: CardLayout | null}; id: string; object_type: string; revision: number; fields: Record<string, unknown>; narrative: string | null; actions?: { can_review: boolean }; proposals?: Proposal[]; links?: { field: string; record_id: string; label: string }[]; sources?: { system: string; source_id: string }[] };
 type Revision = { revision: number; created_at: string; reason: string | null; after: RecordView };
 async function call(operation: string, args: Record<string, unknown>) {
@@ -70,15 +71,17 @@ export function CrmView({ initialName = "", initialRecord = "", initialObject = 
       {!selected && listed && <section aria-label="Records" style={{minWidth:0}}><CrmTable records={records} objectType={kind} layout={tableLayout} busy={busy} onRead={id => void run(() => read(id))} />
       <div style={{ display: "flex", gap: 8 }}><button style={button} disabled={busy || offset === 0} onClick={() => void run(() => list(Math.max(0, offset - 20)))}>Previous</button><button style={button} disabled={busy || next === null} onClick={() => void run(() => list(next!))}>Next</button></div></section>}
       {selected && <section aria-label="Record details">{embedded && !listed && <button style={button} disabled={busy} onClick={() => void run(() => list(0, selected.object_type))}>Browse {selected.object_type}</button>}{listed && <button style={button} disabled={busy} onClick={() => {setSelected(null);setHistory([]);}}>← Back to table</button>}<CrmCard record={selected} busy={busy} onRead={id => void run(() => read(id))} />
-        {embedded && <div style={{display:"flex",gap:12,margin:"12px 0"}}>{["Update record", "Configure card"].map(action => <button key={action} style={{...ty.control,background:"none",border:0,padding:0,color:"var(--t2)",cursor:"pointer"}} disabled={busy} onClick={() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT,{detail:{
+        {embedded && <div style={{display:"flex",gap:12,margin:"12px 0"}}>{["Edit description", "Update record", "Configure card"].map(action => <button key={action} style={{...ty.control,background:"none",border:0,padding:0,color:"var(--t2)",cursor:"pointer"}} disabled={busy} onClick={() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT,{detail:{
           display: action,
-          prompt: action === "Configure card"
+          prompt: action === "Edit description"
+            ? `Help me edit the Markdown description of CRM record ${selected.id}. Read its current narrative and revision through crm_read, ask what I want changed, then use crm_change with narrative and expected_revision. Preserve structured fields. Link CRM records using stable returned hrefs so links create graph relationships and backlinks; use workspace links for reusable knowledge. Do not copy the description into workspace files.`
+            : action === "Configure card"
             ? `Help me configure the shared CRM card layout for object type ${selected.object_type}. Read crm_configure first, ask what I want changed, then preserve other settings and save with expected_version. Do not change record data.`
             : `Help me update CRM record ${selected.id}. Read it through MCP, ask what I want changed, and propose the change with its current revision and evidence. Do not write account data to workspace files.`
         }}))}>{action}</button>)}</div>}
-        {selected.proposals?.map(item => <article key={item.id} style={{ border: "1px solid var(--line)", padding: 12, margin: "12px 0" }}><h3>Pending proposal</h3><p>Based on revision {item.base_revision}</p>{Object.entries(item.fields).map(([name, proposed]) => <p key={name}><strong>{name}</strong><br />Current: {String(selected.fields[name] ?? "—")}<br />Proposed: {String(proposed ?? "—")}</p>)}{item.reason && <p>{item.reason}</p>}{item.evidence.length > 0 && <details><summary>Source evidence</summary><pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(item.evidence, null, 2)}</pre></details>}{selected.actions?.can_review && <div>{[true, false].map(accept => <button key={String(accept)} style={button} disabled={busy} onClick={() => void run(async () => { await call("review", { proposal_id: item.id, accept }); await read(selected.id); setNotice(accept ? "Proposal accepted." : "Proposal rejected."); })}>{accept ? "Accept" : "Reject"}</button>)}</div>}</article>)}
+        {selected.proposals?.map(item => <article key={item.id} style={{ border: "1px solid var(--line)", padding: 12, margin: "12px 0" }}><h3>Pending proposal</h3><p>Based on revision {item.base_revision}</p>{Object.entries(item.fields).map(([name, proposed]) => <p key={name}><strong>{name}</strong><br />Current: {String(selected.fields[name] ?? "—")}<br />Proposed: {String(proposed ?? "—")}</p>)}{item.narrative != null && <><h4>Proposed description</h4><MdxDoc>{item.narrative || "(Empty description)"}</MdxDoc></>}{item.reason && <p>{item.reason}</p>}{item.evidence.length > 0 && <details><summary>Source evidence</summary><pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(item.evidence, null, 2)}</pre></details>}{selected.actions?.can_review && <div>{[true, false].map(accept => <button key={String(accept)} style={button} disabled={busy} onClick={() => void run(async () => { await call("review", { proposal_id: item.id, accept }); await read(selected.id); setNotice(accept ? "Proposal accepted." : "Proposal rejected."); })}>{accept ? "Accept" : "Reject"}</button>)}</div>}</article>)}
         <button style={button} disabled={busy} onClick={() => void run(async () => { const data = await call("history", { record_id: selected.id }); setHistory(data.revisions); })}>Show history</button>
-        {history.map(revision => <details key={revision.revision}><summary>Revision {revision.revision} · {revision.created_at}</summary><p>{revision.reason}</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(revision.after.fields, null, 2)}</pre></details>)}
+        {history.map(revision => <details key={revision.revision}><summary>Revision {revision.revision} · {revision.created_at}</summary><p>{revision.reason}</p>{revision.after.narrative != null && <><h4>Description</h4><MdxDoc>{revision.after.narrative || "(Empty description)"}</MdxDoc></>}<pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(revision.after.fields, null, 2)}</pre></details>)}
       </section>}
     </div>
   </main>;

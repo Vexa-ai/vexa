@@ -159,3 +159,26 @@ def test_resolve_name_respects_field_access_tenant_and_ambiguity(store):
     with store.engine.begin() as c:
         c.execute(s.policies.update().where(s.policies.c.subject_id=='reader').values(policy={'active':True,'objects':{'Company':{'read':'all','read_fields':['revenue']}}}))
     assert store.resolve_name('one','reader','Acme')['records']==[]
+
+def test_markdown_description_graph_revisions_and_review(store):
+    target=make(store)
+    source=store.create('one','owner','Company',{'name':'Source'},narrative=f'## Context\n\nRelated to [Acme](/crm?record={target}).',reason='Markdown fixture')['record_id']
+    assert any(l['field']=='Description' and l['record_id']==target for l in store.get('one','owner',source)['links'])
+    assert any(l['field']=='Referenced by' and l['record_id']==source for l in store.get('one','owner',target)['links'])
+    assert store.get('one','reader',target)['links']==[]
+    proposal=store.change('one','agent',source,1,{},narrative='## Revised description',reason='review text',propose=True)['proposal_id']
+    assert store.get('one','owner',source)['proposals'][0]['narrative']=='## Revised description'
+    assert store.get('one','owner',target)['links']
+    store.review('one','owner',proposal,True)
+    assert store.get('one','owner',target)['links']==[]
+    revisions=store.history('one','owner',source)['revisions']
+    assert any('Related to' in r['after']['narrative'] for r in revisions)
+
+def test_description_code_samples_are_not_graph_links():
+    from crm.markdown_links import crm_references
+    rid='11111111-1111-4111-8111-111111111111'
+    link=f'[Example](/crm?record={rid})'
+    assert crm_references(link)==[rid]
+    assert crm_references(f'`{link}`\n```md\n{link}\n````')==[]
+    assert crm_references(f'```\n{link}')==[]
+    assert crm_references('!'+link)==[]

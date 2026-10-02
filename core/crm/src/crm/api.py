@@ -30,7 +30,7 @@ class Change(Body):
     record_id: str = ''
     expected_revision: int = Field(default=0, ge=0)
     fields: dict = Field(default_factory=dict)
-    narrative: str | None = None
+    narrative: str | None = Field(default=None, description="Native Markdown description of this CRM record. Supports headings, lists, tables, [[Entity names]], workspace links and stable [label](/crm?record=UUID) links. Stable CRM links are indexed as relationships with backlinks. Null preserves the description; empty string clears it. Requires current revision and reason.")
     reason: str = Field(min_length=1)
     evidence: list[dict] = Field(default_factory=list)
 class Configure(Body):

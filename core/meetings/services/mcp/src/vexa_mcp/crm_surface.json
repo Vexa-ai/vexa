@@ -524,7 +524,8 @@
                   "type": "null"
                 }
               ],
-              "title": "Narrative"
+              "title": "Narrative",
+              "description": "Native Markdown description of this CRM record. Supports headings, lists, tables, [[Entity names]], workspace links and stable [label](/crm?record=UUID) links. Stable CRM links are indexed as relationships with backlinks. Null preserves the description; empty string clears it. Requires current revision and reason."
             },
             "reason": {
               "type": "string",

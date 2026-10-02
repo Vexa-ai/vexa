@@ -148,6 +148,12 @@
             "items": {
               "type": "object"
             }
+          },
+          "narrative": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false

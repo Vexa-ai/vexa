@@ -49,7 +49,7 @@ export function cardDocument(record: CardRecord): string {
       body.push(label ? `**${prose(label)}:** ${value}` : value);
     }
   }
-  if (layout.show_narrative !== false && record.narrative) body.push('## Notes',record.narrative);
+  if (layout.show_narrative !== false && record.narrative !== null) body.push('## Description',record.narrative || 'No description yet.');
   const links = record.links?.filter(l => !['CreatedById','LastModifiedById','RecordTypeId'].includes(l.field)) || [];
   if (layout.show_related !== false && links.length) {
     body.push('## Related records',links.map(l => `- **${prose(fieldLabel(l.field))}:** [${prose(l.label)}](/crm?record=${encodeURIComponent(l.record_id)})`).join('\n'));

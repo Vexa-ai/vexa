@@ -15,3 +15,9 @@ it('renders configured sections, formatted money and linked names without exposi
  fireEvent.click(screen.getByRole('link',{name:'Test account'}));expect(read).toHaveBeenCalledWith('a');
  expect(screen.getByText('All fields · 5').closest('details')?.open).toBe(false);
 });
+it('renders the native Markdown description and graph backlinks',async()=>{
+ render(<CrmCard busy={false} onRead={()=>{}} record={{id:'x',object_type:'Account',revision:1,fields:{Name:'Graph account'},narrative:'A **Markdown** description.',links:[{field:'Referenced by',record_id:'source',label:'Source account'}]}}/>);
+ await screen.findByText('Description');
+ expect(screen.getByText('Markdown').tagName).toBe('STRONG');
+ expect(screen.getByRole('link',{name:'Source account'}).getAttribute('href')).toBe('/crm?record=source');
+});
