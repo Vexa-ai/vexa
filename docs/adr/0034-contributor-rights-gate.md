@@ -43,18 +43,16 @@ rewritten merely to add sign-offs.
 ## Addendum 2026-10-02 — declared once per contributor
 
 Founder ruling: the choice is made once per contributor, not on every pull request. The gate now
-passes a pull request without a selection when its author is listed in the `contributors` map of
-`.github/contribution-rights.json`, or when an earlier merged pull request by the same author carried
-an independent declaration with no unresolved review and a body edited only by that author. A
-head-bound corporate receipt never carries forward; corporate standing comes only from the registry.
-The check names the entry or pull request it relied on. Maintainers add entries by pull
-request; a corporate entry carries its `VCR-` receipt and is added only when the private-register
-authorization covers future contributions. The registry is read from the default branch, so a pull
-request cannot register its own author.
+passes a pull request without a selection when an earlier merged pull request by the same author
+carried an independent declaration with no unresolved review and a body edited only by that author.
+Nobody maintains independent contributors by hand. The `contributors` map in
+`.github/contribution-rights.json` exists only for the maintainer's standing declaration and for
+corporate authorizations that cover future work, which are rare and verified against the private
+register before a maintainer adds them with their `VCR-` receipt. A head-bound corporate receipt on
+an earlier pull request never carries forward. The check names the pull request or entry it relied
+on. The registry is read from the default branch, so a pull request cannot register its own author.
 
-A standing covers only its owner's commits. A commit by another GitHub author who is neither
-registered nor previously declared returns the pull request to the per-PR selection. An explicit
-selection that differs from the standing decides that pull request, an unresolved verifier review
-still blocks, grandfathering is unchanged, and DCO remains a separate check. The registry was seeded
-with the maintainer's standing declaration and every author whose merged pull request after the
-activation number passed the check on a declaration they ticked themselves.
+A standing covers only its owner's commits. A commit by another GitHub author with no standing of
+their own returns the pull request to the per-PR selection. An explicit selection that differs from
+the standing decides that pull request, an unresolved verifier review still blocks, grandfathering
+is unchanged, and DCO remains a separate check.

@@ -11,11 +11,11 @@ non-compliant. Concrete ownership concerns in earlier work are reviewed individu
 
 ## Choose one path on your first pull request
 
-You declare once per contributor, not per pull request. Later pull requests need no selection when
-you are listed in `.github/contribution-rights.json`, or when you selected **Independent** yourself
-on an earlier merged pull request in this repository. Corporate standing comes only from the
-registry. If a later contribution falls under a different path, for example work an employer now
-owns, select that path on that pull request; it decides that pull request.
+You declare once per contributor, not per pull request. Once you have selected **Independent**
+yourself on a merged pull request in this repository, later pull requests need no selection; the
+gate finds that pull request automatically. Corporate standing comes only from an authorization on
+file (see *Administration*). If a later contribution falls under a different path, for example work
+an employer now owns, select that path on that pull request; it decides that pull request.
 
 ### Independent
 
@@ -65,14 +65,14 @@ whether the independent or corporate path applies, without asking you to draft l
 
 ## What the automated gate proves
 
-The `contribution-rights` check passes without a selection when the author is registered or has an
-earlier merged pull request whose independent box they ticked themselves: every edit to that body
-must be the author's, so a box a maintainer ticked does not count. A corporate receipt on an earlier
-pull request never carries forward. The check names the registry entry or pull request it relied
-on. A standing
-covers only its owner's commits: if a commit in the pull request has a different GitHub author who
-is neither registered nor previously declared, the check names that author and requires a
-selection. Otherwise it requires exactly one selection, as on a first contribution.
+The `contribution-rights` check passes without a selection when the author has an earlier merged
+pull request whose independent box they ticked themselves: every edit to that body must be the
+author's, so a box a maintainer ticked does not count. It also passes for an author in the registry
+described under *Administration*. A corporate receipt on an earlier pull request never carries
+forward. The check names the pull request or registry entry it relied on. A standing covers only its
+owner's commits: if a commit in the pull request has a different GitHub author with no standing of
+their own, the check names that author and requires a selection. Otherwise it requires exactly one
+selection, as on a first contribution.
 
 A per-PR corporate selection passes only after a designated verifier records an opaque
 private-register receipt against the exact pull request number and current head SHA. A later push
@@ -192,16 +192,23 @@ Head: <40-character commit SHA>
 contribution at the named head. Only `verifiers` listed in `.github/contribution-rights.json` are
 accepted, and all decisions are re-evaluated in the merge queue.
 
-Maintainers record a contributor's standing by pull request to the `contributors` map in
-`.github/contribution-rights.json`, keyed by GitHub login:
+Independent contributors are never added by hand: their standing comes from their own earlier
+merged declaration. The `contributors` map in `.github/contribution-rights.json`, keyed by GitHub
+login, exists only for the maintainer's standing declaration and for corporate authorizations that
+cover a contributor's future contributions, which are rare and verified against the private
+register first:
 
 ```json
-"octocat": { "path": "independent", "declared": "YYYY-MM-DD", "source": "<PR URL>" }
+"octocat": {
+  "path": "corporate",
+  "declared": "YYYY-MM-DD",
+  "source": "<register reference>",
+  "receipt": "VCR-YYYY-NNNN"
+}
 ```
 
-A corporate entry adds `"receipt": "VCR-YYYY-NNNN"` and is added only when the private-register
-authorization covers the contributor's future contributions, not named pull requests. The gate reads
-the registry from the default branch, so a pull request cannot register its own author.
+The gate reads the registry from the default branch, so a pull request cannot register its own
+author.
 
 Before activating the gate, repository administrators must:
 

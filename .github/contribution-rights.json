@@ -9,31 +9,6 @@
       "path": "independent",
       "declared": "2026-08-14",
       "source": "maintainer standing declaration; reaffirmed 2026-10-02"
-    },
-    "jbschooley": {
-      "path": "independent",
-      "declared": "2026-08-06",
-      "source": "https://github.com/Vexa-ai/vexa/pull/1011"
-    },
-    "rene-schwabe": {
-      "path": "independent",
-      "declared": "2026-08-14",
-      "source": "https://github.com/Vexa-ai/vexa/pull/1149"
-    },
-    "rennf93": {
-      "path": "independent",
-      "declared": "2026-08-14",
-      "source": "https://github.com/Vexa-ai/vexa/pull/1156"
-    },
-    "PrBart": {
-      "path": "independent",
-      "declared": "2026-08-20",
-      "source": "https://github.com/Vexa-ai/vexa/pull/1259"
-    },
-    "Cantfirmed": {
-      "path": "independent",
-      "declared": "2026-08-27",
-      "source": "https://github.com/Vexa-ai/vexa/pull/1337"
     }
   }
 }
