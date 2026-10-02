@@ -105,8 +105,8 @@ docker volume rm vexa-lite-pgdata vexa-lite-miniodata   # full wipe
 make probe SURFACE=lite
 ```
 
-The probe mints a key and drives the whole journey — spawn → boot → join → transcribe →
-live-view → stop. Lite runs the **real** bot in-process, so a dead meeting URL ends in a truthful
+The probe mints a key and drives the whole journey — the same nine stages as every surface:
+ready → spawn → schedule → boot → join → transcribe → live-view → stop → log sweep. Lite runs the **real** bot in-process, so a dead meeting URL ends in a truthful
 named failure, never a fake green. The container also carries a Docker `HEALTHCHECK` on the
 gateway's `/health` (30s interval, 120s start period).
 
