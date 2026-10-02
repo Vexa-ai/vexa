@@ -39,3 +39,21 @@ rewritten merely to add sign-offs.
   repository.
 - A bootstrap PR can prove the deterministic machinery locally; a post-merge canary PR is required
   to witness GitHub event, Check Runs, DCO App, and branch-protection behavior end to end.
+
+## Addendum 2026-10-02 — declared once per contributor
+
+Founder ruling: the choice is made once per contributor, not on every pull request. The gate now
+passes a pull request without a selection when its author is listed in the `contributors` map of
+`.github/contribution-rights.json`, or when an earlier merged pull request by the same author carried
+a valid declaration (one independent box with no unresolved review, or a verified corporate
+receipt). The check names the entry or pull request it relied on. Maintainers add entries by pull
+request; a corporate entry carries its `VCR-` receipt and is added only when the private-register
+authorization covers future contributions. The registry is read from the default branch, so a pull
+request cannot register its own author.
+
+A standing covers only its owner's commits. A commit by another GitHub author who is neither
+registered nor previously declared returns the pull request to the per-PR selection. An explicit
+selection that differs from the standing decides that pull request, an unresolved verifier review
+still blocks, grandfathering is unchanged, and DCO remains a separate check. The registry was seeded
+with the maintainer's standing declaration and every author whose merged pull request after the
+activation number passed the check on a declaration they ticked themselves.
