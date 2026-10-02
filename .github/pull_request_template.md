@@ -12,9 +12,8 @@
 ## Contribution rights (first contribution only)
 
 Declared once per contributor, not per PR. Leave this section unticked if you are listed in
-`.github/contribution-rights.json` or declared on an earlier merged PR here, unless this
-contribution's rights differ from that declaration. Otherwise select exactly one. See
-CONTRIBUTOR_RIGHTS.md.
+`.github/contribution-rights.json` or selected Independent yourself on an earlier merged PR here,
+unless this contribution's rights differ. Otherwise select exactly one. See CONTRIBUTOR_RIGHTS.md.
 
 - [ ] **Independent:** I created this contribution, or otherwise have the right to submit it
   under Apache-2.0, and it is not owned or controlled by an employer, client, or other entity.

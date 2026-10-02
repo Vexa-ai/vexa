@@ -78,7 +78,8 @@ function decisionState(comments, config, pr) {
 
 // Rights are declared once per contributor, not once per pull request. A contributor's standing
 // comes from the maintained registry in .github/contribution-rights.json, or -- when they are not
-// listed -- from an earlier merged PR of theirs that carried a valid declaration.
+// listed -- from an earlier merged PR of theirs that carried their own independent declaration.
+// Corporate standing comes only from the registry: a per-PR receipt never carries forward.
 export function registeredStanding(login, config) {
   if (!login) return null;
   const match = Object.entries(config.contributors || {}).find(([name]) => name.toLowerCase() === login.toLowerCase());
@@ -93,24 +94,30 @@ export function registeredStanding(login, config) {
   return null; // A malformed entry grants nothing.
 }
 
-// The declaration an earlier MERGED pull request carried: exactly one independent box with no
-// unresolved rights review, or the corporate box with a designated verifier's receipt.
+// The independent declaration an earlier MERGED pull request carried: exactly one box, the
+// independent one, with no unresolved rights review. A corporate receipt is bound to the PR and head
+// it names, so it never carries forward; a continuing authorization belongs in the registry.
 export function mergedDeclaration(earlier, comments, config) {
   const selected = selectedRights(earlier.body || "");
-  if (selected.length !== 1 || selected[0] === "uncertain") return null;
+  if (selected.length !== 1 || selected[0] !== "independent") return null;
   const decisions = comments
     .map((comment) => parseDecision(comment, config, earlier))
     .filter(Boolean)
     .sort((a, b) => a.order - b.order);
   const latestReview = [...decisions].reverse().find((decision) => decision.decision === "review");
-  const after = decisions.filter((decision) => !latestReview || decision.order > latestReview.order);
-  const pr = { number: earlier.number, url: earlier.html_url || earlier.url };
-  if (selected[0] === "independent") {
-    if (latestReview && !after.length) return null;
-    return { path: "independent", via: "earlier-pr", pr };
-  }
-  const verified = after.filter((decision) => decision.decision === "verified").at(-1);
-  return verified ? { path: "corporate", via: "earlier-pr", pr, receipt: verified.receipt } : null;
+  if (latestReview && !decisions.some((decision) => decision.order > latestReview.order)) return null;
+  return { path: "independent", via: "earlier-pr", pr: { number: earlier.number, url: earlier.html_url || earlier.url } };
+}
+
+// Whether a PR body is provably the author's own words: the GraphQL userContentEdits history lists
+// every edit, including the creation, and each must be by the author. Any other editor -- a
+// maintainer ticking the box on the author's behalf -- or a history that cannot be read in full
+// disqualifies the PR as a source.
+export function editedOnlyByAuthor(pullRequest, login) {
+  const edits = pullRequest?.userContentEdits;
+  if (!login || pullRequest?.author?.login?.toLowerCase() !== login.toLowerCase()) return false;
+  if (!edits || !Array.isArray(edits.nodes) || edits.totalCount > edits.nodes.length) return false;
+  return edits.nodes.every((edit) => edit?.editor?.login?.toLowerCase() === login.toLowerCase());
 }
 
 function describeStanding(standing) {
@@ -118,8 +125,7 @@ function describeStanding(standing) {
     const receipt = standing.path === "corporate" ? ` with receipt ${standing.receipt}` : "";
     return `@${standing.login} is registered in .github/contribution-rights.json as ${standing.path}${receipt} (declared ${standing.declared || "date not recorded"}; source: ${standing.source || "not recorded"}).`;
   }
-  const receipt = standing.path === "corporate" ? `, verified with receipt ${standing.receipt}` : "";
-  return `@${standing.login} declared the ${standing.path} path on merged PR #${standing.pr.number}${receipt} (${standing.pr.url}).`;
+  return `@${standing.login} declared the ${standing.path} path on merged PR #${standing.pr.number} (${standing.pr.url}).`;
 }
 
 function declarationVerdict(selection, state, pr) {
@@ -165,12 +171,13 @@ function declarationVerdict(selection, state, pr) {
 }
 
 // Whether run() must read the author's standing from GitHub: no per-PR selection, or a corporate
-// selection that a corporate standing may already cover. An independent or unsure selection is
+// selection by an author whose corporate authorization is registered. Any other selection is
 // decided by the PR alone.
 export function needsStanding(pr, config) {
   if (!Number.isInteger(config.effectiveAfterPullRequest) || pr.number <= config.effectiveAfterPullRequest) return false;
   const selected = selectedRights(pr.body || "");
-  return selected.length === 0 || (selected.length === 1 && selected[0] === "corporate");
+  if (selected.length === 0) return true;
+  return selected.length === 1 && selected[0] === "corporate" && registeredStanding(pr.user?.login, config)?.path === "corporate";
 }
 
 // evidence (gathered by run()): { authorStanding, coAuthors: [{ login, standing }], error }.
@@ -321,7 +328,22 @@ async function commitAuthorLogins(repo, pr, apiBase, token) {
   throw new Error(`PR #${pr.number} has more commits than this check reads`);
 }
 
-// The earliest merged PR by `login` in this repository that carried a valid declaration.
+const EDIT_HISTORY_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { author { login } userContentEdits(first: 100) { totalCount nodes { editor { login } } } }
+  }
+}`;
+
+async function bodyEditedOnlyByAuthor(repo, number, login, apiBase, token) {
+  const [owner, name] = repo.split("/");
+  const result = await requestJson(`${apiBase}/graphql`, token, {
+    method: "POST",
+    body: JSON.stringify({ query: EDIT_HISTORY_QUERY, variables: { owner, name, number } }),
+  });
+  return editedOnlyByAuthor(result?.data?.repository?.pullRequest, login);
+}
+
+// The earliest merged PR by `login` in this repository that carried their own independent declaration.
 async function earlierDeclaration(repo, login, currentNumber, config, apiBase, token) {
   if (!SEARCHABLE_LOGIN.test(login)) return null;
   const query = encodeURIComponent(`repo:${repo} is:pr is:merged author:${login}`);
@@ -329,9 +351,9 @@ async function earlierDeclaration(repo, login, currentNumber, config, apiBase, t
   for (const item of result.items || []) {
     if (item.number === currentNumber || !item.pull_request?.merged_at) continue;
     if (item.user?.login?.toLowerCase() !== login.toLowerCase()) continue;
-    if (selectedRights(item.body || "").length !== 1) continue;
+    if (!mergedDeclaration(item, [], config)) continue;
     const declaration = mergedDeclaration(item, await commentsForPullRequest(repo, item.number, apiBase, token), config);
-    if (declaration) return { ...declaration, login };
+    if (declaration && await bodyEditedOnlyByAuthor(repo, item.number, login, apiBase, token)) return { ...declaration, login };
   }
   return null;
 }

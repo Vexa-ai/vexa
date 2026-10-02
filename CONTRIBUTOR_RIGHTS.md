@@ -12,10 +12,10 @@ non-compliant. Concrete ownership concerns in earlier work are reviewed individu
 ## Choose one path on your first pull request
 
 You declare once per contributor, not per pull request. Later pull requests need no selection when
-you are listed in `.github/contribution-rights.json`, or when an earlier merged pull request of
-yours in this repository carries a valid declaration. If a later contribution falls under a
-different path, for example work an employer now owns, select that path on that pull request; it
-decides that pull request.
+you are listed in `.github/contribution-rights.json`, or when you selected **Independent** yourself
+on an earlier merged pull request in this repository. Corporate standing comes only from the
+registry. If a later contribution falls under a different path, for example work an employer now
+owns, select that path on that pull request; it decides that pull request.
 
 ### Independent
 
@@ -66,7 +66,10 @@ whether the independent or corporate path applies, without asking you to draft l
 ## What the automated gate proves
 
 The `contribution-rights` check passes without a selection when the author is registered or has an
-earlier merged declaration. It names the registry entry or pull request it relied on. A standing
+earlier merged pull request whose independent box they ticked themselves: every edit to that body
+must be the author's, so a box a maintainer ticked does not count. A corporate receipt on an earlier
+pull request never carries forward. The check names the registry entry or pull request it relied
+on. A standing
 covers only its owner's commits: if a commit in the pull request has a different GitHub author who
 is neither registered nor previously declared, the check names that author and requires a
 selection. Otherwise it requires exactly one selection, as on a first contribution.
