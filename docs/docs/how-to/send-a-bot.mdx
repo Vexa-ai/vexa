@@ -235,6 +235,12 @@ four-hour active-phase cap remains a backstop. A participant who stays but says 
 silence window will also be left; increase the window when silent attendance is expected. Self-hosters can
 change the deployment fallback with `BOT_ALONE_SILENCE_WINDOW_MS`; an explicit per-meeting value wins.
 
+Departure can be delayed past that window in one case: if the meeting page still reports connected remote
+audio streams while no audio is reaching the bot, it treats the silence as its own capture breaking rather
+than as an empty room, and holds on for a bounded grace before leaving anyway — three silence windows by
+default, at least a minute and at most fifteen. `BOT_CAPTURE_FAULT_MAX_MS` sets that bound (`0` removes the
+grace entirely).
+
 ## Next
 
 The transcript compiles into your [workspace](/concepts#workspace), where agents act on it. Turn that into
