@@ -49,8 +49,8 @@ No one else has all three:
    portable, diffable, greppable. Knowledge as code.
 
 3. **Agents work it, safely.** Sandboxed coding agents read and write that repo like
-   developers — isolated ephemeral containers, no egress, thousands in parallel, on Docker
-   or your Kubernetes.
+   developers — isolated ephemeral containers scoped to the workspaces they're granted, thousands
+   in parallel, on Docker or your Kubernetes.
 
 > **Only here for the transcription API?** It's a complete standalone product — send a bot,
 > read the stream, ignore the agent lane entirely.
@@ -161,9 +161,10 @@ A CLI coding agent is just a process on Linux. The **runtime** makes that a mult
 sandboxed execution layer safe to point at real business data — the same engine that already
 spawns Vexa's meeting bots in production.
 
-- **Isolated.** Every dispatch gets its own container: no egress except brokered tools, and
-  only its granted workspaces exist in its filesystem — enforced by the substrate, not by the
-  agent. Agents never run in the control plane.
+- **Isolated.** Every dispatch gets its own container, and only its granted workspaces exist in
+  its filesystem — enforced by the substrate, not by the agent. Agents never run in the control
+  plane. Network egress is yours to restrict: the shipped Compose and Helm defaults don't
+  firewall agent containers.
 - **Ephemeral.** A container lives while it works and is reaped on idle; continuity is a
   session file in the workspace. Sub-second starts, thousands in parallel.
 - **Orchestration-agnostic.** One `runtime.v1` lifecycle, pluggable substrate — the same
