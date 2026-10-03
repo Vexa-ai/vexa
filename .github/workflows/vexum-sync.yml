@@ -1,0 +1,132 @@
+# Bring reviewed Vexum commits back with their authors and DCO trailers intact.
+# VEXUM_SYNC_ENABLED is opt-in; the schedule below and workflow_dispatch do
+# nothing until that repository variable is true. VEXUM_REPO selects the source;
+# its env fallback can move to the foundation repository without changing code.
+# check reports divergence and overdue forward sync in the step summary, then
+# stops green. This informational job is not a required merge check.
+# With no VEXUM_SYNC_TOKEN, report dry-run mode and never push or open a PR.
+# With the token, apply on VEXUM_BRANCH_PREFIX, push, and open only the sync PR.
+# Source fetch failures stop green with a summary; an open sync PR defers the next.
+# The forward carve still squashes: preserving its commit history is a follow-up.
+# It also carries its own allowlist copy, pinned by test until it reads the shared
+# scripts/vexum-paths.txt file. No forward-publisher behavior changes here.
+name: vexum-sync
+
+'on':
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  VEXUM_REPO: ${{ vars.VEXUM_REPO || 'Vexa-ai/vexa-core' }}
+  VEXUM_BRANCH_PREFIX: vexum-sync
+
+jobs:
+  sync:
+    if: ${{ vars.VEXUM_SYNC_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure the run and add the Vexum remote
+        id: source
+        env:
+          SYNC_TOKEN: ${{ secrets.VEXUM_SYNC_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          if [ -n "$SYNC_TOKEN" ]; then
+            git remote add vexum "https://x-access-token:${SYNC_TOKEN}@github.com/${VEXUM_REPO}.git"
+          else
+            git remote add vexum "https://github.com/${VEXUM_REPO}.git"
+          fi
+          if ! git fetch --no-tags vexum main > "$RUNNER_TEMP/vexum-fetch.log" 2>&1; then
+            git remote set-url vexum "https://github.com/${VEXUM_REPO}.git"
+            printf 'Could not fetch %s; sync skipped because the source is unavailable or authentication failed.\n' "$VEXUM_REPO" >> "$GITHUB_STEP_SUMMARY"
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git remote set-url vexum "https://github.com/${VEXUM_REPO}.git"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+          sync_date=$(date -u +%F)
+          echo "SYNC_DATE=$sync_date" >> "$GITHUB_ENV"
+          echo "SYNC_BRANCH=${VEXUM_BRANCH_PREFIX}/${sync_date//-/}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Check both directions
+        if: steps.source.outputs.ready == 'true'
+        id: check
+        run: |
+          set +e
+          result=$(node scripts/vexum-backport.mjs check --vexum . --vexum-ref refs/remotes/vexum/main --vexa . 2>&1)
+          rc=$?
+          set -e
+          printf '%s\n' "$result" >> "$GITHUB_STEP_SUMMARY"
+          case "$rc" in
+            0) echo 'proceed=true' >> "$GITHUB_OUTPUT" ;;
+            3|4) echo 'proceed=false' >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
+      - name: Preview backport
+        if: steps.check.outputs.proceed == 'true'
+        id: preview
+        run: |
+          node scripts/vexum-backport.mjs list --vexum . --vexum-ref refs/remotes/vexum/main --vexa . > "$RUNNER_TEMP/vexum-commits.txt"
+          count=$(wc -l < "$RUNNER_TEMP/vexum-commits.txt" | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          set +e
+          node scripts/vexum-backport.mjs apply --dry-run --branch "$SYNC_BRANCH" --vexum . --vexum-ref refs/remotes/vexum/main --vexa . >> "$GITHUB_STEP_SUMMARY" 2>&1
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo 'apply=true' >> "$GITHUB_OUTPUT" ;;
+            3) echo 'apply=false' >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
+      - name: Report dry-run mode
+        if: steps.preview.outcome == 'success'
+        env:
+          SYNC_TOKEN: ${{ secrets.VEXUM_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo 'Sync ran in dry-run because no token is configured (VEXUM_SYNC_TOKEN).' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Apply and open the sync PR
+        if: steps.preview.outputs.apply == 'true' && steps.preview.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.VEXUM_SYNC_TOKEN }}
+          COMMIT_COUNT: ${{ steps.preview.outputs.count }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then exit 0; fi
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 \
+            --json headRefName,url --jq "map(select(.headRefName | startswith(\"${VEXUM_BRANCH_PREFIX}/\"))) | .[0].url // empty")
+          if [ -n "$existing" ]; then
+            printf 'Sync PR already open: %s; no additional PR created.\n' "$existing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config --local user.name 'github-actions[bot]'
+          git config --local user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          node scripts/vexum-backport.mjs apply --branch "$SYNC_BRANCH" --vexum . --vexum-ref refs/remotes/vexum/main --vexa .
+          gh auth setup-git
+          git push origin "refs/heads/$SYNC_BRANCH:refs/heads/$SYNC_BRANCH"
+          {
+            printf 'Backported commits from `%s`, preserving authors, author dates, and DCO trailers.\n\n' "$VEXUM_REPO"
+            cat "$RUNNER_TEMP/vexum-commits.txt"
+            printf '\n<!-- vexa-agent -->\n'
+          } > "$RUNNER_TEMP/vexum-pr.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$SYNC_BRANCH" \
+            --title "${VEXUM_BRANCH_PREFIX}: $COMMIT_COUNT commits from Vexum ($SYNC_DATE)" \
+            --body-file "$RUNNER_TEMP/vexum-pr.md"
