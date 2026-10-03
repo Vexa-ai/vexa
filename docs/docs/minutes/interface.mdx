@@ -1,0 +1,74 @@
+---
+title: "The interface"
+description: "Three things: the record, the group, and the chat. Everything else is somewhere you never have to go."
+---
+
+<Note>**Status:** every piece described here exists in the terminal today. What Minutes adds is a
+**smaller shape** — fewer surfaces, and controls that appear only for the people they belong to.
+See [what is real today](/minutes/status).</Note>
+
+## What a person actually meets
+
+Someone receives an extract and clicks the link in it. **That click is the entire onboarding**,
+and it lands them on the meeting the extract was about.
+
+From there they have three things, and no fourth:
+
+| | What it is |
+|---|---|
+| **The record** | the meeting itself — who was there, what was said, what was decided. Where an extract's link lands, and what every claim in it can be checked against. |
+| **The group** | what this group knows, accumulated across its meetings, as plain documents you can read — and edit, if you have write access. |
+| **The chat** | ask the assistant anything, against the group you are standing in. |
+
+Across the top, the groups they belong to: their own, plus any shared group they are a member of.
+Nothing else.
+
+## Read, or read and write
+
+Membership carries one of two rights, per person, per group:
+
+- **Read** — receive extracts, read the group's knowledge, ask the chat anything.
+- **Read and write** — the same, plus editing the group's documents directly and letting the
+  assistant write there on your behalf.
+
+Most members only ever need to read. Write access is for the people who curate what a group
+knows.
+
+## Making a group, and letting people in
+
+Anyone with write access can create a group and share it, two ways:
+
+- **By address** — add people's email addresses. They receive their first extract after the next
+  meeting; no invitation to accept, no account to create.
+- **By link** — share a join link, either open to anyone who holds it or restricted to a list of
+  addresses you name.
+
+Both already exist in the substrate: invitations are minted against a group, carry a role, may be
+restricted to named addresses, expire, and can be revoked.
+
+## What Minutes deliberately does not show
+
+The terminal underneath this is a full workbench — task lists, scheduled routines, entity
+browsers, API tokens, agent-composition controls, the private system store. **Minutes registers
+none of it.**
+
+That is not a limitation to be lifted later. A person who arrived by clicking a link in an email
+about a meeting they attended should meet a product with three things in it. The workbench stays
+available to the people who want it, as its own surface, for whom none of this is news.
+
+## Removing a group
+
+A group can be removed by its owner, confirmed by seeing its name and what goes with it: members
+stop receiving extracts, and meetings already held keep their records. It is never a bare icon
+click.
+
+## Why this is a shape, not a fork
+
+Every surface in the terminal is a self-contained module that registers itself; the shell renders
+whatever is registered. A different product is a **different set of registered surfaces**, not a
+different application — so Minutes and the full workbench stay one codebase, one release, and one
+set of fixes.
+
+In practice that made the difference between the two products a build-time mode rather than a
+rewrite: the surfaces Minutes leaves out simply never register, and the ones it keeps are the same
+modules the full workbench uses.
