@@ -459,3 +459,97 @@ def test_row_completion_fields_are_none_when_absent_from_data():
     (row,) = _client(store).get("/meetings", headers=HEADERS).json()["meetings"]
     assert row["completion_reason"] is None
     assert row["failure_stage"] is None
+
+
+# ── C5 · #1670 — the list row answers "did this meeting capture anything?" ─────────────────────────
+# `recordings` is a HEAVY key and stays omitted (C1 above pins that). But it was the only capture
+# EVIDENCE a list row carried, so its removal left the list saying "nothing captured" about meetings
+# that had a recording and a transcript — reported from a self-hosted compose instance on a Teams
+# meeting with 14 segments and a 741 KB webm. The row now hoists the ANSWER as a scalar. The setting
+# (`recording_enabled`) is not the answer and these tests hold it constant to prove that.
+
+CAPTURED_DATA = {
+    "recording_enabled": True,
+    "recordings": [{"id": "r1", "status": "completed", "url": "s3://…"}],
+    "segments_captured": 14,
+}
+
+
+@pytest.mark.parametrize("path", ["/bots", "/meetings"])
+def test_list_row_carries_capture_evidence_the_projection_drops(path):
+    """The heavy evidence is gone from `data`; the answer it carried is on the row."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="teams", native_meeting_id="cap-1", status="completed",
+        data=dict(CAPTURED_DATA),
+    )
+    (row,) = _client(store).get(path, headers=HEADERS).json()["meetings"]
+    assert "recordings" not in row["data"], "the heavy evidence key must stay omitted"
+    assert row["has_capture"] is True
+
+
+def test_either_evidence_is_sufficient_on_its_own():
+    """Audio without a finalized transcript, and a transcript without a stored artifact, are both
+    capture. Neither is reachable from the list's own `data`, which is the whole point."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="teams", native_meeting_id="cap-audio", status="completed",
+        data={"recording_enabled": True, "recordings": [{"id": "r1"}], "segments_captured": 0},
+    )
+    store.seed_meeting(
+        user_id=USER, platform="teams", native_meeting_id="cap-words", status="completed",
+        data={"recording_enabled": True, "segments_captured": 14},
+    )
+    rows = {r["native_meeting_id"]: r for r in
+            _client(store).get("/meetings", headers=HEADERS).json()["meetings"]}
+    assert rows["cap-audio"]["has_capture"] is True
+    assert rows["cap-words"]["has_capture"] is True
+
+
+def test_a_meeting_that_captured_nothing_reads_false_though_recording_was_enabled():
+    """The negative control. `recording_enabled` is the SETTING — it is true on a bot that never
+    got in. A row with the setting and no evidence must still read as nothing captured, or the fix
+    would simply invert the bug."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="teams", native_meeting_id="cap-none", status="completed",
+        data={"recording_enabled": True, "recordings": [], "segments_captured": 0},
+    )
+    (row,) = _client(store).get("/meetings", headers=HEADERS).json()["meetings"]
+    assert row["data"].get("recording_enabled") is True
+    assert row["has_capture"] is False
+
+
+def test_detail_and_list_agree_on_capture():
+    """The two reads of one meeting cannot disagree — the split between them is what produced the
+    report (`GET /meetings/{id}` carried `recordings`, `GET /meetings` did not)."""
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(
+        user_id=USER, platform="teams", native_meeting_id="cap-2", status="completed",
+        data=dict(CAPTURED_DATA),
+    )
+    c = _client(store)
+    (row,) = c.get("/meetings", headers=HEADERS).json()["meetings"]
+    detail = c.get(f"/meetings/{mid}", headers=HEADERS).json()
+    assert detail["has_capture"] is row["has_capture"] is True
+    assert detail["data"]["recordings"], "the detail path still carries the evidence itself"
+
+
+def test_capture_matches_the_lifecycle_rating_of_the_same_row():
+    """`lifecycle.provenance` rates `transcription_outcome == 'served'` on `segments_captured > 0`.
+    A row the API's own rating calls served must not read as nothing captured on the list."""
+    from meeting_api.collector.projection import has_capture
+
+    for segments in (0, 1, 14):
+        data = {"segments_captured": segments}
+        served = int(data.get("segments_captured") or 0) > 0   # provenance.py's exact test
+        assert has_capture(data) is served
+
+
+def test_has_capture_is_total_over_junk_rows():
+    """A projection that raises on a malformed row takes the whole list down with it."""
+    from meeting_api.collector.projection import has_capture
+
+    for junk in (None, [], "recordings", {"recordings": "s3://one"}, {"segments_captured": None},
+                 {"segments_captured": "fourteen"}, {}):
+        assert has_capture(junk) is False

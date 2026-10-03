@@ -51,6 +51,13 @@ from typing import Any, Dict, Optional
 # some of it. ``calendar_sources`` is the one mixed-weight key: Calendar needs its source identity
 # and auto-join policy, but not the embedded raw ICS event snapshot. It is projected separately
 # below. Full ``data`` stays on ``GET /meetings/{id}``.
+#
+# A key may be dropped for its SIZE; the QUESTION it answers still belongs on the row. ``recordings``
+# carries one on its own — "did this meeting capture anything?", the difference between a row that
+# reads as recorded and one that reads as a bot that failed — so the row answers it with the hoisted
+# top-level ``has_capture`` scalar (:func:`has_capture`) and no consumer reconstructs it from a key
+# this set omits. ``recording_enabled``, which DOES ride along, is the SETTING and not the evidence:
+# it says a recording was requested, never that audio arrived.
 LIST_OMIT_KEYS = frozenset({
     "speaker_events",
     "bot_logs",
@@ -156,6 +163,39 @@ DEFAULT_LIST_LIMIT = 50
 LIST_PIN_STATUSES = frozenset({
     "scheduled", "requested", "joining", "awaiting_admission", "active", "stopping",
 })
+
+
+def has_capture(data: Optional[Dict[str, Any]]) -> bool:
+    """True when this meeting captured something — audio, words, or both.
+
+    The list row's answer to "did the bot record this meeting?", hoisted to the top level the same
+    way ``constructed_meeting_url`` and ``completion_reason`` are. The EVIDENCE is heavy and the
+    ANSWER is one byte: :data:`LIST_OMIT_KEYS` drops ``recordings`` from every list row, so the row
+    carries the answer rather than leaving a consumer to look for evidence that is not there.
+
+    Two independent evidences, either one sufficient:
+
+    * ``recordings`` — at least one stored recording artifact, so audio arrived;
+    * ``segments_captured`` — the transcript segment count stamped onto the row at the terminal
+      transition (#807). ``lifecycle.provenance`` rates ``transcription_outcome`` as ``served`` on
+      exactly this test, so the row's capture status and the row's lifecycle rating cannot disagree.
+
+    ``recording_enabled`` is deliberately not evidence. It is the SETTING, written when the bot was
+    requested: it says a recording was ASKED FOR, never that any arrived, so a bot that failed to
+    join carries it just as a bot that recorded an hour does.
+
+    A non-dict ``data`` — and a row whose bot has not reached a terminal state yet — is ``False``:
+    nothing has been captured that anything can point at.
+    """
+    if not isinstance(data, dict):
+        return False
+    recordings = data.get("recordings")
+    if isinstance(recordings, list) and recordings:
+        return True
+    try:
+        return int(data.get("segments_captured") or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _event_ts(value: Any) -> Optional[str]:

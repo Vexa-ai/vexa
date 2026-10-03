@@ -12,7 +12,7 @@ import type { MeetingMock } from "../meetingModel";
 
 const row = (id: string): MeetingMock => ({
   id, native_id: "abc-defg-hij", title: "Google Meet · abc-defg-hij", when: "now",
-  status: "past", live_status: "completed", platform: "Google Meet", has_recording: false,
+  status: "past", live_status: "completed", platform: "Google Meet", has_capture: false,
   docs: [], participants: [], mentioned: [], actions: [], transcript: [], insights: [],
 } as MeetingMock);
 
