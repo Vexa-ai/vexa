@@ -7,6 +7,7 @@ runtime kernel's ``POST /workloads``). They carry NO test logic.
 Heavy imports (SQLAlchemy, httpx) are LAZY (inside the methods / ``build_production_router``) so the
 package can be imported and unit-tested with the in-memory fakes without those runtime deps in the
 gate venv — which is why ``pyproject.toml`` needs no ``greenlet`` pin.
+A teardown exists only as a persisted stop intent.
 """
 from __future__ import annotations
 
@@ -662,7 +663,11 @@ class SqlAlchemyMeetingRepo:
         request,
         decision,
     ) -> bool:
-        """Persist one request-bound boundary decision under a row lock."""
+        """Persist the streak under a row lock; create stop intent at the threshold.
+
+        Any other decision resets the unavailable streak. Existing stop intents
+        are immutable to stale sweep workers.
+        """
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
 
@@ -701,6 +706,13 @@ class SqlAlchemyMeetingRepo:
                 )
                 if prior >= request.boundary_at:
                     return False
+            if data.get("stop_requested") is True:
+                return False
+            streak = (
+                metadata.get("unavailable_streak", 0) + 1
+                if decision.reason == "service_authority_unavailable" else 0
+            )
+            metadata["unavailable_streak"] = streak
             metadata.update(decision.to_record())
             metadata["last_boundary_at"] = boundary
             metadata["last_decision_id"] = decision.decision_id
@@ -708,6 +720,10 @@ class SqlAlchemyMeetingRepo:
                 decision.enforced
                 and not decision.allow
                 and decision.stop_scope == "billable_service"
+                and (
+                    decision.reason != "service_authority_unavailable"
+                    or streak >= decision.unavailable_threshold
+                )
             ):
                 metadata["teardown_confirmed"] = False
                 data["stop_requested"] = True
@@ -719,7 +735,7 @@ class SqlAlchemyMeetingRepo:
             return True
 
     async def list_service_authority_teardowns(self) -> list[dict]:
-        """Durable stop intents that still lack a confirmed runtime teardown."""
+        """List explicit stop_requested intents with teardown_confirmed false."""
         from sqlalchemy import select
 
         from ..sessions.models import Meeting
@@ -746,7 +762,8 @@ class SqlAlchemyMeetingRepo:
                     and metadata.get("allow") is False
                     and metadata.get("stop_scope")
                     == "billable_service"
-                    and metadata.get("teardown_confirmed") is not True
+                    and data.get("stop_requested") is True
+                    and metadata.get("teardown_confirmed") is False
                 ):
                     out.append({
                         "id": row.id,
@@ -763,7 +780,7 @@ class SqlAlchemyMeetingRepo:
         claimed_at,
         lease_seconds,
     ) -> Optional[dict]:
-        """Lease one stop intent under a row lock so replicas cannot race it."""
+        """Lease an explicit pending stop intent under a row lock."""
         from datetime import timezone
 
         from sqlalchemy import select
@@ -788,7 +805,8 @@ class SqlAlchemyMeetingRepo:
                 or metadata.get("enforced") is not True
                 or metadata.get("allow") is not False
                 or metadata.get("stop_scope") != "billable_service"
-                or metadata.get("teardown_confirmed") is True
+                or data.get("stop_requested") is not True
+                or metadata.get("teardown_confirmed") is not False
             ):
                 return None
             metadata = dict(metadata)

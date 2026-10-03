@@ -13,6 +13,7 @@
 
 NO production logic — they only stand in for Postgres + the runtime kernel so the spawn flow runs
 fully in-process.
+A teardown exists only as a persisted stop intent.
 """
 from __future__ import annotations
 
@@ -353,6 +354,7 @@ class InMemoryMeetingRepo:
         request,
         decision,
     ) -> bool:
+        """Persist the streak and create stop intent only at the threshold."""
         row = self._meetings.get(meeting_id)
         if row is None:
             return False
@@ -378,6 +380,13 @@ class InMemoryMeetingRepo:
             )
             if previous >= request.boundary_at:
                 return False
+        if row["data"].get("stop_requested") is True:
+            return False
+        streak = (
+            metadata.get("unavailable_streak", 0) + 1
+            if decision.reason == "service_authority_unavailable" else 0
+        )
+        metadata["unavailable_streak"] = streak
         metadata.update(decision.to_record())
         metadata["last_boundary_at"] = boundary
         metadata["last_decision_id"] = decision.decision_id
@@ -385,6 +394,10 @@ class InMemoryMeetingRepo:
             decision.enforced
             and not decision.allow
             and decision.stop_scope == "billable_service"
+            and (
+                decision.reason != "service_authority_unavailable"
+                or streak >= decision.unavailable_threshold
+            )
         ):
             metadata["teardown_confirmed"] = False
             row["data"]["stop_requested"] = True
@@ -392,6 +405,7 @@ class InMemoryMeetingRepo:
         return True
 
     async def list_service_authority_teardowns(self) -> list[dict]:
+        """List explicit stop_requested intents with teardown_confirmed false."""
         out = []
         for row in self._meetings.values():
             metadata = row.get("data", {}).get("service_authority")
@@ -400,7 +414,8 @@ class InMemoryMeetingRepo:
                 and metadata.get("enforced") is True
                 and metadata.get("allow") is False
                 and metadata.get("stop_scope") == "billable_service"
-                and metadata.get("teardown_confirmed") is not True
+                and row["data"].get("stop_requested") is True
+                and metadata.get("teardown_confirmed") is False
             ):
                 out.append({
                     "id": row["id"],
@@ -417,6 +432,7 @@ class InMemoryMeetingRepo:
         claimed_at,
         lease_seconds,
     ) -> Optional[dict]:
+        """Lease an explicit pending stop intent once per claim interval."""
         from datetime import datetime, timezone
 
         row = self._meetings.get(meeting_id)
@@ -430,7 +446,8 @@ class InMemoryMeetingRepo:
             or metadata.get("enforced") is not True
             or metadata.get("allow") is not False
             or metadata.get("stop_scope") != "billable_service"
-            or metadata.get("teardown_confirmed") is True
+            or row["data"].get("stop_requested") is not True
+            or metadata.get("teardown_confirmed") is not False
         ):
             return None
         prior_claim = metadata.get("teardown_claim_id")

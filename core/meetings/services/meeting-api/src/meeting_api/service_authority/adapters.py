@@ -1,4 +1,4 @@
-"""Allow-all and signed HTTP adapters for service-authority.v1."""
+"""Signed service-authority adapters with a validated unavailable boundary threshold."""
 from __future__ import annotations
 
 import hashlib
@@ -71,8 +71,17 @@ class ServiceAuthorityConfig:
     mode: str
     contract_version: str = AUTHORITY_VERSION
     failure_policy: str = "closed"
+    unavailable_threshold: int = 3
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.unavailable_threshold, bool)
+            or not isinstance(self.unavailable_threshold, int)
+            or self.unavailable_threshold < 1
+        ):
+            raise ValueError(
+                "service-authority unavailable_threshold must be an integer >= 1"
+            )
         _safe_url(self.url)
         if not isinstance(self.secret, str) or not self.secret.strip():
             raise ValueError("service-authority secret is required")
@@ -109,6 +118,8 @@ class AllowAllServiceAuthority:
 
     configured = False
     mode = "unconfigured"
+    enforced = False
+    unavailable_threshold = ServiceAuthorityConfig.unavailable_threshold
 
     async def decide(
         self,
@@ -141,6 +152,14 @@ class HttpServiceAuthority:
         self.config = config
         self.mode = config.mode
         self._client = client
+
+    @property
+    def enforced(self) -> bool:
+        return self.config.mode == "enforce"
+
+    @property
+    def unavailable_threshold(self) -> int:
+        return self.config.unavailable_threshold
 
     async def decide(
         self,
@@ -219,6 +238,7 @@ def build_service_authority_from_env(
         "timeout_ms",
         "response_max_age_seconds",
         "failure_policy",
+        "unavailable_threshold",
         "mode",
     }
     if set(body) - allowed:
@@ -248,5 +268,8 @@ def build_service_authority_from_env(
             AUTHORITY_VERSION,
         ),
         failure_policy=body.get("failure_policy", "closed"),
+        unavailable_threshold=body.get(
+            "unavailable_threshold", ServiceAuthorityConfig.unavailable_threshold,
+        ),
     )
     return HttpServiceAuthority(config)
