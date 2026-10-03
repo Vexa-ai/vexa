@@ -41,6 +41,7 @@ import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
+import { speakerKind } from './room-identity.js';
 
 /** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
  *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
@@ -135,6 +136,7 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
     // The gmeet lane publishes the same 'Speaker' placeholder for an unnamed channel, and it
     // reaches the same dashboard — so it gets the same treatment. One rule, both lanes.
     speaker: displaySpeaker(seg.speaker ?? ''),
+    speaker_kind: seg.speaker_kind ?? speakerKind(seg.speaker ?? ''),
     speaker_key: seg.speaker_key,
     text: seg.text,
     start: seg.start,
@@ -199,6 +201,15 @@ const UNATTRIBUTED_LABEL = /^(?:seg_\d+|Speaker|Speaker [A-Z]+)$/;
  * This is the one place the mapping happens. The lane keeps its internal labels, so the replay
  * harness and every score built on it keep counting refusals exactly as before rather than going
  * blind the moment the display string changed.
+ *
+ * `speakerKind()` rides this same chokepoint, for the same reason: all three lane→bot converters
+ * pass through here, so "is this speaker a meeting ROOM?" is answered once, for Meet, Teams and
+ * Zoom/Jitsi alike. It changes NO attribution — a room system mixes its microphones inside the
+ * hardware, so the room is one participant with one display name and stays one speaker, exactly as
+ * Google's own Meet transcripts have it. What the stamp adds is that a consumer can see the name
+ * belongs to a DEVICE, instead of reading an admin-configured device name as a person.
+ * `room-identity.ts` owns the pattern table and the `VEXA_ROOM_PATTERNS` override; `person` there
+ * means "no room marker found", never "confirmed human".
  */
 function displaySpeaker(internal: string): string {
   return UNATTRIBUTED_LABEL.test(internal) ? '' : internal;
@@ -208,6 +219,7 @@ function chunkToBotSegment(speaker: string, c: ChunkSegment, completed: boolean)
   return {
     segment_id: c.segmentId,
     speaker: displaySpeaker(speaker),
+    speaker_kind: speakerKind(speaker),
     speaker_key: c.segmentId,
     text: c.text,
     start: c.startMs / 1000,
@@ -227,6 +239,7 @@ function teamsToBotSegment(segment: TeamsCsrcTranscriptSegment): TranscriptSegme
   return {
     segment_id: segment.segmentId,
     speaker: displaySpeaker(segment.speaker),
+    speaker_kind: speakerKind(segment.speaker),
     speaker_key: `csrc:${segment.csrc}`,
     text: segment.text,
     start: segment.startMs / 1000,

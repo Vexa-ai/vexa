@@ -314,6 +314,7 @@ curl -H "X-API-Key: $API_KEY" \
     {
       "segment_id": "sess_9c2a:spk1:12400",
       "speaker": "Jane Liu",
+      "speaker_kind": "person",
       "text": "Let's lock the renewal pricing by July 1.",
       "start": 12.4, "end": 15.1,
       "language": "en",
@@ -410,6 +411,47 @@ The same segments arrive **live** (`completed: false`, a pending draft) and then
 (`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
 runs.
 
+### Meeting rooms: `speaker_kind`
+
+When a **meeting-room device** joins the call — a Google Meet hardware kit, a Microsoft Teams Room, a
+Zoom Room — every person in that room speaks through one microphone array. The room hardware mixes
+those microphones **before** the call, so it joins as **one participant, one audio stream, one display
+name**, and every human in the room is attributed to that name. Google's own Meet transcripts do the
+same: in-room speech is attributed to the room device's robot account.
+
+Each segment carries an optional `speaker_kind` saying what its `speaker` names:
+
+| `speaker_kind` | Meaning |
+|---|---|
+| `room` | **Evidence.** The display name matched a known room-device pattern, so the speaker is a device, and the people inside that room are not identified individually. |
+| `person` | **A default, not evidence.** A resolved display name with no room marker. It means "no room marker found", never "confirmed human". |
+| `unknown` | There was no name to classify — the binder did not resolve this turn, or the label is provisional. |
+
+The same value rides `kind` on every row of [Meeting participants](#meeting-participants).
+
+<Warning>
+**People inside a room are not separated.** A four-person room is still one speaker. `speaker_kind`
+does not change attribution — it tells you when the name you are reading belongs to a device, so your
+CRM or summariser stops treating `Amsterdam — Room 2` as a person. Separating in-room voices requires
+either voice separation or a second device per person, and Vexa does neither today.
+
+**A room named after a person reads as `person`.** Detection keys on the display name, and a kit
+whose device-name field somebody filled in with a human name is indistinguishable from a human. If
+your transcripts attribute in-room speech to an odd name, that string is the kit's device name: rename
+the device in your Meet or Teams admin console and the transcript follows.
+</Warning>
+
+**Self-hosted: extend the patterns.** Set `VEXA_ROOM_PATTERNS` on the bot and the meeting-api to a JSON
+array of regexes. It **replaces** the shipped table; make the first element `"+"` to **add** to it:
+
+```bash
+VEXA_ROOM_PATTERNS='["+", "^HQ-", "\\bvergaderruimte\\b"]'
+```
+
+A malformed value is ignored and the shipped patterns stand. The shipped table, with the evidence for
+each pattern, is at
+[`core/meetings/contracts/room-identity/room-patterns.json`](https://github.com/Vexa-ai/vexa/blob/main/core/meetings/contracts/room-identity/room-patterns.json).
+
 ## Meeting participants
 
 ```bash GET /meetings/{platform}/{native_meeting_id}/participants
@@ -422,9 +464,10 @@ curl "$API_BASE/meetings/google_meet/abc-defg-hij/participants" -H "X-API-Key: $
   "platform": "google_meet",
   "native_meeting_id": "abc-defg-hij",
   "participants": [
-    {"name": "Alice Example", "email": "alice@example.com", "source": "invite", "response_status": "accepted"},
-    {"name": "Bob Silent",   "email": "bob@example.com",   "source": "invite", "response_status": "accepted"},
-    {"name": "Alice Example", "email": null, "source": "speaker"}
+    {"name": "Alice Example", "email": "alice@example.com", "source": "invite", "response_status": "accepted", "kind": "person"},
+    {"name": "Bob Silent",   "email": "bob@example.com",   "source": "invite", "response_status": "accepted", "kind": "person"},
+    {"name": "Alice Example", "email": null, "source": "speaker", "kind": "person"},
+    {"name": "Amsterdam — Room 2", "email": null, "source": "speaker", "kind": "room"}
   ],
   "sources": ["invite", "speaker"],
   "observed_roster": "not_recorded"
@@ -437,6 +480,10 @@ Every row says where it came from, because the two sources answer different ques
 |---|---|---|
 | `invite` | The calendar invitation's attendee list, from the feed you connected under [Calendar sync](#calendar-sync). Carries `email` and, when the feed supplied one, `response_status`. | Only exists for meetings imported from a calendar. Lists who was **asked** — an invitee who never showed up still appears. |
 | `speaker` | Distinct speaker names heard in the transcript, ordered by first utterance. | Only people who **spoke and were named**. A silent participant is absent; so is a speaker the binder could not name (see [Speaker-attributed transcripts](#speaker-attributed-transcripts)). |
+
+Every row also carries `kind` — `room`, `person` or `unknown`, exactly as
+[`speaker_kind`](#meeting-rooms-speaker-kind) on a transcript segment. A `room` row is **one row for
+the whole room**: marking it does not add its occupants, and nobody in it is listed.
 
 `404` for a meeting you don't own — not an empty list. `sources` names only the sources that
 actually contributed, so `[]` means neither did.

@@ -128,7 +128,9 @@ def test_partstat_is_omitted_when_the_feed_carried_none():
 
     row = client.get(PATH, headers=H).json()["participants"][0]
 
-    assert row == {"name": None, "email": "dana@example.com", "source": "invite"}
+    # `kind` rides every row (Vexa Rooms rung 1). An invitee with no name has nothing to
+    # classify, so it is `unknown` — never `person`, which would be a claim we cannot make.
+    assert row == {"name": None, "email": "dana@example.com", "source": "invite", "kind": "unknown"}
 
 
 # ── the speaker source: heard and named, in first-heard order ──────────────────────────────────
@@ -180,9 +182,11 @@ def test_both_sources_are_labelled_and_no_identity_resolution_happens():
     alice_rows = [p for p in body["participants"] if p["name"] == "Alice Example"]
     assert len(alice_rows) == 2
     assert sorted(p["source"] for p in alice_rows) == ["invite", "speaker"]
-    # No resolver artefacts: nothing claims these two rows are the same person.
+    # No resolver artefacts: nothing claims these two rows are the same person. `kind` is not a
+    # resolver output — it is a property of the ONE name on the row (room device or person), and it
+    # never links a row to another row.
     for p in body["participants"]:
-        assert set(p) <= {"name", "email", "source", "response_status"}
+        assert set(p) <= {"name", "email", "source", "response_status", "kind"}
         assert "confidence" not in p and "participant_id" not in p
 
 
@@ -248,3 +252,52 @@ def test_malformed_attendees_do_not_break_the_read():
     store2.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE,
                         data={"attendees": ["alice@example.com", None, 7]})
     assert client2.get(PATH, headers=H).json()["participants"] == []
+
+
+# ── `kind`: a meeting ROOM is not a person (Vexa Rooms rung 1) ─────────────────────────────────
+def test_a_room_device_row_is_marked_as_a_room():
+    """A room system mixes its microphones inside the hardware, so it joins as ONE participant with
+    ONE display name and everyone in that room is attributed to it. Attribution is unchanged here —
+    the room is still one row — but the row now says it names a DEVICE, so a consumer stops reading
+    an admin-configured device name as a person's name."""
+    client, store = _client()
+    store.seed_meeting(
+        user_id=USER, platform=PLAT, native_meeting_id=NATIVE,
+        segments=[_seg("s1", "Amsterdam — Room 2", 5.0), _seg("s2", "Alice", 10.0)],
+    )
+
+    rows = {p["name"]: p["kind"] for p in client.get(PATH, headers=H).json()["participants"]}
+
+    assert rows == {"Amsterdam — Room 2": "room", "Alice": "person"}
+
+
+def test_the_people_inside_the_room_are_not_invented():
+    """The whole point of rung 1: marking the room does NOT add its occupants. A four-person room
+    is still exactly one participant row, and nobody may read this route as an attendance list of
+    the humans in it."""
+    client, store = _client()
+    store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE,
+                       segments=[_seg("s1", "Meeting Room 3", 5.0)])
+
+    body = client.get(PATH, headers=H).json()
+
+    assert len(body["participants"]) == 1
+    assert body["participants"][0]["kind"] == "room"
+    assert body["observed_roster"] == "not_recorded"
+
+
+def test_a_calendar_room_resource_is_marked_as_a_room():
+    """A bookable room rides the ATTENDEE lines exactly like a human invitee, so the same name test
+    applies on the invite source."""
+    client, store = _client()
+    store.seed_meeting(
+        user_id=USER, platform=PLAT, native_meeting_id=NATIVE,
+        data={"attendees": [
+            {"email": "room2@example.com", "name": "Amsterdam Meeting Room"},
+            {"email": "alice@example.com", "name": "Alice Example"},
+        ]},
+    )
+
+    rows = {p["name"]: p["kind"] for p in client.get(PATH, headers=H).json()["participants"]}
+
+    assert rows == {"Amsterdam Meeting Room": "room", "Alice Example": "person"}
