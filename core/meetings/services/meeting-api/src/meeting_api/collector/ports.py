@@ -51,6 +51,12 @@ class TranscriptStore(Protocol):
         owner-scoped: a row owned by another user returns ``None`` (404), never another tenant's data."""
         ...
 
+    async def find_owned_native_meetings(
+        self, user_id: int, platform: str, native_meeting_id: str,
+    ) -> list[dict]:
+        """All owned rows for this native key, newest first; never shared rows."""
+        ...
+
     async def list_meetings(
         self,
         user_id: int,
@@ -82,7 +88,7 @@ class TranscriptStore(Protocol):
         ...
 
     async def bind_workspace(
-        self, user_id: int, platform: str, native_meeting_id: str, workspace_id: str
+        self, user_id: int, platform: str, native_meeting_id: str, workspace_id: str, *, meeting_id: Optional[int] = None
     ) -> "Optional[str]":
         """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
         subscribe to the live feed. Returns the bound id, or ``None`` when the user owns no such meeting."""
@@ -149,7 +155,7 @@ class TranscriptStore(Protocol):
         ...
 
     async def connect_doc(
-        self, user_id: int, platform: str, native_meeting_id: str, doc: dict
+        self, user_id: int, platform: str, native_meeting_id: str, doc: dict, *, meeting_id: Optional[int] = None
     ) -> Optional[list[dict]]:
         """Append a workspace-doc ref ``{workspace, path, title?, kind?}`` to the owned meeting's
         ``meeting.data['docs']`` (created if absent), deduped by ``path`` (idempotent — re-connecting
@@ -159,7 +165,7 @@ class TranscriptStore(Protocol):
         ...
 
     async def disconnect_doc(
-        self, user_id: int, platform: str, native_meeting_id: str, path: str
+        self, user_id: int, platform: str, native_meeting_id: str, path: str, *, meeting_id: Optional[int] = None
     ) -> Optional[list[dict]]:
         """Remove the doc ref with ``path`` from the owned meeting's ``meeting.data['docs']``.
         Returns the updated ``docs`` list (idempotent if absent), or ``None`` when not owned/found."""
@@ -172,6 +178,7 @@ class TranscriptStore(Protocol):
         native_meeting_id: str,
         status: str,
         scheduled_at: Optional[str] = None,
+        *, meeting_id: Optional[int] = None,
     ) -> Optional[dict]:
         """Write an INTENT status (``idle`` / ``scheduled`` ONLY) onto the owned meeting's
         ``meetings.status`` column — the user is the source of truth for these pre-FSM states.
