@@ -76,7 +76,8 @@ Docker to build the images. It proves the control plane stands up and `/health` 
 - **`TRANSCRIPTION_MODEL` is not values-plumbed yet** (#522 ships the env on compose + Lite): to
   point k8s bots at a validating STT backend (Groq/vLLM), add the env to the meeting-api (and
   terminal) deployment via `extraEnv` for now; first-class `transcription.model` values plumbing is
-  a declared follow-up.
+  a declared follow-up. **`TRANSCRIPTION_LANGUAGE`** (the deployment-default spoken language) is
+  in the same state: set it on the meeting-api deployment via `extraEnv`.
 
 ## Contracts
 

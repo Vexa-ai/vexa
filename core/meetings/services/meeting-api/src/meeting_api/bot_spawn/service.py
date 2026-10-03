@@ -467,6 +467,10 @@ async def request_bot(
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
+    # The meeting's spoken language when the request names none: Whisper's per-window auto-detect
+    # mislabels short windows of a single-language meeting. It describes the speech, not the
+    # backend, so — unlike the env token/model — a Settings-configured endpoint keeps it.
+    language = language or (os.getenv("TRANSCRIPTION_LANGUAGE") or "").strip() or None
     bot_context = await _fetch_bot_context(user_id)
     configured = _transcription_from_context(bot_context)
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).

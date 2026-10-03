@@ -356,9 +356,11 @@ services:
       # `stt` resource; a token that can actually transcribe — the boot probe + wizard Test verify
       # it with real audio). Unset → bot joins+captures but no transcript.
       # MODEL is the id validating backends require (Groq/vLLM); unset → whisper-1.
+      # LANGUAGE pins the spoken language when POST /bots names none; unset → per-window auto-detect.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
+      - TRANSCRIPTION_LANGUAGE=${TRANSCRIPTION_LANGUAGE:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.

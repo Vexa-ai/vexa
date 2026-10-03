@@ -137,6 +137,16 @@
    ]
   },
   {
+   "key": "TRANSCRIPTION_LANGUAGE",
+   "class": "defaulted",
+   "default": "(unset — the STT auto-detects the language per transcription window)",
+   "description": "deployment-default spoken language (ISO 639-1, e.g. ru) bot_spawn threads into the invocation when POST /bots names none — an explicit request `language` wins. Pins every STT call, so a single-language deployment stops auto-detect mislabeling short windows as other languages. Applies to a Settings-configured STT backend too (it names the speech, not the backend). Helm plumbing is a declared follow-up (deploy/helm/README.md) — use extraEnv there for now",
+   "targets": [
+    "compose",
+    "lite"
+   ]
+  },
+  {
    "key": "TRANSCRIBE_ENABLED",
    "class": "defaulted",
    "default": "true",
