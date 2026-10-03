@@ -24,7 +24,16 @@ const el = () => ({ dataset: {} as Record<string, string>, style: {} as Record<s
 const win: any = globalThis as any;
 win.window = win;
 win.document = { body: { appendChild: () => {} }, createElement: () => el(), addEventListener: () => {} };
-win.MediaStream = class { tracks: any[]; constructor(t: any[] = []) { this.tracks = t; } getAudioTracks() { return this.tracks; } };
+// A real MediaStream always carries an `id`, and the hook now reads it to refuse Jitsi's SDP
+// placeholders (`mixedmslabel` / `default` — see jitsi-placeholder.test.ts). An id-less stub would
+// be refused as "no evidence of a participant", so the stub carries one, defaulting to a
+// participant-shaped id.
+let nextStreamId = 0;
+win.MediaStream = class {
+  id: string; tracks: any[];
+  constructor(t: any[] = [], id?: string) { this.tracks = t; this.id = id ?? `remote-stream-${nextStreamId++}`; }
+  getAudioTracks() { return this.tracks; }
+};
 
 /** A peer connection that, like the real patched one, delivers each track event down BOTH paths. */
 class FakePC {
