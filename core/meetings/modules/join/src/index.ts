@@ -23,6 +23,7 @@ import { joinJitsiMeeting, buildJitsiMeetingUrl } from "./jitsi/join";
 import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./jitsi/admission";
 import { leaveJitsiMeeting } from "./jitsi/leave";
 import { startJitsiRemovalMonitor } from "./jitsi/removal";
+import { parsePhoneTarget, phoneNativeMeetingId, phonePlatformEnabled } from "./phone/link";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
@@ -33,7 +34,10 @@ export { startDebugView, setHooks };
 // build on this ONE set (browser-args.ts), so join↔bot flags never drift.
 export { JOIN_BROWSER_ARGS, getJoinBrowserArgs };
 
-export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
+// "phone" is the DIAL-IN platform (a conference speakerphone calls a number): it has no browser
+// join flow at all, so it is a member of this vocabulary and an explicit REFUSAL in joinMeeting —
+// never a silent fallthrough. Feature-flagged behind VEXA_PHONE_PLATFORM=1; see ./phone/link.ts.
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "phone";
 
 export interface JoinResult {
   admitted: boolean;
@@ -60,6 +64,10 @@ export interface JoinOptions {
 
 /** Infer the platform from the meeting URL. Throws on an unrecognized host. */
 export function resolvePlatform(meetingUrl: string): Platform {
+  // Dial-in first: a tel:/sip: URI has no hostname to inspect and belongs to no web platform.
+  // Gated on VEXA_PHONE_PLATFORM inside parsePhoneTarget, so with the flag unset this line is a
+  // null check and every URL below resolves exactly as it did before the phone platform existed.
+  if (parsePhoneTarget(meetingUrl)) return "phone";
   if (meetingUrl.includes("meet.google.com")) return "google_meet";
   if (meetingUrl.includes("teams.microsoft.com") || meetingUrl.includes("teams.live.com")) return "teams";
   // Canonical zoom.us / *.zoom.us only — white-label portals (LFX etc.) can't be
@@ -124,6 +132,14 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     admitted = await waitForGoogleMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
     );
+  } else if (platform === "phone") {
+    // A dial-in call has no page to drive: the room's speakerphone calls a number and the audio
+    // arrives as RTP from a SIP trunk. Refused HERE, loudly, rather than handed a Page it would
+    // fail on minutes later — the capture path is the phone adapter in @vexa/bot, not this layer.
+    throw new Error(
+      "Platform 'phone' does not join through a browser page — a dial-in call is captured by the " +
+      "phone adapter (core/meetings/services/bot/src/phone-adapter.ts), not by this join layer",
+    );
   } else {
     // Explicit refusal, never a fallthrough: an unknown platform used to silently run the GOOGLE
     // MEET join flow against whatever URL it was handed — the wrong flow on the wrong site, failing
@@ -136,6 +152,9 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
   return { admitted: !!admitted, state: admitted ? "admitted" : "awaiting_admission" };
 }
 
+// Dial-in (phone): address parsing + per-call identity. Pure string logic, no page, no transport.
+export { parsePhoneTarget, phoneNativeMeetingId, phonePlatformEnabled } from "./phone/link";
+export type { PhoneTarget } from "./phone/link";
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
 // AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing).
 // It is THROWN by the join/admission path; the JoinDriver adapter catches it and maps the outcome → a
