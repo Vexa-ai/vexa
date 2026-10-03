@@ -427,24 +427,41 @@ export async function run({ event, config, token, apiBase = "https://api.github.
   const results = [];
   const repo = event.repository.full_name;
   for (const pr of pullRequests) {
-    const comments = await commentsForPullRequest(repo, pr.number, apiBase, token);
-    const evidence = needsStanding(pr, config) ? await gatherEvidence(repo, pr, config, apiBase, token) : {};
-    results.push({ pr, verdict: evaluatePullRequest(pr, comments, config, evidence) });
+    results.push({ pr, verdict: await verdictFor(repo, pr, config, apiBase, token) });
   }
   const headSha = event.merge_group?.head_sha || pullRequests[0].head.sha;
   return publishRightsCheck(event, headSha, results, apiBase, token);
 }
 
+// A read that fails while evaluating a PR is that PR's verdict: the check fails closed on its head and
+// says why, instead of leaving an earlier verdict standing.
+async function verdictFor(repo, pr, config, apiBase, token) {
+  try {
+    const comments = await commentsForPullRequest(repo, pr.number, apiBase, token);
+    const evidence = needsStanding(pr, config) ? await gatherEvidence(repo, pr, config, apiBase, token) : {};
+    return evaluatePullRequest(pr, comments, config, evidence);
+  } catch (error) {
+    return {
+      ok: false,
+      title: "Contribution rights could not be evaluated",
+      summary: `Reading GitHub failed, so this check fails closed. Any new comment, edit or push re-runs it.\n\n${error.message}`,
+    };
+  }
+}
+
+// The verdict is the check run published on the evaluated head, never this job's own status:
+// issue_comment and check_run runs belong to the default branch's newest commit, so a failing job
+// would mark that commit red for another PR's state.
 async function main() {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
   const config = JSON.parse(readFileSync(process.env.CONTRIBUTION_RIGHTS_CONFIG || ".github/contribution-rights.json", "utf8"));
   const ok = await run({ event, config, token: process.env.GITHUB_TOKEN });
-  if (!ok) process.exitCode = 1;
+  console.log(ok ? "Published a passing verdict." : "Published a failing verdict on the evaluated head.");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(error);
-    process.exitCode = 1;
+    console.log(`::error title=contribution-rights not published::${String(error.message).split("\n")[0]}`);
   });
 }

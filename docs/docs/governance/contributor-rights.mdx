@@ -20,13 +20,20 @@ Technical review may continue during rights review. A later push invalidates a c
 verification, and only a designated verifier can bind a private receipt to the new head. Executed
 agreements, signatures, addresses, and employment information never belong in public PR comments.
 
+The verdict is the `contribution-rights` check on the pull request's head (or the merge queue's
+head), and it always says why. The job that computes it never fails on a verdict: comments and DCO
+results run it on the default branch's newest commit, so a failing job would mark `main` red for
+another pull request's state. A failed GitHub read is published as a failing verdict on the head it
+was evaluating.
+
 ## Agent-assisted flow
 
 Agents automate Git, not legal judgment. They ask the human to choose the path once, check the
 repository-local Git identity, use `--signoff` after authorization, identify failing commits by
 SHA, and prepare safe remediation. They may carry forward a path the human already declared, but
 never make the first choice, sign for another person, or rewrite/push history without explicit
-approval.
+approval. Every commit an agent makes on the maintainer's own work carries the maintainer's
+`Signed-off-by`, under the maintainer's standing declaration.
 
 For the latest unsigned commit:
 

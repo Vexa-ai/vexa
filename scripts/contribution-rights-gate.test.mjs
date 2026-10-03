@@ -516,3 +516,33 @@ test("run: a PR beyond the 250-commit list is read through the compare endpoint"
     mock.restore();
   }
 });
+
+test("run: a failed read is published as a failing verdict on the PR head, not thrown", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.includes("/comments")) return { ok: false, status: 502, json: async () => ({}), text: async () => "bad gateway" };
+    return { ok: true, status: 201, json: async () => ({}), text: async () => "" };
+  };
+  try {
+    const event = { repository: { full_name: "Vexa-ai/vexa" }, pull_request: pr() };
+    assert.equal(await run({ event, config, token: "t", apiBase: "https://example.test" }), false);
+    const published = JSON.parse(calls.find((c) => c.url.endsWith("/check-runs")).options.body);
+    assert.equal(published.head_sha, sha);
+    assert.equal(published.conclusion, "failure");
+    assert.match(published.output.summary, /fails closed[\s\S]*502/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("the job never fails on a verdict, and default-branch runs are never cancelled by each other", () => {
+  const gate = readFileSync(new URL("./contribution-rights-gate.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(gate, /process\.exit/, "the verdict is the published check run, not the job status");
+  const workflow = readFileSync(new URL("../.github/workflows/contribution-rights.yml", import.meta.url), "utf8");
+  const group = workflow.match(/^\s+group:\s*(.+)$/m)[1];
+  assert.match(group, /github\.event_name/);
+  assert.match(group, /github\.run_id/, "issue_comment and check_run runs get a group of their own");
+  assert.doesNotMatch(group, /github\.event\.issue\.number/, "comment runs on one PR must not cancel each other");
+});
