@@ -338,6 +338,15 @@ export const googleCameraButtonSelectors: string[] = [
   'button[aria-label*="Turn on camera"]'
 ];
 
+// Meet's camera control is a TOGGLE whose aria-label names the ACTION, not the current
+// state: "Turn off camera" exists only while the camera is ON, "Turn on camera" only while
+// it is OFF. Split out so a caller can DRIVE the toggle to a wanted state instead of
+// blindly clicking it — the mixed list above cannot express that, since its first entry
+// matches only one of the two states. Locale-safe for the same reason as the rest of this
+// file: --lang pins the browser UI to en-US (#856).
+export const googleCameraOnIndicatorSelector = 'button[aria-label*="Turn off camera"]';
+export const googleCameraOffIndicatorSelector = 'button[aria-label*="Turn on camera"]';
+
 export const googleMicrophoneButtonSelectors: string[] = [
   '[aria-label*="Turn off microphone"]',
   'button[aria-label*="Turn off microphone"]',

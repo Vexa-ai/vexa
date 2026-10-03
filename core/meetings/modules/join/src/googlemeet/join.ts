@@ -5,7 +5,8 @@ import {
   googleNameInputSelectors,
   googleJoinButtonSelectors,
   googleMicrophoneButtonSelectors,
-  googleCameraButtonSelectors,
+  googleCameraOnIndicatorSelector,
+  googleCameraOffIndicatorSelector,
   googleAuthJoinCtaSelectors,
   googleSignedOutLobbyProbeSelectors,
   googleLobbyIconGlyphSelectors,
@@ -13,7 +14,7 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
-import { resolveBotUiLocale } from "../browser-args";
+import { resolveBotUiLocale, resolveCameraEnabled } from "../browser-args";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -180,6 +181,55 @@ async function observedPageContext(page: Page): Promise<string> {
     return `url=${url} html.lang=${ctx.lang || "?"} navigator.language=${ctx.nav || "?"}`;
   } catch {
     return `url=${url} html.lang=? navigator.language=?`;
+  }
+}
+
+/**
+ * Drive Meet's camera toggle to an ASSERTED state instead of assuming one.
+ *
+ * Meet's control is a toggle whose aria-label names the ACTION, not the state:
+ * "Turn off camera" is only present while the camera is ON, "Turn on camera" only while it
+ * is OFF. So the button to click is always the one advertising the transition we want.
+ *
+ * Both directions have to be asserted, because not clicking is not the same as turning the
+ * camera on: whether the lobby opens with the camera on or off depends on the launch flags
+ * (2026-09-01, Google Meet: with --use-fake-device-for-media-stream the lobby opens camera-ON,
+ * without it no videoinput is enumerated at all). A caller that merely skipped the mute click
+ * would broadcast nothing and show Meet's generated initial instead.
+ *
+ * Clicks go through the caller's humanized clicker: a synthetic click here bypasses the
+ * anti-detection motion the rest of the join path relies on.
+ */
+async function setGoogleCameraState(
+  page: Page,
+  wantOn: boolean,
+  clickHandle: (handle: ElementHandle<Element>, label: string) => Promise<void>,
+): Promise<void> {
+  // The button that CHANGES the state to the one we want: to turn the camera ON we click
+  // the control that is only present while it is OFF, and vice versa.
+  const selector = wantOn
+    ? googleCameraOffIndicatorSelector
+    : googleCameraOnIndicatorSelector;
+  try {
+    const handle = await page.waitForSelector(selector, { timeout: 3000 });
+    if (handle) {
+      await clickHandle(handle, "camera");
+      log(wantOn ? "Camera turned ON (BOT_CAMERA_ENABLED)." : "Camera turned off.");
+      return;
+    }
+  } catch (e) {
+    // Absent means the camera is already in the wanted state, or the control is missing.
+    // Those two are very different when diagnosing, so probe the opposite control to say
+    // which one it was instead of logging an ambiguous "already X or not found".
+  }
+  const oppositeSelector = wantOn
+    ? googleCameraOnIndicatorSelector
+    : googleCameraOffIndicatorSelector;
+  const alreadyThere = (await page.$(oppositeSelector)) !== null;
+  if (alreadyThere) {
+    log(wantOn ? "Camera was already ON." : "Camera was already off.");
+  } else {
+    log("Camera control not found at all (neither on nor off state).");
   }
 }
 
@@ -408,12 +458,11 @@ export async function joinGoogleMeeting(
       log("Microphone already muted or not found.");
     }
 
-    try {
-      const cameraHandle = await page.waitForSelector(googleCameraButtonSelectors[0], { timeout: 3000 });
-      if (cameraHandle) { await clickHandle(cameraHandle, "camera"); log("Camera turned off."); }
-    } catch (e) {
-      log("Camera already off or not found.");
-    }
+    // The camera stays off unless BOT_CAMERA_ENABLED says otherwise. A recorder bot has
+    // nothing to film, but a deployment may want to broadcast a still card (identity +
+    // "this meeting is being recorded") via BOT_FAKE_VIDEO_FILE, which requires the
+    // camera to be ON. Default is unchanged: off.
+    await setGoogleCameraState(page, resolveCameraEnabled(), clickHandle);
 
     // Authenticated lobby: one primary CTA — "Join now" (standard join),
     // "Switch here" (same account already in the call) or "Ask to join"
@@ -471,12 +520,8 @@ export async function joinGoogleMeeting(
       log("Microphone already muted or not found.");
     }
 
-    try {
-      const cameraHandle = await page.waitForSelector(googleCameraButtonSelectors[0], { timeout: 1000 });
-      if (cameraHandle) await clickHandle(cameraHandle, "camera");
-    } catch (e) {
-      log("Camera already off or not found.");
-    }
+    // Guest lobby: same rule as the authenticated path above.
+    await setGoogleCameraState(page, resolveCameraEnabled(), clickHandle);
 
     const { handle: joinHandle } = await waitForLobbyCta(
       page,

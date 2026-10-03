@@ -44,6 +44,43 @@ export function getLocaleBrowserArgs(): string[] {
   return [`--lang=${locale}`, `--accept-lang=${acceptLang}`];
 }
 
+/**
+ * The file played as the camera feed (`.y4m` or `.mjpeg` — Chromium accepts no other
+ * format, see media/capture/video/file_video_capture_device.cc). Deployment knob in the
+ * same shape as BOT_UI_LOCALE above; the default `/dev/null` is an empty feed, so a
+ * deployment that sets nothing gets a bot with no video at all.
+ *
+ * A single frame is enough for a permanent still, because Chromium rewinds at EOF:
+ *   if (current_byte_index_ >= mapped_file_->bytes().size())
+ *     current_byte_index_ = first_frame_byte_index_;
+ *
+ * Prefer a low-frame-rate Y4M over MJPEG: MJPEG is pinned to 30 fps by the
+ * kMJpegFrameRate constant, whereas a Y4M declares its own rate in its header (F tag)
+ * and Chromium honours it for playback timing. Outgoing encode is paid in CPU, and CPU —
+ * not RAM — is what caps the number of bots per host (see the ~115%/bot figure measured
+ * for --in-process-gpu below).
+ *
+ * The path must resolve INSIDE the container: mount the file as a volume.
+ */
+export function resolveFakeVideoFile(): string {
+  const v = (process.env.BOT_FAKE_VIDEO_FILE || "").trim();
+  return v.length > 0 ? v : "/dev/null";
+}
+
+/**
+ * Should the bot keep its camera ON? Deployment knob; the default `false` switches the
+ * camera off in the lobby, which is what a recorder bot wants — it has nothing to film.
+ *
+ * Only meaningful together with BOT_FAKE_VIDEO_FILE: a camera on with no file broadcasts
+ * nothing. The `cameraEnabled` field in the invocation.v1 contract expresses the same
+ * intent per-invocation; this knob is deployment-wide and is what the join lane reads,
+ * for the same reason BOT_UI_LOCALE is (modules never import services).
+ */
+export function resolveCameraEnabled(): boolean {
+  const v = (process.env.BOT_CAMERA_ENABLED || "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
 export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--incognito",
   "--no-sandbox",
@@ -64,7 +101,9 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   // Start AudioContexts in 'running', not 'suspended' — the capture taps remote participant audio
   // via createMediaStreamSource; without this the worklet never fires and no PCM flows. (L4.)
   "--autoplay-policy=no-user-gesture-required",
-  "--use-file-for-fake-video-capture=/dev/null",
+  // --use-file-for-fake-video-capture is NOT here: it resolves a deployment knob at call
+  // time, so it lives in getJoinBrowserArgs() alongside the locale flags. No caller reads
+  // this array directly — every launch path goes through getJoinBrowserArgs().
   "--disable-blink-features=AutomationControlled",
   "--disable-features=VizDisplayCompositor",
   "--disable-site-isolation-trials",
@@ -74,5 +113,21 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
  *  the pinned-locale flags (#856) so every launch path — production bot and the
  *  debug harness — is byte-identical and speaks the same UI language. */
 export function getJoinBrowserArgs(): string[] {
-  return [...JOIN_BROWSER_ARGS, ...getLocaleBrowserArgs()];
+  const fakeVideoFile = resolveFakeVideoFile();
+  const args = [...JOIN_BROWSER_ARGS];
+
+  // The two flags are one mechanism and ship together. --use-file-for-fake-video-capture
+  // names the frames; --use-fake-device-for-media-stream is what makes Chromium ADVERTISE a
+  // capture device for them to feed. Without the latter, no videoinput is enumerated in the
+  // container at all: Meet has no camera to turn on, the file is never read, and the bot
+  // shows Meet's generated initial (2026-09-01, Google Meet).
+  //
+  // Gated on an actual file because the device flag also replaces the MICROPHONE with a
+  // synthetic beep — a deployment with no BOT_FAKE_VIDEO_FILE must not inherit that beep.
+  if (fakeVideoFile !== "/dev/null") {
+    args.push("--use-fake-device-for-media-stream");
+  }
+  args.push(`--use-file-for-fake-video-capture=${fakeVideoFile}`);
+
+  return [...args, ...getLocaleBrowserArgs()];
 }
