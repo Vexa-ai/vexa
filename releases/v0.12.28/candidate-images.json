@@ -1,0 +1,227 @@
+{
+  "schema_version": 2,
+  "release": "v0.12.28",
+  "stable_tag": "v0.12.28",
+  "candidate_tag": "v0.12.28-rc.1",
+  "build_source": "f85c12c0da2e3075c469ce6a66ab6e24f4660e4a",
+  "validation_source": "f85c12c0da2e3075c469ce6a66ab6e24f4660e4a",
+  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/37152287534",
+  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37152287534",
+  "images": {
+    "vexaai/v012-admin-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:f9c2ecaf63d96f737445edc0a2f85cc5c462763ef79d98ab1fcd963d35500f56",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:93b996a3b9a27760b5c2ab2fcddddd99e7bc2e9e4751c6c50bd222f1e772a157",
+          "config_digest": "sha256:fb4128291d8ce176986b3c83f698596b99841b0f1f149711f0ba4edbd6ae287c"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:d4f30f45d23d7b19ac624ddc67b77f3f5f81b504f18cf120ded9b8ac5387bfdd",
+          "config_digest": "sha256:aa62e628dc121b2d66d2af96fc953ce0ee332b906a772e6e54176d0cfd563567"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-runtime": {
+      "class": "prod_deployed",
+      "digest": "sha256:600a72697cab372885ff326fa4f08b37337c1f40e985e1f0ab07e573b900a4e7",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:8d7176c098f67e01fb5aa90d42ccf2f368edc4d8636a6bcacb7fb22c26fd565b",
+          "config_digest": "sha256:4d0c28a00b8f007edad0ee02295bcde47c4955166337daf8c7ec6acaa415dfa9"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:a4104b54c7d30e27c4ce2400786a1e580e4cbc1b6ead0ba1ec39864087d0bf79",
+          "config_digest": "sha256:c74e9d6212b8f2035b911ffe5104b4b9de421ca08671edf6b658370a6a7ababf"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-agent-api": {
+      "class": "oss_only",
+      "digest": "sha256:8ebea95412172f22375051fbc946bcceb32ba9f537e88d2c08b01ca36d585554",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:bf4484fa72e1f38d261e762b995518d721c3a95783f1186a3ec3a3237671dfb3",
+          "config_digest": "sha256:825ab639fbb5dc3c6937f907ece2e59d429be59247f53ae2a6bc15f2e77ed956"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:a063389fe571ef5f7417d17194cadff50b8c09e17778671031acf9d320d35142",
+          "config_digest": "sha256:f118ea141eabaf06b8a79bea5093d47c8b04b234ef7300d42281bc7f93222b71"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-meeting-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:7820064288aad5331bee3db936fc5a7eec4a5c2dd58842fbaa7c0f671e24cd88",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:7a60c2330c01576244bcd90e8dc855ba256986f091877c679ffa7ad1c960f2e9",
+          "config_digest": "sha256:a00ce45d544b72257e5877f9fbfdaf2873c41018e030692c675e5691d5275f30"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:478d416aad53e4effaebb587fc172ff03278a2c7385d8405176f1e29d6b3d784",
+          "config_digest": "sha256:de0ac3c73a68fb481548943d7914b5e5e62e3944f9b37df62c8234c9c3b767da"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-gateway": {
+      "class": "prod_deployed",
+      "digest": "sha256:a4ee15130d3ae3e9099db1ca067b6b77f6ae7dbcdc1595eed60ecb927b1c2636",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:b1a897b3ceebe55bdc91b88686cc1354602293c00864279a5ef6776fa0e52ca4",
+          "config_digest": "sha256:437c12fb9ad25531367c853adf5da87512d3e7ef65b14f8c0152acd5b34c482c"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:c995b093f175649fea1e1f5ddcfbd997d038c258d620d763d97b714538bcf270",
+          "config_digest": "sha256:13ab87c33699533846d724f37ce802fa1d593e192eaed5dc0f97c48c10d17bf7"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-mcp": {
+      "class": "oss_only",
+      "digest": "sha256:26d615dedb532deb2a315124a6edb1840b236b4fdf31d5bf388c28beb562c3f4",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:95f511f8f31a06f361e35367654a93663929e788ef66d93ab2bef2ff23cc200e",
+          "config_digest": "sha256:c2b5b5a6d85e721a85900a429f7aa7b5c325e1abbf0e9a5966686986c24b29ef"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:24f90513bf9cbc3c39da6d999ab6048715ea96f3827f4049d96eefd9b30d4713",
+          "config_digest": "sha256:3b50ed34216259ad8bfc566aa863a6555366064870f9a182934c236b0148cbe8"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/vexa-bot": {
+      "class": "prod_deployed",
+      "digest": "sha256:75bad90aabd45155ea88e425eefbab679762d8ae7daba9cb466f75f7f00d1c1e",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:75bad90aabd45155ea88e425eefbab679762d8ae7daba9cb466f75f7f00d1c1e",
+          "config_digest": "sha256:8224974816bffd30c8052890f8d42c24b8af9304b121ac21df94842cd001acf1"
+        }
+      },
+      "attestations": false,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-flows": {
+      "class": "oss_only",
+      "digest": "sha256:6ee1363ac99a2fbda6bbf7af742f867b23d11f198bc9cb04abe456da665e3fe7",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:61ef7feeba984a2866be6d58fd1eccaca6d296adea80c8ee1cfaaacd87cc7e1b",
+          "config_digest": "sha256:15d9fe4fd4696e9c535dfd19f38136b1d9a5cb33553352d8af3b1b6f708821ed"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:989af7567d78748c536d5f76958712d6ceb84de579b28b99741f3ec0bff89a28",
+          "config_digest": "sha256:8cacaf582922a973fb60a7c9b459cd1f965e2bca69e7b67da53110cf28c59dca"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-agent-worker": {
+      "class": "oss_only",
+      "digest": "sha256:36a899ecf7d633d64a27b15bd9db4243ae1646bf671f87bf9fd3043ed0a0f60d",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:d925c1b07e5e3e3e992c68a34bf66d08d518bcb819d9a08fd90a269f98c02fa9",
+          "config_digest": "sha256:b982264eea0288e8b3d758df27ad7f9d54a2d7215f320bdfdb2091d5b6f46d4a"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:e53478654fb3a3f6e68dcfa1755ee1a3c0c498111ab518fe97e4302ca2222d12",
+          "config_digest": "sha256:0e21465f4bcfd69f5129b88929aaa98f47c3c2fa713644b47899251848d4e29f"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/v012-terminal": {
+      "class": "oss_only",
+      "digest": "sha256:f330be2dfd1dbd0778465fcb6046d5cbbe8a065629817265f7e914e5047b71e1",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:de3da0779b84cefe681c3cdd73a76a2a32ef19d2d25d701ee9467a9932cb7233",
+          "config_digest": "sha256:d0009e2ae9e5f6ba6c87a3c3b6cecb574e366642fa276dd0c589a1ab53f96cbb"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:c49e97498b1a10ff6317252a7c0003af8d60865dc41084ecf7adf9ad666ca7bf",
+          "config_digest": "sha256:c51ca5256f950e61d1a27bf01f51fc926cfc1e24e40b4f6a63ebd5f369ab4068"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    },
+    "vexaai/vexa-lite": {
+      "class": "oss_only",
+      "digest": "sha256:57b23ef8f94efa4ff59e19c4db8bc2db330714c8d1167d6227e955a54c22e9d7",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:e72a05e6f2172c3e83e0bdb63805c497bce29f4fff03eee4b705a54a9a9d3533",
+          "config_digest": "sha256:816066e9052b30a9b7e6da2ed17942abe18dba6ef5e1957da2e54ac3420b3a3a"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:bc7696059e5d165f57618b1855752a4434519a8f56d17874fa795627c6d6386c",
+          "config_digest": "sha256:6e38b44051eddf38eb335fde641e8d89fc88e706c62ddd8aa7188435779e24a9"
+        }
+      },
+      "attestations": true,
+      "evidence": "Registry readback of v0.12.28-rc.1 from build run 37152287534, source f85c12c0da2e3075c469ce6a66ab6e24f4660e4a"
+    }
+  }
+}
