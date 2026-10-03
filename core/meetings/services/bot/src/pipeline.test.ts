@@ -150,6 +150,28 @@ async function main(): Promise<void> {
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
   }
 
+  // Observe the actual request timer installed by the real client, without waiting 30 seconds.
+  {
+    const realFetch = globalThis.fetch;
+    const realSetTimeout = globalThis.setTimeout;
+    const deadlines: number[] = [];
+    try {
+      globalThis.setTimeout = ((fn: (...args: any[]) => void, ms?: number, ...args: any[]) => {
+        deadlines.push(ms ?? 0);
+        return realSetTimeout(fn, ms, ...args);
+      }) as typeof setTimeout;
+      globalThis.fetch = async () => new Response(JSON.stringify({ text: '', segments: [] }), { status: 200 });
+      const pcm = new Float32Array(1600).fill(0.05);
+      await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test', transcriptionRequestTimeoutMs: 1200 }))(pcm);
+      await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
+      check('configured request deadline rides invocation; absent retains 30000 ms',
+        deadlines[0] === 1200 && deadlines[1] === 30000, JSON.stringify(deadlines));
+    } finally {
+      globalThis.fetch = realFetch;
+      globalThis.setTimeout = realSetTimeout;
+    }
+  }
+
   // ── 5) LEGACY MIXED LANE (Zoom/Jitsi) speaker-label boundary (#890): a turn the lane has NOT
   //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
   //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display
