@@ -25,7 +25,7 @@ never reaches into other services directly.
 
 ## Tools
 
-Nine tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
+Fifteen tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
 `vexa.teams_link_help`).
 
 | Tool | Wraps |
@@ -39,9 +39,22 @@ Nine tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `
 | `get_meeting_transcript` | `GET /transcripts/{platform}/{native}` |
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
+| `search_transcripts` | `GET /transcripts/search` |
+| `annotate_meeting` | `POST /meetings/{platform}/{native}/annotate` |
+| `get_meeting_chat` | `GET /bots/{platform}/{native}/chat` |
+| `speak_in_meeting` | `POST /bots/{platform}/{native}/speak` |
+| `report_issue` | files a ticket with the Vexa maintainers (the deployment's ticket sink) |
+| `delete_meeting_artifacts` | `DELETE /meetings/{platform}/{native}` — **irreversible erasure** |
 
 `update_bot_config` wraps a route that is not wired in the v0.12 open core and returns `404` — see
-[Meetings API → Manage the bot](/api/meetings#manage-the-bot). The other eight reach live routes.
+[Meetings API → Manage the bot](/api/meetings#manage-the-bot). The others reach live routes.
+
+<Warning>
+`delete_meeting_artifacts` destroys data and cannot be undone: the meeting's transcript, the notes
+and share links derived from it, its recordings, and the captured-signal tape Vexa keeps for
+debugging all go. Only a meeting that has ended can be erased; one still running answers `409`.
+See [Meetings API → Edit a plan or delete meeting artifacts](/api/meetings).
+</Warning>
 
 ## Connect a client
 
