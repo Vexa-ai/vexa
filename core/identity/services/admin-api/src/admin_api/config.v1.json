@@ -3,6 +3,20 @@
  "service": "admin-api",
  "keys": [
   {
+   "key": "VEXA_RAMP_BOTS_DEFAULT",
+   "class": "defaulted",
+   "default": "2",
+   "description": "per-account new-bot allowance per ramp window when user.data has no ramp_bots; zero is depleted. Runtime override; deployment templates use the service default.",
+   "targets": []
+  },
+  {
+   "key": "VEXA_RAMP_WINDOW_S_DEFAULT",
+   "class": "defaulted",
+   "default": "300",
+   "description": "per-account ramp window in seconds when user.data has no ramp_window_s; minimum one second. Runtime override; deployment templates use the service default.",
+   "targets": []
+  },
+  {
    "key": "INTERNAL_API_SECRET",
    "class": "required-explicit",
    "secret": true,

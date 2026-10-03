@@ -3,6 +3,7 @@
 These are the wiring used when the gateway runs for real: an ``httpx.AsyncClient`` for the
 admin-api token-validation hop, the meeting-api forward, and the ``/ws`` subscribe-authorization
 hop; a ``redis.asyncio`` client for the ``/ws`` fan-in.
+``X-User-Limits`` carries the ceiling and optional ramp through the shared header encoder.
 
 v0.12 P2 folded the transcription-collector INTO meeting-api (one modular monolith), so both the
 proxy forward AND the ``/ws/authorize-subscribe`` hop target meeting-api — there is no longer a
@@ -24,6 +25,7 @@ from typing import Optional
 
 from .obs import TRACE_HEADER, get_trace_id
 from .ports import AuthUnavailable
+from . import user_limits
 
 
 class HttpxDownstreamClient:
@@ -125,7 +127,7 @@ class AdminApiAuthorizer:
         if user_data:
             auth_headers["x-user-id"] = str(user_data["user_id"])
             auth_headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
+            auth_headers["x-user-limits"] = user_limits.user_limits_header(user_data)
         try:
             resp = await self._client.post(
                 f"{self._meeting_api_url}/ws/authorize-subscribe",

@@ -8,11 +8,13 @@ HTTP status the gateway forwards verbatim:
   * 201 + ``api.v1`` MeetingResponse on success,
   * 409 when the user already has an active meeting for (platform, native_id),
   * 429 when the runtime kernel rejects the spawn for owner quota,
+  * 429 + ``Retry-After`` when the optional ``X-User-Limits`` creation-window ramp is depleted,
   * 502 when the kernel could not start the workload.
 """
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -33,6 +35,7 @@ from .ports import (
     MeetingRepo,
     MeetingStopped,
     QuotaExceeded,
+    RampExceeded,
     RuntimeClient,
     SpawnFailed,
     TranscriptionNotConfigured,
@@ -205,30 +208,44 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
-def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
-    """Parse the gateway's ``X-User-Limits`` header → the per-user max-bots cap (P3e).
+def _ramp_from_mapping(mapping) -> Optional[tuple[int, int]]:
+    """Resolve the optional ramp directly from header JSON or an identity context mapping."""
+    bots, window_s = mapping.get("ramp_bots"), mapping.get("ramp_window_s")
+    if (type(bots) is int and bots >= 0
+            and type(window_s) is int and window_s >= 1):
+        return bots, window_s
+    return None
 
-    The gateway resolves the user via ``/internal/validate`` (identity.v1) and forwards the limit as
-    a header (the parent's ``auth.validate_request`` reads ``X-User-Limits`` as a bare int or a JSON
-    ``{"max_concurrent_bots"|"max_concurrent": …}``). Absent/unparseable → ``None`` (no pre-check).
-    ``0`` is a REAL value (quota depleted — every spawn rejected), not absence."""
+
+def _resolve_limits(
+    x_user_limits: Optional[str],
+) -> tuple[Optional[int], Optional[tuple[int, int]]]:
+    """Read a bare ceiling or JSON ceiling + optional ``ramp_bots`` / ``ramp_window_s``.
+
+    Missing/unparseable limits are absent; zero is depleted, never absence. A ramp is
+    present only when both dials are integers in their declared ranges.
+    """
     if not x_user_limits:
-        return None
+        return None, None
     raw = x_user_limits.strip()
     try:
-        return int(raw)
+        return int(raw), None
     except (TypeError, ValueError):
         pass
     try:
-        import json
-
         obj = json.loads(raw)
         if isinstance(obj, dict):
             v = obj.get("max_concurrent_bots", obj.get("max_concurrent"))
-            return int(v) if v is not None else None
-    except Exception:
-        return None
-    return None
+            max_concurrent = int(v) if v is not None else None
+            return max_concurrent, _ramp_from_mapping(obj)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None, None
+
+
+def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
+    """Compatibility wrapper for callers that only need the ceiling."""
+    return _resolve_limits(x_user_limits)[0]
 
 
 def _passcode_from_url(meeting_url: str) -> Optional[str]:
@@ -273,7 +290,7 @@ def build_router(
         x_user_webhook_events: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        max_concurrent = _resolve_max_concurrent(x_user_limits)
+        max_concurrent, ramp = _resolve_limits(x_user_limits)
         # Per-user webhook config the gateway forwarded from identity (persisted into meeting.data).
         webhook_events = None
         if x_user_webhook_events:
@@ -475,6 +492,7 @@ def build_router(
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
                 continue_meeting=bool(body.get("continue_meeting", False)),
                 max_concurrent=max_concurrent,
+                ramp=ramp,
                 webhook_url=x_user_webhook_url,
                 webhook_secret=x_user_webhook_secret,
                 webhook_events=webhook_events,
@@ -523,6 +541,9 @@ def build_router(
             raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
+        except RampExceeded as e:
+            raise HTTPException(status_code=429, detail=str(e),
+                                headers={"Retry-After": str(e.retry_after_s)})
         except (MaxBotsExceeded, QuotaExceeded) as e:
             raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached")
         except SpawnFailed as e:

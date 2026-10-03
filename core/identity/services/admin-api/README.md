@@ -18,6 +18,8 @@ service stays out of the identity business. Python because it carves the parent 
 
 ## Contracts
 
+Beside `max_concurrent_bots`, admin PATCH sets `ramp_bots` / `ramp_window_s` in `User.data`; account responses, `/internal/validate`, and `/internal/users/{id}/bot-context` resolve missing dials from `VEXA_RAMP_BOTS_DEFAULT` / `VEXA_RAMP_WINDOW_S_DEFAULT` and expose both fields.
+
 **Owns:** [`core/identity/contracts/identity.v1`](../../contracts/identity.v1) — `ScopedToken`
 (`subject`, `scopes[]` ∈ `{bot,tx,browser}`, `expires_at`), `AccessDecision` (default-deny verdict),
 `ResourceKind`. Sealed in [`contracts.seal.json`](../../../../contracts.seal.json).

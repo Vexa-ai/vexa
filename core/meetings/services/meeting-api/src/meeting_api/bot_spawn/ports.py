@@ -12,6 +12,8 @@ and in-process fakes in tests.
 
 Each is a ``typing.Protocol`` so the app depends on BEHAVIOR, not a concrete client. ``adapters.py``
 supplies the production implementations; the module's tests supply in-process fakes.
+The meeting store enforces the ceiling and optional creation-window ramp under one per-user lock;
+``RampExceeded`` carries the seconds until the next slot for HTTP ``Retry-After``.
 """
 from __future__ import annotations
 
@@ -81,27 +83,45 @@ class MeetingRepo(Protocol):
         native_meeting_id: str,
         data: dict,
         max_concurrent: Optional[int] = None,
+        ramp: Optional[tuple[int, int]] = None,
         exclude_meeting_id: Optional[int] = None,
     ) -> dict:
-        """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
+        """ATOMIC dedup + cap + ramp + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
 
         A ``max_concurrent <= 0`` means the user's quota is DEPLETED (0 = no bots, never
         "unlimited"): raise ``MaxBotsExceeded`` immediately, before any of the steps below.
         Only ``max_concurrent=None`` (no cap provided) skips the cap gate.
 
-        Performs, in a SINGLE transaction with NO yield point between the checks and the insert:
+        Performs, in a SINGLE transaction holding the per-user lock through the checks and insert:
           1. dedup — if the user already has an ACTIVE row for ``(platform, native_meeting_id)``,
              raise ``DuplicateMeeting`` (→ HTTP 409);
           2. cap — if ``max_concurrent`` is set and the user already has ``>= max_concurrent`` ACTIVE
              bots (``browser_session`` excluded; ``exclude_meeting_id`` not counted), raise
              ``MaxBotsExceeded`` (→ HTTP 429);
-          3. insert the ``Meeting`` row (status ``requested``) and return it as a dict.
+          3. ramp — when ``ramp=(bots, window_s)`` is supplied, count this user's creations in
+             the last window, ANY status, excluding ``browser_session`` and ``exclude_meeting_id``.
+             At the allowance (including zero), raise ``RampExceeded`` (→ HTTP 429 + Retry-After).
+             ``None`` leaves the existing behavior unchanged.
+          4. claim a planned row or insert the ``Meeting`` row and return it as a dict.
 
         The real (SQLAlchemy) adapter serializes concurrent spawns for the SAME user with a per-user
-        ``pg_advisory_xact_lock`` and backstops dedup with a unique partial index on active rows; the
-        in-memory fake performs the check+insert with no ``await`` between them so the race closes
+        ``pg_advisory_xact_lock``: both the ceiling and ramp count run under that SAME lock,
+        before the claim/insert. It backstops dedup with a unique partial index on active rows; the
+        in-memory fake performs the check+insert with no suspension point between them so the race closes
         offline too. Replaces the old separate ``find_active`` + ``count_active_bots`` +
         ``create_meeting`` pre-check sequence on the fresh-insert path."""
+        ...
+
+    async def count_recent_spawns(
+        self, user_id: int, window_s: int, exclude_meeting_id: Optional[int] = None,
+    ) -> tuple[int, int]:
+        """Return (recent creation count, seconds until the oldest counted creation expires).
+
+        Count this user's rows of any status, excluding ``browser_session`` and the optional
+        meeting id. An empty window returns ``window_s`` as the retry delay. Guarded inserts
+        share their locked transaction with this count; continued runs use it before reopening
+        and include the reused row's prior creation in the count.
+        """
         ...
 
     async def reopen_meeting(
@@ -290,6 +310,20 @@ class MaxBotsExceeded(Exception):
         self.user_id = user_id
         self.cap = cap
         super().__init__(f"User has reached the maximum concurrent bot limit ({cap}).")
+
+
+class RampExceeded(Exception):
+    """The per-account creation-window allowance is depleted — HTTP 429 + Retry-After."""
+
+    def __init__(self, user_id: int, ramp_bots: int, ramp_window_s: int, retry_after_s: int):
+        self.user_id = user_id
+        self.ramp_bots = ramp_bots
+        self.ramp_window_s = ramp_window_s
+        self.retry_after_s = retry_after_s
+        super().__init__(
+            f"Ramp limit: at most {ramp_bots} new bots per {ramp_window_s} s for this account; "
+            f"retry in {retry_after_s} s"
+        )
 
 
 class AuthSessionNotConfigured(Exception):

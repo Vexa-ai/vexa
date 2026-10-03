@@ -3,6 +3,7 @@
 Thin translations of the ports to the concrete clients, exactly as the parent's
 ``meetings.request_bot`` did (SQLAlchemy INSERTs for the meeting + session; an httpx POST to the
 runtime kernel's ``POST /workloads``). They carry NO test logic.
+The per-account ramp counts creations of any status under the same advisory lock as the ceiling.
 
 Heavy imports (SQLAlchemy, httpx) are LAZY (inside the methods / ``build_production_router``) so the
 package can be imported and unit-tested with the in-memory fakes without those runtime deps in the
@@ -11,7 +12,8 @@ gate venv — which is why ``pyproject.toml`` needs no ``greenlet`` pin.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from math import ceil
 from typing import Optional
 
 from ..lifecycle.machine import dominant_completion_reason
@@ -21,6 +23,7 @@ from .ports import (
     MaxBotsExceeded,
     MeetingStopped,
     QuotaExceeded,
+    RampExceeded,
     SpawnFailed,
     WorkloadUnknown,
     _archive_completion,
@@ -456,17 +459,55 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def count_recent_spawns(
+        self, user_id, window_s, exclude_meeting_id=None, *, _db=None, _claimable_id=None,
+    ) -> tuple[int, int]:
+        """Count recent creations and compute the retry delay from the same database clock.
+
+        Guarded inserts pass their session so this query remains under the SAME advisory lock
+        through claim/insert; standalone continuation pre-checks use a fresh session. A planned
+        row about to be claimed is excluded in addition to any explicit exclusion.
+        """
+        from sqlalchemy import func, select
+
+        from ..sessions.models import Meeting
+
+        if _db is None:
+            async with self._session_factory() as db:
+                return await self.count_recent_spawns(
+                    user_id, window_s, exclude_meeting_id, _db=db, _claimable_id=_claimable_id,
+                )
+        # Use wall time after any lock wait; both this value and created_at are naive UTC.
+        now = (await _db.execute(
+            select(func.timezone("UTC", func.clock_timestamp()))
+        )).scalar_one()
+        statement = select(func.count(), func.min(Meeting.created_at)).where(
+            Meeting.user_id == user_id,
+            Meeting.platform != "browser_session",
+            Meeting.created_at > now - timedelta(seconds=window_s),
+        )
+        for excluded in (exclude_meeting_id, _claimable_id):
+            if excluded is not None:
+                statement = statement.where(Meeting.id != excluded)
+        count, oldest = (await _db.execute(statement)).one()
+        retry_after_s = window_s if oldest is None else max(1, ceil(
+            (oldest + timedelta(seconds=window_s) - now).total_seconds()
+        ))
+        return count, retry_after_s
+
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        ramp=None, exclude_meeting_id=None,
     ) -> dict:
-        """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
+        """ATOMIC dedup + cap + ramp + insert in ONE transaction (ROB1/ROB2).
 
         The TOCTOU-safe spawn primitive. Two layers guard it:
 
           * a per-user ``pg_advisory_xact_lock(:user_id)`` taken as the FIRST statement so concurrent
             spawns for the SAME user SERIALIZE through this txn (the lock auto-releases at commit/
-            rollback). With the lock held, the dedup query + cap COUNT + INSERT see a stable snapshot.
+            rollback). Dedup, ceiling count, ramp count and claim/insert all hold the SAME lock.
+            The ramp counts ``created_at`` in a sliding window, any status, excluding browser
+            sessions and ``exclude_meeting_id``; absent ramp preserves the existing path.
           * a unique partial index on active rows (``uq_meeting_active_user_platform_native`` — see
             sessions/models.py) as the DB-level backstop: if a racing transaction (or a different
             meeting-api process not covered by THIS advisory lock) inserted a duplicate active row, the
@@ -538,6 +579,16 @@ class SqlAlchemyMeetingRepo:
                     Meeting.status.in_(("idle", "scheduled")),
                 ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
             )).scalars().first()
+            if ramp is not None:
+                ramp_bots, ramp_window_s = ramp
+                if ramp_bots == 0:
+                    raise RampExceeded(user_id, ramp_bots, ramp_window_s, ramp_window_s)
+                count, retry_after_s = await self.count_recent_spawns(
+                    user_id, ramp_window_s, exclude_meeting_id, _db=db,
+                    _claimable_id=claimable.id if claimable is not None else None,
+                )
+                if count >= ramp_bots:
+                    raise RampExceeded(user_id, ramp_bots, ramp_window_s, retry_after_s)
             if claimable is not None:
                 planned = dict(claimable.data) if isinstance(claimable.data, dict) else {}
                 # A THIS-REQUEST dispatch supersedes an earlier stop ON THE PLAN. Legacy zombie rows

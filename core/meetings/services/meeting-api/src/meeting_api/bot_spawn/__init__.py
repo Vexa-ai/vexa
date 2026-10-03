@@ -16,15 +16,15 @@ Public surface:
   * ``request_bot(...)`` — the spawn flow (the router's core; callable directly in tests).
   * ``build_invocation`` / ``build_workload_spec`` / ``mint_meeting_token`` — the
     invocation.v1 / runtime.v1 builders + the MeetingToken minter.
-  * ``MeetingRepo`` / ``RuntimeClient`` ports + ``QuotaExceeded`` / ``SpawnFailed`` /
-    ``DuplicateMeeting``.
+  * ``MeetingRepo`` / ``RuntimeClient`` ports + ``MaxBotsExceeded`` / ``RampExceeded`` /
+    ``QuotaExceeded`` / ``SpawnFailed`` / ``DuplicateMeeting``; ramp refusals carry a retry delay.
   * ``adapters.build_production_router(...)`` — wire with real SQLAlchemy + the httpx runtime client.
   * ``fakes`` — ``InMemoryMeetingRepo`` / ``FakeRuntimeClient`` (offline drivers).
 """
 from __future__ import annotations
 
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
+from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RampExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
 from .router import build_router
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
@@ -39,6 +39,7 @@ __all__ = [
     "RuntimeClient",
     "QuotaExceeded",
     "MaxBotsExceeded",
+    "RampExceeded",
     "SpawnFailed",
     "TranscriptionNotConfigured",
     "DuplicateMeeting",
