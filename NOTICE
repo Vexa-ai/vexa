@@ -1,0 +1,25 @@
+Vexa
+Copyright 2026 Vexa AI Inc. and contributors
+This product is licensed under the Apache License, Version 2.0.
+
+Third-party notices
+-------------------
+
+python-dateutil is dual-licensed Apache-2.0 OR BSD-2-Clause. This project
+elects Apache-2.0.
+
+certifi (Mozilla CA bundle) is licensed under MPL-2.0. It is used unmodified
+as a Python dependency of httpx/requests. The MPL source is not vendored
+into this repository.
+
+tqdm is licensed MPL-2.0 AND MIT. It is used unmodified as a transitive
+dependency of faster-whisper in the transcription service.
+
+The Geist font (via the `geist` npm package) is licensed under the SIL Open
+Font License 1.1. Copyright (c) Vercel, Inc.
+
+The NumPy binary wheels used by the transcription service bundle libgfortran
+(GPL-3.0-with-GCC-Runtime-Library-Exception) and libquadmath (LGPL-2.1-or-later)
+as dynamically linked native libraries. NumPy itself is BSD-3-Clause.
+Those runtime libraries ship unmodified inside the NumPy wheels; the wheels are
+not part of this repository's own source.
