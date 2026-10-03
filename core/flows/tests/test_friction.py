@@ -120,7 +120,7 @@ def test_extra_context_carries_only_the_keys_that_were_present():
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-friction",
        "INTERNAL_API_SECRET": "test-internal-secret",
-       "VEXA_FLOWS_DB_URL": "postgresql+psycopg://friction:unreachable@127.0.0.1:1/flows"}
+       "VEXA_FLOWS_DB_URL": "postgresql+pg8000://friction:unreachable@127.0.0.1:1/flows"}
 
 
 @pytest.fixture(scope="module")

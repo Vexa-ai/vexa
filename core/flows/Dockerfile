@@ -2,7 +2,7 @@
 # The engine is stdlib-pure; the deps here are the production edges only.
 FROM python:3.12-slim
 WORKDIR /app
-RUN pip install --no-cache-dir "sqlalchemy>=2" "psycopg[binary]>=3" "fastapi>=0.110" "uvicorn>=0.29"
+RUN pip install --no-cache-dir "sqlalchemy>=2" "pg8000>=1.31" "fastapi>=0.110" "uvicorn>=0.29"
 COPY core/flows/schema.sql ./schema.sql
 # THE MCP TOOL MANIFEST — what the gateway assembly fetches from
 # `/.well-known/mcp-tools.json`. `flows_api` reads it at `parents[2]`, i.e. beside `src/`, so it has

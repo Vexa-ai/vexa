@@ -14,12 +14,8 @@ dependencies = [
     "fastapi>=0.115",
     "pydantic>=2",
     "sqlalchemy>=2",
-    # IMPORTED, never connected. `postgres_db` is lazy about the CONNECTION but `create_engine`
-    # resolves the DBAPI eagerly, so composing `flows_api` at all needs the driver present — which
-    # is the property `tests/test_health.py` is about: the app builds against an unreachable DSN
-    # with no database running anywhere. Same spelling as the image's own `pip install`.
-    "psycopg[binary]>=3",
     "httpx>=0.27",
+    "pg8000>=1.31.5",
 ]
 
 [tool.uv]
