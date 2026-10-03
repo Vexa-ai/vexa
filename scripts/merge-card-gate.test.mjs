@@ -10,11 +10,18 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   verdictFromRuns,
   waitForTerminalValueFsm,
   openAcceptanceLegs,
   acceptanceFromIssues,
+  humanTestFromComments,
+  humanTestSafely,
+  humanTestConfig,
+  cardOk,
+  NO_HUMAN_TEST,
+  renderCard,
 } from "./merge-card-gate.mjs";
 
 const run = (o) => ({ name: "value-fsm", started_at: "2026-07-16T20:07:14Z", ...o });
@@ -166,4 +173,142 @@ test("precision control: an unchecked box OUTSIDE the Acceptance section does no
   ].join("\n");
   assert.equal(openAcceptanceLegs(body), 0);
   assert.equal(acceptanceFromIssues([{ number: 903, body }]).ok, true);
+});
+
+// ── the HUMAN TEST row — pure over issue comments (#1687) ────────────────────────────────────
+
+const humanTestFixture = JSON.parse(readFileSync(new URL("./fixtures/merge-card-human-test.json", import.meta.url), "utf8"));
+const noHumanTest = `${NO_HUMAN_TEST} (informational — this row does not block merge)`;
+
+test("human test qualifying: exactly one fixture comment is a non-author human validation", () => {
+  const row = humanTestFromComments(humanTestFixture.comments, { author: "pr-author" });
+  assert.equal(row.ok, true);
+  assert.deepEqual(row.validations, [{
+    by: "octo-validator",
+    shape: "lite",
+    ran: "joined a 20-minute Teams call and left the bot alone for 12",
+    result: "bot exited left_alone at 6m02s as claimed",
+    url: humanTestFixture.comments[1].html_url,
+  }]);
+  assert.equal(row.why, `@octo-validator (lite) — joined a 20-minute Teams call and left the bot alone for 12, bot exited left_alone at 6m02s as claimed ([comment](${humanTestFixture.comments[1].html_url}))`);
+});
+
+test("human test author-self: author comments are excluded case-insensitively", () => {
+  const row = humanTestFromComments(humanTestFixture.comments, { author: "PR-AUTHOR" });
+  assert.equal(row.validations.some((v) => v.by === "pr-author"), false);
+  assert.equal(humanTestFromComments([humanTestFixture.comments[2]], { author: "pr-author" }).ok, false);
+});
+
+test("human test bot: both Bot type and bot login suffix exclude otherwise valid comments", () => {
+  const row = humanTestFromComments(humanTestFixture.comments, { author: "pr-author" });
+  assert.equal(row.validations.some((v) => v.by === "vexa-ci[bot]"), false);
+  const body = humanTestFixture.comments[3].body;
+  assert.equal(humanTestFromComments([{ body, user: { login: "someone[bot]", type: "User" } }]).ok, false);
+  assert.equal(humanTestFromComments([{ body, user: { login: "someone[BOT]", type: "User" } }]).ok, false);
+  assert.equal(humanTestFromComments([{ body, user: { login: "automation", type: "Bot" } }]).ok, false);
+});
+
+test("human test malformed: two parts, hosted, and a buried validation line are excluded", () => {
+  for (const login of ["sloppy-validator", "wrong-shape", "buried-line"]) {
+    const comment = humanTestFixture.comments.find((c) => c.user.login === login);
+    assert.deepEqual(humanTestFromComments([comment]), { ok: false, why: noHumanTest, validations: [] });
+  }
+});
+
+test("human test empty / defensive: missing comments or users return the exact informational reason", () => {
+  for (const comments of [[], null, undefined, [{ body: humanTestFixture.comments[1].body, user: null }], [{ body: humanTestFixture.comments[1].body }]]) {
+    assert.deepEqual(humanTestFromComments(comments), { ok: false, why: noHumanTest, validations: [] });
+  }
+});
+
+test("human test agentLogins: configured agents are excluded case-insensitively", () => {
+  assert.deepEqual(humanTestFromComments(humanTestFixture.comments, {
+    author: "pr-author", agentLogins: ["Octo-Validator"],
+  }), { ok: false, why: noHumanTest, validations: [] });
+});
+
+test("human test preserves order, accepts all three shapes, and omits absent comment links", () => {
+  const row = humanTestFromComments([
+    { body: "\n \n  vAlIdAtEd On COMPOSE, smoke test, passed  \nMore details", user: { login: "first" } },
+    { body: "Validated on helm, upgrade, passed", user: { login: "second" }, html_url: "https://example.test/comment" },
+    { body: "Validated on lite, join, passed", user: { login: "third" } },
+  ]);
+  assert.deepEqual(row.validations.map(({ by, shape, ran, result }) => ({ by, shape, ran, result })), [
+    { by: "first", shape: "compose", ran: "smoke test", result: "passed" },
+    { by: "second", shape: "helm", ran: "upgrade", result: "passed" },
+    { by: "third", shape: "lite", ran: "join", result: "passed" },
+  ]);
+  assert.equal(row.ok, true);
+  assert.equal(row.why, "@first (compose) — smoke test, passed; @second (helm) — upgrade, passed ([comment](https://example.test/comment)); @third (lite) — join, passed");
+});
+
+test("human test renderer: row follows Acceptance or Diff and preserves the marker and supplied verdict", () => {
+  for (const acceptance of [null, { ok: true, why: "delivered" }]) {
+    const rendered = renderCard({
+      num: 4242, ok: true, valueOk: true, valueWhy: "fixture", diffOk: true, diffWhy: "fixture",
+      acceptance, humanTest: humanTestFromComments([]),
+    });
+    assert.ok(rendered.startsWith("<!-- merge-card -->\n"));
+    assert.match(rendered, /\| \*\*Human test\*\* \| ❌ \| no human test/);
+    const lines = rendered.split("\n");
+    const index = lines.findIndex((line) => line.startsWith("| **Human test**"));
+    assert.ok(lines[index - 1].startsWith(`| **${acceptance ? "Acceptance" : "Diff"}**`));
+    assert.match(rendered, /\*\*Ready to merge\*\*/);
+  }
+});
+
+test("human test read is fail-soft: an unreadable comments list is an unavailable row, not a thrown card", () => {
+  const row = humanTestSafely(() => { throw new Error("gh api: 403"); }, 4242, { author: "pr-author" });
+  assert.equal(row.ok, false);
+  assert.deepEqual(row.validations, []);
+  assert.match(row.why, /could not read this PR's comments \(gh api: 403\) — the human-test row is unavailable/);
+  // and the happy path still delegates to the parser
+  assert.equal(humanTestSafely(() => humanTestFixture.comments, 4242, { author: "pr-author" }).validations[0].by, "octo-validator");
+});
+
+test("human test result is rendered, so a first-comma split never changes what a reader sees", () => {
+  // `what I ran` contains a comma: the lazy split puts the tail in `result`, and the row joins
+  // both back with the comma — the rendered text is the validator's own sentence either way.
+  const row = humanTestFromComments([{
+    body: "Validated on compose, ran POST /meetings, then GET /meetings, all 200s",
+    user: { login: "alice" },
+  }]);
+  assert.deepEqual([row.validations[0].ran, row.validations[0].result], ["ran POST /meetings", "then GET /meetings, all 200s"]);
+  assert.equal(row.why, "@alice (compose) — ran POST /meetings, then GET /meetings, all 200s");
+});
+
+test("the ❌ text tells the truth about blocking in BOTH flag states", () => {
+  assert.equal(humanTestFromComments([], { blocking: false }).why, `${NO_HUMAN_TEST} (informational — this row does not block merge)`);
+  assert.equal(humanTestFromComments([], { blocking: true }).why, `${NO_HUMAN_TEST} (required — this row blocks merge)`);
+});
+
+test("humanTestConfig: the flag is off unless explicitly turned on, and agent logins parse", () => {
+  for (const env of [{}, { MERGE_CARD_REQUIRE_HUMAN_TEST: "" }, { MERGE_CARD_REQUIRE_HUMAN_TEST: "false" }, { MERGE_CARD_REQUIRE_HUMAN_TEST: "0" }, { MERGE_CARD_REQUIRE_HUMAN_TEST: "maybe" }])
+    assert.equal(humanTestConfig(env).blocking, false, JSON.stringify(env));
+  for (const v of ["1", "true", "TRUE", "yes", "Yes"])
+    assert.equal(humanTestConfig({ MERGE_CARD_REQUIRE_HUMAN_TEST: v }).blocking, true, v);
+  assert.deepEqual(humanTestConfig({}).agentLogins, []);
+  assert.deepEqual(humanTestConfig({ MERGE_CARD_AGENT_LOGINS: " a , ,b " }).agentLogins, ["a", "b"]);
+});
+
+// THE invariant of #1687: while the flag is off, the human-test row cannot change the verdict.
+test("cardOk: with the flag off a ❌ human test never moves the verdict; with it on, it does", () => {
+  const rows = { valueOk: true, diffOk: true, acceptance: null };
+  const red = humanTestFromComments([]);
+  const green = humanTestFromComments(humanTestFixture.comments, { author: "pr-author" });
+  assert.equal(cardOk({ ...rows, humanTest: red }), true);                    // default: not blocking
+  assert.equal(cardOk({ ...rows, humanTest: red, blocking: false }), true);
+  assert.equal(cardOk({ ...rows, humanTest: green, blocking: false }), true);
+  assert.equal(cardOk({ ...rows, humanTest: red, blocking: true }), false);   // the flip
+  assert.equal(cardOk({ ...rows, humanTest: green, blocking: true }), true);
+  // and it never rescues a card the gating rows already failed
+  assert.equal(cardOk({ valueOk: false, diffOk: true, acceptance: null, humanTest: green }), false);
+  assert.equal(cardOk({ valueOk: true, diffOk: false, acceptance: null, humanTest: green }), false);
+  assert.equal(cardOk({ valueOk: true, diffOk: true, acceptance: { ok: false }, humanTest: green }), false);
+});
+
+test("renderCard without a human-test row renders the three-row card, not a throw", () => {
+  const rendered = renderCard({ num: 4242, ok: true, valueOk: true, valueWhy: "f", diffOk: true, diffWhy: "f", acceptance: null });
+  assert.doesNotMatch(rendered, /Human test/);
+  assert.match(rendered, /\| \*\*Diff\*\* \| ✅ \| f \|/);
 });

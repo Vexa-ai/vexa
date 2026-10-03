@@ -1,5 +1,6 @@
 // merge-card-gate — choke point 1 (the merge card), enforced. A PR carries two artifacts judged
-// on different axes; MAIN accepts it only when BOTH are accepted (delivery constitution, merge bar):
+// on different axes; MAIN accepts it only when BOTH are accepted (delivery constitution, merge bar).
+// Three rows GATE (VALUE · DIFF · ACCEPTANCE) and one row INFORMS (HUMAN TEST):
 //
 //   • VALUE accepted  — the observation bundle is real. Runtime PRs: `value-fsm` (pr-value L3)
 //     GREEN on the head sha AND `state: value-signed` (the D9 human sign-off). Non-runtime PRs
@@ -19,6 +20,12 @@
 //     evidence, or the link is re-filed as `Part of #N` (a plain reference closes nothing, so
 //     the row disappears). Born of the #622/#623 incident: a merge keyword silently dropped a
 //     live acceptance leg written as a plain bullet, not a checkbox — both shapes are parsed.
+//   • HUMAN TEST — who, OTHER than the author, ran the software on their own instance (#1687).
+//     Read off the PR's comments, never off a label: a label says someone thinks this is
+//     validated, a comment says who, on what, and what happened, and it cannot be applied by
+//     accident from a mobile label picker. INFORMATIONAL — it renders ✅/❌ and changes no
+//     verdict until `MERGE_CARD_REQUIRE_HUMAN_TEST` is turned on; because of that, and because
+//     this is a required check, its read is fail-soft (see `humanTestSafely`).
 //
 // This is a required status check on `main` (added to branch protection alongside `gates`). It
 // runs on pull_request + pull_request_review (PR-entry) and on merge_group (the queue re-check,
@@ -26,6 +33,9 @@
 // plain-language card of exactly what's missing.
 //
 // Inputs (env): GITHUB_REPOSITORY; and PR_NUMBERS (space-separated) OR MERGE_GROUP_REF to parse.
+// Optional: MERGE_CARD_REQUIRE_HUMAN_TEST (1|true|yes makes the human-test row BLOCKING; default
+// off) and MERGE_CARD_AGENT_LOGINS (comma-separated logins that are agents, not humans — a login
+// ending in `[bot]` and a `type: "Bot"` account are already excluded without listing them).
 // Exit 0 = every named PR's card is satisfied; 1 = one or more not; 2 = usage/nothing to check.
 
 import { execSync } from "node:child_process";
@@ -230,7 +240,81 @@ function readClosingIssues(num) {
   throw last;
 }
 
-async function card(num, { readClosing = readClosingIssues } = {}) {
+// The one shape a validation may take. Three deployment shapes, and `hosted` is deliberately not
+// among them: the claim this row makes is that a human stood the software up themselves, and using
+// the hosted service proves nothing about THIS diff. The comma split between `what I ran` and
+// `result` is lazy, so a `what I ran` containing a comma splits at the first one — both captures
+// are rendered, joined back with the comma, so where the split landed never changes what a reader
+// sees. Deliberately anchored to ONE line: a shape buried in prose is not a claim.
+const VALIDATION_RE = /^\s*Validated on (lite|compose|helm),\s*(.+?),\s*(.+?)\s*$/im;
+
+export const NO_HUMAN_TEST =
+  "no human test — a non-author human must post a comment whose FIRST non-empty line is " +
+  "`Validated on <lite|compose|helm>, <what I ran>, <result>`";
+
+// Pure over a comments array (the `repos/:repo/issues/:n/comments` shape) so the row has fixture
+// proof and no network in its unit path — the verdictFromRuns/openAcceptanceLegs pattern. An agent
+// posting under a human-shaped account is the one exclusion a suffix test cannot make, hence
+// `agentLogins`; this repo names none today, so the list is empty and the mechanism is the point.
+export function humanTestFromComments(comments, { author, agentLogins = [], blocking = false } = {}) {
+  const agents = new Set(agentLogins.map((login) => login.toLowerCase()));
+  const validations = [];
+  for (const comment of comments || []) {
+    const by = comment.user?.login;
+    if (!by || by.toLowerCase() === author?.toLowerCase()) continue;
+    if (comment.user?.type === "Bot" || /\[bot\]$/i.test(by) || agents.has(by.toLowerCase())) continue;
+    const firstLine = (comment.body || "").split(/\r?\n/).find((line) => line.trim());
+    const match = firstLine?.match(VALIDATION_RE);
+    if (!match) continue;
+    validations.push({ by, shape: match[1].toLowerCase(), ran: match[2].trim(), result: match[3].trim(), url: comment.html_url });
+  }
+  const ok = validations.length > 0;
+  const why = ok
+    ? validations.map((v) => `@${v.by} (${v.shape}) — ${v.ran}, ${v.result}${v.url ? ` ([comment](${v.url}))` : ""}`).join("; ")
+    // Say what the row does to the merge, and say it from the flag — not from a hard-coded clause
+    // that becomes a lie the day someone follows the workflows' own instruction to flip it.
+    : `${NO_HUMAN_TEST} (${blocking ? "required — this row blocks merge" : "informational — this row does not block merge"})`;
+  return { ok, why, validations };
+}
+
+// Paginated like touchesRuntime: a long-running PR here routinely passes 100 comments, and a
+// validation posted past the first page would render a false ❌ — and, once the flag is on, a
+// false block.
+function readComments(num) {
+  const all = [];
+  for (let page = 1; page <= 10; page++) {
+    const batch = ghj(`repos/${REPO}/issues/${num}/comments?per_page=100&page=${page}`);
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+// Informational, so the read is fail-SOFT: every other read in card() is gating data and a throw
+// rightly fails the card, but this row must never red a required check it does not gate. An
+// unreadable comments list becomes an unavailable row, not a failed evaluation.
+export function humanTestSafely(read, num, opts) {
+  try { return humanTestFromComments(read(num), opts); }
+  catch (e) { return { ok: false, why: `could not read this PR's comments (${e.message}) — the human-test row is unavailable`, validations: [] }; }
+}
+
+// The two knobs, read from an env object rather than `process.env` directly so both settings are
+// reachable from a test. `blocking` is the whole safety claim of this change: while it is off, the
+// human-test row cannot alter the verdict, and `cardOk` below is the only place that could.
+export function humanTestConfig(env = {}) {
+  return {
+    blocking: ["1", "true", "yes"].includes((env.MERGE_CARD_REQUIRE_HUMAN_TEST || "").toLowerCase()),
+    agentLogins: (env.MERGE_CARD_AGENT_LOGINS || "").split(",").map((login) => login.trim()).filter(Boolean),
+  };
+}
+
+// The verdict, pure over the four rows. VALUE and DIFF always gate; ACCEPTANCE gates when the PR
+// carries a closing reference; HUMAN TEST gates only when `blocking`.
+export function cardOk({ valueOk, diffOk, acceptance, humanTest, blocking = false }) {
+  return Boolean(valueOk) && Boolean(diffOk) && (!acceptance || acceptance.ok) && (!blocking || humanTest.ok);
+}
+
+async function card(num, { readClosing = readClosingIssues, readComments: readCmts = readComments } = {}) {
   const pr = ghj(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const labels = (pr.labels || []).map((l) => l.name);
@@ -261,12 +345,19 @@ async function card(num, { readClosing = readClosingIssues } = {}) {
   // ACCEPTANCE — what would this merge auto-close, and is every closed issue fully delivered?
   const acceptance = acceptanceFromIssues(readClosing(num));
 
-  return { num, ok: valueOk && d.ok && (!acceptance || acceptance.ok), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance };
+  // HUMAN TEST — who, other than the author, ran this on their own instance (fail-soft, above).
+  const { blocking, agentLogins } = humanTestConfig(process.env);
+  const humanTest = humanTestSafely(readCmts, num, { author: pr.user?.login, agentLogins, blocking });
+
+  return {
+    num, ok: cardOk({ valueOk, diffOk: d.ok, acceptance, humanTest, blocking }),
+    valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, humanTest,
+  };
 }
 
 // Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
 // workflow find and update its own comment in place. This same markdown feeds the check summary.
-function renderCard(c) {
+export function renderCard(c) {
   if (c.skip) return `<!-- merge-card -->\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
   const row = (label, ok, why) => `| **${label}** | ${ok ? "✅" : "❌"} | ${why} |`;
   const verdict = c.ok
@@ -282,6 +373,9 @@ function renderCard(c) {
     row("Diff", c.diffOk, c.diffWhy),
     // The row exists only when the PR carries a closing reference — `Part of #N` closes nothing.
     ...(c.acceptance ? [row("Acceptance", c.acceptance.ok, c.acceptance.why)] : []),
+    // Guarded like the Acceptance row above it: this renderer is exported, so a caller that
+    // builds a card without the row must get a three-row card, never a throw.
+    ...(c.humanTest ? [row("Human test", c.humanTest.ok, c.humanTest.why)] : []),
     ``,
     verdict,
     ``,
