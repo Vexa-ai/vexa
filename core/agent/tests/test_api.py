@@ -24,6 +24,27 @@ def _model_creds_configured(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-model-credential")
 
 
+@pytest.fixture(autouse=True)
+def _workspace_store_in_tmp(tmp_path, monkeypatch):
+    """/api/chat provisions the subject's workspace before dispatching, so an app built with the
+    default store root would write under ``/workspaces`` on the test machine. Redirect that default
+    into ``tmp_path`` and give it a minimal seed template (the production image ships one at
+    ``/app/workspace-seeds``); tests that pass an explicit ``reader=`` keep their own store."""
+    import control_plane.api as api_mod
+    seed = tmp_path / "default-seed"
+    (seed / "agents").mkdir(parents=True)
+    (seed / "CLAUDE.md").write_text("seed\n")
+    (seed / "agents" / "meeting.md").write_text("cfg\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    real = api_mod.WorkspaceReader
+
+    class _TmpDefaultReader(real):
+        def __init__(self, root):
+            super().__init__(str(tmp_path / "default-store") if str(root) == "/workspaces" else root)
+
+    monkeypatch.setattr(api_mod, "WorkspaceReader", _TmpDefaultReader)
+
+
 def _clear_model_creds(monkeypatch):
     for k in _MODEL_CRED_KEYS:
         monkeypatch.delenv(k, raising=False)
@@ -1481,3 +1502,116 @@ def test_redis_stream_reader_yields_keepalive_ticks(monkeypatch):
     reader = RedisStreamReader("redis://test", block_ms=10, idle_giveup_ms=30)
     out = list(reader.read("u1"))
     assert out == [None, None]                  # ticks until the giveup, then a clean end
+
+
+# ── /api/chat provisions the subject's workspace before the worker spawn ─────────────────────────
+# The docker backend mounts only the subject's subpath of the store volume and the engine refuses to
+# start a container whose subpath is absent, so a NEW subject chatting without a prior /workspace/init
+# used to die in the runtime (502 → opaque 500). Chat now ensures the baseline first.
+
+def _provisioning_app(tmp_path, monkeypatch, runtime=None):
+    from control_plane.workspace_reader import WorkspaceReader
+    seed = tmp_path / "seed"
+    (seed / "agents").mkdir(parents=True)
+    (seed / "CLAUDE.md").write_text("root\n")
+    (seed / "agents" / "meeting.md").write_text("cfg\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    store = tmp_path / "store"
+    store.mkdir()   # the store root is a mounted volume in production: it exists before any request
+    runtime = runtime if runtime is not None else _FakeRuntime()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()),
+        stream_reader=_FakeReader(), reader=WorkspaceReader(str(store)),
+    ))
+    return c, runtime, store
+
+
+def _git_log(ws):
+    import subprocess
+    return subprocess.run(["git", "log", "--format=%H %s"], cwd=str(ws), capture_output=True,
+                          text=True, check=True).stdout.splitlines()
+
+
+def test_chat_provisions_workspace_for_new_subject_before_spawn(tmp_path, monkeypatch):
+    store_ref = {}
+
+    class _AssertingRuntime(_FakeRuntime):
+        def spawn(self, workload_id, profile, env):
+            # the invariant the docker engine enforces: the subpath exists WHEN the worker starts
+            ws = store_ref["store"] / "u_new"
+            store_ref["existed_at_spawn"] = (ws / ".git").exists()
+            return super().spawn(workload_id, profile, env)
+
+    c, runtime, store = _provisioning_app(tmp_path, monkeypatch, _AssertingRuntime())
+    store_ref["store"] = store
+    assert not (store / "u_new").exists()
+
+    r = c.post("/api/chat", headers={"X-User-Id": "u_new"}, json={"prompt": "hi", "session": "s1"})
+
+    assert r.status_code == 200
+    assert store_ref["existed_at_spawn"] is True
+    assert len(runtime.spawned) == 1
+    assert (store / "u_new" / "CLAUDE.md").read_text() == "root\n"           # seeded from the template
+    assert (store / ".system" / "u_new" / ".git").exists()                   # private _system tier too
+
+
+def test_chat_leaves_an_initialized_workspace_untouched(tmp_path, monkeypatch):
+    c, runtime, store = _provisioning_app(tmp_path, monkeypatch)
+    h = {"X-User-Id": "u_jane"}
+    assert c.post("/api/workspace/init", headers=h).status_code == 201
+    before = _git_log(store / "u_jane")
+
+    r = c.post("/api/chat", headers=h, json={"prompt": "hi", "session": "s1"})
+
+    assert r.status_code == 200 and len(runtime.spawned) == 1
+    assert _git_log(store / "u_jane") == before                              # no re-seed, no new commit
+    again = c.post("/api/workspace/init", headers=h)                         # explicit init unchanged
+    assert again.status_code == 201 and again.json()["already_initialized"] is True
+
+
+def test_concurrent_init_and_chat_provision_exactly_once(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    c, runtime, store = _provisioning_app(tmp_path, monkeypatch)
+    h = {"X-User-Id": "u_race"}
+
+    def hit(i):
+        if i % 2:
+            return c.post("/api/workspace/init", headers=h)
+        return c.post("/api/chat", headers=h, json={"prompt": "hi", "session": f"s{i}"})
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(hit, range(8)))
+
+    assert all(r.status_code in (200, 201) for r in results), [r.status_code for r in results]
+    inits = [r.json() for r in results if r.status_code == 201]
+    assert sum(1 for j in inits if j["seeded"]) <= 1                          # at most one seeder
+    log = _git_log(store / "u_race")
+    assert len(log) == 1 and log[0].endswith(" seed")                         # one git init, one seed commit
+    assert len(_git_log(store / ".system" / "u_race")) == 1
+    assert len(runtime.spawned) == 4
+
+
+def test_chat_provisioning_failure_is_a_typed_503_without_spawn_or_leak(tmp_path, monkeypatch, caplog):
+    import control_plane.api as api_mod
+    c, runtime, _ = _provisioning_app(tmp_path, monkeypatch)
+
+    def boom(ws, seed_dir):
+        raise OSError("disk exploded token=sk-leak-me")
+
+    monkeypatch.setattr(api_mod, "seed_workspace", boom)
+    with caplog.at_level("ERROR"):
+        r = c.post("/api/chat", headers={"X-User-Id": "u_fail"}, json={"prompt": "hi", "session": "s1"})
+
+    assert r.status_code == 503
+    assert "sk-leak-me" not in r.text and "sk-leak-me" not in caplog.text    # no raw error text exposed
+    assert runtime.spawned == []                                              # never reached the runtime
+    assert c.get("/api/sessions", headers={"X-User-Id": "u_fail"}).json() in ([], {"sessions": []})  # no ghost session
+
+    monkeypatch.undo()                                                        # recovers once the store is healthy
+
+
+def test_chat_rejects_an_invalid_subject_with_400_not_an_opaque_500(tmp_path, monkeypatch):
+    c, runtime, _ = _provisioning_app(tmp_path, monkeypatch)
+    r = c.post("/api/chat", headers={"X-User-Id": "../escape"}, json={"prompt": "hi", "session": "s1"})
+    assert r.status_code == 400 and runtime.spawned == []
+    assert not (tmp_path / "escape").exists()

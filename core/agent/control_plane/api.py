@@ -24,6 +24,7 @@ import hmac
 import json
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -935,6 +936,59 @@ def create_app(
     app.state.live_meetings = live
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
+
+    # ── workspace provisioning (the ONE seam behind POST /api/workspace/init AND the chat preflight) ──
+    # The docker backend mounts only the subject's subpath of the store volume, and the engine refuses to
+    # start a container whose subpath is absent — so a subject's baseline must exist BEFORE its first
+    # dispatch. One lock per subject serializes concurrent callers (the route handlers run in a
+    # threadpool); the loser re-enters, sees ``.git``, and returns the already-provisioned result.
+    _prov_locks: dict[str, threading.Lock] = {}
+    _prov_guard = threading.Lock()
+
+    def _prov_lock(subject: str) -> threading.Lock:
+        with _prov_guard:
+            return _prov_locks.setdefault(subject, threading.Lock())
+
+    def _provision_workspace(subject: str) -> dict:
+        ws = wsr.workspace_dir(subject)
+        seed_dir = resolve_seed_dir(
+            settings.default_template if settings is not None else None,
+            seeds_root=settings.workspace_seeds_dir if settings is not None else None,
+        )
+        problems = validate_seed(seed_dir)
+        if problems:
+            raise HTTPException(status_code=500, detail="invalid workspace seed: " + "; ".join(problems))
+        with _prov_lock(subject):
+            existed = (ws / ".git").exists()
+            seed_workspace(ws, seed_dir)
+            system_existed = (system_mounts.system_store_path(wsr.root, subject) / ".git").exists()
+            system_mounts.ensure_system_workspace(str(wsr.root), subject)
+        return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
+                "system_seeded": not system_existed}
+
+    def _ensure_chat_workspace(subject: str) -> None:
+        """Chat preflight: provision the subject's baseline when it is ACTIVE but not yet on disk. A
+        subject that switched its baseline off (active set without it) is left alone. Any failure is a
+        typed 503 — never an opaque 500 from the runtime's failed container start."""
+        try:
+            ws = wsr.workspace_dir(subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        if (ws / ".git").exists():
+            return
+        try:
+            baseline_active = any(Path(m.path) == ws for m in active_workspaces(wsr.root, subject))
+        except Exception:  # noqa: BLE001 — unresolvable set: dispatch falls back to the baseline, so provision it
+            baseline_active = True
+        if not baseline_active:
+            return
+        try:
+            _provision_workspace(subject)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.error("workspace provisioning failed for subject=%s: %s", subject, type(e).__name__)
+            raise HTTPException(status_code=503, detail="workspace unavailable — retry shortly") from e
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
         settings.meeting_api_url if settings is not None else "")
@@ -1255,6 +1309,7 @@ def create_app(
                 # or a whole turn that finished in the gap, were invisible: the 'Reconnecting' hang).
                 # The thread's Stream holds PRIOR turns too, so the snapshot (not stream start) is the
                 # earliest safe attach point — the client appends and stops on any ``turn-complete``.
+                _ensure_chat_workspace(subject)  # the baseline must exist before the worker's volume-subpath mount
                 start = _stream_tail_id(redis_url, units.output_topic(unit_id)) or None
                 # Upsert the durable index on first use of a thread: a new thread is titled by its first
                 # prompt; an existing one just bumps last_active (title preserved).
@@ -1527,25 +1582,7 @@ def create_app(
         (shared.seeding.seed_workspace) and ensures `_system` (system_mounts.ensure_system_workspace).
         Idempotent — existing tiers (`.git` present) are returned untouched, so it's safe to call on every
         login. The same seams the worker uses lazily on first dispatch, surfaced as a control."""
-        subject = subject_of(request)
-        ws = wsr.workspace_dir(subject)
-        # Select the seed out of the registry root (default template for now; per-request template
-        # selection lands with the second seed). VEXA_WORKSPACE_SEED_DIR still overrides.
-        seed_dir = resolve_seed_dir(
-            settings.default_template if settings is not None else None,
-            seeds_root=settings.workspace_seeds_dir if settings is not None else None,
-        )
-        problems = validate_seed(seed_dir)
-        if problems:
-            raise HTTPException(status_code=500, detail="invalid workspace seed: " + "; ".join(problems))
-        existed = (ws / ".git").exists()
-        seed_workspace(ws, seed_dir)
-        # The PRIVATE SYSTEM tier (`_system`) — always-mounted, holds the light identity reference. Ensure
-        # it up front too so identity + chats/settings have a home from the very first turn. Idempotent.
-        system_existed = (system_mounts.system_store_path(wsr.root, subject) / ".git").exists()
-        system_mounts.ensure_system_workspace(str(wsr.root), subject)
-        return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
-                "system_seeded": not system_existed}
+        return _provision_workspace(subject_of(request))
 
     @app.get("/api/workspace/attached")
     def ws_attached(request: Request):
