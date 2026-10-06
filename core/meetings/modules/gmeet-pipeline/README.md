@@ -41,3 +41,10 @@ Three goldens:
 
 The remaining live path (real Meet *page* audio → capture → this spine) is the bot's job (3.3+).
 Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.
+
+## Capture timestamps
+
+Timestamped frames anchor a channel window to capture time. Confirming text advances
+that window by the duration of audio removed, independent of STT response latency.
+The timestamped-input discontinuity guard starts a fresh window after a gap over
+two seconds; missing capture audio is not reconstructed by timestamp correction.

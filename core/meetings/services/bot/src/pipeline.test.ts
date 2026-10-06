@@ -59,6 +59,32 @@ const FRAME = new Float32Array((SR * FRAME_MS) / 1000).fill(0.05);
 const FAST = { minAudioDuration: 0.15, submitInterval: 0.1, confirmThreshold: 2, maxBufferDuration: 5, idleTimeoutSec: 2, sampleRate: SR };
 
 async function main(): Promise<void> {
+  // Shifted STT onset: a completed segment has a different ID from its live draft.
+  {
+    let calls = 0;
+    const transcribe = async (): Promise<TranscriptionResult> => {
+      calls++;
+      const text = calls === 1 ? 'one two three four' : 'one two three four five';
+      return { text, language: 'en', duration: 2.5, segments: [
+        { start: 0.1, end: 0.2, text: 'one two' },
+        { start: 0.2, end: 2.5, text: calls === 1 ? 'three four' : 'three four five' },
+      ] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv(), sink, { transcribe, config: FAST });
+    await pipe.start();
+    for (let i = 0; i < 12; i++) {
+      pipe.feedAudio(0, 'Alice', FRAME, 1000 + i * FRAME_MS);
+      await sleep(110);
+    }
+    await pipe.stop();
+    const firstDraft = sink.published.find(s => s.completed === false && s.text.trim());
+    check('shifted onset fixture produced a draft', !!firstDraft);
+    check('shifted onset withdraws the old draft ID', !!firstDraft && sink.retracted.includes(firstDraft.segment_id), JSON.stringify(sink.retracted));
+    check('shifted onset preserves confirmed speech', sink.published.some(s => s.completed && s.text === 'one two'));
+    check('empty draft clears are withdrawals, not empty transcription publications', !sink.published.some(s => s.completed === false && !s.text.trim()));
+  }
+
   // ── 1) single glow-bound speaker: capture(ch0='Alice') → lane → stt → bot TranscriptSink ──
   {
     let calls = 0;

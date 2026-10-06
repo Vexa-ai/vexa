@@ -356,6 +356,7 @@ export class SpeakerStreamManager {
             }
             const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
             this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, seg.text.trim(), buffer.windowStartMs, segEndMs, segmentId, buffer.lastLanguage);
+            this.clearStaleDraft(buffer, buffer.windowStartMs);
             buffer.sequenceNumber++;
             buffer.lastConfirmedText = seg.text.trim();
           }
@@ -729,14 +730,16 @@ export class SpeakerStreamManager {
       buffer.confirmedSamples = buffer.totalSamples;
     }
 
-    // Trim confirmed chunks from the front to free memory
+    // The retained audio starts exactly after the samples removed, independent
+    // of when STT finished. Clamp to actual buffered audio, including on fallback.
+    const advancedMs = (buffer.confirmedSamples / this.sampleRate) * 1000;
     this.trimBuffer(buffer);
 
     // Reset confirmation state for the next segment window
     buffer.lastTranscript = '';
     buffer.confirmCount = 0;
     buffer.lastWords = [];
-    buffer.windowStartMs = Date.now();
+    buffer.windowStartMs += advancedMs;
     // The window moved on; the prior pending draft (under the OLD windowStartMs) is superseded.
     // Drop the in-memory tracking so a later turn-close finalize can't re-emit this stale window's
     // text. We don't clear the consumer's draft row here (mid-stream) to avoid a live-edge flicker —
