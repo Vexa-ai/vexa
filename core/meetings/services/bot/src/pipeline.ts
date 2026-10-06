@@ -151,9 +151,9 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
 
 /**
  * The sink ADAPTER — the load-bearing reconciliation. The lane emits via `segment` (confirmed),
- * `draft` (live partial, completed:false), `finalize` (session end); the bot's port is a single
- * `publish(segment)`. We forward BOTH `segment` and `draft` to publish (the bot's transcript.v1
- * egress carries `completed` to distinguish confirmed from draft) and treat `finalize` as a
+ * `draft` (live partial, completed:false), and `finalize` (session end). Content goes to
+ * `publish(segment)`; empty drafts withdraw their exact pending ID through `retract`. The
+ * transcript.v1 egress carries `completed` to distinguish confirmed from draft. `finalize` is a
  * no-op at this seam (the bot signals end-of-session via lifecycle.v1, not the transcript stream).
  * publish() is async; the lane's sink methods are sync fire-and-forget, so we swallow + log a
  * rejection rather than letting it escape the lane's emit path.
