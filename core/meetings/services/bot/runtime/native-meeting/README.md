@@ -36,3 +36,5 @@ The optional `test/audio-pipeline.live.test.mjs` accepts `SDK_PCM_FIXTURE` (raw
 32 kHz signed-16-bit little-endian mono), `SDK_EXPECT_WORDS` (comma-separated
 ground-truth words), and the same STT environment. It tests real STT behind a
 synthetic native input port; it does not establish live meeting capture.
+
+Operator download, credential and authorization guide: [Native SDK evaluation](../../../../../../docs/docs/deployment-zoom-sdk.mdx).
