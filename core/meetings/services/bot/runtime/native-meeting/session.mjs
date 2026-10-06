@@ -39,7 +39,7 @@ export function createNativeMeetingRuntime({sdkDir,addonPath,cleanupTimeoutMs=30
    report=onEvent;
    child=fork(new URL('./worker.cjs',import.meta.url),[],{env:{PATH:process.env.PATH,HOME:process.env.HOME,DISPLAY:process.env.DISPLAY,XDG_RUNTIME_DIR:process.env.XDG_RUNTIME_DIR,PULSE_SERVER:process.env.PULSE_SERVER,ZOOM_SDK_DIR:sdkDir,ZOOM_SDK_ADDON:addonPath,LD_LIBRARY_PATH:`${sdkDir}/qt_libs/Qt/lib:${sdkDir}`},stdio:['ignore','ignore','ignore','ipc']});
    child.on('message',event=>{
-    if(event?.kind==='audio'||event?.kind?.startsWith('capture-')){
+    if(event?.kind==='audio'||(typeof event?.kind==='string'&&event.kind.startsWith('capture-'))){
      if(!captureProtocol.valid(event)){settleCapture('invalid_capture_frame');captureEvent({kind:'capture-failure',code:'invalid_capture_frame'});return;}
      if(event.kind==='capture-failure')settleCapture(event.code);
      if(event.kind==='capture-state'&&captureWait?.state===event.state)settleCapture();

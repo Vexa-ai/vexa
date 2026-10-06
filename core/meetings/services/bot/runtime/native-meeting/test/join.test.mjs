@@ -16,7 +16,7 @@ function fixture(t,scenario) {
  startRecording(){this.audio?.(Buffer.alloc(640),32000,77,Date.now(),1);} stopRecording(){}
  onAuthResult(f){this.auth=f} onMeetingStatus(f){this.status=f}
  initialize(){} authenticate(){${scenario==='auth'?'this.auth({success:false,code:11})':'this.auth({success:true})'}}
- joinMeeting(config){fs.writeFileSync(${JSON.stringify(join(dir,'config.json'))},JSON.stringify(config));${scenario==='crash'?'process.exit(4)':scenario==='native'?'throw Error("secret token")':scenario==='wait'?'this.status({status:"waiting_room"})':'this.status({status:"waiting_for_host"});this.status({status:"waiting_room"});setTimeout(()=>this.status({status:"in_meeting"}),30)'}}
+ joinMeeting(config){fs.writeFileSync(${JSON.stringify(join(dir,'config.json'))},JSON.stringify(config));${scenario==='malformed'?'process.send({version:1,kind:7})':scenario==='crash'?'process.exit(4)':scenario==='native'?'throw Error("secret token")':scenario==='wait'?'this.status({status:"waiting_room"})':'this.status({status:"waiting_for_host"});this.status({status:"waiting_room"});setTimeout(()=>this.status({status:"in_meeting"}),30)'}}
  leaveMeeting(){${scenario==='stuck'?'while(true){}':'fs.writeFileSync('+JSON.stringify(join(dir,'left'))+',"yes");this.status({status:"ended"});'}}
  cleanup(){fs.writeFileSync(${JSON.stringify(join(dir,'cleaned'))},'yes')}
  };`);
@@ -72,4 +72,10 @@ test('capture IPC remains separate from joining and stop keeps meeting alive',as
  const frames=[];const off=runtime.subscribe(e=>{if(e.kind==='audio')frames.push(e);});
  await runtime.startCapture('per-participant');assert.equal(frames.length,1);assert.equal(frames[0].pcm.length,640);assert.equal(frames[0].userId,77);
  await runtime.stopCapture();off();await session.leave();assert.equal((await runtime.dispose()).code,0);
+});
+
+test('malformed IPC kind fails admission instead of throwing in the bot process',async t=>{
+ const session=joinSdk(config,fixture(t,'malformed'));
+ await assert.rejects(session.admitted,{code:'protocol_error'});
+ await session.closed;
 });
