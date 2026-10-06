@@ -41,3 +41,11 @@ Three goldens:
 
 The remaining live path (real Meet *page* audio → capture → this spine) is the bot's job (3.3+).
 Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.
+
+## Native participant reuse
+
+The bot can inject `speakerSource: null` and a native `channelKey` into the same
+channel engine. Named transcripts then omit the optional browser source value and
+carry meeting-scoped participant identity in `speaker_key`. Browser defaults
+remain `glow-bound` and `ch-<channel>:<turn>`. Capture, SDK runtime, and STT hosting
+remain separate from this module.

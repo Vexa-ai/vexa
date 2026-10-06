@@ -28,6 +28,10 @@ export interface GmeetPipelineOptions {
   transcribe: (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
   /** Where transcript.v1 segments + drafts land (consumer = collector/rendering). */
   sink: TranscriptSink;
+  /** Named attribution source. Null omits browser provenance for native identities. */
+  speakerSource?: 'glow-bound' | null;
+  /** Host-provided channel identity; defaults to the browser channel key. */
+  channelKey?: (channel: number) => string;
   /** Label for a turn whose onset had no single confident glow. Default 'Speaker'. */
   unknownLabel?: string;
   /** SpeakerStreamManager tuning (turn gating / confirmation). */
@@ -66,7 +70,8 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
       speaker: speakerName, speaker_key: key, text,
       start: startMs / 1000, end: endMs / 1000, completed, words: [],
       language: lang ?? null,
-      source: named ? 'glow-bound' : 'provisional-cluster-id',
+      ...(!named ? {source: 'provisional-cluster-id' as const}
+        : opts.speakerSource === null ? {} : {source: opts.speakerSource ?? 'glow-bound' as const}),
       confidence: named ? 1 : 0,
     };
   };
@@ -123,7 +128,7 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         // from the glow lit RIGHT NOW (fixed for the turn — held through overlap below).
         if (st) closeTurn(st.key);
         const turn = (st ? st.turn : 0) + 1;
-        const key = `ch-${channel}:${turn}`;
+        const key = `${opts.channelKey?.(channel) ?? `ch-${channel}`}:${turn}`;
         st = { key, name: glowName || UNKNOWN, lastMs: tsMs, turn };
         chan.set(channel, st);
         mgr.addSpeaker(key, st.name);

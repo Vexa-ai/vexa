@@ -39,3 +39,38 @@ A second probe added name/input-rate counters but received zero audio frames dur
 Verdict: real non-silent per-participant capture and clean stop/leave/disposal were witnessed in the first run. SDK-provided name binding, concurrent speakers, long-running capture/revocation and end-to-end STT remain unproven live. No PCM or participant names were saved by either probe. Shared capture-wire round-trip, 32/48→16 kHz anti-aliasing, channel interleaving, timestamp continuity/gaps and cleanup were tested with deterministic fixtures.
 
 Reuse: per-user frames fit the existing Google Meet channel-routed pipeline; its current transcript source label `glow-bound` needs an SDK provenance alternative before production wiring. Mixed audio can use the mixed pipeline; SDK active-speaker name hints are not yet wired. Browser DOM/WebRTC extraction is not part of native capture.
+
+
+## Channel pipeline composition — 2026-10-06
+
+Expected: the user-started test meeting supplies participant audio; SDK capture
+feeds the existing channel engine and real Whisper service; named transcript
+segments are emitted and teardown completes without killing the worker.
+
+Actual: the first composition run lacked the STT token and surfaced unauthorized
+errors (13 calls, zero segments). The runtime still exited 0 without forced
+termination. After supplying the existing development STT credential, the live
+run observed native admission, subscription and receiving_audio, then:
+
+```jsonl
+{"receipt":"transcription_counters","calls":12,"segments":3,"named":3,"speakers":1,"failed":false}
+{"receipt":"runtime_closed","code":0,"signal":null,"forced":false}
+```
+
+Verdict: SDK per-participant audio → 16 kHz capture → channel buffers/LocalAgreement
+→ real Whisper → named transcript segments passed live for one participant.
+No speech text, participant names or PCM were persisted. Transcript accuracy was
+not scored against ground truth. Concurrent live speakers, sustained capture,
+permission revocation and native callback queue bounds remain unvalidated.
+Production dispatch remains unchanged; this proof uses the opt-in bot composition.
+
+Offline: 14 native composition/runtime tests passed, including overlapping tracks
+with identical display names, missing names, transcript schema conformance, STT
+failure reporting, and exactly-once capture stop/finalization. The existing channel
+pipeline suite and capture conversion suite passed. Optional fixture-based real
+STT replay was skipped because its fixture environment was not supplied; the live
+meeting probe above supplied the actual STT evidence.
+
+SDK identity is carried in `speaker_key` (`sdk-<userId>:<turn>`). Named SDK
+segments omit optional `source`; no `glow-bound` claim is emitted for native
+metadata, and no new enum value is forced into the sealed transcript.v1 contract.
