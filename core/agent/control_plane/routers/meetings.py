@@ -12,7 +12,7 @@ from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
 from control_plane.api_shared import (
-    MEETING_STREAM_TRANSCRIPT_REPLAY, _decode_sse_cursor, _encode_sse_cursor, _sse)
+    _decode_sse_cursor, _encode_sse_cursor, _sse)
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import json
@@ -237,8 +237,8 @@ def build(**d) -> APIRouter:
             r = redis.from_url(redis_url, decode_responses=True)
             tkey = f"tc:meeting:{meeting_id}"
             # Resume EXACTLY from the client's last-seen cursor when present (gapless reconnect);
-            # otherwise seed then live-tail (fresh connect).
-            last = {tkey: resume_t or "$"}
+            # otherwise replay the entire history in bounded xread batches, then tail live.
+            last = {tkey: resume_t or "0-0"}
             idle = 0
             # A meeting row's transcript stream is REUSED across the meeting's sessions, so a
             # `session_end` is not necessarily the end of the VIEW: a new session can resume on the
@@ -268,30 +268,6 @@ def build(**d) -> APIRouter:
                 if ids:
                     yield ({"type": "retract", "segment_ids": ids}, cursor())
 
-            if resume_t is None:   # fresh connect → seed the bounded recent transcript tail
-                seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
-                for entry_id, fields in seed_rows:
-                    last[tkey] = entry_id
-                    payload = json.loads(fields.get("payload", "{}"))
-                    if payload.get("type") == "session_end":
-                        ending = True
-                        # F166: NOT `last.pop(tkey, None)` — `last` holds only this one key, so
-                        # popping it emptied the dict and the next `r.xread(last, ...)` (a bare
-                        # `{}`) raised redis-py's `DataError: XREAD streams must be a non empty
-                        # dict`, crash-looping agent-api on every re-poll of a completed meeting's
-                        # stream. Reset to "$" (new-entries-only) instead: same "nothing before this
-                        # point matters" semantics, but `last` is never empty going into xread.
-                        last[tkey] = "$"
-                        continue
-                    if payload.get("type") == "retract":
-                        yield from retract_event(payload)
-                        continue
-                    # A real segment AFTER a session_end in the replay tail means a NEW session resumed
-                    # on this reused meeting-row stream (tc:meeting:{id} is shared across a meeting's
-                    # sessions). The prior end must NOT close the current live view.
-                    ending = False
-                    yield from seg_events(payload)
-
             while True:
                 resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
@@ -313,8 +289,9 @@ def build(**d) -> APIRouter:
                             ptype = payload.get("type")
                             if ptype == "session_end":
                                 ending = True            # a resumed session gets one poll to appear
-                                last[tkey] = "$"         # F166: keep the key (see seed-loop note above)
-                                break
+                                # Keep the exact cursor: later entries may resume this row,
+                                # including entries remaining in this batch.
+                                continue
                             if ptype == "retract":
                                 yield from retract_event(payload)
                                 continue
