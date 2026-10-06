@@ -1333,6 +1333,40 @@
      "domain": "agent"
     }
    ]
+  },
+  {
+   "unique-id": "zoom-sdk",
+   "node-type": "module",
+   "name": "zoom-sdk",
+   "description": "Experimental isolated native joining controller; no production composition",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/zoom-sdk"
+    }
+   ]
+  },
+  {
+   "unique-id": "zoom-sdk-native",
+   "node-type": "service",
+   "name": "zoom-sdk-native",
+   "description": "Operator-built native addon source; external SDK not distributed",
+   "metadata": [
+    {
+     "path": "core/meetings/services/zoom-sdk-native"
+    }
+   ]
+  },
+  {
+   "unique-id": "sdk-join.v1",
+   "node-type": "contract",
+   "name": "sdk-join.v1",
+   "description": "Versioned joining worker IPC",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/sdk-join.v1",
+     "domain": "meetings"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1428,7 +1462,10 @@
       "bot-commands",
       "segments-table",
       "recording-blob",
-      "userdata-blob"
+      "userdata-blob",
+      "zoom-sdk",
+      "zoom-sdk-native",
+      "sdk-join.v1"
      ]
     }
    }

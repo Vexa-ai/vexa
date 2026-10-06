@@ -1,0 +1,20 @@
+{
+  "name": "@vexa/zoom-sdk-join",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.mjs"
+    },
+    "./node": {
+      "types": "./src/node.d.ts",
+      "default": "./src/node.mjs"
+    }
+  },
+  "scripts": {
+    "build": "node --check src/node.mjs && node --check src/worker.cjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
