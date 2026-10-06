@@ -462,7 +462,7 @@ def test_meeting_process_off_freezes_cursor(monkeypatch):
     assert fake.kv["proc:meeting:m9:cursor"] == "37-0"  # cursor frozen
 
 
-def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatch):
+def test_meeting_stream_full_history_preserves_other_lanes(monkeypatch):
     import json
     import redis
 
@@ -487,7 +487,9 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
             self.calls += 1
             if self.first_xread is None:
                 self.first_xread = dict(streams)
-                return [("tc:meeting:abc", [("10-0", {"payload": json.dumps({"type": "session_end"})})])]
+                rows = list(reversed(self.xrevrange("tc:meeting:abc")))
+                rows.append(("10-0", {"payload": json.dumps({"type": "session_end"})}))
+                return [("tc:meeting:abc", rows)]
             return []
 
     fake = FakeRedis()
@@ -506,10 +508,10 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
     assert '"text": "tail"' in body
     assert '"processed tail"' in body
     assert '"meeting-end"' in body
-    # transcript/output resume from their seeded tails; the proc stream from 0-0 (full replay —
+    # Transcript and processed notes replay in full; the agent-output seed stays bounded (
     # notes upsert by id client-side, and the whole processed view must render on connect).
     assert fake.first_xread == {
-        "tc:meeting:abc": "9-0", "unit:agent-meet-abc:out": "4-0", "proc:meeting:abc": "0-0",
+        "tc:meeting:abc": "0-0", "unit:agent-meet-abc:out": "4-0", "proc:meeting:abc": "0-0",
     }
 
 
@@ -853,16 +855,16 @@ def test_sse_resumes_from_last_event_id_no_reseed(monkeypatch):
     assert "tc:meeting:m1" not in fr.seeded                 # transcript tail NOT re-seeded on resume
 
 
-def test_sse_fresh_connect_seeds_and_tails(monkeypatch):
-    """No Last-Event-ID (fresh connect): seed the bounded transcript tail, then live-tail from there."""
+def test_sse_fresh_connect_replays_from_beginning(monkeypatch):
+    """A fresh connection starts at zero and replays bounded batches before tailing."""
     fr = _StreamRedis()
     c = _stream_client(fr, monkeypatch)
     with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
                   headers={"X-User-Id": "u_owner"}) as r:
         assert r.status_code == 200
         _ = r.read()
-    assert "tc:meeting:m1" in fr.seeded                     # fresh connect DID seed the tail
-    assert fr.xread_last["tc:meeting:m1"] == "$"            # then tails live from now
+    assert "tc:meeting:m1" not in fr.seeded
+    assert fr.xread_last["tc:meeting:m1"] == "0-0"
 
 
 class _RetractRedis:
@@ -1481,3 +1483,37 @@ def test_redis_stream_reader_yields_keepalive_ticks(monkeypatch):
     reader = RedisStreamReader("redis://test", block_ms=10, idle_giveup_ms=30)
     out = list(reader.read("u1"))
     assert out == [None, None]                  # ticks until the giveup, then a clean end
+
+def test_sse_fresh_connect_replays_entire_history_across_batches(monkeypatch):
+    """Opening late retains the opening, updates and retractions across session/page boundaries."""
+    import json
+    import fakeredis
+
+    store = fakeredis.FakeRedis(decode_responses=True)
+    key = "tc:meeting:m1"
+    for i in range(1100):
+        payload = {"type": "transcription", "segments": [
+            {"segment_id": f"s{i}", "text": f"line-{i}", "speaker": "A", "completed": True}]}
+        if i in (498, 999):
+            payload = {"type": "session_end"}
+        elif i in (499, 1000):
+            payload = {"type": "session_start"}
+        store.xadd(key, {"payload": json.dumps(payload)}, id=f"{i+1}-0")
+    store.xadd(key, {"payload": json.dumps({"type": "retract", "segment_ids": ["s1"]})}, id="1101-0")
+    store.xadd(key, {"payload": json.dumps({"type": "session_end"})}, id="1102-0")
+
+    class History:
+        def xrevrange(self, *args, **kwargs):
+            return store.xrevrange(*args, **kwargs)
+
+        def xread(self, streams, count=500, block=0):
+            return store.xread(streams, count=count)  # no wall-clock waiting in fixture
+
+    c = _stream_client(History(), monkeypatch)
+    response = c.get("/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                     headers={"X-User-Id": "u_owner"})
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    segments = [e for e in events if e.get("type") == "transcript"]
+    assert [s["text"] for s in segments] == [f"line-{i}" for i in range(1100) if i not in (498,499,999,1000)]
+    assert events[-2] == {"type": "retract", "segment_ids": ["s1"]}
+    assert events[-1] == {"type": "meeting-end"}
