@@ -1,0 +1,152 @@
+---
+title: "Native SDK evaluation"
+description: "Operator-supplied Linux Meeting SDK, private credentials, and authorization for the experimental native path."
+---
+
+This is an **experimental source-branch evaluation path**, not a released Compose
+or Helm option. Native join, per-participant capture and real transcription have
+been witnessed. The probe counts transcripts in memory: it does **not** save
+transcripts, recordings or meeting records. Production dispatch, OAuth onboarding
+and database/API retrieval are not connected to this path yet.
+
+## Download and install the SDK
+
+1. Open your General app in the [Zoom App Marketplace](https://marketplace.zoom.us/).
+2. Under **Features → Embed**, enable **Meeting SDK** and select the **Linux**
+   SDK download. See the [official credential/download guide](https://developers.zoom.us/docs/meeting-sdk/get-credentials/).
+3. Download directly from Zoom and extract outside the Vexa checkout, for example
+   `/opt/zoom-meeting-sdk`. `ZOOM_SDK_DIR` must point at the directory containing
+   both `h/` and `libmeetingsdk.so`, not its parent archive directory.
+4. Use a native Linux host matching the downloaded architecture. The witnessed
+   configuration used Linux x64, SDK **6.7.2.7020**, Node 22, Qt5 and PulseAudio.
+   Other SDK versions and architectures have not been validated by this branch.
+   Install the SDK's system prerequisites from the
+   [Linux SDK documentation](https://developers.zoom.us/docs/meeting-sdk/linux/).
+
+The SDK archive, headers, shared libraries and compiled addon are operator-owned
+external files. Vexa does not download them automatically or include them in its
+repository or stock images.
+
+Build the Vexa-owned wrapper in a separate directory. From the repository root:
+
+```bash
+mkdir -p "$HOME/vexa-native-wrapper"
+cp core/meetings/services/bot/runtime/native-meeting/native/{binding.gyp,zoom_wrapper.cpp} \
+  "$HOME/vexa-native-wrapper/"
+cd "$HOME/vexa-native-wrapper"
+npm init -y
+npm install node-addon-api@8.9.2 node-gyp@12.4.0
+npx node-gyp rebuild --zoom_sdk_dir=/opt/zoom-meeting-sdk
+```
+
+This requires a C++ build toolchain, Python, `pkg-config` and Qt5 development
+headers. Preserve the SDK library layout and resolve its loader dependencies;
+`ldd build/Release/zoom_sdk_wrapper.node` must not show missing libraries. The
+runtime adds the SDK and its `qt_libs/Qt/lib` directory to the worker's library path.
+Provide a working PulseAudio session for media capture.
+
+## Credentials and environment files
+
+For a single-server deployment, a private environment file is a normal way to
+supply process configuration. Keep it outside Git, readable only by its owner
+(`chmod 600`). A managed secret store or mounted secret is also suitable. Never
+put the client secret into browser code, an image layer, logs, or meeting URLs.
+
+The **existing probe** reads these environment variables:
+
+```dotenv
+ZOOM_SDK_DIR=/opt/zoom-meeting-sdk
+ZOOM_SDK_ADDON=/absolute/path/vexa-native-wrapper/build/Release/zoom_sdk_wrapper.node
+VEXA_TX_URL=https://your-transcription-service.example
+VEXA_TX_KEY=your-transcription-service-token
+# Set these for the Linux audio session that owns the PulseAudio socket:
+XDG_RUNTIME_DIR=/run/user/YOUR_UID
+PULSE_SERVER=unix:/run/user/YOUR_UID/pulse/native
+```
+
+For Node 22, load this file with `node --env-file=/private/path/sdk.env ...`.
+An `.env` file alone is not automatically read by the probe, and Compose's root
+`.env` does not by itself inject new variables into a container.
+
+**App credentials are a separate server-side concern.** Store the app's Client
+ID and Client Secret in your secret store (conventional proposed names are
+`ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET`). A trusted backend uses them to mint
+short-lived Meeting SDK JWTs. These variable names are **not implemented probe
+inputs**; the current native join interface accepts an already-generated JWT.
+Do not store expiring JWTs, ZAK or OBF tokens as permanent credentials.
+
+The probe reads join configuration from private JSON on stdin:
+
+```json
+{
+  "meetingId": "YOUR_MEETING_ID",
+  "displayName": "Your assistant",
+  "password": "MEETING_PASSCODE",
+  "jwt": "SHORT_LIVED_MEETING_SDK_JWT"
+}
+```
+
+Optional fields `onBehalfToken` and `zak` accept tokens obtained by the host's
+authorization integration. A meeting-link `pwd` parameter is not necessarily the
+plain meeting passcode. Tokens must never be passed as command-line arguments.
+The branch does not implement token issuance, OAuth callbacks or refresh storage.
+
+From the repository root, build the workspace modules and run:
+
+```bash
+pnpm --filter @vexa/join... --filter @vexa/zoom-sdk-capture... \
+  --filter @vexa/gmeet-pipeline... build
+node --env-file=/private/path/sdk.env \
+  core/meetings/services/bot/runtime/native-meeting/transcription-probe.mjs \
+  < /private/path/short-lived-join.json
+```
+
+Use your own active test meeting. The probe listens for 30 seconds, emits counts,
+flushes capture/transcription, leaves and disposes the native process. Protect and
+remove the temporary join JSON after use. No durable transcript is produced.
+
+## How users authorize the app
+
+There are separate authorization steps:
+
+- **App authentication:** the operator's backend signs the SDK JWT. For a
+  participant joining a meeting within the app owner's account, the SDK JWT is
+  sufficient for SDK authentication; meeting admission rules still apply.
+- **User authorization:** the intended product flow is **Connect Zoom → Zoom
+  sign-in/consent → backend OAuth callback**. Store each user's OAuth tokens
+  encrypted on the server, refresh them there, and obtain the required token
+  shortly before joining. Users never supply the operator's client secret.
+- **External meetings:** the app needs review and user attribution. For assistant
+  joins, the OBF flow requires an OAuth-authorized user who is present in the
+  meeting; the SDK session depends on that user's continued presence. ZAK is
+  the separate path for joining as a user. Choose the scopes required by the
+  applicable token endpoint. See the [authorization FAQ](https://developers.zoom.us/docs/meeting-sdk/obf-faq/)
+  and [SDK authorization guide](https://developers.zoom.us/docs/meeting-sdk/auth/).
+- **Meeting permissions:** OAuth does not admit a participant from the waiting
+  room or grant raw-audio recording privileges. The meeting host's admission and
+  recording controls still apply. Capture must obtain raw-recording permission.
+
+During development, the Marketplace app's **Local Test → Add App Now → Allow**
+flow authorizes the app for the developer account. External users require the
+appropriate reviewed distribution. Vexa's native branch currently has no
+customer-facing Connect Zoom screen or callback/token store.
+
+Zoom's current documentation is inconsistent about assistant support: the
+[Linux overview](https://developers.zoom.us/docs/meeting-sdk/linux/) excludes
+bots/AI notetakers, while the [OBF FAQ](https://developers.zoom.us/docs/meeting-sdk/obf-faq/)
+describes authorization for legacy assistant apps. A successful private technical
+test does not establish eligibility for a new distributed app; resolve the
+app-specific distribution path with Zoom before presenting it as supported.
+
+## What the live test proves
+
+The native path reuses the Google Meet channel transcription engine: SDK
+participant PCM → 16 kHz Float32 capture → independent participant buffers and
+LocalAgreement → Whisper → named transcript segments. Native participant IDs
+survive in `speaker_key`; browser glow attribution is omitted.
+
+The witnessed run produced 3 named segments from one participant, with 12 STT
+calls and clean shutdown. It did not prove persistent storage, API retrieval,
+word accuracy, live overlapping speakers, sustained capture or revocation handling.
+The next integration step is the normal bot transcript sink and lifecycle path,
+followed by a live test that reads the saved transcript back through the API.

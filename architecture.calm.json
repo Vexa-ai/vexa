@@ -303,7 +303,7 @@
    "unique-id": "gmeet-pipeline",
    "node-type": "module",
    "name": "gmeet-pipeline",
-   "description": "gmeet-pipeline — atomic module in meetings",
+   "description": "Shared channel-routed transcription for browser and native per-participant capture",
    "metadata": [
     {
      "path": "core/meetings/modules/gmeet-pipeline"
@@ -1333,6 +1333,41 @@
      "domain": "agent"
     }
    ]
+  },
+  {
+   "unique-id": "sdk-join.v1",
+   "node-type": "contract",
+   "name": "sdk-join.v1",
+   "description": "Versioned joining worker IPC",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/sdk-join.v1",
+     "domain": "meetings"
+    }
+   ]
+  },
+  {
+   "unique-id": "zoom-sdk-capture",
+   "node-type": "module",
+   "name": "zoom-sdk-capture",
+   "description": "Native audio to shared capture contract; no meeting lifecycle",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/zoom-sdk-capture"
+    }
+   ]
+  },
+  {
+   "unique-id": "sdk-capture.v1",
+   "node-type": "contract",
+   "name": "sdk-capture.v1",
+   "description": "Native capture IPC",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/sdk-capture.v1",
+     "domain": "meetings"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1428,7 +1463,10 @@
       "bot-commands",
       "segments-table",
       "recording-blob",
-      "userdata-blob"
+      "userdata-blob",
+      "sdk-join.v1",
+      "zoom-sdk-capture",
+      "sdk-capture.v1"
      ]
     }
    }

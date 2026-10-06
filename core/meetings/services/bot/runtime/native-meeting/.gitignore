@@ -1,0 +1,8 @@
+node_modules/
+build/
+*.node
+*.so
+*.so.*
+*.tar.*
+zoom_meeting_sdk/
+sdk/
