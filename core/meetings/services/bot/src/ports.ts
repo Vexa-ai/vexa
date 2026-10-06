@@ -31,6 +31,10 @@ export interface JoinDriver {
    *  participant for `timeoutMs` continuously (`automaticLeave.everyoneLeftTimeout`).
    *  Platforms without a detector omit it — the 4h max-active backstop still bounds them. */
   onEveryoneLeft?(cb: () => void, timeoutMs: number): () => void;
+  /** OPTIONAL in-meeting chat send: post `text` to the meeting's chat while the bot is still
+   *  seated; resolves true iff the platform lane confirmed the send. Lanes without a chat
+   *  writer omit the method — a missing/false answer never blocks the leave itself. */
+  announce?(text: string): Promise<boolean>;
   /** Leave the meeting (best-effort; never throws fatally). */
   leave(reason: string): Promise<void>;
   /** Withdraw a PENDING join request from the waiting room / pre-join screen (Bug 2): cancel the

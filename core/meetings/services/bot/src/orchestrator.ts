@@ -31,6 +31,7 @@ import type {
   RecordingSink,
   ControlPlaneProbe,
 } from './ports.js';
+import { leaveAfterAnnouncement } from './announce.js';
 
 export interface OrchestratorDeps {
   lifecycle: LifecycleSink;
@@ -77,6 +78,10 @@ export interface RunOptions {
   /** A hard cap on the active phase (ms). Resolves the run with max_bot_time_exceeded.
    *  Defaults to off (0) — the live composition root derives it from automaticLeave. */
   maxActiveMs?: number;
+  /** The owner-set duration bound (ms, invocation.v1 `leaveAfterMs`). Resolves the run with
+   *  `user_limit_reached` and — when the platform lane can write chat — posts the en/ar
+   *  leave line in-meeting BEFORE the leave itself. Off when absent. */
+  leaveAfterMs?: number;
 }
 
 /**
@@ -250,14 +255,31 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     const cap = opts.maxActiveMs && opts.maxActiveMs > 0
       ? setTimeout(() => signalEnd?.('max_bot_time_exceeded'), opts.maxActiveMs)
       : null;
+    // The owner's leave-after bound ends the run with its OWN reason, earlier than the
+    // generic backstop whenever it is the tighter ceiling (the composition root clamps it
+    // to the platform/reserve bound before it ever reaches here).
+    const leaveAfter = opts.leaveAfterMs && opts.leaveAfterMs > 0
+      ? setTimeout(() => signalEnd?.('user_limit_reached'), opts.leaveAfterMs)
+      : null;
 
     const reason = await ended;
 
     // ── graceful teardown (best-effort; never masks the completion reason) ──
     if (cap) clearTimeout(cap);
+    if (leaveAfter) clearTimeout(leaveAfter);
     unsubscribe();
     stopRemoval();
     stopAloneness();
+    // A leave-after exit announces itself in-meeting BEFORE hanging up — the CEO-approved
+    // user-facing line. Best-effort and bounded: a lane with no chat writer, a failed send,
+    // or a hung evaluate must never block or delay the leave itself.
+    if (reason === 'user_limit_reached' && deps.join.announce) {
+      const text = leaveAfterAnnouncement(inv.language, opts.leaveAfterMs ?? 0);
+      await Promise.race([
+        deps.join.announce(text).catch(() => false),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 8000)),
+      ]);
+    }
     await deps.pipeline.stop().catch(() => { /* best-effort */ });
     deps.recording?.close(recordingKey);
     // Bound the leave: a hung platform leave (e.g. a slow Zoom web-client teardown) must not stall

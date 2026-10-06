@@ -30,7 +30,8 @@ export type CompletionReason =
   | 'join_failure'
   | 'auth_session_missing'
   | 'validation_error'
-  | 'max_bot_time_exceeded';
+  | 'max_bot_time_exceeded'
+  | 'user_limit_reached';
 
 export type FailureStage = 'requested' | 'joining' | 'awaiting_admission' | 'active';
 

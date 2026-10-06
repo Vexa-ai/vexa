@@ -280,7 +280,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // exit code on BOTH orphaned bots). Wire before run(); release the listeners after.
   const releaseSignals = installSignalHandlers({ stop: (reason) => orchestrator.stop(reason) });
   try {
-    const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv) });
+    const result = await orchestrator.run({
+      maxActiveMs: deriveMaxActiveMs(inv),
+      leaveAfterMs: inv.leaveAfterMs,
+    });
     return result.exitCode;
   } finally {
     releaseSignals();

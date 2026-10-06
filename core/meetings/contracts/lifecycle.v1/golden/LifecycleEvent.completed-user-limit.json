@@ -1,0 +1,12 @@
+{
+  "connection_id": "conn_01K0A5F3V62Q8M4RCY9ZJ7WTJM",
+  "status": "completed",
+  "exit_code": 0,
+  "completion_reason": "user_limit_reached",
+  "timestamp": "2026-07-19T11:26:00Z",
+  "bot_logs": ["user leave-after timer fired at 900s; announced in meeting chat; leaving"],
+  "bot_resources": {
+    "peak_memory_bytes": 529432166,
+    "cpu_usage_usec": 114203322
+  }
+}

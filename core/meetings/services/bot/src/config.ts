@@ -75,6 +75,10 @@ export interface Invocation {
   recordingUploadUrl?: string;
   // ── lifecycle timeouts ──
   automaticLeave?: AutomaticLeave;
+  /** Owner-set per-meeting duration ceiling (ms). At it the bot announces the leave
+   *  in-meeting, then exits completed/user_limit_reached. Absent ⇒ the maxActiveMs
+   *  backstop alone bounds the active phase (max_bot_time_exceeded, no announcement). */
+  leaveAfterMs?: number;
   reconnectionIntervalMs?: number;
   // ── voice agent (gates acts.v1 voice commands; DEFERRED in this increment) ──
   voiceAgentEnabled?: boolean;

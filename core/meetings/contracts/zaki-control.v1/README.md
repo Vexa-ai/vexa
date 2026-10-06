@@ -96,9 +96,16 @@ completed | failed → (terminal; no successor)
 No-lobby platforms may move directly from `joining` to `active`; natural meeting completion may move
 from `active` to `completed`. A failed state always carries one named `failure_code`; other states must
 not. `StatusResponse.metering.terminal` is true exactly for `completed|failed` and false for all
-non-terminal lifecycle states.
+non-terminal lifecycle states. A `completed` terminal may carry `limit_reached: true` when the
+capture ended at its enforced duration bound (the owner's `max_meeting_minutes`, the platform's
+deployment ceiling or the metering reserve, whichever bound the run); it is never present on any
+other state or cause.
 
-Retention is explicit and policy-owned. This schema admits operator-selected bounded windows but
+Retention is explicit and policy-owned. `Policy.max_meeting_minutes` is the owner's optional
+per-meeting duration ceiling in whole minutes (1..240); when stored, a capture never runs past
+`min(max_meeting_minutes, the platform's deployment ceiling, the metering reserve)`, and the bot
+announces the leave in-meeting before departing at that bound. Absent, the deployment/reserve bound
+alone governs — the pre-existing behaviour. This schema admits operator-selected bounded windows but
 does not choose defaults. Summary retention cannot outlive transcript retention. The policy read
 returns the stored `Policy` verbatim and `404 policy_not_found` when none is stored — including to a
 cleanly bound foreign subject, so stored-policy existence is never enumerable. A read never extends

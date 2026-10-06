@@ -23,6 +23,9 @@ class Policy:
     audio_days: int
     transcript_days: int
     summary_days: int
+    # The owner's chosen per-meeting duration ceiling in whole minutes (zaki-control.v1
+    # `Policy.max_meeting_minutes`). ``None`` means the deployment/reserve bound alone governs.
+    max_meeting_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,9 @@ class Capture:
     # when erasure removes its meeting row immediately after withdrawal.
     max_capture_seconds: int = 0
     started_at: datetime | None = None
+    # Durable flag: the capture ended at its enforced duration bound. Set on the terminal
+    # transition, surfaced as StatusCallbackData/StatusResponse `limit_reached`.
+    limit_reached: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,6 +186,7 @@ class ControlStore(Protocol):
         state: str,
         failure_code: str | None,
         events: tuple[CallbackEvent, ...],
+        limit_reached: bool = False,
     ) -> None: ...
 
     async def pending_callbacks(

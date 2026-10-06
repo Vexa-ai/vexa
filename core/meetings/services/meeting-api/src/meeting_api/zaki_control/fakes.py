@@ -201,7 +201,7 @@ class InMemoryControlStore(ControlStore):
             if event.subject != subject
         }
 
-    async def record_capture_transition(self, *, capture, state, failure_code, events):
+    async def record_capture_transition(self, *, capture, state, failure_code, events, limit_reached=False):
         current = self.captures.get(capture.capture_id)
         if current is None:
             return
@@ -210,6 +210,7 @@ class InMemoryControlStore(ControlStore):
             state=state,
             failure_code=failure_code,
             captured_seconds_total=max(current.captured_seconds_total, capture.captured_seconds_total),
+            limit_reached=current.limit_reached or bool(limit_reached),
         )
         for event in events:
             self.callbacks.setdefault(event.event_id, event)

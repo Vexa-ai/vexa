@@ -10,6 +10,7 @@ import {
   joinMeeting,
   AdmissionError,
   leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, leaveJitsiMeeting,
+  sendGoogleMeetChatMessage,
   startGoogleRemovalMonitor, startGoogleAlonenessMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor, startJitsiRemovalMonitor,
   type JoinState, type Platform as JoinPlatform, type AdmissionOutcome,
 } from '@vexa/join';
@@ -95,6 +96,18 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       // their bots stay bounded by the max-active backstop.
       if (platform !== 'google_meet') return () => { /* no detector on this lane */ };
       return startGoogleAlonenessMonitor(page, timeoutMs, cb);
+    },
+    async announce(text) {
+      // Jitsi sends over the app's own conference API (the browser-utils bundle exposes
+      // @vexa/jitsi-capture's sender); Google Meet has a DOM sender in @vexa/join. Teams and
+      // Zoom have no chat writer yet — report false and the orchestrator leaves anyway.
+      if (platform === 'jitsi') {
+        return Boolean(await page.evaluate(
+          `(() => { const w = window; const send = w.VexaBrowserUtils && w.VexaBrowserUtils.sendJitsiChatMessage; return send ? send(${JSON.stringify(text)}) === true : false; })()`,
+        ));
+      }
+      if (platform === 'google_meet') return sendGoogleMeetChatMessage(page, text);
+      return false;
     },
     async leave(reason) {
       if (platform === 'teams') { await leaveMicrosoftTeams(page, undefined, reason); return; }

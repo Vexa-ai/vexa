@@ -141,6 +141,7 @@ def build_invocation(
     transcription_tier: str = "realtime",
     redis_url: str,
     automatic_leave: Optional[dict] = None,
+    leave_after_ms: Optional[int] = None,
     meeting_api_callback_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
     transcribe_enabled: bool = True,
@@ -185,6 +186,7 @@ def build_invocation(
         "meetingApiCallbackUrl": meeting_api_callback_url,
         "internalSecret": internal_secret,
         "automaticLeave": automatic_leave,
+        "leaveAfterMs": leave_after_ms,
         # Authenticated-bot mode (sealed invocation.v1 auth block): the bot restores the stored
         # browser session from the userdata store before launch and joins signed-in. Deployment-
         # scoped — set by the BOT_AUTHENTICATED knob in ``request_bot``; None-stripped otherwise

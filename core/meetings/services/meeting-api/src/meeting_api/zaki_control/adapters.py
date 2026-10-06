@@ -58,6 +58,7 @@ class SqlAlchemyControlStore:
                 audio_days INTEGER NOT NULL,
                 transcript_days INTEGER NOT NULL,
                 summary_days INTEGER NOT NULL,
+                max_meeting_minutes INTEGER,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (tenant_id, user_id)
             )
@@ -106,6 +107,7 @@ class SqlAlchemyControlStore:
                 failure_code VARCHAR(64),
                 max_capture_seconds INTEGER NOT NULL DEFAULT 0,
                 captured_seconds_total INTEGER NOT NULL DEFAULT 0,
+                limit_reached BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
@@ -144,6 +146,8 @@ class SqlAlchemyControlStore:
                 "ALTER TABLE zaki_control_operations ADD COLUMN IF NOT EXISTS progress JSONB",
                 "ALTER TABLE zaki_control_captures ADD COLUMN IF NOT EXISTS max_capture_seconds INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE zaki_control_captures ADD COLUMN IF NOT EXISTS captured_seconds_total INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE zaki_control_captures ADD COLUMN IF NOT EXISTS limit_reached BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE zaki_control_policies ADD COLUMN IF NOT EXISTS max_meeting_minutes INTEGER",
                 "ALTER TABLE zaki_control_callback_outbox ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(160)",
                 "ALTER TABLE zaki_control_callback_outbox ADD COLUMN IF NOT EXISTS user_id BIGINT",
                 "ALTER TABLE zaki_control_callback_outbox ADD COLUMN IF NOT EXISTS capture_id VARCHAR(160)",
@@ -380,7 +384,7 @@ class SqlAlchemyControlStore:
                     self._statement(
                         """
                         SELECT capture_enabled, agent_read_enabled, policy_version,
-                               audio_days, transcript_days, summary_days
+                               audio_days, transcript_days, summary_days, max_meeting_minutes
                         FROM zaki_control_policies
                         WHERE tenant_id = :tenant_id AND user_id = :user_id
                         """
@@ -397,6 +401,10 @@ class SqlAlchemyControlStore:
             audio_days=int(row["audio_days"]),
             transcript_days=int(row["transcript_days"]),
             summary_days=int(row["summary_days"]),
+            max_meeting_minutes=(
+                int(row["max_meeting_minutes"])
+                if row["max_meeting_minutes"] is not None else None
+            ),
         )
 
     async def _lock_subject(self, db, subject: Subject) -> None:
@@ -437,9 +445,9 @@ class SqlAlchemyControlStore:
                     """
                     INSERT INTO zaki_control_policies
                     (tenant_id, user_id, capture_enabled, agent_read_enabled, policy_version,
-                     audio_days, transcript_days, summary_days, updated_at)
+                     audio_days, transcript_days, summary_days, max_meeting_minutes, updated_at)
                     VALUES (:tenant_id, :user_id, :capture_enabled, :agent_read_enabled, :policy_version,
-                            :audio_days, :transcript_days, :summary_days, now())
+                            :audio_days, :transcript_days, :summary_days, :max_meeting_minutes, now())
                     ON CONFLICT (tenant_id, user_id) DO UPDATE SET
                       capture_enabled = EXCLUDED.capture_enabled,
                       agent_read_enabled = EXCLUDED.agent_read_enabled,
@@ -447,6 +455,7 @@ class SqlAlchemyControlStore:
                       audio_days = EXCLUDED.audio_days,
                       transcript_days = EXCLUDED.transcript_days,
                       summary_days = EXCLUDED.summary_days,
+                      max_meeting_minutes = EXCLUDED.max_meeting_minutes,
                       updated_at = now()
                     """
                 ),
@@ -459,6 +468,7 @@ class SqlAlchemyControlStore:
                     "audio_days": policy.audio_days,
                     "transcript_days": policy.transcript_days,
                     "summary_days": policy.summary_days,
+                    "max_meeting_minutes": policy.max_meeting_minutes,
                 },
             )
             await db.execute(
@@ -664,6 +674,7 @@ class SqlAlchemyControlStore:
             captured_seconds_total=seconds,
             max_capture_seconds=max_capture_seconds,
             started_at=started_at,
+            limit_reached=bool(row.get("limit_reached")),
         )
 
     async def get_capture(self, *, subject: Subject, capture_id: str) -> Capture | None:
@@ -916,7 +927,8 @@ class SqlAlchemyControlStore:
             await db.commit()
 
     async def record_capture_transition(
-        self, *, capture: Capture, state: str, failure_code: str | None, events: tuple[CallbackEvent, ...]
+        self, *, capture: Capture, state: str, failure_code: str | None,
+        events: tuple[CallbackEvent, ...], limit_reached: bool = False,
     ) -> None:
         """Commit a capture state advance and every deterministic callback in one transaction."""
         async with self._session_factory() as db:
@@ -938,6 +950,7 @@ class SqlAlchemyControlStore:
                     SET state = :state,
                         failure_code = :failure_code,
                         captured_seconds_total = GREATEST(captured_seconds_total, :captured_seconds_total),
+                        limit_reached = limit_reached OR :limit_reached,
                         updated_at = now()
                     WHERE capture_id = :capture_id
                     """
@@ -947,6 +960,7 @@ class SqlAlchemyControlStore:
                     "state": state,
                     "failure_code": failure_code,
                     "captured_seconds_total": max(0, capture.captured_seconds_total),
+                    "limit_reached": bool(limit_reached),
                 },
             )
             for event in events:

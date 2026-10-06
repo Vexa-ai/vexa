@@ -39,6 +39,15 @@ for (const g of goldens) {
   check('full: automaticLeave threaded', full.automaticLeave?.waitingRoomTimeout === 300000, String(full.automaticLeave?.waitingRoomTimeout));
   check('full: secret token present (not logged)', typeof full.token === 'string' && full.token.length > 0);
   check('full: transcriptionModel threaded (#522)', full.transcriptionModel === 'whisper-large-v3-turbo', String(full.transcriptionModel));
+  check('full: leaveAfterMs threaded', full.leaveAfterMs === 900000, String(full.leaveAfterMs));
+}
+
+// ── leaveAfterMs: absent stays absent; non-positive is off-contract ──
+{
+  const minimal = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.minimal.json'), 'utf8'));
+  check('minimal: leaveAfterMs absent (today\'s behaviour preserved)', minimal.leaveAfterMs === undefined);
+  check('leaveAfterMs: 0 → InvocationError',
+    throws(() => parseInvocation(JSON.stringify({ platform: 'google_meet', meetingUrl: 'x', botName: 'B', redisUrl: 'redis://r', leaveAfterMs: 0 }))) instanceof InvocationError);
 }
 
 // ── typed access on the jitsi golden (the platform enum accepts jitsi) ──

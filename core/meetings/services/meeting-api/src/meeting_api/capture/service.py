@@ -321,6 +321,7 @@ async def request_capture(
     recording_enabled: bool = True,
     agent_read_enabled: bool = False,
     max_lifetime_sec: Optional[int] = None,
+    leave_after_ms: Optional[int] = None,
     evaluated_at: Optional[datetime] = None,
 ) -> dict:
     """Authorize and start one ZAKI-managed capture through the existing spawn pipeline.
@@ -361,6 +362,12 @@ async def request_capture(
         or max_lifetime_sec <= 0
     ):
         raise CaptureDenied(CaptureDenial.AUTHORITY_SCOPE_MISMATCH)
+    if leave_after_ms is not None and (
+        isinstance(leave_after_ms, bool)
+        or not isinstance(leave_after_ms, int)
+        or leave_after_ms <= 0
+    ):
+        raise CaptureDenied(CaptureDenial.AUTHORITY_SCOPE_MISMATCH)
     capture_repo = _CaptureEvidenceRepo(repo, metadata)
     try:
         return await request_bot(
@@ -383,6 +390,7 @@ async def request_capture(
             internal_secret=internal_secret,
             token_secret=token_secret,
             max_lifetime_sec=max_lifetime_sec,
+            leave_after_ms=leave_after_ms,
         )
     except CaptureGrantConsumed as error:
         raise CaptureDenied(CaptureDenial.AUTHORITY_REPLAYED) from error

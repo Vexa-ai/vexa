@@ -57,6 +57,10 @@ _REASON_TO_FAILURE_CODE: dict[str, str] = {
     "awaiting_admission_timeout": "join_denied",
     # Ran out of the capture LIFETIME — the one thing `capture_timeout` actually means.
     "max_bot_time_exceeded": "capture_timeout",
+    # The owner's leave-after setting ended the run at its duration bound (the bot announced the
+    # leave in-meeting first). Terminal reads `completed` + `limit_reached`; this entry only names
+    # the cause if a contradictory row ever arrives as `failed`.
+    "user_limit_reached": "capture_timeout",
     # The bot could not drive the join at all — our fault, not the host's.
     "join_failure": "upstream_unavailable",
     "validation_error": "invalid_meeting",
@@ -103,6 +107,17 @@ _SPAWN_REASON_TO_FAILURE_CODE: dict[str, str] = {
 }
 # Stages at which the bot had not reached the meeting yet.
 _PRE_ACTIVE_STAGES = frozenset({"requested", "joining", "awaiting_admission", "runtime_spawn"})
+
+# lifecycle.v1 completion reasons that mean "the run ended at its enforced duration bound" —
+# the owner's leave-after setting or the platform/runtime cap. Only a `completed` terminal may
+# carry `limit_reached` on the wire (zaki-control.v1 StatusCallbackData), so callers gate this
+# flag on the resolved state, never on the reason alone.
+_LIMIT_COMPLETION_REASONS = frozenset({"user_limit_reached", "max_bot_time_exceeded"})
+
+
+def limit_reached_from_meeting_data(data: object) -> bool:
+    """True when the meeting row's completion reason names a duration-bound end."""
+    return isinstance(data, dict) and data.get("completion_reason") in _LIMIT_COMPLETION_REASONS
 
 
 def hub_state_for(status: object, data: object) -> object:
@@ -323,6 +338,7 @@ class ControlCallbackDispatcher:
         state: str,
         failure_code: str | None = None,
         ended_at: datetime | None = None,
+        limit_reached: bool = False,
     ) -> None:
         """Record ONE lifecycle advance that is adjacent to the capture's current state.
 
@@ -337,7 +353,8 @@ class ControlCallbackDispatcher:
         if state != capture.state and state not in _ADJACENCY.get(capture.state, ()):
             return
         await self._emit_capture_status(
-            capture, state=state, failure_code=failure_code, ended_at=ended_at
+            capture, state=state, failure_code=failure_code, ended_at=ended_at,
+            limit_reached=limit_reached,
         )
 
     async def _emit_capture_status(
@@ -347,6 +364,7 @@ class ControlCallbackDispatcher:
         state: str,
         failure_code: str | None = None,
         ended_at: datetime | None = None,
+        limit_reached: bool = False,
     ) -> None:
         """Write one transition whose legality the caller has already established."""
         if state in _TERMINAL:
@@ -384,6 +402,11 @@ class ControlCallbackDispatcher:
         }
         if failure_code is not None:
             status_data["failure_code"] = failure_code
+        # Once recorded, the flag rides every later replay of the terminal (erasure re-asserts
+        # the completed event with the stored capture, which already carries it).
+        limit_reached = bool(limit_reached or capture.limit_reached)
+        if state == "completed" and limit_reached:
+            status_data["limit_reached"] = True
         events = [
             self._envelope(
                 event_id=f"status-{capture.capture_id}-{state}",
@@ -428,6 +451,7 @@ class ControlCallbackDispatcher:
             state=state,
             failure_code=failure_code,
             events=tuple(events),
+            limit_reached=limit_reached,
         )
 
     async def record_lifecycle(self, meeting_row: dict, *, state: str) -> None:
@@ -439,7 +463,10 @@ class ControlCallbackDispatcher:
             return
         state = hub_state_for(state, meeting_row.get("data"))
         failure = failure_code_from_meeting_data(meeting_row.get("data"))
-        await self.record_capture_status(capture, state=state, failure_code=failure)
+        await self.record_capture_status(
+            capture, state=state, failure_code=failure,
+            limit_reached=state == "completed" and limit_reached_from_meeting_data(meeting_row.get("data")),
+        )
 
     async def reconcile_capture_lifecycle(self, meeting_row: dict) -> None:
         """Backfill missed lifecycle callbacks after recovering a pre-mapping crash.
@@ -463,12 +490,14 @@ class ControlCallbackDispatcher:
         # a terminal settlement here must be bounded by the meeting's recorded end,
         # not by wall-clock-at-reconcile (which settled 2033s for a 2-min meeting).
         ended_at = _meeting_end(meeting_row.get("end_time"))
+        limit = limit_reached_from_meeting_data(meeting_row.get("data"))
         for step in _RECOVERY_STEPS.get(state, ()):
             await self.record_capture_status(
                 capture,
                 state=step,
                 failure_code=failure if step == "failed" else None,
                 ended_at=ended_at,
+                limit_reached=limit if step == "completed" else False,
             )
             # The adjacency guard checks the CAPTURE we hand it — a stale
             # snapshot refuses every step after the first, silently stranding

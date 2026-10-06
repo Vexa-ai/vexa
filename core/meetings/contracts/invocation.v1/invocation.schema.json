@@ -44,6 +44,7 @@
         "captureModes": { "type": "array", "items": { "type": "string" } },
         "recordingUploadUrl": { "type": "string", "format": "uri", "description": "recording sink" },
         "automaticLeave": { "$ref": "#/$defs/AutomaticLeave" },
+        "leaveAfterMs": { "type": "integer", "minimum": 1, "description": "owner-set per-meeting duration ceiling; the bot posts one in-meeting chat line then leaves with completion_reason user_limit_reached at this bound. Platform/reserve ceilings stay enforced by the runtime's own lifetime, independent of this field." },
         "reconnectionIntervalMs": { "type": "integer" },
         "voiceAgentEnabled": { "type": "boolean", "description": "gates the acts.v1 voice commands" },
         "defaultAvatarUrl": { "type": "string", "format": "uri" },

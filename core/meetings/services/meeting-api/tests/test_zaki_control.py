@@ -16,6 +16,7 @@ from meeting_api import create_app
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 from meeting_api.retention.fakes import InMemoryRetentionRepo, InMemoryRetentionStorage
+from meeting_api.zaki_control.callbacks import ControlCallbackDispatcher
 from meeting_api.zaki_control.fakes import InMemoryControlStore
 from meeting_api.zaki_control.ports import CallbackEvent, Subject
 from meeting_api.zaki_control.router import ControlConfig, build_router
@@ -424,6 +425,174 @@ def test_capture_rejects_a_reservation_larger_than_the_runtime_lifetime(monkeypa
     assert response.status_code == 422
     assert response.json()["code"] == "invalid_request"
     assert runtime.specs == []
+
+
+def test_policy_read_round_trips_max_meeting_minutes(monkeypatch):
+    client, *_ = _client(monkeypatch)
+    ensure = _ensure()
+    ensure["policy"]["max_meeting_minutes"] = 45
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=ensure).status_code == 200
+
+    response = client.get("/api/zaki/control/v1/42/policy", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["policy"]["max_meeting_minutes"] == 45
+
+
+def test_policy_read_omits_max_meeting_minutes_when_unset(monkeypatch):
+    client, *_ = _client(monkeypatch)
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=_ensure()).status_code == 200
+
+    response = client.get("/api/zaki/control/v1/42/policy", headers=_headers())
+
+    assert response.status_code == 200
+    assert "max_meeting_minutes" not in response.json()["policy"]
+
+
+def _workload_invocation(runtime) -> dict:
+    return json.loads(runtime.specs[-1]["env"]["VEXA_BOT_CONFIG"])
+
+
+def test_capture_owner_limit_clamps_lifetime_and_arms_leave_after(monkeypatch):
+    client, store, _repo, runtime, *_ = _client(monkeypatch)
+    ensure = _ensure()
+    ensure["policy"]["max_meeting_minutes"] = 15
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=ensure).status_code == 200
+
+    response = client.post(
+        "/api/zaki/control/v1/42/captures",
+        headers=_headers("capture-request", "capture-key"), json=_capture(reserved_units=60),
+    )
+
+    assert response.status_code == 200
+    capture_id = response.json()["capture_id"]
+    capture = asyncio.run(store.get_capture(
+        subject=Subject("tenant-1", "42"), capture_id=capture_id
+    ))
+    # The owner's 15-minute bound clamps BOTH the runtime teardown ceiling and the
+    # persisted settlement cap below the reserve and platform ceilings (3600s).
+    assert capture.max_capture_seconds == 900
+    assert runtime.specs[-1]["maxLifetimeSec"] == 900
+    assert _workload_invocation(runtime)["leaveAfterMs"] == 900_000
+
+
+def test_capture_owner_limit_never_exceeds_reserve_or_deployment_cap(monkeypatch):
+    client, store, _repo, runtime, *_ = _client(monkeypatch)
+    ensure = _ensure()
+    ensure["policy"]["max_meeting_minutes"] = 240
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=ensure).status_code == 200
+
+    response = client.post(
+        "/api/zaki/control/v1/42/captures",
+        headers=_headers("capture-request", "capture-key"), json=_capture(reserved_units=30),
+    )
+
+    assert response.status_code == 200
+    capture = asyncio.run(store.get_capture(
+        subject=Subject("tenant-1", "42"), capture_id=response.json()["capture_id"]
+    ))
+    # A 240-minute setting on a 30-minute reserve runs to the reserve: the announced
+    # bound is the effective one, never the owner's pick alone.
+    assert capture.max_capture_seconds == 1800
+    assert runtime.specs[-1]["maxLifetimeSec"] == 1800
+    assert _workload_invocation(runtime)["leaveAfterMs"] == 1_800_000
+
+
+def test_capture_without_owner_limit_carries_no_leave_after(monkeypatch):
+    client, store, _repo, runtime, *_ = _client(monkeypatch)
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=_ensure()).status_code == 200
+
+    response = client.post(
+        "/api/zaki/control/v1/42/captures",
+        headers=_headers("capture-request", "capture-key"), json=_capture(reserved_units=60),
+    )
+
+    assert response.status_code == 200
+    assert "leaveAfterMs" not in _workload_invocation(runtime)
+    capture = asyncio.run(store.get_capture(
+        subject=Subject("tenant-1", "42"), capture_id=response.json()["capture_id"]
+    ))
+    assert capture.max_capture_seconds == 3600
+
+
+def test_limit_reached_rides_the_terminal_status_callback_and_response(monkeypatch):
+    client, store, _repo, _runtime, *_ = _client(monkeypatch)
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=_ensure()).status_code == 200
+    created = client.post(
+        "/api/zaki/control/v1/42/captures",
+        headers=_headers("capture-request", "capture-key"), json=_capture(),
+    )
+    assert created.status_code == 200
+    capture_id = created.json()["capture_id"]
+    meeting_id = created.json()["meeting_id"]
+
+    # Drive the REAL dispatcher: a bot that exited at its leave-after bound reports
+    # completed(user_limit_reached) in the meeting row; the record must carry the
+    # sealed `limit_reached` flag on the status event AND the status read.
+    dispatcher = ControlCallbackDispatcher(
+        store, callback_url="http://hub.test/api/minutes/callback/v1",
+        hmac_key="test-hmac-key-0123456789abcdef0123456789", now=lambda: NOW,
+    )
+    asyncio.run(dispatcher.record_capture_status(
+        asyncio.run(store.get_capture(subject=Subject("tenant-1", "42"), capture_id=capture_id)),
+        state="joining",
+    ))
+    asyncio.run(dispatcher.record_capture_status(
+        asyncio.run(store.get_capture(subject=Subject("tenant-1", "42"), capture_id=capture_id)),
+        state="active",
+    ))
+    asyncio.run(dispatcher.record_lifecycle(
+        {"id": meeting_id, "status": "completed",
+         "data": {"completion_reason": "user_limit_reached"}},
+        state="completed",
+    ))
+
+    status = client.get(
+        f"/api/zaki/control/v1/42/captures/{capture_id}", headers=_headers(),
+    )
+    assert status.status_code == 200
+    assert status.json()["state"] == "completed"
+    assert status.json()["limit_reached"] is True
+
+    terminal = [
+        event for event in asyncio.run(store.pending_callbacks(limit=50))
+        if event.body.get("event_type") == "minutes.capture.status"
+        and event.body["data"].get("state") == "completed"
+    ]
+    assert terminal and terminal[0].body["data"]["limit_reached"] is True
+
+
+def test_a_plain_completed_capture_carries_no_limit_reached(monkeypatch):
+    client, store, _repo, _runtime, *_ = _client(monkeypatch)
+    assert client.post("/api/zaki/control/v1/42/ensure", headers=_headers(), json=_ensure()).status_code == 200
+    created = client.post(
+        "/api/zaki/control/v1/42/captures",
+        headers=_headers("capture-request", "capture-key"), json=_capture(),
+    )
+    assert created.status_code == 200
+    capture_id = created.json()["capture_id"]
+    meeting_id = created.json()["meeting_id"]
+
+    dispatcher = ControlCallbackDispatcher(
+        store, callback_url="http://hub.test/api/minutes/callback/v1",
+        hmac_key="test-hmac-key-0123456789abcdef0123456789", now=lambda: NOW,
+    )
+    for step in ("joining", "active"):
+        asyncio.run(dispatcher.record_capture_status(
+            asyncio.run(store.get_capture(subject=Subject("tenant-1", "42"), capture_id=capture_id)),
+            state=step,
+        ))
+    asyncio.run(dispatcher.record_lifecycle(
+        {"id": meeting_id, "status": "completed",
+         "data": {"completion_reason": "stopped"}},
+        state="completed",
+    ))
+
+    status = client.get(
+        f"/api/zaki/control/v1/42/captures/{capture_id}", headers=_headers(),
+    )
+    assert status.status_code == 200
+    assert "limit_reached" not in status.json()
 
 
 class _FailOnceBindStore(InMemoryControlStore):

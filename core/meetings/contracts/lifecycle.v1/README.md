@@ -16,7 +16,9 @@ failed             ∅   (terminal)
 attribution (the control plane's reconcile path, when the workload dies before the bot reports
 `active`): `awaiting_admission` → `awaiting_admission_timeout` (reaped while waiting in the lobby —
 the room never admitted the bot), `requested`/`joining` → `join_failure` (died before it could
-join). The machine-checked
+join). `user_limit_reached` is the owner-set duration bound (invocation `leaveAfterMs`): the bot
+posts one in-meeting chat line before leaving, so a completed capture can name the cause. The
+machine-checked
 `canTransition` lives in the **runtime/bot implementation** (Stage 2) — the contract documents it; the
 impl enforces it (lean: no separate harness, B8).
 

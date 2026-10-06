@@ -138,6 +138,10 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
 export { startGoogleAlonenessMonitor } from "./googlemeet/removal";
+// In-meeting chat send (gmeet DOM; jitsi already ships a sender inside @vexa/jitsi-capture's
+// `sendJitsiChatMessage` on the page's own conference API). Teams/Zoom have no writer yet —
+// their join-driver `announce` reports false and the leave proceeds without a line.
+export { sendGoogleMeetChatMessage, gmeetChatBrowserSend } from "./googlemeet/chat";
 // AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing).
 // It is THROWN by the join/admission path; the JoinDriver adapter catches it and maps the outcome → a
 // JoinOutcome so a host DENIAL is recorded as a permanent `rejected` — and a signed-out profile

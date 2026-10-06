@@ -14,6 +14,8 @@ at boot — is deferred; for now the raw fields are faithful to today's wire.
 
 ## Shape
 `Invocation` (`$defs`): required `platform · meetingUrl · botName · redisUrl`; everything else optional.
-`automaticLeave` defaults the three timeouts. No tenancy fields (deferred, ADR-0003).
+`automaticLeave` defaults the three timeouts. `leaveAfterMs` is the owner-set duration ceiling: at it,
+the bot announces the leave in-meeting chat then exits `completed`/`user_limit_reached`. No tenancy
+fields (deferred, ADR-0003).
 
 Goldens (`Invocation.<case>.json`) validated by `gate:schema`.

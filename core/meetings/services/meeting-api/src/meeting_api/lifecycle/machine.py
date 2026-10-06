@@ -47,6 +47,7 @@ class CompletionReason(str, Enum):
     AUTH_SESSION_MISSING = "auth_session_missing"
     VALIDATION_ERROR = "validation_error"
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"
+    USER_LIMIT_REACHED = "user_limit_reached"
 
 
 class FailureStage(str, Enum):

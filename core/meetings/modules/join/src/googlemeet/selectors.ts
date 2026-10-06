@@ -434,6 +434,43 @@ export const googlePeopleButtonSelectors: string[] = [
   'button[data-tooltip*="Participants"]'
 ];
 
+// Google Meet in-meeting CHAT matchers — the announce-before-leave path
+// (./chat.ts ships them into page.evaluate alongside gmeetChatBrowserSend).
+// BROWSER CONTEXT: declared in browserContextSelectorArrays below, so the
+// validity gate CSS-parses every `css` field. aria-labels on a Meet deployment
+// are localized to the meeting UI language; the bot runs a fixed English
+// browser locale, and the jsname/data-attribute entries are the language-free
+// fallbacks.
+
+// The toolbar affordance that opens the chat panel. Tried in order; first
+// visible match wins (same semantics as googleLeaveButtonMatchers).
+export const googleChatOpenMatchers: BrowserContextButtonMatcher[] = [
+  { css: 'button[aria-label="Chat with everyone"]' },
+  { css: 'button[aria-label*="Chat with everyone"]' },
+  { css: 'button[data-tooltip*="chat"]' },
+  { css: 'button[aria-label*="Chat"]' },
+  { css: 'button[aria-label*="chat"]' },
+];
+
+// The composer once the panel is open — textarea or contenteditable.
+export const googleChatInputSelectors: string[] = [
+  'textarea[aria-label*="Send a message"]',
+  'textarea[aria-label*="message"]',
+  'textarea[placeholder*="message"]',
+  'div[contenteditable="true"][aria-label*="message"]',
+  'textarea[jsname="YPqjbf"]',
+  '[contenteditable="true"][jsname="YPqjbf"]',
+];
+
+// The send affordance. Meet also submits the composer on plain Enter — the
+// chat routine falls back to dispatching a real key press when no send button
+// is reachable.
+export const googleChatSendMatchers: BrowserContextButtonMatcher[] = [
+  { css: 'button[aria-label="Send"]' },
+  { css: 'button[aria-label*="Send"]' },
+  { css: 'button[jsname="SoqoKb"]' },
+];
+
 // EXECUTION-CONTEXT DECLARATION — consumed by src/shared/selector-validity.test.ts.
 // Arrays named here ship into page.evaluate and run through
 // document.querySelector, so the gate additionally CSS-parses them: a
@@ -441,5 +478,10 @@ export const googlePeopleButtonSelectors: string[] = [
 // ship green as a dead selector. Entries may be plain CSS strings or
 // BrowserContextButtonMatcher objects (`css` field parsed as CSS; `text`
 // fields are raw strings, not selectors).
-export const browserContextSelectorArrays: string[] = ['googleLeaveButtonMatchers'];
+export const browserContextSelectorArrays: string[] = [
+  'googleLeaveButtonMatchers',
+  'googleChatOpenMatchers',
+  'googleChatInputSelectors',
+  'googleChatSendMatchers',
+];
 

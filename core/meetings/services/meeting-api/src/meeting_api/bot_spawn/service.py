@@ -186,6 +186,7 @@ async def request_bot(
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
     max_lifetime_sec: Optional[int] = None,
+    leave_after_ms: Optional[int] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -420,6 +421,7 @@ async def request_bot(
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
         automatic_leave=DEFAULT_AUTOMATIC_LEAVE,
+        leave_after_ms=leave_after_ms,
     )
 
     # 5. Spawn over runtime.v1.

@@ -40,7 +40,13 @@
         "capture_enabled": { "type": "boolean" },
         "agent_read_enabled": { "type": "boolean" },
         "capture_notice_policy_version": { "$ref": "#/$defs/Identifier" },
-        "retention": { "$ref": "#/$defs/RetentionPolicy" }
+        "retention": { "$ref": "#/$defs/RetentionPolicy" },
+        "max_meeting_minutes": {
+          "description": "The owner's chosen per-meeting duration ceiling in whole minutes. A capture never runs past min(max_meeting_minutes, the platform's deployment ceiling, the metering reserve); absent means the deployment/reserve bound alone governs. 240 pins the same ceiling the operator-side maximum is bounded by.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 240
+        }
       }
     },
     "CaptureAttestation": {
@@ -98,14 +104,30 @@
         "capture_id": { "$ref": "#/$defs/Identifier" },
         "meeting_id": { "$ref": "#/$defs/Identifier" },
         "state": { "$ref": "#/$defs/LifecycleState" },
-        "failure_code": { "$ref": "#/$defs/FailureCode" }
+        "failure_code": { "$ref": "#/$defs/FailureCode" },
+        "limit_reached": {
+          "description": "True on the completed terminal when the capture ended because its enforced duration bound (owner setting, platform ceiling or metering reserve — whichever bound the run) was reached and the bot announced the leave in-meeting first. Absent on every other terminal cause.",
+          "type": "boolean"
+        }
       },
       "if": {
         "properties": { "state": { "const": "failed" } },
         "required": ["state"]
       },
       "then": { "required": ["failure_code"] },
-      "else": { "not": { "required": ["failure_code"] } }
+      "else": { "not": { "required": ["failure_code"] } },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "limit_reached": { "const": true } },
+            "required": ["limit_reached"]
+          },
+          "then": {
+            "properties": { "state": { "const": "completed" } },
+            "required": ["state"]
+          }
+        }
+      ]
     },
     "CallbackEnvelope": {
       "oneOf": [
@@ -413,7 +435,11 @@
         "meeting_id": { "$ref": "#/$defs/Identifier" },
         "state": { "$ref": "#/$defs/LifecycleState" },
         "failure_code": { "$ref": "#/$defs/FailureCode" },
-        "metering": { "$ref": "#/$defs/StatusMetering" }
+        "metering": { "$ref": "#/$defs/StatusMetering" },
+        "limit_reached": {
+          "description": "True when the completed capture ended at its enforced duration bound (the bot announced the leave in-meeting first). Absent otherwise.",
+          "type": "boolean"
+        }
       },
       "if": {
         "properties": { "state": { "const": "failed" } },
@@ -442,6 +468,16 @@
                 "required": ["terminal"]
               }
             }
+          }
+        },
+        {
+          "if": {
+            "properties": { "limit_reached": { "const": true } },
+            "required": ["limit_reached"]
+          },
+          "then": {
+            "properties": { "state": { "const": "completed" } },
+            "required": ["state"]
           }
         }
       ]

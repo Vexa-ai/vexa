@@ -337,6 +337,7 @@ def _policy(body: dict) -> Policy:
         audio_days=retention["audio_days"],
         transcript_days=retention["transcript_days"],
         summary_days=retention["summary_days"],
+        max_meeting_minutes=raw.get("max_meeting_minutes"),
     )
 
 
@@ -358,6 +359,8 @@ def _status_payload(capture: Capture, *, request_id: str) -> dict:
         payload["meeting_id"] = capture.meeting_id
     if capture.state == "failed":
         payload["failure_code"] = capture.failure_code or "internal_failure"
+    if capture.state == "completed" and capture.limit_reached:
+        payload["limit_reached"] = True
     return payload
 
 
@@ -638,14 +641,19 @@ def build_router(
                 "api_version": "zaki-control.v1",
                 "subject": {"tenant_id": subject.tenant_id, "user_id": subject.user_id},
                 "policy": {
-                    "capture_enabled": policy.capture_enabled,
-                    "agent_read_enabled": policy.agent_read_enabled,
-                    "capture_notice_policy_version": policy.policy_version,
-                    "retention": {
-                        "audio_days": policy.audio_days,
-                        "transcript_days": policy.transcript_days,
-                        "summary_days": policy.summary_days,
-                    },
+                    key: value
+                    for key, value in {
+                        "capture_enabled": policy.capture_enabled,
+                        "agent_read_enabled": policy.agent_read_enabled,
+                        "capture_notice_policy_version": policy.policy_version,
+                        "retention": {
+                            "audio_days": policy.audio_days,
+                            "transcript_days": policy.transcript_days,
+                            "summary_days": policy.summary_days,
+                        },
+                        "max_meeting_minutes": policy.max_meeting_minutes,
+                    }.items()
+                    if value is not None
                 },
             },
             request_id=request_id,
@@ -695,6 +703,13 @@ def build_router(
         # Bound the reserve by the ceiling that will ACTUALLY apply to this platform, so a
         # client cannot reserve (and be billed a hold for) more minutes than the bot may run.
         platform_capture_seconds = config.capture_seconds_for(body.get("platform"))
+        # The owner's leave-after setting is a THIRD ceiling on this capture, clamped to (never
+        # above) the platform/deployment ceiling and the metering reserve — whichever binds first
+        # ends the run, and only an owner-set bound makes the bot announce before leaving.
+        owner_cap_seconds = (
+            policy.max_meeting_minutes * 60
+            if policy.max_meeting_minutes is not None else None
+        )
         max_reserved_units = (platform_capture_seconds + 59) // 60
         if (
             attestation.get("attested_by_user_id") != subject.user_id
@@ -752,12 +767,15 @@ def build_router(
             capture = await store.get_capture_by_operation(
                 subject=subject, operation_id=claim.operation_id
             )
+            enforced_cap_seconds = min(platform_capture_seconds, reserved_units * 60)
+            if owner_cap_seconds is not None:
+                enforced_cap_seconds = min(enforced_cap_seconds, owner_cap_seconds)
             if capture is None:
                 capture = Capture(
                     capture_id=_capture_id(), subject=subject, operation_id=claim.operation_id,
                     reservation_id=body["metering"]["reservation_id"], platform=body["platform"],
                     native_meeting_id=native_meeting_id, meeting_id=None, state="requested",
-                    max_capture_seconds=min(platform_capture_seconds, reserved_units * 60),
+                    max_capture_seconds=enforced_cap_seconds,
                 )
                 await store.create_capture(capture)
             if capture.meeting_id is not None:
@@ -815,7 +833,11 @@ def build_router(
                 meeting_title=body.get("meeting_title"),
                 recording_enabled=policy.audio_days > 0,
                 agent_read_enabled=policy.agent_read_enabled,
-                max_lifetime_sec=min(platform_capture_seconds, reserved_units * 60),
+                max_lifetime_sec=enforced_cap_seconds,
+                # The owner-set bound rides the invocation so the BOT (not just the runtime's
+                # hard teardown) knows it: at it the bot posts the leave line in-meeting first,
+                # then exits completed/user_limit_reached. Absent ⇒ unchanged silent behavior.
+                leave_after_ms=enforced_cap_seconds * 1000 if owner_cap_seconds is not None else None,
                 evaluated_at=current,
             )
             meeting_id = str(meeting["id"])
