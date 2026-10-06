@@ -14,6 +14,7 @@ process.on('SIGTERM',stop);process.on('SIGINT',stop);process.on('disconnect',sto
 process.on('message',message=>{
   if(stopping)return;
   if(exact(message,['version','kind']) && message.version===1 && message.kind==='stop')return stop();
+  if(exact(message,['version','kind']) && message.version===1 && message.kind==='leave'){call(()=>sdk?.leaveMeeting());return;}
   if(started || !exact(message,['version','kind','config']) || message.version!==1 || message.kind!=='start' || !validConfig(message.config))return fail('protocol_error');
   started=true;
   const config=message.config;
@@ -29,7 +30,7 @@ process.on('message',message=>{
     sdk.onMeetingStatus(result=>{
       if(stopping)return;
       if(result.status==='failed')return fail('join_failed',result.code);
-      if(result.status==='ended'){emit({kind:'state',state:'ended'},stop);return;}
+      if(result.status==='ended'){emit({kind:'state',state:'ended'});return;}
       if(['connecting','waiting_for_host','waiting_room','in_meeting','reconnecting','disconnecting','ended'].includes(result.status))emit({kind:'state',state:result.status});
     });
     emit({kind:'state',state:'initializing'});sdk.initialize();

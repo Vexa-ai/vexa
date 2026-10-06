@@ -371,8 +371,6 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  core/meetings/modules/zoom-sdk: {}
-
   core/meetings/services/bot:
     dependencies:
       '@vexa/gmeet-pipeline':

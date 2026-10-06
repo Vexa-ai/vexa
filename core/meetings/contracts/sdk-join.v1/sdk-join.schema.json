@@ -76,6 +76,22 @@
             "version",
             "kind"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "leave"
+            }
+          },
+          "required": [
+            "version",
+            "kind"
+          ]
         }
       ]
     },
