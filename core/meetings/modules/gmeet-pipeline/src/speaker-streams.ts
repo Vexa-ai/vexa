@@ -356,6 +356,7 @@ export class SpeakerStreamManager {
             }
             const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
             this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, seg.text.trim(), buffer.windowStartMs, segEndMs, segmentId, buffer.lastLanguage);
+            this.clearStaleDraft(buffer, buffer.windowStartMs);
             buffer.sequenceNumber++;
             buffer.lastConfirmedText = seg.text.trim();
           }

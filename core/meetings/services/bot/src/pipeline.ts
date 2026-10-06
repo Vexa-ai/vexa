@@ -158,9 +158,12 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
  * publish() is async; the lane's sink methods are sync fire-and-forget, so we swallow + log a
  * rejection rather than letting it escape the lane's emit path.
  */
-function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => void): LaneTranscriptSink {
+function laneSink(sink: TranscriptSink, onError?: (e: unknown) => void): LaneTranscriptSink {
   const forward = (seg: LaneSegment): void => {
-    void publish(toBotSegment(seg)).catch((e) => {
+    const operation = seg.completed === false && !seg.text.trim()
+      ? sink.retract?.([seg.segment_id])
+      : sink.publish(toBotSegment(seg));
+    void operation?.catch((e) => {
       (onError ?? ((err) => console.error(`[bot] pipeline: transcript publish rejected: ${String(err)}`)))(e);
     });
   };
@@ -247,7 +250,7 @@ function createGmeetBotPipeline(
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, onError), config, onError });
+  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink, onError), config, onError });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
     async stop() { await lane.dispose(); },
