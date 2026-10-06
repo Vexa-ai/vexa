@@ -1345,6 +1345,29 @@
      "domain": "meetings"
     }
    ]
+  },
+  {
+   "unique-id": "zoom-sdk-capture",
+   "node-type": "module",
+   "name": "zoom-sdk-capture",
+   "description": "Native audio to shared capture contract; no meeting lifecycle",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/zoom-sdk-capture"
+    }
+   ]
+  },
+  {
+   "unique-id": "sdk-capture.v1",
+   "node-type": "contract",
+   "name": "sdk-capture.v1",
+   "description": "Native capture IPC",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/sdk-capture.v1",
+     "domain": "meetings"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1441,7 +1464,9 @@
       "segments-table",
       "recording-blob",
       "userdata-blob",
-      "sdk-join.v1"
+      "sdk-join.v1",
+      "zoom-sdk-capture",
+      "sdk-capture.v1"
      ]
     }
    }

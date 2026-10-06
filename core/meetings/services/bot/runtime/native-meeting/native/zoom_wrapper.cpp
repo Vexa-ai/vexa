@@ -9,6 +9,7 @@
 #include <vector>
 #include <stdint.h>
 #include <cstring>
+#include <chrono>
 
 // Qt event loop (required for Zoom SDK async callbacks on Linux)
 #include <QCoreApplication>
@@ -180,11 +181,13 @@ public:
         unsigned int len = data->GetBufferLen();
         if (len == 0) return;
         unsigned int sampleRate = data->GetSampleRate();
+        auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        auto channels = data->GetChannelNum();
         // Copy data before returning (SDK-owned pointer)
         std::vector<char> buffer(data->GetBuffer(), data->GetBuffer() + len);
-        tsf_.NonBlockingCall([buf = std::move(buffer), sampleRate](Napi::Env env, Napi::Function jsCallback) mutable {
+        tsf_.NonBlockingCall([buf = std::move(buffer), sampleRate, ts, channels](Napi::Env env, Napi::Function jsCallback) mutable {
             Napi::Buffer<char> nodeBuf = Napi::Buffer<char>::Copy(env, buf.data(), buf.size());
-            jsCallback.Call({nodeBuf, Napi::Number::New(env, (double)sampleRate)});
+            jsCallback.Call({nodeBuf, Napi::Number::New(env, (double)sampleRate), Napi::Number::New(env, (double)ts), Napi::Number::New(env, channels)});
         });
     }
 
@@ -197,13 +200,15 @@ public:
         unsigned int len = data->GetBufferLen();
         if (len == 0) return;
         unsigned int sampleRate = data->GetSampleRate();
+        auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        auto channels = data->GetChannelNum();
         std::vector<char> buffer(data->GetBuffer(), data->GetBuffer() + len);
-        tsfOneWay_.NonBlockingCall([buf = std::move(buffer), sampleRate, user_id](Napi::Env env, Napi::Function jsCallback) mutable {
+        tsfOneWay_.NonBlockingCall([buf = std::move(buffer), sampleRate, user_id, ts, channels](Napi::Env env, Napi::Function jsCallback) mutable {
             Napi::Buffer<char> nodeBuf = Napi::Buffer<char>::Copy(env, buf.data(), buf.size());
             jsCallback.Call({
                 nodeBuf,
                 Napi::Number::New(env, (double)sampleRate),
-                Napi::Number::New(env, (double)user_id)
+                Napi::Number::New(env, (double)user_id), Napi::Number::New(env, (double)ts), Napi::Number::New(env, channels)
             });
         });
     }
@@ -465,6 +470,9 @@ Napi::Value ZoomSDKNode::JoinAudio(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
+    if (auto participants = meetingService_->GetMeetingParticipantsController()) {
+        if (auto self = participants->GetMySelfUser()) audioController_->MuteAudio(self->GetUserID());
+    }
     std::cout << "[ZoomSDK] Successfully joined VoIP audio" << std::endl;
     return env.Undefined();
 }
@@ -700,6 +708,7 @@ Napi::Value ZoomSDKNode::GetUserInfo(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(env);
     result.Set("userId", Napi::Number::New(env, userId));
     result.Set("userName", Napi::String::New(env, userInfo->GetUserName() ? userInfo->GetUserName() : "Unknown"));
+    result.Set("isSelf", Napi::Boolean::New(env, userInfo->IsMySelf()));
     result.Set("isHost", Napi::Boolean::New(env, userInfo->IsHost()));
 
     return result;

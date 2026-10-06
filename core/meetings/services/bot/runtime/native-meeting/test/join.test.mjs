@@ -12,6 +12,8 @@ function fixture(t,scenario) {
  writeFileSync(join(dir,'libmeetingsdk.so'),'fixture only');
  const addonPath=join(dir,'fixture.cjs');
  writeFileSync(addonPath,`const fs=require('node:fs');module.exports.ZoomSDK=class {
+ onOneWayAudioData(f){this.audio=f;} getUserInfo(id){return {userName:'Fixture',isSelf:false};} joinAudio(){}
+ startRecording(){this.audio?.(Buffer.alloc(640),32000,77,Date.now(),1);} stopRecording(){}
  onAuthResult(f){this.auth=f} onMeetingStatus(f){this.status=f}
  initialize(){} authenticate(){${scenario==='auth'?'this.auth({success:false,code:11})':'this.auth({success:true})'}}
  joinMeeting(config){fs.writeFileSync(${JSON.stringify(join(dir,'config.json'))},JSON.stringify(config));${scenario==='crash'?'process.exit(4)':scenario==='native'?'throw Error("secret token")':scenario==='wait'?'this.status({status:"waiting_room"})':'this.status({status:"waiting_for_host"});this.status({status:"waiting_room"});setTimeout(()=>this.status({status:"in_meeting"}),30)'}}
@@ -62,4 +64,12 @@ test('native departure preserves runtime until host disposal',async t=>{
  assert.equal(existsSync(join(options.dir,'cleaned')),false);
  const result=await runtime.dispose();assert.equal(result.code,0);assert.equal(result.forced,false);
  assert.equal(existsSync(join(options.dir,'cleaned')),true);
+});
+
+test('capture IPC remains separate from joining and stop keeps meeting alive',async t=>{
+ const runtime=createNativeMeetingRuntime(fixture(t,'success'));
+ const session=createSdkJoinSession(runtime,config);await session.admitted;
+ const frames=[];const off=runtime.subscribe(e=>{if(e.kind==='audio')frames.push(e);});
+ await runtime.startCapture('per-participant');assert.equal(frames.length,1);assert.equal(frames[0].pcm.length,640);assert.equal(frames[0].userId,77);
+ await runtime.stopCapture();off();await session.leave();assert.equal((await runtime.dispose()).code,0);
 });

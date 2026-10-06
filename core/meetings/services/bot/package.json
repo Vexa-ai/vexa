@@ -24,7 +24,8 @@
     "@vexa/transcribe-whisper": "workspace:*",
     "ajv": "^8.17.0",
     "ajv-formats": "^3.0.1",
-    "redis": "^4.7.0"
+    "redis": "^4.7.0",
+    "@vexa/zoom-sdk-capture": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -38,6 +38,8 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset recording-blob [writers: bot, meeting-api]
   data-asset userdata-blob [writers: remote-browser, bot]
   contract sdk-join.v1
+  module zoom-sdk-capture
+  contract sdk-capture.v1
 
 system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api

@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { createSdkJoinSession, type NativeJoinEvent } from './sdk';
+import { createSdkJoinSession, type NativeJoinEvent } from './index';
 const config={meetingId:'12345678901',displayName:'Fixture',jwt:'fixture'};
 async function main(){
  let report:(e:NativeJoinEvent)=>void=()=>{},left=0,disposed=0;
