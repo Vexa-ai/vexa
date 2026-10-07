@@ -52,4 +52,6 @@ A feeder whose frames carry capture-callback stamps (Zoom per-track capture) set
 `callbackStampedFrames`: the guard then measures the gap between consecutive frames, because
 late or lost callbacks space those stamps wider than the audio they carry. Its turn close also
 finalizes only a transcript that covers every buffered sample, and otherwise submits the whole
-window as the final one.
+window as the final one. Its segment and window times come from each frame's own stamp,
+so a turn whose frames cover only part of its wall time keeps its timeline; at the 30 s cap the
+window up to its quietest late frame is finalized from its own request and the rest stays buffered.

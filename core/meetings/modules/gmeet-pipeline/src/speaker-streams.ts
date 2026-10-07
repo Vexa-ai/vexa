@@ -25,6 +25,9 @@ interface SpeakerBuffer {
   speakerId: string;
   speakerName: string;
   chunks: Float32Array[];
+  /** Capture time (ms) of each chunk's first sample, parallel to `chunks`. Segment and window times
+   *  are read from it only with `callbackStampedFrames`. */
+  chunkStartMs: number[];
   totalSamples: number;
   /** Samples already confirmed and emitted — next submission starts here */
   confirmedSamples: number;
@@ -75,6 +78,9 @@ interface SpeakerBuffer {
   /** Window end of the request whose text is `lastTranscript`. Read by the turn-close flush only
    *  with `callbackStampedFrames`: the flush emits that text only when it covers every buffered sample. */
   lastTranscriptEndSample?: number;
+  /** A hard-cap request is in flight for the window ending at this buffered-sample index
+   *  (`callbackStampedFrames` only); its response finalizes that window and keeps the rest. */
+  capCutSample?: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -100,7 +106,10 @@ export interface SpeakerStreamManagerConfig {
    *  frame, on that one clock, instead of from `windowStartMs + buffered samples`, which such a
    *  feeder outruns by construction. A turn close also emits the last transcript only when that
    *  transcript covers every buffered sample, and otherwise submits the whole window as the final
-   *  one. Opt-in; default false keeps every other feeder's behaviour. */
+   *  one. Segment and window times are read from each frame's own stamp rather than from a gapless
+   *  sample count, so a turn whose frames cover only part of its wall time keeps its timeline. At the
+   *  hard cap, the window up to its quietest late frame is finalized from its own request and the
+   *  audio after that cut stays buffered. Opt-in; default false keeps every other feeder's behaviour. */
   callbackStampedFrames?: boolean;
 }
 
@@ -159,6 +168,7 @@ export class SpeakerStreamManager {
       speakerId,
       speakerName,
       chunks: [],
+      chunkStartMs: [],
       totalSamples: 0,
       confirmedSamples: 0,
       lastTranscript: '',
@@ -248,6 +258,8 @@ export class SpeakerStreamManager {
       buffer.bufferStartMs = atMs ?? Date.now();
     }
 
+    // A stamped frame starts at its stamp; an unstamped one continues the buffered audio.
+    buffer.chunkStartMs.push(atMs ?? this.bufferedEndMs(buffer));
     buffer.chunks.push(audioData);
     buffer.totalSamples += audioData.length;
     if (atMs !== undefined) buffer.lastFedEndMs = atMs + (audioData.length / this.sampleRate) * 1000;
@@ -294,6 +306,7 @@ export class SpeakerStreamManager {
     // Discard it and submit the owned audio as the final window.
     if (buffer.pendingFinal) {
       buffer.pendingFinal = false;
+      buffer.capCutSample = undefined;
       if (this.unconfirmedSamples(buffer) === 0) {
         this.fullReset(buffer);
         return false;
@@ -301,6 +314,12 @@ export class SpeakerStreamManager {
       buffer.idleSubmitted = true;
       log(`[SpeakerStreams] Final resubmit for "${buffer.speakerName}" after deferred close (${(this.unconfirmedSamples(buffer) / this.sampleRate).toFixed(1)}s audio)`);
       void this.submitBuffer(buffer);
+      return false;
+    }
+
+    // A hard-cap request answers for the window up to its cut, not for the whole buffer.
+    if (buffer.capCutSample !== undefined) {
+      this.finishCappedWindow(buffer, transcript);
       return false;
     }
 
@@ -378,10 +397,16 @@ export class SpeakerStreamManager {
 
         if (confirmedSegCount > 0) {
           const baseWindowMs = buffer.windowStartMs;
+          const baseSample = buffer.confirmedSamples;
+          // Whisper offsets count submitted samples; a callback-stamped buffer maps them through each
+          // frame's stamp, every other buffer through its gapless window.
+          const timeAtOffset = (sec: number): number => this.callbackStampedFrames
+            ? this.captureTimeAt(buffer, baseSample + Math.floor(sec * this.sampleRate))
+            : baseWindowMs + Math.floor(sec * 1000);
           for (let i = 0; i < confirmedSegCount; i++) {
             const seg = segments[i];
-            buffer.windowStartMs = baseWindowMs + Math.floor(seg.start * 1000);
-            const segEndMs = baseWindowMs + Math.floor(seg.end * 1000);
+            buffer.windowStartMs = timeAtOffset(seg.start);
+            const segEndMs = timeAtOffset(seg.end);
             if (!seg.text.trim() || !this.onSegmentConfirmed) continue;
             if (isHallucination(seg.text.trim())) {
               log(`[SpeakerStreams] [FILTERED] Hallucination segment for "${buffer.speakerName}": "${seg.text.trim().substring(0, 60)}"`);
@@ -395,7 +420,7 @@ export class SpeakerStreamManager {
           }
           const lastConfirmedSeg = segments[confirmedSegCount - 1];
           this.advanceOffset(buffer, lastConfirmedSeg.end);
-          buffer.windowStartMs = baseWindowMs + Math.floor(lastConfirmedSeg.end * 1000);
+          if (!this.callbackStampedFrames) buffer.windowStartMs = baseWindowMs + Math.floor(lastConfirmedSeg.end * 1000);
           return true;
         }
       }
@@ -578,9 +603,7 @@ export class SpeakerStreamManager {
     // dedup-vs-lastConfirmedText guard on purpose — the pending row carries this exact text
     // as completed:false and MUST be replaced by a completed:true row of the same id.
     if (text !== buffer.lastConfirmedText && this.onSegmentConfirmed && !isHallucination(text)) {
-      const endMs = buffer.totalSamples > 0
-        ? buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000
-        : startMs;
+      const endMs = buffer.totalSamples > 0 ? this.audioEndMs(buffer) : startMs;
       this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, startMs, endMs, `${buffer.speakerId}:${buffer.sequenceNumber}`, buffer.lastLanguage);
       buffer.sequenceNumber++;
       buffer.lastConfirmedText = text;
@@ -625,6 +648,17 @@ export class SpeakerStreamManager {
     // Buffer too large — force-flush or trim
     if (totalSec > this.maxBufferDuration) {
       if (buffer.confirmedSamples === 0) {
+        // A callback-stamped feeder finalizes the capped window from its own request, cut at the
+        // quietest frame of its last 4 s, and keeps the audio after the cut. The force-flush below
+        // emits a transcript that misses the audio fed since the last request, then drops it.
+        if (this.callbackStampedFrames) {
+          const cut = this.quietCutSample(buffer, 4);
+          buffer.capCutSample = cut;
+          log(`[SpeakerStreams] Hard cap final-submit for "${buffer.speakerName}" (${totalSec.toFixed(1)}s buffered, ` +
+              `${(cut / this.sampleRate).toFixed(1)}s finalized at its quietest frame)`);
+          if (await this.submitBuffer(buffer, cut)) return;
+          buffer.capCutSample = undefined;    // the capped window is near-silent: fall back
+        }
         // Nothing confirmed — confirmation never triggered. Force-flush whatever
         // transcript we have to prevent monolith segments (e.g. 120s+ buffer).
         if (buffer.lastTranscript) {
@@ -649,24 +683,26 @@ export class SpeakerStreamManager {
    * Near-silent windows (RMS < silenceRmsThreshold) are NOT submitted (#617) — silence yields
    * hallucinated boilerplate, so it never reaches Whisper.
    */
-  private async submitBuffer(buffer: SpeakerBuffer): Promise<void> {
-    const unconfirmed = this.unconfirmedSamples(buffer);
-    if (unconfirmed === 0 || !this.onSegmentReady) return;
+  private async submitBuffer(buffer: SpeakerBuffer, endSample?: number): Promise<boolean> {
+    const end = Math.min(endSample ?? buffer.totalSamples, buffer.totalSamples);
+    const unconfirmed = end - buffer.confirmedSamples;
+    if (unconfirmed <= 0 || !this.onSegmentReady) return false;
 
-    // Build audio from confirmedSamples onward
+    // Build audio from confirmedSamples up to `end` (the whole buffer unless a cut is given)
     const combined = new Float32Array(unconfirmed);
     let dstOffset = 0;
     let samplesToSkip = buffer.confirmedSamples;
 
     for (const chunk of buffer.chunks) {
+      if (dstOffset >= unconfirmed) break;
       if (samplesToSkip >= chunk.length) {
         samplesToSkip -= chunk.length;
         continue;
       }
       const start = samplesToSkip;
       samplesToSkip = 0;
-      const toCopy = chunk.length - start;
-      combined.set(chunk.subarray(start), dstOffset);
+      const toCopy = Math.min(chunk.length - start, unconfirmed - dstOffset);
+      combined.set(chunk.subarray(start, start + toCopy), dstOffset);
       dstOffset += toCopy;
     }
 
@@ -679,10 +715,10 @@ export class SpeakerStreamManager {
     if (rms(combined) < this.silenceRmsThreshold) {
       log(`[SpeakerStreams] [SILENT-SKIP] "${buffer.speakerName}" ${(unconfirmed / this.sampleRate).toFixed(1)}s window ` +
           `below RMS ${this.silenceRmsThreshold} — not submitting (no hallucination surface)`);
-      return;
+      return false;
     }
 
-    buffer.submittedEndSample = buffer.totalSamples;
+    buffer.submittedEndSample = end;
     buffer.inFlight = true;
     this.submitGeneration.set(buffer.speakerId, buffer.generation);
 
@@ -694,6 +730,7 @@ export class SpeakerStreamManager {
       log(`[SpeakerStreams] [STT-FAULT] ${err?.kind ?? 'error'} submitting for ` +
           `"${buffer.speakerName}": ${String(err?.message ?? err)}`);
     }
+    return true;
   }
 
   /**
@@ -716,9 +753,7 @@ export class SpeakerStreamManager {
     // Audio-time end via the buffer's gapless timeline — NOT Date.now(),
     // which is submit/commit ARRIVAL time and overstates the span by the
     // whole commit lag (segments then visually overlap their successors).
-    const endMs = buffer.totalSamples > 0
-      ? buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000
-      : Date.now();
+    const endMs = buffer.totalSamples > 0 ? this.audioEndMs(buffer) : Date.now();
     const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
     this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, buffer.windowStartMs, endMs, segmentId, buffer.lastLanguage);
     buffer.sequenceNumber++;
@@ -770,6 +805,7 @@ export class SpeakerStreamManager {
     // The retained audio starts exactly after the samples removed, independent
     // of when STT finished. Clamp to actual buffered audio, including on fallback.
     const advancedMs = (buffer.confirmedSamples / this.sampleRate) * 1000;
+    const retainedStartMs = this.callbackStampedFrames ? this.captureTimeAt(buffer, buffer.confirmedSamples) : 0;
     this.trimBuffer(buffer);
 
     // Reset confirmation state for the next segment window
@@ -777,7 +813,8 @@ export class SpeakerStreamManager {
     buffer.lastTranscriptEndSample = undefined;
     buffer.confirmCount = 0;
     buffer.lastWords = [];
-    buffer.windowStartMs += advancedMs;
+    if (this.callbackStampedFrames) buffer.windowStartMs = retainedStartMs;
+    else buffer.windowStartMs += advancedMs;
     // The window moved on; the prior pending draft (under the OLD windowStartMs) is superseded.
     // Drop the in-memory tracking so a later turn-close finalize can't re-emit this stale window's
     // text. We don't clear the consumer's draft row here (mid-stream) to avoid a live-edge flicker —
@@ -796,7 +833,9 @@ export class SpeakerStreamManager {
    */
   private trimTailAfter(buffer: SpeakerBuffer, tMs: number): void {
     if (buffer.totalSamples === 0) return;
-    const keep = Math.floor(((tMs - buffer.windowStartMs) / 1000) * this.sampleRate);
+    const keep = this.callbackStampedFrames
+      ? this.sampleCapturedAt(buffer, tMs)
+      : Math.floor(((tMs - buffer.windowStartMs) / 1000) * this.sampleRate);
     if (keep >= buffer.totalSamples) return;
     if (keep <= 0) {
       // Boundary predates this window (offset drift or stale commit) — an
@@ -812,6 +851,7 @@ export class SpeakerStreamManager {
       if (last.length <= excess) {
         excess -= last.length;
         buffer.chunks.pop();
+        buffer.chunkStartMs.pop();
       } else {
         buffer.chunks[buffer.chunks.length - 1] = last.subarray(0, last.length - excess);
         excess = 0;
@@ -836,22 +876,26 @@ export class SpeakerStreamManager {
 
     let samplesToTrim = buffer.confirmedSamples;
     const newChunks: Float32Array[] = [];
+    const newStartMs: number[] = [];
 
-    for (const chunk of buffer.chunks) {
+    buffer.chunks.forEach((chunk, i) => {
       if (samplesToTrim >= chunk.length) {
         samplesToTrim -= chunk.length;
-        continue;
+        return;
       }
       if (samplesToTrim > 0) {
         // Partial chunk — keep the tail
         newChunks.push(chunk.subarray(samplesToTrim));
+        newStartMs.push(buffer.chunkStartMs[i] + (samplesToTrim / this.sampleRate) * 1000);
         samplesToTrim = 0;
       } else {
         newChunks.push(chunk);
+        newStartMs.push(buffer.chunkStartMs[i]);
       }
-    }
+    });
 
     buffer.chunks = newChunks;
+    buffer.chunkStartMs = newStartMs;
     buffer.totalSamples -= buffer.confirmedSamples;
     // Sample indices shift with the trim; keep the request coverage marks on the same index base.
     if (buffer.submittedEndSample !== undefined) buffer.submittedEndSample = Math.max(0, buffer.submittedEndSample - buffer.confirmedSamples);
@@ -866,11 +910,102 @@ export class SpeakerStreamManager {
     return buffer.lastTranscriptEndSample >= buffer.totalSamples;
   }
 
+  /** End (ms) of the buffered audio: from the last frame's own stamp for a callback-stamped feeder,
+   *  from the gapless window for every other feeder. */
+  private audioEndMs(buffer: SpeakerBuffer): number {
+    return this.callbackStampedFrames
+      ? this.bufferedEndMs(buffer)
+      : buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000;
+  }
+
+  /** Capture time (ms) just past the last buffered chunk; the window start when nothing is buffered. */
+  private bufferedEndMs(buffer: SpeakerBuffer): number {
+    const n = buffer.chunks.length;
+    if (n === 0) return buffer.windowStartMs;
+    return buffer.chunkStartMs[n - 1] + (buffer.chunks[n - 1].length / this.sampleRate) * 1000;
+  }
+
+  /** Capture time (ms) of buffered sample `sample`, counted from the first buffered sample, read
+   *  through the stamp of the chunk that holds it. Past the end, it continues from the last chunk. */
+  private captureTimeAt(buffer: SpeakerBuffer, sample: number): number {
+    let rest = sample;
+    for (let i = 0; i < buffer.chunks.length; i++) {
+      const n = buffer.chunks[i].length;
+      if (rest < n) return buffer.chunkStartMs[i] + (rest / this.sampleRate) * 1000;
+      rest -= n;
+    }
+    return this.bufferedEndMs(buffer) + (rest / this.sampleRate) * 1000;
+  }
+
+  /** Index of the first buffered sample captured at or after `tMs`. */
+  private sampleCapturedAt(buffer: SpeakerBuffer, tMs: number): number {
+    let base = 0;
+    for (let i = 0; i < buffer.chunks.length; i++) {
+      const n = buffer.chunks[i].length;
+      const startMs = buffer.chunkStartMs[i];
+      if (tMs <= startMs) return base;
+      const endMs = startMs + (n / this.sampleRate) * 1000;
+      if (tMs < endMs) return base + Math.floor(((tMs - startMs) / 1000) * this.sampleRate);
+      base += n;
+    }
+    return base;
+  }
+
+  /** Start index of the quietest chunk that begins within the last `sec` seconds of buffered audio
+   *  (after the confirmed samples) — where a capped window is cut. The buffer end when none does. */
+  private quietCutSample(buffer: SpeakerBuffer, sec: number): number {
+    const from = buffer.totalSamples - sec * this.sampleRate;
+    let pos = 0, cut = buffer.totalSamples, quietest = Infinity;
+    for (const chunk of buffer.chunks) {
+      if (pos >= from && pos > buffer.confirmedSamples) {
+        const level = rms(chunk);
+        if (level < quietest) { quietest = level; cut = pos; }
+      }
+      pos += chunk.length;
+    }
+    return cut;
+  }
+
+  /** The hard-cap request answered: publish its text as the confirmed segment for the capped window,
+   *  then continue the turn from the cut with the audio fed since. An empty or junk answer falls back
+   *  to the last transcript only when that transcript lies within the cut. */
+  private finishCappedWindow(buffer: SpeakerBuffer, transcript: string): void {
+    const cut = Math.min(buffer.capCutSample ?? buffer.totalSamples, buffer.totalSamples);
+    buffer.capCutSample = undefined;
+    let text = (transcript || '').trim();
+    if (!text || isHallucination(text)) {
+      const withinCut = buffer.lastTranscriptEndSample !== undefined && buffer.lastTranscriptEndSample <= cut;
+      text = withinCut ? buffer.lastTranscript : '';
+    }
+    const startMs = buffer.windowStartMs;
+    if (text && !isHallucination(text) && text !== buffer.lastConfirmedText && this.onSegmentConfirmed) {
+      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, startMs, this.captureTimeAt(buffer, cut),
+        `${buffer.speakerId}:${buffer.sequenceNumber}`, buffer.lastLanguage);
+      buffer.sequenceNumber++;
+      buffer.lastConfirmedText = text;
+      this.clearStaleDraft(buffer, startMs);
+    } else if (buffer.pendingDraftText && this.onSegmentPending) {
+      // Nothing usable for the capped window: withdraw its draft rather than confirm stale text.
+      this.onSegmentPending(buffer.speakerId, buffer.speakerName, '', buffer.pendingDraftStartMs);
+    }
+    log(`[SpeakerStreams] Hard cap finalized for "${buffer.speakerName}" (${(cut / this.sampleRate).toFixed(1)}s)`);
+    buffer.confirmedSamples = cut;
+    const retainedStartMs = this.captureTimeAt(buffer, cut);
+    this.trimBuffer(buffer);
+    buffer.lastTranscript = '';
+    buffer.lastTranscriptEndSample = undefined;
+    buffer.confirmCount = 0;
+    buffer.lastWords = [];
+    buffer.windowStartMs = retainedStartMs;
+    buffer.pendingDraftText = '';
+  }
+
   /**
    * Full reset — discard everything. Used on speaker change and idle cleanup.
    */
   private fullReset(buffer: SpeakerBuffer): void {
     buffer.chunks = [];
+    buffer.chunkStartMs = [];
     buffer.totalSamples = 0;
     buffer.confirmedSamples = 0;
     buffer.lastTranscript = '';
@@ -886,6 +1021,7 @@ export class SpeakerStreamManager {
     buffer.lastFedEndMs = undefined;
     buffer.submittedEndSample = undefined;
     buffer.lastTranscriptEndSample = undefined;
+    buffer.capCutSample = undefined;
     buffer.generation++;
   }
 }
