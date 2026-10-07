@@ -117,7 +117,7 @@ export function ConnectionsPanel({onOpenChange,onModeChange}:{onOpenChange?:(ope
       return <section key={provider} style={cs.card}>
         <h3 style={{...ty.title,margin:'0 0 6px'}}>{label}</h3>
         <p style={{...ty.body,color:'var(--t2)',margin:'0 0 16px'}}>{provider==='custom_secret'?'Store any secret privately. Optionally configure an HTTPS API where the agent can use it.':provider==='google_email'?'Read email and save drafts. Minutes does not send mail.':'Read calendar events.'}</p>
-        
+
         {connections.map(c=><div key={c.id} style={{borderTop:'1px solid var(--line)',padding:'12px 0'}}>
           <div style={{display:'flex',alignItems:'flex-start',gap:16}}>
           <details open={focus?true:undefined} style={{flex:1,minWidth:0}}>
