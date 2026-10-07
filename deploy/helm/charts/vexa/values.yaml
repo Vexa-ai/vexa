@@ -451,7 +451,9 @@ runtime:
   #
   # The two classes are sized INDEPENDENTLY: a meeting bot is a Chromium browser + capture pipeline,
   # an agent worker is a code harness. runtime.v1 carries ONE value per dimension, so each value sets
-  # BOTH the request and the limit (Guaranteed QoS) — there is no separate request/limit knob.
+  # BOTH the request and the limit (Guaranteed QoS). The one separate knob is meetingBot.cpuLimit: a
+  # CPU limit above the bot's cpu request, so a bot bursts onto a node's idle cores while the
+  # scheduler still packs on the request. It makes the bot Pod Burstable rather than Guaranteed.
   #
   # The defaults below are conservative and sized to fit a small dev cluster. RAISE THEM for real
   # meetings: memoryMb is a hard ceiling, and a bot that exceeds it is OOM-killed mid-meeting (before
@@ -460,6 +462,7 @@ runtime:
   workloadResources:
     meetingBot:
       cpu: 1                    # cores → requests/limits cpu: 1000m
+      cpuLimit: ""              # cores → limits cpu only, at least cpu; "" ⇒ the limit equals cpu
       memoryMb: 2048            # MiB   → requests/limits memory: 2048Mi
     agentWorker:
       cpu: 0.5                  # cores → requests/limits cpu: 500m
