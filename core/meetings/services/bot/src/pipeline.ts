@@ -249,8 +249,9 @@ function createGmeetBotPipeline(
   sink: TranscriptSink,
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
+  onsetGapMs?: number,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink, onError), config, onError });
+  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink, onError), config, onError, onsetGapMs });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
     async stop() { await lane.dispose(); },
@@ -472,7 +473,19 @@ export function createBotPipeline(
       inv.botName,
     );
   }
-  return createGmeetBotPipeline(transcribe, sink, perChannelLaneConfig(inv.platform, opts.config), opts.onError);
+  return createGmeetBotPipeline(
+    transcribe, sink, perChannelLaneConfig(inv.platform, opts.config), opts.onError, perChannelOnsetGapMs(inv.platform),
+  );
+}
+
+/** A per-track (Zoom) channel carries one participant, so its turn gap only decides when a stretch
+ *  of speech is finalized. A starved page loses capture callbacks for 1–2 s inside speech; a 2 s gap
+ *  keeps such a stretch whole. Google Meet keeps the lane default (channels rotate between people). */
+export const PER_TRACK_ONSET_GAP_MS = 2000;
+
+/** The per-channel lane's turn-onset gap for one platform; undefined keeps the lane default. */
+export function perChannelOnsetGapMs(platform: Platform | string): number | undefined {
+  return isPerTrackLanePlatform(platform) ? PER_TRACK_ONSET_GAP_MS : undefined;
 }
 
 /** The per-channel lane's tuning for one platform. Per-track capture (Zoom) stamps each frame at

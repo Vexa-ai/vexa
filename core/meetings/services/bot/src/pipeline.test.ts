@@ -16,7 +16,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createBotPipeline, createTranscribe, perChannelLaneConfig } from './pipeline.js';
+import { createBotPipeline, createTranscribe, perChannelLaneConfig, perChannelOnsetGapMs, PER_TRACK_ONSET_GAP_MS } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
@@ -377,6 +377,35 @@ async function main(): Promise<void> {
         && perChannelLaneConfig('zoom')?.callbackStampedFrames === true);
     check('google_meet lane config is passed through unchanged',
       perChannelLaneConfig('google_meet', FAST) === FAST && perChannelLaneConfig('google_meet') === undefined);
+  }
+
+  // ── 9) ZOOM PER-TRACK turn gap: a starved page loses capture callbacks for 1–2 s inside speech.
+  //      1.5 s between two frame stamps inside one continuous turn must not close the turn: one final request at the
+  //      close covers every frame. Google Meet keeps the lane's default 1 s gap.
+  {
+    const ZF = 4096, ZF_MS = (ZF / SR) * 1000;
+    const zframe = new Float32Array(ZF).fill(0.05);
+    const windows: number[] = [];
+    const transcribe = async (pcm: Float32Array): Promise<TranscriptionResult> => {
+      windows.push(pcm.length / ZF);
+      return { text: 'one continuous turn', language: 'en', duration: pcm.length / SR,
+        segments: [{ start: 0, end: pcm.length / SR, text: 'one continuous turn' }] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    await pipe.start();
+    const t0 = 1_800_000_000_000;
+    let t = t0;
+    for (let k = 0; k < 6; k++) { pipe.feedAudio(4, 'Alice', zframe, t); t += 2 * ZF_MS; }
+    t += 1000;                                                     // callbacks lost: 1.5 s between two frame stamps
+    for (let k = 0; k < 6; k++) { pipe.feedAudio(4, 'Alice', zframe, t); t += 2 * ZF_MS; }
+    await pipe.stop();
+    check('zoom: 1.5 s between frame stamps inside speech keeps one turn (one final request for all 12 frames)',
+      windows.length === 1 && windows[0] === 12, JSON.stringify(windows));
+    check('zoom: the turn is published once', sink.published.filter((s) => s.completed).length === 1,
+      JSON.stringify(sink.published.map((s) => s.text)));
+    check('per-track turn gap is 2 s for zoom; google_meet keeps the lane default',
+      perChannelOnsetGapMs('zoom') === PER_TRACK_ONSET_GAP_MS && PER_TRACK_ONSET_GAP_MS === 2000 && perChannelOnsetGapMs('google_meet') === undefined);
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }
