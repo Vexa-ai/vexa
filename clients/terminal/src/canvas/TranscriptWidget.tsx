@@ -15,6 +15,8 @@
  *
  *  Registered as a tab KIND (`surfaces/canvas.tsx`) rather than imported by the renderer, so the
  *  ui-kit keeps knowing nothing about meetings. */
+import { useState } from "react";
+import { copyText } from "../ui-kit/ContextMenu";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
 import { CanvasActionsProvider } from "./actions";
 import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
@@ -23,6 +25,18 @@ import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMe
 function WidgetBody({ meetingId }: { meetingId: string }) {
   const { transcript, meeting } = useMeeting();
   const renderText = useTermRenderer(meetingId);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const copyTranscript = async () => {
+    const segments = transcript.segments;
+    const pending = [...segments].reverse().find(s => s.completed === false);
+    const visible = [...segments.filter(s => s.completed !== false), ...(pending ? [pending] : [])];
+    const text = visible.filter(s => s.text.trim()).map(s =>
+      `${s.speaker ? s.speaker + "\n" : ""}${s.text}`).join("\n\n");
+    setCopyError(false);
+    try { await copyText(text); setCopied(true); }
+    catch { setCopyError(true); }
+  };
   // The same durable-truth rule the canvas states: a row can stay stuck on a live session_uid after
   // a stop, so a TERMINAL status wins over the list's `live` flag.
   const durableTerminal = ["completed", "failed", "stopped", "past"].includes(meeting.status ?? "");
@@ -42,6 +56,13 @@ function WidgetBody({ meetingId }: { meetingId: string }) {
         <span style={{ flex: "1 1 0%" }} />
         {/* Highlight belongs to the transcript, so it comes with it — a reader who scrolled the
             widget into view should not have to find a different surface to attribute what is in it. */}
+        <button type="button" aria-label="Copy transcript" disabled={!transcript.segments.some(s => s.text.trim())}
+          onClick={() => void copyTranscript()} onBlur={() => setCopied(false)}
+          style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 999,
+            border: "1px solid var(--line2)", background: "var(--panel2)", color: "var(--t2)" }}>
+          {copied ? "Copied" : "Copy transcript"}
+        </button>
+        {copyError && <span role="alert">Could not copy transcript</span>}
         <HighlightButton meeting={meetingId} live={live} />
       </div>
       <LiveTranscriptEngine

@@ -190,13 +190,19 @@ def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
     and the turn was right."""
     if not prompt or not reply or not tools:
         return None
-    if not _DISBELIEF.search(reply):
+    refusals = list(_DISBELIEF.finditer(reply))
+    if not refusals:
         return None
     words = set(re.findall(r"[a-z]+", prompt.lower()))
     have = {str(t).rsplit("__", 1)[-1] for t in tools}
     for verbs, tool in _VERB_TOOL:
         if tool in have and words.intersection(verbs):
-            return tool
+            # Prompt includes workspace context. Its verbs cannot establish what capability
+            # the answer refused. Require the SAME refusal clause to name this tool/domain.
+            for refusal in refusals:
+                clause=refusal.group(0).lower()
+                if tool in clause or (tool.startswith('bot_') and re.search(r'\bbot\b',clause)) or (tool=='meeting_transcript' and re.search(r'\btranscript\b',clause)):
+                    return tool
     return None
 
 

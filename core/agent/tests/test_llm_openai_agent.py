@@ -64,6 +64,8 @@ def _blocking(monkeypatch):
     # The loop streams by default; these tests script whole messages, so they run the blocking path.
     # Streaming has its own test below.
     monkeypatch.setenv("VEXA_AGENT_STREAM", "0")
+    # Legacy hard-cap tests explicitly exercise the operator opt-out.
+    monkeypatch.setenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", "0")
     monkeypatch.delenv("VEXA_MOUNTS", raising=False)
 
 
@@ -978,3 +980,32 @@ def test_a_private_address_is_refused_inside_the_loop(tmp_path):
     result = next(e for e in evs if e["type"] == "tool-result")
     assert result["ok"] is False and "169.254.169.254" in result["summary"]
     assert evs[-1]["ok"] is True          # a refusal is an ordinary result; the turn goes on
+
+
+@pytest.mark.parametrize("batched", [True, False])
+def test_chat_continues_past_40_without_replaying_or_refusing_calls(tmp_path, monkeypatch, batched):
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "40")
+    calls=[(f"call_{i}", "Write", {"file_path": str(tmp_path / f"fact-{i}.md"), "content": str(i)}) for i in range(45)]
+    seen=[]
+    responses = [_msg("", calls)] if batched else [_msg("", [call]) for call in calls]
+    h=_harness(_server([*responses,_msg("Research complete")],seen))
+    h.prepare(tmp_path)
+    events=_events(h,tmp_path,"Research all sources",allowed_tools=["Write"])
+    executed=[e['callId'] for e in events if e['type']=='tool-call']
+    assert executed==[f"call_{i}" for i in range(45)]
+    assert events[-1]['ok'] and events[-1]['steps']==45
+    assert not any(e['type']=='turn-truncated' for e in events)
+    assert 'act' not in events[-1]
+    assert len(list(tmp_path.glob('fact-*.md')))==45
+    assert len([m for m in seen[-1]['messages'] if m['role']=='tool'])==45
+
+
+def test_auto_continuation_keeps_time_limit(tmp_path, monkeypatch):
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TURN_SEC", "-1")
+    h=_harness(_server([_msg("",[("call", "Write", {"file_path":str(tmp_path/'never.md'),"content":"no"})])]))
+    h.prepare(tmp_path)
+    events=_events(h,tmp_path,"work",allowed_tools=["Write"])
+    assert not events[-1]['ok'] and 'time budget' in events[-1]['reason']
+    assert not (tmp_path/'never.md').exists()

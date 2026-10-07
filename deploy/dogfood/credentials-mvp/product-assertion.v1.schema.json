@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Product credential broker assertion v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["role", "actor", "session", "at", "nonce", "method", "path", "body"],
+  "properties": {
+    "role": {"enum": ["agent", "human", "git"]},
+    "actor": {"type": "string", "minLength": 1, "maxLength": 160},
+    "session": {"type": "string", "minLength": 1, "maxLength": 160},
+    "at": {"type": "integer"},
+    "nonce": {"type": "string", "minLength": 1, "maxLength": 160},
+    "method": {"enum": ["GET", "POST"]},
+    "path": {"type": "string", "pattern": "^/api/", "maxLength": 16384},
+    "body": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

@@ -675,3 +675,24 @@ export async function ensureDeployKey(slug: string, repo?: string): Promise<Depl
 export async function readDeployKey(slug: string): Promise<DeployKey> {
   return getJson(`/api/workspace/${encodeURIComponent(slug)}/deploy-key`);
 }
+
+export interface WorkspaceImport {
+  operation_id: string; status: "queued" | "running" | "completed" | "failed" | "interrupted";
+  result?: { workspace: string; cloned: boolean; changed: boolean; nested: boolean; repo: string; ref: string };
+  error?: string; error_status?: number;
+}
+
+/** Start once, then query the same durable operation until the backend confirms completion. */
+export async function importWorkspace(repo: string, ref: string, token: string | undefined,
+  progress: (message: string) => void): Promise<NonNullable<WorkspaceImport["result"]>> {
+  let job = await getJson<WorkspaceImport>("/api/workspace/import", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, ref, token }) });
+  while (job.status === "queued" || job.status === "running") {
+    progress("Importing repository as a new workspace. Large repositories can take several minutes.");
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    job = await getJson<WorkspaceImport>(`/api/workspace/import/${encodeURIComponent(job.operation_id)}`);
+  }
+  if (job.status !== "completed" || !job.result)
+    throw new ApiError(job.error_status ?? 409, job.error ?? "Import interrupted. Check the workspace before retrying.", `/api/workspace/import/${job.operation_id}`);
+  return job.result;
+}

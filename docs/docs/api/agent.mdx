@@ -350,3 +350,37 @@ credentials for expiry. `config` echoes only `mode`, `model` and `base_url`.
 `GET /api/transcription/test` → `{ ok, summary, source }` (plus per-failure detail). Probes the
 effective STT backend with its token and then a real transcribe, so a zero-balance account fails here
 rather than on every segment; `source` says whether settings or the deployment env was tested.
+
+## Repository imports
+
+`POST /api/workspace/import` accepts `repo`, optional `ref` (default `main`) and an
+optional one-off `token` from the authenticated UI. It returns HTTP 202 with an
+`operation_id` and `status`. Credentials are never included in the persisted operation.
+
+Poll `GET /api/workspace/import/{operation_id}`. States are `queued`, `running`,
+`completed`, `failed`, and `interrupted`. Only `completed` includes a usable `result`
+with the workspace slug, repository and ref. Status is scoped to the caller. Repeating
+the same repository/ref recovers the operation; a different import while one is
+running returns 409. Status survives an agent-service restart, but an unfinished
+operation is marked interrupted rather than automatically replayed.
+
+The MCP equivalents are `workspace_import(repo, ref, credential_workspace?)` and
+`workspace_import_status(operation_id)`. They use configured server-side credentials
+and expose no token argument. The HTTP routes own their schemas and descriptions.
+
+If a deploy key is already registered for another workspace you own, pass its slug as
+`credential_workspace`. The server verifies ownership before using the key and saves
+the reference for later Git operations; it does not copy the key or grant access.
+
+### Request a secure connection
+
+With a credential broker configured, agent MCP exposes
+`connection_request(provider="google_email" | "google_calendar")` and
+`connections_status()`. These belong to the agent domain; a meetings-only
+installation does not expose them. The gateway assembles the deployed manifests.
+
+A request returns a connection reference and `awaiting_user` or an existing
+`ready` status. Minutes opens **Connections** on the right, where the user chooses
+**Continue with Google** and grants read-only consent. Agents must never request
+passwords, tokens or authorization codes in chat. `ready` means authorization was
+stored; it does not establish that email ingestion or Calendar auto-join is active.

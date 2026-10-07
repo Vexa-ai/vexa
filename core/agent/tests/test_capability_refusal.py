@@ -105,3 +105,7 @@ def test_the_worker_friction_path_scrubs_before_it_is_durable(tmp_path, monkeypa
     rec = json.loads(written.splitlines()[-1])
     assert rec["tool"] == "bot_send"          # non-secret fields survive intact
     assert "bot-dispatch tool" in rec["reply"]
+
+def test_email_refusal_with_transcript_in_context_does_not_replay():
+    assert disbelieved_capability('Context: transcript. Send a test email', "I don't have a send tool in this session. Here is your email draft.", TOOLS) is None
+    assert disbelieved_capability('read the transcript', "I cannot access Gmail tools in this session", TOOLS) is None

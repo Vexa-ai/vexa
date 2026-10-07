@@ -228,6 +228,7 @@ def build_production_app(
         meeting_api_url=meeting_api_url,
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
+        agent_mcp_url=os.getenv("AGENT_MCP_URL", ""),
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )

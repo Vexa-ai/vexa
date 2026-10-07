@@ -167,7 +167,7 @@ export function peopleLine(members: readonly NamedMember[] | null, mySubject?: s
  *  `shared workspace` is what the panel has always shown for it; this is the same gloss in the
  *  middle of a sentence. */
 export const placeWord = (kind: WorkspaceKind): string =>
-  kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "shared workspace";
+  kind === "private" ? "Workspace" : kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "shared workspace";
 
 /** THE EYEBROW (#1634's design spec, point 1) — the kind, 12px and muted, above the title.
  *
@@ -177,7 +177,7 @@ export const placeWord = (kind: WorkspaceKind): string =>
  *  `Pilot · shared workspace · you, Jane Smith and 2 more` says the kind in the middle of a
  *  sentence about people, where it reads as one more fact in a list. */
 export const eyebrow = (kind: WorkspaceKind): string =>
-  kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "Shared workspace";
+  kind === "private" ? "Workspace" : kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "Shared workspace";
 
 /** THE PAGE'S OWN TITLE, and the body with that heading taken off it.
  *
@@ -216,7 +216,7 @@ export interface Avatar { key: string; name: string; you: boolean }
 export const AVATARS_SHOWN = 3;
 export function avatarPeople(f: FrontPageFacts): Avatar[] {
   const mine = (f.myName || "").trim();
-  if (f.kind === "desk") return mine ? [{ key: "me", name: mine, you: true }] : [];
+  if (f.kind === "desk" || f.kind === "private") return mine ? [{ key: "me", name: mine, you: true }] : [];
   if (f.kind === "global") {
     const admin = (f.adminName || "").trim();
     return admin ? [{ key: "admin", name: admin, you: admin === mine }] : [];
@@ -273,6 +273,7 @@ export const pageCount = (n: number | null): string | null =>
  *  above this row. `Pilot · shared workspace · you, Jane Smith and 2 more` was three answers in a
  *  row with no sentence among them. */
 export function peopleClause(f: FrontPageFacts): string | null {
+  if (f.kind === "private") return "Private workspace";
   if (f.kind === "group") return peopleLine(f.members, f.mySubject);
   return visibilitySentence(f.kind, f.policies,
     { company: f.company, adminFirstName: f.adminFirstName });
@@ -425,7 +426,7 @@ export function stripActs(f: {
     ? { id: "sync", label: "Sync", why: "Ask the chat to sync this workspace with its GitHub home" }
     : { id: "connect", label: "Connect a repo", why: "Ask the chat to connect this workspace to a GitHub repository" };
   // A DESK HAS NO MEMBERS to add — it is one person's, and the sentence above says so.
-  return f.kind === "desk" ? [repo, history] : [
+  return f.kind === "desk" || f.kind === "private" ? [repo, history] : [
     { id: "member", label: "Add a member", why: "Ask the chat who should join, and in which role" },
     repo, history,
   ];

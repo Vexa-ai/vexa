@@ -90,6 +90,10 @@ _FOCUS_TOOLS = frozenset({
     "workspace_new",
     "mcp__vexa__workspace_target",
     "workspace_target",
+    "workspace_import",
+    "mcp__vexa__workspace_import",
+    "workspace_import_status",
+    "mcp__vexa__workspace_import_status",
 })
 
 
@@ -195,6 +199,8 @@ def _workspace_focus(content: object) -> "dict | None":
         return None
     if not isinstance(obj, dict):
         return None
+    if obj.get("status") == "completed" and isinstance(obj.get("result"), dict):
+        obj = {"targeted": obj["result"].get("workspace"), "name": obj["result"].get("name")}
     wid = str(obj.get("created") or obj.get("targeted") or "").strip()
     # A slug is one path segment and never a dot-namespaced reserved one. Same shape check the
     # store itself applies; refusing here keeps a malformed answer out of a durable session record.

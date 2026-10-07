@@ -101,6 +101,7 @@ from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
 from control_plane.routers import friction as routers_friction
 from control_plane.routers import proposals as routers_proposals
+from control_plane.routers import connections as routers_connections
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
     MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
@@ -955,6 +956,13 @@ def create_app(
         """The deploy-key name for a target: a shared workspace keys by its id (the key belongs to the
         WORKSPACE, so every member's pull uses the same one), a person's desk by subject."""
         target = (slug or "").strip()
+        binding = attached_workspaces(wsr.root, subject).get("slots", {}).get(target, {}).get("credential_workspace")
+        if binding:
+            try:
+                membership_mod.require_role(wsr.root, binding, subject, "owner")
+            except MembershipError as exc:
+                raise HTTPException(status_code=403, detail="Repository credential workspace is no longer accessible") from exc
+            return deploy_keys_mod.workspace_key(workspace_id=binding)
         if target and target != subject and membership_mod.is_member(wsr.root, target, subject) is not None:
             return deploy_keys_mod.workspace_key(workspace_id=target)
         return deploy_keys_mod.workspace_key(subject=subject)
@@ -1054,7 +1062,7 @@ def create_app(
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
         settings=settings, stream_reader=stream_reader, subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces):
+    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections):
         app.include_router(_r.build(**_deps))
 
     return app

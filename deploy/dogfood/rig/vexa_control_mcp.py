@@ -5963,6 +5963,9 @@ def _transport_security():
 # Stateless means each request stands alone: no session handshake to reject, no server memory to
 # outlive, and a restart is invisible to a client mid-turn. The cost is server-initiated streaming,
 # which this server does not use — every tool here answers in one response.
+from workspace_import_tools import register_workspace_import_tools
+register_workspace_import_tools(mcp, http=_http, subject=me, guard=_anon_guard, agent_api=AGENT_API)
+
 app = AUTH_MIDDLEWARE(mcp.streamable_http_app(
     transport_security=_transport_security(), stateless_http=True))
 

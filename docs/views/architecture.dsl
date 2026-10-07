@@ -51,6 +51,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in
   data-asset va-chat
+  service agent-mcp
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -150,6 +151,11 @@ edges:
   flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
   flows-worker -req-> gateway
   flows-worker -req-> admin-api
+  agent-api -req-> credentials-broker
+  terminal -req-> credentials-broker
+  credentials-broker -req-> credentials-vault
+  gateway -req-> agent-mcp  # Delegated /mcp transport; bearer forwarded without asserted identity; agent domain validates scope
+  agent-mcp -req-> agent-api  # Authenticated subject scoped agent operations and connection setup requests
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

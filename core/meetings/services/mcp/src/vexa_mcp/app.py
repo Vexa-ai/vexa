@@ -1341,7 +1341,7 @@ def create_app(
         with httpx.Client(transport=assembly_transport) as _boot:
             _assembly, _openapi, _bases = discover_mod.discover(_boot, env=_assembly_env)
         _bound = bind_mod.verify(_assembly, _openapi)
-        register_mod.register(app, _bound, _bases, transport=transport, env=_assembly_env)
+        register_mod.register(app, _bound, _bases, transport=transport, env=_assembly_env, gateway_url=base_url)
         app.state.assembly = _assembly
 
     # ---------------------------

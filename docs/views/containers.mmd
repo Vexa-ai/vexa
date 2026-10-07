@@ -11,6 +11,7 @@ flowchart LR
   subgraph agent["agent"]
     agent_api["agent-api"]
     agent_worker["agent-worker"]
+    agent_mcp["agent-mcp"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
@@ -41,6 +42,8 @@ flowchart LR
   extension["extension"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
+  credentials_broker["credentials-broker"]
+  credentials_vault["OpenBao"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
@@ -65,3 +68,8 @@ flowchart LR
   flows_worker -->|""| agent_api
   flows_worker -->|""| gateway
   flows_worker -->|""| admin_api
+  agent_api -->|"req"| credentials_broker
+  terminal -->|"req"| credentials_broker
+  credentials_broker -->|"req"| credentials_vault
+  gateway -->|"HTTP"| agent_mcp
+  agent_mcp -->|"HTTP"| agent_api

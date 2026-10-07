@@ -43,6 +43,10 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 });
 
 import { Chat } from "../../surfaces/chat";
+import { useChatActive } from "../../surfaces/chatActivity";
+function ActivityProbe({ session }: { session: string }) {
+  return <span data-testid="agent-activity">{useChatActive(session) ? "Active" : "Idle"}</span>;
+}
 import { PagesPanel } from "../PagesPanel";
 import { resetActs } from "../../surfaces/actState";
 import { clearPending } from "../extend";
@@ -64,6 +68,7 @@ function mount(body: string | null) {
   return render(
     <ServicesProvider container={container()}>
       <Chat params={{ session: `act-state-${seq}` }} />
+      <ActivityProbe session={`act-state-${seq}`} />
       <PagesPanel pages={[{ path: PATH, label: "New" }]} docPath={PATH} onOpen={() => {}} body={body} />
     </ServicesProvider>,
   );
@@ -126,12 +131,14 @@ describe("an act control while its job runs", () => {
     //    pressed into and got nothing back.
     expect(state("create")).toBe("working");
     expect(head("create")).toBe("Creating…");
+    expect(screen.getByTestId("agent-activity").textContent).toBe("Active");
 
     await waitFor(() => expect(stream.calls.length).toBe(1));
     await flush(() => {
       stream.calls[0].cb.onJobStarted?.({ jobId: "j-9", kind: "create", target: PATH, line: "on it" } as never);
     });
     expect(head("create")).toBe("Creating…");
+    expect(screen.getByTestId("agent-activity").textContent).toBe("Active");
 
     // 2. THE JOB'S OWN STEPS, live, in the same vocabulary the chat's row uses.
     await flush(() => { stream.calls[0].cb.onJobStep?.("j-9" as never, "Write" as never); });
@@ -171,6 +178,7 @@ describe("an act control while its job runs", () => {
     // …and it is working now, not queued: one control, one act, one line running through both
     await waitFor(() => expect(state("create")).toBe("working"));
     expect(head("create")).toBe("Creating…");
+    expect(screen.getByTestId("agent-activity").textContent).toBe("Active");
   });
 
   it("LANDED: the record goes and the control is a control again", async () => {

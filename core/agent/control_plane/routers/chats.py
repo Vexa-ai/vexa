@@ -187,7 +187,7 @@ def build(**d) -> APIRouter:
             sid, title = str(r.get("session") or ""), str(r.get("title") or "")
             meeting_title = (titles.get(sid[len(_MEET_SESSION_PREFIX):], "")
                              if sid.startswith(_MEET_SESSION_PREFIX) else "")
-            out.append({**r, "label": chat_label_mod.chat_label(
+            out.append({**r, "label": r.get("named_title") or chat_label_mod.chat_label(
                 title, meeting_title=meeting_title,
                 scaffold_label=_preset_label(chat_label_mod.preset_kind(title), cache))})
         return out
@@ -527,6 +527,11 @@ def build(**d) -> APIRouter:
         # and therefore in front of the sentinel below, so the person's half stays exactly their
         # words (F47): this is machinery, and machinery never renders as somebody's speech.
         prompt = _target_line(subject, session, _target) + prompt
+        import json
+        prompt = (f"Current chat session: {json.dumps(session)}. Once the task is clear, call chat_name "
+                  "with this session and a concise 3–7 word task title describing the actual objective "
+                  "(for example, ‘Connect personal calendar’). Do not copy the raw opening message, "
+                  "include secrets, or narrate naming. A human-chosen title is protected.\n" + prompt)
         # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
         # user's words are the exact suffix; the sentinel goes right before them.
         #
@@ -755,6 +760,35 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — index drop is the contract; the file delete is best-effort
             logger.exception("dropping continuity file failed subject=%s session=%s", subject, session)
         return {"ok": True}
+    @router.post("/api/chat/name")
+    def name_chat(request: Request, body: dict = Body(...)):
+        subject = subject_of(request)
+        session = body.get('session')
+        title = body.get('title')
+        if not isinstance(session, str) or not isinstance(title, str):
+            raise HTTPException(422, 'A session and title are required')
+        title = ' '.join(title.split())
+        if not title or len(title) > 100:
+            raise HTTPException(422, 'Use a title between 1 and 100 characters')
+        if not any(r['session'] == session for r in sess.list(subject)):
+            raise HTTPException(404, 'Chat not found')
+        changed = sess.name(subject, session, title, human=body.get('source') != 'agent')
+        row = next(r for r in _labelled(subject, sess.list(subject)) if r['session'] == session)
+        return {'changed': changed, 'label': row['label'], 'name_source': row.get('name_source')}
+
+    @router.get("/api/chat/order")
+    def read_chat_order(request: Request):
+        return {'order': sess.rail_order(subject_of(request))}
+
+    @router.put("/api/chat/order")
+    def save_chat_order(request: Request, body: dict = Body(...)):
+        order = body.get('order')
+        if (not isinstance(order, list) or len(order) > 5000
+                or any(not isinstance(x, str) or not x or len(x) > 300 for x in order)
+                or len(order) != len(set(order))):
+            raise HTTPException(422, 'Invalid chat order')
+        return {'order': sess.rail_order(subject_of(request), order)}
+
     @router.get("/api/sessions")
     def list_sessions(request: Request):
         """THE RAIL, FOR THIS PERSON, WHEREVER THEY SIGN IN (Vexa-ai/vexa#1591).

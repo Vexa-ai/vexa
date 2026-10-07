@@ -209,3 +209,30 @@ describe("workspaceApi — attach an existing repo (deploy-key credential model)
     expect(fetchMock.mock.calls.at(-1)![1]).toBeUndefined();   // a plain GET — no body, nothing minted
   });
 });
+
+describe("repository import progress", () => {
+  it("waits beyond the gateway timeout without starting a second clone", async () => {
+    vi.useFakeTimers();
+    try {
+      const { importWorkspace } = await import("../workspaceApi");
+      let polls = 0;
+      const result = { workspace: "plain", nested: false, cloned: true };
+      globalThis.fetch = vi.fn(async (_url, init) => ({ ok: true, status: 200,
+        json: async () => init?.method === "POST"
+          ? { operation_id: "job1", status: "queued" }
+          : ++polls < 25 ? { operation_id: "job1", status: "running" }
+          : { operation_id: "job1", status: "completed", result },
+      })) as typeof fetch;
+      const progress = vi.fn();
+      const done = vi.fn();
+      const pending = importWorkspace("https://github.com/example/plain", "main", undefined, progress).then(done);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(done).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(7_000);
+      await pending;
+      expect(done).toHaveBeenCalledWith(result);
+      expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+      expect(progress).toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+});

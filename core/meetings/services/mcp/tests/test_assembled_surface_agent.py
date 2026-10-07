@@ -44,10 +44,23 @@ AGENT_OPENAPI = {"paths": {
     "/api/workspace/new": {"post": {"summary": "Ws New", "requestBody": {"content": {
         "application/json": {"schema": {"$ref": "#/components/schemas/WorkspaceNewBody"}}}}}},
 }}
+AGENT_OPENAPI["paths"].update({
+    "/api/workspace/import": {"post": {"description": "Import private or public repositories as independent workspaces; do not WebFetch for access.", "requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "required": ["repo"], "properties": {
+            "repo": {"type": "string"}, "ref": {"type": "string", "default": "main"}, "token": {"type": "string"}, "credential_workspace": {"type": "string"}}}}}}}},
+    "/api/workspace/import/{operation_id}": {"get": {"description": "Poll import until completed.", "parameters": [
+        {"name": "operation_id", "in": "path", "required": True, "schema": {"type": "string"}}]}}
+})
 AGENT_OPENAPI["components"] = {"schemas": {"WorkspaceNewBody": {
     "type": "object", "title": "WorkspaceNewBody",
     "properties": {"name": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Name"}}}}}
 
+AGENT_OPENAPI["paths"].update({
+    "/api/connections/request": {"post": {"description": "Request trusted connection setup", "requestBody": {"content": {
+        "application/json": {"schema": {"type":"object", "required":["provider"], "properties": {
+            "provider":{"type":"string", "enum":["google_email","google_calendar"]}}}}}}}},
+    "/api/connections": {"get": {"description":"Read connection metadata", "parameters":[]}},
+})
 BUILT_IN = 14
 
 
@@ -178,3 +191,34 @@ def test_agent_beside_flows_is_twentythree_plus_the_agent_tools():
     assert len(names) == 23 + n_agent, (
         f"expected 23 + {n_agent} = {23 + n_agent} tools with flows+agent both present, got "
         f"{len(names)}")
+
+
+def test_connections_are_owned_only_by_agent_and_absent_without_it():
+    names={'connection_request','connections_status'}
+    assert names <= {t['name'] for t in AGENT_MANIFEST['tools']}
+    assert names.isdisjoint({t.name for t in _boot().state.mcp.tools})
+    app=_boot(AGENT_API_URL='http://agent')
+    assert all(t.domain=='agent' for t in app.state.assembly.tools if t.name in names)
+
+
+def test_connection_call_goes_through_gateway_with_caller_identity():
+    from fastapi.testclient import TestClient
+    seen=[]
+    def upstream(request):
+        seen.append(request)
+        return httpx.Response(200,json={'status':'awaiting_user','connection_id':'a'*32})
+    def discovery(request):
+        if str(request.url)=='http://agent/.well-known/mcp-tools.json':
+            return httpx.Response(200,json=AGENT_MANIFEST)
+        if str(request.url)=='http://agent/openapi.json':
+            return httpx.Response(200,json=AGENT_OPENAPI)
+        return httpx.Response(404)
+    app=create_app('http://gateway.test',transport=httpx.MockTransport(upstream),
+        assembly_env={'ADMIN_API_URL':'http://identity','AGENT_API_URL':'http://agent'},
+        assembly_transport=httpx.MockTransport(discovery))
+    result=TestClient(app).post('/tools/connection_request',json={'provider':'google_email'},headers={'x-api-key':'fixture-user-key'})
+    assert result.status_code==200
+    assert str(seen[-1].url)=='http://gateway.test/agent/connections/request'
+    assert seen[-1].headers['x-api-key']=='fixture-user-key'
+    assert 'x-user-id' not in seen[-1].headers
+    assert json.loads(seen[-1].content)=={'provider':'google_email'}

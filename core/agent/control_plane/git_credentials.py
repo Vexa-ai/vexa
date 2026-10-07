@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from control_plane import secret_store
+from control_plane import git_secret_store as secret_store
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def read_github_token(root: str | Path, subject: str) -> Optional[str]:
     if name is None:
         return None
     tok = secret_store.get(root, name)
-    if tok:
+    if tok or secret_store.enabled():
         return tok
     legacy = _legacy_path(root, subject)
     if legacy is None:
@@ -86,6 +86,8 @@ def set_github_token(root: str | Path, subject: str, token: Optional[str]) -> bo
     name = _name(subject)
     if name is None:
         raise ValueError("invalid subject")
+    if secret_store.enabled():
+        return secret_store.put(root, name, token)
     legacy = _legacy_path(root, subject)
     if legacy is not None:
         try:

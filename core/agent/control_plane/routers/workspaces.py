@@ -19,6 +19,7 @@ from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
+from control_plane import workspace_import as imports
 from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
@@ -26,11 +27,11 @@ from control_plane.api_shared import (
     ArchiveBody, GitTokenBody, InviteAcceptBody, InviteCreateBody, MAX_UPLOAD_BYTES,
     RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
-    WorkspaceInviteBody, WorkspaceMembershipBody,
+    WorkspaceInviteBody, WorkspaceMembershipBody, WorkspaceImportBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
     WorkspaceRenameBody, WorkspaceSwapBody, _upload_filename, logger)
 from control_plane.workspace_attach import (
-    CloneError, activate_workspace, active_workspaces, attach_shared_workspace,
+    CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
     attached_workspaces, create_shared_workspace_dir, create_workspace,
     deactivate_workspace, delete_workspace, ensure_workspace_private,
     ensure_workspace_shareable, rename_workspace, set_archived, set_shared_active,
@@ -972,6 +973,13 @@ def build(**d) -> APIRouter:
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
         put a NAME where it used to print a directory name (F49: the chat header read `126`)."""
         subject = subject_of(request)
+        # Private attached roots resolve within their owner's slots, never as
+        # instance-wide desks in the global registry.
+        own = attached_workspaces(wsr.root, subject)
+        slot = own.get("slots", {}).get(slug)
+        if slot is not None and slug not in (own.get("active"), "seed") and workspace_slot_dir(wsr.root, subject, slug).is_dir():
+            return {"id": slug, "slug": slug, "name": slot.get("name") or slug,
+                    "kind": "private", "access": "readable", "writable": True}
         rec = workspace_registry.by_slug(slug) or _ws_sync(slug)
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return ids_mod.view(rec, access, writable=ids_mod.writable_for(
@@ -1120,6 +1128,55 @@ def build(**d) -> APIRouter:
             ],
             "index_degraded": index_degraded,
         }
+    @router.post("/api/workspace/import", status_code=202)
+    def ws_import(request: Request, body: WorkspaceImportBody):
+        """Import a repository as its own workspace; preserve Personal and the repository tree.
+
+        Use this for public AND private repository URLs, never WebFetch as an access test.
+        Returns an operation_id immediately. Poll workspace_import_status until completed;
+        queued/running is not success. Stored credentials are resolved inside the agent service.
+        credential_workspace optionally reuses the deploy key of a workspace you own.
+        """
+        subject = subject_of(request)
+        repo = _repo(body.repo)
+        try:
+            ref = repo_ref.valid_ref(body.ref)
+        except repo_ref.RepoRefError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        credential_workspace = (body.credential_workspace or "").strip()
+        if credential_workspace:
+            try:
+                membership_mod.require_role(wsr.root, credential_workspace, subject, "owner")
+            except MembershipError as exc:
+                raise _member_error(exc)
+        key = deploy_keys_mod.workspace_key(subject=subject, workspace_id=credential_workspace)
+        repo = imports.repository_url(repo, has_deploy_key=deploy_keys_mod.exists(wsr.root, key),
+                                      has_token=bool(body.token or (not credential_workspace and git_creds.read_github_token(wsr.root, subject))))
+        def operation():
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=repo, subject=subject, explicit_token=body.token) as cred:
+                try:
+                    result = activate_workspace(wsr.root, subject, repo, ref,
+                                                slug=imports.workspace_slug(repo, ref), token=cred.token, clone=_clone_fn(cred))
+                except CloneError as exc:
+                    raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, credential_workspace or None, repo)
+            name = repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+            rename_workspace(wsr.root, subject, result.slug, name)
+            if credential_workspace:
+                bind_repository_credential(wsr.root, subject, result.slug, credential_workspace)
+            return {"workspace": result.slug, "slug": result.slug, "cloned": result.cloned,
+                    "changed": result.changed, "nested": result.nested, "repo": repo, "ref": ref,
+                    "name": name}
+        return imports.start(wsr.root, subject, repo, ref, operation)
+
+    @router.get("/api/workspace/import/{operation_id}")
+    def ws_import_status(operation_id: str, request: Request):
+        """Read your repository import. Only completed confirms an independently usable workspace.
+
+        Poll this after workspace_import; report failures verbatim. Never start a duplicate import
+        or report success while status is queued/running/interrupted.
+        """
+        return imports.status(wsr.root, subject_of(request), operation_id)
+
     @router.post("/api/workspace/activate")
     def ws_activate(request: Request, body: WorkspaceActivateBody = Body(default=WorkspaceActivateBody())):
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).

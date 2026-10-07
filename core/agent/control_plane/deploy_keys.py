@@ -32,7 +32,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterator, Optional
 
-from control_plane import secret_store
+from control_plane import git_secret_store as secret_store
 
 log = logging.getLogger(__name__)
 

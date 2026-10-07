@@ -650,6 +650,30 @@ class Card:
             return False
         i = self.place(name)
         lines = self.blocks[i][1]
+        if name == 'Connected':
+            wanted = _connection_bullet(line)
+            if wanted:
+                target, relation = wanted
+                matches = [(j, _connection_bullet(old)) for j, old in enumerate(lines[1:], 1)]
+                matches = [(j, edge) for j, edge in matches if edge and slugify(edge[0]) == slugify(target)]
+                if not relation and any(edge[1] for _, edge in matches):
+                    empty = [j for j, edge in matches if not edge[1]]
+                    for j in reversed(empty):
+                        del lines[j]
+                    return bool(empty)
+                # A relationless duplicate adds no information. Keep distinct stated relations.
+                same = [(j, edge) for j, edge in matches if not edge[1] or not relation or edge[1].casefold() == relation.casefold()]
+                if same:
+                    chosen = next((edge for _, edge in same if edge[1]), (target, relation))
+                    if relation:
+                        chosen = (target, relation)
+                    canonical = _chip(*chosen)
+                    first = same[0][0]
+                    changed = lines[first] != canonical or len(same) > 1
+                    lines[first] = canonical
+                    for j, _ in reversed(same[1:]):
+                        del lines[j]
+                    return changed
         if self._has(lines[1:], line):
             return False
         _append_in_block(lines, line if line.startswith("-") else f"- {line}")
@@ -828,7 +852,29 @@ def find_entity(root, name: str) -> "tuple[str, str] | None":
     return None
 
 
+def connection_name(value: str) -> str:
+    """Accept one entity, with optional wiki syntax; never invent identities from prose."""
+    name = str(value).strip()
+    while name.startswith('[[') and name.endswith(']]'):
+        name = name[2:-2].strip()
+    name = name.split('|', 1)[0].strip()
+    if not name or any(c in name for c in '[];\n\r'):
+        raise EntityMalformed('Connection name must identify one page. Pass separate people as separate list entries, not a combined name.')
+    return name
+
+
+def _connection_bullet(line):
+    match = re.fullmatch(r'\s*[-*]\s+(\[\[.*\]\])(?:\s+—\s+(.+))?\s*', line)
+    if not match:
+        return None
+    try:
+        return connection_name(match[1]), (match[2] or '').strip()
+    except EntityMalformed:
+        return None
+
+
 def _chip(name: str, relation: str) -> str:
+    name = connection_name(name)
     rel = (relation or "").strip()
     return f"- [[{name}]] — {rel}" if rel else f"- [[{name}]]"
 
@@ -933,6 +979,7 @@ def _connection_list(connections) -> list[dict]:
             if not name:
                 raise EntityMalformed(f"{where} is empty — {_CONNECTION_SHAPE}")
             entry = {"name": name, "relation": "", "reverse": "", "explicit_reverse": False}
+        entry["name"] = connection_name(entry["name"])
         if not slugify(entry["name"]):
             raise EntityMalformed(
                 f"{where} names {entry['name']!r}, which leaves nothing to file it under — "
@@ -1099,7 +1146,9 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         if field in edges:
             here, there = edges[field]
             for value in values:
-                for target_name in (wikilinks([value]) or [value]):
+                for target_name in ([connection_name(value)] if value.strip().startswith('[[') and value.strip().endswith(']]')
+                                    and value.count(']]') == value.count('[[') and ']]' not in value.strip('[]')
+                                    else (wikilinks([value]) or [value])):
                     if card.add("Connected", _chip(target_name, here)):
                         written += 1
                     connections.append({"name": target_name, "relation": here, "reverse": there,

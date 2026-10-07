@@ -23,6 +23,9 @@ flowchart LR
     dashboard["dashboard (deprecated)"]
     flows_api["flows-api"]
     flows_worker["flows-worker"]
+    credentials_broker["credentials-broker"]
+    credentials_vault["OpenBao"]
+    agent_mcp["agent-mcp"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription

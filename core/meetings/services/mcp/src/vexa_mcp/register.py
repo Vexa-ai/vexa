@@ -85,12 +85,12 @@ def _caller_key(request: Request) -> str:
 
 def register(app: FastAPI, bound: List[BoundTool], base_urls: Dict[str, str], *,
              transport: Optional[httpx.AsyncBaseTransport] = None,
-             env: Optional[dict] = None) -> List[str]:
+             env: Optional[dict] = None, gateway_url: Optional[str] = None) -> List[str]:
     """Add one route per bound tool. Returns the names registered, in order."""
     env = os.environ if env is None else env
     names: List[str] = []
     for bt in bound:
-        names.append(_add(app, bt, base_urls[bt.tool.domain], transport, env))
+        names.append(_add(app, bt, base_urls[bt.tool.domain], transport, env, gateway_url))
     return names
 
 
@@ -173,7 +173,7 @@ def _vocabulary(schema: dict) -> dict:
 
 
 def _add(app: FastAPI, bt: BoundTool, base: str,
-         transport: Optional[httpx.AsyncBaseTransport], env: dict) -> str:
+         transport: Optional[httpx.AsyncBaseTransport], env: dict, gateway_url: Optional[str] = None) -> str:
     method = bt.tool.route["method"]
     template = bt.tool.route["path"]
     declared = tuple(n for n in bt.parameters if n not in bt.path_params)
@@ -230,7 +230,8 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
         try:
             async with httpx.AsyncClient(timeout=10, transport=transport) as client:
                 r = await client.request(
-                    method, f"{base}{path}",
+                    method, (gateway_url.rstrip("/")+"/agent/"+path.removeprefix("/api/")
+                             if bt.tool.domain == "agent" and gateway_url else f"{base}{path}"),
                     headers=_outbound(bt, key, env),
                     params=params or None,
                     json=body if method in ("POST", "PUT", "PATCH") else None)

@@ -273,7 +273,18 @@ def _normalized_active_set(state: dict) -> list[str]:
 
 def _save_state(store: Path, state: dict) -> None:
     store.mkdir(parents=True, exist_ok=True)
-    (store / STATE_FILENAME).write_text(json.dumps(state, indent=2, sort_keys=True))
+    import tempfile
+    import os
+    fd, temporary = tempfile.mkstemp(dir=store, prefix=".state-")
+    try:
+        with os.fdopen(fd, "w") as output:
+            json.dump(state, output, indent=2, sort_keys=True)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, store / STATE_FILENAME)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def attached_workspaces(root: str | Path, subject: str) -> dict:
@@ -816,33 +827,14 @@ def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveRes
 
 
 def _build_attached(dest: Path, repo_url: str, ref: str, token: Optional[str], clone: CloneFn) -> tuple[bool, bool]:
-    """Build the workspace tree for an attached repo AT ``dest`` (out of the live workspace's way).
-
-    COMPLIANCE GATE: a workspace must carry a governance root (``validate_seed`` — i.e. a ``CLAUDE.md``).
-    A compliant clone becomes the tree as-is. A non-compliant one is wrapped: a fresh template workspace
-    is materialized at ``dest`` and the clone is nested under ``kg/<repo-name>/`` (its own ``.git`` dropped
-    so it folds into the governed workspace) and committed. Returns ``(cloned, nested)``. Raises
-    ``CloneError`` on a failed clone WITHOUT having created ``dest`` (caller's active workspace untouched)."""
+    """Clone a repository unchanged at the workspace root, preserving its Git metadata."""
     incoming = dest.parent / f"{dest.name}.clone"
     if incoming.exists():
         shutil.rmtree(incoming)
     incoming.parent.mkdir(parents=True, exist_ok=True)
-    clone(repo_url, ref, incoming, token)          # raises CloneError on failure — nothing placed yet
-
-    if not validate_seed(incoming):                # compliant workspace → use as-is
-        shutil.move(str(incoming), str(dest))
-        return True, False
-
-    # Non-compliant → wrap in a fresh template workspace, nest the clone under kg/.
-    _reseed(dest)
-    shutil.rmtree(incoming / ".git", ignore_errors=True)   # fold into the governed workspace's git
-    sub = dest / "kg" / _repo_name(repo_url)
-    sub.parent.mkdir(parents=True, exist_ok=True)
-    if sub.exists():
-        shutil.rmtree(sub)
-    shutil.move(str(incoming), str(sub))
-    _git_commit_all(dest, f"attach non-compliant repo {repo_url} under kg/{_repo_name(repo_url)}")
-    return True, True
+    clone(repo_url, ref, incoming, token)
+    shutil.move(str(incoming), str(dest))
+    return True, False
 
 
 def _git_commit_all(ws: Path, message: str) -> None:
@@ -891,6 +883,16 @@ def _backup_default(store: Path, src: Path, state: dict) -> None:
         "repo": None, "ref": None,
         "name": f"{prev_name} (previous)" if prev_name else "default (previous)",
     }
+
+
+def bind_repository_credential(root: str | Path, subject: str, slug: str, credential_workspace: str) -> None:
+    """Persist a credential reference, never key material; callers enforce ownership."""
+    store = _store(Path(root), subject)
+    state = _load_state(store)
+    if slug not in state["slots"]:
+        raise KeyError(slug)
+    state["slots"][slug]["credential_workspace"] = credential_workspace
+    _save_state(store, state)
 
 
 def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[str]) -> dict:

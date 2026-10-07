@@ -419,6 +419,33 @@ class _Sessions:
             if native:
                 rec["meeting_native"] = native
 
+    def name(self, subject: str, session: str, title: str, *, human: bool) -> bool:
+        """Persist a deliberate title without touching activity; human naming wins atomically."""
+        if self._redis is not None:
+            return bool(self._redis.eval("""
+                if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+                if ARGV[2] == 'agent' and redis.call('HGET', KEYS[1], 'name_source') == 'human' then return 0 end
+                redis.call('HSET', KEYS[1], 'named_title', ARGV[1], 'name_source', ARGV[2])
+                return 1
+            """, 1, self._meta_key(subject, session), title, 'human' if human else 'agent'))
+        rec = self._mem.get(subject, {}).get(session)
+        if rec is None or (not human and rec.get('name_source') == 'human'):
+            return False
+        rec.update(named_title=title, name_source='human' if human else 'agent')
+        return True
+
+    def rail_order(self, subject: str, order=None) -> list[str]:
+        if self._redis is not None:
+            key = f'agent:rail-order:{subject}'
+            if order is not None:
+                self._redis.set(key, json.dumps(order))
+            return json.loads(self._redis.get(key) or '[]')
+        if not hasattr(self, '_orders'):
+            self._orders = {}
+        if order is not None:
+            self._orders[subject] = list(order)
+        return list(self._orders.get(subject, []))
+
     def add_workspace(self, subject: str, session: str, workspace: str) -> bool:
         """PUT a workspace into this chat's focus, and say whether that changed anything
         (Vexa-ai/vexa#1603). THE RAISER of the stale-mounts semaphore.
@@ -583,6 +610,7 @@ class _Sessions:
                 rows.append({
                     "session": session,
                     "title": meta.get("title") or session,
+                    "named_title": meta.get("named_title"), "name_source": meta.get("name_source"),
                     "created": float(meta.get("created", 0) or 0),
                     "last_active": float(meta.get("last_active", 0) or 0),
                     "workspaces": [str(w) for w in mounts] if isinstance(mounts, list) else [],
@@ -601,6 +629,7 @@ class _Sessions:
             for session, meta in self._mem.get(subject, {}).items():
                 rows.append({
                     "session": session, "title": meta.get("title") or session,
+                    "named_title": meta.get("named_title"), "name_source": meta.get("name_source"),
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
                     "workspaces": list(meta.get("workspaces") or []),
                     "target": str(meta.get("target") or "").strip() or None,
@@ -946,6 +975,15 @@ class ArchiveBody(BaseModel):
     """Archive (collapse, keep) or un-archive one of the caller's own workspaces."""
     model_config = {"extra": "forbid"}
     archived: bool = True
+
+
+class WorkspaceImportBody(BaseModel):
+    """Import a repository as a new independent workspace using configured credentials."""
+    model_config = {"extra": "forbid"}
+    repo: str
+    ref: str = "main"
+    token: Optional[str] = None
+    credential_workspace: Optional[str] = None
 
 
 class WorkspaceActivateBody(BaseModel):

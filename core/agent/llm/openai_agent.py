@@ -49,8 +49,9 @@ self-hosted one is AGPL-3.0) as much as a deployment one. `WebFetch` needs no ba
 always attached, and refuses any URL that resolves into the deployment's own network.
 
 SIZING (CCC-Inference-Deployment): the KV cache holds ~29 requests at 24k context, so the loop
-carries a HARD per-turn budget — max tool calls, max wall seconds — and trims context (oldest tool
-results first) to stay under ``VEXA_AGENT_CONTEXT_TOKENS``. A shared box is a shared box.
+keeps a whole-turn time budget and trims context (oldest tool results first) to stay under
+``VEXA_AGENT_CONTEXT_TOKENS``. Chat call windows continue automatically by default;
+``VEXA_AGENT_AUTO_CONTINUE_CHAT=0`` restores the hard call cap for operators who require it.
 
 A JOB IS NOT A TURN (Vexa-ai/vexa#1613). The sizing above is about how much of the box ONE request
 may hold at once — context and concurrency — and says nothing about how many times a piece of work
@@ -243,11 +244,8 @@ _JOB_CONTINUE = (
 )
 
 
-#: WHAT THE PERSON PRESSES (Vexa-ai/vexa#1622), and the words that go back with it. A turn does NOT
-#: continue itself the way a job opens a fresh window: a job was dispatched to finish something and
-#: its pages are already committed, while a turn is somebody waiting on a reply who may well want a
-#: different next move. So the loop offers, and the press queues a same-target act through #1610's
-#: inbox — one click where the founder re-typed his instruction three times.
+#: Manual continuation remains available after a time limit or an explicitly enabled hard cap.
+#: Ordinary chats continue across call windows automatically, retaining prior tool results.
 _CONTINUE_LABEL = "Continue"
 _CONTINUE_INSTRUCTION = "continue where you stopped"
 
@@ -1103,6 +1101,9 @@ class OpenAIAgentHarness:
             # once, so the budget cannot come from the environment alone.
             kind = llm_jobs.turn_kind()
             budget_calls = _calls_budget(kind)
+            # Interactive research continues across call windows without replaying tools.
+            # Zero still disables execution; the whole-turn clock and allow-set remain enforced.
+            auto_continue = kind == "chat" and os.environ.get("VEXA_AGENT_AUTO_CONTINUE_CHAT", "1").lower() not in {"0", "false", "no"}
             budget_secs = _job_seconds() if is_job else _float_env("VEXA_AGENT_MAX_TURN_SEC",
                                                                    _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
@@ -1154,6 +1155,11 @@ class OpenAIAgentHarness:
                 messages.append(oa)
                 over_budget = False
                 for i, call in enumerate(calls):
+                    if auto_continue and budget_calls > 0 and calls_made >= budget_calls:
+                        # Keep the pending call and every prior result. Context trimming remains
+                        # bounded independently; do not fabricate a refusal or re-ask the model.
+                        calls_made = 0
+                        window += 1
                     if calls_made >= budget_calls or (time.monotonic() - started) > budget_secs:
                         over_budget = True
                         reason = "tool-call budget" if calls_made >= budget_calls else "time budget"

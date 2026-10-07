@@ -1,4 +1,5 @@
 "use client";
+import { setChatActivity } from "./chatActivity";
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
@@ -115,7 +116,9 @@ function emitChatState(key: string): void {
 }
 
 function updateChatState(key: string, fn: (state: ChatSessionState) => ChatSessionState): void {
-  chatSessions.set(key, fn(getChatState(key)));
+  const next = fn(getChatState(key));
+  chatSessions.set(key, next);
+  setChatActivity(key, next);
   emitChatState(key);
 }
 
@@ -1137,6 +1140,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // transcript renders that record — this surface forwards and stores nothing.
           onTerms: (t) => window.dispatchEvent(new CustomEvent(TERMS_EVENT, { detail: t })),
           onTool: (tool, args) => {
+            if (/(^|__)connection_request$/.test(tool)) window.dispatchEvent(new CustomEvent("vexa:connections-open", { detail: args }));
             breakBeforeNextDelta = true;      // F40 — the assistant message ended here
             const op = toolOp(tool, args);
             // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity

@@ -22,7 +22,9 @@ import {
   listSharedMemberships, listWorkspaceTree, readWorkspaceById, readWorkspaceBySlug, type Membership,
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
+import { orderedRows, moveChat } from "./chatOrder";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
+import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
@@ -271,7 +273,27 @@ export function MinutesShell() {
     writeRailOwner(email);
   }, [email]);
 
-  const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
+  const [chatOrder, setChatOrder] = useState<string[]>([]);
+  const [orderError, setOrderError] = useState("");
+  const [orderBusy, setOrderBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setChatOrder([]);
+    fetch("/api/chat/order").then(r=>r.ok?r.json():Promise.reject()).then(d=>{if(live)setChatOrder(d.order || []);}).catch(()=>{});
+    return ()=>{live=false;};
+  }, [email]);
+  const rows = useMemo(() => orderedRows(railRows(allChats, meetings), chatOrder), [allChats, meetings, chatOrder]);
+  const reorder = async (from: string, to: string) => {
+    if (orderBusy) return;
+    const next = moveChat(rows.map(r=>r.key), from, to);
+    setOrderBusy(true); setOrderError("");
+    try {
+      const res = await fetch("/api/chat/order", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({order:next})});
+      if(!res.ok) throw new Error();
+      setChatOrder(next);
+    } catch { setOrderError("Couldn't save chat order. Try again."); }
+    finally { setOrderBusy(false); }
+  };
   const selKey = `c:${sel.chatId}`;
   const shownRows = useMemo(() => visibleRows(rows, all, selKey), [rows, all, selKey]);
   const hiddenCount = useMemo(() => rows.length - visibleRows(rows, false, selKey).length, [rows, selKey]);
@@ -289,6 +311,9 @@ export function MinutesShell() {
   const [attachTo, setAttachTo] = useState<{ id?: string } | null>(null);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => loadCollapsed("left"));
   const [pagesCollapsed, setPagesCollapsed] = useState<boolean>(() => loadCollapsed("right"));
+  const [connectionsMode,setConnectionsMode] = useState<'page'|'panel'|null>(null);
+  const connectionsOpen=connectionsMode!==null;
+  const rightCollapsed=pagesCollapsed&&!connectionsOpen;
   const collapseRail = (v: boolean) => { setRailCollapsed(v); saveCollapsed("left", v); };
   const collapsePages = (v: boolean) => { setPagesCollapsed(v); saveCollapsed("right", v); };
 
@@ -351,6 +376,7 @@ export function MinutesShell() {
    *  Every setState below runs after the single `await`, so React commits them together — which is
    *  what lets the artifacts effect trust that `sel.chatId` and `pages` describe the same chat. */
   const openChat = useCallback(async (c: ChatRec) => {
+    window.dispatchEvent(new Event(CONNECTIONS_CLOSE));
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
     // BOUND TO A ROW THIS CLIENT HAS NEVER LISTED — the bot the chat sent moments ago. Ask the list
     // for it instead of laying the room out as though the meeting did not exist; `pagesForPhase`
@@ -577,6 +603,20 @@ export function MinutesShell() {
     return () => { live = false; };
   }, [email, persist, deeplinkPending]);
 
+  // Refresh server-authored names without disturbing selection or reader-owned pages.
+  useEffect(() => {
+    if (!email) return;
+    let live = true;
+    const timer = setInterval(() => { void listSessions().then(data=>{
+      if(!live)return;
+      const named = chatsFromSessions(data);
+      persist(prev=>mergeChats(prev,named,loadHidden()));
+      const current = named.find(c=>c.id===sel.chatId && c.nameSource);
+      if(current)setSel(x=>x.chatId===current.id?{...x,label:current.label}:x);
+    }).catch(()=>{}); }, 5000);
+    return ()=>{live=false;clearInterval(timer);};
+  }, [email, sel.chatId, persist]);
+
   /** Fire a proposal chip. The founder chose IMMEDIATE, for consistency with the emailed links:
    *  a click sends the turn, with nothing left in the composer to press Enter on. And it sends it
    *  HERE — **a chip acts in the chat it renders in and never mints a row** (founder, 2026-09-01:
@@ -652,6 +692,16 @@ export function MinutesShell() {
   // Deleting a chat drops it from the rail (its agent session stays on the server — the row is the
   // user's index, not the record). A meeting's row comes back as a derived row, because the meeting
   // itself did not go anywhere.
+  const renameChat = async (title: string) => {
+    const id = sel.chatId;
+    if (draftRef.current?.id !== id) {
+      const response = await fetch("/api/chat/name", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({session:id,title})});
+      if(!response.ok) throw new Error("Rename failed");
+    }
+    persist(prev=>prev.map(c=>c.id===id?{...c,label:title,nameSource:"human"}:c));
+    setDraft(d=>d?.id===id?{...d,label:title,nameSource:"human"}:d);
+    setSel(x=>x.chatId===id?{...x,label:title}:x);
+  };
   const deleteChat = (chatId: string) => {
     // …and it has to be REMEMBERED now that the rail derives from the server (Vexa-ai/vexa#1591).
     // Dropping the stored row alone would put the chat straight back on the next fetch: the row is
@@ -1483,14 +1533,16 @@ export function MinutesShell() {
   }, []);
 
   return (
-    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${pagesCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
+    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${rightCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       {railCollapsed
         ? <EdgeHandle side="left" onClick={() => collapseRail(false)} />
         : <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
             selKey={selKey} onSelect={(r) => void openRow(r)}
-            onNewChat={startDraft} onDeleteChat={deleteChat}
+            onNewChat={startDraft} onDeleteChat={deleteChat} onMove={reorder}
             onCollapse={() => collapseRail(true)} />}
-      <ContextBar sel={sel} flavor={flavor} memberships={memberships}
+      {orderError && <div role="alert" style={{position:"absolute",bottom:10,left:10,zIndex:50}}>{orderError}</div>}
+      <div style={{display:connectionsMode==='page'?"none":"contents"}}>
+      <ContextBar sel={sel} onRename={draft?.id === sel.chatId ? undefined : renameChat} flavor={flavor} memberships={memberships}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => {
           setWorkspaces((ws) => ws.filter((w) => w !== id));
@@ -1538,10 +1590,11 @@ export function MinutesShell() {
             onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
         </div>
       </main>
+      </div>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
           lights up on hover/focus, and arrow keys for anyone not dragging. A collapsed panel has no
           width to drag, so the separator goes with it. */}
-      {!pagesCollapsed && <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
+      {!rightCollapsed && connectionsMode!=='page' && <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
         onMouseDown={startDrag}
         onKeyDown={(e) => { if (e.key === "ArrowLeft") { e.preventDefault(); nudge(24); } if (e.key === "ArrowRight") { e.preventDefault(); nudge(-24); } }}
         onMouseEnter={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
@@ -1551,6 +1604,8 @@ export function MinutesShell() {
         style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
         <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
       </div>}
+      <ConnectionsPanel onModeChange={setConnectionsMode} />
+      <div style={{display:connectionsOpen?"none":"contents"}} aria-hidden={connectionsOpen||undefined}>
       {pagesCollapsed
         ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
         : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
@@ -1559,6 +1614,7 @@ export function MinutesShell() {
             canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
             body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
             onCollapse={() => collapsePages(true)} />}
+      </div>
     </div>
   );
 }

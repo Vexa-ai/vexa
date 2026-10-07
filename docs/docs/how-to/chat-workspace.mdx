@@ -74,3 +74,21 @@ A `rejected` frame means governance blocked the write. Trusted chat may write; u
 web) are propose-only — see [Governance](/architecture/governance) and
 [Troubleshooting](/troubleshooting#agent-write-was-rejected).
 </Note>
+
+## Import a repository
+
+Ask the chat to import a repository URL as a new workspace, or use **Load an existing
+repository**. The repository's files and Git history stay at its root; Personal and
+other workspaces remain available. A repository does not need a `CLAUDE.md` file.
+
+For a private repository, register the displayed deploy key on the repository first.
+When that key is configured, a GitHub HTTPS URL can use it without changing the URL
+by hand. A saved or explicitly selected HTTPS token takes precedence for HTTPS URLs.
+
+Large imports report progress while cloning. Only **completed** confirms success;
+then **Open workspace** opens the imported workspace. If the browser connection fails,
+retry the same URL and branch to recover the existing operation. An interrupted
+operation requires checking the workspace before retrying.
+
+The chat uses `workspace_import` and `workspace_import_status`. A public web page's
+404 is not an access check for a private repository.

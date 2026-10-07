@@ -245,6 +245,7 @@ def create_app(
     agent_api_url: Optional[str] = None,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
+    agent_mcp_url: str = "",
     rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
@@ -324,6 +325,16 @@ def create_app(
         # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
         # scope check and the identity injection below are the same for every route.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
+        # The agent domain validates delegated MCP credentials and enforces their
+        # workspace/regime ceiling. This transport route forwards no asserted identity
+        # or service credential. Delegations never authorize ordinary REST routes.
+        if (agent_mcp_url and request.url.path == "/mcp"
+                and client_key and client_key.startswith("vxd_")):
+            allowed = {"accept", "content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"}
+            headers = {k: v for k, v in request.headers.items() if k.lower() in allowed}
+            headers["authorization"] = "Bearer " + client_key
+            headers[TRACE_HEADER] = get_trace_id() or ""
+            return headers, None
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
             return None, Response(
@@ -920,8 +931,10 @@ def create_app(
     #               read timeout, and answers a gateway-manufactured 5xx the MCP service never sees
     #               (#795 — 8 × 503 on GET at the edge, 0 at the service, POST 116/116 fine).
     # The two legs are therefore declared separately: GET streams, everything else buffers.
-    def _mcp(path: str) -> str:
-        return f"{mcp_url}{path}"
+    def _mcp(path: str, request: Request) -> str:
+        delegated = path == "/mcp" and (_mcp_key(request) or "").startswith("vxd_")
+        base = agent_mcp_url if delegated and agent_mcp_url else mcp_url
+        return f"{base.rstrip('/')}{path}"
 
     def _mcp_key(request: Request) -> Optional[str]:
         """The caller's Vexa API key, from whichever carrier the MCP transport used.
@@ -946,22 +959,22 @@ def create_app(
 
     @app.get("/mcp")
     async def mcp_stream(request: Request):
-        return await _forward_stream_verbatim("GET", _mcp("/mcp"), request, api_key=_mcp_key(request))
+        return await _forward_stream_verbatim("GET", _mcp("/mcp", request), request, api_key=_mcp_key(request))
 
     @app.get("/mcp/{path:path}")
     async def mcp_stream_path(path: str, request: Request):
         return await _forward_stream_verbatim(
-            "GET", _mcp(f"/mcp/{path}"), request, api_key=_mcp_key(request)
+            "GET", _mcp(f"/mcp/{path}", request), request, api_key=_mcp_key(request)
         )
 
     @app.api_route("/mcp", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message(request: Request):
-        return await _forward(request.method, _mcp("/mcp"), request, api_key=_mcp_key(request))
+        return await _forward(request.method, _mcp("/mcp", request), request, api_key=_mcp_key(request))
 
     @app.api_route("/mcp/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message_path(path: str, request: Request):
         return await _forward(
-            request.method, _mcp(f"/mcp/{path}"), request, api_key=_mcp_key(request)
+            request.method, _mcp(f"/mcp/{path}", request), request, api_key=_mcp_key(request)
         )
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
