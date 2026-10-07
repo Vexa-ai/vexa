@@ -70,6 +70,11 @@ interface SpeakerBuffer {
   /** Caller-clock end (ms) of the most recently fed stamped frame. Read by the input-gap guard
    *  only when the feeder stamps frames at capture-callback time (`callbackStampedFrames`). */
   lastFedEndMs?: number;
+  /** Buffered-sample index the latest transcription request covered up to (its window end). */
+  submittedEndSample?: number;
+  /** Window end of the request whose text is `lastTranscript`. Read by the turn-close flush only
+   *  with `callbackStampedFrames`: the flush emits that text only when it covers every buffered sample. */
+  lastTranscriptEndSample?: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -93,7 +98,9 @@ export interface SpeakerStreamManagerConfig {
    *  wider than the audio they carry when callbacks arrive late or are lost (Zoom per-track capture
    *  on a starved page, #1774). The input-gap guard then measures from the end of the PREVIOUS
    *  frame, on that one clock, instead of from `windowStartMs + buffered samples`, which such a
-   *  feeder outruns by construction. Opt-in; default false keeps every other feeder's behaviour. */
+   *  feeder outruns by construction. A turn close also emits the last transcript only when that
+   *  transcript covers every buffered sample, and otherwise submits the whole window as the final
+   *  one. Opt-in; default false keeps every other feeder's behaviour. */
   callbackStampedFrames?: boolean;
 }
 
@@ -404,6 +411,7 @@ export class SpeakerStreamManager {
       buffer.lastTranscript = trimmed;
       buffer.confirmCount = 1;
     }
+    buffer.lastTranscriptEndSample = buffer.submittedEndSample;
 
     if (buffer.confirmCount >= this.confirmThreshold) {
       // CONFIRMED — emit and advance offset to Whisper's segment boundary.
@@ -510,8 +518,10 @@ export class SpeakerStreamManager {
     // speaker's buffer start, which makes the speaker-mapper unable to attribute
     // carried words correctly. Direct submission preserves correct timing.
 
-    // Have transcript — emit and reset
-    if (buffer.lastTranscript) {
+    // Have transcript — emit and reset. A callback-stamped feeder keeps feeding between requests,
+    // so its last transcript can describe only the audio up to the previous request; then the
+    // final submit below covers the whole window instead of the newer audio being dropped.
+    if (buffer.lastTranscript && this.lastTranscriptCoversBuffer(buffer)) {
       this.emitSegment(buffer, buffer.lastTranscript);
       this.fullReset(buffer);
       return;
@@ -672,6 +682,7 @@ export class SpeakerStreamManager {
       return;
     }
 
+    buffer.submittedEndSample = buffer.totalSamples;
     buffer.inFlight = true;
     this.submitGeneration.set(buffer.speakerId, buffer.generation);
 
@@ -763,6 +774,7 @@ export class SpeakerStreamManager {
 
     // Reset confirmation state for the next segment window
     buffer.lastTranscript = '';
+    buffer.lastTranscriptEndSample = undefined;
     buffer.confirmCount = 0;
     buffer.lastWords = [];
     buffer.windowStartMs += advancedMs;
@@ -807,7 +819,9 @@ export class SpeakerStreamManager {
     }
     buffer.totalSamples = keep;
     if (buffer.confirmedSamples > keep) buffer.confirmedSamples = keep;
+    if (buffer.submittedEndSample !== undefined && buffer.submittedEndSample > keep) buffer.submittedEndSample = keep;
     buffer.lastTranscript = '';
+    buffer.lastTranscriptEndSample = undefined;
     buffer.confirmCount = 0;
     buffer.lastWords = [];
     log(`[SpeakerStreams] Boundary trim for "${buffer.speakerName}": dropped ${droppedSec.toFixed(2)}s past segmentation boundary`);
@@ -839,7 +853,17 @@ export class SpeakerStreamManager {
 
     buffer.chunks = newChunks;
     buffer.totalSamples -= buffer.confirmedSamples;
+    // Sample indices shift with the trim; keep the request coverage marks on the same index base.
+    if (buffer.submittedEndSample !== undefined) buffer.submittedEndSample = Math.max(0, buffer.submittedEndSample - buffer.confirmedSamples);
+    if (buffer.lastTranscriptEndSample !== undefined) buffer.lastTranscriptEndSample = Math.max(0, buffer.lastTranscriptEndSample - buffer.confirmedSamples);
     buffer.confirmedSamples = 0;
+  }
+
+  /** Whether `lastTranscript` describes every buffered sample. Only a callback-stamped feeder asks:
+   *  every other feeder emits its last transcript at a turn close exactly as before. */
+  private lastTranscriptCoversBuffer(buffer: SpeakerBuffer): boolean {
+    if (!this.callbackStampedFrames || buffer.lastTranscriptEndSample === undefined) return true;
+    return buffer.lastTranscriptEndSample >= buffer.totalSamples;
   }
 
   /**
@@ -860,6 +884,8 @@ export class SpeakerStreamManager {
     buffer.pendingFinal = false;
     buffer.carryForwardSamples = 0;
     buffer.lastFedEndMs = undefined;
+    buffer.submittedEndSample = undefined;
+    buffer.lastTranscriptEndSample = undefined;
     buffer.generation++;
   }
 }
