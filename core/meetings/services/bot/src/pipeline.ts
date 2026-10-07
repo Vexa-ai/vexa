@@ -472,7 +472,18 @@ export function createBotPipeline(
       inv.botName,
     );
   }
-  return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
+  return createGmeetBotPipeline(transcribe, sink, perChannelLaneConfig(inv.platform, opts.config), opts.onError);
+}
+
+/** The per-channel lane's tuning for one platform. Per-track capture (Zoom) stamps each frame at
+ *  capture-callback time (#1774), so on a starved page consecutive frames are spaced wider than the
+ *  audio they carry; the lane is told so and measures input gaps frame to frame. Google Meet keeps
+ *  the configuration it is given, unchanged. */
+export function perChannelLaneConfig(
+  platform: Platform | string,
+  config?: SpeakerStreamManagerConfig,
+): SpeakerStreamManagerConfig | undefined {
+  return isPerTrackLanePlatform(platform) ? { ...config, callbackStampedFrames: true } : config;
 }
 
 /** The post-admission subsystem stages createLivePipeline sequences (used in fault labels). */

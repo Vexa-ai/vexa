@@ -48,3 +48,6 @@ Timestamped frames anchor a channel window to capture time. Confirming text adva
 that window by the duration of audio removed, independent of STT response latency.
 The timestamped-input discontinuity guard starts a fresh window after a gap over
 two seconds; missing capture audio is not reconstructed by timestamp correction.
+A feeder whose frames carry capture-callback stamps (Zoom per-track capture) sets
+`callbackStampedFrames`: the guard then measures the gap between consecutive frames, because
+late or lost callbacks space those stamps wider than the audio they carry.

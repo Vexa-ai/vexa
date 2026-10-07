@@ -16,7 +16,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createBotPipeline, createTranscribe } from './pipeline.js';
+import { createBotPipeline, createTranscribe, perChannelLaneConfig } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
@@ -343,6 +343,40 @@ async function main(): Promise<void> {
       !sink.retracted.includes('turn:1:0'), JSON.stringify(sink.retracted));
     check('retraction: the confirmed segment WAS published (real content kept)',
       sink.published.some((s) => s.segment_id === 'turn:1:0' && s.completed), JSON.stringify(sink.published.map((s) => s.segment_id)));
+  }
+
+  // ── 8) ZOOM PER-TRACK on a starved page: per-track capture stamps each frame at callback time (#1774).
+  //      With half the callbacks lost, consecutive 256 ms frames of ONE continuous turn arrive 512 ms apart
+  //      (under the 1 s turn-onset gap). The lane must hold the whole turn — no transcription request
+  //      before the turn closes — and hand every frame to STT at the close. Google Meet's lane config is
+  //      passed through exactly as given.
+  {
+    const ZF = 4096, ZF_MS = (ZF / SR) * 1000;
+    const zframe = new Float32Array(ZF).fill(0.05);
+    const windows: number[] = [];
+    const transcribe = async (pcm: Float32Array): Promise<TranscriptionResult> => {
+      windows.push(pcm.length);
+      return { text: 'starved but whole', language: 'en', duration: pcm.length / SR,
+        segments: [{ start: 0, end: pcm.length / SR, text: 'starved but whole' }] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    await pipe.start();
+    const N = 30, t0 = 1_800_000_000_000;
+    // Fed synchronously: the 2 s submit timer cannot fire, so any request here comes from the input-gap guard.
+    for (let k = 0; k < N; k++) pipe.feedAudio(4, 'Alice', zframe, t0 + k * 2 * ZF_MS);
+    const midTurn = windows.length;
+    await pipe.stop();
+    check('zoom starved page: no transcription request inside one continuous turn (no input-gap detach)', midTurn === 0, `requests=${midTurn}`);
+    check('zoom starved page: the turn close hands every frame to STT in one window',
+      windows.length === 1 && windows[0] === N * ZF, JSON.stringify(windows));
+    check('zoom starved page: the whole turn is published',
+      sink.published.some((s) => s.completed && s.text === 'starved but whole'), JSON.stringify(sink.published.map((s) => s.text)));
+    check('zoom per-track lane config carries callbackStampedFrames (with and without env tuning)',
+      perChannelLaneConfig('zoom', FAST)?.callbackStampedFrames === true && perChannelLaneConfig('zoom', FAST)?.maxBufferDuration === FAST.maxBufferDuration
+        && perChannelLaneConfig('zoom')?.callbackStampedFrames === true);
+    check('google_meet lane config is passed through unchanged',
+      perChannelLaneConfig('google_meet', FAST) === FAST && perChannelLaneConfig('google_meet') === undefined);
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }

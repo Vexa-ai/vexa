@@ -67,6 +67,9 @@ interface SpeakerBuffer {
    *  upsert-by-id replaces the pending row (rather than appending a new id and
    *  leaving the draft dangling). */
   pendingDraftStartMs: number;
+  /** Caller-clock end (ms) of the most recently fed stamped frame. Read by the input-gap guard
+   *  only when the feeder stamps frames at capture-callback time (`callbackStampedFrames`). */
+  lastFedEndMs?: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -86,6 +89,12 @@ export interface SpeakerStreamManagerConfig {
    *  yields "YouTube-outro" hallucinations. Conservative default (well under speech) so it only
    *  drops true silence; the phrase-list filter is the language-agnostic backstop. Default: 0.0025 */
   silenceRmsThreshold?: number;
+  /** The feeder stamps every frame at capture-callback time, so consecutive frames can be spaced
+   *  wider than the audio they carry when callbacks arrive late or are lost (Zoom per-track capture
+   *  on a starved page, #1774). The input-gap guard then measures from the end of the PREVIOUS
+   *  frame, on that one clock, instead of from `windowStartMs + buffered samples`, which such a
+   *  feeder outruns by construction. Opt-in; default false keeps every other feeder's behaviour. */
+  callbackStampedFrames?: boolean;
 }
 
 /** Root-mean-square energy of a PCM window in [-1,1]; the near-silent oracle (#617). */
@@ -106,6 +115,7 @@ export class SpeakerStreamManager {
   private idleTimeoutSec: number;
   private sampleRate: number;
   private silenceRmsThreshold: number;
+  private callbackStampedFrames: boolean;
   /** Audio carried forward from a flushed short segment — prepended to the next feedAudio call */
   private carryForward: Float32Array[] = [];
   /** Generation at time of last submission — used to detect stale responses after fullReset */
@@ -131,6 +141,7 @@ export class SpeakerStreamManager {
     this.idleTimeoutSec = config?.idleTimeoutSec ?? 15;
     this.sampleRate = config?.sampleRate ?? 16000;
     this.silenceRmsThreshold = config?.silenceRmsThreshold ?? 0.0025;
+    this.callbackStampedFrames = config?.callbackStampedFrames ?? false;
   }
 
   addSpeaker(speakerId: string, speakerName: string): void {
@@ -184,9 +195,23 @@ export class SpeakerStreamManager {
     // actually spoken, shuffling cross-speaker order. If the new audio is not
     // contiguous with what's buffered (>2s gap), flush the buffer first so
     // each contiguous stretch keeps a truthful time base.
+    //
+    // A callback-stamped feeder (Zoom per-track) is measured frame to frame on its own clock: this
+    // frame's stamp against the end of the previous frame. Its stamps outrun windowStartMs +
+    // buffered samples whenever capture callbacks arrive late or are lost, so the sample-count
+    // comparison fired every few seconds inside one continuous turn on a starved page.
     if (atMs !== undefined && buffer.totalSamples > 0) {
-      const bufferedEndMs = buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000;
-      if (atMs - bufferedEndMs > 2000) {
+      const prevEndMs = this.callbackStampedFrames && buffer.lastFedEndMs !== undefined
+        ? buffer.lastFedEndMs
+        : buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000;
+      if (atMs - prevEndMs > 2000) {
+        const heldSec = (buffer.totalSamples - buffer.confirmedSamples) / this.sampleRate;
+        const outcome = buffer.lastTranscript ? 'emitting its last transcript'
+          : heldSec > 0 && !buffer.inFlight ? 'submitting it'
+          : heldSec > 0 ? 'dropped: a request is in flight'
+          : 'nothing unconfirmed';
+        log(`[SpeakerStreams] Input gap for "${buffer.speakerName}": ${((atMs - prevEndMs) / 1000).toFixed(1)}s — ` +
+            `detaching ${heldSec.toFixed(1)}s of buffered audio (${outcome})`);
         // Detach the buffered stretch and finish it asynchronously on the
         // snapshot, then reset the live buffer NOW — the new turn must never
         // append to (or race with) the old stretch. fullReset() assigns fresh
@@ -218,6 +243,7 @@ export class SpeakerStreamManager {
 
     buffer.chunks.push(audioData);
     buffer.totalSamples += audioData.length;
+    if (atMs !== undefined) buffer.lastFedEndMs = atMs + (audioData.length / this.sampleRate) * 1000;
     buffer.lastAudioTimestamp = Date.now();
     buffer.idleSubmitted = false;
   }
@@ -833,6 +859,7 @@ export class SpeakerStreamManager {
     buffer.idleSubmitted = false;
     buffer.pendingFinal = false;
     buffer.carryForwardSamples = 0;
+    buffer.lastFedEndMs = undefined;
     buffer.generation++;
   }
 }
