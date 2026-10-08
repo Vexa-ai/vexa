@@ -74,8 +74,10 @@ def test_rd11_the_code_is_single_use_and_the_account_is_made_after_the_proof(mon
     happens — a code that survived its own use is a second sign-in for anyone who saw the
     transcript — and the account is created here, after the proof, never before it."""
     monkeypatch.setattr(rig, "_send_code", lambda email, code: None)
-    http = as_user(monkeypatch, "7", routes={"/admin/users/email/": (404, {}),
-                                             "/admin/users": (200, {"id": 42})})
+    http = as_user(monkeypatch, "7", routes={
+        "/internal/signin-admission": (200, {"admitted": True, "why": "allow-list"}),
+        "/admin/users/email/": (404, {}),
+        "/admin/users": (200, {"id": 42})})
     rig.CURRENT.set(None)
     rig.rig_secrets.write(rig.EMAIL_CODES_STORE, {})
     rig._CODE_SENDS.clear()

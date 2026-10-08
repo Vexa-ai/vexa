@@ -32,8 +32,13 @@ each slice carrying only what the rehearsal proved worth carrying.
 - **`VEXA_RIG_MODE`** (default on here) enables a `token=` argument fallback and a
   `GET /do/<tool>` bridge. Both put a credential in a query string: right for a fetch-only
   agent on a private host, wrong anywhere requests are logged. `VEXA_RIG_MODE=0` disables both.
-- **Identity proves mailbox control and nothing more.** Federation is the upgrade an
-  organisation will require.
+- **Identity proves mailbox control and nothing more.** Every door — `/login`, the
+  `start_onboarding`/`confirm_login` tools and the OAuth consent screen — mails a 6-digit code and
+  issues nothing until it comes back, and creates an account only for an address the instance's
+  sign-in admission admits. Federation is the upgrade an organisation will require.
+- **The OAuth surface has a kill switch.** `VEXA_RIG_OAUTH_ENABLED=0` (via `rig.sh restart`) answers
+  404 on every OAuth path and stops resolving the tokens it issued. The consent screen redirects
+  only to a `redirect_uri` the client registered, exactly.
 - **`workspace_write` is a dev double** — agent-api exposes no HTTP write, so this reaches the
   volume directly. That missing endpoint is the real gap behind first-class remote workspaces.
 - **Mail is a double** (mailpit): nothing leaves the host.

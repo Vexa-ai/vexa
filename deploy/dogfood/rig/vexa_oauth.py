@@ -13,18 +13,26 @@ Implements the parts the MCP authorization spec (2025-06-18) makes mandatory:
   OAuth 2.1 authorization code + PKCE       — PKCE is MUST
   RFC 8707  resource indicators             — MUST be sent, and the RS MUST check the audience
 
-What this deliberately does NOT do yet, stated so nobody assumes otherwise:
-  * The consent screen takes an email and does not verify it. It is exactly as strong as
-    start_onboarding was — identity is claimed, not proven. Federating the login step to
-    Google is the next move and it slots in at one function, `_identify()`.
-  * Endpoints are served over HTTP for the local rig. The spec requires HTTPS for anything
-    that is not localhost; this must sit behind TLS before it leaves the tunnel.
+Identity on the consent screen is PROVEN, the same way every other rig door proves it: the
+person types the address, a 6-digit code is mailed to it (`_issue_email_code`), and only the code
+coming back issues anything (`_redeem_email_code`). The account is then found or created only for
+an address the instance's sign-in admission admits (`_account_for`). The authorization request is
+bound to a `redirect_uri` the client registered, exactly.
+
+`VEXA_RIG_OAUTH_ENABLED=0` (also `false`/`no`/`off`) turns the whole surface off without a code
+change: every OAuth path answers 404, the 401 stops advertising the metadata, and tokens this
+server issued stop resolving. Unset, it is on.
+
+Endpoints are served over HTTP for the local rig. The spec requires HTTPS for anything that is not
+localhost; this must sit behind TLS before it leaves the tunnel.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
+import os
 import secrets
 import time
 import urllib.parse
@@ -41,6 +49,13 @@ CODES = "oauth/codes"
 TOKENS = "oauth/tokens"
 CODE_TTL = 60          # seconds; an authorization code is single-use and short-lived
 TOKEN_TTL = 8 * 3600
+PENDING_TTL = 15 * 60  # seconds an authorization request waits for its emailed code
+ENABLED_ENV = "VEXA_RIG_OAUTH_ENABLED"
+
+
+def enabled() -> bool:
+    """The operator's kill switch: the OAuth surface is on unless `VEXA_RIG_OAUTH_ENABLED` says off."""
+    return os.environ.get(ENABLED_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _load(name: str) -> dict:
@@ -67,27 +82,14 @@ def _html(status: int, markup: str):
                     (b"content-length", str(len(body)).encode())], body
 
 
-# --------------------------------------------------------------------------- identity
-def _identify(email: str) -> str | None:
-    """Turn a consent-screen answer into a platform uid.
-
-    THE WEAK LINK, on purpose and in one place: the email is claimed, never proven. Everything
-    else here is spec-correct; this is where Google (or an emailed code) federates in, and
-    until it does, OAuth improves the CREDENTIAL mechanism without improving identity
-    assurance. Do not read a successful login as proof of who someone is."""
-    from vexa_control_mcp import ADMIN_API, _admin_key, _http, AGENT_API
-    email = (email or "").strip().lower()
-    if "@" not in email:
-        return None
-    ak = {"X-Admin-API-Key": _admin_key()}
-    st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{email}", ak)
-    if st != 200:
-        st, u = _http("POST", f"{ADMIN_API}/admin/users", ak,
-                      {"email": email, "name": email.split("@")[0].title()})
-    uid = str((u or {}).get("id", ""))
-    if uid:
-        _http("POST", f"{AGENT_API}/api/workspace/init", {"X-User-Id": uid}, {})
-    return uid or None
+# --------------------------------------------------------------------------- redirect uri
+def _registered_redirect(client: dict, requested: str) -> str | None:
+    """The redirect URI this request may use: `requested` only when it EXACTLY matches one the
+    client registered; with none requested, the client's single registered URI. Otherwise None."""
+    registered = [u for u in (client.get("redirect_uris") or []) if isinstance(u, str) and u]
+    if requested:
+        return requested if requested in registered else None
+    return registered[0] if len(registered) == 1 else None
 
 
 # --------------------------------------------------------------------------- token check
@@ -96,7 +98,9 @@ def resolve_token(tok: str, canonical: str) -> dict | None:
 
     RFC 8707 / the MCP spec: a resource server must only accept tokens minted for itself.
     Skipping this is the confused-deputy hole — a token issued for some other service would
-    otherwise be accepted here."""
+    otherwise be accepted here. Nothing resolves while the surface is switched off."""
+    if not enabled():
+        return None
     rec = _load(TOKENS).get(tok)
     if not rec:
         return None
@@ -107,7 +111,7 @@ def resolve_token(tok: str, canonical: str) -> dict | None:
     return rec
 
 
-CONSENT = """<!doctype html><meta charset="utf-8"><title>Authorize Vexa</title>
+_PAGE = """<!doctype html><meta charset="utf-8"><title>Authorize Vexa</title>
 <style>
  body{{margin:0;background:#F5F6F2;color:#141716;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
    display:flex;align-items:center;justify-content:center;min-height:100vh}}
@@ -122,24 +126,49 @@ CONSENT = """<!doctype html><meta charset="utf-8"><title>Authorize Vexa</title>
    border-radius:6px;background:#fff;color:#141716;box-sizing:border-box}}
  button{{width:100%;margin-top:16px;font:inherit;font-size:15px;font-weight:500;padding:12px;
    border:none;border-radius:6px;background:#1E5E4A;color:#F5F6F2;cursor:pointer}}
- .note{{font-size:12.5px;color:#8A6A1C;background:#F2ECD9;border-left:3px solid #8A6A1C;
-   padding:11px 13px;border-radius:5px;margin-top:18px}}
 </style>
 <div class="card">
   <h1>Authorize Vexa</h1>
   <p><b>{client}</b> is asking to use your Vexa account — your meetings, the knowledge your
      team builds, and the flows that run automatically.</p>
   <div class="who">{resource}</div>
-  <form method="POST">
+  {body}
+</div>"""
+
+_EMAIL_STEP = """<form method="POST">
     <input type="hidden" name="rid" value="{rid}">
     <label for="email">The email your calendar invites come from</label>
     <input id="email" name="email" type="email" required autofocus
            placeholder="you@yourcompany.com" autocomplete="email">
+    <button type="submit">Send me a code</button>
+  </form>"""
+
+_CODE_STEP = """{note}<p>A 6-digit code is on its way to <b>{email}</b>.</p>
+  <form method="POST">
+    <input type="hidden" name="rid" value="{rid}">
+    <label for="code">The 6-digit code from that email</label>
+    <input id="code" name="code" inputmode="numeric" required autofocus autocomplete="one-time-code">
     <button type="submit">Allow</button>
-  </form>
-  <div class="note">This address is not verified yet. Anyone who reaches this page can type
-     any address — so treat it as a claim, not proof, until the login step is federated.</div>
-</div>"""
+  </form>"""
+
+
+def _consent(p: dict, body: str):
+    """One consent page. Every value that came from a client or a person is escaped."""
+    return _PAGE.format(client=html.escape(p.get("client_name") or "an MCP client"),
+                        resource=html.escape(p.get("resource") or ""), body=body)
+
+
+def _email_step(p: dict, rid: str) -> str:
+    return _consent(p, _EMAIL_STEP.format(rid=html.escape(rid)))
+
+
+def _code_step(p: dict, rid: str, note: str = "") -> str:
+    return _consent(p, _CODE_STEP.format(rid=html.escape(rid), email=html.escape(p.get("email", "")),
+                                              note=f"<p>{html.escape(note)}</p>" if note else ""))
+
+
+def _message(p: dict, text: str) -> str:
+    return _consent(p, f"<p>{html.escape(text)}</p>")
 
 
 async def handle(scope, receive, send, canonical: str) -> bool:
@@ -158,6 +187,10 @@ async def handle(scope, receive, send, canonical: str) -> bool:
         status, hdrs, body = triple
         await send({"type": "http.response.start", "status": status, "headers": hdrs})
         await send({"type": "http.response.body", "body": body})
+
+    if not enabled():
+        await reply(_j(404, {"error": "not_found"}))
+        return True
 
     # ---- RFC 9728: which authorization server protects this resource
     if path.startswith("/.well-known/oauth-protected-resource"):
@@ -224,8 +257,16 @@ async def handle(scope, receive, send, canonical: str) -> bool:
         q = dict(urllib.parse.parse_qsl(scope.get("query_string", b"").decode()))
         if method == "GET":
             cid = q.get("client_id", "")
-            if cid not in _load(CLIENTS):
+            client = _load(CLIENTS).get(cid)
+            if client is None:
                 await reply(_j(400, {"error": "invalid_client"}))
+                return True
+            redirect_uri = _registered_redirect(client, q.get("redirect_uri", ""))
+            if redirect_uri is None:
+                # Never redirect to an address the client did not register: answer here instead.
+                await reply(_j(400, {"error": "invalid_request",
+                                     "error_description": "redirect_uri must exactly match a "
+                                                          "registered redirect URI"}))
                 return True
             if q.get("code_challenge_method") != "S256" or not q.get("code_challenge"):
                 # OAuth 2.1: PKCE is mandatory. Refuse rather than silently downgrade.
@@ -233,35 +274,86 @@ async def handle(scope, receive, send, canonical: str) -> bool:
                                      "error_description": "PKCE with S256 is required"}))
                 return True
             rid = secrets.token_urlsafe(16)
-            pend = _load(CODES)
-            pend["pending:" + rid] = {
+            p = {
                 "client_id": cid,
-                "redirect_uri": q.get("redirect_uri", ""),
+                "client_name": client.get("client_name", "an MCP client"),
+                "redirect_uri": redirect_uri,
                 "state": q.get("state", ""),
                 "code_challenge": q["code_challenge"],
                 "resource": q.get("resource", canonical),
                 "scope": q.get("scope", "vexa.read vexa.write"),
                 "at": time.time(),
             }
+            pend = _load(CODES)
+            pend["pending:" + rid] = p
             _save(CODES, pend)
-            name = _load(CLIENTS)[cid].get("client_name", "an MCP client")
-            await reply(_html(200, CONSENT.format(
-                client=name, resource=q.get("resource", canonical), rid=rid)))
+            await reply(_html(200, _email_step(p, rid)))
             return True
 
+        # POST — two steps on one pending request: the address (a code is mailed to it), then the
+        # code. The address is bound to the request at the first step; the second reads it from
+        # there, never from the form, so a code proves the address the request was made for.
+        from vexa_control_mcp import (NOT_ADMITTED, _account_for, _issue_email_code,
+                                      _redeem_email_code)
         form = dict(urllib.parse.parse_qsl((await body_bytes()).decode()))
+        rid = form.get("rid", "")
         pend = _load(CODES)
-        p = pend.pop("pending:" + form.get("rid", ""), None)
-        if not p:
+        p = pend.get("pending:" + rid)
+        if not p or time.time() - p.get("at", 0) > PENDING_TTL:
+            pend.pop("pending:" + rid, None)
+            _save(CODES, pend)
             await reply(_html(400, "<p>That authorization request expired. Start again.</p>"))
             return True
-        uid = _identify(form.get("email", ""))
-        if not uid:
-            await reply(_html(400, "<p>That does not look like an email address.</p>"))
+
+        if "code" not in form:
+            email = (form.get("email") or "").strip().lower()
+            if "@" not in email or email.startswith("@") or email.endswith("@"):
+                await reply(_html(400, _email_step(p, rid)))
+                return True
+            p["email"] = email
+            pend["pending:" + rid] = p
+            _save(CODES, pend)
+            issued = _issue_email_code(email)
+            if issued.get("refused") == "budget":
+                await reply(_html(429, _message(p, "Too many sign-in codes were sent just now. "
+                                                        "Wait a minute and start again.")))
+                return True
+            if issued.get("refused") == "mail":
+                await reply(_html(502, _message(p, "We could not send the code. Try again in "
+                                                        "a minute.")))
+                return True
+            # "already-sent": a code from the last few minutes is still in that inbox — ask for it.
+            await reply(_html(200, _code_step(p, rid)))
             return True
+
+        email = p.get("email", "")
+        if not email:
+            await reply(_html(400, _email_step(p, rid)))
+            return True
+        checked = _redeem_email_code(email, form.get("code", ""))
+        if checked.get("error") == "wrong":
+            await reply(_html(400, _code_step(p, rid, "Wrong code — check the email again.")))
+            return True
+        if not checked.get("ok"):
+            pend.pop("pending:" + rid, None)
+            _save(CODES, pend)
+            await reply(_html(400, "<p>That code expired. Start again.</p>"))
+            return True
+
+        uid, why = _account_for(email)
+        if not uid:
+            pend.pop("pending:" + rid, None)
+            _save(CODES, pend)
+            if why == NOT_ADMITTED:
+                await reply(_html(403, _message(p, "This address can't sign in here. Ask the "
+                                                        "person who runs this Vexa to add it.")))
+            else:
+                await reply(_html(502, _message(p, "Something broke on our side. Try again.")))
+            return True
+
+        pend.pop("pending:" + rid, None)
         code = secrets.token_urlsafe(24)
-        pend[code] = {**p, "uid": uid, "email": form.get("email", "").strip().lower(),
-                      "issued": time.time()}
+        pend[code] = {**p, "uid": uid, "email": email, "issued": time.time()}
         _save(CODES, pend)
         sep = "&" if "?" in p["redirect_uri"] else "?"
         loc = f'{p["redirect_uri"]}{sep}code={urllib.parse.quote(code)}'

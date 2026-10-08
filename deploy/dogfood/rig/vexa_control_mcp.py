@@ -364,8 +364,29 @@ def _logins_save(d: dict) -> None:
     rig_secrets.write(LOGINS_STORE, d)
 
 
+#: The admission reasons a rig door accepts. admin-api also admits the sign-in that claims an
+#: unclaimed instance's admin role; no rig door performs that claim, so that reason is refused here.
+SIGNIN_ADMITTED_REASONS = frozenset({"admin", "admin-email", "existing-user", "allow-list"})
+#: `_account_for`'s refusal when admin-api does not admit the address.
+NOT_ADMITTED = "this address may not sign in here"
+
+
+def _signin_admitted(email: str) -> bool:
+    """MAY THIS ADDRESS SIGN IN? admin-api's own rule (`POST /internal/signin-admission`), the
+    question every terminal door asks, asked before the rig creates an account or issues a token.
+    FAILS CLOSED: anything but a 200 that literally says `admitted: true` with a reason in
+    `SIGNIN_ADMITTED_REASONS` refuses."""
+    st, body = _http("POST", f"{ADMIN_API}/internal/signin-admission", _internal_headers(),
+                     {"email": email})
+    return (st == 200 and isinstance(body, dict) and body.get("admitted") is True
+            and body.get("why") in SIGNIN_ADMITTED_REASONS)
+
+
 def _account_for(email: str):
-    """Find or create the account; (uid, existed) or (None, err)."""
+    """Find or create the account of an ADMITTED address; (uid, existed) or (None, err).
+    `err` is `NOT_ADMITTED` when admin-api does not admit the address — nothing is created then."""
+    if not _signin_admitted(email):
+        return None, NOT_ADMITTED
     ak = {"X-Admin-API-Key": _admin_key()}
     st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{email}", ak)
     existed = st == 200
@@ -1603,6 +1624,10 @@ class _Auth:
 <button {_F_BTN}>Sign in</button></form>""", "Not quite")
                 return
             uid, existed = _account_for(email)
+            if uid is None and existed == NOT_ADMITTED:
+                await page("<p>This address can't sign in here. Ask the person who runs this "
+                           "Vexa to add it.</p>", "Not allowed")
+                return
             if uid is None:
                 await page("<p>Something broke on our side. Tell your agent to "
                            "report_friction().</p>", "Our fault")
@@ -1843,10 +1868,11 @@ working.</p>""", "Connected")
                        "to the open endpoint instead — everything works there.",
                 "open_endpoint": f"{base}/mcp",
             }).encode()
+            challenge = (f'Bearer realm="vexa", resource_metadata="{meta}"'
+                         if vexa_oauth.enabled() else 'Bearer realm="vexa"')
             await send({"type": "http.response.start", "status": 401, "headers": [
                 (b"content-type", b"application/json"),
-                (b"www-authenticate",
-                 f'Bearer realm="vexa", resource_metadata="{meta}"'.encode()),
+                (b"www-authenticate", challenge.encode()),
                 (b"content-length", str(len(body)).encode()),
             ]})
             await send({"type": "http.response.body", "body": body})
@@ -3082,6 +3108,8 @@ def user_ensure(email: str) -> str:
     ak = {"X-Admin-API-Key": _admin_key()}
     st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{email}", ak)
     if st != 200:
+        if not _signin_admitted((email or "").strip().lower()):
+            return json.dumps({"error": NOT_ADMITTED, "email": email})
         st, u = _http("POST", f"{ADMIN_API}/admin/users", ak,
                       {"email": email, "name": email.split("@")[0].title()})
     uid = str((u or {}).get("id", ""))
@@ -5745,6 +5773,64 @@ def vexa_search_docs(query: str, hits: int = 5) -> str:
                        "source": "https://docs.vexa.ai/llms-full.txt"})[:14000]
 
 
+def _issue_email_code(email: str) -> dict:
+    """Mail a fresh 6-digit sign-in code to `email` — the mailbox proof every rig sign-in door
+    takes (start_onboarding here, the OAuth consent screen in vexa_oauth). One of:
+    `{"sent": True}`, `{"refused": "budget"}` (the process-wide mail budget is spent),
+    `{"refused": "already-sent"}` (a live code is already in that inbox; reminting would invalidate
+    it), `{"refused": "mail", "detail": ...}`. NO ACCOUNT IS CREATED HERE (R-D11)."""
+    import secrets
+    if not _code_budget():
+        # RATE-LIMITED BY SOURCE (R-D11). These doors need no account, so the only source this
+        # server can see is itself: a process-wide budget on codes MAILED. Without it, one
+        # anonymous caller in a loop makes us the mailer for an address list.
+        return {"refused": "budget"}
+    live = rig_secrets.read(EMAIL_CODES_STORE).get(email)
+    if live and time.time() < live.get("exp", 0) and live.get("tries", 0) < 5:
+        return {"refused": "already-sent"}
+    code = f"{secrets.randbelow(1000000):06d}"
+    rig_secrets.update(EMAIL_CODES_STORE, lambda d: d.update(
+        {email: {"code": code, "exp": time.time() + LOGIN_TTL, "tries": 0}}) or d)
+    err = _send_code(email, code)
+    if err:
+        return {"refused": "mail", "detail": err}
+    return {"sent": True}
+
+
+def _redeem_email_code(email: str, code) -> dict:
+    """Check the code mailed to `email`, and SPEND it on success. One of: `{"ok": True}`,
+    `{"error": "none"}` (no code pending), `{"error": "expired"}`, `{"error": "too-many"}` (five
+    wrong tries; the code is dropped), `{"error": "wrong", "attempts_left": n}`."""
+    digits = "".join(ch for ch in str(code) if ch.isdigit())
+    rec = rig_secrets.read(EMAIL_CODES_STORE).get(email)
+    if not rec:
+        return {"error": "none"}
+
+    def _drop(d):
+        d.pop(email, None)
+        return d
+
+    if time.time() > rec["exp"]:
+        rig_secrets.update(EMAIL_CODES_STORE, _drop)
+        return {"error": "expired"}
+    if rec["tries"] >= 5:
+        rig_secrets.update(EMAIL_CODES_STORE, _drop)
+        return {"error": "too-many"}
+    if not hmac.compare_digest(digits, str(rec["code"])):
+        def _bump(d):
+            r = d.get(email)
+            if r:
+                r["tries"] = int(r.get("tries", 0)) + 1
+            return d
+        tries = int(rig_secrets.update(EMAIL_CODES_STORE, _bump).get(email, {}).get("tries", 5))
+        return {"error": "wrong", "attempts_left": max(0, 5 - tries)}
+    # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is spent here,
+    # under the store's lock, BEFORE the account is touched. A code that survived its own success
+    # is a second sign-in for anyone who saw it in a transcript.
+    rig_secrets.update(EMAIL_CODES_STORE, _drop)
+    return {"ok": True}
+
+
 @mcp.tool()
 def start_onboarding(email: str) -> str:
     """Sign in or sign up, from inside this conversation. NO ACCOUNT NEEDED to call this.
@@ -5757,19 +5843,19 @@ def start_onboarding(email: str) -> str:
     email = (email or "").strip().lower()
     if "@" not in email or email.startswith("@") or email.endswith("@"):
         return json.dumps({"error": "that is not an email address"})
-    import secrets
-    if not _code_budget():
-        # RATE-LIMITED BY SOURCE (R-D11). This tool needs no account, so the only source this
-        # server can see is itself: a process-wide budget on codes MAILED. Without it, one
-        # anonymous caller in a loop makes us the mailer for an address list.
+    # NO ACCOUNT IS CREATED HERE (R-D11). It used to POST /admin/users before any code was
+    # verified, so an unauthenticated caller minted platform accounts for addresses it did not
+    # own — and the response then said "existing" or "created", which made this an existence
+    # oracle for the whole user table. The account is created in confirm_login, once the code
+    # coming back proves the caller can read that mailbox.
+    issued = _issue_email_code(email)
+    if issued.get("refused") == "budget":
         return json.dumps({
             "error": "too many sign-in codes have been sent from this server just now",
             "what_to_do": "Wait a minute and call start_onboarding(email) again. If your person "
                           "already has a code from the last few minutes, use that one.",
         })
-    codes = rig_secrets.read(EMAIL_CODES_STORE)
-    live = codes.get(email)
-    if live and time.time() < live.get("exp", 0) and live.get("tries", 0) < 5:
+    if issued.get("refused") == "already-sent":
         # a code is already sitting in that inbox — reminting would invalidate it
         return json.dumps({
             "code_already_sent": email,
@@ -5777,18 +5863,8 @@ def start_onboarding(email: str) -> str:
                           "inbox. Ask your person for it and call "
                           "confirm_login(email, code) — do not request another.",
         })
-    code = f"{secrets.randbelow(1000000):06d}"
-    # NO ACCOUNT IS CREATED HERE (R-D11). It used to POST /admin/users before any code was
-    # verified, so an unauthenticated caller minted platform accounts for addresses it did not
-    # own — and the response then said "existing" or "created", which made this an existence
-    # oracle for the whole user table. The account is created in confirm_login, once the code
-    # coming back proves the caller can read that mailbox.
-    rig_secrets.update(EMAIL_CODES_STORE, lambda d: d.update(
-        {email: {"code": code, "exp": time.time() + LOGIN_TTL, "tries": 0}}) or d)
-
-    err = _send_code(email, code)
-    if err:
-        return json.dumps({"error": "could not send the code", "detail": err,
+    if issued.get("refused") == "mail":
+        return json.dumps({"error": "could not send the code", "detail": issued.get("detail"),
                            "try": "report_friction() and tell your person — the mail channel "
                                   "is down."})
     return json.dumps({
@@ -5820,41 +5896,28 @@ def confirm_login(email: str, code: str) -> str:
     authenticates the CONNECTION, so it takes effect on the next session. Say that plainly and
     once; do not promise the tools work this turn, because they do not."""
     email = (email or "").strip().lower()
-    code = "".join(ch for ch in str(code) if ch.isdigit())
-    rec = rig_secrets.read(EMAIL_CODES_STORE).get(email)
-    if not rec:
+    checked = _redeem_email_code(email, code)
+    if checked.get("error") == "none":
         return json.dumps({"error": "no code is pending for that email",
                            "fix": "call start_onboarding(email) first"})
-
-    def _drop(d):
-        d.pop(email, None)
-        return d
-
-    if time.time() > rec["exp"]:
-        rig_secrets.update(EMAIL_CODES_STORE, _drop)
+    if checked.get("error") == "expired":
         return json.dumps({"error": "that code expired",
                            "fix": "call start_onboarding(email) again for a fresh one"})
-    if rec["tries"] >= 5:
-        rig_secrets.update(EMAIL_CODES_STORE, _drop)
+    if checked.get("error") == "too-many":
         return json.dumps({"error": "too many wrong attempts — code invalidated",
                            "fix": "call start_onboarding(email) again"})
-    if not hmac.compare_digest(str(code), str(rec["code"])):
-        def _bump(d):
-            r = d.get(email)
-            if r:
-                r["tries"] = int(r.get("tries", 0)) + 1
-            return d
-        tries = int(rig_secrets.update(EMAIL_CODES_STORE, _bump).get(email, {}).get("tries", 5))
+    if checked.get("error") == "wrong":
         return json.dumps({"error": "wrong code",
-                           "attempts_left": max(0, 5 - tries),
+                           "attempts_left": checked.get("attempts_left", 0),
                            "note": "ask your person to re-read it — never guess"})
 
-    # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is spent here,
-    # under the store's lock, BEFORE the account is touched. A code that survived its own success
-    # is a second sign-in for anyone who saw it in a transcript.
-    rig_secrets.update(EMAIL_CODES_STORE, _drop)
-    # THE ACCOUNT IS CREATED HERE, not in start_onboarding (R-D11) — after the proof, never before.
-    uid, _existed = _account_for(email)
+    # THE ACCOUNT IS CREATED HERE, not in start_onboarding (R-D11) — after the proof, never before,
+    # and only for an address admin-api admits.
+    uid, why = _account_for(email)
+    if not uid and why == NOT_ADMITTED:
+        return json.dumps({"error": "this address may not sign in to this Vexa",
+                           "do": "tell your person plainly; the person who runs this Vexa can "
+                                 "add the address. Do not retry."})
     if not uid:
         return json.dumps({"error": "could not create the account",
                            "do": "report_friction() — this is ours, not theirs"})
