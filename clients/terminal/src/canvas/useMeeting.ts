@@ -329,8 +329,11 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   // "processed" body to wait for any more — PRD decision 34 removed the producer, so the
   // bounded catch-up retry that existed to wait out the copilot's final beat went with it.)
   const effStatus = selected.live_status ?? selected.status;
+  const erased = !!selected.artifacts_deleted;
   useEffect(() => {
     setDurable({ lines: [] });
+    // A deleted meeting has no transcript to hydrate; whatever was fetched before is dropped above.
+    if (erased) return;
     // P0 (wrong-row hydration fix): hydrate by the meetings-domain ROW id (`selected.id`), so the pane
     // shows EXACTLY this row's durable segments + processed notes — never the newest row sharing the
     // native (the old native-keyed fetch). `native_id` presence still gates a real (resolved) meeting vs
@@ -343,7 +346,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       if (!cancelled) setDurable(next);
     });
     return () => { cancelled = true; };
-  }, [selected.id, selected.native_id, selected.platform, selected.session_uid, effStatus, live.ended]);
+  }, [selected.id, selected.native_id, selected.platform, selected.session_uid, effStatus, live.ended, erased]);
 
   return useMemo(() => {
     const participants = safeArray(selected.participants);
@@ -370,7 +373,9 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
     const isFinished = ["completed", "failed", "stopped", "past"].includes(selected.live_status ?? selected.status);
-    const segments = selected.session_uid && !isFinished ? liveSegments : (recordedSegments.length ? recordedSegments : liveSegments.length ? liveSegments : fallbackSegments);
+    // A deleted meeting shows no transcript at all — not the copy this view fetched or streamed
+    // before the delete, and not a live replay of a cache.
+    const segments = selected.artifacts_deleted ? [] : selected.session_uid && !isFinished ? liveSegments : (recordedSegments.length ? recordedSegments : liveSegments.length ? liveSegments : fallbackSegments);
     const diagnostics = {
       liveConnected: live.connected,
       ended: live.ended,
@@ -405,6 +410,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
         title: selected.title,
         status: selected.live_status ?? selected.status,
         live: Boolean(selected.session_uid),
+        deleted: Boolean(selected.artifacts_deleted),
         startedAt: selected.scheduled_at,
         participants: participants.map((p) => p.name),
         docs: normalizedSelected.docs.map((doc) => ({

@@ -67,6 +67,7 @@ export interface MeetingState {
     startedAt?: string;
     participants?: string[];
     docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
+    deleted?: boolean;          // its owner deleted the transcript + recordings; nothing is shown
   };
   transcript: {
     segments: TranscriptSegment[];

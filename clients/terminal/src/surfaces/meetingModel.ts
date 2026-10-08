@@ -33,6 +33,7 @@ export interface MeetingMock {
   transcript: TranscriptLine[];
   insights: { t: string; text: string }[];  // copilot notes, revealed alongside the transcript
   docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
+  artifacts_deleted?: boolean;  // its owner deleted the transcript + recordings (data.artifact_deletion)
 }
 
 // ── meeting lifecycle phase (design-spec meeting-lifecycle-v2) ──────────────────────

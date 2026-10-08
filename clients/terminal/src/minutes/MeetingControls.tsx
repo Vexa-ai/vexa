@@ -27,7 +27,10 @@ function Controls({ meeting: m, connected, showBot }: { meeting: MeetingMock; co
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
-  const [deleted, setDeleted] = useState(false);
+  const [deletedHere, setDeleted] = useState(false);
+  // The server row is the truth after a reload or on another tab; the local flag covers the moment
+  // between this delete answering and the meetings list refreshing.
+  const deleted = deletedHere || !!m.artifacts_deleted;
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (!finished || deleted) return;

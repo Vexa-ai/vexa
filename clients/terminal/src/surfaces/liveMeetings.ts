@@ -31,6 +31,9 @@ interface MeetingRowDTO {
     auto_join_error?: string;
     constructed_meeting_url?: string;
     attendees?: { email: string; name?: string; partstat?: string }[];
+    // stamped by meeting-api when the owner deletes the meeting's transcript and recordings; the
+    // row itself is kept as history
+    artifact_deletion?: { state?: string } | null;
   } | null;
 }
 
@@ -146,6 +149,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
+    artifacts_deleted: !!d.data?.artifact_deletion,
     participants: [],
     mentioned: [],
     actions: [],
@@ -193,7 +197,7 @@ async function snapshotOnce() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
     const wasLoaded = loaded;
     loaded = true;

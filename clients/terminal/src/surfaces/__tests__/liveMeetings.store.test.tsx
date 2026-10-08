@@ -165,6 +165,26 @@ describe("liveMeetings store", () => {
     });
   });
 
+  it("(g) a refresh after a meeting's data is deleted marks its row deleted", async () => {
+    let deleted = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes("/api/ws")) return jsonResp({ url: "ws://test/ws" });
+      if (u.includes("/api/meetings")) {
+        const body = meetingsPayload("completed");
+        if (deleted) body.meetings[0].data = { artifact_deletion: { state: "completed" } } as never;
+        return jsonResp(body);
+      }
+      return jsonResp({});
+    });
+    const { mod, hook } = await startStore();
+    expect(hook.result.current[0].artifacts_deleted).toBe(false);
+
+    deleted = true;
+    await act(async () => { mod.refreshMeetings(); });
+    await waitFor(() => expect(hook.result.current[0].artifacts_deleted).toBe(true));
+  });
+
   it("(d) a 'deleted' frame REMOVES the row (a retired plan never masquerades as Recorded)", async () => {
     const { hook } = await startStore();
     expect(hook.result.current.length).toBe(1);

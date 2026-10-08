@@ -33,7 +33,8 @@ function RawTranscript({ meetingId }: { meetingId?: string }) {
   const box = useRef<HTMLDivElement>(null);
   return (
     <div ref={box} style={{ position: "relative" }}>
-      <LiveTranscriptEngine meetingId={meeting.id} segments={transcript.segments} renderText={renderText} />
+      <LiveTranscriptEngine meetingId={meeting.id} segments={transcript.segments} renderText={renderText}
+        {...(meeting.deleted ? { emptyLabel: "This meeting’s transcript and recording were deleted." } : {})} />
       {meetingId && <TranscriptExtend containerRef={box} meeting={meetingId} segments={transcript.segments} />}
     </div>
   );

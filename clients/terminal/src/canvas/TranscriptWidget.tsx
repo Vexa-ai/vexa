@@ -69,7 +69,9 @@ function WidgetBody({ meetingId }: { meetingId: string }) {
         meetingId={meeting.id}
         segments={transcript.segments}
         renderText={renderText}
-        emptyLabel="Nothing said yet — this fills in as the room talks."
+        emptyLabel={meeting.deleted
+          ? "This meeting’s transcript and recording were deleted."
+          : "Nothing said yet — this fills in as the room talks."}
       />
     </div>
   );
