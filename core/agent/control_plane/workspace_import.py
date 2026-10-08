@@ -47,11 +47,24 @@ def _write(path: Path, value: dict) -> None:
             os.unlink(name)
 
 
-def repository_url(repo: str, *, has_deploy_key: bool, has_token: bool) -> str:
-    """Use the workspace's SSH key for a GitHub URL when no token was selected."""
-    url = normalize(repo)
-    if has_deploy_key and not has_token and url.startswith('https://github.com/'):
+def ssh_form(url: str) -> str | None:
+    """The deploy-key (SSH) form of a GitHub https URL, or None for any other URL."""
+    if url.startswith('https://github.com/'):
         return url.replace('https://github.com/', 'git@github.com:', 1)
+    return None
+
+
+def repository_url(repo: str, *, use_deploy_key: bool) -> str:
+    """The URL an import clones FIRST.
+
+    A GitHub https URL becomes its SSH form only when this import uses a deploy key on purpose —
+    it named the workspace whose key to reuse (``credential_workspace``). Merely HAVING a key does
+    not: a public repository must still import over https for a person who once minted one. When an
+    https clone is then refused for want of a credential, the route retries over SSH with the key
+    (``ssh_form``)."""
+    url = normalize(repo)
+    if use_deploy_key:
+        return ssh_form(url) or url
     return url
 
 

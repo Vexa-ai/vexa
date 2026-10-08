@@ -1150,21 +1150,39 @@ def build(**d) -> APIRouter:
             except MembershipError as exc:
                 raise _member_error(exc)
         key = deploy_keys_mod.workspace_key(subject=subject, workspace_id=credential_workspace)
-        repo = imports.repository_url(repo, has_deploy_key=deploy_keys_mod.exists(wsr.root, key),
-                                      has_token=bool(body.token or (not credential_workspace and git_creds.read_github_token(wsr.root, subject))))
+        has_key = deploy_keys_mod.exists(wsr.root, key)
+        # SSH first only when this import names the workspace whose deploy key it reuses. A key the
+        # person merely HAS is the fallback for an https clone refused for want of a credential.
+        use_key = bool(credential_workspace) and has_key
+        repo = imports.repository_url(repo, use_deploy_key=use_key)
+        fallback = imports.ssh_form(repo) if has_key and not use_key else None
+        slug = imports.workspace_slug(repo, ref)
+
+        def clone_into_workspace(url: str):
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=url, subject=subject, explicit_token=body.token) as cred:
+                return activate_workspace(wsr.root, subject, url, ref, slug=slug, token=cred.token,
+                                          clone=_clone_fn(cred))
+
         def operation():
-            with wcreds.for_workspace(wsr.root, key=key, repo_url=repo, subject=subject, explicit_token=body.token) as cred:
+            used = repo
+            try:
+                result = clone_into_workspace(repo)
+            except CloneError as exc:
+                detail = redact_secrets(exc)
+                if not (fallback and wcreds.is_auth_failure(str(detail))):
+                    raise _credential_refusal(f"git clone failed: {detail}", subject, credential_workspace or None, repo)
+                used = fallback
                 try:
-                    result = activate_workspace(wsr.root, subject, repo, ref,
-                                                slug=imports.workspace_slug(repo, ref), token=cred.token, clone=_clone_fn(cred))
-                except CloneError as exc:
-                    raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, credential_workspace or None, repo)
+                    result = clone_into_workspace(fallback)
+                except CloneError as exc2:
+                    raise _credential_refusal(f"git clone failed: {redact_secrets(exc2)}", subject,
+                                              credential_workspace or None, fallback)
             name = repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
             rename_workspace(wsr.root, subject, result.slug, name)
             if credential_workspace:
                 bind_repository_credential(wsr.root, subject, result.slug, credential_workspace)
             return {"workspace": result.slug, "slug": result.slug, "cloned": result.cloned,
-                    "changed": result.changed, "nested": result.nested, "repo": repo, "ref": ref,
+                    "changed": result.changed, "nested": result.nested, "repo": used, "ref": ref,
                     "name": name}
         return imports.start(wsr.root, subject, repo, ref, operation)
 

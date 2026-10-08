@@ -54,9 +54,50 @@ def test_interrupted_operation_is_not_silently_replayed(tmp_path):
     assert result['status'] == 'interrupted'
 
 
-def test_github_https_uses_existing_key_without_public_web_probe():
-    assert jobs.repository_url('https://github.com/acme/private', has_deploy_key=True, has_token=False) == 'git@github.com:acme/private.git'
-    assert jobs.repository_url('https://github.com/acme/private', has_deploy_key=True, has_token=True) == 'https://github.com/acme/private.git'
+def test_github_https_switches_to_ssh_only_when_the_import_uses_a_deploy_key():
+    assert jobs.repository_url('https://github.com/acme/private', use_deploy_key=True) == 'git@github.com:acme/private.git'
+    assert jobs.repository_url('https://github.com/acme/private', use_deploy_key=False) == 'https://github.com/acme/private.git'
+    assert jobs.ssh_form('https://github.com/acme/private.git') == 'git@github.com:acme/private.git'
+    assert jobs.ssh_form('https://gitlab.example.com/acme/private.git') is None
+
+
+def _import_with_fake_clone(tmp_path, monkeypatch, refuse_https=False):
+    """Import `octocat/Spoon-Knife` as u_jane, who has minted her own deploy key. The clone is faked:
+    it records every URL it is asked for and, with ``refuse_https``, answers an https clone the way
+    git does when a repository needs a credential."""
+    from tests.test_workspace_manage_routes import _client, _seed_primary
+    from control_plane import deploy_keys, workspace_attach
+    _seed_primary(tmp_path, 'u_jane')
+    deploy_keys.ensure(tmp_path, deploy_keys.workspace_key(subject='u_jane'))
+    asked = []
+
+    def fake_clone(repo, ref, dest, token=None, **kwargs):
+        asked.append(repo)
+        if refuse_https and repo.startswith('https://'):
+            raise workspace_attach.CloneError('fatal: could not read Username for https://github.com: terminal prompts disabled')
+        dest.mkdir(parents=True)
+        (dest / 'README.md').write_text('spoon\n')
+
+    monkeypatch.setattr(workspace_attach, '_git_clone', fake_clone)
+    client = _client(tmp_path)
+    response = client.post('/api/workspace/import', headers={'X-User-Id': 'u_jane'},
+                           json={'repo': 'https://github.com/octocat/Spoon-Knife'})
+    assert response.status_code == 202, response.text
+    return finish(tmp_path, 'u_jane', response.json()['operation_id']), asked
+
+
+def test_a_person_with_a_deploy_key_still_imports_a_public_repository_over_https(tmp_path, monkeypatch):
+    result, asked = _import_with_fake_clone(tmp_path, monkeypatch)
+    assert result['status'] == 'completed', result
+    assert asked == ['https://github.com/octocat/Spoon-Knife.git']
+    assert result['result']['repo'] == 'https://github.com/octocat/Spoon-Knife.git'
+
+
+def test_an_https_clone_refused_for_a_credential_retries_with_the_deploy_key(tmp_path, monkeypatch):
+    result, asked = _import_with_fake_clone(tmp_path, monkeypatch, refuse_https=True)
+    assert result['status'] == 'completed', result
+    assert asked == ['https://github.com/octocat/Spoon-Knife.git', 'git@github.com:octocat/Spoon-Knife.git']
+    assert result['result']['repo'] == 'git@github.com:octocat/Spoon-Knife.git'
 
 
 def test_import_http_and_mcp_manifest_expose_same_operation(tmp_path, monkeypatch):
