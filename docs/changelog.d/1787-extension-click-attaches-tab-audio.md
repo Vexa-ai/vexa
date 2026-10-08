@@ -1,0 +1,1 @@
+- **Extension: clicking the toolbar icon now starts remote audio on an auto-started Teams, Zoom or YouTube session (#1787).** With auto-start on, the session began before the click and stayed at "no audio — capturing 0 streams"; clicking the icon minted a tab-capture stream that nothing used. The click now attaches that stream to the running session.
