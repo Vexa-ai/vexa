@@ -57,7 +57,7 @@ Docker to build the images. It proves the control plane stands up and `/health` 
 |---|---|---|
 | `global.imageTag` | `""` | Set to a pinned `YYMMDD-HHMM` tag — overrides every service tag (build-once). |
 | `runtime.backend` | `k8s` | `k8s` spawns Pods via RBAC (real cloud); `docker` mounts the host socket (single-node only); `process` runs child processes. |
-| `secrets.*` | placeholders | `adminApiToken`, `internalApiSecret`, `transcriptionServiceToken`, `dispatchSigningKey`, `nextauthSecret`, `anthropic*`. Or set `secrets.existingSecretName` (must carry `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET`, `TRANSCRIPTION_SERVICE_TOKEN`, `VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`). |
+| `secrets.*` | placeholders | `adminApiToken`, `internalApiSecret`, `transcriptionServiceToken`, `dispatchSigningKey`, `nextauthSecret` (32+ bytes, never a published value; empty keeps the release Secret's or generates one), `anthropic*`. Or set `secrets.existingSecretName` (must carry `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET`, `TRANSCRIPTION_SERVICE_TOKEN`, `VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`). |
 | `storage.s3.endpoint` / `bucket` / `existingSecret` | required | Your S3 bucket for recordings and a Secret with its key pair (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`). Optional: `region`, `forcePathStyle`, `caBundle`. No object store runs in the chart; `minio.enabled: true` is refused. |
 | `postgres.enabled` / `redis.enabled` | `true` | Flip to `false` to use managed backing; then set `database.*` / `redisConfig.*` and a pre-existing `postgres.credentialsSecretName`. |
 | `pgbouncer.enabled` | `false` | Transaction pooler for managed Postgres with a fixed slot budget. |

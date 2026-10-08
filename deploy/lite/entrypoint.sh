@@ -129,8 +129,16 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
 export VEXA_PUBLIC_API_URL="${VEXA_PUBLIC_API_URL:-http://localhost:8056}"
 export VEXA_API_KEY="${VEXA_API_KEY:-}"
 export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
-export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-vexa-lite-nextauth-secret}"
-export JWT_SECRET="${JWT_SECRET:-vexa-lite-jwt-secret}"
+# The terminal's signing secret — it signs sign-in cookies and (through a derived key) every emailed
+# sign-in link, so it has NO published default, and the terminal refuses to start on one shorter
+# than 32 bytes or published in this repository. Unset, it is minted on first boot and kept in
+# $VEXA_LITE_STATE_DIR (default /var/lib/vexa/state), so a restart of this container keeps sessions
+# and links valid. Mount a volume there, or pass NEXTAUTH_SECRET (`openssl rand -hex 32`), to keep it
+# across re-creating the container.
+lite_state_dir="${VEXA_LITE_STATE_DIR:-/var/lib/vexa/state}"
+export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(/usr/local/bin/persisted-secret "$lite_state_dir/nextauth-secret")}"
+# Read by no Lite program; minted per boot like the internal tier so no published value is exported.
+export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 
 # Workspace store for the agent (shared dir; the worker runs in-process, no volume bind).
 mkdir -p /workspaces /var/lib/redis /var/run/redis

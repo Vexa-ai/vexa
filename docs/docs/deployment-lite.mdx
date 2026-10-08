@@ -87,6 +87,11 @@ Lite reads the repo-root `.env` (via `docker run --env-file`) plus the flags the
 explicitly. Every key in the [configuration reference](/configuration) applies; mind its warning
 about inline `# comments` in `.env` values — it exists because of Lite's `--env-file` semantics.
 
+The terminal's signing secret has no default. Leave `NEXTAUTH_SECRET` unset and the container
+mints one on first boot and keeps it in `/var/lib/vexa/state` (the `vexa-lite-state` volume under
+`make lite`); or set it in `.env` to a value of at least 32 bytes (`openssl rand -hex 32`). The
+terminal refuses to start on a shorter value or one published in this repository.
+
 If `~/.claude/.credentials.json` exists on the host, `make lite` mounts it read-only into the
 container so agents run on your Claude subscription without copying credentials into `.env`.
 
@@ -98,6 +103,7 @@ State lives in the sidecars' named volumes and survives app-container replacemen
 |---|---|
 | Users, meetings, transcripts (Postgres) | volume `vexa-lite-pgdata` |
 | Recordings (the `vexa-lite-storage` sidecar, versitygw) | volume `vexa-lite-storagedata` — one plain file per object under `data/vexa/` |
+| The terminal's signing secret (`NEXTAUTH_SECRET`, when `.env` sets none) | volume `vexa-lite-state` at `/var/lib/vexa/state` |
 | Valkey state and `/workspaces` scratch | **in-container, ephemeral** — mount `/var/lib/redis` yourself if you need it kept |
 
 The storage sidecar runs `versity/versitygw` (Apache-2.0), pinned by tag and digest in
@@ -119,7 +125,7 @@ the old volume. [Where your recordings live now](/upgrade-from-minio) covers the
 
 ```bash
 make -C deploy/lite down                                  # containers go, volumes stay
-docker volume rm vexa-lite-pgdata vexa-lite-storagedata   # full wipe
+docker volume rm vexa-lite-pgdata vexa-lite-storagedata vexa-lite-state   # full wipe
 ```
 
 ## Is this install actually working? — `make probe SURFACE=lite`

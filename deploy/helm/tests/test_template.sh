@@ -662,6 +662,26 @@ for k in AWS_DEFAULT_REGION AWS_CA_BUNDLE AWS_PROFILE AWS_SHARED_CREDENTIALS_FIL
     -f "$CHART/values-test.yaml" --set "meetingApi.extraEnv[0].name=$k" --set 'meetingApi.extraEnv[0].value=override'
 done
 
+# NEXTAUTH_SECRET has no published default: empty generates one, a published or short value refuses.
+nextauth() {  # nextauth <helm args...> → the NEXTAUTH_SECRET the chart's Secret renders
+  helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "$@" --show-only templates/secret.yaml \
+    | sed -nE 's/^  NEXTAUTH_SECRET: "(.*)"$/\1/p' | head -1
+}
+GEN="$(nextauth)"
+if [ "${#GEN}" -ge 32 ] && [ "$GEN" != "dev-nextauth-secret" ]; then
+  echo "  OK: an empty secrets.nextauthSecret renders a generated ${#GEN}-character secret"
+else echo "  FAIL: empty secrets.nextauthSecret rendered '$GEN'"; fail=1; fi
+[ "$(nextauth)" != "$GEN" ] && echo "  OK: each render without a release Secret mints its own value" \
+  || { echo "  FAIL: two renders minted the same NEXTAUTH_SECRET"; fail=1; }
+GIVEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+[ "$(nextauth --set secrets.nextauthSecret=$GIVEN)" = "$GIVEN" ] && echo "  OK: a given secrets.nextauthSecret is used as is" \
+  || { echo "  FAIL: a given secrets.nextauthSecret did not render"; fail=1; }
+for weak in dev-nextauth-secret DEV-NEXTAUTH-SECRET vexa-lite-nextauth-secret short-secret; do
+  refuse "secrets.nextauthSecret=$weak" 'secrets\.nextauthSecret must be 32\+ bytes and not a value published' \
+    -f "$CHART/values-test.yaml" --set "secrets.nextauthSecret=$weak"
+done
+exact 0 'dev-nextauth-secret' "no published NEXTAUTH_SECRET in the default render"
+
 # The admin list is admin-api's (VEXA_ADMIN_EMAILS); an install that still sets it in the terminal's
 # extraEnv, as this chart once said to, keeps its admins on upgrade.
 admin_emails() {  # admin_emails <helm args...> → the value admin-api's VEXA_ADMIN_EMAILS renders to

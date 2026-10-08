@@ -19,6 +19,7 @@ PROJ="${COMPOSE_PROJECT:-vexa-dash}"
 ADMIN="${ADMIN_TOKEN:-gate-admin-token}"
 export IMAGE_TAG=dev COMPOSE_PROJECT_NAME="$PROJ" ADMIN_TOKEN="$ADMIN" \
        INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-gate-internal-secret}" MINIO_BUCKET=vexa \
+       NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(openssl rand -hex 32)}" \
        BROWSER_IMAGE="${BROWSER_IMAGE:-mock-bot:dev}" DOCKER_GID="${DOCKER_GID:-0}" \
        STORAGE_HOST_PORT="${STORAGE_HOST_PORT:-19000}"
 DC=(docker compose -p "$PROJ" -f docker-compose.yml -f docker-compose.dashboard.yml)

@@ -72,7 +72,7 @@ beforeEach(() => {
   setCookies = [];
   _resetJtiLedger();
   vi.stubEnv("NODE_ENV", "development");           // the direct login route is dev-only
-  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
+  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");
   vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");

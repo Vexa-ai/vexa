@@ -30,7 +30,8 @@ make bot      # build the meeting bot FROM SOURCE — required before a bot can 
 ```
 
 `make all` seeds `.env` from `.env.example`, mints the secrets the services refuse to boot without
-(`INTERNAL_API_SECRET`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY` — a value you already set is kept),
+(`INTERNAL_API_SECRET`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY`, `NEXTAUTH_SECRET` — a value you
+already set is kept),
 brings the stack up, and **prints an API key plus the
 service URLs** when it's done. The **meeting bot is built from source** (`make bot`), **not pulled** —
 the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is **not compatible** with
@@ -140,7 +141,7 @@ hostname, put a TLS-terminating reverse proxy in front of the terminal port (`TE
 ```bash
 # deploy/compose/.env
 NEXTAUTH_URL=https://your-host.example.com
-NEXTAUTH_SECRET=<a strong random secret>   # don't ship the dev default
+NEXTAUTH_SECRET=<openssl rand -hex 32>   # required; make all mints one
 ```
 
 An nginx vhost (the terminal proxies `/ws` to the gateway itself, so the proxy only needs standard
@@ -229,6 +230,14 @@ procurement review can hold us to is self-hosted with no egress, not a certified
 ## One-time steps after upgrading
 
 Run these once on an existing install when you move to this release. They are safe to repeat.
+
+**Rotate `NEXTAUTH_SECRET` if it was ever a default.** The terminal now requires a secret of at least
+32 bytes that is not published in this repository, and refuses to start otherwise. If your install
+ever ran with the old example value (`dev-nextauth-secret`, or Lite's built-in one), treat it as known:
+set a new value (`openssl rand -hex 32`) and restart the terminal. `make all` replaces the old example
+value in `deploy/compose/.env` for you; Helm replaces it in the chart-managed Secret on upgrade; Lite
+mints a new one when you stop passing the old one. Rotating signs everybody out of the web UI once and
+invalidates sign-in links already sent; API keys are not affected.
 
 **Clear the transcript feeds of meetings deleted earlier.** Deleting a meeting's transcript now also
 removes its live feed from Redis. Meetings deleted on an earlier release kept that feed at rest (no

@@ -17,10 +17,19 @@ import { createServer } from "node:http";
 import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
+import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd(), dev);
+
+// The signing secret is checked before anything else starts: an unset, short, or published
+// NEXTAUTH_SECRET signs nothing anybody should trust, so the terminal does not run with one.
+const secretError = authSecretStartupError(process.env);
+if (secretError) {
+  console.error(`[terminal] refusing to start: ${secretError}`);
+  process.exit(1);
+}
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOST || "0.0.0.0";

@@ -45,7 +45,7 @@ function sentLink() {
 beforeEach(() => {
   sendMail.mockClear();
   sendMail.mockImplementation(async () => {});
-  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
+  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("NEXTAUTH_URL", "https://terminal.test");
   vi.stubEnv("MAGIC_LINK_TTL_SECONDS", "");
   // admin-api admits every address these cases use; the refusals are in signinAllowList.test.ts.

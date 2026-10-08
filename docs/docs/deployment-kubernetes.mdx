@@ -49,6 +49,10 @@ helm install vexa deploy/helm/charts/vexa -n vexa \
 ```
 
 Keep these four secret values: every later `helm upgrade` must pass the same ones (or use `--reuse-values`).
+`secrets.nextauthSecret` may also be left out: the chart then keeps the value its own Secret already
+holds, or generates one on first install. It refuses a value shorter than 32 bytes or one published in
+this repository. When a GitOps tool renders the chart with `helm template` (no cluster to look the
+Secret up in), set it explicitly, or every render generates a new one.
 
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.

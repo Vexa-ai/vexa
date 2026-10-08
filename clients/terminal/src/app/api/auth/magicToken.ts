@@ -9,32 +9,38 @@
  *  Wire format — two base64url parts, dot-separated:
  *      <payload>.<sig>
  *      payload = base64url(JSON {e: <email>, x: <expiry, epoch seconds>, j: <jti>})
- *      sig     = base64url(HMAC-SHA256(NEXTAUTH_SECRET, payload))
- *  Signatures are compared with timingSafeEqual. With no NEXTAUTH_SECRET nothing can be minted
- *  OR verified (fail closed): an unconfigured deploy has no magic-link door at all, rather than
- *  an unsigned one that anybody could forge.
+ *      sig     = base64url(HMAC-SHA256(<link key>, payload))
+ *  The link key is never the session secret: `MAGIC_LINK_SECRET` when configured, else a key
+ *  derived from `NEXTAUTH_SECRET` (`./authSecret.mjs`). Signatures are compared with
+ *  timingSafeEqual. With no usable secret — unset, shorter than 32 bytes, or a value published in
+ *  the repository — nothing can be minted OR verified (fail closed): such a deploy has no
+ *  magic-link door at all, rather than one anybody could sign for.
  *
- *  TTL: 15 minutes by default (MAGIC_LINK_TTL_SECONDS overrides).
+ *  TTL: 15 minutes by default (MAGIC_LINK_TTL_SECONDS overrides, up to MAX_TTL_SECONDS). Verify
+ *  also refuses an expiry further out than MAX_TTL_SECONDS, whatever the token says.
  *
  *  SINGLE USE: a redeemed `jti` is remembered until the token would have expired anyway, so a
  *  link works exactly once. See `consumeJti` for the multi-replica caveat.
  */
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { magicLinkKey } from "./authSecret.mjs";
 
 /** Default lifetime of an emailed link — long enough to walk to a phone, short enough that a
  *  forwarded/leaked mail stops being a credential quickly. */
 export const DEFAULT_TTL_SECONDS = 15 * 60;
 
+/** The longest an emailed link may live, whatever MAGIC_LINK_TTL_SECONDS says. */
+export const MAX_TTL_SECONDS = 60 * 60;
+
 export function ttlSeconds(): number {
   const raw = parseInt(process.env.MAGIC_LINK_TTL_SECONDS || "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TTL_SECONDS;
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, MAX_TTL_SECONDS) : DEFAULT_TTL_SECONDS;
 }
 
 /** The signing key. Read at call time (not as a module constant) so tests and the server observe
- *  the live env. Empty/absent → the door is closed, not open. */
+ *  the live env. No usable secret → the door is closed, not open. */
 function secret(): string | null {
-  const s = process.env.NEXTAUTH_SECRET || "";
-  return s.trim() ? s : null;
+  return magicLinkKey(process.env);
 }
 
 function b64url(buf: Buffer): string {
@@ -56,9 +62,9 @@ export type MintResult =
 /** Sign a link for `email`. `now`/`ttl` are injectable so expiry is testable without sleeping. */
 export function mintMagicToken(email: string, opts: { ttl?: number; now?: number } = {}): MintResult {
   const key = secret();
-  if (!key) return { ok: false, error: "NEXTAUTH_SECRET is not configured — magic links are disabled" };
+  if (!key) return { ok: false, error: "no usable NEXTAUTH_SECRET (or MAGIC_LINK_SECRET) — magic links are disabled" };
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
-  const expiresAt = nowSec + (opts.ttl ?? ttlSeconds());
+  const expiresAt = nowSec + Math.min(opts.ttl ?? ttlSeconds(), MAX_TTL_SECONDS);
   const jti = randomUUID();
   const payload = b64url(Buffer.from(JSON.stringify({ e: email, x: expiresAt, j: jti }), "utf8"));
   return { ok: true, token: `${payload}.${signPayload(payload, key)}`, jti, expiresAt };
@@ -100,6 +106,9 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
 
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
   if (nowSec >= expiresAt) return { ok: false, reason: "expired" };
+  // No link this server mints lives longer than MAX_TTL_SECONDS, so an expiry further out is not
+  // one of ours, whatever signed it.
+  if (expiresAt - nowSec > MAX_TTL_SECONDS) return { ok: false, reason: "malformed" };
 
   return { ok: true, email, jti, expiresAt };
 }

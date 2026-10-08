@@ -5,9 +5,11 @@
  *  link carries can never point off-site (open-redirect guard). Everything else in the flow is
  *  plumbing around them.
  */
+import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TTL_SECONDS,
+  MAX_TTL_SECONDS,
   _resetJtiLedger,
   consumeJti,
   mintMagicToken,
@@ -17,9 +19,14 @@ import {
   verifyMagicToken,
 } from "../magicToken";
 
+function b64url(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 beforeEach(() => {
   _resetJtiLedger();
-  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
+  vi.stubEnv("MAGIC_LINK_SECRET", "");
+  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("MAGIC_LINK_TTL_SECONDS", "");
 });
 
@@ -60,7 +67,7 @@ describe("mint / verify", () => {
     const minted = mintMagicToken("someone@example.com");
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
-    vi.stubEnv("NEXTAUTH_SECRET", "a-completely-different-secret");
+    vi.stubEnv("NEXTAUTH_SECRET", "a-completely-different-secret-0123456789");
     expect(verifyMagicToken(minted.token)).toEqual({ ok: false, reason: "bad-signature" });
   });
 
@@ -89,6 +96,50 @@ describe("mint / verify", () => {
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(minted.expiresAt).toBe(Math.floor(now / 1000) + 60);
+  });
+
+  it("a token signed with the session secret itself is refused — links use their own key", () => {
+    const payload = b64url(Buffer.from(JSON.stringify({ e: "someone@example.com", x: Math.floor(Date.now() / 1000) + 600, j: "j1" })));
+    const sig = b64url(createHmac("sha256", "test-signing-secret-0123456789abcdef").update(payload).digest());
+    expect(verifyMagicToken(`${payload}.${sig}`)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+
+  it.each(["dev-nextauth-secret", "vexa-lite-nextauth-secret", "short-secret"])(
+    "a published or short session secret (%s) closes the door: nothing is minted or verified",
+    (weak) => {
+      vi.stubEnv("NEXTAUTH_SECRET", weak);
+      expect(mintMagicToken("someone@example.com").ok).toBe(false);
+      const payload = b64url(Buffer.from(JSON.stringify({ e: "someone@example.com", x: Math.floor(Date.now() / 1000) + 600, j: "j1" })));
+      for (const key of [weak, createHmac("sha256", weak).update("vexa-terminal/magic-link/v1").digest("hex")]) {
+        const sig = b64url(createHmac("sha256", key).update(payload).digest());
+        expect(verifyMagicToken(`${payload}.${sig}`)).toEqual({ ok: false, reason: "unconfigured" });
+      }
+    },
+  );
+
+  it("a configured MAGIC_LINK_SECRET signs the links", () => {
+    vi.stubEnv("MAGIC_LINK_SECRET", "a-separate-link-secret-0123456789abcdef");
+    const minted = mintMagicToken("someone@example.com");
+    expect(minted.ok).toBe(true);
+    if (!minted.ok) return;
+    expect(verifyMagicToken(minted.token).ok).toBe(true);
+    vi.stubEnv("MAGIC_LINK_SECRET", "");
+    expect(verifyMagicToken(minted.token)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+
+  it("caps the lifetime: the TTL setting is clamped and a far-future expiry is refused", () => {
+    vi.stubEnv("MAGIC_LINK_TTL_SECONDS", String(30 * 24 * 3600));
+    expect(ttlSeconds()).toBe(MAX_TTL_SECONDS);
+    const now = 1_700_000_000_000;
+    const long = mintMagicToken("someone@example.com", { now, ttl: 30 * 24 * 3600 });
+    expect(long.ok).toBe(true);
+    if (!long.ok) return;
+    expect(long.expiresAt).toBe(Math.floor(now / 1000) + MAX_TTL_SECONDS);
+
+    const key = createHmac("sha256", "test-signing-secret-0123456789abcdef").update("vexa-terminal/magic-link/v1").digest("hex");
+    const payload = b64url(Buffer.from(JSON.stringify({ e: "someone@example.com", x: Math.floor(now / 1000) + 2 * 24 * 3600, j: "j2" })));
+    const sig = b64url(createHmac("sha256", key).update(payload).digest());
+    expect(verifyMagicToken(`${payload}.${sig}`, { now })).toEqual({ ok: false, reason: "malformed" });
   });
 
   it("fails CLOSED with no NEXTAUTH_SECRET — nothing can be minted or verified", () => {

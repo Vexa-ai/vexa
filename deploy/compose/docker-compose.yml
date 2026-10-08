@@ -1124,7 +1124,14 @@ services:
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      # REQUIRED, NO DEFAULT. It signs the sign-in cookies and (through a derived key) every emailed
+      # sign-in link, so a published default would let anybody sign in. The terminal also refuses
+      # to start on a value shorter than 32 bytes or one published in this repository.
+      # `make all` mints one into .env; by hand: openssl rand -hex 32
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required - set it in deploy/compose/.env (openssl rand -hex 32)}
+      # Optional: a separate key for the emailed sign-in link (32+ bytes, different from
+      # NEXTAUTH_SECRET). Unset, the link key is derived from NEXTAUTH_SECRET.
+      - MAGIC_LINK_SECRET=${MAGIC_LINK_SECRET:-}
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
       # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
@@ -1318,8 +1325,8 @@ services:
       - NEXTAUTH_URL=${DASHBOARD_URL:-http://localhost:13001}
       - NEXT_PUBLIC_APP_URL=${DASHBOARD_URL:-http://localhost:13001}
       - NEXT_PUBLIC_BASE_URL=${DASHBOARD_URL:-http://localhost:13001}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
-      - JWT_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - JWT_SECRET=${NEXTAUTH_SECRET:-}
       - ALLOW_REGISTRATIONS=${DASHBOARD_ALLOW_REGISTRATIONS:-true}
       - NEXT_PUBLIC_HOSTED_MODE=false
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}

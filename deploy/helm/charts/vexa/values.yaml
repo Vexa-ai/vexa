@@ -77,7 +77,9 @@ secrets:
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
-  nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
+  nextauthSecret: ""                # terminal sign-in signing secret (32+ bytes, never a published
+                                    # value). Empty → kept from this release's Secret, else generated;
+                                    # set it when rendering with `helm template` — `openssl rand -hex 32`
   secretsKey: ""                    # agent-api credential store (saved PATs + deploy-key private
                                     # halves). Empty → a key is generated INSIDE the workspaces
                                     # volume beside the ciphertext, which is not encryption at rest

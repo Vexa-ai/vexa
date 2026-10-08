@@ -13,8 +13,8 @@ Two doors, and no third:
   discovers enabled providers from NextAuth's `/api/auth/providers`.
 - **Email magic link** — `request-link/` mails a signed, single-use link; `redeem/` verifies it and
   sets the cookies. Control of the mailbox is the proof of identity. `magicToken.ts` owns the token
-  (HMAC-SHA256 over `{email, exp, jti}` with `NEXTAUTH_SECRET`, 15-minute default TTL, in-process
-  single-use ledger) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
+  (HMAC-SHA256 over `{email, exp, jti}` with the link key, 15-minute default TTL capped at 60
+  minutes, in-process single-use ledger) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
   client driven by `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` (+ optional `SMTP_USER`/`SMTP_PASS`,
   `SMTP_SECURE`).
 
@@ -29,6 +29,13 @@ anything but a literal `admitted: true` refuses. `findOrCreateUserToken` asks be
 account, so OAuth, redeem and the dev login cannot skip it; `request-link/` asks before it mails. A
 refused person sees one sentence (`../../signinRefusal.ts`) at the redeem page and on the sign-in card
 (`?error=` after OAuth); the email form answers "check your email" either way.
+
+**The signing secret** (`authSecret.mjs`, one file read by both `server.mjs` and the routes).
+`NEXTAUTH_SECRET` must be at least 32 bytes and not a value published in this repository;
+`server.mjs` refuses to start otherwise. The emailed link is never signed with it directly: the link
+key is `MAGIC_LINK_SECRET` when configured (held to the same rule, and different from
+`NEXTAUTH_SECRET`), else HMAC-SHA256 of `NEXTAUTH_SECRET` under a fixed label. With no usable secret
+nothing is minted or verified.
 
 One link is both door and destination: `/api/auth/redeem?t=<token>&next=<relative-path>` carries
 the deeplink the visitor was reaching for (`?ask=`, `?meeting=`, `?view=`), so a click lands them

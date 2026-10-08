@@ -121,7 +121,7 @@ beforeEach(() => {
   sendMail.mockClear();
   sendMail.mockImplementation(async () => {});
   _resetJtiLedger();
-  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
+  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("NEXTAUTH_URL", "https://terminal.test");
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");

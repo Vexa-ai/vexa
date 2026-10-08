@@ -36,6 +36,9 @@ PG_IMAGE          ?= postgres:17-alpine
 STORAGE_CONTAINER ?= vexa-lite-storage
 APP_CONTAINER     ?= vexa-lite
 PG_VOLUME         ?= vexa-lite-pgdata
+# The app container's own state (/var/lib/vexa/state): the terminal's NEXTAUTH_SECRET, minted on
+# first boot when .env sets none, so re-creating the container keeps sign-in cookies valid.
+STATE_VOLUME      ?= vexa-lite-state
 HOST_GATEWAY_PORT   ?= 8056
 HOST_TERMINAL_PORT  ?= 3001
 HOST_AGENT_PORT     ?= 8100
@@ -217,6 +220,7 @@ up: preflight storage-up
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
 	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
 		--env-file $(ENV_FILE) \
+		-v $(STATE_VOLUME):/var/lib/vexa/state \
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \

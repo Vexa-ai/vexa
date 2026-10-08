@@ -76,7 +76,7 @@ function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down" 
 
 beforeEach(() => {
   _resetJtiLedger();
-  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
+  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");

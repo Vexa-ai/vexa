@@ -256,11 +256,12 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY --from=terminal-builder /app/terminal /app/terminal
 
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
-COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh /usr/local/bin/
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh deploy/lite/bin/persisted-secret /usr/local/bin/
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker \
-      /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh /entrypoint.sh
+      /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh \
+      /usr/local/bin/persisted-secret /entrypoint.sh
 
 # ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
 ENV LOG_LEVEL=info \
@@ -278,7 +279,7 @@ ENV LOG_LEVEL=info \
     ANTHROPIC_DEFAULT_OPUS_MODEL= ANTHROPIC_DEFAULT_SONNET_MODEL= ANTHROPIC_DEFAULT_HAIKU_MODEL= \
     VEXA_PUBLIC_API_URL=http://localhost:8056 VEXA_API_KEY= \
     TERMINAL_PUBLIC_URL=http://localhost:3001 \
-    NEXTAUTH_SECRET=vexa-lite-nextauth-secret JWT_SECRET=vexa-lite-jwt-secret
+    NEXTAUTH_SECRET= JWT_SECRET=
 
 # Front doors: gateway (8056) · terminal (3001) · agent control plane (8100).
 EXPOSE 8056 3001 8100 6080
