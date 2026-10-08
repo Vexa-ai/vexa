@@ -1,59 +1,57 @@
 import { cookies } from "next/headers";
-import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
+import { getAuthCookieName } from "@/lib/auth-cookies";
+
+export type AuthenticatedUser = {
+  /** Numeric user id, as a string. */
+  id: string;
+  email: string;
+};
 
 /**
- * Resolve the authenticated user's ID from the configured auth cookie.
+ * Resolve the signed-in user from the auth cookie (an API token).
  *
- * Uses the auth cookie (an API key) to look up the owning user via the
- * Admin API's user-facing auth endpoint, which resolves token -> user.
- * Resolves through the configured admin /users/email/ endpoint when user-info is available.
+ * Identity comes only from the gateway's `/auth/me`, which resolves the token
+ * itself to its owning user. Nothing the browser sends alongside the token
+ * (such as the `vexa-user-info` display cookie) is used to decide who the
+ * user is. Every login path — magic link, direct login, Google / Microsoft
+ * sign-in, and the hosted webapp's shared-domain session — sets this cookie.
  *
- * Returns the numeric user ID as a string, or null if unauthenticated.
+ * Returns null when there is no cookie, the token is not valid, or the
+ * gateway cannot be reached.
  */
-export async function getAuthenticatedUserId(): Promise<string | null> {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL;
-  const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
-
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY) return null;
+export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
+  const VEXA_API_URL = process.env.VEXA_API_URL;
+  if (!VEXA_API_URL) return null;
 
   const cookieStore = await cookies();
   const token = cookieStore.get(getAuthCookieName())?.value;
   if (!token) return null;
 
-  // Validate the token by calling the API gateway (same as /api/auth/me)
-  const VEXA_API_URL = process.env.VEXA_API_URL;
-  if (!VEXA_API_URL) return null;
-  const verifyRes = await fetch(`${VEXA_API_URL}/meetings`, {
-    headers: { "X-API-Key": token },
-  });
-  if (!verifyRes.ok) return null;
-
-  // Get the user's email from the SSO cookie, then resolve to a user ID
-  const userInfoStr = cookieStore.get(getUserInfoCookieName())?.value;
-  if (!userInfoStr) return null;
-
-  let email: string;
   try {
-    const userInfo = JSON.parse(userInfoStr);
-    email = userInfo.email;
-    if (!email) return null;
-  } catch {
-    return null;
-  }
-
-  // Look up user by email using the admin API key (server-side only)
-  try {
-    const res = await fetch(
-      `${VEXA_ADMIN_API_URL}/admin/users/email/${encodeURIComponent(email)}`,
-      {
-        headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
-        cache: "no-store",
-      }
-    );
+    const res = await fetch(`${VEXA_API_URL}/auth/me`, {
+      headers: { "X-API-Key": token },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
     if (!res.ok) return null;
-    const user = await res.json();
-    return user.id != null ? String(user.id) : null;
+    const data = (await res.json()) as { user_id?: unknown; email?: unknown };
+    const id =
+      typeof data.user_id === "number" && Number.isSafeInteger(data.user_id)
+        ? String(data.user_id)
+        : typeof data.user_id === "string" && /^\d+$/.test(data.user_id)
+          ? data.user_id
+          : null;
+    if (!id) return null;
+    return { id, email: typeof data.email === "string" ? data.email : "" };
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve the signed-in user's ID (see `getAuthenticatedUser`).
+ * Returns the numeric user ID as a string, or null if unauthenticated.
+ */
+export async function getAuthenticatedUserId(): Promise<string | null> {
+  return (await getAuthenticatedUser())?.id ?? null;
 }

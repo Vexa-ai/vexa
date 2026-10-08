@@ -5,7 +5,8 @@ import { getAuthCookieName } from "@/lib/auth-cookies";
 /**
  * GET /api/webhooks/deliveries/:meetingId
  *
- * Proxy to admin-api for meeting-specific webhook delivery attempts.
+ * Proxy for meeting-specific webhook delivery attempts, made with the
+ * signed-in user's own token. Requests without a user session are refused.
  */
 export async function GET(
   _request: NextRequest,
@@ -17,17 +18,20 @@ export async function GET(
   }
   const cookieStore = await cookies();
   const userToken = cookieStore.get(getAuthCookieName())?.value;
-  const apiKey = userToken || process.env.VEXA_API_KEY || "";
+  if (!userToken) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
   const { meetingId } = await params;
 
   try {
     const response = await fetch(
-      `${VEXA_API_URL}/admin/webhooks/deliveries/${meetingId}`,
+      `${VEXA_API_URL}/admin/webhooks/deliveries/${encodeURIComponent(meetingId)}`,
       {
         headers: {
           "Content-Type": "application/json",
-          ...(apiKey ? { "X-API-Key": apiKey } : {}),
+          "X-API-Key": userToken,
         },
+        cache: "no-store",
       }
     );
 

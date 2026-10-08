@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac } from "crypto";
-import { findUserByEmail } from "@/lib/vexa-admin-api";
+import { getAuthenticatedUser } from "@/lib/auth-utils";
+import { getUserById } from "@/lib/vexa-admin-api";
 
 type CalendarOAuthStatePayload = {
   userId: string;
@@ -44,14 +45,11 @@ function resolveRedirectUri(req: NextRequest): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const { userEmail, returnTo } = (await req.json()) as {
-      userEmail?: string;
+    // The account being connected is always the signed-in user's. A
+    // `userEmail` in the body (sent by older clients) is ignored.
+    const { returnTo } = (await req.json()) as {
       returnTo?: string;
     };
-
-    if (!userEmail || typeof userEmail !== "string") {
-      return NextResponse.json({ error: "userEmail is required" }, { status: 400 });
-    }
 
     const clientId = getGoogleClientId();
     const secret = getStateSecret();
@@ -62,19 +60,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const userResult = await findUserByEmail(userEmail);
-    if (!userResult.success || !userResult.data) {
-      return NextResponse.json(
-        { error: userResult.error?.message || "Could not resolve user" },
-        { status: 400 }
-      );
+    const sessionUser = await getAuthenticatedUser();
+    if (!sessionUser) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+    let email = sessionUser.email;
+    if (!email) {
+      const userResult = await getUserById(sessionUser.id);
+      email = userResult.success && userResult.data ? userResult.data.email : "";
+    }
+    if (!email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
     const now = Math.floor(Date.now() / 1000);
     const redirectUri = resolveRedirectUri(req);
     const payload: CalendarOAuthStatePayload = {
-      userId: String(userResult.data.id),
-      email: userResult.data.email,
+      userId: sessionUser.id,
+      email,
       returnTo: typeof returnTo === "string" && returnTo.startsWith("/") ? returnTo : "/meetings",
       redirectUri,
       iat: now,
