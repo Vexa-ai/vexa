@@ -38,6 +38,7 @@ import { GET as redeem } from "../redeem/route";
 import { POST as login } from "../login/route";
 import { authOptions } from "../[...nextauth]/authOptions";
 import { _settleLinkDeliveries } from "../linkDelivery";
+import { _resetLinkRateLimits } from "../linkRateLimit";
 import { signinAdmission } from "../adminApi";
 import { _resetJtiLedger, mintMagicToken } from "../magicToken";
 import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE, signinErrorMessage } from "../../../signinRefusal";
@@ -115,6 +116,7 @@ const created = () => calls.filter((c) => c.startsWith("POST") && c.endsWith("/a
 const minted = () => calls.filter((c) => c.startsWith("POST") && c.includes("/tokens"));
 
 beforeEach(() => {
+  _resetLinkRateLimits();
   world = { users: new Set(["member@example.com"]), admins: new Set(["boss@example.com"]), adminEmails: [], allow: ["@oenb.at", "alice@example.org"], admission: "up" };
   calls = [];
   cookieJar = {};

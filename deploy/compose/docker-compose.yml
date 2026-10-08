@@ -1136,6 +1136,9 @@ services:
       # The emailed sign-in link is built ONLY from it (never from request headers): empty, the
       # terminal sends no link. Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      # Public proxy addresses whose X-Forwarded-For names the client, for the sign-in link's per-client
+      # rate limit (private and loopback peers, e.g. a proxy on this host, are trusted already).
+      - TERMINAL_TRUSTED_PROXIES=${TERMINAL_TRUSTED_PROXIES:-}
       # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
       # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
       # type-any-email login still works). Register the redirect URI in the provider console:

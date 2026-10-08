@@ -18,6 +18,7 @@ import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
+import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const { loadEnvConfig } = nextEnv;
@@ -78,7 +79,12 @@ const handle = app.getRequestHandler();
 
 await app.prepare();
 
+// The client address routes may trust (rate limits): the TCP peer, or the address a proxy appended
+// to X-Forwarded-For when the peer is a private or TERMINAL_TRUSTED_PROXIES address.
+const TRUSTED_PROXIES = trustedProxies(process.env);
+
 const server = createServer((req, res) => {
+  stampClientAddress(req, TRUSTED_PROXIES);
   Promise.resolve(handle(req, res)).catch((err) => {
     logError("request handler failed", err);
     sendProxyError(res);

@@ -15,6 +15,7 @@ vi.mock("../mailer", () => ({ sendMail: (opts: MailArgs) => sendMail(opts) }));
 
 import { POST as requestLinkRoute } from "../request-link/route";
 import { _settleLinkDeliveries } from "../linkDelivery";
+import { _resetLinkRateLimits } from "../linkRateLimit";
 import { verifyMagicToken } from "../magicToken";
 
 /** The route answers BEFORE it asks admin-api or mails anything (Vexa-ai/vexa#1783 — so a refused
@@ -43,6 +44,7 @@ function sentLink() {
 }
 
 beforeEach(() => {
+  _resetLinkRateLimits();
   sendMail.mockClear();
   sendMail.mockImplementation(async () => {});
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");

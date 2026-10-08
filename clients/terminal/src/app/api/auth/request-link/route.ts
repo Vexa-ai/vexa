@@ -21,12 +21,17 @@
  *  sent a link nobody can ever receive would hide a broken deploy behind a security property it does
  *  not have — and it is the same 503 for every address.
  *
+ *  RATE LIMITED per client address and per email address (`../linkRateLimit.ts`): past the client
+ *  limit a 429, past the address limit the usual 200 with nothing sent.
+ *
  *  This route never creates a user and never mints a session — everything happens at `redeem/`,
  *  after the recipient proves they hold the mailbox.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { mintMagicToken, safeNext, ttlSeconds } from "../magicToken";
 import { startLinkDelivery } from "../linkDelivery";
+import { takeLinkRequest } from "../linkRateLimit";
+import { CLIENT_ADDRESS_HEADER } from "../clientAddress.mjs";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -71,6 +76,19 @@ export async function POST(request: NextRequest) {
   // Minted for every well-formed address, admitted or not: whether this can succeed at all is a fact
   // about the instance, not about the address, and answering it the same way for everybody is what
   // keeps the 503 below from becoming an oracle.
+  // RATE LIMITED (../linkRateLimit.ts), before anything costs an admin-api call or a mail. Over the
+  // client limit: a 429 that says nothing about the address. Over the address limit: the same 200 as
+  // always, and nothing is sent — the mailbox is not flooded, and the answer reveals nothing.
+  const verdict = takeLinkRequest(request.headers.get(CLIENT_ADDRESS_HEADER) || "unknown", normalized);
+  if (verdict === "client-limited") {
+    return NextResponse.json({ error: "Too many sign-in requests. Try again in a few minutes." },
+      { status: 429, headers: { ...NO_STORE, "Retry-After": "60" } });
+  }
+  if (verdict === "address-limited") {
+    console.info("[terminal-auth] sign-in link NOT sent — too many requested for this address recently");
+    return NextResponse.json({ ok: true }, { headers: NO_STORE });
+  }
+
   const base = baseUrl();
   if (!base) {
     console.error("[terminal-auth] magic link refused: no public URL configured (NEXTAUTH_URL or TERMINAL_URL)");
