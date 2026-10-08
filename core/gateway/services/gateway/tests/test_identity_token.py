@@ -1,6 +1,6 @@
-"""identity.v1 — the signer and verifier, against the contract's own goldens (P8).
+"""gateway-identity.v1 — the signer and verifier, against the contract's own goldens (P8).
 
-The vectors in core/gateway/contracts/identity.v1/golden are re-signed here in Python (validate.mjs
+The vectors in core/gateway/contracts/gateway-identity.v1/golden are re-signed here in Python (validate.mjs
 re-signs them in Node), and every way a token can be wrong is refused with its own reason.
 """
 import json
@@ -10,7 +10,7 @@ import pytest
 
 from gateway import identity_token as it
 
-GOLDEN = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "identity.v1" / "golden"
+GOLDEN = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "gateway-identity.v1" / "golden"
 SECRET = "unit-secret"
 
 

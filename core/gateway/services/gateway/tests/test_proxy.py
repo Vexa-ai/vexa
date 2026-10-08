@@ -203,7 +203,7 @@ def test_internal_tier_header_is_stripped_from_a_public_request():
         "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
         "x-vexa-internal-api-secret": "vexa-internal-secret",
         "x-admin-api-key": "changeme",
-        "x-vexa-identity": "v1.forged.forged",         # identity.v1's signature header
+        "x-vexa-identity": "v1.forged.forged",         # gateway-identity.v1's signature header
     })
     assert r.status_code == 200
     fwd = downstream.last["headers"]

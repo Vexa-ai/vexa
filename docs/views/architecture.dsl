@@ -63,7 +63,7 @@ system gateway-system  # the one public edge (api.v1, ws.v1)
   service gateway
   contract api.v1
   contract logevent.v1
-  contract identity.v1
+  contract gateway-identity.v1
   contract ws.v1
 
 system identity  # access + audit; owns the durable DB
@@ -138,7 +138,7 @@ edges:
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync
-  gateway -req-> agent-api  # proxy /agent/* with the resolved identity signed (identity.v1)
+  gateway -req-> agent-api  # proxy /agent/* with the resolved identity signed (gateway-identity.v1)
   gateway -req-> mcp  # proxy /mcp — the ONE assembled MCP server for every bearer, a person's key or a worker's delegation token; POST buffered, GET relayed unbuffered (SSE stream)
   gateway -req-> admin-api  # POST /internal/validate (authz oracle) plus user calendar connection CRUD
   gateway -read-> bm-status  # WS fan-out

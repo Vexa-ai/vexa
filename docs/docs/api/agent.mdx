@@ -29,7 +29,7 @@ itself is internal.
 canonical prefix **`/agent/*`**. The gateway resolves your
 `X-API-Key` → user and injects `X-User-Id`; agent-api derives the workspace/chat/quota **`subject`** from
 that header (P20). A `subject` in a request body or query string is **ignored** — never trust the client
-for identity. The gateway signs the identity it stamps (`X-Vexa-Identity`, identity.v1) and agent-api
+for identity. The gateway signs the identity it stamps (`X-Vexa-Identity`, gateway-identity.v1) and agent-api
 refuses an `X-User-Id` that is not signed, so call these routes **through the gateway** —
 `$API_BASE/agent/...` with `X-API-Key`. The `$AGENT_API/api/...` paths below name the internal routes;
 reaching them directly takes the internal tier (`X-Internal-Secret` beside `X-User-Id`), which only

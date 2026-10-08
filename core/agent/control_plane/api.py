@@ -195,7 +195,7 @@ def create_app(
         logger.warning("workspace-id migration could not run: %s: %s", type(exc).__name__, exc)
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
     settings = dispatcher.settings if dispatcher is not None else None
-    # THE DOOR FOR `x-user-*` (identity.v1). Every request that names a person must carry the
+    # THE DOOR FOR `x-user-*` (gateway-identity.v1). Every request that names a person must carry the
     # gateway's signature over that identity, or come from the internal tier (flows, the terminal's
     # server-side admin routes, the dogfood rig) with `X-Internal-Secret`. Anything else that names a
     # person is a 401 at this middleware, before any route reads a header. The production boot
@@ -248,7 +248,7 @@ def create_app(
     _meeting_note_recorder = meeting_note_recorder or meeting_mint_mod.http_recorder(
         settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
 
-    # TOPOLOGY BOUNDARY (Lane M vector 3, identity.v1): agent-api reads X-User-Id / X-User-Email as
+    # TOPOLOGY BOUNDARY (Lane M vector 3, gateway-identity.v1): agent-api reads X-User-Id / X-User-Email as
     # ground truth, and that is sound only because of the door installed above — the gateway signs
     # the identity it resolved, `IdentityGuard` verifies the signature and rebuilds every x-user-*
     # header from the signed claims, and an unsigned header is believed only from the internal tier.

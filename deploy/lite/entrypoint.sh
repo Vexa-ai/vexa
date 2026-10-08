@@ -70,7 +70,7 @@ export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import s
 # internal tier (F95). A random per-boot value keeps the one-command quickstart working and is
 # nobody's to guess; set INTERNAL_API_SECRET explicitly when something outside talks in.
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
-# identity.v1 — the gateway signs the identity it resolved and agent-api and meeting-api verify it;
+# gateway-identity.v1 — the gateway signs the identity it resolved and agent-api and meeting-api verify it;
 # all three refuse to boot without it. Same terms as the internal tier: minted per boot unless set.
 export VEXA_GATEWAY_IDENTITY_SECRET="${VEXA_GATEWAY_IDENTITY_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 # The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.

@@ -184,7 +184,7 @@ def create_app(
     # calendar-sync user edges (async callables from the composition root; None → routes 503)
     calendar_sync_now: Optional["object"] = None,
     calendar_sync_status: Optional["object"] = None,
-    # identity.v1 — the gateway's signing key, and the internal tier's secret. With a key, every
+    # gateway-identity.v1 — the gateway's signing key, and the internal tier's secret. With a key, every
     # x-user-* header must be signed by the gateway or carried by the internal tier, or the request
     # is refused before any route reads it. The production entrypoint always passes one (the boot
     # refuses without it); None is the in-process harness, which drives the routes directly.
@@ -201,7 +201,7 @@ def create_app(
     app = FastAPI(title="Vexa Meeting API (v0.12)", version="0.12.0")
     # The edge: read/mint X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
-    # THE DOOR FOR x-user-* (identity.v1). meeting-api derives the owner, the bot limit, the
+    # THE DOOR FOR x-user-* (gateway-identity.v1). meeting-api derives the owner, the bot limit, the
     # workspace memberships and the webhook from these headers; a request that names a person
     # without the gateway's signature or the internal tier is refused here. Bot and runtime
     # callbacks name no person and pass through to the routes that authenticate them.

@@ -209,7 +209,7 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
 # ── the authority-header strip (F95) ─────────────────────────────────────────────
 # Downstream services trust a small vocabulary of headers as AUTHORITY: ``x-user-*`` is the identity
 # the gateway resolved from the api-key, ``x-vexa-identity`` is the signature that makes it believable
-# (identity.v1 — agent-api and meeting-api refuse an ``x-user-*`` header without it),
+# (gateway-identity.v1 — agent-api and meeting-api refuse an ``x-user-*`` header without it),
 # ``x-internal-secret`` is the internal service tier (agent-api ``_internal_caller``, admin-api
 # ``_check_internal`` — the gate the meeting room calls its own trust boundary), and
 # ``x-admin-api-key`` is admin-api's privileged surface.
@@ -255,7 +255,7 @@ def create_app(
     ``downstream``  — forwards proxied HTTP requests to meeting-api (the unified control plane:
                       /bots + /transcripts + /meetings + /recordings all live there now, P2).
     ``redis``       — pub/sub bus for the ``/ws`` fan-in.
-    ``identity_secret`` — signs the resolved identity onto every forward (identity.v1,
+    ``identity_secret`` — signs the resolved identity onto every forward (gateway-identity.v1,
                       ``X-Vexa-Identity``). The production builder passes
                       ``VEXA_GATEWAY_IDENTITY_SECRET``, which the boot preflight requires; a harness
                       that injects fakes downstream may leave it empty and forward plain headers.
@@ -419,7 +419,7 @@ def create_app(
             if _is_authority_header(h):
                 headers.pop(h, None)
         headers["x-api-key"] = client_key
-        # THE RESOLVED IDENTITY, RE-STAMPED (identity.v1). Every value comes from /internal/validate,
+        # THE RESOLVED IDENTITY, RE-STAMPED (gateway-identity.v1). Every value comes from /internal/validate,
         # never from the client: the user id; the verified email agent-api's membership redeem checks
         # for RESTRICTED invites (Lane M); the scopes and the bot limit `POST /bots` enforces; the
         # shared-workspace memberships meeting-api authorizes a member's transcript subscribe against

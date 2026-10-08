@@ -76,7 +76,7 @@ secrets:
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
-  gatewayIdentitySecret: ""         # identity.v1: the gateway signs the identity it resolved, agent-api and
+  gatewayIdentitySecret: ""         # gateway-identity.v1: the gateway signs the identity it resolved, agent-api and
                                     # meeting-api verify it. Empty → GENERATED at install and kept across
                                     # upgrades (read back from the release's Secret). With
                                     # existingSecretName, the Secret must carry VEXA_GATEWAY_IDENTITY_SECRET.
@@ -184,7 +184,7 @@ mcp:
   extraEnv: []
 
 # Who may open a connection to agent-api and meeting-api. Both read the person they act for from
-# a signed identity (identity.v1), and this is the second wall: only the pods that legitimately call
+# a signed identity (gateway-identity.v1), and this is the second wall: only the pods that legitimately call
 # them can reach them at all — the gateway, the MCP service, the runtime, flows and the terminal for
 # agent-api; the gateway, agent-api, the MCP service, the runtime and the meeting BOTS (their
 # lifecycle callbacks and recording uploads) for meeting-api. Agent WORKERS reach neither: they act

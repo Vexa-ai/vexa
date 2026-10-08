@@ -633,7 +633,7 @@ else
 fi
 
 # Negative controls — each MUST fail to render, with the message that names the fix.
-# ── identity.v1 + the one MCP server (Vexa-ai/vexa#1783) ────────────────────────────────────────
+# ── gateway-identity.v1 + the one MCP server (Vexa-ai/vexa#1783) ────────────────────────────────────────
 # The gateway signs the identity it resolved and agent-api + meeting-api verify it (all three refuse
 # to boot without the key); identity verifies a worker's delegation token and agent-api signs it.
 need 3 'key: VEXA_GATEWAY_IDENTITY_SECRET' "identity signing key on gateway, agent-api, meeting-api"

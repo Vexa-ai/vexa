@@ -618,7 +618,7 @@ def test_policy_guard_removes_policy_in_freshly_seeded_workspace(tmp_path):
 
 # ── vector 2 (topology): a forged X-User-Id never reaches the role gate ──────────────────────────
 def test_an_unsigned_identity_is_refused_before_the_role_gate(tmp_path, monkeypatch):
-    """identity.v1: with the gateway's signing key configured (every deployment), a caller that
+    """gateway-identity.v1: with the gateway's signing key configured (every deployment), a caller that
     reaches agent-api directly and asserts X-User-Id without the signature is refused 401 at the door;
     the gateway's signed identity reaches the normal role gate (403 for a non-member, not 401)."""
     from control_plane import identity_token

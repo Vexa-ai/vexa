@@ -33,7 +33,7 @@ def test_preflight_passes_when_required_set():
 
 
 def test_preflight_refuses_boot_without_the_identity_signing_key():
-    """identity.v1 — every forward is signed; with no key nothing behind the edge can authenticate a
+    """gateway-identity.v1 — every forward is signed; with no key nothing behind the edge can authenticate a
     request, so the gateway refuses to boot rather than forward identities nobody will believe."""
     with pytest.raises(cp.ConfigError) as ei:
         cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})

@@ -541,13 +541,13 @@
    ]
   },
   {
-   "unique-id": "identity.v1",
+   "unique-id": "gateway-identity.v1",
    "node-type": "contract",
-   "name": "identity.v1",
-   "description": "identity.v1 \u2014 sealed/published contract (gateway): the identity the edge resolved, HMAC-signed onto every forward and verified by agent-api and meeting-api",
+   "name": "gateway-identity.v1",
+   "description": "gateway-identity.v1 \u2014 sealed/published contract (gateway): the identity the edge resolved, HMAC-signed onto every forward and verified by agent-api and meeting-api",
    "metadata": [
     {
-     "path": "core/gateway/contracts/identity.v1",
+     "path": "core/gateway/contracts/gateway-identity.v1",
      "domain": "gateway"
     }
    ]
@@ -1485,7 +1485,7 @@
       "gateway",
       "api.v1",
       "logevent.v1",
-      "identity.v1",
+      "gateway-identity.v1",
       "ws.v1"
      ]
     }
@@ -2279,7 +2279,7 @@
      }
     }
    },
-   "description": "proxy /agent/* with the resolved identity signed (identity.v1)",
+   "description": "proxy /agent/* with the resolved identity signed (gateway-identity.v1)",
    "protocol": "HTTPS"
   },
   {

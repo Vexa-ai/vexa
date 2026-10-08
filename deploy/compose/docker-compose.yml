@@ -336,7 +336,7 @@ services:
       # `INTERNAL_API_SECRET` and marks `VEXA_INTERNAL_API_SECRET` DEPRECATED ("no deploy surface
       # sets it on agent-api any more"), so the A19 fix rides the spelling this service reads.
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
-      # identity.v1: the key that verifies the gateway's X-Vexa-Identity. agent-api believes an
+      # gateway-identity.v1: the key that verifies the gateway's X-Vexa-Identity. agent-api believes an
       # x-user-* header only with that signature (or from the internal tier above) and refuses to
       # boot without it. mint-dev-env.sh generates it beside INTERNAL_API_SECRET.
       - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
@@ -485,7 +485,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
-      # identity.v1: verifies the gateway's X-Vexa-Identity — the owner, bot limit, memberships and
+      # gateway-identity.v1: verifies the gateway's X-Vexa-Identity — the owner, bot limit, memberships and
       # webhook meeting-api reads come from that signature (or the internal tier), never a bare header.
       - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
@@ -603,7 +603,7 @@ services:
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
-      # identity.v1: the gateway signs the identity it resolved onto every forward with this key;
+      # gateway-identity.v1: the gateway signs the identity it resolved onto every forward with this key;
       # agent-api and meeting-api verify it. Required — mint-dev-env.sh generates it.
       - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}

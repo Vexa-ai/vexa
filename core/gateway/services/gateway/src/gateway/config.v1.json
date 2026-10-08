@@ -27,7 +27,7 @@
       "key": "VEXA_GATEWAY_IDENTITY_SECRET",
       "class": "required-explicit",
       "secret": true,
-      "description": "identity.v1 signing key. The gateway HMAC-signs the identity it resolved onto every forward (X-Vexa-Identity, short expiry); agent-api and meeting-api verify it with the same value and refuse an x-user-* header without it. Unset, nothing behind the edge can authenticate a request, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint).",
+      "description": "gateway-identity.v1 signing key. The gateway HMAC-signs the identity it resolved onto every forward (X-Vexa-Identity, short expiry); agent-api and meeting-api verify it with the same value and refuse an x-user-* header without it. Unset, nothing behind the edge can authenticate a request, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint).",
       "forbidden_values": [
         "vexa-internal-secret",
         "lite-internal-secret",

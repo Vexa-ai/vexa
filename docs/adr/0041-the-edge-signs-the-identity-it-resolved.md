@@ -22,7 +22,7 @@ caller, with the worker as an ordinary client of it.
 
 1. **The gateway signs what it stamps.** Every forward carries `X-Vexa-Identity`: HMAC-SHA256 over
    the claims the services read, with an issue time and a 60-second expiry, keyed by
-   `VEXA_GATEWAY_IDENTITY_SECRET` (the sealed contract `core/gateway/contracts/identity.v1`).
+   `VEXA_GATEWAY_IDENTITY_SECRET` (the sealed contract `core/gateway/contracts/gateway-identity.v1`).
 2. **The services verify at their door.** agent-api and meeting-api install `IdentityGuard`: a valid
    signature (constant-time, ±30 s skew, at most a 300 s lifetime) rebuilds every `x-user-*` header
    from the claims; an `x-user-*` header without one is a `401`. A request that names nobody passes

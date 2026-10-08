@@ -1,4 +1,4 @@
-"""identity.v1 at agent-api's door — who may name a person, one test per caller class.
+"""gateway-identity.v1 at agent-api's door — who may name a person, one test per caller class.
 
 agent-api reads WHO is calling from x-user-* headers. With the gateway's signing key configured
 (every deployment: the production boot requires it), a header is believed only when:

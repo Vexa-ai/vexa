@@ -115,7 +115,7 @@ IDENTITY = {"VEXA_GATEWAY_IDENTITY_SECRET": "a-real-signing-key"}
 
 
 def test_preflight_refuses_a_boot_that_cannot_verify_identity():
-    """identity.v1 — agent-api believes an x-user-* header only with the gateway's signature
+    """gateway-identity.v1 — agent-api believes an x-user-* header only with the gateway's signature
     beside it; with no key to check it, nobody can be authenticated, so the boot refuses."""
     with pytest.raises(cp.ConfigError) as ei:
         cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})

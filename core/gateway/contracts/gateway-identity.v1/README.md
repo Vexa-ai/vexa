@@ -1,4 +1,4 @@
-# identity.v1 — the signed identity behind the gateway
+# gateway-identity.v1 — the signed identity behind the gateway
 
 The gateway resolves every bearer through identity's `/internal/validate`, then forwards the
 request with the identity it resolved. The services behind it (agent-api, meeting-api) read that

@@ -1,4 +1,4 @@
-"""identity.v1 — the identity the gateway resolved, signed, and the door that checks it.
+"""gateway-identity.v1 — the identity the gateway resolved, signed, and the door that checks it.
 
 The gateway resolves a bearer (an API key, or a worker's delegation token) through identity's
 ``/internal/validate`` and forwards the request to a domain service. The services behind it read
@@ -19,7 +19,7 @@ honours it and nothing weaker.
 
 THIS FILE IS VENDORED, byte for byte, into every package that signs or verifies (the gateway,
 agent-api, meeting-api). ``gate:fact-parity`` compares the copies; edit the canonical copy in
-``core/gateway/contracts/identity.v1/`` and copy it out. Standard library only, so it can be.
+``core/gateway/contracts/gateway-identity.v1/`` and copy it out. Standard library only, so it can be.
 """
 from __future__ import annotations
 

@@ -407,7 +407,7 @@ def test_reporting_never_raises_into_a_turn(monkeypatch, tmp_path):
 
 
 def test_a_worker_files_friction_through_the_edge_as_its_delegation(monkeypatch, tmp_path):
-    """identity.v1: agent-api believes no unsigned X-User-Id, so the worker never names its person
+    """gateway-identity.v1: agent-api believes no unsigned X-User-Id, so the worker never names its person
     itself — it presents the dispatch's delegation token at the gateway, which resolves it."""
     import json as _json
 

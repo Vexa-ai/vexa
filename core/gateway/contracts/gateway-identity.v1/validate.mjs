@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * gate:schema for identity.v1 — the goldens are the spec (P8).
+ * gate:schema for gateway-identity.v1 — the goldens are the spec (P8).
  *   claims-*  → a signed payload, validated against #/$defs/Claims
  *   vector-*  → a signing vector, validated against #/$defs/Vector, then RE-SIGNED here in a second
  *               language: the token's payload must decode to Claims, and HMAC-SHA256 over
@@ -45,5 +45,5 @@ for (const f of files) {
     console.error(`  ✗ ${f}: filename must start with claims- / vector-`); failed++;
   }
 }
-console.log(failed ? `identity.v1: ${failed} golden(s) FAILED` : `identity.v1: ${files.length} goldens conform`);
+console.log(failed ? `gateway-identity.v1: ${failed} golden(s) FAILED` : `gateway-identity.v1: ${files.length} goldens conform`);
 process.exit(failed ? 1 : 0);

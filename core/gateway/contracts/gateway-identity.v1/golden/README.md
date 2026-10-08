@@ -1,4 +1,4 @@
-# identity.v1 goldens
+# gateway-identity.v1 goldens
 
 - `claims-human.json` — the payload the gateway signs for an API key: subject, email, scopes,
   limits, a workspace membership and a webhook.

@@ -68,7 +68,7 @@ ADMIN_TOKEN = "gate-admin-token"
 INTERNAL_API_SECRET = "gate-internal-secret"
 # Compose requires NEXTAUTH_SECRET for the whole file, whichever services a test brings up.
 NEXTAUTH_SECRET = "gate-nextauth-secret-0123456789abcdef0123"
-# identity.v1: the gateway signs the identity it resolved and meeting-api / agent-api verify it; the
+# gateway-identity.v1: the gateway signs the identity it resolved and meeting-api / agent-api verify it; the
 # services refuse to boot without the key. The proof calls meeting-api directly as an internal-tier
 # caller (X-Internal-Secret beside X-User-Id), never as a forged identity.
 GATEWAY_IDENTITY_SECRET = "gate-identity-signing-key"

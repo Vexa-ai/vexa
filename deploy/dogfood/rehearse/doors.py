@@ -172,7 +172,7 @@ MEETINGS_PAGE_MAX = 100
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout: float = 40):
     h = {"content-type": "application/json", **(headers or {})}
     # agent-api believes an asserted X-User-Id only from the gateway's signature or the internal
-    # tier (identity.v1). These doors reach agent-api directly, so every call naming a person
+    # tier (gateway-identity.v1). These doors reach agent-api directly, so every call naming a person
     # presents the internal tier beside it.
     if url.startswith(AGENT_API) and any(k.lower() == "x-user-id" for k in h):
         h.setdefault("X-Internal-Secret", _internal_secret())

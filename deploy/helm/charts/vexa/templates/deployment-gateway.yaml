@@ -59,7 +59,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            # identity.v1: signs the identity the edge resolved onto every forward.
+            # gateway-identity.v1: signs the identity the edge resolved onto every forward.
             - name: VEXA_GATEWAY_IDENTITY_SECRET
               valueFrom:
                 secretKeyRef:

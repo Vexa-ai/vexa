@@ -124,7 +124,7 @@ class AdminApiAuthorizer:
             # subscribe path fail-safe — surface it as an authorization error, not an unhandled 500.
             return {"authorized": [], "errors": [f"authorization_unavailable:{e}"]}
         if user_data:
-            # The same signed identity every proxied forward carries (identity.v1) — meeting-api
+            # The same signed identity every proxied forward carries (gateway-identity.v1) — meeting-api
             # refuses an x-user-* header without it.
             secret = os.getenv("VEXA_GATEWAY_IDENTITY_SECRET", "")
             if secret:
@@ -235,7 +235,7 @@ def build_production_app(
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
-        # identity.v1: the resolved identity is signed onto every forward. preflight() above has
+        # gateway-identity.v1: the resolved identity is signed onto every forward. preflight() above has
         # already refused a boot without it, so this is never empty in production.
         identity_secret=os.getenv("VEXA_GATEWAY_IDENTITY_SECRET", ""),
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)

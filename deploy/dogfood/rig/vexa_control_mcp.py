@@ -114,7 +114,7 @@ def _admin_key() -> str:
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout=40):
     h = {"content-type": "application/json", **(headers or {})}
     # agent-api believes an asserted X-User-Id only from the gateway's signature or from the
-    # internal tier (identity.v1). This rig reaches agent-api directly as an internal caller, so
+    # internal tier (gateway-identity.v1). This rig reaches agent-api directly as an internal caller, so
     # every call that names a person carries the tier's credential — and the delegation's regime
     # and workspace ceiling, so the routes that need a person in the loop can refuse on their own.
     if url.startswith(AGENT_API) and any(k.lower() == "x-user-id" for k in h):

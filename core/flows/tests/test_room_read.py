@@ -274,7 +274,7 @@ def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(mon
 def test_no_room_means_the_body_and_headers_this_dispatch_always_sent(monkeypatch):
     """Every other turn in the system — onboarding, the email conversation, the re-ask — must not
     grow a room field. It carries the internal tier like every call flows makes FOR a person
-    (identity.v1: agent-api believes an unsigned X-User-Id only beside it); a room is the BODY
+    (gateway-identity.v1: agent-api believes an unsigned X-User-Id only beside it); a room is the BODY
     fields, never the header."""
     seen = _chat_post(monkeypatch)
     REAL_DISPATCH_TURN("7", "s", "hello")

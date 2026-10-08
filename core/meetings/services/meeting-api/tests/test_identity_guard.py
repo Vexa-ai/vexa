@@ -1,4 +1,4 @@
-"""identity.v1 at meeting-api's door — who may name a person, one test per caller class.
+"""gateway-identity.v1 at meeting-api's door — who may name a person, one test per caller class.
 
 meeting-api derives the owner, the bot limit (`X-User-Limits`), the workspace memberships and the
 webhook from x-user-* headers. With the gateway's signing key configured (the production boot

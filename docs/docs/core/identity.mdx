@@ -65,7 +65,7 @@ terminal ──(API key, from your login)──▶  GATEWAY  ──(X-User-Id + 
                                             │ resolve key → user (fail-closed)
                                             │ strip any client-supplied identity (anti-spoof)
                                             │ check the route's coarse scope
-                                            │ sign the identity (HMAC, 60 s) — identity.v1
+                                            │ sign the identity (HMAC, 60 s) — gateway-identity.v1
 ```
 
 agent-api and meeting-api believe `X-User-Id` (and the email, limits, workspaces and webhook beside it)
@@ -74,7 +74,7 @@ other way to name a person is the **internal tier**: a service holding `INTERNAL
 agent-api calling meeting-api) presents `X-Internal-Secret` and names the user it acts for. Anything
 else that names a person is refused with `401` before a route reads it — a process that reaches a
 service past the gateway cannot become a user. The contract is
-[`core/gateway/contracts/identity.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/contracts/identity.v1).
+[`core/gateway/contracts/gateway-identity.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/contracts/gateway-identity.v1).
 
 An agent worker is an ordinary client of the same edge. Each dispatch mints it a short-lived
 delegation token (`vxd_…`); identity's `/internal/validate` resolves that token like an API key — the

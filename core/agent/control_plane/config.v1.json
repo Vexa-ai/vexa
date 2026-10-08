@@ -356,7 +356,7 @@
       "key": "VEXA_GATEWAY_IDENTITY_SECRET",
       "class": "required-explicit",
       "secret": true,
-      "description": "identity.v1 verification key \u2014 the same value the gateway signs X-Vexa-Identity with. agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier. Unset, nobody can be authenticated, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint)",
+      "description": "gateway-identity.v1 verification key \u2014 the same value the gateway signs X-Vexa-Identity with. agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier. Unset, nobody can be authenticated, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint)",
       "forbidden_values": [
         "vexa-internal-secret",
         "lite-internal-secret",

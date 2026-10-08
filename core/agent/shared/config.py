@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # ── identity seam — the subject is the authenticated user (P20) ──────────
     # agent-api is fronted by the gateway, which resolves the bearer → user and forwards X-User-Id
     # together with X-Vexa-Identity, an HMAC over the same identity with a short expiry
-    # (identity.v1). ``gateway_identity_secret`` verifies it: with it set, agent-api refuses any
+    # (gateway-identity.v1). ``gateway_identity_secret`` verifies it: with it set, agent-api refuses any
     # x-user-* header that is neither signed nor carried by the internal tier, and a request that
     # names nobody is a 401 — there is no fallback subject. The production boot requires it.
     gateway_identity_secret: SecretStr = SecretStr("")

@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 #: Where the report goes: agent-api's `/api/friction`, reached THROUGH THE EDGE — `/agent/friction` on
 #: the same gateway whose `/mcp` is this worker's toolbelt (`VEXA_MCP_URL`) — and authenticated by the
 #: dispatch's delegation token (`VEXA_MCP_DELEGATION_TOKEN`), the bearer the toolbelt presents.
-#: agent-api believes an X-User-Id only with the gateway's signature beside it (identity.v1), so a
+#: agent-api believes an X-User-Id only with the gateway's signature beside it (gateway-identity.v1), so a
 #: worker never names its person itself; the gateway resolves the token and says who it acts for.
 TIMEOUT_S = 3.0
 

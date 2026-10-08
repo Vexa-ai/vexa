@@ -1,4 +1,4 @@
-"""identity.v1 at the edge — the gateway signs the identity it resolved onto every forward.
+"""gateway-identity.v1 at the edge — the gateway signs the identity it resolved onto every forward.
 
 agent-api and meeting-api believe `x-user-*` only with a valid `X-Vexa-Identity` beside it, so
 these pin the producer half: every leg that stamps an identity (the buffered REST forward, the SSE

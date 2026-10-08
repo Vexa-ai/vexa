@@ -1745,7 +1745,7 @@ def build(**d) -> APIRouter:
         to be in the invite's allowed_emails."""
         subject = subject_of(request)
         # SECURITY BOUNDARY: X-User-Email is the caller's VERIFIED email because agent-api's identity
-        # door (identity.v1, see the TOPOLOGY BOUNDARY note in create_app) rebuilds every x-user-*
+        # door (gateway-identity.v1, see the TOPOLOGY BOUNDARY note in create_app) rebuilds every x-user-*
         # header from the gateway's signature — the address identity resolved — or believes it from
         # the internal tier only. Restricted-mode invites rest on that.
         subject_email = request.headers.get("x-user-email")

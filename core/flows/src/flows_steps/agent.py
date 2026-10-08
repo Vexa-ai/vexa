@@ -14,7 +14,7 @@ from .common import agent_door, http, require_internal_secret, scaffolded, swall
 def as_person(uid) -> dict:
     """The headers flows sends agent-api to act FOR a person: their id, carried by the internal
     tier. agent-api believes an asserted X-User-Id only from the gateway's signature or from a
-    service presenting `X-Internal-Secret` (identity.v1) — flows is the second kind."""
+    service presenting `X-Internal-Secret` (gateway-identity.v1) — flows is the second kind."""
     return {"X-User-Id": str(uid), "X-Internal-Secret": require_internal_secret()}
 
 
