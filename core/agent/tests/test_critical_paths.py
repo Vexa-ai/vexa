@@ -61,7 +61,7 @@ def test_cp6_meeting_grounding_folds_live_transcript(monkeypatch):
     )
     url = _fake_url(r, monkeypatch)
     ctx, tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"platform": "google_meet", "native_id": "abc-defg-hij"}},
+        {"kind": "meeting", "platform": "google_meet", "native_id": "abc-defg-hij"},
         session="main", prompt="who spoke last?", redis_url=url)
     assert ctx == {"kind": "none", "session": "main"} and tools == []
     assert "Jane: ship it Friday" in prompt
@@ -75,7 +75,7 @@ def test_cp6_meeting_with_no_transcript_says_so(monkeypatch):
     r = _seed_transcript_stream("empty-mtg")  # no entries
     url = _fake_url(r, monkeypatch)
     _ctx, tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "empty-mtg"}},
+        {"kind": "meeting", "native_id": "empty-mtg"},
         session="main", prompt="summary?", redis_url=url)
     assert tools == []
     assert "no transcript has been captured yet" in prompt

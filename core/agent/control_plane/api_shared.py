@@ -1272,11 +1272,13 @@ def _meeting_grounding(
 
     There is ONE transcript and one fold of it: the "processed notes" the post branch used to prefer
     were the in-product inference pipeline's output, and PRD decision 34 removed that pipeline.
+    ``active`` is the FLAT focus ``_readable_meeting_focus`` built — one level, scalar fields only.
+    A ``meeting`` key inside it names nothing and is not read.
+
     Returns the plain (none-context, no tools, prompt) when the active tab isn't a meeting."""
-    a = active or {}
-    if a.get("kind") != "meeting":
+    m = active or {}
+    if m.get("kind") != "meeting":
         return ({"kind": "none", "session": session}, [], prompt)
-    m = a.get("meeting") or a  # tolerate {kind, meeting:{…}} or a flat {kind, platform, native_id}
     native = m.get("native_id") or m.get("ref")
     if not native:
         return ({"kind": "none", "session": session}, [], prompt)
@@ -1437,28 +1439,82 @@ def transcript_erased(row: "dict | None") -> bool:
     return isinstance(data, dict) and bool(data.get("artifact_deletion"))
 
 
+# The fields a meeting focus may carry into the prompt. Each is a scalar; nothing nested is read.
+_MEETING_FOCUS_FIELDS = ("meeting_id", "native_id", "platform", "status", "title", "scheduled_at",
+                         "workspace_id")
+
+
+def _meeting_focus_level(focus: dict) -> dict:
+    """The ONE level of a client meeting focus that names the meeting: ``focus["meeting"]`` for the
+    wrapped ``{kind, meeting: {…}}`` shape, else the focus itself. Selected once, here; nothing
+    downstream unwraps again."""
+    inner = focus.get("meeting")
+    return inner if isinstance(inner, dict) else focus
+
+
+def _focus_scalar(value) -> str:
+    """A focus field as text, or "" for anything that is not a plain string or integer."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return ""
+    return str(value).strip()
+
+
+def _prep_focus(level: dict) -> dict:
+    """A planned meeting's focus: the caller's own scalar fields, copied into a fresh flat dict."""
+    out = {"kind": "meeting"}
+    for key in _MEETING_FOCUS_FIELDS:
+        value = _focus_scalar(level.get(key))
+        if value:
+            out[key] = value
+    if "native_id" not in out and _focus_scalar(level.get("ref")):
+        out["native_id"] = _focus_scalar(level.get("ref"))
+    return out
+
+
+def _focus_from_row(rid: str, row: dict) -> dict:
+    """The focus of a CHECKED meeting, built from its server row alone: row id, native id, platform,
+    status, and the title / time / bound workspace from ``row["data"]``. No client field is read."""
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    out = {"kind": "meeting", "meeting_id": rid,
+           "status": _focus_scalar(row.get("status")).lower(),
+           # A row with no native link (a planned meeting, an imported transcript) is named by its
+           # row id — the same value the terminal puts in the tab.
+           "native_id": _focus_scalar(row.get("native_meeting_id")) or rid}
+    platform = _focus_scalar(row.get("platform"))
+    if platform and platform != "unknown":
+        out["platform"] = platform
+    for key in ("title", "scheduled_at", "workspace_id"):
+        value = _focus_scalar(data.get(key))
+        if value:
+            out[key] = value
+    return out
+
+
 def _readable_meeting_focus(
-    focus: dict, meeting_access: "Callable[[str], dict | None] | None",
+    level: dict, meeting_access: "Callable[[str], dict | None] | None",
 ) -> "dict | None":
     """The meeting focus a chat may ground on, or None when the caller may not read that meeting.
 
-    The focus is CLIENT-SENT, and the transcript fold reads ``tc:meeting:{row id}`` straight out of
-    redis, so the row id must be checked before anything is folded — the same access decision the
-    live stream makes (owner, transcript-share recipient, or member of the bound workspace; one
-    union, evaluated by meeting-api). A caller who passes none of those gets no meeting grounding.
+    ``level`` is the one level of the client focus that names the meeting
+    (``_meeting_focus_level``). The focus is CLIENT-SENT, and the transcript fold reads
+    ``tc:meeting:{row id}`` straight out of redis, so the row id must be checked before anything is
+    folded — the same access decision the live stream makes (owner, transcript-share recipient, or
+    member of the bound workspace; one union, evaluated by meeting-api). A caller who passes none of
+    those gets no meeting grounding.
 
     The PREP phase reads nothing server-side (it renders the caller's own fields, overlaid only from
     the caller's own rows), so it passes through unchecked. Every other phase folds a transcript and
     is checked. FAIL CLOSED: no access check wired, a row id that is not a row id, a lookup that
     raises, or a meeting whose transcript its owner deleted all mean no grounding.
 
-    On success the server row's truth (row id, status, native id) replaces the client's, so the
-    stream that is folded is exactly the row that was checked."""
-    m = focus.get("meeting") if isinstance(focus.get("meeting"), dict) else focus
-    status = str(m.get("status") or "").strip().lower()
+    Either way the result is a FRESH flat dict of scalar fields: for a checked meeting it is built
+    from the server row alone (``_focus_from_row``), so the stream that is folded is exactly the row
+    that was checked, and no client key reaches the fold."""
+    status = _focus_scalar(level.get("status")).lower()
     if meeting_steering.phase_for(status) == "prep":
-        return focus
-    rid = str(m.get("meeting_id") or m.get("native_id") or m.get("ref") or "").strip()
+        return _prep_focus(level)
+    rid = (_focus_scalar(level.get("meeting_id")) or _focus_scalar(level.get("native_id"))
+           or _focus_scalar(level.get("ref")))
     if meeting_access is None or not rid.isdigit():
         return None
     try:
@@ -1468,9 +1524,7 @@ def _readable_meeting_focus(
         return None
     if not isinstance(row, dict) or transcript_erased(row):
         return None
-    checked = _enriched_meeting_focus({**m, "kind": "meeting", "meeting_id": rid}, [{**row, "id": int(rid)}])
-    checked["meeting_id"] = rid
-    return checked
+    return _focus_from_row(rid, row)
 
 
 def _context_grounding(
@@ -1514,7 +1568,8 @@ def _context_grounding(
             preamble = digest + meeting_steering.render("schedule", {})
 
     if kind == "meeting":
-        enriched = _enriched_meeting_focus(dict(focus), rows) if rows else dict(focus)
+        level = _meeting_focus_level(focus)
+        enriched = _enriched_meeting_focus(dict(level), rows) if rows else dict(level)
         readable = _readable_meeting_focus(enriched, meeting_access)
         if readable is None:
             return (ctx, [], preamble + prompt)
