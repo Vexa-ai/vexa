@@ -12,7 +12,7 @@ from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
 from control_plane.api_shared import (
-    _decode_sse_cursor, _encode_sse_cursor, _sse)
+    _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check)
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import json
@@ -28,43 +28,11 @@ def build(**d) -> APIRouter:
     subject_of = d['subject_of']
     wsr = d['wsr']
 
-    def _caller_workspaces(subject: str) -> list[str]:
-        """The workspaces this caller is a member of — the grant that lets the routes below answer for
-        a meeting the caller does not own but their workspace does.
-
-        READ FROM `policy/members.json`, not from a request header. The header the gateway injects
-        would be the cheaper source, but agent-api is reachable directly in the dev/self-host topology
-        (see `subject_of`'s TOPOLOGY BOUNDARY note), where identity headers are spoofable — and this
-        value decides who may read a live transcript. The on-disk roster is the same authoritative
-        store `assert_may_manage` and the mount builder already trust, and it is local.
-
-        NEVER RAISES. A membership scan that fails must narrow access to owner-only, never open it and
-        never 500 a meeting the owner is entitled to watch."""
-        try:
-            from control_plane.workspace_membership import list_memberships
-            return [str(m["workspace_id"]) for m in list_memberships(wsr.root, str(subject))
-                    if m.get("workspace_id")]
-        except Exception:  # noqa: BLE001 — fail CLOSED to the previous owner-only answer
-            return []
-
-    # `_meeting_owner_lookup` is an INJECTED seam: the shipped one takes the caller's workspaces as a
-    # third argument, and the fakes five test modules hand in take two. Ask the callable which it is,
-    # once, rather than calling three-arg and rescuing `TypeError` — that rescue would also swallow a
-    # genuine TypeError raised INSIDE the lookup and silently downgrade it to "not authorized".
-    try:
-        import inspect as _inspect
-        _lookup_takes_workspaces = len(
-            _inspect.signature(_meeting_owner_lookup).parameters) >= 3
-    except (TypeError, ValueError):  # C-implemented or otherwise unintrospectable → narrower call
-        _lookup_takes_workspaces = False
-
-    def _meeting_access(subject: str, meeting_id) -> "dict | None":
-        """THE ONE ACCESS DECISION every route in this file makes: the meeting record this caller may
-        read, or None. Owner, transcript-share recipient, or member of the workspace the meeting is
-        bound to — meeting-api evaluates all three, this only says who is asking."""
-        if _lookup_takes_workspaces:
-            return _meeting_owner_lookup(subject, meeting_id, _caller_workspaces(subject))
-        return _meeting_owner_lookup(subject, meeting_id)
+    # THE ONE ACCESS DECISION every route in this file makes: the meeting record this caller may
+    # read, or None. Owner, transcript-share recipient, or member of the workspace the meeting is
+    # bound to — meeting-api evaluates all three. Shared with the chat's meeting grounding, which
+    # reads the same transcript (see `api_shared.meeting_access_check`).
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
 
     @router.get("/api/meeting/relay-health")
     def meeting_relay_health(request: Request):

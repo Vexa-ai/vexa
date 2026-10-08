@@ -21,7 +21,7 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, logger, meeting_binding, target_preamble, workspace_focus)
+    inbox_pending, logger, meeting_access_check, meeting_binding, target_preamble, workspace_focus)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -62,6 +62,9 @@ def build(**d) -> APIRouter:
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
+    # The same access decision the live transcript stream makes (routers/meetings.py): a chat may
+    # fold a meeting's transcript only when its caller could watch that transcript.
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
 
     # ── THE TARGET WORKSPACE, BY NAME (Vexa-ai/vexa#1611) ────────────────────────────────────
     #
@@ -481,14 +484,17 @@ def build(**d) -> APIRouter:
         # the server, so it takes the dispatch path whatever a stale header says.
         resume = (request.headers.get("last-event-id") or None) if stream else None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
-        # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the live view renders) into
+        # from the meeting's redis Stream (tc:meeting:{row} — the SAME stream the live view renders) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
         # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
+        # The meeting the client names is checked with the live stream's own access decision before
+        # anything is folded; a meeting this caller cannot read grounds nothing.
         ctx, tools, prompt = _context_grounding(
             body, session, redis_url,
             schedule_rows=lambda: _schedule_source(subject),
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
+            meeting_access=lambda meeting_id: _meeting_access(subject, meeting_id),
         )
         # THE CHAT'S MOUNT GENERATION rides the dispatch (Vexa-ai/vexa#1603). An agent-api routing
         # hint, exactly like `context.session` beside it: `dispatch_id` reads it off the in-memory

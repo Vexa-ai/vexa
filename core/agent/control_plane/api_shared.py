@@ -1427,14 +1427,54 @@ def _enriched_meeting_focus(focus: dict, rows: "list[dict]") -> dict:
     return merged
 
 
+def _readable_meeting_focus(
+    focus: dict, meeting_access: "Callable[[str], dict | None] | None",
+) -> "dict | None":
+    """The meeting focus a chat may ground on, or None when the caller may not read that meeting.
+
+    The focus is CLIENT-SENT, and the transcript fold reads ``tc:meeting:{row id}`` straight out of
+    redis, so the row id must be checked before anything is folded — the same access decision the
+    live stream makes (owner, transcript-share recipient, or member of the bound workspace; one
+    union, evaluated by meeting-api). A caller who passes none of those gets no meeting grounding.
+
+    The PREP phase reads nothing server-side (it renders the caller's own fields, overlaid only from
+    the caller's own rows), so it passes through unchecked. Every other phase folds a transcript and
+    is checked. FAIL CLOSED: no access check wired, a row id that is not a row id, or a lookup that
+    raises all mean no grounding.
+
+    On success the server row's truth (row id, status, native id) replaces the client's, so the
+    stream that is folded is exactly the row that was checked."""
+    m = focus.get("meeting") if isinstance(focus.get("meeting"), dict) else focus
+    status = str(m.get("status") or "").strip().lower()
+    if meeting_steering.phase_for(status) == "prep":
+        return focus
+    rid = str(m.get("meeting_id") or m.get("native_id") or m.get("ref") or "").strip()
+    if meeting_access is None or not rid.isdigit():
+        return None
+    try:
+        row = meeting_access(rid)
+    except Exception:  # noqa: BLE001 — an access check that cannot answer refuses
+        logger.warning("meeting access check failed for row %s — no meeting grounding", rid)
+        return None
+    if not isinstance(row, dict):
+        return None
+    checked = _enriched_meeting_focus({**m, "kind": "meeting", "meeting_id": rid}, [{**row, "id": int(rid)}])
+    checked["meeting_id"] = rid
+    return checked
+
+
 def _context_grounding(
     body: "ChatBody", session: str, redis_url: "str | None", *,
     schedule_rows: "Callable[[], list[dict]]",
     workspace_mounts: "Callable[[], list]",
+    meeting_access: "Callable[[str], dict | None] | None" = None,
 ) -> "tuple[dict, list[str], str]":
     """Assemble the turn's grounding from the context bundle (or the legacy ``active``).
     ``schedule_rows`` / ``workspace_mounts`` are LAZY — fetched only for the branches that
-    need them, and both degrade to empty on failure (a bundle must never fail the turn)."""
+    need them, and both degrade to empty on failure (a bundle must never fail the turn).
+
+    ``meeting_access(row_id) -> row | None`` is the caller's meeting access check. A meeting focus
+    folds a transcript only for a row it approves; without one, no transcript is folded."""
     prompt = body.prompt
     context = body.context
     focus = context.focus if context is not None else body.active
@@ -1465,7 +1505,10 @@ def _context_grounding(
 
     if kind == "meeting":
         enriched = _enriched_meeting_focus(dict(focus), rows) if rows else dict(focus)
-        _c, _t, folded_prompt = _meeting_grounding(enriched, session, prompt, redis_url)
+        readable = _readable_meeting_focus(enriched, meeting_access)
+        if readable is None:
+            return (ctx, [], preamble + prompt)
+        _c, _t, folded_prompt = _meeting_grounding(readable, session, prompt, redis_url)
         return (_c, _t, preamble + folded_prompt if preamble else folded_prompt)
 
     if kind == "workspace" and (focus or {}).get("slug"):
@@ -1613,5 +1656,45 @@ def _http_meeting_owner_lookup(meeting_api_url: str):
             return None
 
     return _lookup
+
+
+def meeting_access_check(lookup, roster_root) -> "Callable[[str, object], dict | None]":
+    """THE ONE meeting access decision, as a callable ``(subject, meeting_id) -> row | None``.
+
+    Owner, transcript-share recipient, or member of the workspace the meeting is bound to —
+    meeting-api evaluates all three; this only says who is asking and which workspaces they belong
+    to. The live transcript stream and the chat's meeting grounding both read the same transcript,
+    so both ask this one question.
+
+    The caller's workspaces are READ FROM `policy/members.json` under ``roster_root``, not from a
+    request header: agent-api is reachable directly in the dev/self-host topology (see
+    `subject_of`'s TOPOLOGY BOUNDARY note), where identity headers are spoofable, and this value
+    decides who may read a transcript. The membership scan NEVER RAISES — a scan that fails narrows
+    access to owner-only, never opens it.
+
+    ``lookup`` is an INJECTED seam: the shipped one takes the caller's workspaces as a third
+    argument, and older test fakes take two. The callable is asked which it is, once, rather than
+    called three-arg with a `TypeError` rescue — that rescue would also swallow a genuine TypeError
+    raised INSIDE the lookup and silently downgrade it to "not authorized"."""
+    def _caller_workspaces(subject: str) -> list[str]:
+        try:
+            from control_plane.workspace_membership import list_memberships
+            return [str(m["workspace_id"]) for m in list_memberships(roster_root, str(subject))
+                    if m.get("workspace_id")]
+        except Exception:  # noqa: BLE001 — fail CLOSED to the owner-only answer
+            return []
+
+    try:
+        import inspect as _inspect
+        takes_workspaces = len(_inspect.signature(lookup).parameters) >= 3
+    except (TypeError, ValueError):  # C-implemented or otherwise unintrospectable → narrower call
+        takes_workspaces = False
+
+    def _access(subject: str, meeting_id) -> "dict | None":
+        if takes_workspaces:
+            return lookup(subject, meeting_id, _caller_workspaces(subject))
+        return lookup(subject, meeting_id)
+
+    return _access
 
 
