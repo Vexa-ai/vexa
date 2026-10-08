@@ -26,6 +26,7 @@
  */
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
+import { MeetingPageHeader } from "./MeetingPageHeader";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
@@ -269,8 +270,8 @@ export function PagesPanel(p: {
             A canvas is exempt — it names its own meeting in its own header, and there is no file
             here to read as source, copy or edit, so the whole row (not just the group) stands down. */}
         {doc && <div style={{ flex: "none", display: "flex", alignItems: "baseline", gap: 8, padding: "9px 20px 8px", borderBottom: "1px solid var(--line)", minWidth: 0 }}>
-          <span data-doc-name title={docName}
-            style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</span>
+          {docMeeting ? <MeetingPageHeader meetingId={docMeeting} body={p.body ?? ""} path={p.docPath} /> : <span data-doc-name title={docName}
+            style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</span>}
           {/* ONE PATH LINE (PRD decision 28, founder: *"duplicated paths"*). This span repeated the
               folder trail that the breadcrumb directly below already shows, and navigates. The name
               belongs here; the path belongs there. */}
