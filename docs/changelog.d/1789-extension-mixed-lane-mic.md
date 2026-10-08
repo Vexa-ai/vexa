@@ -1,0 +1,1 @@
+- **Extension: your own voice is transcribed on Teams and Zoom web (#1789).** Mixed-lane sessions captured only the tab audio, which carries the remote side of the call, so nothing you said reached the "You" lane. The session now also starts the in-page microphone on Teams and Zoom, and Stop releases it.
