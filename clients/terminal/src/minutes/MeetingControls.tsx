@@ -1,4 +1,6 @@
 "use client";
+import { Modal } from "../ui-kit/Modal";
+import { Icon } from "../ui-kit";
 import { RecordingPlayer, finiteDuration } from "./RecordingPlayer";
 import { useEffect, useState } from "react";
 import { useLiveMeetings, useLiveMeetingsConnection, refreshMeetings } from "../surfaces/liveMeetings";
@@ -24,6 +26,7 @@ function Controls({ meeting: m, connected, showBot }: { meeting: MeetingMock; co
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [confirmationText, setConfirmationText] = useState("");
   const [deleted, setDeleted] = useState(false);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
@@ -37,19 +40,15 @@ function Controls({ meeting: m, connected, showBot }: { meeting: MeetingMock; co
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [m.id, m.has_recording, finished, deleted, retry]);
-  useEffect(() => {
-    if (!confirm) return;
-    const timer = window.setTimeout(() => setConfirm(false), 5000);
-    return () => window.clearTimeout(timer);
-  }, [confirm]);
   async function mutate(kind: "stop" | "delete") {
-    setBusy(true); setError(""); setConfirm(false);
+    if (kind === "delete" && confirmationText !== "delete") return;
+    setBusy(true); setError("");
     const platform = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
     const path = kind === "stop" ? `/api/bots/${platform}/${encodeURIComponent(m.native_id || m.id)}` : `/api/meetings/${encodeURIComponent(m.id)}`;
     try {
       const r = await fetch(path, { method: "DELETE" });
       if (!r.ok) throw new Error(kind === "stop" ? "Could not stop bot. Retry." : "Could not delete meeting data. Retry.");
-      if (kind === "delete") { setDeleted(true); setTracks([]); }
+      if (kind === "delete") { setDeleted(true); setTracks([]); setConfirm(false); setConfirmationText(""); }
       refreshMeetings();
     } catch (e) { setError(e instanceof Error ? e.message : "Request failed"); }
     finally { setBusy(false); }
@@ -58,10 +57,22 @@ function Controls({ meeting: m, connected, showBot }: { meeting: MeetingMock; co
   return <section aria-label="Meeting controls" style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       {showBot && running.has(status) && !m.shared && <button style={button} disabled={busy || !connected || status === "stopping"} onClick={() => void mutate("stop")}>{status === "stopping" ? "Stopping…" : "Stop bot"}</button>}
-      {finished && !deleted && !m.shared && <button style={{ ...button, color: confirm ? "var(--danger)" : "var(--t2)" }} disabled={busy} onClick={() => confirm ? void mutate("delete") : setConfirm(true)}>{confirm ? "Confirm delete" : "Delete meeting data"}</button>}
-      {confirm && <span style={{ fontSize: 12, color: "var(--t3)" }}>Deletes audio and transcript. Saved pages are kept.</span>}
-      {deleted && <span role="status">Meeting audio and transcript deleted. Saved pages are kept.</span>}
+      {finished && !deleted && !m.shared && <button aria-label="Delete meeting data" title="Delete meeting data" style={{ ...button, color: "var(--danger)", display: "inline-flex", alignItems: "center", gap: 6 }} disabled={busy} onClick={() => { setConfirmationText(""); setConfirm(true); }}><Icon name="trash" size={14} /> Delete</button>}
+      {deleted && <span role="status">Meeting audio, transcript and fixtures deleted. Saved pages are kept.</span>}
     </div>
+    {confirm && <Modal title="Delete meeting data?" onClose={() => { if (!busy) { setConfirm(false); setConfirmationText(""); } }}>
+      <p style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.5 }}>Permanently delete this meeting’s audio, transcript and captured fixtures, including promoted fixtures. Saved pages are kept.</p>
+      <form onSubmit={e => { e.preventDefault(); if (!busy && confirmationText === "delete") void mutate("delete"); }}>
+        <label style={{ display: "block", fontSize: 13 }}>Type <strong>delete</strong> to confirm
+          <input autoFocus aria-label="Type delete to confirm" autoComplete="off" spellCheck={false} disabled={busy} value={confirmationText} onChange={e => setConfirmationText(e.target.value)} style={{ display: "block", boxSizing: "border-box", width: "100%", marginTop: 8, padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 6, background: "var(--bg)", color: "var(--t1)" }} />
+        </label>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button type="button" style={button} disabled={busy} onClick={() => { setConfirm(false); setConfirmationText(""); }}>Cancel</button>
+          <button type="submit" disabled={busy || confirmationText !== "delete"} style={{ ...button, background: "var(--danger)", color: "white", border: "none", opacity: busy || confirmationText !== "delete" ? 0.45 : 1 }}>{busy ? "Deleting…" : "Delete permanently"}</button>
+        </div>
+        {error && <p role="alert" style={{ color: "var(--danger)", fontSize: 12 }}>{error}</p>}
+      </form>
+    </Modal>}
     {finished && !deleted && <>
       {loading ? <span role="status">Loading recording…</span> : !audio.length && !error ? <span style={{ fontSize: 12, color: "var(--t3)" }}>No audio recording available.</span> : null}
       {audio.map(t => <RecordingPlayer key={`${t.recording}/${t.media}/${retry}`} duration={t.duration} src={`/api/recordings/${t.recording}/media/${t.media}/raw?type=audio`} onError={() => setError("Audio could not be played. Retry loading the recording.")} />)}

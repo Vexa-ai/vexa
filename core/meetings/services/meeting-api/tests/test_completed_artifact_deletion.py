@@ -134,3 +134,34 @@ def test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_del
     assert response.status_code == 409
     assert active_store._meetings[MEETING_ID]["status"] == "active"
     assert active_storage.blobs
+
+
+def test_deletes_every_fixture_session_and_promotion_without_touching_other_meetings():
+    store, storage, client = _fixture()
+    prefix = f"signal/{OWNER}/{MEETING_ID}/"
+    for name in ("session-a/captured-signal.jsonl", "session-a/PROMOTED", "session-b/botlog.txt"):
+        storage.blobs[prefix + name] = b"private fixture"
+    other = f"signal/{OWNER}/{MEETING_ID + 1}/session-a/captured-signal.jsonl"
+    storage.blobs[other] = b"other meeting"
+    assert client.delete(f"/meetings/{MEETING_ID}", headers={"x-user-id": str(OWNER)}).status_code == 204
+    assert storage.blobs == {other: b"other meeting"}
+
+
+def test_fixtures_without_recordings_are_deleted_and_storage_failure_can_retry():
+    class FailsFixtureOnce(InMemoryStorage):
+        fail = True
+        async def delete(self, key):
+            if key.startswith("signal/") and self.fail:
+                self.fail = False
+                raise RuntimeError("fixture storage unavailable")
+            await super().delete(key)
+    store, storage, client = _fixture(storage_cls=FailsFixtureOnce)
+    store._meetings[MEETING_ID]["data"]["recordings"] = []
+    storage.blobs.clear()
+    key = f"signal/{OWNER}/{MEETING_ID}/session-a/transcript.jsonl"
+    storage.blobs[key] = b"fixture"
+    headers = {"x-user-id": str(OWNER)}
+    assert client.delete(f"/meetings/{MEETING_ID}", headers=headers).status_code == 500
+    assert store._meetings[MEETING_ID]["data"]["artifact_deletion"]["state"] == "pending"
+    assert client.delete(f"/meetings/{MEETING_ID}", headers=headers).status_code == 204
+    assert storage.blobs == {}

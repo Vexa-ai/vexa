@@ -12,17 +12,23 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("meeting controls", () => {
-  it("offers playback without autoplay and confirms artifact deletion with a second click", async () => {
+  it("offers playback without autoplay and requires the exact confirmation word before deleting", async () => {
     const { container } = render(<MeetingControls meetingId="42" />);
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     const audio = container.querySelector("audio")!;
     expect(audio.getAttribute("src")).toBe("/api/recordings/7/media/9/raw?type=audio");
     expect(audio.autoplay).toBe(false);
     expect(audio.preload).toBe("metadata");
-    fireEvent.click(screen.getByText("Delete meeting data"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete meeting data" }));
     expect(vi.mocked(fetch).mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(0);
-    fireEvent.click(screen.getByText("Confirm delete"));
-    await screen.findByText("Meeting audio and transcript deleted. Saved pages are kept.");
+    const confirm = screen.getByRole("button", { name: "Delete permanently" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Type delete to confirm"), { target: { value: "DELETE" } });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Type delete to confirm"), { target: { value: "delete" } });
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await screen.findByText("Meeting audio, transcript and fixtures deleted. Saved pages are kept.");
     expect(container.querySelector("audio")).toBeNull();
   });
   it("stops the correct bot and does not offer deletion or playback for an active meeting", async () => {

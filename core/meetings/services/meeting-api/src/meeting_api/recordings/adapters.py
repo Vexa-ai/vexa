@@ -148,7 +148,12 @@ class SqlAlchemyRecordingRepo:
                     select(MeetingSession).where(MeetingSession.session_uid == session_uid)
                 )
             ).scalars().first()
-            return {"meeting_id": s.meeting_id, "session_uid": s.session_uid} if s else None
+            if not s:
+                return None
+            meeting = await self._meeting(db, s.meeting_id)
+            if meeting is None or (isinstance(meeting.data, dict) and meeting.data.get("artifact_deletion")):
+                return None
+            return {"meeting_id": s.meeting_id, "session_uid": s.session_uid}
 
     async def _meeting(self, db, meeting_id):
         from sqlalchemy import select

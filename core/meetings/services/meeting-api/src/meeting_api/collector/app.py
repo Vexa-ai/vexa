@@ -141,6 +141,7 @@ def build_router(
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
     artifact_object_deleter: Optional[Callable] = None,
+    fixture_object_deleter: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -635,6 +636,10 @@ def build_router(
                 # Storage FIRST. Any exception deliberately aborts before DB paths/transcripts are
                 # scrubbed, so the same owner-scoped request can retry with the original keys.
                 deleted_objects += len(await artifact_object_deleter(recording))
+
+            if fixture_object_deleter is None:
+                raise HTTPException(status_code=503, detail="Fixture storage deletion unavailable")
+            deleted_objects += len(await fixture_object_deleter(user_id, meeting_id))
 
             finalized = await store.finalize_completed_artifact_deletion(user_id, meeting_id)
             if finalized is None:

@@ -200,6 +200,10 @@ async def upload_signal_tape(
     key = signal_tape_key(user_id=owner or 0, meeting_id=meeting_id, session_uid=session_uid,
                           part=part, media_format=media_format)
     await storage.upload(key, data, content_type=_content_type(media_format))
+    # A deletion may have started while this last teardown upload was in flight.
+    if await repo.find_session(session_uid) is None:
+        await storage.delete(key)
+        raise SessionNotFound("Meeting data was deleted")
     log_event(
         "signal_tape_stored", audience="operator", span="recordings.signal",
         user_id=owner, meeting_id=str(meeting_id),

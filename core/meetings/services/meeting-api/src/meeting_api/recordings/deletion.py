@@ -86,3 +86,12 @@ async def delete_owned_recording(
         "objects_deleted": len(deleted_keys),
         "scope": "primary_object_storage",
     }
+
+
+async def delete_meeting_fixtures(storage: Storage, *, user_id: int, meeting_id: int) -> list[str]:
+    """Erase all session tapes and promotion markers belonging to this owned meeting."""
+    prefix = f"signal/{int(user_id)}/{int(meeting_id)}/"
+    keys = [key for key in await storage.list(prefix) if key.startswith(prefix)]
+    for key in keys:
+        await storage.delete(key)
+    return keys
