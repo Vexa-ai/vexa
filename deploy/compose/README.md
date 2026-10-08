@@ -61,10 +61,11 @@ whatever the admin adds in the terminal under Settings → Sign-in. If admin-api
 new sign-ins are refused; sessions that already exist are untouched. Upgrading admits every
 account that already exists, so nobody is locked out by it.
 
-⚠ **Until an admin is claimed, anybody may sign in** — that first sign-in becomes the admin.
-`VEXA_ADMIN_EMAILS` names the admins and turns the claim off, so **set it in `.env` before first
-boot whenever the terminal is reachable from outside.** admin-api reads it (and `VEXA_SIGNIN_ALLOW`)
-and decides every sign-in; the terminal only asks.
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot (`docker compose logs admin-api | grep -A4 'ADMIN CLAIM
+CODE'`); the terminal's claim screen asks for it, and the sign-in that carries it becomes the admin.
+Without it nobody new can sign in. `VEXA_ADMIN_EMAILS` names the admins instead (no code is issued
+then). admin-api reads it (and `VEXA_SIGNIN_ALLOW`) and decides every sign-in; the terminal only asks.
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts

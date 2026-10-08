@@ -26,15 +26,16 @@
  */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, claimAdminRole, instanceState, mintFirstVisitScaffold, validateAuthToken } from "../adminApi";
+import { AUTH_COOKIE, CLAIM_COOKIE, claimAdminRole, instanceState, mintFirstVisitScaffold, validateAuthToken } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
 
-export async function POST() {
-  const token = (await cookies()).get(AUTH_COOKIE)?.value;
+export async function POST(request: Request) {
+  const jar = await cookies();
+  const token = jar.get(AUTH_COOKIE)?.value;
   if (!token) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401, headers: NO_STORE });
   }
@@ -58,7 +59,16 @@ export async function POST() {
     );
   }
 
-  const claimed = await claimAdminRole(who.userId);
+  // THE CLAIM CODE (admin-api writes it to its log at boot): typed on the claim card, or carried
+  // from the claim screen in front of the sign-in. No code, no claim — admin-api refuses without it.
+  let typed: unknown;
+  try { ({ code: typed } = (await request.json()) ?? {}); } catch { typed = undefined; }
+  const code = (typeof typed === "string" && typed.trim()) || jar.get(CLAIM_COOKIE)?.value || "";
+  if (!code) {
+    return NextResponse.json({ error: "Enter the claim code from the admin-api log." }, { status: 400, headers: NO_STORE });
+  }
+
+  const claimed = await claimAdminRole(who.userId, code);
   if (!claimed.ok) {
     console.error(`[terminal-auth] admin claim failed for user ${who.userId}: ${claimed.error}`);
     return NextResponse.json(
@@ -69,6 +79,12 @@ export async function POST() {
 
   // admin-api decides who may claim (signin_allow.may_claim). On an instance with an allow-list, an
   // address that is not on it may not be its first administrator.
+  if (!claimed.claimed && claimed.why === "bad-code") {
+    return NextResponse.json(
+      { error: "That is not this instance's claim code. Find the current one in the admin-api log." },
+      { status: 403, headers: NO_STORE },
+    );
+  }
   if (!claimed.claimed && claimed.why === "not-allowed") {
     console.info(`[terminal-auth] admin claim refused for user ${who.userId}: not on the sign-in allow-list`);
     return NextResponse.json(

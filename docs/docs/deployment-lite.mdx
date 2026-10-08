@@ -34,6 +34,15 @@ On first boot Lite mints its own credentials — a `self-host@vexa.ai` user and 
 keys — and hands them to the terminal, so `http://localhost:3001` opens signed in. Set
 `VEXA_API_KEY` in `.env` to bring your own key and skip the minting.
 
+The terminal then asks for the **admin claim code** before anyone can become the instance's
+administrator. admin-api writes it to the container log at boot, and it works once:
+
+```bash
+docker logs vexa-lite 2>&1 | grep -A4 'ADMIN CLAIM CODE'
+```
+
+Pass `-e VEXA_ADMIN_EMAILS=you@example.com` to name the admins instead; no code is issued then.
+
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.

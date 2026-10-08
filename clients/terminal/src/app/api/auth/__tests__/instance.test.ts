@@ -31,11 +31,11 @@ function stubAdminApi(opts: { adminExists: boolean; company?: string | null }) {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, body: init?.body as string });
-      // Vexa-ai/vexa#1783: admission comes first. On an instance nobody has claimed, anybody is
-      // admitted — that sign-in IS the claim.
+      // Vexa-ai/vexa#1783: admission comes first. On an instance nobody has claimed, the sign-in
+      // that carries the admin claim code is admitted — that sign-in IS the claim.
       if (url.includes("/internal/signin-admission")) {
         return new Response(JSON.stringify({
-          admitted: true, why: opts.adminExists ? "existing-user" : "unclaimed-instance",
+          admitted: true, why: opts.adminExists ? "existing-user" : "claim-code",
         }), { status: 200 });
       }
       if (url.includes("/admin/users/email/")) {
@@ -113,17 +113,28 @@ describe("first sign-in claims the admin role", () => {
   beforeEach(() => { vi.stubEnv("NODE_ENV", "development"); });
   afterEach(() => { vi.unstubAllEnvs(); });
 
-  it("login on a fresh instance POSTs the bootstrap claim with the user's id", async () => {
+  it("login on a fresh instance POSTs the bootstrap claim with the user's id and the claim code", async () => {
+    cookieJar["vexa-claim-code"] = "ABCD-EF01-JKMN-PQRS"; // entered on the claim screen
     const calls = stubAdminApi({ adminExists: false });
     const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
     expect(res.status).toBe(200);
+    const admission = calls.find((c) => c.url.includes("/internal/signin-admission"));
+    expect(JSON.parse(admission!.body || "{}").claim_code).toBe("ABCD-EF01-JKMN-PQRS");
     const claim = calls.find((c) => c.url.includes("/internal/bootstrap-admin"));
     expect(claim).toBeDefined();
-    expect(JSON.parse(claim!.body || "{}")).toEqual({ user_id: 7 });
+    expect(JSON.parse(claim!.body || "{}")).toEqual({ user_id: 7, claim_code: "ABCD-EF01-JKMN-PQRS" });
+  });
+
+  it("no code, no claim: a sign-in that carries none never asks for the role", async () => {
+    const calls = stubAdminApi({ adminExists: true });
+    const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
+    expect(res.status).toBe(200);
+    expect(calls.some((c) => c.url.includes("/internal/bootstrap-admin"))).toBe(false);
   });
 
   it("whether the claim lands is admin-api's answer, whatever the terminal's environment says", async () => {
     process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
+    cookieJar["vexa-claim-code"] = "ABCD-EF01-JKMN-PQRS";
     const calls = stubAdminApi({ adminExists: true });
     const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
     expect(res.status).toBe(200);

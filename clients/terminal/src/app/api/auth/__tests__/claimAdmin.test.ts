@@ -24,7 +24,16 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { POST as claimAdmin } from "../claim-admin/route";
+import { POST as claimAdminRoute } from "../claim-admin/route";
+
+/** The one-time admin claim code admin-api logs at boot; the card sends what the person typed. */
+const CODE = "ABCD-EF01-JKMN-PQRS";
+const claimAdmin = (body: unknown = { code: CODE }) =>
+  claimAdminRoute(new Request("http://terminal.test/api/auth/claim-admin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === null ? undefined : JSON.stringify(body),
+  }));
 
 /** Every scaffold-mint body agent-api saw. */
 const minted: Record<string, unknown>[] = [];
@@ -105,7 +114,35 @@ describe("the happy path", () => {
 
     expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(true);
     const write = spy.mock.calls.find(([u]) => String(u).includes("/internal/bootstrap-admin"));
-    expect(JSON.parse(String((write![1] as RequestInit).body))).toEqual({ user_id: 11 });
+    expect(JSON.parse(String((write![1] as RequestInit).body))).toEqual({ user_id: 11, claim_code: CODE });
+  });
+});
+
+describe("no code, no claim (M7)", () => {
+  it("a claim that carries no code is refused before admin-api is asked to write anything", async () => {
+    const calls = stubAdminApi({});
+    const res = await claimAdmin(null);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("claim code");
+    expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(false);
+  });
+
+  it("a code admin-api does not recognise is refused with 403 and no arrival", async () => {
+    stubAdminApi({ bootstrap: { status: 200, body: { claimed: false, admin_exists: false, why: "bad-code" } } });
+    const res = await claimAdmin({ code: "WRONG-CODE" });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("claim code");
+    expect(minted).toHaveLength(0);
+  });
+
+  it("the code the claim screen kept in its cookie counts as typed", async () => {
+    cookieJar["vexa-claim-code"] = CODE;
+    stubAdminApi({});
+    const spy = vi.mocked(globalThis.fetch);
+    const res = await claimAdmin({});
+    expect(res.status).toBe(200);
+    const write = spy.mock.calls.find(([u]) => String(u).includes("/internal/bootstrap-admin"));
+    expect(JSON.parse(String((write![1] as RequestInit).body)).claim_code).toBe(CODE);
   });
 });
 

@@ -123,15 +123,15 @@
   {
    "key": "VEXA_SIGNIN_ALLOW",
    "class": "defaulted",
-   "default": "(empty — only existing users and admins may sign in, plus the admin claim while nothing is configured and no admin has been claimed)",
+   "default": "(empty — only existing users and admins may sign in, plus the holder of the admin claim code while nothing is configured and no admin has been claimed)",
    "description": "The deployment's seed for the terminal sign-in allow-list (Vexa-ai/vexa#1783): comma-separated exact addresses and @domain entries, e.g. \"@example.com,alice@example.org\". A sign-in through any terminal door (emailed link, Google, Microsoft) is admitted only for an existing user, an admin, or an address on the effective list = these entries + the admin-edited `signin.allow` platform setting. A non-empty list also closes the unclaimed-instance door: only an address on it may sign in or claim the admin role. Read on every POST /internal/signin-admission and /internal/bootstrap-admin (app/signin_allow.py), so a change applies on restart with no migration. Removing an entry does not remove an account that already exists: existing users stay admitted.",
    "targets": ["compose", "helm", "lite"]
   },
   {
    "key": "VEXA_ADMIN_EMAILS",
    "class": "defaulted",
-   "default": "(empty — the admin is whoever claims the role on the terminal's claim screen)",
-   "description": "The instance's administrators, comma-separated exact addresses (no @domain entries: an admin is one person). Each is admitted to sign in, is an admin on /internal/validate and /internal/users/{id}/is-admin, and makes the instance count as having an admin, so the claim screen never shows and nobody can claim the role. Set it before first boot whenever the terminal is reachable from outside. Read here and nowhere else (app/signin_allow.py): the terminal holds no list of its own and only asks.",
+   "default": "(empty — the first admin claims the role on the terminal's claim screen with the one-time code admin-api logs at boot)",
+   "description": "The instance's administrators, comma-separated exact addresses (no @domain entries: an admin is one person). Each is admitted to sign in, is an admin on /internal/validate and /internal/users/{id}/is-admin, and makes the instance count as having an admin, so the claim screen never shows, no admin claim code is issued, and nobody can claim the role. Set it before first boot whenever the terminal is reachable from outside. Read here and nowhere else (app/signin_allow.py): the terminal holds no list of its own and only asks.",
    "targets": ["compose", "helm", "lite"]
   },
   {

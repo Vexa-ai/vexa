@@ -14,9 +14,12 @@ traverses a sign-in door twice. This route is the missing edge.
    this product has to anyone who can type `curl`.
 2. Refuses with `409` when an admin already exists, and tells the client to reload: the claim
    screen it is showing is stale.
-3. Delegates the write to admin-api `/internal/bootstrap-admin`, which serialises concurrent
-   claims under an advisory lock and is a no-op once an admin exists — so racing tabs are safe and
-   the `admin_exists` check above is a courtesy for the message, never the safety property.
+3. Needs the one-time admin claim code (`{code}` in the body, or the `vexa-claim-code` cookie the
+   claim screen set) and refuses with `403` on a wrong or spent one: no code, no claim.
+4. Delegates the write to admin-api `/internal/bootstrap-admin`, which checks the code, serialises
+   concurrent claims under an advisory lock, retires the code, and is a no-op once an admin exists —
+   so racing tabs are safe and the `admin_exists` check above is a courtesy for the message, never
+   the safety property.
 
 **Fails CLOSED.** Elsewhere an unreachable probe must not lock everybody out of a working
 instance, so those paths fail open. Here, guessing wrong *grants admin*: the cost of refusing is

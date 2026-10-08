@@ -144,8 +144,34 @@ def build_production_app():
         # absent must not be served by a process that assumes it. Not retried (see
         # _is_transient_connect_error) — it needs an operator, not a backoff.
         await _connect_with_retry(lambda: ensure_schema(app_db.get_engine(), Base))
+        await _announce_admin_claim()
 
     return app
+
+
+async def _announce_admin_claim() -> None:
+    """On an instance nobody has claimed, issue the one-time admin claim code and log it — the only
+    way the first administrator is made without VEXA_ADMIN_EMAILS (app/claim_code.py). Never fails
+    the boot: a code that could not be issued is logged, and restarting admin-api issues one."""
+    import socket
+    from datetime import datetime, timezone
+
+    from .app import claim_code
+    from .app import db as app_db
+    from .app.main import issue_admin_claim_code
+
+    try:
+        async with app_db.session() as db:
+            code, note = await issue_admin_claim_code(
+                db, host=socket.gethostname(), now=datetime.now(timezone.utc))
+    except Exception as exc:  # noqa: BLE001 — logged loud; the claim screen stays closed meanwhile
+        logger.error("admin claim code NOT issued (%s: %s) — restart admin-api to issue one",
+                     type(exc).__name__, exc)
+        return
+    if code:
+        logging.getLogger("admin_api.claim").warning(claim_code.announcement(code))
+    else:
+        logger.info("admin claim: no code issued — %s", note)
 
 
 # uvicorn ``admin_api.__main__:app`` resolves this. Exposed LAZILY via PEP 562 so merely importing

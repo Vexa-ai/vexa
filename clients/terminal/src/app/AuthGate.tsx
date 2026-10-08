@@ -16,8 +16,11 @@
  *  the proof. /api/auth/login still exists for local dev tooling and is refused in production.
  *
  *  FIRST RUN: /api/auth/instance says whether an admin exists. On a fresh instance the card becomes
- *  the one-time "Set up your instance" claim screen — the first sign-in becomes the admin —
- *  through whichever door the deploy actually has.
+ *  the one-time "Set up your instance" claim screen. It asks first for the ADMIN CLAIM CODE that
+ *  admin-api wrote to its log at boot (/api/auth/claim-code keeps a valid one for the sign-in that
+ *  follows), then offers whichever doors the deploy has; that sign-in becomes the admin. No code, no
+ *  claim: the first visitor to an exposed instance is not its owner. An existing account can still
+ *  sign in plainly from the same screen.
  *
  *  WHO MAY SIGN IN is decided by the server, never here (Vexa-ai/vexa#1783): an existing user, an
  *  admin, or an address on the instance's allow-list. The card learns of a refusal only as an OAuth
@@ -106,6 +109,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // not asked yet" and "we asked and an admin exists" must not render the same thing.
   const [instanceProbed, setInstanceProbed] = useState(false);
   const [subjectEmail, setSubjectEmail] = useState<string | null>(null);
+  // The claim screen's first step: the one-time code from the admin-api log, accepted by the server.
+  const [claimCode, setClaimCode] = useState("");
+  const [codeAccepted, setCodeAccepted] = useState(false);
+  const [plainSignIn, setPlainSignIn] = useState(false);
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
@@ -206,6 +213,30 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /** The claim screen's first step: hand the code to the server, which keeps a valid one (httpOnly)
+   *  for the sign-in that follows. A wrong one is said so here, at once. */
+  const submitCode = async (e: FormEvent) => {
+    e.preventDefault();
+    const value = claimCode.trim();
+    if (!value || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/claim-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: value }),
+      });
+      if (r.ok) { setCodeAccepted(true); return; }
+      const body = (await r.json().catch(() => ({}))) as { error?: string };
+      setError(body.error || `Could not check the code (${r.status})`);
+    } catch (err) {
+      setError((err as Error).message || "Could not check the code");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   /** Sign out and reload — same discipline as the workbench's own profile row: wipe client state so
    *  the next person does not inherit this one's chats, tabs and pane widths. */
   const signOut = () => {
@@ -260,7 +291,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
+  const claiming = !adminExists && !plainSignIn; // fresh instance → this sign-in claims the admin role
+  const needCode = claiming && !codeAccepted;     // …once the claim code has been accepted
   // With no OAuth configured (this deploy's /api/auth/providers is empty) the emailed link is not
   // an alternative to anything — it is the door. "Or …" would read as if a button were missing.
   const hasOAuth = providers.google || providers.microsoft;
@@ -301,38 +333,64 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 {notice}
               </div>
             )}
-            {claiming ? (
-              <>
+            {needCode ? (
+              <form onSubmit={submitCode} data-testid="claim-code" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-                  This Vexa instance has no administrator yet. The first sign-in becomes the admin and can
-                  configure models, transcription, and other users.
+                  This Vexa instance has no administrator yet. To claim it, enter the one-time claim code
+                  from the admin-api log; whoever signs in with it becomes the admin and can configure
+                  models, transcription, and other users.
                 </div>
-                <div
+                <input
+                  type="text"
+                  required
+                  autoComplete="one-time-code"
+                  spellCheck={false}
+                  value={claimCode}
+                  onChange={(e) => setClaimCode(e.target.value)}
+                  placeholder="XXXX-XXXX-XXXX-XXXX"
                   style={{
-                    alignSelf: "flex-start", fontSize: 11, color: "var(--t2)", border: "1px solid var(--line2)",
-                    borderRadius: 20, padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: 6,
+                    background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
+                    padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none", fontFamily: "var(--mono, monospace)",
+                  }}
+                />
+                {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
+                <button
+                  type="submit"
+                  disabled={!claimCode.trim() || submitting}
+                  style={{
+                    background: claimCode.trim() ? "var(--accent)" : "var(--panel2)",
+                    color: claimCode.trim() ? "var(--on-accent)" : "var(--t3)",
+                    border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
+                    cursor: claimCode.trim() && !submitting ? "pointer" : "default",
                   }}
                 >
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block" }} />
-                  First sign-in = administrator
-                </div>
-              </>
+                  {submitting ? "Checking…" : "Continue"}
+                </button>
+                <button type="button" onClick={() => { setPlainSignIn(true); setError(null); }} style={gateQuietBtn}>
+                  Already have an account here? Sign in
+                </button>
+              </form>
+            ) : claiming ? (
+              <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
+                Code accepted. Sign in now — this sign-in becomes the administrator. If you use the
+                emailed link, open it in this browser.
+              </div>
             ) : (
               <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
             )}
 
-            {providers.google && (
+            {!needCode && providers.google && (
               <button onClick={() => signIn("google", { callbackUrl: destination() })} style={oauthBtn}>
                 <GoogleMark /> Continue with Google
               </button>
             )}
-            {providers.microsoft && (
+            {!needCode && providers.microsoft && (
               <button onClick={() => signIn("microsoft", { callbackUrl: destination() })} style={oauthBtn}>
                 <MicrosoftMark /> Continue with Microsoft
               </button>
             )}
 
-            <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {!needCode && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
                 {hasOAuth
                   ? "Or get a sign-in link by email."
@@ -363,7 +421,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
               >
                 {submitting ? "Sending…" : "Send me a link"}
               </button>
-            </form>
+            </form>}
           </>
         )}
 
@@ -415,12 +473,18 @@ const gateQuietBtn: React.CSSProperties = {
 function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState("");
 
   const claim = async () => {
+    if (!code.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch("/api/auth/claim-admin", { method: "POST" });
+      const r = await fetch("/api/auth/claim-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code.trim() }),
+      });
       if (r.ok) {
         // FOLLOW THE URL THE SERVER HANDED BACK — the claimer's first-visit arrival (`/?s=<id>`), or
         // `/` when there is none. A full navigation, not a flip: the claim changes what every probe
@@ -451,11 +515,25 @@ function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignO
       </div>
       <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
         There is no second administrator to undo this, so claim it only if the instance is yours to run.
+        Claiming takes the one-time claim code from the admin-api log.
       </div>
+      <input
+        type="text"
+        autoComplete="one-time-code"
+        spellCheck={false}
+        value={code}
+        onChange={(e) => setCode(e.target.value)}
+        placeholder="XXXX-XXXX-XXXX-XXXX"
+        aria-label="Claim code"
+        style={{
+          background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
+          padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none", fontFamily: "var(--mono, monospace)",
+        }}
+      />
       {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.45 }}>{error}</div>}
       <button
         onClick={() => void claim()}
-        disabled={busy}
+        disabled={busy || !code.trim()}
         style={{
           background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7,
           padding: "10px 12px", fontSize: 13, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,

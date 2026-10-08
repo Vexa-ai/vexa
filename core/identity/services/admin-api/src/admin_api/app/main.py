@@ -18,9 +18,11 @@ exercises:
   is refused (422) — never silently dropped (#922).
 """
 import hmac
+import logging
 import os
+import socket
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
@@ -37,7 +39,10 @@ from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
+from . import claim_code
 from . import signin_allow
+
+claim_log = logging.getLogger("admin_api.claim")
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -417,6 +422,63 @@ def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> bool
         if flag is not None:
             return flag
     return True
+
+
+# ── the admin claim, at module level so the boot hook can issue a code before any request ─────────
+#: The app-wide advisory-lock key every admin-claim write serializes under.
+ADMIN_CLAIM_LOCK = 0x5EC4_AD31
+
+
+async def admin_claimed(db: AsyncSession) -> bool:
+    """Has the admin ROLE been claimed on a user row? (VEXA_ADMIN_EMAILS is the other half of "is
+    there an admin"; the instance state joins them.)"""
+    row = (await db.execute(
+        select(User.id).where(User.data["is_admin"].astext == "true").limit(1)
+    )).first()
+    return row is not None
+
+
+async def _claim_record(db: AsyncSession) -> dict:
+    row = await db.get(PlatformSetting, claim_code.ROW_KEY)
+    return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
+
+async def _write_claim_record(db: AsyncSession, value: dict) -> None:
+    """Stage the claim row (the caller commits). Clearing writes `{}` — a consumed code."""
+    row = await db.get(PlatformSetting, claim_code.ROW_KEY)
+    if row is None:
+        row = PlatformSetting(key=claim_code.ROW_KEY, value=value)
+    else:
+        row.value = value
+    db.add(row)
+
+
+async def issue_admin_claim_code(db: AsyncSession, *, host: str, now: datetime,
+                                 force: bool = False) -> "tuple[Optional[str], str]":
+    """Issue the one-time admin claim code for an unclaimed instance — (code, note), code None when
+    none was issued and the note says why. Under the claim lock, so a boot never races a claim.
+
+    No code while VEXA_ADMIN_EMAILS names the admins or a user holds the role (any stale code is
+    retired). A code another replica issued moments ago is kept unless `force` (an explicit release
+    of the role asks for a new one)."""
+    from sqlalchemy import text as sa_text
+    await db.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMIN_CLAIM_LOCK})
+    admins, _ = signin_allow.admin_emails()
+    rec = await _claim_record(db)
+    if admins or await admin_claimed(db):
+        if claim_code.is_live(rec):
+            await _write_claim_record(db, {})
+        await db.commit()
+        return None, ("VEXA_ADMIN_EMAILS names the administrators" if admins
+                      else "an administrator has claimed this instance")
+    holder = None if force else claim_code.held_elsewhere(rec, host=host, now=now)
+    if holder:
+        await db.commit()
+        return None, f"replica {holder} issued the claim code moments ago — it is in that replica's log"
+    code = claim_code.generate()
+    await _write_claim_record(db, claim_code.record(code, host=host, now=now))
+    await db.commit()
+    return code, "issued"
 
 
 def create_app() -> FastAPI:
@@ -1061,15 +1123,8 @@ def create_app() -> FastAPI:
     #     the terminal, which fronts this edge) shows a one-time "set up your instance" claim
     #     screen. Who may claim is `signin_allow.may_claim`, decided here and nowhere else. The claim
     #     is race-safe: a pg advisory xact lock serializes concurrent claims so exactly ONE wins. ---
-    _BOOTSTRAP_ADMIN_LOCK = 0x5EC4_AD31  # arbitrary app-wide advisory-lock key for the claim
-
-    async def _admin_exists(db: AsyncSession) -> bool:
-        """Has the admin ROLE been claimed on a user row? (The deployment's VEXA_ADMIN_EMAILS is the
-        other half of "is there an admin"; `_instance_state` joins them.)"""
-        row = (await db.execute(
-            select(User.id).where(User.data["is_admin"].astext == "true").limit(1)
-        )).first()
-        return row is not None
+    _BOOTSTRAP_ADMIN_LOCK = ADMIN_CLAIM_LOCK
+    _admin_exists = admin_claimed
 
     async def _instance_state(db: AsyncSession) -> dict:
         """THE INSTANCE STATE, computed in exactly ONE place: does this instance have an admin — a
@@ -1101,13 +1156,15 @@ def create_app() -> FastAPI:
     @app.post("/internal/bootstrap-admin", include_in_schema=False)
     async def bootstrap_admin(payload: dict, request: Request,
                               db: AsyncSession = Depends(get_db)):
-        """Claim the admin role for `user_id` IF `signin_allow.may_claim` allows it. Idempotent and
-        race-safe: under the advisory lock the first permitted caller claims, every later caller gets
-        claimed=False. A user who already IS the admin re-claims harmlessly.
+        """Claim the admin role for `user_id` IF `signin_allow.may_claim` allows it — which needs
+        the one-time claim code (`claim_code`) unless VEXA_ADMIN_EMAILS already names the admins.
+        Race-safe: under the advisory lock the first permitted caller claims and the code is retired
+        in the same transaction, so every later caller gets claimed=False.
 
         Answers {"claimed", "admin_exists", "why"}; `why` is `claimed`, `admin-exists` (somebody
-        holds the role, or VEXA_ADMIN_EMAILS names the admins) or `not-allowed` (an allow-list is
-        configured and this address is not on it)."""
+        holds the role, or VEXA_ADMIN_EMAILS names the admins), `bad-code` (no code, a wrong one, or
+        one already used) or `not-allowed` (an allow-list is configured and this address is not on
+        it)."""
         from sqlalchemy import text as sa_text
         from sqlalchemy.orm import attributes
 
@@ -1121,9 +1178,10 @@ def create_app() -> FastAPI:
                          {"key": _BOOTSTRAP_ADMIN_LOCK})
         admins, _ = signin_allow.admin_emails()
         claimed_already = await _admin_exists(db)
+        code_ok = claim_code.matches(payload.get("claim_code"), await _claim_record(db))
         allowed, why = signin_allow.may_claim(
             user.email, admin_claimed=claimed_already, admins=admins,
-            allow=await _effective_allow(db))
+            allow=await _effective_allow(db), code_ok=code_ok)
         if not allowed:
             return {"claimed": False, "admin_exists": claimed_already or bool(admins), "why": why}
         data = dict(user.data or {})
@@ -1131,6 +1189,7 @@ def create_app() -> FastAPI:
         user.data = data
         attributes.flag_modified(user, "data")
         db.add(user)
+        await _write_claim_record(db, {})          # the code works once
         await db.commit()
         return {"claimed": True, "admin_exists": True, "why": why}
 
@@ -1160,16 +1219,37 @@ def create_app() -> FastAPI:
         data = user.data if user is not None and isinstance(user.data, dict) else {}
         admins, _ = signin_allow.admin_emails()
         allow = await _effective_allow(db)
+        # The claim-code door is only consulted when nothing else could admit and it is open at all
+        # (nobody claimed, nothing configured) — two queries fewer on the common path.
+        admin_claimed_now, code_ok = True, False
+        if user is None and not admins and not allow:
+            admin_claimed_now = await _admin_exists(db)
+            if not admin_claimed_now:
+                code_ok = claim_code.matches(
+                    payload.get("claim_code") if isinstance(payload, dict) else None,
+                    await _claim_record(db))
         admitted, why = signin_allow.decide(
             email,
             user_exists=user is not None,
             is_admin=data.get("is_admin") is True,
             admins=admins,
-            # Only consulted when nothing else could admit — one query fewer on the common path.
-            admin_claimed=True if (user is not None or admins or allow) else await _admin_exists(db),
+            admin_claimed=admin_claimed_now,
             allow=allow,
+            claim_code_ok=code_ok,
         )
         return {"admitted": admitted, "why": why}
+
+    @app.post("/internal/admin-claim/check", include_in_schema=False)
+    async def admin_claim_check(payload: dict, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+        """Is this the live admin claim code? The terminal's claim screen asks before it lets a code
+        ride a sign-in, so a typo is answered at once rather than as a sign-in that never arrives.
+        True only while the claim is open (nobody claimed, VEXA_ADMIN_EMAILS empty)."""
+        _check_internal(request)
+        admins, _ = signin_allow.admin_emails()
+        valid = (not admins and not await _admin_exists(db) and claim_code.matches(
+            payload.get("claim_code") if isinstance(payload, dict) else None, await _claim_record(db)))
+        return {"valid": bool(valid)}
 
     # --- GET /internal/users/by-email/{email} → JUST the id, for the internal tier ---
     # The post-meeting run mounts the desks of the people who were in the meeting, and it starts
@@ -1217,7 +1297,8 @@ def create_app() -> FastAPI:
 
     @app.post("/internal/release-admin", include_in_schema=False)
     async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
-        """RELEASE the admin role from a user so the next sign-in claims it again.
+        """RELEASE the admin role from a user so the instance can be claimed again — with a fresh
+        claim code, which this answers (`claim_code`) and logs whenever no admin remains.
 
         The counterpart of bootstrap-admin, and it exists for one honest reason: an instance whose
         admin is a leftover TEST IDENTITY cannot rehearse first-run, and the alternative was hand
@@ -1233,8 +1314,17 @@ def create_app() -> FastAPI:
         attributes.flag_modified(user, "data")
         db.add(user)
         await db.commit()
-        return {"user_id": user.id, "email": user.email, "released": had,
+        body = {"user_id": user.id, "email": user.email, "released": had,
                 **(await _instance_state(db))}
+        # An instance handed back to first run needs a claim code to be claimed again. The caller
+        # holds the internal secret, so it is given the code as well as the log.
+        if not body["admin_exists"]:
+            code, _ = await issue_admin_claim_code(
+                db, host=socket.gethostname(), now=datetime.now(timezone.utc), force=True)
+            if code:
+                claim_log.warning(claim_code.announcement(code))
+                body["claim_code"] = code
+        return body
 
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):

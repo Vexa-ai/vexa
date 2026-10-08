@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 
 from admin_api.app import db as app_db
+from admin_api.app import claim_code
 from admin_api.app import signin_allow as sa
 from admin_api.app.main import create_app
 
@@ -29,10 +30,10 @@ ADMIN = "admin-token-for-the-signin-test"
 
 # ── the rule, pure ──────────────────────────────────────────────────────────────────────────────
 
-def _decide(email, *, users=(), admins=(), admin_exists=True, allow=(), admin_emails=()):
+def _decide(email, *, users=(), admins=(), admin_exists=True, allow=(), admin_emails=(), code=False):
     e = email.lower()
     return sa.decide(email, user_exists=e in users or e in admins, is_admin=e in admins,
-                     admin_claimed=admin_exists, allow=allow, admins=admin_emails)
+                     admin_claimed=admin_exists, allow=allow, admins=admin_emails, claim_code_ok=code)
 
 
 def test_an_unknown_address_is_refused_once_an_admin_exists():
@@ -67,8 +68,19 @@ def test_an_exact_entry_admits_that_address_only():
     assert _decide("alice+x@example.org", allow=allow) == (False, sa.WHY_NOT_ALLOWED)
 
 
-def test_an_unclaimed_instance_admits_anybody_because_that_sign_in_is_the_claim():
-    assert _decide("first@anywhere.net", admin_exists=False) == (True, sa.WHY_UNCLAIMED)
+def test_an_unclaimed_instance_admits_nobody_new_without_the_claim_code():
+    """M7: the first visitor to an exposed instance is a stranger, not its owner."""
+    assert _decide("first@anywhere.net", admin_exists=False) == (False, sa.WHY_NOT_ALLOWED)
+
+
+def test_an_unclaimed_instance_admits_the_sign_in_that_holds_the_claim_code():
+    assert _decide("first@anywhere.net", admin_exists=False, code=True) == (True, sa.WHY_CLAIM_CODE)
+    # …and the code opens nothing once the instance is claimed or a list is configured
+    assert _decide("first@anywhere.net", admin_exists=True, code=True) == (False, sa.WHY_NOT_ALLOWED)
+    assert _decide("first@anywhere.net", admin_exists=False, code=True,
+                   allow=["@oenb.at"]) == (False, sa.WHY_NOT_ALLOWED)
+    assert _decide("first@anywhere.net", admin_exists=False, code=True,
+                   admin_emails=["owner@example.com"]) == (False, sa.WHY_NOT_ALLOWED)
 
 
 def test_an_address_in_admin_emails_is_admitted_as_an_admin():
@@ -90,17 +102,21 @@ def test_a_configured_allow_list_closes_the_unclaimed_door():
 
 
 def test_who_may_claim_the_admin_role():
-    # nothing configured, nobody claimed: the claim is open
-    assert sa.may_claim("first@anywhere.net", admin_claimed=False, allow=[]) == (True, sa.CLAIMED)
+    # nothing configured, nobody claimed: the claim is open — to the claim code, and only to it
+    assert sa.may_claim("first@anywhere.net", admin_claimed=False, allow=[]) == (False, sa.CLAIM_BAD_CODE)
+    assert sa.may_claim("first@anywhere.net", admin_claimed=False, allow=[], code_ok=True) == (True, sa.CLAIMED)
     # somebody holds it
-    assert sa.may_claim("first@anywhere.net", admin_claimed=True, allow=[]) == (False, sa.CLAIM_ADMIN_EXISTS)
-    # VEXA_ADMIN_EMAILS names the admins: nobody claims, not even an allowed address
+    assert sa.may_claim("first@anywhere.net", admin_claimed=True, allow=[],
+                        code_ok=True) == (False, sa.CLAIM_ADMIN_EXISTS)
+    # VEXA_ADMIN_EMAILS names the admins: nobody claims, not even an allowed address with the code
     assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"],
-                        admins=["owner@example.com"]) == (False, sa.CLAIM_ADMIN_EXISTS)
-    # an allow-list is configured: only an address on it
-    assert sa.may_claim("stranger@anywhere.net", admin_claimed=False,
-                        allow=["@oenb.at"]) == (False, sa.CLAIM_NOT_ALLOWED)
-    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"]) == (True, sa.CLAIMED)
+                        admins=["owner@example.com"], code_ok=True) == (False, sa.CLAIM_ADMIN_EXISTS)
+    # an allow-list is configured: only an address on it, and still only with the code
+    assert sa.may_claim("stranger@anywhere.net", admin_claimed=False, allow=["@oenb.at"],
+                        code_ok=True) == (False, sa.CLAIM_NOT_ALLOWED)
+    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"]) == (False, sa.CLAIM_BAD_CODE)
+    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"],
+                        code_ok=True) == (True, sa.CLAIMED)
 
 
 def test_the_admin_test_is_the_claimed_role_or_the_named_list():
@@ -270,11 +286,36 @@ def test_admission_reads_the_env_and_the_settings_lists_together(make_client, mo
     assert _ask(c, "bob@example.com").json() == {"admitted": False, "why": "not-allowed"}
 
 
-def test_admission_on_an_unclaimed_instance_admits_the_claim(make_client):
+def _live_code(db: FakeDB, code: str = "ABCD-EFGH-JKMN-PQRS") -> str:
+    """Put a live claim code in the fake's admin_claim row, as the boot hook would."""
+    from datetime import datetime, timezone
+    db.rows[claim_code.ROW_KEY] = SimpleNamespace(
+        key=claim_code.ROW_KEY,
+        value=claim_code.record(code, host="boot-host", now=datetime.now(timezone.utc)))
+    return code
+
+
+def _ask_with(client, email, code):
+    return client.post("/internal/signin-admission", headers={"X-Internal-Secret": SECRET},
+                       json={"email": email, "claim_code": code})
+
+
+def test_admission_on_an_unclaimed_instance_needs_the_claim_code(make_client):
     db = FakeDB(admin_exists=False)
-    assert _ask(make_client(db), "first@anywhere.net").json() == \
-        {"admitted": True, "why": "unclaimed-instance"}
-    assert db.asked_admin_exists == 1
+    code = _live_code(db)
+    c = make_client(db)
+    assert _ask(c, "first@anywhere.net").json() == {"admitted": False, "why": "not-allowed"}
+    assert _ask_with(c, "first@anywhere.net", "WRONG-CODE-0000-0000").json() == \
+        {"admitted": False, "why": "not-allowed"}
+    assert _ask_with(c, "first@anywhere.net", code.lower().replace("-", " ")).json() == \
+        {"admitted": True, "why": "claim-code"}
+
+
+def test_admission_on_a_claimed_instance_ignores_the_code(make_client):
+    db = FakeDB(admin_exists=True)
+    code = _live_code(db)
+    assert _ask_with(make_client(db), "first@anywhere.net", code).json() == \
+        {"admitted": False, "why": "not-allowed"}
 
 
 def test_admission_admits_an_address_the_deployment_names_as_admin(make_client, monkeypatch):
@@ -312,26 +353,78 @@ def plain_rows(monkeypatch):
     monkeypatch.setattr(attributes, "flag_modified", lambda *_a, **_k: None)
 
 
-def _claim(client, user_id):
+def _claim(client, user_id, code=None):
+    body = {"user_id": user_id}
+    if code is not None:
+        body["claim_code"] = code
     return client.post("/internal/bootstrap-admin", headers={"X-Internal-Secret": SECRET},
-                       json={"user_id": user_id}).json()
+                       json=body).json()
 
 
 def test_the_claim_is_decided_here_with_the_same_lists(make_client, monkeypatch, plain_rows):
     db = FakeDB(users={"stranger@anywhere.net", "anna@oenb.at"}, admin_exists=False)
+    code = _live_code(db)
     c = make_client(db)
     ids = {u.email: u.id for u in db.users.values()}
-    # an allow-list is configured: the first admin is one of its people
+    # an allow-list is configured: the first admin is one of its people, code or not
     monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
-    assert _claim(c, ids["stranger@anywhere.net"]) == \
+    assert _claim(c, ids["stranger@anywhere.net"], code) == \
         {"claimed": False, "admin_exists": False, "why": "not-allowed"}
     # VEXA_ADMIN_EMAILS names the admins: nobody claims
     monkeypatch.setenv("VEXA_ADMIN_EMAILS", "owner@example.com")
-    assert _claim(c, ids["anna@oenb.at"]) == {"claimed": False, "admin_exists": True, "why": "admin-exists"}
+    assert _claim(c, ids["anna@oenb.at"], code) == \
+        {"claimed": False, "admin_exists": True, "why": "admin-exists"}
     monkeypatch.delenv("VEXA_ADMIN_EMAILS")
-    r = _claim(c, ids["anna@oenb.at"])
+    r = _claim(c, ids["anna@oenb.at"], code)
     assert r == {"claimed": True, "admin_exists": True, "why": "claimed"}
     assert db.users["anna@oenb.at"].data == {"is_admin": True}
+
+
+def test_no_code_no_claim(make_client, plain_rows):
+    db = FakeDB(users={"first@anywhere.net"}, admin_exists=False)
+    _live_code(db)
+    c = make_client(db)
+    uid = db.users["first@anywhere.net"].id
+    assert _claim(c, uid) == {"claimed": False, "admin_exists": False, "why": "bad-code"}
+    assert _claim(c, uid, "WRONG-CODE-0000-0000") == {"claimed": False, "admin_exists": False, "why": "bad-code"}
+    assert db.users["first@anywhere.net"].data == {}
+
+
+def test_the_claim_code_works_once(make_client, plain_rows):
+    db = FakeDB(users={"first@anywhere.net", "second@anywhere.net"}, admin_exists=False)
+    code = _live_code(db)
+    c = make_client(db)
+    first, second = db.users["first@anywhere.net"].id, db.users["second@anywhere.net"].id
+    assert _claim(c, first, code)["claimed"] is True
+    assert not claim_code.is_live(db.rows[claim_code.ROW_KEY].value), "the claim retires the code"
+    # even with the role released again, the spent code opens nothing
+    db.admin_exists = False
+    db.users["first@anywhere.net"].data = {}
+    assert _claim(c, second, code) == {"claimed": False, "admin_exists": False, "why": "bad-code"}
+
+
+def test_the_claim_screen_can_check_a_code_before_a_sign_in_carries_it(make_client, monkeypatch):
+    db = FakeDB(admin_exists=False)
+    code = _live_code(db)
+    c = make_client(db)
+
+    def check(value):
+        return c.post("/internal/admin-claim/check", headers={"X-Internal-Secret": SECRET},
+                      json={"claim_code": value}).json()
+    assert check(code) == {"valid": True}
+    assert check("oops") == {"valid": False}
+    assert check("") == {"valid": False}
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "owner@example.com")
+    assert check(code) == {"valid": False}, "no claim is open while the deployment names the admins"
+    assert c.post("/internal/admin-claim/check", json={"claim_code": code}).status_code == 403
+
+
+def test_the_claim_row_is_not_a_settings_key(make_client):
+    """The code's digest is never readable or writable through the generic settings door."""
+    c = make_client(FakeDB())
+    h = {"X-Internal-Secret": SECRET}
+    assert c.get(f"/internal/settings/{claim_code.ROW_KEY}", headers=h).status_code == 404
+    assert c.put(f"/internal/settings/{claim_code.ROW_KEY}", headers=h, json={"sha256": "x"}).status_code == 404
 
 
 def test_admission_does_not_ask_about_the_admin_when_the_answer_is_already_yes(make_client):

@@ -68,7 +68,9 @@ curl -fsS -H "X-Internal-Secret: ${SECRET}" "${BASE}/internal/instance"
 echo
 echo
 cat <<'NEXT'
-  The next sign-in at the terminal claims the admin role and lands in an ordinary
-  first visit. There is no setup step and nothing is gated on the company layer.
+  The release answered a fresh admin claim code (claim_code, above; also in the
+  admin-api log). Enter it on the terminal's claim screen: the sign-in that carries
+  it claims the admin role and lands in an ordinary first visit. There is no setup
+  step and nothing is gated on the company layer.
   Nothing was deleted: workspaces, chats, meetings and _global/asks/ are untouched.
 NEXT

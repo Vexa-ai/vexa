@@ -474,7 +474,7 @@ the effective list is both:
 ```yaml
 adminApi:
   signinAllow: "@example.com,alice@example.org"
-  adminEmails: "admin@example.com"   # set BEFORE the first install — see the warning
+  adminEmails: "admin@example.com"   # optional: names the admins, no claim code needed
 ```
 
 admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
@@ -482,10 +482,18 @@ admin-api reads both and decides every sign-in; the Terminal only asks it. An ol
 while `adminApi.adminEmails` is empty.
 
 <Warning>
-**Until an admin is claimed, anybody may sign in, and the first sign-in becomes the admin.** If the
-Ingress makes the Terminal reachable before you have signed in yourself, a stranger can claim it.
-Name the admins in `adminApi.adminEmails` before the first install: that turns the claim off. A
-non-empty `adminApi.signinAllow` also narrows it: only an address on the list may sign in or claim.
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot. With several replicas, one of them holds it:
+
+```bash
+kubectl -n vexa logs -l app.kubernetes.io/component=admin-api --prefix --tail=-1 | grep -A4 'ADMIN CLAIM CODE'
+```
+
+Open the Terminal, enter the code on the claim screen, then sign in: that sign-in becomes the
+administrator. The code works once; restarting admin-api issues a new one. Without it nobody new can
+sign in and nobody can claim the role. To name the admins instead, set `adminApi.adminEmails` before
+the first install; no code is issued then. A non-empty `adminApi.signinAllow` narrows the claim too:
+only an address on the list may sign in or claim.
 </Warning>
 
 <Note>

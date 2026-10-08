@@ -101,13 +101,19 @@ describe("AuthGate — the first admin can still be claimed", () => {
     expect(screen.getByRole("button", { name: "Not you? Sign out" })).toBeTruthy();
   });
 
-  it("POSTs the claim to the server, which is the only thing that may grant it", async () => {
+  it("POSTs the claim, with the code typed into the card, to the server — the only thing that may grant it", async () => {
     const calls = stubGate({ adminExists: false });
+    const spy = vi.mocked(globalThis.fetch);
     render(<AuthGate><div>the app</div></AuthGate>);
     await screen.findByTestId("claim-instance");
 
-    fireEvent.click(screen.getByRole("button", { name: "Claim this instance" }));
+    const button = screen.getByRole("button", { name: "Claim this instance" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); // no code, no claim
+    fireEvent.change(screen.getByLabelText("Claim code"), { target: { value: "ABCD-EF01-JKMN-PQRS" } });
+    fireEvent.click(button);
     await waitFor(() => expect(calls.some((c) => c === "POST /api/auth/claim-admin")).toBe(true));
+    const sent = spy.mock.calls.find(([u]) => String(u) === "/api/auth/claim-admin");
+    expect(JSON.parse(String((sent![1] as RequestInit).body))).toEqual({ code: "ABCD-EF01-JKMN-PQRS" });
   });
 
   it("surfaces a refused claim instead of pretending it worked", async () => {
@@ -118,8 +124,59 @@ describe("AuthGate — the first admin can still be claimed", () => {
     render(<AuthGate><div>the app</div></AuthGate>);
     await screen.findByTestId("claim-instance");
 
+    fireEvent.change(screen.getByLabelText("Claim code"), { target: { value: "ABCD-EF01-JKMN-PQRS" } });
     fireEvent.click(screen.getByRole("button", { name: "Claim this instance" }));
     await screen.findByRole("alert");
     expect(screen.getByRole("alert").textContent).toContain("Could not claim this instance");
+  });
+});
+
+describe("signed out on an instance nobody has claimed (M7: no code, no claim)", () => {
+  function stubSignedOut(codeAnswer: number) {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      calls.push(`${init?.method || "GET"} ${u}`);
+      if (u.startsWith("/api/auth/me")) return new Response("{}", { status: 401 });
+      if (u.startsWith("/api/auth/providers")) return new Response("{}", { status: 200 });
+      if (u.startsWith("/api/auth/instance")) return new Response(JSON.stringify({ admin_exists: false }), { status: 200 });
+      if (u === "/api/auth/claim-code") {
+        return new Response(JSON.stringify(codeAnswer === 200 ? { ok: true } : { error: "That is not this instance's claim code." }),
+                            { status: codeAnswer });
+      }
+      return new Response("{}", { status: 200 });
+    }));
+    return calls;
+  }
+
+  it("asks for the claim code before it offers any sign-in door", async () => {
+    const calls = stubSignedOut(200);
+    render(<AuthGate><div>the app</div></AuthGate>);
+    await screen.findByTestId("claim-code");
+    expect(screen.queryByRole("button", { name: "Send me a link" })).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("XXXX-XXXX-XXXX-XXXX"), { target: { value: "ABCD-EF01-JKMN-PQRS" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByRole("button", { name: "Send me a link" });
+    expect(calls).toContain("POST /api/auth/claim-code");
+    expect(screen.queryByTestId("claim-code")).toBeNull();
+  });
+
+  it("a wrong code is said so, and no door opens", async () => {
+    stubSignedOut(403);
+    render(<AuthGate><div>the app</div></AuthGate>);
+    await screen.findByTestId("claim-code");
+    fireEvent.change(screen.getByPlaceholderText("XXXX-XXXX-XXXX-XXXX"), { target: { value: "WRONG" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("That is not this instance's claim code.");
+    expect(screen.queryByRole("button", { name: "Send me a link" })).toBeNull();
+  });
+
+  it("somebody who already has an account can still sign in from the same screen", async () => {
+    stubSignedOut(200);
+    render(<AuthGate><div>the app</div></AuthGate>);
+    await screen.findByTestId("claim-code");
+    fireEvent.click(screen.getByRole("button", { name: "Already have an account here? Sign in" }));
+    await screen.findByRole("button", { name: "Send me a link" });
   });
 });

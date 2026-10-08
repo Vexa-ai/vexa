@@ -6,8 +6,13 @@
  *  (a cached 404 would make find-or-create fabricate duplicate users).
  */
 
+import { cookies } from "next/headers";
+
 export const AUTH_COOKIE = process.env.VEXA_AUTH_COOKIE_NAME || "vexa-token";
 export const USER_INFO_COOKIE = process.env.VEXA_USER_INFO_COOKIE_NAME || "vexa-user-info";
+/** The admin claim code a visitor typed on the claim screen (`claim-code/route.ts`), carried to the
+ *  sign-in that follows. httpOnly, scoped to /api/auth, short-lived; the code itself works once. */
+export const CLAIM_COOKIE = "vexa-claim-code";
 
 export interface AdminUser {
   id: string | number;
@@ -310,7 +315,7 @@ export async function mintFirstVisitScaffold(
 //    be open to anyone with an email address by default.
 
 /** The admission reasons admin-api answers with. */
-type AdmittedWhy = "admin" | "admin-email" | "existing-user" | "allow-list" | "unclaimed-instance";
+type AdmittedWhy = "admin" | "admin-email" | "existing-user" | "allow-list" | "claim-code";
 
 /** The verdict on one address. `why` is a reason for logs and tests, never shown to the person. */
 export type SigninAdmission =
@@ -318,7 +323,17 @@ export type SigninAdmission =
   | { admitted: false; why: "not-allowed" | "unavailable"; detail?: string };
 
 const ADMITTED_REASONS: ReadonlySet<string> = new Set<AdmittedWhy>(
-  ["admin", "admin-email", "existing-user", "allow-list", "unclaimed-instance"]);
+  ["admin", "admin-email", "existing-user", "allow-list", "claim-code"]);
+
+/** The claim code this request carries, if the visitor entered one on the claim screen. Read from
+ *  the request's cookies; outside a request (a test, a script) there is none. */
+async function claimCodeFromRequest(): Promise<string | undefined> {
+  try {
+    return (await cookies()).get(CLAIM_COOKIE)?.value || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** MAY THIS ADDRESS SIGN IN? Every door asks this BEFORE it creates or sends anything — the
  *  emailed link's request and redeem halves, OAuth, the dev login — and the last three ask it
@@ -328,7 +343,9 @@ const ADMITTED_REASONS: ReadonlySet<string> = new Set<AdmittedWhy>(
  *  `signin_allow.decide`): an admin (claimed, or named by `VEXA_ADMIN_EMAILS`), an existing user, an
  *  address on the allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting the admin edits in
  *  Settings), or — on an instance nobody has claimed and nothing has been configured for — the
- *  sign-in that will claim it. This process asks once and obeys; it holds no list of its own.
+ *  sign-in that carries the one-time admin claim code, because it will claim the instance. This
+ *  process passes the code along when the visitor entered one, asks once, and obeys; it holds no
+ *  list of its own.
  *
  *  ⚠ FAILS CLOSED, the opposite direction from `instanceState()`. An unreachable or unconfigured
  *  admin-api, a non-2xx (an older admin-api has no such route and answers 404), or a body that does
@@ -337,9 +354,10 @@ const ADMITTED_REASONS: ReadonlySet<string> = new Set<AdmittedWhy>(
  *  new sign-ins and nothing else. */
 export async function signinAdmission(email: string): Promise<SigninAdmission> {
   const normalized = (email || "").trim().toLowerCase();
+  const claimCode = await claimCodeFromRequest();
   const res = await internalRequest<{ admitted?: unknown; why?: unknown }>("/internal/signin-admission", {
     method: "POST",
-    body: JSON.stringify({ email: normalized }),
+    body: JSON.stringify(claimCode ? { email: normalized, claim_code: claimCode } : { email: normalized }),
   });
   if (!res.ok || !res.data) {
     return { admitted: false, why: "unavailable", detail: res.error || `admin-api returned ${res.status}` };
@@ -350,8 +368,20 @@ export async function signinAdmission(email: string): Promise<SigninAdmission> {
 }
 
 /** Why admin-api did or did not hand over the role: `claimed`, `admin-exists` (somebody holds it,
- *  or the deployment names the admins), `not-allowed` (this address may not be the first admin). */
-export type ClaimWhy = "claimed" | "admin-exists" | "not-allowed";
+ *  or the deployment names the admins), `bad-code` (no claim code, a wrong one, or a spent one),
+ *  `not-allowed` (this address may not be the first admin). */
+export type ClaimWhy = "claimed" | "admin-exists" | "bad-code" | "not-allowed";
+const CLAIM_REFUSALS: ReadonlySet<string> = new Set<ClaimWhy>(["admin-exists", "bad-code", "not-allowed"]);
+
+/** Is `code` the live admin claim code? `null` when admin-api could not answer. */
+export async function checkClaimCode(code: string): Promise<boolean | null> {
+  const res = await internalRequest<{ valid?: unknown }>("/internal/admin-claim/check", {
+    method: "POST",
+    body: JSON.stringify({ claim_code: code }),
+  });
+  if (!res.ok || !res.data) return null;
+  return res.data.valid === true;
+}
 
 export type ClaimResult =
   | { ok: true; claimed: boolean; why: ClaimWhy }
@@ -376,27 +406,26 @@ export type ClaimResult =
  *
  *  Unlike `bootstrapAdminClaim` below, this REPORTS its outcome — a user who pressed a button that
  *  says "claim this instance" is owed the answer, where a background step on a sign-in was not. */
-export async function claimAdminRole(userId: string | number): Promise<ClaimResult> {
+export async function claimAdminRole(userId: string | number, claimCode?: string): Promise<ClaimResult> {
   const res = await internalRequest<{ claimed?: boolean; why?: unknown }>("/internal/bootstrap-admin", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId }),
+    body: JSON.stringify(claimCode ? { user_id: userId, claim_code: claimCode } : { user_id: userId }),
   });
   if (!res.ok) return { ok: false, status: res.status || 503, error: res.error || "admin-api refused the claim" };
   const claimed = res.data?.claimed === true;
-  const why = res.data?.why;
-  return {
-    ok: true,
-    claimed,
-    why: claimed ? "claimed" : why === "not-allowed" ? "not-allowed" : "admin-exists",
-  };
+  const why = String(res.data?.why ?? "");
+  return { ok: true, claimed, why: claimed ? "claimed" : CLAIM_REFUSALS.has(why) ? (why as ClaimWhy) : "admin-exists" };
 }
 
-/** Claim the admin role for this user IF admin-api says this sign-in may — the "first sign-in =
- *  admin" step, called on every successful login (admin-api answers no once an admin exists, while
- *  the deployment names the admins, or for an address the allow-list does not hold).
- *  BEST-EFFORT: a failure must never block sign-in; the claim screen simply reappears. */
+/** Claim the admin role for this user IF admin-api says this sign-in may — called on every
+ *  successful login with the claim code the visitor entered, if any (admin-api answers no without
+ *  the code, once an admin exists, while the deployment names the admins, or for an address the
+ *  allow-list does not hold). BEST-EFFORT: a failure must never block sign-in; the claim screen
+ *  simply reappears. */
 async function bootstrapAdminClaim(userId: string | number): Promise<void> {
-  const res = await claimAdminRole(userId);
+  const code = await claimCodeFromRequest();
+  if (!code) return; // no code, no claim — nothing to ask
+  const res = await claimAdminRole(userId, code);
   if (res.ok && res.claimed) {
     console.info(`[terminal-auth] bootstrap: user ${userId} claimed the admin role (first sign-in)`);
   } else if (!res.ok) {

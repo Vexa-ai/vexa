@@ -229,9 +229,11 @@ adminApi:
   # Settings → Sign-in; the effective list is both.
   signinAllow: ""
   # The administrators (VEXA_ADMIN_EMAILS): comma-separated full addresses. They may always sign in
-  # and are the admins; naming them closes the admin claim. Set it BEFORE first install when the
-  # terminal is reachable from outside. admin-api reads it; the terminal only asks admin-api. A
-  # VEXA_ADMIN_EMAILS still set under terminal.extraEnv is carried over when this is empty.
+  # and are the admins; naming them closes the admin claim. Left empty, the first admin claims the
+  # instance with the one-time code admin-api logs at boot (kubectl logs -l
+  # app.kubernetes.io/component=admin-api | grep -A4 'ADMIN CLAIM CODE'). admin-api reads it; the
+  # terminal only asks admin-api. A VEXA_ADMIN_EMAILS still set under terminal.extraEnv is carried
+  # over when this is empty.
   adminEmails: ""
   extraEnv: []
 

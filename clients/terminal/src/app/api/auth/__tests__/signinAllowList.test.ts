@@ -58,15 +58,18 @@ let world: World;
 let calls: string[];
 let nextId = 100;
 
-function admits(email: string): { admitted: boolean; why: string } {
+/** The live admin claim code this fake admin-api would have logged at boot. */
+const CODE = "ABCD-EF01-JKMN-PQRS";
+
+function admits(email: string, code?: string): { admitted: boolean; why: string } {
   const e = email.toLowerCase();
   if (world.admins.has(e)) return { admitted: true, why: "admin" };
   if (world.adminEmails.includes(e)) return { admitted: true, why: "admin-email" };
   if (world.users.has(e)) return { admitted: true, why: "existing-user" };
   const domain = "@" + e.split("@").pop();
   if (world.allow.includes(e) || world.allow.includes(domain)) return { admitted: true, why: "allow-list" };
-  if (world.admins.size === 0 && !world.adminEmails.length && !world.allow.length) {
-    return { admitted: true, why: "unclaimed-instance" };
+  if (world.admins.size === 0 && !world.adminEmails.length && !world.allow.length && code === CODE) {
+    return { admitted: true, why: "claim-code" };
   }
   return { admitted: false, why: "not-allowed" };
 }
@@ -82,7 +85,8 @@ function installAdminApi() {
       if (world.admission === "down") throw new Error("ECONNREFUSED");
       if (world.admission === "old") return new Response("Not Found", { status: 404 });
       if (world.admission === "garbled") return json({ allowed: true });
-      return json(admits(JSON.parse(String(init?.body ?? "{}")).email));
+      const asked = JSON.parse(String(init?.body ?? "{}"));
+      return json(admits(asked.email, asked.claim_code));
     }
     const byEmail = u.match(/\/admin\/users\/email\/(.+)$/);
     if (byEmail) {
@@ -96,8 +100,11 @@ function installAdminApi() {
     }
     if (u.includes("/tokens")) return method === "POST" ? json({ token: "minted-tok" }) : json([]);
     if (u.includes("/internal/bootstrap-admin")) {
-      const claimed = world.admins.size === 0 && !world.adminEmails.length;
-      return json({ claimed, admin_exists: true, why: claimed ? "claimed" : "admin-exists" });
+      const asked = JSON.parse(String(init?.body ?? "{}"));
+      if (world.admins.size || world.adminEmails.length) return json({ claimed: false, admin_exists: true, why: "admin-exists" });
+      if (asked.claim_code !== CODE) return json({ claimed: false, admin_exists: false, why: "bad-code" });
+      world.admins.add("claimed@by-code");
+      return json({ claimed: true, admin_exists: true, why: "claimed" });
     }
     if (u.includes("/internal/has-history")) return json({ has_history: true, sessions: 1, desk: "warm" });
     return new Response("nope", { status: 500 });
@@ -308,15 +315,42 @@ describe("FAIL CLOSED — an admin-api that cannot answer admits nobody new", ()
 });
 
 describe("the first admin claim still works", () => {
-  it("on an instance nobody has claimed and nothing is configured for, a first sign-in is admitted and claims the role", async () => {
+  it("no code, no claim: a fresh instance admits nobody new, at any door", async () => {
     world.admins.clear();
     world.users.clear();
     world.allow = [];
+    await askForLink("first-visitor@anywhere.example");
+    expect(sendMail).not.toHaveBeenCalled();
+    expect((await clickLinkFor("first-visitor@anywhere.example")).status).toBe(403);
+    expect(await oauth("first-visitor@anywhere.example")).toBe("/?error=SigninNotAllowed");
+    expect(created()).toHaveLength(0);
+    expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(false);
+  });
+
+  it("with the claim code entered on the claim screen, the first sign-in is admitted and claims the role", async () => {
+    world.admins.clear();
+    world.users.clear();
+    world.allow = [];
+    cookieJar["vexa-claim-code"] = CODE;
+    await askForLink("founder@newco.example");
+    expect(sendMail).toHaveBeenCalledTimes(1);           // the link is mailed…
     const res = await clickLinkFor("founder@newco.example");
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(302);                        // …and redeemed in this browser
     expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
     expect(created()).toHaveLength(1);
-    expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(true);
+    const claim = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls
+      .find(([u]) => String(u).includes("/internal/bootstrap-admin"));
+    expect(JSON.parse(String(claim![1].body))).toMatchObject({ claim_code: CODE });
+    expect(world.admins.size).toBe(1);
+  });
+
+  it("a wrong code opens nothing", async () => {
+    world.admins.clear();
+    world.users.clear();
+    world.allow = [];
+    cookieJar["vexa-claim-code"] = "WRONG-CODE";
+    expect(await oauth("first-visitor@anywhere.example")).toBe("/?error=SigninNotAllowed");
+    expect(created()).toHaveLength(0);
   });
 
   it("…but not when admin-api's VEXA_ADMIN_EMAILS names the admins: the claim is off, so is that door", async () => {

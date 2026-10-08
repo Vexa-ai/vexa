@@ -8,6 +8,8 @@ The role lives in users.data["is_admin"] — no schema migration.
 
 Same testcontainers-PG harness as the other suites (skips without docker).
 """
+import itertools
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -48,6 +50,24 @@ def _mk_user(client, email):
     return client.post("/admin/users", headers=_admin(), json={"email": email}).json()["id"]
 
 
+_throwaway = itertools.count()
+
+
+def _claim_code(client):
+    """A live admin claim code, the way an operator gets one on a running instance: releasing the
+    role (here from a throwaway account that never held it) hands the instance back to first run and
+    answers a fresh code. At boot the same code is written to the admin-api log."""
+    uid = _mk_user(client, f"code-{next(_throwaway)}-test@vexa.ai")
+    code = client.post("/internal/release-admin", headers=_internal(), json={"user_id": uid}).json()["claim_code"]
+    client.delete(f"/admin/users/{uid}", headers=_admin())
+    return code
+
+
+def _claim(client, user_id, code=None):
+    body = {"user_id": user_id} if code is None else {"user_id": user_id, "claim_code": code}
+    return client.post("/internal/bootstrap-admin", headers=_internal(), json=body)
+
+
 def test_instance_and_bootstrap_gate_fail_closed(client):
     # internal edge only — no/wrong secret rejected
     assert client.get("/internal/instance").status_code == 403
@@ -65,8 +85,11 @@ def test_first_claim_wins_then_idempotent(client):
     assert r.status_code == 200
     assert r.json() == {"admin_exists": False}
 
-    # first sign-in claims
-    r = client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": a})
+    # no code, no claim
+    assert _claim(client, a).json() == {"claimed": False, "admin_exists": False, "why": "bad-code"}
+    # the sign-in that holds the code claims
+    code = _claim_code(client)
+    r = _claim(client, a, code)
     assert r.status_code == 200 and r.json() == {"claimed": True, "admin_exists": True, "why": "claimed"}
 
     # instance now has an admin — and that is the whole instance state: there is no company-layer
@@ -75,8 +98,8 @@ def test_first_claim_wins_then_idempotent(client):
 
     # a later user never claims; the admin re-claiming is a harmless no-op
     later = {"claimed": False, "admin_exists": True, "why": "admin-exists"}
-    assert client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": b}).json() == later
-    assert client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": a}).json() == later
+    assert _claim(client, b, code).json() == later
+    assert _claim(client, a, code).json() == later
 
 
 def test_bootstrap_unknown_user_404(client):
@@ -94,7 +117,7 @@ def test_validate_surfaces_is_admin(client):
     r = client.post("/internal/validate", headers=_internal(), json={"token": tok})
     assert r.status_code == 200 and r.json()["is_admin"] is False
 
-    client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": uid})
+    _claim(client, uid, _claim_code(client))
     r = client.post("/internal/validate", headers=_internal(), json={"token": tok})
     assert r.json()["is_admin"] is True
 
@@ -133,28 +156,27 @@ def test_the_gate_doors_are_gone(client):
 
 def test_signin_admission_against_real_postgres(client, monkeypatch):
     """Vexa-ai/vexa#1783, end to end on a real schema: while no admin exists and nothing is
-    configured, the next sign-in is admitted (it is the claim); a configured allow-list closes that
-    door; once the claim lands, a stranger is refused, the admin and every existing user are
-    admitted, and the allow-list (env + settings row) admits the rest. The offline twin of this is
-    tests/test_signin_allow.py."""
-    def ask(email):
-        return client.post("/internal/signin-admission", headers=_internal(),
-                           json={"email": email}).json()
+    configured, only the sign-in that holds the claim code is admitted (it is the claim); a
+    configured allow-list closes that door; once the claim lands, a stranger is refused, the admin
+    and every existing user are admitted, and the allow-list (env + settings row) admits the rest.
+    The offline twin of this is tests/test_signin_allow.py."""
+    def ask(email, code=None):
+        body = {"email": email} if code is None else {"email": email, "claim_code": code}
+        return client.post("/internal/signin-admission", headers=_internal(), json=body).json()
 
-    monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
-    monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
-    assert ask("first@anywhere.net") == {"admitted": True, "why": "unclaimed-instance"}
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
+    code = _claim_code(client)
     assert ask("first@anywhere.net") == {"admitted": False, "why": "not-allowed"}
+    assert ask("first@anywhere.net", code) == {"admitted": True, "why": "claim-code"}
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
+    assert ask("first@anywhere.net", code) == {"admitted": False, "why": "not-allowed"}
 
     boss = _mk_user(client, "boss-test@vexa.ai")
     _mk_user(client, "Member-Test@vexa.ai")
-    # with the allow-list in force, an address not on it may not be the first admin…
-    assert client.post("/internal/bootstrap-admin", headers=_internal(),
-                       json={"user_id": boss}).json()["why"] == "not-allowed"
+    # with the allow-list in force, an address not on it may not be the first admin, code or not…
+    assert _claim(client, boss, code).json()["why"] == "not-allowed"
     # …and with it lifted, the claim lands
     monkeypatch.delenv("VEXA_SIGNIN_ALLOW")
-    client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": boss})
+    assert _claim(client, boss, code).json()["claimed"] is True
     monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
 
     assert ask("stranger@anywhere.net") == {"admitted": False, "why": "not-allowed"}
@@ -172,20 +194,26 @@ def test_release_admin_hands_the_instance_back_to_first_run(client):
     """The rehearsal needs an instance that has never been claimed, and the account holding the
     role is usually a leftover test identity sitting next to a real one. Role, and only role."""
     uid = _mk_user(client, "release-me@vexa.ai")
-    client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": uid})
+    spent = _claim_code(client)
+    _claim(client, uid, spent)
     assert client.get(f"/internal/users/{uid}/is-admin", headers=_internal()).json()["is_admin"] is True
 
     r = client.post("/internal/release-admin", headers=_internal(), json={"user_id": uid})
     assert r.json()["released"] is True and r.json()["admin_exists"] is False
+    fresh = r.json()["claim_code"]
+    assert fresh and fresh != spent
     assert client.get(f"/internal/users/{uid}/is-admin", headers=_internal()).json()["is_admin"] is False
     # The user itself is untouched — this is not a delete.
     assert client.get(f"/admin/users/{uid}", headers=_admin()).status_code == 200
     # Idempotent: releasing a role nobody holds is not an error.
     assert client.post("/internal/release-admin", headers=_internal(),
                        json={"user_id": uid}).json()["released"] is False
-    # ...and the next sign-in can claim again.
-    assert client.post("/internal/bootstrap-admin", headers=_internal(),
-                       json={"user_id": uid}).json()["claimed"] is True
+    # ...and the next sign-in can claim again — with the newest code; a spent one opens nothing.
+    latest = client.post("/internal/release-admin", headers=_internal(),
+                         json={"user_id": uid}).json()["claim_code"]
+    assert _claim(client, uid, spent).json()["why"] == "bad-code"
+    assert _claim(client, uid, latest).json()["claimed"] is True
+    assert _claim(client, uid, latest).json()["why"] == "admin-exists"
 
 
 def test_the_admins_the_deployment_names_are_admins_and_close_the_claim(client, monkeypatch):
@@ -201,6 +229,9 @@ def test_the_admins_the_deployment_names_are_admins_and_close_the_claim(client, 
     assert client.get("/internal/instance", headers=_internal()).json() == {"admin_exists": True}
     assert client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": other}).json() == \
         {"claimed": False, "admin_exists": True, "why": "admin-exists"}
+    # no code is handed out while the deployment names the admins
+    assert "claim_code" not in client.post("/internal/release-admin", headers=_internal(),
+                                           json={"user_id": other}).json()
 
 
 def test_instance_routes_are_internal_tier(client):

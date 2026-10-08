@@ -14,10 +14,12 @@ THE RULE. A sign-in is admitted when the address is ONE of:
     platform setting the admin edits in the terminal's Settings. The effective list is the union.
 
 …and, on an instance nobody has claimed and NOTHING has been configured for (no admin emails, no
-allow-list), the next sign-in, because that sign-in is the admin claim and refusing it would make a
-fresh instance unclaimable. Configuring either list closes that door: then only those addresses get
-in. The same inputs decide who may CLAIM the admin role (`may_claim`): nobody while `VEXA_ADMIN_EMAILS`
-names the admins, and only an allowed address while an allow-list is configured.
+allow-list), a sign-in that presents the instance's one-time ADMIN CLAIM CODE (`app/claim_code.py`),
+because that sign-in is the admin claim. Without the code nobody new gets in: the first visitor to an
+exposed instance is a stranger, not its owner. Configuring either list closes that door entirely:
+then only those addresses get in. The same inputs decide who may CLAIM the admin role (`may_claim`):
+nobody while `VEXA_ADMIN_EMAILS` names the admins; otherwise only with the claim code, and only an
+allowed address while an allow-list is configured.
 
 ONE PLACE. Every input to both decisions — the user rows, the claimed admin, both lists — is read by
 this service, and the terminal only asks (`POST /internal/signin-admission`,
@@ -49,13 +51,14 @@ WHY_ADMIN = "admin"
 WHY_ADMIN_EMAIL = "admin-email"
 WHY_EXISTING_USER = "existing-user"
 WHY_ALLOW_LIST = "allow-list"
-WHY_UNCLAIMED = "unclaimed-instance"
+WHY_CLAIM_CODE = "claim-code"
 WHY_NOT_ALLOWED = "not-allowed"
 
 # The claim outcomes (`may_claim` and `POST /internal/bootstrap-admin`).
 CLAIMED = "claimed"
 CLAIM_ADMIN_EXISTS = "admin-exists"
 CLAIM_NOT_ALLOWED = "not-allowed"
+CLAIM_BAD_CODE = "bad-code"
 
 # Bounds. An address is at most 254 characters (RFC 5321); a list longer than this is a directory,
 # and a domain entry is the tool for that.
@@ -208,11 +211,12 @@ def is_admin(email, data, admins: Iterable[str]) -> bool:
 
 
 def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
-           allow: Iterable[str], admins: Iterable[str] = ()) -> Tuple[bool, str]:
+           allow: Iterable[str], admins: Iterable[str] = (),
+           claim_code_ok: bool = False) -> Tuple[bool, str]:
     """(admitted, why). The order only decides which reason is reported, except for the last row:
-    an instance nobody has claimed and nothing has been configured for admits the next sign-in,
-    because that sign-in is the claim. `is_admin` is the claimed role on the user row; `admins` is
-    `VEXA_ADMIN_EMAILS`."""
+    an instance nobody has claimed and nothing has been configured for admits a sign-in that holds
+    the claim code, because that sign-in is the claim. `is_admin` is the claimed role on the user
+    row; `admins` is `VEXA_ADMIN_EMAILS`; `claim_code_ok` says the sign-in presented the live code."""
     e = normalize_email(email)
     if not is_address(e):
         return False, WHY_NOT_ALLOWED
@@ -226,18 +230,21 @@ def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
         return True, WHY_EXISTING_USER
     if matches(e, allow):
         return True, WHY_ALLOW_LIST
-    if not admin_claimed and not admins and not allow:
-        return True, WHY_UNCLAIMED
+    if not admin_claimed and not admins and not allow and claim_code_ok:
+        return True, WHY_CLAIM_CODE
     return False, WHY_NOT_ALLOWED
 
 
 def may_claim(email, *, admin_claimed: bool, allow: Iterable[str],
-              admins: Iterable[str] = ()) -> Tuple[bool, str]:
+              admins: Iterable[str] = (), code_ok: bool = False) -> Tuple[bool, str]:
     """(may this user take the admin role now, why). Nobody, once an admin is claimed or while
-    `VEXA_ADMIN_EMAILS` names the admins — those addresses already are. While an allow-list is
-    configured, only an address on it: the first admin of a closed instance is one of its people."""
+    `VEXA_ADMIN_EMAILS` names the admins — those addresses already are. Otherwise only with the live
+    claim code (`code_ok`): no code, no claim. And while an allow-list is configured, only an address
+    on it: the first admin of a closed instance is one of its people."""
     if admin_claimed or list(admins):
         return False, CLAIM_ADMIN_EXISTS
+    if not code_ok:
+        return False, CLAIM_BAD_CODE
     allow = list(allow)
     if allow and not matches(email, allow):
         return False, CLAIM_NOT_ALLOWED
