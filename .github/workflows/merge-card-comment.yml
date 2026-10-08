@@ -35,6 +35,10 @@ jobs:
         with: { node-version: 22 }
       - name: Render the card
         env:
+          # Kept identical to merge-card.yml so the comment and the check never disagree about a
+          # row; both knobs are documented at the top of scripts/merge-card-gate.mjs.
+          MERGE_CARD_REQUIRE_HUMAN_TEST: "false"
+          MERGE_CARD_AGENT_LOGINS: ""
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBERS: ${{ github.event.pull_request.number }}
