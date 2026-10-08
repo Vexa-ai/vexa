@@ -450,7 +450,7 @@ pgbouncer:
   # Transaction-mode pooler in front of Postgres. Default off; enable against managed Postgres with a
   # fixed slot budget or when scaling replicas. When on, every service's DB_HOST routes through it.
   enabled: false
-  image: edoburu/pgbouncer:latest
+  image: edoburu/pgbouncer:latest@sha256:9c78945868a6a142c7fc40ccd843bbe5a606df163c7ffce4de70e0d628d696a2
   replicaCount: 1
   poolMode: transaction
   defaultPoolSize: 20
@@ -466,7 +466,8 @@ pgbouncer:
 
 postgres:
   enabled: true
-  image: postgres:17-alpine
+  # Pinned by digest, the same bytes as deploy/compose (scripts/infra-image-digest.test.mjs).
+  image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
   credentialsSecretName: postgres-credentials
   idleInTransactionTimeoutMs: 60000
   service:
@@ -484,7 +485,7 @@ redis:
   # Valkey (BSD-3 fork of Redis 7.2.4) — engine parity with Lite/compose and off source-available
   # Redis ≥7.4. Wire-compatible (RESP): the `redis.*` keys, redisConfig.url, and the durability
   # helper are unchanged so existing values overrides keep working; only the engine swaps (#653).
-  image: valkey/valkey:8-alpine
+  image: valkey/valkey:8-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
   service:
     port: 6379
   persistence:

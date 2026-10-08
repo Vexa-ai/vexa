@@ -31,6 +31,7 @@ import yaml
 from shared.gitenv import pinned_git_env, scrubbed_git_env
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
+from shared.token_destination import embed_token
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -148,13 +149,9 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
     Both credential flows converge here: ``GitHubVcs.push`` (brokered secret store) and the
     per-call-token workspace publish (``control_plane.workspace_publish``)."""
     work = Path(work_dir)
-    # A credential rides only over https; any other URL is pushed without one (and fails loud if the
-    # remote needs it).
-    if token and remote_url.strip().lower().startswith("https://"):
-        proto, rest = remote_url.split("://", 1)
-        auth_url = f"{proto}://{token}@{rest}"
-    else:
-        auth_url = remote_url
+    # A credential rides only over https (``token_destination``); any other URL is pushed without one
+    # (and fails loud if the remote needs it).
+    auth_url = embed_token(remote_url, token)
 
     def redact(text: str) -> str:
         return text.replace(token, "***") if token else text

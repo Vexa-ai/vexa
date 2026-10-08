@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from control_plane import git_credentials, workspace_credentials as wcreds
-from control_plane.workspace_attach import _authenticated_url
+from shared.token_destination import embed_token
 
 SAVED = "ghp_" + "S" * 36
 TYPED = "ghp_" + "T" * 36
@@ -74,9 +74,9 @@ def test_a_pull_carries_a_credential_only_over_https(monkeypatch, tmp_path):
 
 
 def test_a_clone_url_carries_a_credential_only_over_https():
-    assert _authenticated_url("https://github.com/acme/kg", TYPED) == f"https://{TYPED}@github.com/acme/kg"
-    assert _authenticated_url("http://github.com/acme/kg", TYPED) == "http://github.com/acme/kg"
-    assert _authenticated_url("git@github.com:acme/kg.git", TYPED) == "git@github.com:acme/kg.git"
+    assert embed_token("https://github.com/acme/kg", TYPED) == f"https://{TYPED}@github.com/acme/kg"
+    assert embed_token("http://github.com/acme/kg", TYPED) == "http://github.com/acme/kg"
+    assert embed_token("git@github.com:acme/kg.git", TYPED) == "git@github.com:acme/kg.git"
 
 
 def test_the_capability_line_reports_a_saved_token_only_where_it_would_be_used(tmp_path, saved_token):

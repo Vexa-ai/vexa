@@ -42,6 +42,13 @@ PHASE_MARK = "[vexa-phase:writeback]"
 #: The worker's historical name for PHASE_MARK. One literal, two names, no second source.
 WRITEBACK_MARK = PHASE_MARK
 
+#: A seeded `_global` layer file nobody has written yet carries this inside an HTML comment
+#: (`behavior/global/*.md`). The control plane counts such a file as unwritten
+#: (`control_plane/global_layer.py`) and the worker keeps it out of a turn's organisation context
+#: (`worker/engine.py`). flows spells it again because its image carries no `core/agent`; that copy
+#: and the seed files are held to this one by `gate:fact-parity` (fact `unwritten-marker`).
+UNWRITTEN_MARK = "vexa:unwritten"
+
 
 # ── the third mark: this act does not hold the chat (Vexa-ai/vexa#1584) ──────────────────────────
 # A turn that takes two minutes holds the composer for two minutes. On 2026-09-06 the founder

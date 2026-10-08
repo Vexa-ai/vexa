@@ -33,6 +33,7 @@ from shared.git_redaction import redact
 from control_plane.repo_ref import RepoRefError, assert_not_credential, assert_public_host, valid_ref
 from shared.gitenv import pinned_git_env, scrubbed_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+from shared.token_destination import embed_token
 
 log = logging.getLogger(__name__)
 
@@ -138,16 +139,6 @@ def _slug(repo_url: str) -> str:
     return f"{tail}-{digest}"
 
 
-def _authenticated_url(repo_url: str, token: Optional[str]) -> str:
-    """Embed ``token`` as HTTP basic-auth in an ``https`` URL so a PRIVATE repo can be cloned. SSH/scp
-    URLs (``git@host:org/repo``), tokenless calls and every non-``https`` URL are returned unchanged
-    (key-auth / public / never a credential in cleartext)."""
-    if not token or not repo_url.strip().lower().startswith("https://"):
-        return repo_url
-    proto, rest = repo_url.split("://", 1)
-    return f"{proto}://{token}@{rest}"
-
-
 def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
                *, ssh_env: Optional[dict] = None) -> None:
     """Default clone: clone then checkout ``ref`` (kept separate so a non-default branch/tag/sha works
@@ -182,7 +173,7 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
     assert_public_host(repo_url)      # …nor make this server fetch its own neighbours (R-D15)
     ref = valid_ref(ref)              # …and never hand it a git OPTION either (R-E14)
     env = pinned_git_env(repo_url, GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {}))
-    url = _authenticated_url(repo_url, token)
+    url = embed_token(repo_url, token)
 
     try:
         # `--` so a repository beginning with `-` is a repository and not an option to `git clone`.
