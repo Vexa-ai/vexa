@@ -214,6 +214,14 @@ def test_delegation_stays_off_unless_both_halves_are_configured(over):
     assert "VEXA_MCP_URL" not in env
 
 
+def test_a_dispatch_without_a_toolbelt_says_so_in_the_log(caplog):
+    """friction.py's spawn_gap is silent for a turn that was never meant to have a toolbelt, so the
+    dispatcher names the gap itself, every time, with the half that is missing."""
+    _env(_settings(mcp_delegation_secret=""), _inv())
+    assert "worker toolbelt not configured (worker_toolbelt: no signing key, " \
+           "VEXA_MCP_DELEGATION_SECRET unset)" in caplog.text
+
+
 def test_two_dispatches_never_share_a_token_id():
     """jti is what revocation names, so it has to be per-dispatch or revoking one revokes the fleet."""
     a = d.verify_delegation(SECRET, _env(_settings(), _inv())["VEXA_MCP_DELEGATION_TOKEN"])
@@ -279,6 +287,18 @@ def test_the_worker_attaches_nothing_when_the_dispatcher_minted_nothing(tmp_path
         monkeypatch.setenv(k, v)
     assert mcp_delegation_config(tmp_path) == (None, [])
     assert not (tmp_path / ".claude" / "mcp.json").exists()
+
+
+def test_the_worker_log_says_whether_the_toolbelt_was_attached(tmp_path, monkeypatch, capsys, caplog):
+    from worker.engine import mcp_delegation_config
+    monkeypatch.delenv("VEXA_MCP_URL", raising=False)
+    monkeypatch.delenv("VEXA_MCP_DELEGATION_TOKEN", raising=False)
+    mcp_delegation_config(tmp_path)
+    assert "vexa MCP toolbelt NOT attached: VEXA_MCP_URL and VEXA_MCP_DELEGATION_TOKEN unset" in caplog.text
+    monkeypatch.setenv("VEXA_MCP_URL", "http://gateway:8000/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
+    mcp_delegation_config(tmp_path)
+    assert "vexa MCP toolbelt attached: server=vexa url=http://gateway:8000/mcp" in capsys.readouterr().err
 
 
 def test_the_turn_runner_forwards_the_attachment_to_the_harness(monkeypatch, tmp_path):

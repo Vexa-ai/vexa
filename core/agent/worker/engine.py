@@ -25,6 +25,7 @@ import json
 import pathlib
 import logging
 import os
+import sys
 import re
 import shutil
 import threading
@@ -1428,6 +1429,12 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     url = (os.environ.get("VEXA_MCP_URL") or "").strip()
     token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     if not url or not token:
+        # Said out loud, every time: a turn with no toolbelt answers questions about meetings and
+        # workspaces from nothing, and from the chat it looks exactly like a turn that has one.
+        log.warning("vexa MCP toolbelt NOT attached: %s unset — this turn runs without vexa tools "
+                    "(configure the worker_toolbelt capability on agent-api)",
+                    " and ".join(n for n, v in (("VEXA_MCP_URL", url),
+                                                ("VEXA_MCP_DELEGATION_TOKEN", token)) if not v))
         _file_spawn_gap(url, token)
         return None, []
     cfg = {"mcpServers": {VEXA_MCP_SERVER: {
@@ -1445,6 +1452,9 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
         path.chmod(0o600)
     except OSError:  # a store backend that does not carry modes — the attachment still stands
         pass
+    # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
+    # and "was the toolbelt attached?" is the first question asked of a worker's log.
+    print(f"vexa MCP toolbelt attached: server={VEXA_MCP_SERVER} url={url}", file=sys.stderr, flush=True)
     return str(path), [f"mcp__{VEXA_MCP_SERVER}",
                        *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
 

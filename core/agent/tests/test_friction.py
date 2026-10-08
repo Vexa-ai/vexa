@@ -400,9 +400,50 @@ def test_a_missing_toolbelt_files_at_spawn_because_the_model_could_not():
 
 def test_reporting_never_raises_into_a_turn(monkeypatch, tmp_path):
     monkeypatch.setattr(wfr, "FALLBACK_LOG", tmp_path / "f.jsonl")
-    monkeypatch.setenv("VEXA_AGENT_API_SELF_URL", "http://127.0.0.1:1")   # nothing listens
+    monkeypatch.setenv("VEXA_MCP_URL", "http://127.0.0.1:1/mcp")   # nothing listens
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", "vxd_t.t.t")
     assert wfr.report({"happened": "boom"}, subject="126", timeout=0.05) is None
     assert "boom" in (tmp_path / "f.jsonl").read_text()      # the file is written FIRST, always
+
+
+def test_a_worker_files_friction_through_the_edge_as_its_delegation(monkeypatch, tmp_path):
+    """identity.v1: agent-api believes no unsigned X-User-Id, so the worker never names its person
+    itself — it presents the dispatch's delegation token at the gateway, which resolves it."""
+    import json as _json
+
+    monkeypatch.setattr(wfr, "FALLBACK_LOG", tmp_path / "f.jsonl")
+    monkeypatch.setenv("VEXA_MCP_URL", "http://gateway:8000/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", "vxd_t.t.t")
+    seen = {}
+
+    class _R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def urlopen(req, timeout=None):
+        seen.update(url=req.full_url, headers={k.lower(): v for k, v in req.header_items()})
+        return _R()
+
+    monkeypatch.setattr(wfr.urllib.request, "urlopen", urlopen)
+    assert wfr.report({"happened": "boom"}, subject="126") == {"ok": True}
+    assert seen["url"] == "http://gateway:8000/agent/friction"
+    assert seen["headers"]["x-api-key"] == "vxd_t.t.t"
+    assert "x-user-id" not in seen["headers"]
+
+
+def test_a_worker_with_no_delegation_keeps_the_record_and_says_why(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(wfr, "FALLBACK_LOG", tmp_path / "f.jsonl")
+    monkeypatch.setenv("VEXA_MCP_URL", "http://gateway:8000/mcp")
+    monkeypatch.delenv("VEXA_MCP_DELEGATION_TOKEN", raising=False)
+    assert wfr.report({"happened": "boom"}, subject="126") is None
+    assert "boom" in (tmp_path / "f.jsonl").read_text()
+    assert "delegation token" in caplog.text
 
 
 # ── the refused-model-endpoint path (in-process, no HTTP hop) ──────────────────────────────────
@@ -442,3 +483,15 @@ def test_fallback_session_never_returns_empty(monkeypatch):
     monkeypatch.delenv("VEXA_CHAT_SESSION", raising=False)
     monkeypatch.delenv("VEXA_UNIT_ID", raising=False)
     assert wfr.fallback_session() == "unknown"
+
+
+def test_a_toolbelt_pointed_elsewhere_keeps_the_record_rather_than_guessing_an_edge(monkeypatch, tmp_path):
+    """The gateway is the toolbelt's own edge only when VEXA_MCP_URL is its /mcp; a lane that points
+    workers at a different MCP server has no /agent surface there, and nothing is sent."""
+    monkeypatch.setattr(wfr, "FALLBACK_LOG", tmp_path / "f.jsonl")
+    monkeypatch.setenv("VEXA_MCP_URL", "http://rig.example:18310/rpc")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", "vxd_t.t.t")
+    monkeypatch.setattr(wfr.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing may be sent")))
+    assert wfr.report({"happened": "boom"}, subject="126") is None
+    assert "boom" in (tmp_path / "f.jsonl").read_text()

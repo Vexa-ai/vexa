@@ -37,7 +37,9 @@ def _fresh_probe_cache():
 def test_declaration_loads_and_is_internally_consistent():
     decl = cp.load_declaration()
     assert decl["service"] == "agent-api"
-    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections", "git_credential_broker"}
+    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections",
+                                         "git_credential_broker", "worker_toolbelt"}
+    assert decl["capabilities"]["worker_toolbelt"]["mode"] == "all"
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
 
@@ -103,10 +105,33 @@ def test_preflight_refuses_a_secretless_or_placeheld_internal_tier():
     assert "INTERNAL_API_SECRET" in str(ei.value)
     for placeholder in ("vexa-internal-secret", "lite-internal-secret", "changeme"):
         with pytest.raises(cp.ConfigError) as ei:
-            cp.preflight({"INTERNAL_API_SECRET": placeholder})
+            cp.preflight({"INTERNAL_API_SECRET": placeholder, **IDENTITY})
         assert "INTERNAL_API_SECRET" in str(ei.value)
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", **IDENTITY})
+
+
+IDENTITY = {"VEXA_GATEWAY_IDENTITY_SECRET": "a-real-signing-key"}
+
+
+def test_preflight_refuses_a_boot_that_cannot_verify_identity():
+    """identity.v1 — agent-api believes an x-user-* header only with the gateway's signature
+    beside it; with no key to check it, nobody can be authenticated, so the boot refuses."""
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    assert "VEXA_GATEWAY_IDENTITY_SECRET" in str(ei.value)
+    for placeholder in ("changeme", "secret"):
+        with pytest.raises(cp.ConfigError):
+            cp.preflight({"INTERNAL_API_SECRET": "a-real-secret",
+                          "VEXA_GATEWAY_IDENTITY_SECRET": placeholder})
+
+
+def test_the_toolbelt_is_a_capability_with_both_halves():
+    assert cp.capability_states({})["worker_toolbelt"] == cp.NOT_CONFIGURED
+    both = {"VEXA_MCP_URL": "http://gateway:8000/mcp", "VEXA_MCP_DELEGATION_SECRET": "k"}
+    assert cp.capability_states(both)["worker_toolbelt"] == cp.CONFIGURED
+    assert cp.capability_states({"VEXA_MCP_URL": "http://gateway:8000/mcp"})["worker_toolbelt"] \
+        == cp.MISCONFIGURED
 
 
 def test_capability_tri_states():
@@ -125,6 +150,7 @@ def test_preflight_reports_capability_rows(monkeypatch):
     for k in ("VEXA_BOT_API_KEY", "HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_SECRET", "a-real-signing-key")
     report = cp.preflight()
     assert report["service"] == "agent-api"
     assert report["capabilities"]["bot_gateway"]["state"] == cp.NOT_CONFIGURED

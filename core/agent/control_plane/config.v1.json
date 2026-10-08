@@ -126,8 +126,9 @@
     {
       "key": "VEXA_AGENT_DEFAULT_SUBJECT",
       "class": "defaulted",
-      "default": "(empty \u2014 FAIL-CLOSED: 401 when the gateway's X-User-Id is absent)",
-      "description": "single-user fallback subject for a direct/self-host deploy with no gateway in front"
+      "default": "(empty \u2014 FAIL-CLOSED: 401 when no identity is named)",
+      "description": "single-user fallback subject for an app built WITHOUT the identity guard (the in-process test harness). Ignored whenever VEXA_GATEWAY_IDENTITY_SECRET is set, which every deployment is; no deploy surface sets it",
+      "targets": []
     },
     {
       "key": "VEXA_REDIS_URL",
@@ -352,6 +353,21 @@
       ]
     },
     {
+      "key": "VEXA_GATEWAY_IDENTITY_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "identity.v1 verification key \u2014 the same value the gateway signs X-Vexa-Identity with. agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier. Unset, nobody can be authenticated, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint)",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
       "default": "(unset \u2014 DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
@@ -385,13 +401,6 @@
       "targets": [
         "compose"
       ]
-    },
-    {
-      "key": "VEXA_REQUIRE_GATEWAY_IDENTITY",
-      "class": "defaulted",
-      "default": "false",
-      "description": "when true, reject callers lacking the gateway-signed X-Gateway-Verified identity marker (hardened multi-tenant topology); default false preserves dev/direct-edge access",
-      "targets": []
     },
     {
       "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
@@ -429,21 +438,26 @@
     },
     {
       "key": "VEXA_MCP_URL",
-      "class": "defaulted",
-      "default": "(unset \u2014 no MCP is attached to a worker; the pre-delegation behaviour)",
-      "description": "the vexa-control MCP endpoint a spawned chat worker connects to (e.g. https://rig.dev.vexa.ai/mcp). Set together with VEXA_MCP_DELEGATION_SECRET: either alone leaves the toolbelt OFF, because an endpoint with no credential and a credential with no endpoint are both unusable",
+      "class": "capability",
+      "description": "the MCP endpoint a spawned worker attaches as its `vexa` toolbelt: the gateway's /mcp, where the ONE assembled MCP server serves the meetings, agent and flows tools (ADR-0037). Every deploy surface points it at the in-network gateway",
       "targets": [
-        "compose"
-      ]
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "capability": "worker_toolbelt"
     },
     {
       "key": "VEXA_MCP_DELEGATION_SECRET",
-      "class": "defaulted",
-      "default": "(unset \u2014 delegation is OFF and no worker receives an MCP credential)",
-      "description": "the symmetric HS256 key agent-api SIGNS the per-dispatch MCP delegation token with and the vexa-control MCP VERIFIES with (shared.delegation). Empty must mean ABSENT, never 'signed with nothing' \u2014 a zero-length HMAC key would authenticate anyone who guessed the token format",
+      "class": "capability",
+      "description": "the symmetric HS256 key agent-api SIGNS each worker's per-dispatch delegation token with (shared.delegation); identity's /internal/validate verifies it with the same value, so the gateway authenticates the worker's tool calls as the person it acts for. Empty must mean ABSENT, never 'signed with nothing'. Generated at install on every deploy surface",
       "targets": [
-        "compose"
-      ]
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "capability": "worker_toolbelt",
+      "secret": true
     },
     {
       "key": "VEXA_SECRETS_KEY",
@@ -878,6 +892,11 @@
       "description": "Git tokens and deploy keys are kept in the credential broker instead of this service's own encrypted store",
       "mode": "all",
       "when_unconfigured": "nothing degrades: Git credentials stay in the local encrypted store (control_plane/secret_store.py, keyed by VEXA_SECRETS_KEY)"
+    },
+    "worker_toolbelt": {
+      "description": "each spawned worker gets the vexa MCP toolbelt: a delegation token minted per dispatch (who it acts for, the regime, the workspace ceiling) and the gateway's /mcp to present it to",
+      "mode": "all",
+      "when_unconfigured": "workers run with no vexa tools; the dispatcher logs the gap on every spawn and the worker files a spawn_gap friction record when only one of the two is set"
     }
   },
   "surface_only": [

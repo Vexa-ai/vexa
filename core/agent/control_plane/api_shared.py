@@ -1689,7 +1689,7 @@ def _http_email_subject_lookup(admin_api_url: str, internal_secret: str, admin_t
     return _lookup
 
 
-def _http_meeting_owner_lookup(meeting_api_url: str):
+def _http_meeting_owner_lookup(meeting_api_url: str, internal_secret: str = ""):
     """Build the default meeting ACCESS lookup: GET {meeting_api_url}/meetings/{id} as the caller.
     Returns a callable ``(user_id, meeting_id, workspaces=None) -> dict | None`` — the meeting record
     the caller may read, or None when the row is absent / not theirs / meeting-api is unreachable
@@ -1713,7 +1713,11 @@ def _http_meeting_owner_lookup(meeting_api_url: str):
     def _lookup(user_id: str, meeting_id: str, workspaces=None) -> "dict | None":
         if not base or not user_id or not str(meeting_id).isdigit():
             return None  # non-numeric row id can't be an owned meeting row → fail closed
+        # AS the caller, over the internal tier: meeting-api believes an asserted X-User-Id only from
+        # the gateway's signature or from a service presenting X-Internal-Secret.
         headers = {"X-User-Id": str(user_id)}
+        if internal_secret:
+            headers["X-Internal-Secret"] = internal_secret
         ws = ",".join(str(w).strip() for w in (workspaces or []) if str(w).strip())
         if ws:
             headers["X-User-Workspaces"] = ws

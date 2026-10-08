@@ -92,7 +92,7 @@ def test_the_worker_friction_path_scrubs_before_it_is_durable(tmp_path, monkeypa
 
     log = tmp_path / "friction.jsonl"
     monkeypatch.setattr(friction, "FALLBACK_LOG", log)
-    monkeypatch.setattr(friction, "_api", lambda: "http://127.0.0.1:1")  # unreachable: log-only path
+    monkeypatch.setattr(friction, "_edge", lambda: ("http://127.0.0.1:1", "vxd_t.t.t"))  # unreachable: log-only path
 
     secret = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
     friction.report({"kind": "capability-hallucination", "tool": "bot_send",

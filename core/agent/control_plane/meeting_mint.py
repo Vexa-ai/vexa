@@ -191,9 +191,10 @@ def _commit(desk: Path, rel: str) -> None:
         logger.exception("committing the minted meeting page %s failed", rel)
 
 
-def http_recorder(meeting_api_url: str):
-    """The default recorder: `POST {meeting_api_url}/meetings/{id}/annotate` with the caller's
-    `X-User-Id`. Returns `(subject, meeting_id, path) -> bool`; injectable for L2 tests, the same
+def http_recorder(meeting_api_url: str, *, internal_secret: str = ""):
+    """The default recorder: `POST {meeting_api_url}/meetings/{id}/annotate` as the caller — its
+    `X-User-Id` over the internal tier (`X-Internal-Secret`), the only unsigned identity meeting-api
+    believes. Returns `(subject, meeting_id, path) -> bool`; injectable for L2 tests, the same
     seam style as `_http_meeting_owner_lookup` one file over.
 
     ANNOTATE RATHER THAN PATCH, deliberately. PATCH edits the INSTRUCTIONS for a meeting and is
@@ -211,7 +212,8 @@ def http_recorder(meeting_api_url: str):
         body = json.dumps({"metadata": {meeting_note.NOTE_PATH_KEY: str(path)}}).encode()
         req = urllib.request.Request(
             f"{base}/meetings/{int(meeting_id)}/annotate", data=body, method="POST",
-            headers={"X-User-Id": str(subject), "Content-Type": "application/json"})
+            headers={"X-User-Id": str(subject), "Content-Type": "application/json",
+                     **({"X-Internal-Secret": internal_secret} if internal_secret else {})})
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return 200 <= int(resp.status) < 300

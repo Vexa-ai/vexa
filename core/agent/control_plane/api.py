@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
+from control_plane import identity_token
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_room
 from control_plane import meeting_steering
@@ -192,6 +193,20 @@ def create_app(
     except Exception as exc:  # noqa: BLE001 — a volume that cannot be walked must not stop the boot
         logger.warning("workspace-id migration could not run: %s: %s", type(exc).__name__, exc)
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
+    settings = dispatcher.settings if dispatcher is not None else None
+    # THE DOOR FOR `x-user-*` (identity.v1). Every request that names a person must carry the
+    # gateway's signature over that identity, or come from the internal tier (flows, the terminal's
+    # server-side admin routes, the dogfood rig) with `X-Internal-Secret`. Anything else that names a
+    # person is a 401 at this middleware, before any route reads a header. The production boot
+    # requires the key (config.v1 required-explicit), so a deployed agent-api always has this door;
+    # an app built without one is the in-process test harness.
+    _identity_secret = (settings.gateway_identity_secret.get_secret_value()
+                        if settings is not None else "")
+    _identity_guarded = bool(_identity_secret)
+    if _identity_guarded:
+        app.add_middleware(
+            identity_token.IdentityGuard, secret=_identity_secret, service="agent-api",
+            internal_secret=settings.internal_api_secret.get_secret_value())
 
     # There is NO company-layer gate here (founder ruling 2026-10-08: "let's remove global setup at
     # all so that there is no need to setup global at all - let it be empty with no data - it's
@@ -205,14 +220,15 @@ def create_app(
     app.state.workspace_registry = workspace_registry
     app.state.live_meetings = live
     app.state.scheduler = scheduler
-    settings = dispatcher.settings if dispatcher is not None else None
     if settings is not None:
         # An out-of-store `_global` is read where the worker mount serves it from, not from a stale
         # slot in the store (`system_mounts.global_root`).
         wsr.allow(system_mounts.global_root(settings, wsr.root))
+    _internal_secret_value = (settings.internal_api_secret.get_secret_value()
+                              if settings is not None else "")
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
-        settings.meeting_api_url if settings is not None else "")
+        settings.meeting_api_url if settings is not None else "", _internal_secret_value)
     # The ambient schedule digest's rows source (context bundle): TTL-cached meeting-api fetch;
     # injectable for L2 tests, same seam style as meeting_owner_lookup.
     # The post-meeting room's participant ADDRESS → subject resolver; injectable for L2 tests, same
@@ -223,45 +239,58 @@ def create_app(
         settings.admin_api_token.get_secret_value() if settings is not None else "",
     )
     _schedule_source = schedule_source or schedule_digest_mod.digest_source(
-        settings.meeting_api_url if settings is not None else "", mindex.list)
+        settings.meeting_api_url if settings is not None else "", mindex.list,
+        internal_secret=_internal_secret_value)
     # WHERE A MEETING'S PAGE IS, PUT ON THE ROW ITSELF (Vexa-ai/vexa#1601): default = an owner-scoped
     # annotate on meeting-api; injectable for L2 tests, the same seam style as the two above. The
     # path stops being a thing two services each compose — whoever mints records, everybody reads.
     _meeting_note_recorder = meeting_note_recorder or meeting_mint_mod.http_recorder(
-        settings.meeting_api_url if settings is not None else "")
+        settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
 
-    # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
-    # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
-    # x-user-id/x-user-email and re-injects the values it resolved from the verified api-key. In the
-    # current dev/direct topology the terminal and host-local clients reach agent-api WITHOUT the gateway
-    # hop (compose loopback + VEXA_AGENT_DEFAULT_SUBJECT fallback), so those headers are spoofable and
-    # restricted-mode invites MUST NOT be relied on as a security boundary here. A hardened deploy sets
-    # VEXA_REQUIRE_GATEWAY_IDENTITY=1: agent-api then rejects any request lacking the gateway's signed
-    # identity marker (X-Gateway-Verified), so identity headers are only honored when the gateway put
-    # them there. OFF by default so the dev/direct topology keeps working. Full fix = route the terminal
-    # through the gateway (Stage 4) and make the gateway the only thing that can reach agent-api.
-    _require_gateway_identity = os.environ.get("VEXA_REQUIRE_GATEWAY_IDENTITY", "").strip().lower() in ("1", "true", "yes")
+    # TOPOLOGY BOUNDARY (Lane M vector 3, identity.v1): agent-api reads X-User-Id / X-User-Email as
+    # ground truth, and that is sound only because of the door installed above — the gateway signs
+    # the identity it resolved, `IdentityGuard` verifies the signature and rebuilds every x-user-*
+    # header from the signed claims, and an unsigned header is believed only from the internal tier.
+    # Restricted-mode invites and the scaffold recipient checks rely on X-User-Email for exactly
+    # that reason.
 
     def subject_of(request: Request) -> str:
-        """The authenticated subject (P20). The gateway resolves the api-key → user_id and injects
-        ``X-User-Id``; agent-api derives the workspace/chat/quota partition from THAT, never from the
-        client body/query. Fail-closed (401) when the header is absent, unless a single-user fallback
-        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front.
-
-        When ``VEXA_REQUIRE_GATEWAY_IDENTITY`` is set, the request must additionally carry the gateway's
-        signed identity marker (``X-Gateway-Verified``) — a hardened deploy enforces that identity headers
-        were injected by the gateway, not forged by a direct/host-local caller (see the TOPOLOGY BOUNDARY
-        note above). This does NOT change the default dev/direct topology."""
-        if _require_gateway_identity and not request.headers.get("x-gateway-verified"):
-            raise HTTPException(status_code=401,
-                                detail="gateway-signed identity required (VEXA_REQUIRE_GATEWAY_IDENTITY)")
+        """The authenticated subject (P20): ``X-User-Id`` as the door above let it through — signed
+        by the gateway, or asserted by the internal tier. agent-api derives the workspace/chat/quota
+        partition from THAT, never from the client body/query, and fails closed (401) when no subject
+        is named. The single-user fallback (``VEXA_AGENT_DEFAULT_SUBJECT``) exists only for an app
+        built without the door; a deployed agent-api never has one."""
         uid = request.headers.get("x-user-id")
         if uid:
             return uid
-        fallback = settings.agent_default_subject if settings is not None else ""
+        fallback = (settings.agent_default_subject
+                    if settings is not None and not _identity_guarded else "")
         if fallback:
             return fallback
         raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
+
+    def require_person(request: Request) -> None:
+        """Refuse a verb that needs a person in the loop when the caller is a worker dispatched
+        without one. The gateway carries a delegation token's regime as ``x-user-regime`` (signed);
+        a person's own credential carries none. ``human`` is the only regime these verbs run under,
+        and an unknown regime is refused like ``autonomous`` — the fail direction on a verb that
+        reads a mailbox, spends a credential or loads a repository is closed."""
+        regime = (request.headers.get("x-user-regime") or "").strip().lower()
+        if regime and regime != "human":
+            raise HTTPException(status_code=403, detail={
+                "status": "refused", "reason": "human_session_required",
+                "instruction": "This session runs without a person in the loop. Record what you "
+                               "wanted to do and stop; do not retry it another way."})
+
+    def _delegation_allows(request: Request, slug: str) -> bool:
+        """May this caller address workspace ``slug``? A worker dispatched without a person carries
+        the dispatch's isolation set (``x-user-delegation-workspaces``); ``*`` — and every caller
+        that is not a delegated worker — is bounded by the account alone. An EMPTY slug is the
+        caller's own workspace and always in scope: the uid decides it, not the caller."""
+        ceiling = request.headers.get("x-user-delegation-workspaces")
+        if ceiling is None or ceiling.strip() == "*" or not slug:
+            return True
+        return slug in {w.strip() for w in ceiling.split(",") if w.strip()}
 
     def _resolve_room(request: Request, subject: str, meeting_id: str,
                       participants: "Optional[list[str]]" = None,
@@ -395,6 +424,14 @@ def create_app(
             if g.exists():
                 return g
             raise HTTPException(status_code=404, detail="the organisation tier is not configured")
+        # THE DISPATCH'S CEILING, for a worker dispatched without a person: a named workspace must be
+        # in the isolation set it was granted. Checked before any resolution, so a workspace outside
+        # the set is refused the same way whether or not it exists.
+        if target and target != subject and not _delegation_allows(request, target):
+            raise HTTPException(status_code=403, detail={
+                "refused": "out_of_scope", "workspace": target,
+                "why": "this session was dispatched with access to a named set of workspaces and "
+                       "that is not one of them"})
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
@@ -1005,7 +1042,8 @@ def create_app(
         _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
-        settings=settings, stream_reader=stream_reader, subject_of=subject_of,
+        require_person=require_person, settings=settings, stream_reader=stream_reader,
+        subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
     for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections):
         app.include_router(_r.build(**_deps))

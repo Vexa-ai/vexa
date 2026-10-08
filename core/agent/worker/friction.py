@@ -37,9 +37,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-#: Where the report goes. `VEXA_AGENT_API_SELF_URL` is an already-declared agent-api config key
-#: (config.v1.json, class `defaulted`, no deploy target) — the worker reads the same name the
-#: control plane does rather than inventing a second one for the same address.
+#: Where the report goes: agent-api's `/api/friction`, reached THROUGH THE EDGE — `/agent/friction` on
+#: the same gateway whose `/mcp` is this worker's toolbelt (`VEXA_MCP_URL`) — and authenticated by the
+#: dispatch's delegation token (`VEXA_MCP_DELEGATION_TOKEN`), the bearer the toolbelt presents.
+#: agent-api believes an X-User-Id only with the gateway's signature beside it (identity.v1), so a
+#: worker never names its person itself; the gateway resolves the token and says who it acts for.
 TIMEOUT_S = 3.0
 
 #: THE FILE FIRST, ALWAYS — the rule the rig's original `report_friction` was written around, kept
@@ -50,8 +52,15 @@ TIMEOUT_S = 3.0
 FALLBACK_LOG = Path(os.environ.get("TMPDIR", "/tmp")) / "vexa-friction.jsonl"
 
 
-def _api() -> str:
-    return (os.environ.get("VEXA_AGENT_API_SELF_URL") or "http://agent-api:8100").rstrip("/")
+def _edge() -> "tuple[str, str]":
+    """``(gateway base, delegation token)`` — empty strings when the dispatch handed over none.
+
+    The base is the toolbelt's own edge: ``VEXA_MCP_URL`` is the gateway's ``/mcp``, so the gateway
+    is that URL without it. A toolbelt pointed anywhere else (a lane's own MCP server) has no
+    ``/agent`` surface, and the record stays in the fallback log."""
+    url = (os.environ.get("VEXA_MCP_URL") or "").strip().rstrip("/")
+    base = url[: -len("/mcp")] if url.endswith("/mcp") else ""
+    return base, (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
 
 
 def fallback_session() -> str:
@@ -120,10 +129,14 @@ def report(record: dict, *, subject: str = "", timeout: float = TIMEOUT_S) -> di
             f.write(json.dumps({"at": time.time(), **body}) + "\n")
     except OSError as e:
         log.warning("friction: could not write the fallback log (%s)", e)
+    base, token = _edge()
+    if not base or not token:
+        log.warning("friction: not filed — this worker has no %s; the record is in %s",
+                    "gateway toolbelt" if not base else "delegation token", FALLBACK_LOG)
+        return None
     req = urllib.request.Request(
-        f"{_api()}/api/friction", method="POST", data=json.dumps(body).encode(),
-        headers={"content-type": "application/json",
-                 **({"x-user-id": str(subject)} if subject else {})})
+        f"{base}/agent/friction", method="POST", data=json.dumps(body).encode(),
+        headers={"content-type": "application/json", "x-api-key": token})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())

@@ -93,6 +93,7 @@ def build(**d) -> APIRouter:
     mindex = d['mindex']
     settings = d['settings']
     subject_of = d['subject_of']
+    require_person = d.get('require_person') or (lambda request: None)
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
 
@@ -1051,6 +1052,7 @@ def build(**d) -> APIRouter:
 
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
+        require_person(request)      # loads a repository with the person's saved git credentials
         subject = subject_of(request)
         repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
@@ -1144,6 +1146,7 @@ def build(**d) -> APIRouter:
         queued/running is not success. Stored credentials are resolved inside the agent service.
         credential_workspace optionally reuses the deploy key of a workspace you own.
         """
+        require_person(request)      # loads a repository with the person's saved git credentials
         subject = subject_of(request)
         repo = _repo(body.repo)
         try:
@@ -1741,13 +1744,10 @@ def build(**d) -> APIRouter:
         RESTRICTED invite additionally requires their VERIFIED email (X-User-Email, gateway-injected)
         to be in the invite's allowed_emails."""
         subject = subject_of(request)
-        # SECURITY BOUNDARY: X-User-Email is trusted as the caller's VERIFIED email ONLY because the
-        # gateway strips any client-sent x-user-email and re-injects the value it resolved from the
-        # api-key. That invariant holds solely when the gateway is agent-api's SOLE ingress. Today the
-        # terminal / host-local clients reach agent-api directly (no gateway hop), so on the direct edge
-        # this header is spoofable — restricted-mode invites are NOT a security boundary until agent-api
-        # is gateway-fronted (Stage 4). VEXA_REQUIRE_GATEWAY_IDENTITY (checked in subject_of) lets a
-        # hardened deploy reject non-gateway callers. See the TOPOLOGY BOUNDARY note in create_app.
+        # SECURITY BOUNDARY: X-User-Email is the caller's VERIFIED email because agent-api's identity
+        # door (identity.v1, see the TOPOLOGY BOUNDARY note in create_app) rebuilds every x-user-*
+        # header from the gateway's signature — the address identity resolved — or believes it from
+        # the internal tier only. Restricted-mode invites rest on that.
         subject_email = request.headers.get("x-user-email")
         # Resolve which shared workspace this token belongs to by hash (never trust a client-declared
         # id) — through `find_invite`, the SAME resolver `invites/preview` uses. It used to be a second

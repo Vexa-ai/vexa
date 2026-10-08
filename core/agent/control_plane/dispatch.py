@@ -645,6 +645,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # scope combination), and it is logged rather than swallowed — an unauthenticated worker that was
     # supposed to be authenticated looks, from the chat, exactly like an MCP with nothing to say.
     mcp_secret = settings.mcp_delegation_secret.get_secret_value()
+    if not (mcp_secret and settings.mcp_url):
+        logger.warning("worker toolbelt not configured (worker_toolbelt: %s) — subject=%s's worker "
+                       "runs without vexa tools", ", ".join(n for n, v in (
+                           ("no endpoint, VEXA_MCP_URL unset", settings.mcp_url),
+                           ("no signing key, VEXA_MCP_DELEGATION_SECRET unset", mcp_secret)) if not v),
+                       subject)
     if mcp_secret and settings.mcp_url:
         regime = delegation.regime_for_trigger(invocation["trigger"])
         # Human ⇒ "*" (soft focus over the subject's own account). Autonomous ⇒ the granted workspace
