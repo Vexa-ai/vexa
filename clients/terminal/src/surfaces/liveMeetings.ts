@@ -9,7 +9,7 @@ import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 
 /** A row from meeting-api GET /meetings (live AND past). */
-interface MeetingRowDTO {
+export interface MeetingRowDTO {
   id: number | string;
   platform: string;
   native_meeting_id: string | null;   // null on a link-less PLANNED meeting (platform 'unknown')
@@ -32,9 +32,19 @@ interface MeetingRowDTO {
     constructed_meeting_url?: string;
     attendees?: { email: string; name?: string; partstat?: string }[];
     // stamped by meeting-api when the owner deletes the meeting's transcript and recordings; the
-    // row itself is kept as history
-    artifact_deletion?: { state?: string } | null;
+    // row itself is kept as history. Its shape is api.v1's `ArtifactDeletion`
+    // (core/gateway/contracts/api.v1), and `artifactsDeleted` below is its one reader here.
+    artifact_deletion?: { state: "pending" | "completed"; [extra: string]: unknown } | null;
   } | null;
+}
+
+/** Has the owner deleted (or is deleting) this meeting's transcript and recordings? The api.v1
+ *  `MeetingResponse.data.artifact_deletion` stamp, in either of its states, says so; its tests read
+ *  the contract's own goldens, so a reshape of that field fails here rather than silently showing a
+ *  deleted meeting as one with a transcript. */
+export function artifactsDeleted(d: Pick<MeetingRowDTO, "data">): boolean {
+  const stamp = d.data?.artifact_deletion;
+  return !!stamp && typeof stamp === "object";
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped
@@ -149,7 +159,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
-    artifacts_deleted: !!d.data?.artifact_deletion,
+    artifacts_deleted: artifactsDeleted(d),
     participants: [],
     mentioned: [],
     actions: [],

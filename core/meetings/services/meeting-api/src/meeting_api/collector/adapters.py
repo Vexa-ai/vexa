@@ -25,7 +25,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from .ports import RedisBus, TranscriptStore
+from .ports import ARTIFACT_DELETION_FIELD, RedisBus, TranscriptStore, deletion_stamp
 
 log = logging.getLogger("meeting_api.collector.adapters")
 
@@ -1595,13 +1595,9 @@ class SqlAlchemyTranscriptStore:
                 prior and prior.get("state", "completed") == "completed"
             )
             if not already_deleted:
-                data["artifact_deletion"] = {
-                    "state": "pending",
-                    "requested_at": prior.get("requested_at")
-                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "scope": "primary_transcript_recording_and_fixture_storage",
-                    "backup_residuals": "expire_under_deployment_retention_policy",
-                }
+                data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                    "pending", prior=prior,
+                    at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
                 meeting.data = data
                 flag_modified(meeting, "data")
                 await db.commit()
@@ -1632,12 +1628,8 @@ class SqlAlchemyTranscriptStore:
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
                 data.pop(key, None)
-            data["artifact_deletion"] = {
-                "state": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_recording_and_fixture_storage",
-                "backup_residuals": "expire_under_deployment_retention_policy",
-            }
+            data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                "completed", at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()

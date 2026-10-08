@@ -22,6 +22,26 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
+#: The meeting-row field a typed delete of a meeting's transcript and recordings stamps — api.v1's
+#: ``MeetingResponse.data.artifact_deletion`` (schema ``ArtifactDeletion``), which agent-api and the
+#: terminal read to show the meeting as deleted. ``deletion_stamp`` is its one shape.
+ARTIFACT_DELETION_FIELD = "artifact_deletion"
+_DELETION_SCOPE = "primary_transcript_recording_and_fixture_storage"
+_DELETION_BACKUP_RESIDUALS = "expire_under_deployment_retention_policy"
+
+
+def deletion_stamp(state: str, *, at: str, prior: "Optional[dict]" = None) -> dict:
+    """The ``ArtifactDeletion`` value for ``state`` (``pending`` while the delete runs, ``completed``
+    once it is done), at time ``at`` (ISO-8601, Z). A pending stamp keeps the first request time."""
+    if state == "pending":
+        return {"state": "pending", "requested_at": (prior or {}).get("requested_at") or at,
+                "scope": _DELETION_SCOPE, "backup_residuals": _DELETION_BACKUP_RESIDUALS}
+    if state == "completed":
+        return {"state": "completed", "completed_at": at,
+                "scope": _DELETION_SCOPE, "backup_residuals": _DELETION_BACKUP_RESIDUALS}
+    raise ValueError(f"not an ArtifactDeletion state: {state!r}")
+
+
 def erased_meeting_cache_keys(meeting_id) -> tuple[str, ...]:
     """Every Redis key that holds a meeting's transcript, removed when its owner deletes it.
 

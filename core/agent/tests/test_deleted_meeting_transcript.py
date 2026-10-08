@@ -79,3 +79,38 @@ def test_the_live_view_refuses_a_deleted_meeting(tmp_path):
     assert gone.status_code == 410
     # …and a stranger is still refused on access, before deletion is even considered.
     assert client.get(url, headers={"X-User-Id": STRANGER}).status_code == 403
+
+
+# ── the stamp is api.v1's ArtifactDeletion, read through the sealed contract (S12) ──────────────
+
+def _api_v1():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3] / "core" / "gateway" / "contracts" / "api.v1"
+    schema = json.loads((root / "api.schema.json").read_text())
+    goldens = {p.name: json.loads(p.read_text()) for p in sorted((root / "golden").glob("MeetingResponse.*.json"))}
+    return schema, goldens
+
+
+def test_the_field_agent_api_reads_is_the_one_api_v1_declares():
+    from control_plane.api_shared import ARTIFACT_DELETION_FIELD
+    schema, _ = _api_v1()
+    data = next(a for a in schema["components"]["schemas"]["MeetingResponse"]["properties"]["data"]["anyOf"]
+                if a.get("type") == "object")
+    assert data["properties"][ARTIFACT_DELETION_FIELD] == {"$ref": "#/components/schemas/ArtifactDeletion"}
+
+
+def test_every_api_v1_meeting_golden_reads_as_erased_exactly_when_it_carries_the_stamp():
+    _, goldens = _api_v1()
+    assert any((g.get("data") or {}).get("artifact_deletion") for g in goldens.values())
+    for name, row in goldens.items():
+        assert transcript_erased(row) is bool((row.get("data") or {}).get("artifact_deletion")), name
+
+
+def test_every_deletion_state_the_contract_allows_reads_as_erased():
+    schema, _ = _api_v1()
+    states = schema["components"]["schemas"]["ArtifactDeletion"]["properties"]["state"]["enum"]
+    assert set(states) >= {"pending", "completed"}
+    for state in states:
+        assert transcript_erased({"data": {"artifact_deletion": {"state": state}}}), state
+    assert not transcript_erased({"data": {"artifact_deletion": None}})
+    assert not transcript_erased({"data": {"artifact_deletion": "yes"}})

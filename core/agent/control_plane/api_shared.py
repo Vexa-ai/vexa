@@ -1429,14 +1429,22 @@ def _enriched_meeting_focus(focus: dict, rows: "list[dict]") -> dict:
     return merged
 
 
+#: The api.v1 field meeting-api stamps when the owner deletes a meeting's transcript and recordings
+#: (``MeetingResponse.data.artifact_deletion``, schema ``ArtifactDeletion``). Named once; the test of
+#: ``transcript_erased`` reads the sealed contract's own goldens, so a reshape there fails it.
+ARTIFACT_DELETION_FIELD = "artifact_deletion"
+
+
 def transcript_erased(row: "dict | None") -> bool:
     """Whether the owner deleted (or is deleting) this meeting's transcript and recordings.
 
     meeting-api keeps the row after a typed delete — its title, times and status are history the
-    owner asked to keep — and stamps ``data.artifact_deletion`` on it. Every reader of the
-    transcript treats that stamp as "there is no transcript", whatever a cache may still hold."""
+    owner asked to keep — and stamps api.v1's ``ArtifactDeletion`` on ``data.artifact_deletion``, in
+    state ``pending`` while the delete runs and ``completed`` after. Every reader of the transcript
+    treats that stamp, in either state, as "there is no transcript", whatever a cache may still hold."""
     data = row.get("data") if isinstance(row, dict) else None
-    return isinstance(data, dict) and bool(data.get("artifact_deletion"))
+    stamp = data.get(ARTIFACT_DELETION_FIELD) if isinstance(data, dict) else None
+    return isinstance(stamp, dict) and bool(stamp)
 
 
 # The fields a meeting focus may carry into the prompt. Each is a scalar; nothing nested is read.

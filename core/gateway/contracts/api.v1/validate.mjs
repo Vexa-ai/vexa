@@ -75,5 +75,18 @@ for (const f of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
   check(`golden ${f} ≡ ${shape}${validate(data) ? "" : " — " + ajv.errorsText(validate.errors)}`, validate(data));
 }
 
+// ── 5) THE DELETION STAMP — a reshape of data.artifact_deletion must fail here, not in a reader ──
+// agent-api and the terminal both decide "this transcript was deleted" from this one field; they read
+// it by the name and states written here (and their tests read these goldens).
+{
+  const meeting = ajv.getSchema(`${BASE}#/components/schemas/MeetingResponse`);
+  const base = JSON.parse(readFileSync(join(dir, "MeetingResponse.deleted.json"), "utf8"));
+  for (const [why, stamp] of [["an unknown state", { state: "gone" }], ["no state", { scope: "x" }],
+                              ["a stamp that is not an object", true]]) {
+    const body = { ...base, data: { ...base.data, artifact_deletion: stamp } };
+    check(`MeetingResponse refuses data.artifact_deletion with ${why}`, !meeting(body));
+  }
+}
+
 console.log(failed ? `\napi.v1: ${failed} check(s) FAILED` : `\napi.v1: all checks pass (frozen ≡ vexa main api-gateway 1.5.0)`);
 process.exit(failed ? 1 : 0);
