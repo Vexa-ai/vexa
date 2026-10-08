@@ -83,11 +83,12 @@ describe("/api/auth/instance — the login surface's claim-screen switch", () =>
     expect(await res.json()).toEqual({ admin_exists: false });
   });
 
-  it("a configured allowlist counts as an existing admin", async () => {
+  it("is admin-api's answer alone — an admin list in the terminal's environment is not consulted", async () => {
+    // admin-api counts its own VEXA_ADMIN_EMAILS as admins; the terminal has no list to add.
     process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
     stubAdminApi({ adminExists: false });
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: true });
+    expect(await res.json()).toEqual({ admin_exists: false });
   });
 
   it("probe unreachable → fails safe to plain sign-in", async () => {
@@ -121,11 +122,12 @@ describe("first sign-in claims the admin role", () => {
     expect(JSON.parse(claim!.body || "{}")).toEqual({ user_id: 7 });
   });
 
-  it("allowlist-run instance → claim machinery stays off", async () => {
+  it("whether the claim lands is admin-api's answer, whatever the terminal's environment says", async () => {
     process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
     const calls = stubAdminApi({ adminExists: true });
     const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
     expect(res.status).toBe(200);
-    expect(calls.some((c) => c.url.includes("/internal/bootstrap-admin"))).toBe(false);
+    // asked, and told no: the decision is upstream
+    expect(calls.some((c) => c.url.includes("/internal/bootstrap-admin"))).toBe(true);
   });
 });

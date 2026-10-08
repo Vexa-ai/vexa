@@ -136,6 +136,11 @@ services:
       # admin exists. The admin can add more in the terminal's Settings → Sign-in; the effective list
       # is both. See .env.example.
       - VEXA_SIGNIN_ALLOW=${VEXA_SIGNIN_ALLOW:-}
+      # The administrators, comma-separated exact addresses. They may always sign in, they are the
+      # admins (the terminal's admin panel included), and naming them closes the admin claim. Set it
+      # before first boot whenever the terminal is reachable from outside. Read by admin-api only:
+      # the terminal asks admin-api who may sign in and who is an admin, and holds no list itself.
+      - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
       # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
       # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
       # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —
@@ -1088,13 +1093,6 @@ services:
       - VEXA_API_URL=http://gateway:8000
       - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-}
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
-      # Hidden admin panel (/api/admin/*): comma-separated email allowlist — EMPTY = the panel is off
-      # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
-      # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
-      # Setting it also turns OFF the first-sign-in admin claim: while no admin is claimed, ANY
-      # address may sign in (that sign-in becomes the admin). Set it before first boot whenever the
-      # terminal is reachable from outside.
-      - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
       # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
       # every service that REFUSES it at boot; these two lines kept it, so an unconfigured stack
       # still PRESENTED the published literal as internal-tier authority. Unset is unset (A19).

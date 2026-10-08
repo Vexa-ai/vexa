@@ -79,7 +79,6 @@ beforeEach(() => {
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");
-  vi.stubEnv("VEXA_ADMIN_EMAILS", "admin@example.com");
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");
   vi.stubEnv("AGENT_API_URL", "http://agent.test");
   vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");

@@ -662,4 +662,21 @@ for k in AWS_DEFAULT_REGION AWS_CA_BUNDLE AWS_PROFILE AWS_SHARED_CREDENTIALS_FIL
     -f "$CHART/values-test.yaml" --set "meetingApi.extraEnv[0].name=$k" --set 'meetingApi.extraEnv[0].value=override'
 done
 
+# The admin list is admin-api's (VEXA_ADMIN_EMAILS); an install that still sets it in the terminal's
+# extraEnv, as this chart once said to, keeps its admins on upgrade.
+admin_emails() {  # admin_emails <helm args...> → the value admin-api's VEXA_ADMIN_EMAILS renders to
+  helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "$@" \
+    | awk '/name: vexa-vexa-admin-api$/{d=1} d && /name: VEXA_ADMIN_EMAILS/{getline; print; exit}' \
+    | sed -E 's/.*value: "?([^"]*)"?/\1/'
+}
+check_admins() {  # check_admins <label> <want> <helm args...>
+  local label="$1" want="$2" got; shift 2
+  got="$(admin_emails "$@")"
+  if [ "$got" = "$want" ]; then echo "  OK: $label"; else echo "  FAIL: $label — want '$want' got '$got'"; fail=1; fi
+}
+check_admins "adminApi.adminEmails reaches admin-api" "a@example.com" --set adminApi.adminEmails=a@example.com
+check_admins "terminal.extraEnv VEXA_ADMIN_EMAILS is carried over to admin-api" "old@example.com" \
+  --set 'terminal.extraEnv[0].name=VEXA_ADMIN_EMAILS' --set 'terminal.extraEnv[0].value=old@example.com'
+check_admins "unset is empty" ""
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

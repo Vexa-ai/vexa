@@ -2,9 +2,10 @@
 
 Removing the company-layer gate removed the only thing that controlled who could sign in: every
 terminal door ends in find-or-create, so anybody who could finish one got an account, an API token,
-agent turns and bot launches. The rule now: an EXISTING user, an ADMIN, or an address on the
-allow-list (`VEXA_SIGNIN_ALLOW` + the admin-edited `signin.allow` setting) — and anybody while no
-admin has been claimed, because that sign-in is the claim.
+agent turns and bot launches. The rule now: an EXISTING user, an ADMIN (claimed, or named by
+`VEXA_ADMIN_EMAILS`), or an address on the allow-list (`VEXA_SIGNIN_ALLOW` + the admin-edited
+`signin.allow` setting) — and, on an instance nobody has claimed and nothing has been configured for,
+the next sign-in, because that sign-in is the claim. Who may CLAIM is decided here too.
 
 Offline, no docker: the rule is pure (`app/signin_allow.py`), and the two doors are driven through
 the real FastAPI app with the DB dependency replaced by an in-memory double that answers exactly the
@@ -28,10 +29,10 @@ ADMIN = "admin-token-for-the-signin-test"
 
 # ── the rule, pure ──────────────────────────────────────────────────────────────────────────────
 
-def _decide(email, *, users=(), admins=(), admin_exists=True, allow=()):
+def _decide(email, *, users=(), admins=(), admin_exists=True, allow=(), admin_emails=()):
     e = email.lower()
     return sa.decide(email, user_exists=e in users or e in admins, is_admin=e in admins,
-                     admin_exists=admin_exists, allow=allow)
+                     admin_claimed=admin_exists, allow=allow, admins=admin_emails)
 
 
 def test_an_unknown_address_is_refused_once_an_admin_exists():
@@ -68,6 +69,54 @@ def test_an_exact_entry_admits_that_address_only():
 
 def test_an_unclaimed_instance_admits_anybody_because_that_sign_in_is_the_claim():
     assert _decide("first@anywhere.net", admin_exists=False) == (True, sa.WHY_UNCLAIMED)
+
+
+def test_an_address_in_admin_emails_is_admitted_as_an_admin():
+    assert _decide("owner@example.com", admin_emails=["owner@example.com"]) == (True, sa.WHY_ADMIN_EMAIL)
+    assert _decide("Owner@Example.com", admin_emails=["owner@example.com"]) == (True, sa.WHY_ADMIN_EMAIL)
+
+
+def test_a_configured_admin_list_closes_the_unclaimed_door():
+    """VEXA_ADMIN_EMAILS names the admins: a stranger on an unclaimed instance is refused."""
+    assert _decide("stranger@anywhere.net", admin_exists=False,
+                   admin_emails=["owner@example.com"]) == (False, sa.WHY_NOT_ALLOWED)
+
+
+def test_a_configured_allow_list_closes_the_unclaimed_door():
+    """VEXA_SIGNIN_ALLOW (or the settings half) is set: only those addresses, claimed or not."""
+    assert _decide("stranger@anywhere.net", admin_exists=False,
+                   allow=["@oenb.at"]) == (False, sa.WHY_NOT_ALLOWED)
+    assert _decide("anna@oenb.at", admin_exists=False, allow=["@oenb.at"]) == (True, sa.WHY_ALLOW_LIST)
+
+
+def test_who_may_claim_the_admin_role():
+    # nothing configured, nobody claimed: the claim is open
+    assert sa.may_claim("first@anywhere.net", admin_claimed=False, allow=[]) == (True, sa.CLAIMED)
+    # somebody holds it
+    assert sa.may_claim("first@anywhere.net", admin_claimed=True, allow=[]) == (False, sa.CLAIM_ADMIN_EXISTS)
+    # VEXA_ADMIN_EMAILS names the admins: nobody claims, not even an allowed address
+    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"],
+                        admins=["owner@example.com"]) == (False, sa.CLAIM_ADMIN_EXISTS)
+    # an allow-list is configured: only an address on it
+    assert sa.may_claim("stranger@anywhere.net", admin_claimed=False,
+                        allow=["@oenb.at"]) == (False, sa.CLAIM_NOT_ALLOWED)
+    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"]) == (True, sa.CLAIMED)
+
+
+def test_the_admin_test_is_the_claimed_role_or_the_named_list():
+    assert sa.is_admin("boss@example.com", {"is_admin": True}, []) is True
+    assert sa.is_admin("Owner@Example.com", {}, ["owner@example.com"]) is True
+    assert sa.is_admin("member@example.com", {}, ["owner@example.com"]) is False
+    assert sa.is_admin("member@example.com", None, []) is False
+
+
+def test_admin_emails_are_addresses_never_domains(monkeypatch):
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", " Owner@Example.com, @example.com, not-an-address ")
+    valid, problems = sa.admin_emails()
+    assert valid == ["owner@example.com"]
+    assert len(problems) == 2 and any("@example.com" in p and "domain" in p for p in problems)
+    monkeypatch.delenv("VEXA_ADMIN_EMAILS")
+    assert sa.admin_emails() == ([], [])
 
 
 def test_a_non_address_is_refused_even_on_an_unclaimed_instance():
@@ -125,34 +174,47 @@ class _Result:
     def first(self):
         return self._rows[0] if self._rows else None
 
+    def scalar_one_or_none(self):
+        return self.first()
+
 
 class FakeDB:
     """Answers the admission's three reads, and holds platform_settings rows for the settings door."""
 
     def __init__(self, *, users=(), admins=(), admin_exists=True, signin_allow=""):
-        self.users = {u: SimpleNamespace(email=u, data={}) for u in users}
+        self.users = {u: SimpleNamespace(id=i, email=u, data={}) for i, u in enumerate(users, 1)}
         for a in admins:
-            self.users[a] = SimpleNamespace(email=a, data={"is_admin": True})
+            self.users[a] = SimpleNamespace(id=len(self.users) + 1, email=a, data={"is_admin": True})
         self.admin_exists = admin_exists or bool(admins)
         self.rows = {}
         if signin_allow:
             self.rows["signin"] = SimpleNamespace(key="signin", value={"allow": signin_allow})
         self.asked_admin_exists = 0
 
-    async def execute(self, stmt):
+    async def execute(self, stmt, params=None):
+        if not hasattr(stmt, "selected_columns"):          # the claim's advisory lock
+            return _Result([])
         if len(stmt.selected_columns) == 1:                 # _admin_exists: select(User.id)…
             self.asked_admin_exists += 1
             return _Result([(1,)] if self.admin_exists else [])
         params = stmt.compile(dialect=postgresql.dialect()).params
+        uid = next((v for v in params.values() if isinstance(v, int) and not isinstance(v, bool)), None)
+        if uid is not None and not any(isinstance(v, str) for v in params.values()):   # _load_user
+            user = next((u for u in self.users.values() if u.id == uid), None)
+            return _Result([user] if user else [])
         email = next((v for v in params.values() if isinstance(v, str)), "")
         user = self.users.get(email)
         return _Result([user] if user else [])
+
 
     async def get(self, _model, key):
         return self.rows.get(key)
 
     def add(self, row):
-        self.rows[row.key] = row
+        if hasattr(row, "key"):                              # a platform_settings row
+            self.rows[row.key] = row
+        elif isinstance(getattr(row, "data", None), dict) and row.data.get("is_admin") is True:
+            self.admin_exists = True                         # a user row the claim just promoted
 
     async def commit(self):
         pass
@@ -164,6 +226,7 @@ def make_client(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
     monkeypatch.setenv("DEV_MODE", "false")
     monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
+    monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
     clients = []
 
     def _make(db: FakeDB) -> TestClient:
@@ -212,6 +275,63 @@ def test_admission_on_an_unclaimed_instance_admits_the_claim(make_client):
     assert _ask(make_client(db), "first@anywhere.net").json() == \
         {"admitted": True, "why": "unclaimed-instance"}
     assert db.asked_admin_exists == 1
+
+
+def test_admission_admits_an_address_the_deployment_names_as_admin(make_client, monkeypatch):
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "Owner@Example.com")
+    assert _ask(make_client(FakeDB()), "owner@example.com").json() == {"admitted": True, "why": "admin-email"}
+
+
+def test_admission_on_an_unclaimed_instance_with_an_allow_list_admits_only_the_list(make_client, monkeypatch):
+    """The security requirement on #1784: a configured list closes the unclaimed door."""
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
+    c = make_client(FakeDB(admin_exists=False))
+    assert _ask(c, "stranger@anywhere.net").json() == {"admitted": False, "why": "not-allowed"}
+    assert _ask(c, "anna@oenb.at").json() == {"admitted": True, "why": "allow-list"}
+
+
+def test_admission_on_an_unclaimed_instance_with_admin_emails_admits_only_them(make_client, monkeypatch):
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "owner@example.com")
+    c = make_client(FakeDB(admin_exists=False))
+    assert _ask(c, "stranger@anywhere.net").json() == {"admitted": False, "why": "not-allowed"}
+    assert _ask(c, "owner@example.com").json() == {"admitted": True, "why": "admin-email"}
+
+
+def test_the_instance_has_an_admin_when_the_deployment_names_one(make_client, monkeypatch):
+    c = make_client(FakeDB(admin_exists=False))
+    headers = {"X-Internal-Secret": SECRET}
+    assert c.get("/internal/instance", headers=headers).json() == {"admin_exists": False}
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "owner@example.com")
+    assert c.get("/internal/instance", headers=headers).json() == {"admin_exists": True}
+
+
+@pytest.fixture()
+def plain_rows(monkeypatch):
+    """The claim flags its JSONB column modified; the fake's rows are plain objects."""
+    from sqlalchemy.orm import attributes
+    monkeypatch.setattr(attributes, "flag_modified", lambda *_a, **_k: None)
+
+
+def _claim(client, user_id):
+    return client.post("/internal/bootstrap-admin", headers={"X-Internal-Secret": SECRET},
+                       json={"user_id": user_id}).json()
+
+
+def test_the_claim_is_decided_here_with_the_same_lists(make_client, monkeypatch, plain_rows):
+    db = FakeDB(users={"stranger@anywhere.net", "anna@oenb.at"}, admin_exists=False)
+    c = make_client(db)
+    ids = {u.email: u.id for u in db.users.values()}
+    # an allow-list is configured: the first admin is one of its people
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
+    assert _claim(c, ids["stranger@anywhere.net"]) == \
+        {"claimed": False, "admin_exists": False, "why": "not-allowed"}
+    # VEXA_ADMIN_EMAILS names the admins: nobody claims
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "owner@example.com")
+    assert _claim(c, ids["anna@oenb.at"]) == {"claimed": False, "admin_exists": True, "why": "admin-exists"}
+    monkeypatch.delenv("VEXA_ADMIN_EMAILS")
+    r = _claim(c, ids["anna@oenb.at"])
+    assert r == {"claimed": True, "admin_exists": True, "why": "claimed"}
+    assert db.users["anna@oenb.at"].data == {"is_admin": True}
 
 
 def test_admission_does_not_ask_about_the_admin_when_the_answer_is_already_yes(make_client):

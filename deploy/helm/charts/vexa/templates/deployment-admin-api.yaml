@@ -67,6 +67,8 @@ spec:
               value: {{ .Values.adminApi.logLevel | default "info" | quote }}
             - name: VEXA_SIGNIN_ALLOW
               value: {{ .Values.adminApi.signinAllow | default "" | quote }}
+            - name: VEXA_ADMIN_EMAILS
+              value: {{ include "vexa.adminEmails" . | quote }}
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

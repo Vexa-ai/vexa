@@ -18,11 +18,12 @@ Two doors, and no third:
   client driven by `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` (+ optional `SMTP_USER`/`SMTP_PASS`,
   `SMTP_SECURE`).
 
-**Who may sign in** (Vexa-ai/vexa#1783). Every door admits only an existing user of this instance,
-an admin (the claimed one, or an address in `VEXA_ADMIN_EMAILS`), or an address on the sign-in
-allow-list — admin-api's `VEXA_SIGNIN_ALLOW` plus the `signin.allow` setting the admin edits under
-Settings → Sign-in — and, while no admin has been claimed (and `VEXA_ADMIN_EMAILS` is empty),
-anybody, because that sign-in is the claim. `signinAdmission` in `adminApi.ts` asks admin-api
+**Who may sign in** (Vexa-ai/vexa#1783) is decided by admin-api alone; this process holds no list.
+Every door admits only an existing user of this instance, an admin (the claimed one, or an address in
+admin-api's `VEXA_ADMIN_EMAILS`), or an address on the sign-in allow-list — admin-api's
+`VEXA_SIGNIN_ALLOW` plus the `signin.allow` setting the admin edits under Settings → Sign-in — and,
+while no admin has been claimed and neither list is configured, the sign-in that claims the
+instance. Who may claim is admin-api's answer too. `signinAdmission` in `adminApi.ts` asks admin-api
 (`POST /internal/signin-admission`) and **fails closed**: no answer, a 404 from an older admin-api, or
 anything but a literal `admitted: true` refuses. `findOrCreateUserToken` asks before it can create an
 account, so OAuth, redeem and the dev login cannot skip it; `request-link/` asks before it mails. A

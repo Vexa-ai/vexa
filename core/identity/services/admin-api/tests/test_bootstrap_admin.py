@@ -1,8 +1,9 @@
 """First-run bootstrap admin — /internal/instance + /internal/bootstrap-admin + the is_admin
 surfacing on /internal/validate (the terminal admin gate's input).
 
-Contract (first-run onboarding design, 2026-07-09): a fresh instance has NO admin; the first
-sign-in claims the role exactly once (advisory-lock serialized); later sign-ins never claim.
+Contract (first-run onboarding design, 2026-07-09): a fresh instance has NO admin unless
+VEXA_ADMIN_EMAILS names them; the role is claimed exactly once (advisory-lock serialized), by whoever
+`signin_allow.may_claim` permits; later claims never succeed.
 The role lives in users.data["is_admin"] — no schema migration.
 
 Same testcontainers-PG harness as the other suites (skips without docker).
@@ -31,6 +32,8 @@ def client(pg_url, pg_async_url, monkeypatch):
     monkeypatch.setenv("ADMIN_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
     monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
+    monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
     app_db.configure(pg_async_url)
     with TestClient(create_app()) as c:
         yield c
@@ -64,17 +67,16 @@ def test_first_claim_wins_then_idempotent(client):
 
     # first sign-in claims
     r = client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": a})
-    assert r.status_code == 200 and r.json() == {"claimed": True, "admin_exists": True}
+    assert r.status_code == 200 and r.json() == {"claimed": True, "admin_exists": True, "why": "claimed"}
 
     # instance now has an admin — and that is the whole instance state: there is no company-layer
     # gate to report any more (founder ruling 2026-10-08)
     assert client.get("/internal/instance", headers=_internal()).json() == {"admin_exists": True}
 
     # a later user never claims; the admin re-claiming is a harmless no-op
-    assert client.post("/internal/bootstrap-admin", headers=_internal(),
-                       json={"user_id": b}).json() == {"claimed": False, "admin_exists": True}
-    assert client.post("/internal/bootstrap-admin", headers=_internal(),
-                       json={"user_id": a}).json() == {"claimed": False, "admin_exists": True}
+    later = {"claimed": False, "admin_exists": True, "why": "admin-exists"}
+    assert client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": b}).json() == later
+    assert client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": a}).json() == later
 
 
 def test_bootstrap_unknown_user_404(client):
@@ -130,20 +132,30 @@ def test_the_gate_doors_are_gone(client):
 
 
 def test_signin_admission_against_real_postgres(client, monkeypatch):
-    """Vexa-ai/vexa#1783, end to end on a real schema: while no admin exists anybody is admitted
-    (that sign-in is the claim); once the claim lands, a stranger is refused, the admin and every
-    existing user are admitted, and the allow-list (env + settings row) admits the rest. The
-    offline twin of this is tests/test_signin_allow.py."""
+    """Vexa-ai/vexa#1783, end to end on a real schema: while no admin exists and nothing is
+    configured, the next sign-in is admitted (it is the claim); a configured allow-list closes that
+    door; once the claim lands, a stranger is refused, the admin and every existing user are
+    admitted, and the allow-list (env + settings row) admits the rest. The offline twin of this is
+    tests/test_signin_allow.py."""
     def ask(email):
         return client.post("/internal/signin-admission", headers=_internal(),
                            json={"email": email}).json()
 
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
+    monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
+    monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
     assert ask("first@anywhere.net") == {"admitted": True, "why": "unclaimed-instance"}
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
+    assert ask("first@anywhere.net") == {"admitted": False, "why": "not-allowed"}
 
     boss = _mk_user(client, "boss-test@vexa.ai")
     _mk_user(client, "Member-Test@vexa.ai")
+    # with the allow-list in force, an address not on it may not be the first admin…
+    assert client.post("/internal/bootstrap-admin", headers=_internal(),
+                       json={"user_id": boss}).json()["why"] == "not-allowed"
+    # …and with it lifted, the claim lands
+    monkeypatch.delenv("VEXA_SIGNIN_ALLOW")
     client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": boss})
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
 
     assert ask("stranger@anywhere.net") == {"admitted": False, "why": "not-allowed"}
     assert ask("BOSS-test@vexa.ai") == {"admitted": True, "why": "admin"}
@@ -174,6 +186,21 @@ def test_release_admin_hands_the_instance_back_to_first_run(client):
     # ...and the next sign-in can claim again.
     assert client.post("/internal/bootstrap-admin", headers=_internal(),
                        json={"user_id": uid}).json()["claimed"] is True
+
+
+def test_the_admins_the_deployment_names_are_admins_and_close_the_claim(client, monkeypatch):
+    """VEXA_ADMIN_EMAILS is read HERE (the terminal holds no list): those addresses are admins on
+    /internal/validate and the role oracle, the instance has an admin, and nobody can claim."""
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "Owner-Test@vexa.ai")
+    owner = _mk_user(client, "owner-test@vexa.ai")
+    other = _mk_user(client, "other-test@vexa.ai")
+    tok = client.post(f"/admin/users/{owner}/tokens?scopes=bot", headers=_admin()).json()["token"]
+    assert client.post("/internal/validate", headers=_internal(), json={"token": tok}).json()["is_admin"] is True
+    assert client.get(f"/internal/users/{owner}/is-admin", headers=_internal()).json()["is_admin"] is True
+    assert client.get(f"/internal/users/{other}/is-admin", headers=_internal()).json()["is_admin"] is False
+    assert client.get("/internal/instance", headers=_internal()).json() == {"admin_exists": True}
+    assert client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": other}).json() == \
+        {"claimed": False, "admin_exists": True, "why": "admin-exists"}
 
 
 def test_instance_routes_are_internal_tier(client):

@@ -16,8 +16,9 @@ import { GET as meRoute } from "../admin/me/route";
 import { GET as overviewRoute } from "../admin/overview/route";
 import { POST as probeRoute } from "../admin/probe/route";
 
-/** A fake admin-api /internal/validate: token "admin-tok" → dmitry (allowlisted), "user-tok" → bob,
- *  "role-tok" → carol (DB-backed is_admin role, NOT allowlisted). */
+/** A fake admin-api /internal/validate: token "admin-tok" → dmitry (an admin admin-api names from its
+ *  own VEXA_ADMIN_EMAILS, so `is_admin: true`), "user-tok" → bob, "role-tok" → carol (the claimed
+ *  role). admin-api answers `is_admin` for both kinds; the terminal holds no list. */
 function stubValidate() {
   const calls: { url: string; secret?: string; body?: string }[] = [];
   vi.stubGlobal(
@@ -30,7 +31,7 @@ function stubValidate() {
       });
       if (url.includes("/internal/validate")) {
         const { token } = JSON.parse((init?.body as string) || "{}");
-        if (token === "admin-tok") return new Response(JSON.stringify({ user_id: 1, email: "dmitry@vexa.ai" }), { status: 200 });
+        if (token === "admin-tok") return new Response(JSON.stringify({ user_id: 1, email: "Dmitry@Vexa.ai", is_admin: true }), { status: 200 });
         if (token === "user-tok") return new Response(JSON.stringify({ user_id: 2, email: "bob@example.com" }), { status: 200 });
         if (token === "role-tok") return new Response(JSON.stringify({ user_id: 3, email: "carol@example.com", is_admin: true }), { status: 200 });
         return new Response("Invalid token", { status: 401 });
@@ -51,7 +52,6 @@ beforeEach(() => {
   cookieJar = {};
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_INTERNAL_API_SECRET = "internal-secret";
-  process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai, Other@Vexa.ai";
   process.env.AGENT_API_URL = "http://agent.test";
 });
 
@@ -61,8 +61,8 @@ afterEach(() => {
   delete process.env.VEXA_ADMIN_EMAILS;
 });
 
-describe("admin gate — verified allowlist, fail-closed", () => {
-  it("allowlisted admin passes with the VALIDATED email (case-insensitive)", async () => {
+describe("admin gate — admin-api's verified answer, fail-closed", () => {
+  it("an admin passes with the VALIDATED email (lower-cased)", async () => {
     cookieJar = { "vexa-token": "admin-tok" };
     const calls = stubValidate();
     const admin = await requireAdmin();
@@ -76,15 +76,14 @@ describe("admin gate — verified allowlist, fail-closed", () => {
     expect(await requireAdmin()).toBeNull();
   });
 
-  it("no allowlist configured → closed for a validated NON-role user", async () => {
-    delete process.env.VEXA_ADMIN_EMAILS;
-    cookieJar = { "vexa-token": "admin-tok" }; // validated email, but no is_admin and no allowlist
+  it("VEXA_ADMIN_EMAILS in the TERMINAL's environment grants nothing — the list is admin-api's", async () => {
+    process.env.VEXA_ADMIN_EMAILS = "bob@example.com";
+    cookieJar = { "vexa-token": "user-tok" }; // validated as bob, and admin-api says not an admin
     stubValidate();
     expect(await requireAdmin()).toBeNull();
   });
 
-  it("DB-backed is_admin role passes WITHOUT an allowlist (bootstrap-claimed admin)", async () => {
-    delete process.env.VEXA_ADMIN_EMAILS;
+  it("the claimed role passes", async () => {
     cookieJar = { "vexa-token": "role-tok" };
     stubValidate();
     const admin = await requireAdmin();

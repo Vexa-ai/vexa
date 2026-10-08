@@ -67,8 +67,18 @@ export async function POST() {
     );
   }
 
-  // `claimed:false` means admin-api's lock handed the role to somebody else between our check and
-  // our write. That is not an error for this user's PAGE — an admin exists either way and the
+  // admin-api decides who may claim (signin_allow.may_claim). On an instance with an allow-list, an
+  // address that is not on it may not be its first administrator.
+  if (!claimed.claimed && claimed.why === "not-allowed") {
+    console.info(`[terminal-auth] admin claim refused for user ${who.userId}: not on the sign-in allow-list`);
+    return NextResponse.json(
+      { error: "This address may not claim this instance." },
+      { status: 403, headers: NO_STORE },
+    );
+  }
+
+  // `claimed:false` otherwise means admin-api's lock handed the role to somebody else between our
+  // check and our write. That is not an error for this user's PAGE — an admin exists either way and the
   // reload puts them on the correct screen — but it is not the same event, so it is not reported
   // as one.
   console.info(`[terminal-auth] admin claim by user ${who.userId} (${who.email}): claimed=${claimed.claimed}`);

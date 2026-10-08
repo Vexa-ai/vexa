@@ -45,7 +45,6 @@ beforeEach(() => {
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");
   vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");
-  vi.stubEnv("VEXA_ADMIN_EMAILS", "admin@example.com"); // allowlist → bootstrap claim stays off
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");
 });
 

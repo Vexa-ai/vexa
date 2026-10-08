@@ -474,17 +474,18 @@ the effective list is both:
 ```yaml
 adminApi:
   signinAllow: "@example.com,alice@example.org"
-terminal:
-  extraEnv:
-    - name: VEXA_ADMIN_EMAILS              # set BEFORE the first install — see the warning
-      value: "admin@example.com"
+  adminEmails: "admin@example.com"   # set BEFORE the first install — see the warning
 ```
+
+admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
+`VEXA_ADMIN_EMAILS` under `terminal.extraEnv` keeps working: the chart carries it over to admin-api
+while `adminApi.adminEmails` is empty.
 
 <Warning>
 **Until an admin is claimed, anybody may sign in, and the first sign-in becomes the admin.** If the
 Ingress makes the Terminal reachable before you have signed in yourself, a stranger can claim it.
-Name the admins in `VEXA_ADMIN_EMAILS` on the Terminal before the first install: that turns the
-first-sign-in claim off.
+Name the admins in `adminApi.adminEmails` before the first install: that turns the claim off. A
+non-empty `adminApi.signinAllow` also narrows it: only an address on the list may sign in or claim.
 </Warning>
 
 <Note>

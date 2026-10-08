@@ -981,9 +981,9 @@ def create_app() -> FastAPI:
             "scopes": scopes,
             "max_concurrent": user.max_concurrent_bots,
             "email": user.email,
-            # DB-backed admin role (bootstrap-claimed on a fresh instance) — the terminal's
-            # admin gate reads THIS, with its VEXA_ADMIN_EMAILS allowlist kept as an override.
-            "is_admin": (user.data or {}).get("is_admin") is True if isinstance(user.data, dict) else False,
+            # THE admin test (signin_allow.is_admin): the claimed role on the row, or an address in
+            # VEXA_ADMIN_EMAILS. The terminal's admin gate reads this and holds no list of its own.
+            "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0]),
         }
         data_blob = user.data if isinstance(user.data, dict) else {}
         if data_blob.get("webhook_url"):
@@ -1056,23 +1056,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
         return user
 
-    # --- internal tier: instance identity — admin existence + the first-sign-in admin claim.
-    #     A fresh install has NO admin; the login surface (via the terminal, which fronts this
-    #     edge) shows a one-time "set up your instance" claim screen, and the first successful
-    #     sign-in becomes the admin. The claim is race-safe: a pg advisory xact lock serializes
-    #     concurrent first sign-ins so exactly ONE claims the role. ---
+    # --- internal tier: instance identity — admin existence + the admin claim.
+    #     A fresh install has NO admin unless VEXA_ADMIN_EMAILS names them; the login surface (via
+    #     the terminal, which fronts this edge) shows a one-time "set up your instance" claim
+    #     screen. Who may claim is `signin_allow.may_claim`, decided here and nowhere else. The claim
+    #     is race-safe: a pg advisory xact lock serializes concurrent claims so exactly ONE wins. ---
     _BOOTSTRAP_ADMIN_LOCK = 0x5EC4_AD31  # arbitrary app-wide advisory-lock key for the claim
 
     async def _admin_exists(db: AsyncSession) -> bool:
+        """Has the admin ROLE been claimed on a user row? (The deployment's VEXA_ADMIN_EMAILS is the
+        other half of "is there an admin"; `_instance_state` joins them.)"""
         row = (await db.execute(
             select(User.id).where(User.data["is_admin"].astext == "true").limit(1)
         )).first()
         return row is not None
 
     async def _instance_state(db: AsyncSession) -> dict:
-        """THE INSTANCE STATE, computed in exactly ONE place: has an admin been claimed? It used to
-        carry the company-layer gate as well; that gate is gone (founder ruling 2026-10-08)."""
-        return {"admin_exists": await _admin_exists(db)}
+        """THE INSTANCE STATE, computed in exactly ONE place: does this instance have an admin — a
+        claimed one, or the addresses VEXA_ADMIN_EMAILS names? It used to carry the company-layer
+        gate as well; that gate is gone (founder ruling 2026-10-08)."""
+        admins, _ = signin_allow.admin_emails()
+        return {"admin_exists": bool(admins) or await _admin_exists(db)}
+
+    async def _effective_allow(db: AsyncSession) -> list:
+        """The sign-in allow-list in force: VEXA_SIGNIN_ALLOW plus the admin-edited `signin` row."""
+        env_valid, _ = signin_allow.env_entries()
+        return signin_allow.effective(
+            env_valid,
+            (await _platform_setting(signin_allow.SETTING_KEY, db)).get(signin_allow.SETTING_FIELD, ""))
 
     @app.get("/internal/instance", include_in_schema=False)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
@@ -1090,9 +1101,13 @@ def create_app() -> FastAPI:
     @app.post("/internal/bootstrap-admin", include_in_schema=False)
     async def bootstrap_admin(payload: dict, request: Request,
                               db: AsyncSession = Depends(get_db)):
-        """Claim the admin role for `user_id` IF no admin exists yet. Idempotent and race-safe:
-        under the advisory lock the first caller claims, every later caller gets claimed=False.
-        A user who already IS the admin re-claims harmlessly (claimed=False, admin_exists=True)."""
+        """Claim the admin role for `user_id` IF `signin_allow.may_claim` allows it. Idempotent and
+        race-safe: under the advisory lock the first permitted caller claims, every later caller gets
+        claimed=False. A user who already IS the admin re-claims harmlessly.
+
+        Answers {"claimed", "admin_exists", "why"}; `why` is `claimed`, `admin-exists` (somebody
+        holds the role, or VEXA_ADMIN_EMAILS names the admins) or `not-allowed` (an allow-list is
+        configured and this address is not on it)."""
         from sqlalchemy import text as sa_text
         from sqlalchemy.orm import attributes
 
@@ -1104,23 +1119,29 @@ def create_app() -> FastAPI:
         )
         await db.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"),
                          {"key": _BOOTSTRAP_ADMIN_LOCK})
-        if await _admin_exists(db):
-            return {"claimed": False, "admin_exists": True}
+        admins, _ = signin_allow.admin_emails()
+        claimed_already = await _admin_exists(db)
+        allowed, why = signin_allow.may_claim(
+            user.email, admin_claimed=claimed_already, admins=admins,
+            allow=await _effective_allow(db))
+        if not allowed:
+            return {"claimed": False, "admin_exists": claimed_already or bool(admins), "why": why}
         data = dict(user.data or {})
         data["is_admin"] = True
         user.data = data
         attributes.flag_modified(user, "data")
         db.add(user)
         await db.commit()
-        return {"claimed": True, "admin_exists": True}
+        return {"claimed": True, "admin_exists": True, "why": why}
 
     @app.post("/internal/signin-admission", include_in_schema=False)
     async def signin_admission(payload: dict, request: Request,
                                db: AsyncSession = Depends(get_db)):
         """MAY THIS ADDRESS SIGN IN? Asked by every terminal sign-in door BEFORE anything is created
         or sent (Vexa-ai/vexa#1783). Decided here because this service owns every input: the user
-        rows, the claimed admin, the `signin` settings row, and the VEXA_SIGNIN_ALLOW seed. The rule
-        itself is `signin_allow.decide`.
+        rows, the claimed admin, VEXA_ADMIN_EMAILS, the `signin` settings row, and the
+        VEXA_SIGNIN_ALLOW seed. The rule itself is `signin_allow.decide`; the terminal holds no part
+        of it.
 
         Answers {"admitted": bool, "why": str}. The caller must read `admitted` as POSITIVE
         evidence — only a literal true admits — so an older admin-api with no such route (404), an
@@ -1137,17 +1158,15 @@ def create_app() -> FastAPI:
             select(User).where(func.lower(User.email) == email).limit(1)
         )).scalars().first()
         data = user.data if user is not None and isinstance(user.data, dict) else {}
-        env_valid, _ = signin_allow.env_entries()
-        allow = signin_allow.effective(
-            env_valid,
-            (await _platform_setting(signin_allow.SETTING_KEY, db)).get(signin_allow.SETTING_FIELD, ""))
+        admins, _ = signin_allow.admin_emails()
+        allow = await _effective_allow(db)
         admitted, why = signin_allow.decide(
             email,
             user_exists=user is not None,
             is_admin=data.get("is_admin") is True,
-            # Only consulted when nothing else admitted — one query fewer on the common path.
-            admin_exists=True if user is not None or signin_allow.matches(email, allow)
-            else await _admin_exists(db),
+            admins=admins,
+            # Only consulted when nothing else could admit — one query fewer on the common path.
+            admin_claimed=True if (user is not None or admins or allow) else await _admin_exists(db),
             allow=allow,
         )
         return {"admitted": admitted, "why": why}
@@ -1193,8 +1212,8 @@ def create_app() -> FastAPI:
         definition of who may rewrite how every agent in the company behaves."""
         _check_internal(request)
         user = await _load_user(user_id, db)
-        data = user.data if isinstance(user.data, dict) else {}
-        return {"user_id": user.id, "email": user.email, "is_admin": data.get("is_admin") is True}
+        return {"user_id": user.id, "email": user.email,
+                "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])}
 
     @app.post("/internal/release-admin", include_in_schema=False)
     async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
@@ -1215,7 +1234,7 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         return {"user_id": user.id, "email": user.email, "released": had,
-                "admin_exists": await _admin_exists(db)}
+                **(await _instance_state(db))}
 
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):

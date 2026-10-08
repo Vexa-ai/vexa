@@ -203,6 +203,7 @@ cannot be reached, new sign-ins are refused; sessions that already exist are unt
 **Until an admin is claimed, anybody may sign in, and the first sign-in becomes the admin.** If the
 terminal is reachable from outside before you have signed in yourself, a stranger can claim it.
 Set `VEXA_ADMIN_EMAILS` before first boot: it names the admins and turns the first-sign-in claim off.
+A non-empty `VEXA_SIGNIN_ALLOW` narrows it too: only an address on the list may sign in or claim.
 </Warning>
 
 ## No egress

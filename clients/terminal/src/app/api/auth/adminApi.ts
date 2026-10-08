@@ -111,14 +111,10 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
   }
 }
 
-// ── first-run bootstrap admin — a fresh instance has NO admin; the first successful sign-in
-//    claims the role (admin-api serializes concurrent claims). A configured VEXA_ADMIN_EMAILS
-//    allowlist means the instance ALREADY has admins → the claim machinery stays off entirely,
-//    which also keeps existing deployments (allowlist-run) from handing admin to the next login.
-
-function allowlistConfigured(): boolean {
-  return (process.env.VEXA_ADMIN_EMAILS || "").split(",").some((e) => e.trim());
-}
+// ── the admin claim — a fresh instance has NO admin unless the deployment names them; whether a
+//    sign-in may take the role is admin-api's decision (`signin_allow.may_claim`), never this
+//    process's. admin-api serializes concurrent claims and holds every input: the claimed role,
+//    VEXA_ADMIN_EMAILS and the allow-list. The terminal reads none of them.
 
 async function internalRequest<T>(path: string, init: RequestInit = {}): Promise<AdminResult<T>> {
   const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
@@ -165,8 +161,8 @@ export interface InstanceState {
 export async function instanceState(): Promise<InstanceState> {
   const res = await internalRequest<{ admin_exists?: boolean }>("/internal/instance", { method: "GET" });
   if (!res.ok || !res.data) return { admin_exists: true };
-  // A configured allowlist IS a set of admins, so it answers the question on its own.
-  return { admin_exists: allowlistConfigured() || res.data.admin_exists === true };
+  // admin-api counts the addresses VEXA_ADMIN_EMAILS names as admins; this process has no list.
+  return { admin_exists: res.data.admin_exists === true };
 }
 
 /** An arrival as a SERVER record (PRD §5.5): who it is for, which workspaces it mounts, which
@@ -313,27 +309,26 @@ export async function mintFirstVisitScaffold(
 //    turns on this instance's model credentials and bot launches. A self-hosted instance must not
 //    be open to anyone with an email address by default.
 
+/** The admission reasons admin-api answers with. */
+type AdmittedWhy = "admin" | "admin-email" | "existing-user" | "allow-list" | "unclaimed-instance";
+
 /** The verdict on one address. `why` is a reason for logs and tests, never shown to the person. */
 export type SigninAdmission =
-  | { admitted: true; why: "admin-email" | "admin" | "existing-user" | "allow-list" | "unclaimed-instance" }
+  | { admitted: true; why: AdmittedWhy }
   | { admitted: false; why: "not-allowed" | "unavailable"; detail?: string };
 
-const ADMITTED_REASONS = new Set(["admin", "existing-user", "allow-list", "unclaimed-instance"]);
-
-function adminEmails(): string[] {
-  return (process.env.VEXA_ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-}
+const ADMITTED_REASONS: ReadonlySet<string> = new Set<AdmittedWhy>(
+  ["admin", "admin-email", "existing-user", "allow-list", "unclaimed-instance"]);
 
 /** MAY THIS ADDRESS SIGN IN? Every door asks this BEFORE it creates or sends anything — the
  *  emailed link's request and redeem halves, OAuth, the dev login — and the last three ask it
  *  through `findOrCreateUserToken`, so a door added later cannot reach an account without it.
  *
- *  Admitted: an address in `VEXA_ADMIN_EMAILS` (decided here, because this process holds that
- *  list), or whatever admin-api's `POST /internal/signin-admission` admits — an existing user, the
- *  claimed admin, an address on the allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting
- *  the admin edits in Settings), or anybody while no admin has been claimed, because that sign-in
- *  IS the claim. That last reason is refused here when `VEXA_ADMIN_EMAILS` is set, for the same
- *  reason the claim itself is off then: the instance already has its admins.
+ *  THE WHOLE DECISION IS ADMIN-API'S (`POST /internal/signin-admission`, rule in
+ *  `signin_allow.decide`): an admin (claimed, or named by `VEXA_ADMIN_EMAILS`), an existing user, an
+ *  address on the allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting the admin edits in
+ *  Settings), or — on an instance nobody has claimed and nothing has been configured for — the
+ *  sign-in that will claim it. This process asks once and obeys; it holds no list of its own.
  *
  *  ⚠ FAILS CLOSED, the opposite direction from `instanceState()`. An unreachable or unconfigured
  *  admin-api, a non-2xx (an older admin-api has no such route and answers 404), or a body that does
@@ -342,7 +337,6 @@ function adminEmails(): string[] {
  *  new sign-ins and nothing else. */
 export async function signinAdmission(email: string): Promise<SigninAdmission> {
   const normalized = (email || "").trim().toLowerCase();
-  if (adminEmails().includes(normalized)) return { admitted: true, why: "admin-email" };
   const res = await internalRequest<{ admitted?: unknown; why?: unknown }>("/internal/signin-admission", {
     method: "POST",
     body: JSON.stringify({ email: normalized }),
@@ -352,21 +346,15 @@ export async function signinAdmission(email: string): Promise<SigninAdmission> {
   }
   const why = typeof res.data.why === "string" ? res.data.why : "";
   if (res.data.admitted !== true || !ADMITTED_REASONS.has(why)) return { admitted: false, why: "not-allowed" };
-  if (why === "unclaimed-instance" && allowlistConfigured()) return { admitted: false, why: "not-allowed" };
-  return { admitted: true, why: why as "admin" | "existing-user" | "allow-list" | "unclaimed-instance" };
+  return { admitted: true, why: why as AdmittedWhy };
 }
 
-/** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
- *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.
- *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
- *  rather than dangling a claim screen that can't succeed. */
-export async function instanceHasAdmin(): Promise<boolean> {
-  if (allowlistConfigured()) return true;
-  return (await instanceState()).admin_exists;
-}
+/** Why admin-api did or did not hand over the role: `claimed`, `admin-exists` (somebody holds it,
+ *  or the deployment names the admins), `not-allowed` (this address may not be the first admin). */
+export type ClaimWhy = "claimed" | "admin-exists" | "not-allowed";
 
 export type ClaimResult =
-  | { ok: true; claimed: boolean }
+  | { ok: true; claimed: boolean; why: ClaimWhy }
   | { ok: false; status: number; error: string };
 
 /** Ask admin-api to make this user the instance's administrator.
@@ -389,19 +377,25 @@ export type ClaimResult =
  *  Unlike `bootstrapAdminClaim` below, this REPORTS its outcome — a user who pressed a button that
  *  says "claim this instance" is owed the answer, where a background step on a sign-in was not. */
 export async function claimAdminRole(userId: string | number): Promise<ClaimResult> {
-  const res = await internalRequest<{ claimed?: boolean }>("/internal/bootstrap-admin", {
+  const res = await internalRequest<{ claimed?: boolean; why?: unknown }>("/internal/bootstrap-admin", {
     method: "POST",
     body: JSON.stringify({ user_id: userId }),
   });
   if (!res.ok) return { ok: false, status: res.status || 503, error: res.error || "admin-api refused the claim" };
-  return { ok: true, claimed: res.data?.claimed === true };
+  const claimed = res.data?.claimed === true;
+  const why = res.data?.why;
+  return {
+    ok: true,
+    claimed,
+    why: claimed ? "claimed" : why === "not-allowed" ? "not-allowed" : "admin-exists",
+  };
 }
 
-/** Claim the admin role for this user IF the instance has none — the "first sign-in = admin"
- *  step, called on every successful login (admin-api makes it a no-op once an admin exists).
+/** Claim the admin role for this user IF admin-api says this sign-in may — the "first sign-in =
+ *  admin" step, called on every successful login (admin-api answers no once an admin exists, while
+ *  the deployment names the admins, or for an address the allow-list does not hold).
  *  BEST-EFFORT: a failure must never block sign-in; the claim screen simply reappears. */
 async function bootstrapAdminClaim(userId: string | number): Promise<void> {
-  if (allowlistConfigured()) return; // allowlist-run instance → role claims stay off
   const res = await claimAdminRole(userId);
   if (res.ok && res.claimed) {
     console.info(`[terminal-auth] bootstrap: user ${userId} claimed the admin role (first sign-in)`);
@@ -669,9 +663,9 @@ export async function findOrCreateUserToken(
   }
   // Bound the user's login tokens to the newest N (best-effort; never blocks sign-in).
   await pruneLoginTokens(user.id);
-  // First-run bootstrap: on a fresh instance the FIRST successful sign-in claims the admin role
-  // (no-op everywhere else — admin exists, or an allowlist runs the instance). Covers both the
-  // direct email login and the OAuth signIn callback, which both land here.
+  // First-run bootstrap: on a fresh instance the FIRST permitted sign-in claims the admin role
+  // (admin-api says no everywhere else). Covers both the direct email login and the OAuth signIn
+  // callback, which both land here.
   await bootstrapAdminClaim(user.id);
   // On genuine account creation ("account start"), eagerly provision the user's workspace tiers so the
   // Personal baseline + `_system` exist before their first chat. Best-effort (idempotent + lazy fallback).

@@ -39,6 +39,9 @@ export DISPLAY="${DISPLAY:-:99}"
 # entries, comma-separated (admin-api reads it; see deploy/compose/.env.example). Empty = nobody new
 # once an admin exists. Pass it with `docker run -e VEXA_SIGNIN_ALLOW=@example.com …`.
 export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
+# The administrators, comma-separated full addresses (admin-api reads it; the terminal only asks).
+# Naming them closes the admin claim — set it whenever the terminal is reachable from outside.
+export VEXA_ADMIN_EMAILS="${VEXA_ADMIN_EMAILS:-}"
 # The admin tier, on the same terms as the internal tier below and for a LARGER blast radius:
 # this token mints an API key for ANY user and HS256-signs every per-spawn MeetingToken. It
 # defaulted to the published literal `changeme`, so every lite stack nobody configured shared one

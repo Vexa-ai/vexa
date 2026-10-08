@@ -224,12 +224,15 @@ adminApi:
   # Who may sign in to the terminal besides existing users and admins (VEXA_SIGNIN_ALLOW):
   # comma-separated exact addresses and @domain entries, e.g. "@example.com,alice@example.org".
   # `@example.com` admits everyone at exactly that domain (a subdomain needs its own entry).
-  # Empty = nobody new once an admin exists. The admin can add more in the terminal under
+  # Empty = nobody new once an admin exists. A non-empty list also means only these addresses may
+  # sign in or claim the admin role while nobody has. The admin can add more in the terminal under
   # Settings → Sign-in; the effective list is both.
-  # ⚠ While no admin is claimed, ANY address may sign in and becomes the admin. Before exposing
-  # the terminal publicly, name the admins with VEXA_ADMIN_EMAILS (terminal.extraEnv), which
-  # turns that first-sign-in claim off.
   signinAllow: ""
+  # The administrators (VEXA_ADMIN_EMAILS): comma-separated full addresses. They may always sign in
+  # and are the admins; naming them closes the admin claim. Set it BEFORE first install when the
+  # terminal is reachable from outside. admin-api reads it; the terminal only asks admin-api. A
+  # VEXA_ADMIN_EMAILS still set under terminal.extraEnv is carried over when this is empty.
+  adminEmails: ""
   extraEnv: []
 
 # Meetings + recordings (compose: meeting-api → :8080).
@@ -398,10 +401,7 @@ terminal:
   # OAuth (Google/Microsoft) + other knobs: add here, e.g.
   #   - name: GOOGLE_CLIENT_ID
   #     value: "..."
-  # Set VEXA_ADMIN_EMAILS here BEFORE first install when the terminal is reachable from outside:
-  #   - name: VEXA_ADMIN_EMAILS
-  #     value: "admin@example.com"
-  # Without it the first address to sign in claims the admin role. Who else may sign in is
+  # Who is an admin and who may sign in are admin-api settings: adminApi.adminEmails and
   # adminApi.signinAllow.
   extraEnv: []
 

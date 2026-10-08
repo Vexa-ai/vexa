@@ -164,6 +164,14 @@ describe("it can never transfer the role", () => {
     expect((await res.json()).claimed).toBe(false);
   });
 
+  it("an address admin-api will not let claim (not on the allow-list) is refused with 403", async () => {
+    stubAdminApi({ bootstrap: { status: 200, body: { claimed: false, admin_exists: false, why: "not-allowed" } } });
+    const res = await claimAdmin();
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("This address may not claim this instance.");
+    expect(minted).toHaveLength(0);
+  });
+
   it("a bootstrap write that fails is surfaced, not swallowed", async () => {
     stubAdminApi({ bootstrap: { status: 500, body: { detail: "boom" } } });
     const res = await claimAdmin();

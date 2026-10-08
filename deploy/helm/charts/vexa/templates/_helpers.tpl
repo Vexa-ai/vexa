@@ -98,6 +98,24 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built by
 this chart. runtime.browserImage is the explicit value; global.imageTag (set) pins the standard repo. */}}
+{{/*
+The instance's administrators for admin-api's VEXA_ADMIN_EMAILS: `adminApi.adminEmails`. Before
+admin-api read this list the terminal did, and the chart told operators to set it in
+`terminal.extraEnv`; an install that still sets it there is carried over here rather than silently
+losing its admins on upgrade.
+*/}}
+{{- define "vexa.adminEmails" -}}
+{{- $emails := .Values.adminApi.adminEmails | default "" -}}
+{{- if not $emails -}}
+{{- range (.Values.terminal.extraEnv | default list) -}}
+{{- if and (kindIs "map" .) (eq (.name | default "") "VEXA_ADMIN_EMAILS") -}}
+{{- $emails = .value | default "" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $emails -}}
+{{- end -}}
+
 {{- define "vexa.botImage" -}}
 {{- if .Values.runtime.browserImage -}}
 {{- .Values.runtime.browserImage -}}

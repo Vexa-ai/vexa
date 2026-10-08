@@ -14,4 +14,5 @@ Unit tests for the auth routes:
   address before anything is created or mailed; existing users, admins and allow-listed addresses
   get in; the email form's answer is identical (and equally fast) for allowed and refused
   addresses; an admin-api that cannot answer refuses (fail closed); the first admin claim still
-  works, and `VEXA_ADMIN_EMAILS` turns it off.
+  works, and admin-api's `VEXA_ADMIN_EMAILS` or allow-list turns that door off. The terminal holds no
+  list of its own: every one of these answers is admin-api's.

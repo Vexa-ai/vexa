@@ -8,15 +8,20 @@ must not be open to anyone with an email address by default.
 
 THE RULE. A sign-in is admitted when the address is ONE of:
 
+  * an ADMIN — the claimed admin here, or an address in `VEXA_ADMIN_EMAILS`;
   * an EXISTING USER of this instance — so upgrading locks nobody out who already has an account;
-  * an ADMIN — the claimed admin here, and (decided by the terminal, which holds that list) an
-    address in `VEXA_ADMIN_EMAILS`;
   * on the ALLOW-LIST — `VEXA_SIGNIN_ALLOW` (the deployment's seed) plus the `signin.allow`
     platform setting the admin edits in the terminal's Settings. The effective list is the union.
 
-…and, on an instance nobody has claimed yet, anybody: the next sign-in IS the admin claim, and
-refusing it would make a fresh instance unclaimable. The terminal closes that door when
-`VEXA_ADMIN_EMAILS` names the admins, exactly as it turns the claim off.
+…and, on an instance nobody has claimed and NOTHING has been configured for (no admin emails, no
+allow-list), the next sign-in, because that sign-in is the admin claim and refusing it would make a
+fresh instance unclaimable. Configuring either list closes that door: then only those addresses get
+in. The same inputs decide who may CLAIM the admin role (`may_claim`): nobody while `VEXA_ADMIN_EMAILS`
+names the admins, and only an allowed address while an allow-list is configured.
+
+ONE PLACE. Every input to both decisions — the user rows, the claimed admin, both lists — is read by
+this service, and the terminal only asks (`POST /internal/signin-admission`,
+`POST /internal/bootstrap-admin`) and obeys. An operator configures sign-in on admin-api alone.
 
 ENTRIES are exact addresses (`alice@example.com`) and whole domains (`@example.com`). A domain entry
 matches that domain exactly — a subdomain needs its own entry — and an exact entry matches that
@@ -34,16 +39,23 @@ import re
 from typing import Iterable, List, Optional, Tuple
 
 ENV_KEY = "VEXA_SIGNIN_ALLOW"
+ADMIN_EMAILS_ENV = "VEXA_ADMIN_EMAILS"
 SETTING_KEY = "signin"
 SETTING_FIELD = "allow"
 SETTING_FIELDS = (SETTING_FIELD,)
 
 # The admission reasons. Named, so a log line and a test read the same word.
 WHY_ADMIN = "admin"
+WHY_ADMIN_EMAIL = "admin-email"
 WHY_EXISTING_USER = "existing-user"
 WHY_ALLOW_LIST = "allow-list"
 WHY_UNCLAIMED = "unclaimed-instance"
 WHY_NOT_ALLOWED = "not-allowed"
+
+# The claim outcomes (`may_claim` and `POST /internal/bootstrap-admin`).
+CLAIMED = "claimed"
+CLAIM_ADMIN_EXISTS = "admin-exists"
+CLAIM_NOT_ALLOWED = "not-allowed"
 
 # Bounds. An address is at most 254 characters (RFC 5321); a list longer than this is a directory,
 # and a domain entry is the tool for that.
@@ -167,19 +179,66 @@ def matches(email, entries: Iterable[str]) -> bool:
     return e in allowed or ("@" + e.rpartition("@")[2]) in allowed
 
 
-def decide(email, *, user_exists: bool, is_admin: bool, admin_exists: bool,
-           allow: Iterable[str]) -> Tuple[bool, str]:
+def admin_email_problem(entry: str) -> Optional[str]:
+    """None when `entry` is a usable admin address. An admin is one person: a domain entry would make
+    everybody at that domain an administrator, so it is refused rather than widened."""
+    if entry.startswith("@"):
+        return f"{entry!r} is a domain — {ADMIN_EMAILS_ENV} names people, one full address each"
+    return entry_problem(entry)
+
+
+def admin_emails() -> Tuple[List[str], List[str]]:
+    """The administrators the deployment names, `VEXA_ADMIN_EMAILS` (comma-separated exact
+    addresses), read on every call. (valid addresses; one sentence per invalid entry)."""
+    valid: List[str] = []
+    problems: List[str] = []
+    for entry in split_entries(os.getenv(ADMIN_EMAILS_ENV, "")):
+        problem = admin_email_problem(entry)
+        if problem:
+            problems.append(problem)
+        elif entry not in valid:
+            valid.append(entry)
+    return valid, problems
+
+
+def is_admin(email, data, admins: Iterable[str]) -> bool:
+    """THE admin test: the claimed role on the user row, or an address the deployment names."""
+    claimed = isinstance(data, dict) and data.get("is_admin") is True
+    return claimed or normalize_email(email) in set(admins)
+
+
+def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
+           allow: Iterable[str], admins: Iterable[str] = ()) -> Tuple[bool, str]:
     """(admitted, why). The order only decides which reason is reported, except for the last row:
-    an instance with no admin admits anybody, because that sign-in is the claim."""
+    an instance nobody has claimed and nothing has been configured for admits the next sign-in,
+    because that sign-in is the claim. `is_admin` is the claimed role on the user row; `admins` is
+    `VEXA_ADMIN_EMAILS`."""
     e = normalize_email(email)
     if not is_address(e):
         return False, WHY_NOT_ALLOWED
+    admins = set(admins)
+    allow = list(allow)
     if is_admin:
         return True, WHY_ADMIN
+    if e in admins:
+        return True, WHY_ADMIN_EMAIL
     if user_exists:
         return True, WHY_EXISTING_USER
     if matches(e, allow):
         return True, WHY_ALLOW_LIST
-    if not admin_exists:
+    if not admin_claimed and not admins and not allow:
         return True, WHY_UNCLAIMED
     return False, WHY_NOT_ALLOWED
+
+
+def may_claim(email, *, admin_claimed: bool, allow: Iterable[str],
+              admins: Iterable[str] = ()) -> Tuple[bool, str]:
+    """(may this user take the admin role now, why). Nobody, once an admin is claimed or while
+    `VEXA_ADMIN_EMAILS` names the admins — those addresses already are. While an allow-list is
+    configured, only an address on it: the first admin of a closed instance is one of its people."""
+    if admin_claimed or list(admins):
+        return False, CLAIM_ADMIN_EXISTS
+    allow = list(allow)
+    if allow and not matches(email, allow):
+        return False, CLAIM_NOT_ALLOWED
+    return True, CLAIMED

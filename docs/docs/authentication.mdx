@@ -126,8 +126,11 @@ every address and mails only the admitted ones; the redeem page and the OAuth re
 sentence that names no list. If admin-api cannot answer, new sign-ins are refused (existing sessions
 keep working).
 
-While **no admin has been claimed**, anybody may sign in and the first sign-in becomes the admin.
-`VEXA_ADMIN_EMAILS` turns that off — set it before first boot on any instance reachable from outside.
+While **no admin has been claimed and neither list is configured**, anybody may sign in and the
+first sign-in becomes the admin. `VEXA_ADMIN_EMAILS` (on admin-api) turns that off — set it before
+first boot on any instance reachable from outside. A sign-in allow-list narrows it: only an address on
+the list may sign in or claim the role. admin-api makes every one of these decisions; the terminal
+only asks it.
 An account created through `POST /admin/users` (above) counts as an existing user, so minting a key
 for someone also lets them sign in.
 

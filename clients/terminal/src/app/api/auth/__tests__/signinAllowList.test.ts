@@ -5,17 +5,18 @@
  *  control, any Google account, any Microsoft account — got an account, an API token, agent turns
  *  on this instance's model credentials, and bot launches.
  *
- *  The rule (decided by admin-api, `POST /internal/signin-admission`): an EXISTING user, an ADMIN,
- *  or an address on the allow-list; anybody while no admin has been claimed, because that sign-in
- *  is the claim. The fake admin-api below MODELS that rule over a small user table and allow-list,
+ *  The rule (decided by admin-api ALONE, `POST /internal/signin-admission`): an EXISTING user, an
+ *  ADMIN (claimed, or named by admin-api's VEXA_ADMIN_EMAILS), or an address on the allow-list; and,
+ *  while nobody has claimed the instance and neither list is configured, the sign-in that will claim
+ *  it. The fake admin-api below MODELS that rule over a small user table and allow-list,
  *  so these cases read as the behaviour a person meets. The rule itself, entry grammar and the
  *  env + settings merge included, is proven against the real code in admin-api's
  *  tests/test_signin_allow.py.
  *
  *  What is the terminal's own, and proven here: every door asks BEFORE it creates or sends
  *  anything; the email form's answer is identical for allowed and refused addresses (in time as well
- *  as in content); `VEXA_ADMIN_EMAILS` admits on its own and turns the unclaimed-instance door off;
- *  and an admin-api that cannot answer refuses — fail closed.
+ *  as in content); the terminal holds no list of its own (a VEXA_ADMIN_EMAILS in its environment
+ *  changes nothing); and an admin-api that cannot answer refuses — fail closed.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,6 +47,7 @@ import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE, signinErrorMessage } from "../.
 interface World {
   users: Set<string>;
   admins: Set<string>;
+  adminEmails: string[];         // admin-api's VEXA_ADMIN_EMAILS
   allow: string[];               // the effective list: VEXA_SIGNIN_ALLOW + the signin.allow setting
   /** "down" = connection refused; "old" = an admin-api from before #1783 (no such route → 404);
    *  "garbled" = a 200 that does not literally say admitted:true. */
@@ -59,10 +61,13 @@ let nextId = 100;
 function admits(email: string): { admitted: boolean; why: string } {
   const e = email.toLowerCase();
   if (world.admins.has(e)) return { admitted: true, why: "admin" };
+  if (world.adminEmails.includes(e)) return { admitted: true, why: "admin-email" };
   if (world.users.has(e)) return { admitted: true, why: "existing-user" };
   const domain = "@" + e.split("@").pop();
   if (world.allow.includes(e) || world.allow.includes(domain)) return { admitted: true, why: "allow-list" };
-  if (world.admins.size === 0) return { admitted: true, why: "unclaimed-instance" };
+  if (world.admins.size === 0 && !world.adminEmails.length && !world.allow.length) {
+    return { admitted: true, why: "unclaimed-instance" };
+  }
   return { admitted: false, why: "not-allowed" };
 }
 
@@ -91,8 +96,8 @@ function installAdminApi() {
     }
     if (u.includes("/tokens")) return method === "POST" ? json({ token: "minted-tok" }) : json([]);
     if (u.includes("/internal/bootstrap-admin")) {
-      const claimed = world.admins.size === 0;
-      return json({ claimed, admin_exists: true });
+      const claimed = world.admins.size === 0 && !world.adminEmails.length;
+      return json({ claimed, admin_exists: true, why: claimed ? "claimed" : "admin-exists" });
     }
     if (u.includes("/internal/has-history")) return json({ has_history: true, sessions: 1, desk: "warm" });
     return new Response("nope", { status: 500 });
@@ -103,7 +108,7 @@ const created = () => calls.filter((c) => c.startsWith("POST") && c.endsWith("/a
 const minted = () => calls.filter((c) => c.startsWith("POST") && c.includes("/tokens"));
 
 beforeEach(() => {
-  world = { users: new Set(["member@example.com"]), admins: new Set(["boss@example.com"]), allow: ["@oenb.at", "alice@example.org"], admission: "up" };
+  world = { users: new Set(["member@example.com"]), admins: new Set(["boss@example.com"]), adminEmails: [], allow: ["@oenb.at", "alice@example.org"], admission: "up" };
   calls = [];
   cookieJar = {};
   sendMail.mockClear();
@@ -223,10 +228,17 @@ describe("who IS admitted", () => {
     expect(await oauth("boss@example.com")).toBe(true);
   });
 
-  it("an address in VEXA_ADMIN_EMAILS, without even asking admin-api", async () => {
-    vi.stubEnv("VEXA_ADMIN_EMAILS", "Owner@Example.com");
-    expect(await signinAdmission("owner@example.com")).toEqual({ admitted: true, why: "admin-email" });
-    expect(calls.some((c) => c.includes("/internal/signin-admission"))).toBe(false);
+  it("an address admin-api's VEXA_ADMIN_EMAILS names — on admin-api's word", async () => {
+    world.adminEmails = ["owner@example.com"];
+    expect(await signinAdmission("Owner@Example.com")).toEqual({ admitted: true, why: "admin-email" });
+    expect(calls).toEqual(["POST http://admin.test/internal/signin-admission"]);
+  });
+
+  it("the terminal decides nothing itself: a VEXA_ADMIN_EMAILS in ITS environment admits nobody", async () => {
+    vi.stubEnv("VEXA_ADMIN_EMAILS", "stranger@evil.example");
+    expect(await signinAdmission("stranger@evil.example")).toEqual({ admitted: false, why: "not-allowed" });
+    expect(await oauth("stranger@evil.example")).toBe("/?error=SigninNotAllowed");
+    expect(created()).toHaveLength(0);
   });
 });
 
@@ -296,9 +308,10 @@ describe("FAIL CLOSED — an admin-api that cannot answer admits nobody new", ()
 });
 
 describe("the first admin claim still works", () => {
-  it("on an instance nobody has claimed, a first sign-in is admitted and claims the role", async () => {
+  it("on an instance nobody has claimed and nothing is configured for, a first sign-in is admitted and claims the role", async () => {
     world.admins.clear();
     world.users.clear();
+    world.allow = [];
     const res = await clickLinkFor("founder@newco.example");
     expect(res.status).toBe(302);
     expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
@@ -306,13 +319,20 @@ describe("the first admin claim still works", () => {
     expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(true);
   });
 
-  it("…but not when VEXA_ADMIN_EMAILS names the admins: the claim is off, so is that door", async () => {
+  it("…but not when admin-api's VEXA_ADMIN_EMAILS names the admins: the claim is off, so is that door", async () => {
     world.admins.clear();
-    vi.stubEnv("VEXA_ADMIN_EMAILS", "owner@example.com");
+    world.allow = [];
+    world.adminEmails = ["owner@example.com"];
     expect(await oauth("stranger@evil.example")).toBe("/?error=SigninNotAllowed");
     expect(created()).toHaveLength(0);
     // the named admin still gets in
-    world.users.add("owner@example.com");
     expect(await oauth("owner@example.com")).toBe(true);
+  });
+
+  it("…nor when an allow-list is configured: only its addresses get in", async () => {
+    world.admins.clear();
+    world.users.clear();
+    expect(await oauth("stranger@evil.example")).toBe("/?error=SigninNotAllowed");
+    expect(await oauth("anna@oenb.at")).toBe(true);
   });
 });

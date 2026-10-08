@@ -213,8 +213,6 @@ beforeEach(() => {
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_ADMIN_API_KEY = "test-admin-key";
   process.env.VEXA_INTERNAL_API_SECRET = "test-internal-secret"; // the admission door (#1783)
-  // allowlist configured → the bootstrap-admin internal call short-circuits (no /internal hit)
-  process.env.VEXA_ADMIN_EMAILS = "owner@vexa.ai";
   process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP = "3";
 });
 
@@ -223,7 +221,6 @@ afterEach(() => {
   delete process.env.VEXA_ADMIN_API_URL;
   delete process.env.VEXA_ADMIN_API_KEY;
   delete process.env.VEXA_INTERNAL_API_SECRET;
-  delete process.env.VEXA_ADMIN_EMAILS;
   delete process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP;
   delete process.env.VEXA_TERMINAL_LOGIN_TOKEN_MAX;
   delete process.env.VEXA_TERMINAL_LOGIN_RECENT_USE_HOURS;
