@@ -1136,6 +1136,16 @@ const CONFIG_ADOPTED = [
     scan: ["core/gateway/services/gateway/src"],
     compose: "gateway", helm: ["deployment-gateway.yaml"], lite: "gateway",
   },
+  {
+    // Connections (ADR-0039). Adopted the day it entered the product tree. lite is null on
+    // purpose: Lite spawns agent workers as child processes of the one container, so no process
+    // boundary could keep the human key from a worker, and Lite does not carry Connections.
+    service: "credential-broker",
+    decl: "core/agent/services/credential-broker/src/credential_broker/config.v1.json",
+    preflight: "core/agent/services/credential-broker/src/credential_broker/config_preflight.py",
+    scan: ["core/agent/services/credential-broker/src"],
+    compose: "credential-broker", helm: ["deployment-credential-broker.yaml"], lite: null,
+  },
 ];
 
 // docker-compose.yml is parsed line-wise (no YAML dep): a service block runs from `  name:` to the

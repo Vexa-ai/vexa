@@ -37,7 +37,7 @@ def _fresh_probe_cache():
 def test_declaration_loads_and_is_internally_consistent():
     decl = cp.load_declaration()
     assert decl["service"] == "agent-api"
-    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference"}
+    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections", "git_credential_broker"}
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
 
@@ -229,9 +229,24 @@ def test_the_qwen_lane_dials_are_declared():
 # harness reads every budget through `_int_env(name, default)` and the scan looks for `os.environ`
 # with a literal beside it. The same blind spot already hides #1613's VEXA_AGENT_JOB_MAX_TOOL_CALLS
 # and VEXA_AGENT_JOB_MAX_TURN_SEC, which are read by the shipped worker and declared nowhere.
-# 98 at v0.13.1; v0.13.2 adds VEXA_AGENT_AUTO_CONTINUE_CHAT, VEXA_CONNECTIONS_AGENT_KEY_FILE,
-# VEXA_CONNECTIONS_BROKER_URL, VEXA_GIT_STORE_BROKER_URL and VEXA_GIT_STORE_KEY_FILE.
+# 98 at v0.13.1; 103 in v0.13.2: VEXA_AGENT_AUTO_CONTINUE_CHAT, and the four Connections keys —
+# VEXA_CONNECTIONS_BROKER_URL + VEXA_CONNECTIONS_AGENT_KEY_FILE (capability `connections`) and
+# VEXA_GIT_STORE_BROKER_URL + VEXA_GIT_STORE_KEY_FILE (capability `git_credential_broker`). The four
+# were first declared `targets: []` for a dogfood overlay; since the broker is a product service
+# (ADR-0039) they are plumbed on compose and helm, and gate:config-contract holds them there.
 EXPECTED_DECLARED_KEYS = 103
+
+
+def test_connections_keys_are_capabilities_on_real_surfaces():
+    """The broker keys are optional (the no-Connections deployment is a real one) and plumbed —
+    never a `targets: []` dial a standard install cannot set."""
+    decl = cp.load_declaration()
+    keys = {k["key"]: k for k in decl["keys"]}
+    for key, cap in [("VEXA_CONNECTIONS_BROKER_URL", "connections"), ("VEXA_CONNECTIONS_AGENT_KEY_FILE", "connections"),
+                     ("VEXA_GIT_STORE_BROKER_URL", "git_credential_broker"), ("VEXA_GIT_STORE_KEY_FILE", "git_credential_broker")]:
+        assert keys[key]["class"] == "capability" and keys[key]["capability"] == cap
+        assert keys[key]["targets"] == ["compose", "helm"], key
+    assert decl["capabilities"]["connections"]["when_unconfigured"]
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():

@@ -249,6 +249,14 @@
       "from": "terminal",
       "to": "agent",
       "ruling": "PRD decision 46 — clients reach ONE edge with a bearer, and this call has no bearer BY DESIGN. The invite card at /join renders for somebody with no account on this instance (Vexa-ai/vexa#1635): agent-api’s GET /api/workspace/invites/preview takes no subject because it is capability-gated by the invite token itself, and every /agent/{path} row in core/agent/routes.v1.json carries scopes, so the edge answers 401 to a visitor who just clicked a colleague’s link. Asking a stranger to sign in to find out what they are signing in FOR is the wrong order and reads as a phish. The entry closes when the edge can carry a scope-free, capability-gated route — the preview bound in routes.v1 with no scopes — and the client reads only GATEWAY_URL. Siblings: the admin, auth and version routes above."
+    },
+    {
+      "path": "clients/terminal/src/app/api/connections/broker.ts",
+      "door": "VEXA_CONNECTIONS_BROKER_URL",
+      "line": 43,
+      "from": "terminal",
+      "to": "agent",
+      "ruling": "ADR-0037 decision 1 — clients reach ONE edge with a bearer. Not a new door: the terminal's Connections routes have called the credential broker since 0.13.2, and the gate only began counting the door when the broker's keys were given a token (0.13.2 architecture pass, S1). It is direct because the human role key — the authority to consent and store a credential — must live in no process that agent traffic crosses, and today the gateway forwards both. The entry closes when the gateway re-stamps a person's session as the broker's human role (the signed-identity work, M1) and the terminal reaches Connections through GATEWAY_URL only."
     }
   ]
 }

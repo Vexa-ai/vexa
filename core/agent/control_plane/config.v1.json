@@ -812,31 +812,43 @@
     },
     {
       "key": "VEXA_GIT_STORE_BROKER_URL",
-      "default": "",
-      "description": "Git credential broker endpoint; unset retains legacy encrypted storage. Configured through the Minutes dogfood deployment overlay; standard deployment templates do not expose this setting.",
-      "class": "defaulted",
-      "targets": []
+      "class": "capability",
+      "capability": "git_credential_broker",
+      "description": "the credential broker's base URL for Git credentials. Opt-in: set, saved Git tokens and deploy keys move into the broker on first use and a broker outage refuses Git operations rather than falling back to disk; unset, they stay in this service's own encrypted store (VEXA_SECRETS_KEY)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_GIT_STORE_KEY_FILE",
-      "default": "",
-      "description": "File containing the Git broker assertion signing key; required when broker is configured. Configured through the Minutes dogfood deployment overlay; standard deployment templates do not expose this setting.",
-      "class": "defaulted",
-      "targets": []
+      "class": "capability",
+      "capability": "git_credential_broker",
+      "description": "file holding the git role's assertion key, set together with VEXA_GIT_STORE_BROKER_URL",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_CONNECTIONS_BROKER_URL",
-      "default": "",
-      "description": "Connection broker endpoint; unset makes account operations unavailable. Configured through the Minutes dogfood deployment overlay; standard deployment templates do not expose this setting.",
-      "class": "defaulted",
-      "targets": []
+      "class": "capability",
+      "capability": "connections",
+      "description": "the credential broker's base URL (credential-broker.v1). Compose and the chart point it at the broker they deploy with agent-api; unset, every Connections route answers 503 'Connections are not configured on this deployment'",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_CONNECTIONS_AGENT_KEY_FILE",
-      "default": "",
-      "description": "File containing the Connections broker assertion signing key. Configured through the Minutes dogfood deployment overlay; standard deployment templates do not expose this setting.",
-      "class": "defaulted",
-      "targets": []
+      "class": "capability",
+      "capability": "connections",
+      "description": "file holding the agent role's assertion key, the same file the broker verifies with. Mounted into agent-api only: never into a worker, never into the terminal",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_AGENT_AUTO_CONTINUE_CHAT",
@@ -856,6 +868,16 @@
       "description": "spawned agent-workers will have a model-provider credential path available \u2014 dispatch stamps the model-auth allowlist from this service's env into every worker spec env (uniform across docker/k8s/process backends); the docker runtime additionally brokers/mounts creds itself (see the runtime's config.v1 for the mount mechanics + file probe)",
       "mode": "any",
       "when_unconfigured": "terminal chat / workspace turns fail inside the worker ('Model inference failed: Not logged in') \u2014 set CLAUDE_CODE_OAUTH_TOKEN (subscription OAuth), an ANTHROPIC_* key, or HOST_CLAUDE_CREDENTIALS (docker subscription mount)"
+    },
+    "connections": {
+      "description": "Connections: the agent can request, list and use a person's connected accounts and services through the credential broker, without ever receiving a credential",
+      "mode": "all",
+      "when_unconfigured": "every /api/connections* and /api/onboarding/research route answers 503 'Connections are not configured on this deployment'; the agent's connection tools report the same sentence"
+    },
+    "git_credential_broker": {
+      "description": "Git tokens and deploy keys are kept in the credential broker instead of this service's own encrypted store",
+      "mode": "all",
+      "when_unconfigured": "nothing degrades: Git credentials stay in the local encrypted store (control_plane/secret_store.py, keyed by VEXA_SECRETS_KEY)"
     }
   },
   "surface_only": [

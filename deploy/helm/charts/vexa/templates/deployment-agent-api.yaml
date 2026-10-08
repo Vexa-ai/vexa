@@ -151,12 +151,30 @@ spec:
               value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
             - name: VEXA_LOG_LEVEL
               value: {{ .Values.agentApi.logLevel | default "info" | quote }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            # Connections (credential-broker.v1): agent-api signs as the `agent` role, never `human`.
+            - name: VEXA_CONNECTIONS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_CONNECTIONS_AGENT_KEY_FILE
+              value: /run/vexa-connections/agent/key
+            {{- if .Values.credentialBroker.gitStore }}
+            - name: VEXA_GIT_STORE_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_GIT_STORE_KEY_FILE
+              value: /run/vexa-connections/git/key
+            {{- end }}
+            {{- end }}
             {{- with .Values.agentApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
             - name: workspaces
               mountPath: /workspaces
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            - name: connections-keys
+              mountPath: /run/vexa-connections
+              readOnly: true
+            {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -184,6 +202,18 @@ spec:
         - name: workspaces
           persistentVolumeClaim:
             claimName: {{ include "vexa.componentName" (list . "agent-workspaces") }}
+        {{- if include "vexa.credentialBrokerEnabled" . }}
+        # The agent role key (and the git role key when gitStore is on) — never the human key.
+        - name: connections-keys
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: agent.key, path: agent/key }
+              {{- if .Values.credentialBroker.gitStore }}
+              - { key: git.key, path: git/key }
+              {{- end }}
+        {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

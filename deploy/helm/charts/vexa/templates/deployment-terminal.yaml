@@ -84,9 +84,25 @@ spec:
             - name: TERMINAL_URL
               value: {{ .Values.terminal.publicUrl | quote }}
             {{- end }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            # Connections panel (credential-broker.v1): the terminal's server routes sign as the
+            # `human` role for the signed-in person. Browser POSTs must come from the public origin.
+            - name: VEXA_CONNECTIONS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_CONNECTIONS_HUMAN_KEY_FILE
+              value: /run/vexa-connections/human/key
+            - name: VEXA_CONNECTIONS_PUBLIC_ORIGIN
+              value: {{ .Values.terminal.publicUrl | default "" | trimSuffix "/" | quote }}
+            {{- end }}
             {{- with .Values.terminal.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if include "vexa.credentialBrokerEnabled" . }}
+          volumeMounts:
+            - name: connections-keys
+              mountPath: /run/vexa-connections
+              readOnly: true
+          {{- end }}
           startupProbe:
             httpGet:
               path: /
@@ -110,6 +126,16 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.terminal.resources | nindent 12 }}
+      {{- if include "vexa.credentialBrokerEnabled" . }}
+      volumes:
+        # The human role key only.
+        - name: connections-keys
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: human.key, path: human/key }
+      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

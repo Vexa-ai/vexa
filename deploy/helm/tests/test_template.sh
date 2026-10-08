@@ -679,4 +679,47 @@ check_admins "terminal.extraEnv VEXA_ADMIN_EMAILS is carried over to admin-api" 
   --set 'terminal.extraEnv[0].name=VEXA_ADMIN_EMAILS' --set 'terminal.extraEnv[0].value=old@example.com'
 check_admins "unset is empty" ""
 
+# ── Connections: the credential broker (credential-broker.v1, ADR-0039) ──────────────────────────
+# The broker renders with agent-api, admits only agent-api and terminal Pods, and each consumer
+# mounts only its own role key: agent-api never the human key, the terminal never the agent key.
+echo "=== credential broker ==="
+need 1 'name: vexa-vexa-credential-broker$'        "broker Deployment/Service name"
+need 1 '^kind: NetworkPolicy'                      "broker NetworkPolicy"
+need 1 'name: vexa-vexa-credential-broker-state'   "broker state PVC"
+need 1 'helm.sh/resource-policy: keep'             "broker keys Secret kept across uninstall"
+need 2 'name: VEXA_CONNECTIONS_BROKER_URL'         "broker URL on agent-api AND terminal"
+need 1 'name: VEXA_CONNECTIONS_AGENT_KEY_FILE'     "agent role key path"
+need 1 'name: VEXA_CONNECTIONS_HUMAN_KEY_FILE'     "human role key path"
+# 4 component labels: the policy's own two (metadata + podSelector) and the two admitted sources.
+NP="$(awk '/Source: vexa\/templates\/networkpolicy-credential-broker.yaml/,/^---/' <<< "$RENDER")"
+if grep -q 'component: agent-api' <<< "$NP" && grep -q 'component: terminal' <<< "$NP" \
+   && [ "$(grep -c 'component: ' <<< "$NP")" -eq 4 ]; then echo "  OK: NetworkPolicy admits exactly agent-api + terminal"
+else echo "  FAIL: NetworkPolicy ingress is not exactly agent-api + terminal"; fail=1; fi
+AGENT="$(awk '/Source: vexa\/templates\/deployment-agent-api.yaml/,/^---/' <<< "$RENDER")"
+TERM="$(awk '/Source: vexa\/templates\/deployment-terminal.yaml/,/^---/' <<< "$RENDER")"
+if grep -q 'key: agent.key' <<< "$AGENT" && ! grep -q 'key: human.key' <<< "$AGENT" && ! grep -q 'key: git.key' <<< "$AGENT"; then
+  echo "  OK: agent-api mounts the agent key only (gitStore off)"
+else echo "  FAIL: agent-api key mounts wrong"; fail=1; fi
+if grep -q 'key: human.key' <<< "$TERM" && ! grep -qE 'key: (agent|git|store).key' <<< "$TERM"; then
+  echo "  OK: terminal mounts the human key only"
+else echo "  FAIL: terminal key mounts wrong"; fail=1; fi
+GIT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.gitStore=true)"
+if [ "$(grep -c 'name: VEXA_GIT_STORE_BROKER_URL' <<< "$GIT")" -eq 1 ] && grep -q 'key: git.key, path: git/key' <<< "$GIT"; then
+  echo "  OK: gitStore=true wires the git role into agent-api"
+else echo "  FAIL: gitStore=true did not wire the git store"; fail=1; fi
+NOAGENT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.enabled=false)"
+if ! grep -q 'credential-broker' <<< "$NOAGENT"; then echo "  OK: no agent-api → no broker (no-agents profile)"
+else echo "  FAIL: broker rendered without agent-api"; fail=1; fi
+OAUTH="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.publicUrl=https://app.example.test/ \
+  --set credentialBroker.google.clientId=x.apps.googleusercontent.com --set credentialBroker.google.clientSecret=s)"
+if grep -q 'value: "https://app.example.test/api/auth/callback/google"' <<< "$OAUTH" \
+   && grep -q 'key: google-client-secret' <<< "$OAUTH"; then echo "  OK: Google consent derives the callback from terminal.publicUrl"
+else echo "  FAIL: Google consent wiring"; fail=1; fi
+refuse "openbao backend without an address" 'credentialBroker\.openbao\.address is required' \
+  -f "$CHART/values-test.yaml" --set credentialBroker.store.backend=openbao
+EXT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.existingSecret=my-keys)"
+if ! grep -q 'name: vexa-vexa-credential-broker-keys' <<< "$EXT" && [ "$(grep -c 'secretName: my-keys' <<< "$EXT")" -eq 3 ]; then
+  echo "  OK: existingSecret replaces the generated keys on all three consumers"
+else echo "  FAIL: existingSecret wiring"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

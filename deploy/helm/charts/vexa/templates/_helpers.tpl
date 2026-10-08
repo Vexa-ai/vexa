@@ -374,3 +374,26 @@ securityContext:
   {{- toYaml $sc | nindent 2 }}
 {{- end -}}
 {{- end -}}
+
+{{/* Connections (ADR-0039): the broker deploys with agent-api, never without it. */}}
+{{- define "vexa.credentialBrokerEnabled" -}}
+{{- if and .Values.agentApi.enabled .Values.credentialBroker.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/* The Secret holding agent.key, human.key, git.key, store.key (and google-client-secret). */}}
+{{- define "vexa.credentialBrokerKeys" -}}
+{{- .Values.credentialBroker.existingSecret | default (include "vexa.componentName" (list . "credential-broker-keys")) -}}
+{{- end -}}
+
+{{- define "vexa.credentialBrokerUrl" -}}
+{{- printf "http://%s:%v" (include "vexa.componentName" (list . "credential-broker")) .Values.credentialBroker.service.port -}}
+{{- end -}}
+
+{{/* The OAuth callback the broker sends Google: explicit, else the terminal's https public URL. */}}
+{{- define "vexa.credentialBrokerRedirect" -}}
+{{- if .Values.credentialBroker.productRedirect -}}
+{{- .Values.credentialBroker.productRedirect -}}
+{{- else if hasPrefix "https://" (.Values.terminal.publicUrl | default "") -}}
+{{- printf "%s/api/auth/callback/google" (trimSuffix "/" .Values.terminal.publicUrl) -}}
+{{- end -}}
+{{- end -}}

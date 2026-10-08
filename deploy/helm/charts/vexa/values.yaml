@@ -383,6 +383,53 @@ agentApi:
     limits:   { cpu: 1000m, memory: 1Gi }
   extraEnv: []
 
+# ---------- Connections: the credential broker (credential-broker.v1, ADR-0039) ----------
+# Holds the accounts and services a person connects (Gmail, Google Calendar, custom API keys) and
+# uses them for the agent without handing the credential over. Deployed whenever agentApi is.
+# agent-api signs as the `agent` role, the terminal as the `human` role (consent, save, delete);
+# a NetworkPolicy admits only those two, and no worker Pod ever mounts a key.
+credentialBroker:
+  enabled: true                 # takes effect only with agentApi.enabled
+  image:
+    repository: vexaai/v012-credential-broker
+    tag: v012
+  service:
+    type: ClusterIP
+    port: 8100
+  # The four keys — agent.key, human.key, git.key (role keys) and store.key (64 hex characters,
+  # the local store's AES-256 key). Empty existingSecret: the chart generates them on first
+  # install and keeps them across upgrades (lookup + resource-policy keep). With `helm template`
+  # pipelines (GitOps) lookup sees nothing and would mint new keys every render — create the
+  # Secret yourself and name it here instead. Losing store.key makes every stored credential
+  # unreadable; losing a role key only breaks requests until both sides hold the new one.
+  existingSecret: ""
+  store:
+    backend: local              # local | openbao
+    # The broker's state: connection metadata, audit, and (backend=local) the encrypted store.
+    # One replica writes it, so the Deployment is pinned to replicas: 1 with Recreate.
+    size: 1Gi
+    storageClassName: ""
+  openbao:                      # backend=openbao only: an OpenBao/Vault KV v2 you run
+    address: ""                 # https://openbao.example:8200 (https across hosts)
+    mount: connections
+    tokenSecret: ""             # a Secret with key `token`, policy create/update/read on <mount>/data/*
+  # Gmail + Google Calendar consent. Usually the client the terminal signs in with. The redirect
+  # defaults to <terminal.publicUrl>/api/auth/callback/google when publicUrl is https; register it
+  # on the client. Unset, those providers answer "not configured"; custom secrets still work.
+  google:
+    clientId: ""
+    clientSecret: ""            # stored in the keys Secret as google-client-secret
+  productRedirect: ""
+  # Opt-in: agent-api keeps saved Git tokens and deploy keys in the broker instead of its own
+  # encrypted store (VEXA_SECRETS_KEY). Migration happens on first read; a broker outage then
+  # refuses Git operations instead of falling back to disk.
+  gitStore: false
+  networkPolicy:
+    enabled: true               # ingress from agent-api and terminal Pods only
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
 # The user-facing web UI (Next.js custom server). Proxies /ws → gateway, REST/login → agent-api/admin-api.
 terminal:
   enabled: true
