@@ -357,6 +357,40 @@ test("v0.12.25 canonical packet binds the rc.1 train candidate", () => {
   );
 });
 
+test("v0.12.28 canonical packet binds the v0.12.28-rc.3 candidate (schema 2, eleven images, three build sources)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.28/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "62c30489f6661cea5d436204283ebd9d0b959b49a08efac43afc837cf64a1bab",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.28");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.12.28-rc.3");
+  assert.equal(map.build_source, "c1d0ef6f0456cc7907e89e0fa911f069597c7297");
+  // The bot is the image production runs (estate entry 48), not a rebuild.
+  assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:e2398bfac7fa8671c209e996bc6451598b58438c851956ec050a0300f5a5354b");
+  assert.equal(map.images["vexaai/vexa-bot"].build_source, "2b60c6ce943c43ee77a0acaa36bcf5f73ef9e79a");
+  // Seven images carry the v0.12.27 bytes unchanged.
+  const v27 = JSON.parse(readFileSync(new URL("../releases/v0.12.27/candidate-images.json", import.meta.url)));
+  for (const image of [
+    "vexaai/v012-admin-api", "vexaai/v012-runtime", "vexaai/v012-agent-worker", "vexaai/v012-agent-api",
+    "vexaai/v012-gateway", "vexaai/v012-mcp", "vexaai/v012-flows",
+  ]) {
+    assert.equal(map.images[image].digest, v27.images[image].digest, image);
+    assert.equal(map.images[image].build_source, "71321ad0fff535b2b565045d56abe315773710fd", image);
+  }
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
+  );
+});
+
 test("v0.12.27 canonical packet binds the v0.12.27-rc.5 train candidate (schema 2, eleven images)", () => {
   const raw = readFileSync(
     new URL("../releases/v0.12.27/candidate-images.json", import.meta.url),
