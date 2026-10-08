@@ -35,6 +35,9 @@ def test_fixed_endpoint_pinned_ip_redirect_and_secret_redaction():
         constructor.assert_called_once_with("fixture.test", "8.8.8.8")
         assert "private-token" not in json.dumps(result)
         assert connection.request.call_args.args[:2] == ("GET", "/v1?q=fixture")
+        # A User-Agent rides every request (GitHub refuses one without), and cannot displace the credential.
+        assert connection.request.call_args.kwargs["headers"]["User-Agent"] == "vexa-credential-broker"
+        assert connection.request.call_args.kwargs["headers"]["Authorization"] == "Bearer private-token"
         response.status = 302
         with pytest.raises(secret_service.ServiceError):
             secret_service.execute(config, {})

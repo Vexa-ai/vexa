@@ -10,7 +10,7 @@ def exchange(spec, app, *, code=None, verifier=None, redirect=None, refresh=None
     form={'grant_type':'refresh_token' if refresh else 'authorization_code'}
     if refresh:form['refresh_token']=refresh
     else:form.update(code=code,code_verifier=verifier,redirect_uri=redirect)
-    headers={'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'}
+    headers={'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json','User-Agent':transport.USER_AGENT}
     if oauth.get('token_auth','client_secret_post')=='client_secret_basic':
         pair=quote(app['client_id'],safe='')+':'+quote(app['client_secret'],safe='')
         headers['Authorization']='Basic '+base64.b64encode(pair.encode()).decode()

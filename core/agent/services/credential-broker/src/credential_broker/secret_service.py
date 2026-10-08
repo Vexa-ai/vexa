@@ -4,6 +4,8 @@ from urllib.parse import urlsplit,quote
 
 class ServiceError(Exception):pass
 
+USER_AGENT='vexa-credential-broker'
+
 def validate_endpoint(endpoint):
     try:
         u=urlsplit(endpoint);port=u.port
@@ -62,7 +64,8 @@ def execute(config, parameters, body=None):
             body[k]=v
     raw=json.dumps(body).encode() if body is not None else None
     if raw and len(raw)>65536:raise ServiceError('Request body too large')
-    headers={c['header']:('Bearer ' if c['scheme']=='bearer' else '')+c['value'],'Accept':'application/json','Content-Type':'application/json'}
+    # A User-Agent first: several public APIs (GitHub among them) refuse a request without one.
+    headers={'User-Agent':USER_AGENT,c['header']:('Bearer ' if c['scheme']=='bearer' else '')+c['value'],'Accept':'application/json','Content-Type':'application/json'}
     path=u.path
     if c['scheme']=='telegram':
         headers.pop(c['header'],None)
