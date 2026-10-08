@@ -204,6 +204,21 @@ def admin_emails() -> Tuple[List[str], List[str]]:
     return valid, problems
 
 
+def boot_problems() -> List[str]:
+    """Every malformed entry in the two sign-in lists the deployment sets, each naming its key.
+
+    The boot refuses on any of them (`__main__.build_production_app`, P14 "validate at boot, fail
+    fast"). A malformed entry never matches anything, so left alone it fails silently and in the
+    worst direction: a typo in `VEXA_ADMIN_EMAILS` leaves the instance without the admin it names
+    while still closing the claim, and a typo in `VEXA_SIGNIN_ALLOW` turns away the people it was
+    written for. Only the deployment's halves are checked here; the admin-edited setting is validated
+    when it is written."""
+    _, allow_problems = env_entries()
+    _, admin_problems = admin_emails()
+    return ([f"{ENV_KEY}: {p}" for p in allow_problems]
+            + [f"{ADMIN_EMAILS_ENV}: {p}" for p in admin_problems])
+
+
 def is_admin(email, data, admins: Iterable[str]) -> bool:
     """THE admin test: the claimed role on the user row, or an address the deployment names."""
     claimed = isinstance(data, dict) and data.get("is_admin") is True
