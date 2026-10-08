@@ -32,7 +32,7 @@
       "key": "VEXA_CONNECTIONS_STORE",
       "class": "defaulted",
       "default": "local",
-      "description": "credential store backend: `local` (AES-256-GCM in the state directory, keyed by VEXA_CONNECTIONS_STORE_KEY_FILE) or `openbao` (an OpenBao or Vault KV v2 mount the operator runs). Any other value refuses the boot (ADR-0039)",
+      "description": "credential store backend: `local` (AES-256-GCM in the state directory, keyed by VEXA_CONNECTIONS_STORE_KEY_FILE) or `openbao` (an OpenBao or Vault KV v2 mount the operator runs). Any other value refuses the boot (ADR-0040)",
       "targets": ["compose", "helm"]
     },
     {

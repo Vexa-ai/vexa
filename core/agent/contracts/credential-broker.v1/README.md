@@ -44,7 +44,7 @@ holding the agent key cannot perform a human-only operation.
 - **No route returns a stored credential to `agent` or `human`.** Only `git` reads a value back,
   and only for Git operations agent-api runs itself.
 - **How the broker stores credentials** (an encrypted local store, or OpenBao) is a deployment
-  choice behind a port, not part of the wire. See ADR-0039.
+  choice behind a port, not part of the wire. See ADR-0040.
 - **Who the actor is.** The assertion carries the subject its signer resolved. agent-api resolves
   it from the gateway's identity; the terminal resolves it from the sign-in cookie, checked against
   identity on every request.

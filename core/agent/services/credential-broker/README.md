@@ -7,7 +7,7 @@ API key or OAuth application for a custom service, a saved Git token — and use
 person's behalf without returning them. The agent asks for a connection, a human consents or pastes
 the secret in the terminal's Connections panel, and from then on the agent receives results (mail,
 events, a service response, a Git credential for agent-api's own Git operations), never the
-credential. Decision record: [ADR-0039](../../../../docs/adr/0039-connections-credential-broker-is-a-product-service.md).
+credential. Decision record: [ADR-0040](../../../../docs/adr/0040-connections-credential-broker-is-a-product-service.md).
 
 A separate service rather than an agent-api module (P10) because its force is trust isolation:
 agent-api runs next to the worker containers that execute model-chosen tool calls, and the broker's

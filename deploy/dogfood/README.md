@@ -35,7 +35,7 @@ stack's shape, that change belongs in the stack, where users get it too.
 
 The Connections credential broker used to live here as a harness (`credentials-mvp/`). It is a
 product service now — `core/agent/services/credential-broker`, deployed by the stock compose file
-and the chart (ADR-0039) — so a dogfood stack gets it the way users do.
+and the chart (ADR-0040) — so a dogfood stack gets it the way users do.
 
 ## Hostnames
 

@@ -375,7 +375,7 @@ securityContext:
 {{- end -}}
 {{- end -}}
 
-{{/* Connections (ADR-0039): the broker deploys with agent-api, never without it. */}}
+{{/* Connections (ADR-0040): the broker deploys with agent-api, never without it. */}}
 {{- define "vexa.credentialBrokerEnabled" -}}
 {{- if and .Values.agentApi.enabled .Values.credentialBroker.enabled -}}true{{- end -}}
 {{- end -}}

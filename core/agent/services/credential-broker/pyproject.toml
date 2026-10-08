@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn>=0.29,<1",
     "httpx>=0.27,<1",
     "pydantic>=2,<3",
-    # AES-256-GCM for the local encrypted store (ADR-0039). Apache-2.0 OR BSD-3-Clause.
+    # AES-256-GCM for the local encrypted store (ADR-0040). Apache-2.0 OR BSD-3-Clause.
     "cryptography>=43,<47",
 ]
 

@@ -383,7 +383,7 @@ agentApi:
     limits:   { cpu: 1000m, memory: 1Gi }
   extraEnv: []
 
-# ---------- Connections: the credential broker (credential-broker.v1, ADR-0039) ----------
+# ---------- Connections: the credential broker (credential-broker.v1, ADR-0040) ----------
 # Holds the accounts and services a person connects (Gmail, Google Calendar, custom API keys) and
 # uses them for the agent without handing the credential over. Deployed whenever agentApi is.
 # agent-api signs as the `agent` role, the terminal as the `human` role (consent, save, delete);

@@ -679,7 +679,7 @@ check_admins "terminal.extraEnv VEXA_ADMIN_EMAILS is carried over to admin-api" 
   --set 'terminal.extraEnv[0].name=VEXA_ADMIN_EMAILS' --set 'terminal.extraEnv[0].value=old@example.com'
 check_admins "unset is empty" ""
 
-# ── Connections: the credential broker (credential-broker.v1, ADR-0039) ──────────────────────────
+# ── Connections: the credential broker (credential-broker.v1, ADR-0040) ──────────────────────────
 # The broker renders with agent-api, admits only agent-api and terminal Pods, and each consumer
 # mounts only its own role key: agent-api never the human key, the terminal never the agent key.
 echo "=== credential broker ==="

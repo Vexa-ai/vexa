@@ -2,7 +2,7 @@
 
 Every route except GET /health requires an X-Vexa-Assertion signed with a role key; the role decides
 what the caller may do (contract `x-routes`). The broker owns three things nobody else writes:
-connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0039), and
+connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0040), and
 the OAuth state that binds a consent to the browser session that started it.
 
 No route returns a stored credential to the `agent` or `human` roles. Errors are fixed sentences

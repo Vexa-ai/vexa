@@ -1337,7 +1337,7 @@
    "unique-id": "credentials-broker",
    "node-type": "service",
    "name": "credential-broker",
-   "description": "Connections credential broker (credential-broker.v1, ADR-0039): verifies signed agent/human/git role assertions, owns connection metadata, audit and OAuth state, and uses stored credentials for the caller without returning them to the agent or human roles. Deployed with agent-api (compose, helm); not in Lite",
+   "description": "Connections credential broker (credential-broker.v1, ADR-0040): verifies signed agent/human/git role assertions, owns connection metadata, audit and OAuth state, and uses stored credentials for the caller without returning them to the agent or human roles. Deployed with agent-api (compose, helm); not in Lite",
    "metadata": [
     {
      "path": "core/agent/services/credential-broker"

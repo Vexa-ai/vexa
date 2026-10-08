@@ -1137,7 +1137,7 @@ const CONFIG_ADOPTED = [
     compose: "gateway", helm: ["deployment-gateway.yaml"], lite: "gateway",
   },
   {
-    // Connections (ADR-0039). Adopted the day it entered the product tree. lite is null on
+    // Connections (ADR-0040). Adopted the day it entered the product tree. lite is null on
     // purpose: Lite spawns agent workers as child processes of the one container, so no process
     // boundary could keep the human key from a worker, and Lite does not carry Connections.
     service: "credential-broker",

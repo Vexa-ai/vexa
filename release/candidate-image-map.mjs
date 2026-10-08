@@ -26,7 +26,7 @@ export const FLOWS_IMAGE = "vexaai/v012-flows";
 export const REQUIRED_IMAGES_V2 = [...REQUIRED_IMAGES, FLOWS_IMAGE];
 
 // schema_version 3 (v0.13.2+): Connections ships the credential broker as its own image
-// (core/agent/services/credential-broker, ADR-0039) — compose and the chart run it beside
+// (core/agent/services/credential-broker, ADR-0040) — compose and the chart run it beside
 // agent-api. Frozen schema-1 and schema-2 packets keep validating against ten and eleven; a
 // v0.13.2+ map must name twelve. Hosted production does not deploy it yet, so it is oss_only.
 export const CREDENTIAL_BROKER_IMAGE = "vexaai/v012-credential-broker";

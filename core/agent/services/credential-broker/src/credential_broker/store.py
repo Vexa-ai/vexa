@@ -1,4 +1,4 @@
-"""The credential store port and its two adapters (ADR-0039).
+"""The credential store port and its two adapters (ADR-0040).
 
 The broker writes every credential through `Store`: a versioned key-value store whose values are
 JSON objects. A write returns the new version and a receipt id the audit log records; a read names

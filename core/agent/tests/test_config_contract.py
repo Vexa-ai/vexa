@@ -233,7 +233,7 @@ def test_the_qwen_lane_dials_are_declared():
 # VEXA_CONNECTIONS_BROKER_URL + VEXA_CONNECTIONS_AGENT_KEY_FILE (capability `connections`) and
 # VEXA_GIT_STORE_BROKER_URL + VEXA_GIT_STORE_KEY_FILE (capability `git_credential_broker`). The four
 # were first declared `targets: []` for a dogfood overlay; since the broker is a product service
-# (ADR-0039) they are plumbed on compose and helm, and gate:config-contract holds them there.
+# (ADR-0040) they are plumbed on compose and helm, and gate:config-contract holds them there.
 EXPECTED_DECLARED_KEYS = 103
 
 

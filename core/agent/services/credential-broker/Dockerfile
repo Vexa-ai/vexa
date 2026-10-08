@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# credential-broker — the Connections credential broker (credential-broker.v1, ADR-0039).
+# credential-broker — the Connections credential broker (credential-broker.v1, ADR-0040).
 # Build context: this directory (pyproject.toml + uv.lock + src/). The signer it verifies with is
 # vendored into src/ (gate:fact-parity holds it to the contract's canonical copy), so nothing
 # outside this directory enters the image.
