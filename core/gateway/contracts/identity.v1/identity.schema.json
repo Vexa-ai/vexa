@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/identity.v1",
+  "title": "identity.v1 — the signed identity the gateway forwards to the services behind it",
+  "description": "The gateway resolves a bearer through identity's /internal/validate and forwards the request with X-Vexa-Identity: \"v1.\" + base64url(claims JSON) + \".\" + base64url(HMAC-SHA256(VEXA_GATEWAY_IDENTITY_SECRET, \"v1.\" + base64url(claims JSON))). agent-api and meeting-api verify the signature in constant time, the issue time and the expiry within a bounded clock skew, and rebuild every x-user-* header from these claims. A request that asserts an x-user-* header without a valid signature, and without the internal tier's X-Internal-Secret, is refused with 401.",
+  "$defs": {
+    "Claims": {
+      "type": "object",
+      "required": ["typ", "sub", "scopes", "iat", "exp"],
+      "additionalProperties": false,
+      "properties": {
+        "typ": { "const": "vexa-identity" },
+        "sub": { "type": "string", "minLength": 1, "description": "the user id identity resolved; becomes x-user-id" },
+        "email": { "type": "string", "description": "the verified email identity holds; becomes x-user-email" },
+        "scopes": { "type": "array", "items": { "type": "string" }, "description": "the credential's scopes; becomes x-user-scopes (comma-joined)" },
+        "limits": { "type": "integer", "minimum": 0, "description": "max concurrent bots; becomes x-user-limits" },
+        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships; becomes x-user-workspaces (comma-joined)" },
+        "webhook_url": { "type": "string", "description": "the user's webhook; becomes x-user-webhook-url" },
+        "webhook_secret": { "type": "string", "description": "its signing secret; becomes x-user-webhook-secret" },
+        "webhook_events": { "description": "its event filter; becomes x-user-webhook-events (JSON)" },
+        "delegation": { "$ref": "#/$defs/Delegation" },
+        "iat": { "type": "integer", "description": "issued at, unix seconds" },
+        "exp": { "type": "integer", "description": "expires at, unix seconds; a verifier refuses exp - iat > 300" }
+      }
+    },
+    "Delegation": {
+      "type": "object",
+      "description": "Present when the bearer was a worker's delegation token (vxd_). The ceiling the dispatch granted: a service refuses a person-in-the-loop verb when regime is not human.",
+      "required": ["regime", "workspaces"],
+      "additionalProperties": false,
+      "properties": {
+        "regime": { "enum": ["human", "autonomous"], "description": "becomes x-user-regime" },
+        "workspaces": {
+          "description": "\"*\" (everything already the subject's) or the isolation set; becomes x-user-delegation-workspaces",
+          "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ]
+        },
+        "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" }
+      }
+    },
+    "Vector": {
+      "type": "object",
+      "description": "A signing test vector: any implementation signing these claims at `now` with `secret` must produce `token`.",
+      "required": ["secret", "now", "ttl_sec", "claims", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "type": "string" },
+        "now": { "type": "integer" },
+        "ttl_sec": { "type": "integer" },
+        "claims": { "type": "object" },
+        "token": { "type": "string", "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" }
+      }
+    }
+  }
+}

@@ -92,6 +92,29 @@
       ]
     },
     {
+      "id": "identity-token",
+      "fact": "identity.v1 — the signed identity the gateway forwards and the guard that checks it",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/identity.v1/identity_token.py",
+      "how_to_agree": "edit the canonical copy in the contract and vendor it VERBATIM into each package that signs or verifies",
+      "why": "One signer (the gateway) and two verifiers (agent-api, meeting-api) in three separately-built images that may not import each other (P2). A verifier that drifts from its signer refuses every request or, worse, accepts one it should not; the bytes are compared so neither can happen quietly.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/identity.v1/identity_token.py"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/identity_token.py"
+        },
+        {
+          "path": "core/agent/control_plane/identity_token.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/identity_token.py"
+        }
+      ]
+    },
+    {
       "id": "machinery-mark",
       "fact": "the machinery mark — the literal that hides a composed opening's prompt bubble",
       "kind": "literal",

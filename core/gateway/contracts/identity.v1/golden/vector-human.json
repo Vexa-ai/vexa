@@ -1,0 +1,23 @@
+{
+  "claims": {
+    "email": "ada@example.com",
+    "limits": 3,
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "sub": "42",
+    "webhook_events": {
+      "meeting.completed": true
+    },
+    "webhook_secret": "whsec-example",
+    "webhook_url": "https://hooks.example.com/vexa",
+    "workspaces": [
+      "ws_7f3a"
+    ]
+  },
+  "now": 1760000000,
+  "secret": "golden-test-secret-not-a-deployment-value",
+  "token": "v1.eyJlbWFpbCI6ImFkYUBleGFtcGxlLmNvbSIsImV4cCI6MTc2MDAwMDA2MCwiaWF0IjoxNzYwMDAwMDAwLCJsaW1pdHMiOjMsInNjb3BlcyI6WyJib3QiLCJ0eCJdLCJzdWIiOiI0MiIsInR5cCI6InZleGEtaWRlbnRpdHkiLCJ3ZWJob29rX2V2ZW50cyI6eyJtZWV0aW5nLmNvbXBsZXRlZCI6dHJ1ZX0sIndlYmhvb2tfc2VjcmV0Ijoid2hzZWMtZXhhbXBsZSIsIndlYmhvb2tfdXJsIjoiaHR0cHM6Ly9ob29rcy5leGFtcGxlLmNvbS92ZXhhIiwid29ya3NwYWNlcyI6WyJ3c183ZjNhIl19.yfjq6wMinrwsP7MEgYkGKGboG7fsPjDQXQC0w1kDlIQ",
+  "ttl_sec": 60
+}
