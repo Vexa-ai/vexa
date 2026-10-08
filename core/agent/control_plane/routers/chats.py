@@ -64,7 +64,7 @@ def build(**d) -> APIRouter:
     wsr = d['wsr']
     # The same access decision the live transcript stream makes (routers/meetings.py): a chat may
     # fold a meeting's transcript only when its caller could watch that transcript.
-    _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, getattr(wsr, "root", None))
 
     # ── THE TARGET WORKSPACE, BY NAME (Vexa-ai/vexa#1611) ────────────────────────────────────
     #

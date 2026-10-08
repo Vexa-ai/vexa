@@ -1687,6 +1687,8 @@ def meeting_access_check(lookup, roster_root) -> "Callable[[str, object], dict |
     called three-arg with a `TypeError` rescue — that rescue would also swallow a genuine TypeError
     raised INSIDE the lookup and silently downgrade it to "not authorized"."""
     def _caller_workspaces(subject: str) -> list[str]:
+        if roster_root is None:
+            return []
         try:
             from control_plane.workspace_membership import list_memberships
             return [str(m["workspace_id"]) for m in list_memberships(roster_root, str(subject))
