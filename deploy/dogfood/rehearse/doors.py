@@ -220,22 +220,20 @@ class LiveDoors(Doors):
 
     # -- verbs ----------------------------------------------------------------------------------
     def require_instance_blank(self) -> dict:
-        st, body = _http("GET", f"{AGENT_API}/api/global/state", None)
-        if st != 200 or not isinstance(body, dict):
-            st, body = _http("GET", f"{ADMIN_API}/internal/instance-state", self._ak())
+        # Blank = no admin claimed. There is no company-layer state to read any more (founder
+        # ruling 2026-10-08); admin-api answers the admin question over its admin-key door.
+        st, body = _http("GET", f"{ADMIN_API}/admin/instance", self._ak())
         if st != 200 or not isinstance(body, dict):
             raise DoorRefused(
-                "could not read the instance gate — refusing rather than guessing that a stack "
-                f"is blank ({st}). The gate is what tells a blank instance from a claimed one.")
-        claimed = bool(body.get("admin_exists") or body.get("admin"))
-        layer = str(body.get("global_setup") or body.get("setup") or "")
-        if claimed or layer == "completed":
+                "could not read the instance state — refusing rather than guessing that a stack "
+                f"is blank ({st}).")
+        claimed = bool(body.get("admin_exists"))
+        if claimed:
             raise DoorRefused(
-                "the instance is NOT blank: an admin has claimed it"
-                + (f" and the company layer is {layer}" if layer else "")
-                + ". `blank-admin` asserts this state, it never creates it — blanking deletes "
-                  "every person on the stack and is `bin/blank-instance.sh`, run on purpose.")
-        return {"blank": True, "admin_exists": claimed, "global_setup": layer}
+                "the instance is NOT blank: an admin has claimed it. `blank-admin` asserts this "
+                "state, it never creates it — blanking deletes every person on the stack and is "
+                "`bin/blank-instance.sh`, run on purpose.")
+        return {"blank": True, "admin_exists": claimed}
 
     def require_subject_absent(self, address: str) -> dict:
         uid = self.user_find(address)

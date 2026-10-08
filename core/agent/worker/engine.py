@@ -499,7 +499,10 @@ def global_context_preamble(mounts: list[dict]) -> str:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
-        if not content.strip() or remaining <= 0:
+        # A seed placeholder nobody wrote (`vexa:unwritten`, see control_plane/global_layer.py) is
+        # not organisation context: `_global` may stay unwritten for good (founder ruling
+        # 2026-10-08), and its "# Company" heading must never reach a turn as the employer's name.
+        if not content.strip() or "vexa:unwritten" in content or remaining <= 0:
             continue
         excerpt = content[:remaining]
         remaining -= len(excerpt)

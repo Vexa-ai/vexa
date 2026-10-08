@@ -2165,16 +2165,10 @@ def flows_submit(name: str, on_event: str, steps: list[str],
 
     steps: ordered step names from flows_list's vocabulary.
     on_event: a trigger name, e.g. invite.received / meeting.completed / mail.reply.
-    params: flow-level tuning read by steps via ctx.flow.param(key).
-
-    REFUSED while the company layer is missing: a flow submitted into an instance that cannot yet
-    say who it works for is a machine configured for nobody."""
+    params: flow-level tuning read by steps via ctx.flow.param(key)."""
     _actor, _refused = _operator_gate("flows_submit")
     if _refused:
         return _refused
-    gated = _refuse_if_gated("flows_submit", me())
-    if gated:
-        return gated
     st, body = _http("POST", f"{FLOWS_API}/flows", _fkey(), {
         "name": name, "on_event": on_event, "steps": steps,
         "params": params or {}, "activate": activate})
@@ -2187,15 +2181,10 @@ def flow_lifecycle(name: str, version: int, verb: str) -> str:
     """Activate or retire one flow version. verb: activate | retire.
 
     In-flight reactions keep the version stamped at their admission — retiring never
-    rewrites work already running.
-
-    REFUSED while the company layer is missing, for the same reason flows_submit is."""
+    rewrites work already running."""
     _actor, _refused = _operator_gate("flow_lifecycle")
     if _refused:
         return _refused
-    gated = _refuse_if_gated("flow_lifecycle", me())
-    if gated:
-        return gated
     if verb not in ("activate", "retire"):
         return json.dumps({"error": "verb must be activate or retire"})
     st, body = _http("POST", f"{FLOWS_API}/flows/{name}/{version}/{verb}", _fkey(), {})
@@ -3858,59 +3847,22 @@ def company_context() -> str:
 
 
 # ---------------------------------------------------------------- the company layer
-# A fresh Vexa serves NOBODY until its admin has written the thin company layer into `_global`
-# (founder, 2026-09-02: "global needs to be setup by admin, it just should not let him start the
-# service before that"). agent-api holds the gate value and the verifier; the rig only asks.
-
-SETUP_SENTENCE = "This Vexa is being set up by its administrator."
-
-
-def _company_layer_state(uid: str) -> dict:
-    """What the company layer holds, from the one service that can see the store.
-
-    FAIL-CLOSED like every other reader of this gate: if agent-api cannot answer, the layer is
-    missing. A verb that reconfigures the machine must not proceed because a probe timed out."""
-    st, body = _http("GET", f"{AGENT_API}/api/global/state", {"X-User-Id": uid})
-    if st != 200 or not isinstance(body, dict):
-        return {"global_setup": "missing", "reasons": [f"agent-api answered {st}"],
-                "missing_files": [], "you_are_admin": False}
-    return body
-
-
-def _refuse_if_gated(verb: str, uid: str):
-    """The refusal an operator verb returns while the company layer is missing, or None.
-
-    It NAMES ITSELF. A bare "forbidden" leaves the agent to guess whether it asked wrongly or asked
-    too early, and those two have opposite fixes. Note this is a DIFFERENT refusal from
-    `_operator_or_refuse`: that one says "you are not the operator", this one says "there is not yet
-    an organisation to operate". Both can be true; they are answered separately because the person
-    reading the answer has to know which one to fix."""
-    state = _company_layer_state(uid)
-    if state.get("global_setup") == "completed":
-        return None
-    return json.dumps({
-        "refused": verb,
-        "why": f"{verb} is refused: the company layer is not set up. {SETUP_SENTENCE}",
-        "missing_files": state.get("missing_files", []),
-        "reasons": state.get("reasons", []),
-        "next": ("You are the admin — write the five files into _global and call "
-                 "mark_global_ready." if state.get("you_are_admin") else
-                 "Only the instance admin can lift this."),
-    })
+# OPTIONAL (founder ruling 2026-10-08: "let's remove global setup at all so that there is no need to
+# setup global at all - let it be empty with no data - it's fine"). Nothing waits for it and no verb
+# here refuses for want of it; an admin who chooses to write it accepts it with the verb below.
 
 
 @mcp.tool()
 @_anon_guard
 def mark_global_ready() -> str:
-    """ACCEPT the company layer you just wrote into `_global`, and start the service.
+    """ACCEPT the company layer you just wrote into `_global` (optional — nothing waits for it).
 
     Call this at the END of the company-setup conversation, once the administrator agrees the five
     files are right: README.md (the company name as its first heading, then ONE sentence of what it
     does), PRINCIPLES.md, OBJECTIVES.md, STRUCTURE.md, MISSING.md.
 
-    It RE-READS the files itself before it accepts anything, commits them to the `_global` git
-    history with the administrator as the author, and lifts the instance gate — so other people can
-    sign in and the flows engine starts sending. It is a CHECK, not a claim: if the layer is
+    It RE-READS the files itself before it accepts anything and commits them to the `_global` git
+    history with the administrator as the author. It is a CHECK, not a claim: if the layer is
     incomplete it refuses and tells you exactly what is missing, so calling it is always safe, and
     telling the administrator it is done before this verb has accepted it is always wrong.
 
@@ -3926,8 +3878,8 @@ def mark_global_ready() -> str:
     if st != 200:
         return json.dumps({"accepted": False, "status": st, "error": str(body)[:500]})
     return json.dumps({**body,
-                       "say_this": "The instance is set up. Other people can sign in now and the "
-                                   "flows start sending."})
+                       "say_this": "The company layer is written: every agent here now introduces "
+                                   "itself with this company, and the mails name it."})
 
 
 @mcp.tool()
@@ -5012,7 +4964,7 @@ def deeplink(target: str, ref: str = "", name: str = "", meeting: str = "", ws: 
                       "the terminal composed: context pane left, the meeting beside it"),
         })
     if target == "setup_global":
-        q = f"?setup=global" + (f"&{as_q}" if as_q else "")
+        q = f"?ask=setup-global" + (f"&{as_q}" if as_q else "")
         return json.dumps({"url": f"{UI_BASE}/{q}",
                            "opens": "the org-level setup conversation"})
     return json.dumps({"error": "target must be ask | meeting | meetings | workspace_file | view | pre_meeting | during_meeting | post_meeting | "

@@ -410,7 +410,7 @@ def access_for(record: Optional[dict], subject: str, *, root=None,
     and writable-by-one is the entire shape of a desk.
 
     So `not-yours` applies to a desk only for a caller from OUTSIDE the instance — no subject at all
-    (an unauthenticated edge, or the company-layer gate closed before a subject was resolved). That
+    (an unauthenticated edge, or any refusal that ran before a subject was resolved). That
     is why the subject is tested for emptiness rather than for identity."""
     if not record:
         return ACCESS_GONE

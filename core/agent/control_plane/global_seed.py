@@ -30,11 +30,11 @@ SOURCE and `/workspaces/_global/mail/<name>.md` is the live copy, *"same content
 the source lies"* — and until now the only thing that carried one to the other was a person
 remembering to. `asks/` is `preset_library`'s and stays there; it had this rule first.
 
-WHAT THE SEED MUST NOT DO IS LIFT THE GATE. Every layer file arrives carrying
+WHAT THE SEED MUST NOT DO IS PASS FOR A WRITTEN LAYER. Every layer file arrives carrying
 `global_layer.UNWRITTEN_MARKER`, and `global_layer.state` counts a file that still carries it as not
-yet written. Before the seed, "empty" was what told the gate a file had not been written; a seeded
-placeholder is non-empty, and without the marker rule an instance could have accepted five files
-nobody had filled in.
+yet written, so the optional acceptance verb (`POST /api/global/ready`) cannot accept five files
+nobody filled in, and a mail never introduces the agent as working at "Company". Nothing waits for
+the layer to be written (founder ruling 2026-10-08) — the placeholders may stay as they are.
 """
 from __future__ import annotations
 

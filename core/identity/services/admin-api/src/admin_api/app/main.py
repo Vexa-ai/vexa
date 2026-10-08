@@ -287,40 +287,14 @@ _SETUP_FIELDS = ("models", "transcription", "completed", "global")
 # Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
 # default) because _validate_config_fields' one rulebook is string-only.
 _DIAGNOSTICS_FIELDS = ("capture_signal",)
-# "global_setup" is THE INSTANCE GATE (PRD S9 decision 17; founder 2026-09-02: "global needs to be
-# setup by admin, it just should not let him start the service before that"). `state` is "completed"
-# once an admin has written and committed the thin company layer into `_global`; ABSENT-OR-ANYTHING-
-# ELSE means missing, because this value is read FAIL-CLOSED by everything that can SEND. A fresh
-# instance, a cleared row and a half-written value therefore all mean the same thing: this Vexa
-# serves nobody yet. `company` is the company name the layer opens with -- evidence of WHAT was
-# accepted, never a second source of truth -- and `completed_at` is when. The only writer is
-# agent-api's verifier (POST /api/global/ready), which reads the files and the commit before it
-# flips anything: nothing may mark itself ready.
+# "global_setup" was the company-layer instance gate (founder 2026-09-02). Founder ruling
+# 2026-10-08 removed that gate ("let's remove global setup at all so that there is no need to setup
+# global at all - let it be empty with no data - it's fine"); the key stays writable so older
+# writers and existing rows do not 400, and NOTHING READS IT.
 _GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
 SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
                 "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
                 "global_setup": _GLOBAL_SETUP_FIELDS}
-
-# One vocabulary for the gate, so no caller invents its own spelling of "not ready".
-GLOBAL_SETUP_COMPLETED = "completed"
-GLOBAL_SETUP_MISSING = "missing"
-
-# The one sentence a refused visitor sees, spelled once. Every service that refuses on this gate
-# quotes THIS wording; a paraphrase in one client is how a person learns to distrust the product.
-GATE_SENTENCE = "This Vexa is being set up by its administrator."
-
-
-def global_setup_state(value: dict) -> str:
-    """Read the gate out of the stored `global_setup` row -- FAIL-CLOSED.
-
-    Anything that is not exactly "completed" is "missing": an absent row, a cleared field, a typo,
-    a value half-written by a crashed run. The expensive direction of this decision is a flow
-    mailing strangers on behalf of a company nobody has described yet; the cheap direction is
-    showing an admin a wizard they have already finished."""
-    if isinstance(value, dict) and str(value.get("state", "")).strip() == GLOBAL_SETUP_COMPLETED:
-        return GLOBAL_SETUP_COMPLETED
-    return GLOBAL_SETUP_MISSING
-
 
 class ModelPrefsUpdate(BaseModel):
     """Partial update — only fields the caller SENDS change; an empty string clears a field."""
@@ -1089,115 +1063,21 @@ def create_app() -> FastAPI:
         return row is not None
 
     async def _instance_state(db: AsyncSession) -> dict:
-        """THE INSTANCE GATE, computed in exactly ONE place.
-
-        Every other service (the terminal, agent-api, the flows engine) reads the gate through one
-        of the two doors below -- never by reaching into platform_settings itself. One source of
-        truth, one reader function per service, is the whole design: a surface with two readers of
-        a lifecycle value does not error when they disagree, it just behaves differently in two
-        places and nobody can say which is right."""
-        row = await db.get(PlatformSetting, "global_setup")
-        value = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
-        return {
-            "admin_exists": await _admin_exists(db),
-            "global_setup": global_setup_state(value),
-            "company": value.get("company") or None,
-        }
+        """THE INSTANCE STATE, computed in exactly ONE place: has an admin been claimed? It used to
+        carry the company-layer gate as well; that gate is gone (founder ruling 2026-10-08)."""
+        return {"admin_exists": await _admin_exists(db)}
 
     @app.get("/internal/instance", include_in_schema=False)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
         return await _instance_state(db)
 
-    @app.put("/admin/instance/global-setup", include_in_schema=False,
-             dependencies=[Depends(verify_admin_token)])
-    async def set_global_setup_admin(payload: dict, db: AsyncSession = Depends(get_db)):
-        """F-D15: the OPERATOR door onto the row `POST /api/global/ready` writes over the internal
-        edge (`PUT /internal/settings/global_setup`) -- for the profile that has no wizard to call
-        it. agent-api's onboarding wizard is the ONLY writer today (see the comment on
-        `_GLOBAL_SETUP_FIELDS` above), so a no-agents deployment -- no agent-api at all -- had no
-        way to commit the company layer short of the internal secret, which an operator holding
-        only the admin key should never need for a routine setup step. Same row, same fields, same
-        fail-closed reader (`global_setup_state`); this is a second DOOR onto it, gated by the
-        credential this tier already authenticates every other `/admin/*` route with, not a second
-        definition of the gate.
-
-        `company` is required -- the whole point of the layer is naming who this Vexa serves, and a
-        commit with no company would open the gate on a document that still answers nothing.
-        `state` defaults to "completed" (the only value `global_setup_state` recognises) and
-        `completed_at` defaults to now if the caller does not supply one."""
-        fields = SETTING_KEYS["global_setup"]
-        update = {f: payload.get(f) for f in fields if f in payload}
-        if payload and not update:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail=(f"none of {sorted(payload)} is a field of 'global_setup'. "
-                        f"Known fields: {list(fields)}"))
-        if not str(update.get("company") or "").strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail="company is required to commit the global setup layer")
-        if not str(update.get("state") or "").strip():
-            update["state"] = GLOBAL_SETUP_COMPLETED
-        if not str(update.get("completed_at") or "").strip():
-            update["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        cleaned = _validate_config_fields(update, kind="global_setup")
-        row = await db.get(PlatformSetting, "global_setup")
-        merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)
-        if row is None:
-            row = PlatformSetting(key="global_setup", value=merged)
-        else:
-            row.value = merged
-        db.add(row)
-        await db.commit()
-        return {"key": "global_setup", "value": merged}
-
     @app.get("/admin/instance", include_in_schema=False,
              dependencies=[Depends(verify_admin_token)])
     async def instance_status_admin(db: AsyncSession = Depends(get_db)):
-        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
-        no internal secret (see flows_steps/common.py), so without this door it would have to infer
-        the gate from something else -- and a service that infers the gate IS a second source of
-        truth. Same body, same computation, different transport."""
-        return await _instance_state(db)
-
-    @app.post("/internal/signin-allowed", include_in_schema=False)
-    async def signin_allowed(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
-        """MAY THIS EMAIL SIGN IN RIGHT NOW? The company-layer gate's admission rule, decided HERE
-        because this service owns both halves of it -- `users.data.is_admin` and platform_settings.
-        The terminal asks one question instead of assembling the answer out of three reads it can
-        get wrong in three different ways.
-
-        While the gate is up the instance serves exactly one person:
-          * no admin yet -> allowed. The next sign-in IS the claim (first sign-in = admin), so
-            refusing here would make a fresh instance unclaimable -- a deadlock, not a gate.
-          * the admin    -> allowed. They are the one who has to finish the setup.
-          * anyone else  -> refused, in one sentence, and the caller must refuse BEFORE creating a
-            user row: an account minted for somebody who was never admitted is a ghost that later
-            reads as an adopted user.
-
-        Once the gate is down this answers True for everyone and is a formality."""
-        _check_internal(request)
-        email = str(payload.get("email") or "").strip().lower()
-        state = await _instance_state(db)
-        if state["global_setup"] == GLOBAL_SETUP_COMPLETED or not state["admin_exists"]:
-            return {"allowed": True, "reason": "", **state}
-        row = None
-        if email:
-            row = (await db.execute(
-                select(User).where(func.lower(User.email) == email).limit(1)
-            )).scalar_one_or_none()
-        data = row.data if row is not None and isinstance(row.data, dict) else {}
-        if data.get("is_admin") is True:
-            return {"allowed": True, "reason": "", **state}
-        return {"allowed": False, "reason": GATE_SENTENCE, **state}
-
-    @app.get("/admin/instance", include_in_schema=False,
-             dependencies=[Depends(verify_admin_token)])
-    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
-        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
-        no internal secret (see flows_steps/common.py), so without this door it would have to infer
-        the gate from something else -- and a service that infers the gate IS a second source of
-        truth. Same body, same computation, different transport."""
+        """The SAME instance state over the admin-key door, for a caller that holds an admin key and
+        no internal secret (the dogfood rehearsal rig's blank-instance check). Same body, same
+        computation, different transport."""
         return await _instance_state(db)
 
     @app.post("/internal/bootstrap-admin", include_in_schema=False)

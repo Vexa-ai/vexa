@@ -100,71 +100,34 @@ def build(**d) -> APIRouter:
             workloads = None
         return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health(),
                                      workloads=workloads)
-    @router.get("/api/global/state")
-    def global_state(request: Request):
-        """WHAT THE COMPANY LAYER HOLDS — the wizard's poll, and the honest answer to "why is this
-        instance still refusing people".
-
-        Readable by any authenticated subject on purpose: a non-admin who has just been refused at
-        the door deserves to be told the instance is mid-setup rather than that they are broken.
-        The company NAME is only returned once the gate is down — before that it is a half-written
-        answer to a question about somebody's employer."""
-        subject = subject_of(request)
-        gate = global_layer.instance_state(settings)
-        try:
-            st = global_layer.state(_global_store())
-        except HTTPException:
-            raise
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"could not read the organisation tier: {e}")
-        down = gate.get("global_setup") == global_layer.COMPLETED
-        return {
-            "global_setup": gate.get("global_setup", global_layer.MISSING),
-            "company": (gate.get("company") or st["company"]) if down else None,
-            "present": st["present"],
-            "missing_files": st["missing_files"],
-            "reasons": st["reasons"],
-            "is_repo": st["is_repo"],
-            "commits": st["commits"],
-            "ready_to_accept": st["ready"],
-            "you_are_admin": global_layer.is_admin(settings, str(subject)),
-            "gate_sentence": global_layer.GATE_SENTENCE,
-        }
     @router.post("/api/global/ready")
     def global_ready(request: Request, body: dict = Body(default={})):
-        """ACCEPT the company layer: verify the files, commit them as the admin, lift the gate.
+        """ACCEPT an admin-written company layer: verify the files and commit them as the admin.
 
-        NOTHING MAY MARK ITSELF READY. The agent that wrote the layer asks for this verb and the
-        verb goes and looks — the five files present and non-empty, and a README that opens with
-        the company's name and one sentence of what it does. That last rule is the founder's:
-        *"the first chat needs to present itself knowing about itself — which company it's from and
-        what's their service."* An agent can only say which company it belongs to if a human wrote
-        the name down, so the gate does not lift on a README that does not carry one.
+        OPTIONAL. Nothing waits for this any more (founder ruling 2026-10-08: "let's remove global
+        setup at all so that there is no need to setup global at all - let it be empty with no data -
+        it's fine"); `_global` may stay empty for good. It used to also lift the instance gate in
+        admin-api — that gate is gone, so this verb only verifies and commits.
 
-        Admin-only, idempotent, and it reports WHY it refused rather than just refusing — the caller
-        is an agent mid-conversation with the one person who can fix it."""
+        NOTHING MAY MARK ITSELF ACCEPTED: the verb goes and looks — the five files present and
+        written, and a README that opens with the company's name and one sentence of what it does,
+        because those two lines are read out loud to strangers. Admin-only, idempotent, and it
+        reports WHY it refused — the caller is an agent mid-conversation with the one person who
+        can fix it."""
         subject = subject_of(request)
         if not global_layer.is_admin(settings, str(subject)):
             raise HTTPException(status_code=403,
                                 detail="only the instance admin may accept the company layer")
         root = _global_store()
-        # The SECOND top-up point. Start is the one that matters for a running instance; this one
-        # catches the instance that was started before its store existed, or whose `_global` became
-        # writable later — and it runs BEFORE the commit below, so anything added rides into the
-        # admin's own acceptance commit instead of sitting untracked. Additive, never overwriting,
-        # and never raising (it logs what it could not write) — so it cannot fail an acceptance.
+        # Top-ups before the commit, so anything added rides into the admin's own acceptance commit
+        # instead of sitting untracked. Additive, never overwriting, and never raising.
         from control_plane import global_seed, preset_library
         preset_library.top_up(root)
-        # The rest of the tier on the same terms — the layer files, `POLICIES.md`, the flow pages
-        # and the mail templates. It cannot lift the gate on its own: every seeded layer file
-        # carries `global_layer.UNWRITTEN_MARKER`, and `state()` below counts a file that still
-        # carries it as not yet written.
         global_seed.top_up(root)
         st = global_layer.state(root)
         if not st["ready"]:
             return JSONResponse(status_code=409, content={
                 "accepted": False,
-                "global_setup": global_layer.MISSING,
                 "missing_files": st["missing_files"],
                 "reasons": st["reasons"],
                 "next": "write the missing files into /workspaces/_global, then call this again",
@@ -176,17 +139,8 @@ def build(**d) -> APIRouter:
                                       message=f"company layer: {st['company']}")
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=f"could not commit the company layer: {e}")
-        try:
-            global_layer.mark_ready(settings, company=st["company"])
-        except Exception as e:  # noqa: BLE001
-            # The commit stands and the files are on disk; only the MARKER failed. Say exactly that
-            # — an agent told "failed" would rewrite files that are already correct.
-            raise HTTPException(status_code=502, detail=(
-                f"the company layer is committed ({sha}) but the instance gate could not be "
-                f"recorded: {e}"))
-        return {"accepted": True, "global_setup": global_layer.COMPLETED,
-                "company": st["company"], "service": st["service"], "commit": sha,
-                "files": st["present"]}
+        return {"accepted": True, "company": st["company"], "service": st["service"],
+                "commit": sha, "files": st["present"]}
     @router.get("/api/models/test")
     def models_test(request: Request):
         """Test the effective model credentials NOW: custom mode = a real 1-token completion

@@ -18,7 +18,6 @@ import { VersionBar } from "./VersionBar";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
-import { SetupGate } from "./SetupGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import { redeemScaffoldShare } from "../minutes/scaffold";
 import { beginArrival } from "../minutes/arrival";
@@ -41,26 +40,9 @@ function InviteGate({ children }: { children: ReactNode }) {
   const tshare = params.get("tshare");
   const meeting = params.get("meeting");   // ?meeting=<platform>/<native> deep-link → open that meeting
   const assign = params.get("assign");     // ?assign=<uid> — MINUTES: choose a group for an unbound meeting
-  const setup = params.get("setup");       // ?setup=global — MINUTES: the admin org-tier conversation
-  const view = params.get("view");         // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
+  const view = params.get("view");        // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
   const ask = params.get("ask");           // ?ask=<preset> — MINUTES: open a chat already primed
   const scaffold = params.get("s");        // ?s=<id> — THE SCAFFOLD: one record per arrival (§5.5)
-
-  // MINUTES `?setup=global`: the ADMIN company-layer conversation. It stashes a PRESET — the same
-  // `vexa.pendingPreset` every emailed `?ask=` link stashes — so the opening turn comes from
-  // `_global/asks/setup-global.md`, admin-authored and read hot at click time. It used to stash a
-  // bespoke flag that the workbench turned into a prompt string baked into this client, pointing
-  // the agent at a file that exists on no deployment; the one conversation that decides how every
-  // agent in the company behaves opened by reading nothing, and its wording could only change by
-  // rebuilding a cold image. Re-runnable on purpose — amending the company layer is the same
-  // conversation.
-  useEffect(() => {
-    if (setup !== "global") return;
-    try {
-      localStorage.setItem("vexa.pendingPreset", JSON.stringify({ ask: "setup-global" }));
-    } catch { /* locked-down storage */ }
-    if (!invite && !tshare) window.location.replace(window.location.pathname);
-  }, [setup, invite, tshare]);
 
   // MINUTES `?assign=` (from the organiser's artifact email): stash the meeting uid; the groups
   // surface renders the chooser. Same clean-URL discipline as `?meeting=`.
@@ -265,15 +247,13 @@ export function App() {
       <VersionBar />
     <AuthGate>
       <InviteGate>
-        {/* SetupGate: the bootstrap-claimed admin's first-run wizard (models + transcription,
-            smoke-tested). Non-admins and completed instances fall straight through. */}
-        <SetupGate>
-          <OnboardingGate>
-            <ServicesProvider container={container}>
-              {minutesOnly() ? <MinutesShell /> : <Workbench />}
-            </ServicesProvider>
-          </OnboardingGate>
-        </SetupGate>
+        {/* No setup step in front of the workbench (founder ruling 2026-10-08): `_global` may stay
+            empty, so every signed-in person, the admin included, goes straight to onboarding. */}
+        <OnboardingGate>
+          <ServicesProvider container={container}>
+            {minutesOnly() ? <MinutesShell /> : <Workbench />}
+          </ServicesProvider>
+        </OnboardingGate>
       </InviteGate>
     </AuthGate>
     </>

@@ -69,10 +69,16 @@ VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you a
                        "keep in your workspaces is visible to the company's agents; recordings and "
                        "transcripts stay here.")
 
-# The company half's fallback. If this string ever reaches a recipient it is a BUG in the gate --
-# no mail should send at all while the company layer is missing -- so it is written to be
-# recognisable in an inbox rather than to read smoothly.
-COMPANY_UNSET = "this company (setup incomplete)"
+# The company half's fallback, for an instance whose `_global/README.md` names no company. That is
+# an ordinary state now, not a bug: nothing waits for the company layer to be written (founder
+# ruling 2026-10-08: "let it be empty with no data - it's fine"), so mail goes out without it and
+# this phrase is what a recipient reads in its place.
+COMPANY_UNSET = "this organisation"
+
+# The marker every seeded `_global` placeholder carries until somebody writes the file (agent-api's
+# `global_layer.UNWRITTEN_MARKER`, spelled again here because flows does not import agent-api). The
+# seeded README's heading is the word "Company"; a mail must never introduce us as working there.
+UNWRITTEN_MARKER = "vexa:unwritten"
 
 _H1 = re.compile(r"^#\s+(.+?)\s*$")
 
@@ -178,10 +184,13 @@ def mailbox_address() -> str:
 def company_name(uid: str) -> str:
     """WHO THIS VEXA BELONGS TO, read from the company layer the admin wrote.
 
-    The first heading of `_global/README.md`, which the setup verb refuses to accept without.
-    Read per send rather than cached: an admin who corrects the company name expects the next mail
-    to carry the correction, and mail volume is nowhere near a rate at which this read matters."""
+    The first heading of `_global/README.md`, or `COMPANY_UNSET` when there is none — an empty
+    `_global`, or the seed's unwritten placeholder. Read per send rather than cached: an admin who
+    corrects the company name expects the next mail to carry the correction, and mail volume is
+    nowhere near a rate at which this read matters."""
     readme = ws_file(uid, "README.md", "_global") or ""
+    if UNWRITTEN_MARKER in readme:
+        return COMPANY_UNSET
     for line in readme.splitlines():
         if not line.strip():
             continue

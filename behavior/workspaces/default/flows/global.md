@@ -1,9 +1,17 @@
-# The ORGANISATION tier (`_global`) — what it is, and where its setup lives
+# The ORGANISATION tier (`_global`) — what it is, and that it is optional
 
-**This file is not the setup conversation.** The conversation lives in one place —
-`_global/asks/setup-global.md`, read hot at click time, admin-editable, source at
-`behavior/asks/setup-global.md`. This page exists only so an agent reading a workspace knows
-what the tier IS and does not invent a second version of it.
+**`_global` starts empty of company data, and it may stay that way.** Founder ruling, 2026-10-08:
+*"let's remove global setup at all so that there is no need to setup global at all - let it be empty
+with no data - it's fine."* (The image seeds only machinery into it — asks, mail templates, flow
+pages, `POLICIES.md` — plus unwritten placeholders for the five files below; none of it names a
+company, and an empty directory works just as well.) Nothing waits for it: every person who signs in is served from their first sign-in,
+flows send, and no verb refuses because the company layer is unwritten. Never tell anyone the
+instance is "not set up" for want of it, and never push an administrator into writing it.
+
+**This file is not the conversation that writes it.** That conversation, for an administrator who
+chooses to, lives in one place — `_global/asks/setup-global.md`, read hot at click time,
+admin-editable, source at `behavior/asks/setup-global.md`. This page exists only so an agent
+reading a workspace knows what the tier IS and does not invent a second version of it.
 
 It used to be that second version: a five-question, research-first, MDX-shaped org-onboarding script
 with its own accept marker, seeded into every PERSONAL workspace, describing a conversation that no
@@ -44,12 +52,13 @@ replaces. Nobody is in anything they were not invited to.
 introduces itself with the company name from that heading, so it goes out to that company's own
 customers.
 
-## The accept is a verb, not a marker
+## Writing it is optional; accepting it is a verb
 
-The setup conversation ends by calling `mark_global_ready`. That verb re-reads the five files, commits
-them to `_global`'s history with the administrator as author, and lifts the instance gate. Until it
-has accepted, this Vexa serves nobody: no other person can sign in, the flows engine parks every fact
-instead of sending, and the operator verbs refuse by name.
+When an administrator does write the layer, the conversation ends by calling `mark_global_ready`.
+That verb re-reads the five files and commits them to `_global`'s history with the administrator
+as author. It gates nothing: until it runs — or if it never runs — the instance serves everybody
+exactly as before, and the files that ship as unwritten placeholders simply say nothing about the
+company.
 
-Nothing may mark itself ready. Writing a `.scaffolded` file here does nothing — that marker belongs
-to person and group onboarding, not to the organisation tier.
+Nothing may mark itself accepted. Writing a `.scaffolded` file here does nothing — that marker
+belongs to person and group onboarding, not to the organisation tier.

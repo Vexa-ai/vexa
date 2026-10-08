@@ -3,35 +3,30 @@
 #
 # A first-run rehearsal needs an instance that has never been claimed. This one has: the admin is
 # whatever identity happened to sign in first, which on a dogfood stack is usually a test account
-# (`minutes-test@vexa.ai`), and the setup wizard is marked complete. Neither fact can be undone from
-# any product surface, and the alternative to this script was hand surgery on a jsonb column by
-# whoever remembered the query.
+# (`minutes-test@vexa.ai`). That cannot be undone from any product surface, and the alternative to
+# this script was hand surgery on a jsonb column by whoever remembered the query.
 #
-# WHAT IT TOUCHES — three values, and nothing else:
+# WHAT IT TOUCHES — one value, and nothing else:
 #   1. `users.data.is_admin` on the named user   → released, so the next sign-in claims the role
-#   2. `platform_settings.setup`                 → cleared, so the wizard runs again
-#   3. `platform_settings.global_setup`          → set to missing, so the company-layer gate goes up
+#
+# (It used to clear the first-run wizard state and put the company-layer gate back up. Both are gone:
+# founder ruling 2026-10-08 removed global setup, so there is nothing else to reset.)
 #
 # WHAT IT NEVER TOUCHES: workspaces, chats, meetings, transcripts, users, tokens, `_global/asks/`.
-# It is a role-and-flags reset, not a wipe. The founder's own account and everything in it survives
+# It is a role reset, not a wipe. The founder's own account and everything in it survives
 # verbatim — that is the whole reason it is a script with a named blast radius rather than a
 # `docker volume rm`.
 #
-#   deploy/dogfood/bin/reset-instance [--admin-email minutes-test@vexa.ai] [--keep-global]
-#
-# --keep-global leaves the company layer accepted (only the wizard and the admin role reset), for
-# the case where you want to rehearse the claim but not re-type the company.
+#   deploy/dogfood/bin/reset-instance [--admin-email minutes-test@vexa.ai]
 set -euo pipefail
 
 ADMIN_EMAIL="minutes-test@vexa.ai"
-KEEP_GLOBAL=0
 STACK="${VEXA_DOGFOOD_STACK:-vexa-dogfood}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --admin-email) ADMIN_EMAIL="$2"; shift 2 ;;
-    --keep-global) KEEP_GLOBAL=1; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -67,36 +62,13 @@ curl -fsS -X POST -H "X-Internal-Secret: ${SECRET}" -H 'Content-Type: applicatio
   -d "{\"user_id\": \"${USER_ID}\"}" "${BASE}/internal/release-admin"
 echo
 
-# 2 · the first-run wizard. Empty strings CLEAR a field (the settings writers' documented rule),
-#     so the wizard's own probe reads "not completed" and it runs from step 1.
-say "clearing the first-run wizard state"
-curl -fsS -X PUT -H "X-Internal-Secret: ${SECRET}" -H 'Content-Type: application/json' \
-  -d '{"models": "", "transcription": "", "completed": "", "global": ""}' \
-  "${BASE}/internal/settings/setup"
-echo
-
-# 3 · the company-layer gate.
-if [ "$KEEP_GLOBAL" = "0" ]; then
-  say "putting the company-layer gate back up"
-  curl -fsS -X PUT -H "X-Internal-Secret: ${SECRET}" -H 'Content-Type: application/json' \
-    -d '{"state": "missing", "company": "", "completed_at": ""}' \
-    "${BASE}/internal/settings/global_setup"
-  echo
-else
-  say "--keep-global: leaving the company layer accepted"
-fi
-
 echo
 say "state now:"
 curl -fsS -H "X-Internal-Secret: ${SECRET}" "${BASE}/internal/instance"
 echo
 echo
 cat <<'NEXT'
-  The next sign-in at the terminal claims the admin role, meets the setup wizard
-  (model -> transcription -> company layer), and lands in the company-setup chat.
-  Until that chat calls mark_global_ready:
-    - a non-admin sign-in is refused with one sentence,
-    - the flows engine parks every fact instead of sending,
-    - flows_submit / flow_lifecycle refuse by name.
+  The next sign-in at the terminal claims the admin role and lands in an ordinary
+  first visit. There is no setup step and nothing is gated on the company layer.
   Nothing was deleted: workspaces, chats, meetings and _global/asks/ are untouched.
 NEXT

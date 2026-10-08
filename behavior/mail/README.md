@@ -87,7 +87,7 @@ customer.
 
 | token | becomes |
 |---|---|
-| `{{company}}` | the company's name — `_global/README.md`'s first heading, written by the admin at setup |
+| `{{company}}` | the company's name — `_global/README.md`'s first heading, if an admin wrote one; **this organisation** while `_global` names none (it may stay empty) |
 | `{{service}}` | one sentence of what Vexa does — **fixed product text**, see below |
 | `{{title}}` | the meeting's title |
 | `{{when}}` | when it is, or was, in the reader's own clock |

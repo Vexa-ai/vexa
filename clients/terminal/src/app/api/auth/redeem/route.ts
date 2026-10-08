@@ -1,9 +1,6 @@
 /** Redeem an emailed sign-in link — the BACK half of the magic-link door.
  *
  *  GET /api/auth/redeem?t=<token>&next=<relative-path>
- *    0. verify the signature WITHOUT burning anything (the pure `verifyMagicToken`) and ask the
- *       company-layer setup gate whether this address may sign in at all — see the long comment in
- *       the handler for why a refusal must not consume the link,
  *    1. verify the HMAC signature and the expiry, and BURN the jti (single use — see magicToken.ts;
  *       burning happens BEFORE the session is minted, so a replay can never win a race with a slow
  *       admin-api round-trip. The cost is that a transient admin-api failure eats the link and the
@@ -19,8 +16,8 @@
  *  a mail, and a raw error body is a dead end for them.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed, type GlobalSetupState } from "../adminApi";
-import { redeemMagicToken, safeNext, verifyMagicToken } from "../magicToken";
+import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
+import { redeemMagicToken, safeNext } from "../magicToken";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -35,12 +32,9 @@ function isSecureRequest(): boolean {
   );
 }
 
-/** The refused-link card. `cta` labels the one link out; it defaults to "Ask for a new link"
- *  because almost every refusal here means the link is gone (used, expired, forged). The setup-gate
- *  refusal is the one case where it is NOT gone — that card says so in its body, and a button
- *  telling the reader to replace a link we just promised still works would contradict it in the
- *  same 340px. */
-function page(title: string, detail: string, status: number, cta = "Ask for a new link"): NextResponse {
+/** The refused-link card. Every refusal here means the link is gone (used, expired, forged), so its
+ *  one link out asks for a new one. */
+function page(title: string, detail: string, status: number): NextResponse {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -55,7 +49,7 @@ function page(title: string, detail: string, status: number, cta = "Ask for a ne
  a{display:inline-block;background:#3b82f6;color:#fff;text-decoration:none;border-radius:7px;
    padding:9px 14px;font-size:13px;font-weight:600}
 </style></head><body><div class="card">
-<h1>${esc(title)}</h1><p>${esc(detail)}</p><a href="/">${esc(cta)}</a>
+<h1>${esc(title)}</h1><p>${esc(detail)}</p><a href="/">Ask for a new link</a>
 </div></body></html>`;
   return new NextResponse(html, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
 }
@@ -86,19 +80,11 @@ function page(title: string, detail: string, status: number, cta = "Ask for a ne
  *  The opposite trade from the admin claim, where the role had already changed and a silent failure
  *  would strand the new administrator — here the only thing that has happened is that they are
  *  signed in, which is what they came for. */
-async function arrival(
-  target: string,
-  email: string,
-  userId: string | number,
-  globalSetup?: GlobalSetupState,
-): Promise<string> {
+async function arrival(target: string, email: string, userId: string | number): Promise<string> {
   // `?s=` inside the destination means an arrival already exists for this click — minting a second
   // would open a conversation over the one they were sent.
   if (target !== "/" || /[?&]s=/.test(target)) return target;
-  // The OTHER arrival that counts is the administrator's setup conversation (#1607). That rule
-  // lives in `mintFirstVisitScaffold` with the history one, so all four doors carry it; this door
-  // only hands it the gate state it read a few lines above rather than making it ask again.
-  const minted = await mintFirstVisitScaffold(email, userId, { globalSetup });
+  const minted = await mintFirstVisitScaffold(email, userId);
   if (minted.ok && minted.data?.url) return minted.data.url;
   // 409 is the DELIBERATE no-arrival — a returning person, or a probe that could not answer. It is
   // the ordinary path for everybody who has been here before, so it is not an error and must not be
@@ -111,53 +97,6 @@ async function arrival(
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("t") || "";
   const target = safeNext(request.nextUrl.searchParams.get("next"));
-
-  // ── the company-layer setup gate — CHECKED BEFORE THE LINK IS BURNED ───────────────────────────
-  //
-  // While the admin is still writing the company layer into `_global`, only the admin may sign in
-  // (founder ruling 2026-09-02). Where that check goes in this handler is a real decision, because
-  // the next call down burns the token:
-  //
-  //   • AFTER redeemMagicToken() — the natural-looking place — a refused click EATS THE LINK. The
-  //     link then reports "already used" to whoever holds it, including the ADMIN: a colleague who
-  //     forwards themselves the admin's mail, or an over-eager mail scanner that follows links,
-  //     silently consumes the one credential that can unlock the instance, and the refusal page
-  //     doesn't even say a link was destroyed. Locking the admin out of their own setup is the
-  //     precise thing this gate exists to avoid.
-  //
-  //   • BEFORE it, on the PURE verifier — `verifyMagicToken` checks signature and expiry and does
-  //     NOT consume the jti (magicToken.ts is explicit about that split). A refused click leaves the
-  //     link intact, so the person who is actually allowed can still use it.
-  //
-  // The trade paid for that: the signature is verified twice on the happy path (a HMAC over a short
-  // string — free), and a refused click makes one admin-api round-trip before any burn, so an
-  // attacker can probe "is this address the admin" with a link they already hold. They hold a valid
-  // signed link for that address, i.e. they control that mailbox — the answer tells them nothing
-  // their possession of the link didn't already imply.
-  //
-  // What this does NOT move: the burn still happens BEFORE the session is minted, so the original
-  // property (a replay can never win a race against a slow admin-api round-trip) is untouched. Two
-  // concurrent clicks both pass the gate and then both call redeemMagicToken(); consumeJti still
-  // lets exactly one through.
-  //
-  // The verdict also carries whether this instance has its company layer yet, and that decides
-  // whether an arrival may be minted below at all (#1607) — read once, here, used there.
-  let globalSetup: GlobalSetupState | undefined;
-  const preflight = verifyMagicToken(token);
-  if (preflight.ok) {
-    const gate = await signinAllowed(preflight.email);
-    globalSetup = gate.global_setup;
-    if (!gate.allowed) {
-      // A person who clicked a mail must never get a JSON body — they arrived from an inbox, not
-      // from a fetch(). Same HTML card every other refusal here uses, carrying the sentence verbatim.
-      return page(
-        SETUP_GATE_REFUSAL,
-        "Only the administrator can sign in until the company layer for this instance has been written. Your sign-in link has not been used — it will still work once setup is finished.",
-        403,
-        "Back to sign-in",
-      );
-    }
-  }
 
   const verdict = redeemMagicToken(token);
   if (!verdict.ok) {
@@ -182,7 +121,7 @@ export async function GET(request: NextRequest) {
   const { user, token: apiToken } = result;
   const res = new NextResponse(null, {
     status: 302,
-    headers: { Location: await arrival(target, user.email, user.id, globalSetup), ...NO_STORE },
+    headers: { Location: await arrival(target, user.email, user.id), ...NO_STORE },
   });
   const opts = { httpOnly: true, secure: isSecureRequest(), sameSite: "lax" as const, maxAge: 60 * 60 * 24 * 30, path: "/" };
   res.cookies.set(AUTH_COOKIE, apiToken, opts);

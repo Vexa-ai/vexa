@@ -37,8 +37,11 @@ Every agent turn mounts an ordered set `[_global, *normal, _system]`:
   **invisible** in the workspace lists and **non-sharable** — both are in `RESERVED_SLUGS` and
   `ensure_workspace_shareable` refuses them (✅). `_system` can be **surfaced read-only in the files
   panel via a toggle, hidden by default** (the key icon in the KNOWLEDGE header) (✅).
-- `_global` is provisioned from `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH` (a host dir / synced branch); the
-  runtime gives it its own `:ro` bind. Dispatch fails closed when unset/absent, and the worker loads
+- `_global` lives in the workspace store at `<VEXA_WORKSPACES_DIR>/_global`, created EMPTY at boot —
+  an empty `_global` is fine and nothing waits for it to be filled (founder ruling 2026-10-08). Set
+  `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH` only to provision it from a separate host dir / synced branch,
+  which the runtime then gives its own `:ro` bind; a configured path that is absent fails dispatch
+  closed. The worker loads
   its `CLAUDE.md`, `PURPOSE`, and `README.md` into every turn so Personal reasoning starts with shared
   organisation facts rather than merely having them available on disk. (✅ wired;
   auto-sync of the branch is a ⬜ follow-up.)

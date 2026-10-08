@@ -14,8 +14,8 @@
  *  The trade that had to be got the right way round is the failure direction, and it is the OPPOSITE
  *  of the admin claim's: a failed mint must never cost somebody their sign-in.
  *
- *  The claim route's half of F42 — an instance that is ALREADY set up gets a first visit rather than
- *  the setup conversation — is in claimAdmin.test.ts, which owns that route's harness.
+ *  The claim route's arrival — the same first visit — is in claimAdmin.test.ts, which owns that
+ *  route's harness.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,19 +35,14 @@ let minted: { url: string; body: Record<string, unknown> }[] = [];
 /** Every has-history probe, so a test can assert the arrival ASKED before it minted. */
 let probed: string[] = [];
 
-function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down";
-                       setup?: "completed" | "missing" } = {}) {
-  const { mint = "ok", history = "none", setup = "completed" } = opts;
+function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down" } = {}) {
+  const { mint = "ok", history = "none" } = opts;
   minted = [];
   probed = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
-    // The setup gate, which every door asks before it creates anything. `missing` is a blank
-    // instance whose administrator has not written the company layer yet (#1607).
-    if (u.includes("/internal/signin-allowed") || u.includes("/internal/instance")) {
-      return new Response(JSON.stringify({
-        allowed: true, reason: "", admin_exists: setup === "completed", global_setup: setup, company: null,
-      }), { status: 200 });
+    if (u.includes("/internal/instance")) {
+      return new Response(JSON.stringify({ admin_exists: true }), { status: 200 });
     }
     if (u.includes("/internal/has-history")) {
       probed.push(u);
@@ -198,38 +193,27 @@ describe("the arrival asks first", () => {
   });
 });
 
-/** #1607 — ONE SIGN-IN, ONE ARRIVAL.
+/** NO COMPANY-LAYER EXCEPTION (founder ruling 2026-10-08).
  *
- *  The administrator's first sign-in on a blank instance minted two: the setup conversation the
- *  claim opens, and a first visit beside it, because nothing had been shared with this brand-new
- *  address and #1591's probe answered honestly that there was nothing to return to. Both landed in
- *  the rail at the same minute — *"this is the first chat, but i see two"*.
- *
- *  The claim IS an arrival, so the sign-in that makes it does not get a second one. The condition
- *  is the company layer: while it is missing, the only person any door lets in is the administrator
- *  and the setup conversation is where they are going. */
-describe("the administrator's first sign-in on a blank instance", () => {
-  it("mints NO first visit — the setup conversation is this sign-in's arrival", async () => {
-    stubs({ setup: "missing", history: "none" });
-    const res = await redeem(makeReq({ t: link() }));
-    expect(minted).toHaveLength(0);
-    // …and they are signed in and land on `/`, where SetupGate opens the one chat they should have
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/");
-    expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
-  });
-
-  it("…and does not even ask what they have to return to — that answer could not change it", async () => {
-    stubs({ setup: "missing", history: "none" });
-    await redeem(makeReq({ t: link() }));
-    expect(probed).toHaveLength(0);
-  });
-
-  it("a first sign-in on an instance that IS set up still gets exactly one", async () => {
-    stubs({ setup: "completed", history: "none" });
+ *  While `_global` was unwritten, the administrator's first sign-in minted no first visit, because
+ *  the setup-global conversation was their arrival (#1607). That conversation is no longer opened
+ *  at first run, so every first sign-in — the administrator's included, with `_global` empty — gets
+ *  exactly one first visit, and no door asks admin-api about the company layer to decide it. */
+describe("a first sign-in on an instance whose `_global` is empty", () => {
+  it("still gets exactly one first visit", async () => {
+    stubs({ history: "none" });
     const res = await redeem(makeReq({ t: link() }));
     expect(minted).toHaveLength(1);
     expect(minted[0].body.kind).toBe("first-visit");
     expect(res.headers.get("location")).toBe("https://terminal.test/?s=SC1");
+  });
+
+  it("asks admin-api nothing about the company layer to decide it", async () => {
+    stubs({ history: "none" });
+    const spy = vi.mocked(globalThis.fetch);
+    await redeem(makeReq({ t: link() }));
+    const asked = spy.mock.calls.map(([u]) => String(u));
+    expect(asked.some((u) => u.includes("/internal/signin-allowed"))).toBe(false);
+    expect(asked.some((u) => u.includes("/internal/instance"))).toBe(false);
   });
 });

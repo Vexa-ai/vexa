@@ -8,9 +8,10 @@ active set (the ``_global`` read-only base and the ``_system`` per-user private 
         Behaviour (CLAUDE.md-level instructions), shared skills, common tools, base knowledge. Agents
         never write it (the mount is ``write=False`` → the runtime binds it ``:ro``). A LIVE MOUNT, not a
         seed: updating the one _global repo propagates to all agents next turn. Source = an env-configured
-        path (``GLOBAL_SYSTEM_WORKSPACE_PATH``, config.v1-declared). Mount HEAD; a pinned ref is supported
-        via ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main). Missing configuration fails
-        closed: no worker may run without the organisation tier.
+        path (``GLOBAL_SYSTEM_WORKSPACE_PATH``, config.v1-declared), or — when that is unset — the
+        in-store ``<workspaces_dir>/_global``, created EMPTY if absent (founder ruling 2026-10-08:
+        "let it be empty with no data - it's fine"). Mount HEAD; a pinned ref is supported via
+        ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main).
 
   2. ``/workspaces/_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Chats/sessions,
         settings, routines, membership/attachment records, credential refs. Private, never shareable.
@@ -66,17 +67,39 @@ _IDENTITY_STUB = (
 )
 
 
+def ensure_global_dir(root: str | Path) -> Path:
+    """The in-store ``<root>/_global``, made an (empty) DIRECTORY if it is not one yet. Idempotent.
+
+    Nobody has to set the organisation tier up any more (founder ruling 2026-10-08), so nothing may
+    wait on an operator to provision it either: when no out-of-store path is configured, agent-api
+    owns ``_global`` inside its own store and creates it. It is never created anywhere ELSE — a
+    host path is the operator's, and auto-creating one is how the 2026-09-02 phantom store happened.
+
+    One repair, and only one: an EMPTY REGULAR FILE at ``<root>/_global`` is removed first. That is
+    what an earlier compose file left behind — it bound ``/dev/null`` over ``/workspaces/_global``,
+    and docker creates a bind's missing mountpoint inside a named volume as an empty file, which then
+    outlived the bind and made the directory impossible to create. A non-empty file is somebody's
+    data and is left alone (the caller then fails on "not a directory")."""
+    path = Path(root) / GLOBAL_SLUG
+    if path.is_file() and not path.is_symlink() and path.stat().st_size == 0:
+        path.unlink()
+        logger.info("system_mounts: removed an empty _global FILE (a stale bind mountpoint) at %s", path)
+    path.mkdir(exist_ok=True)
+    return path
+
+
 def global_mount(settings, root: str) -> dict:
-    """The mandatory GLOBAL SYSTEM tier (``_global``), mounted into every worker.
+    """The GLOBAL SYSTEM tier (``_global``), mounted into every worker — EMPTY is fine.
 
     Source is the platform-operated _global repo/dir named by ``settings.global_system_workspace_path``
-    (env ``GLOBAL_SYSTEM_WORKSPACE_PATH``). ``path`` is that source bound at ``<root>/_global`` — an
-    OUT-OF-STORE mount, so the runtime gives it its OWN read-only bind (source→target). Mount HEAD; a
-    pinned ref (``GLOBAL_SYSTEM_WORKSPACE_REF``) is carried through as the mount ``ref`` for the backend
-    to check out on materialization (default: whatever the repo's HEAD is)."""
+    (env ``GLOBAL_SYSTEM_WORKSPACE_PATH``), or, when that is unset, the in-store ``<root>/_global``
+    (``ensure_global_dir``). An OUT-OF-STORE source gets its OWN read-only bind (source→target) at
+    ``<root>/_global``; an in-store one rides the store bind. Mount HEAD; a pinned ref
+    (``GLOBAL_SYSTEM_WORKSPACE_REF``) is carried through as the mount ``ref`` for the backend to check
+    out on materialization (default: whatever the repo's HEAD is)."""
     src = (getattr(settings, "global_system_workspace_path", "") or "").strip()
-    if not src:
-        raise RuntimeError("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH is required: every agent stack includes _global")
+    if not src or Path(src).resolve() == (Path(root) / GLOBAL_SLUG).resolve():
+        src = str(ensure_global_dir(root))
     if not Path(src).exists():
         raise RuntimeError(f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH does not exist: {src}")
     if not Path(src).is_dir():

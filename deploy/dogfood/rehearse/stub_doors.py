@@ -62,9 +62,9 @@ class StubDoors(Doors):
             # error text differs from the door's teaches a caller to handle a message the stack
             # never sends.
             raise DoorRefused(
-                "the instance is NOT blank: an admin has claimed it and the company layer is "
-                "completed. `blank-admin` asserts this state, it never creates it — blanking "
-                "deletes every person on the stack and is `bin/blank-instance.sh`, run on purpose.")
+                "the instance is NOT blank: an admin has claimed it. `blank-admin` asserts this "
+                "state, it never creates it — blanking deletes every person on the stack and is "
+                "`bin/blank-instance.sh`, run on purpose.")
         return {"blank": True}
 
     def require_subject_absent(self, address: str) -> dict:

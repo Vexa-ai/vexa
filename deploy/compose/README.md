@@ -46,13 +46,11 @@ unconfigured deployment look configured), and it will refuse to compose a mailed
 terminal. Every key it reads is declared in `core/flows/src/config.v1.json` and checked against
 this file by `gate:config-contract`.
 
-**The instance gate and the no-agents profile (F-D15).** Flows will not act on the world until
-an admin has committed the company layer (`global_setup`) — but the only writer of that layer
-is agent-api's onboarding wizard. Leave `VEXA_FLOWS_AGENT_API_URL` unset (no-agents profile)
-and the gate opens BY CONSTRUCTION, since there is no wizard that could ever satisfy it; set it
-(the full profile) and the gate stays fail-closed until the wizard runs, or an operator commits
-it by hand over `PUT /admin/instance/global-setup` (admin-key gated, same row as the wizard's
-own write).
+**First run needs no setup step.** The first person to sign in becomes the administrator; everyone
+who signs in after them is served at once. There is no company-layer gate (founder ruling
+2026-10-08): `_global` lives in the `agent-workspaces` volume, agent-api creates it empty at boot,
+and flows act on the world whether or not anybody ever writes it. `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
+is optional — set it only to manage `_global` as a separate host repo.
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts

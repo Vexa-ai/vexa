@@ -55,7 +55,7 @@ class Verb:
 VERBS: dict[str, Verb] = {
     "require_instance_blank": Verb(
         "admin-api", (), (), writes=False, precondition=True,
-        what="assert no admin has claimed the instance and the company layer is missing"),
+        what="assert no admin has claimed the instance"),
     "require_subject_absent": Verb(
         "admin-api", ("address",), (), writes=False, precondition=True,
         what="assert this address has no user — the stranger precondition"),

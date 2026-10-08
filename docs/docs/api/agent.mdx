@@ -304,15 +304,15 @@ failure, `400` with no token passed and none saved.
 
 ## The company layer
 
-`GET /api/global/state` →
-`{ global_setup, company, present, missing_files, reasons, is_repo, commits, ready_to_accept, you_are_admin, gate_sentence }`.
-Readable by any authenticated subject: someone refused at the door is told the instance is mid-setup
-rather than that they are broken. `company` is `null` until the gate is down.
+Optional. `_global` starts empty of company data and may stay that way: no request, sign-in, flow or
+operator verb waits for it (founder ruling 2026-10-08). Unless `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
+names a separate host repo, agent-api keeps `_global` in its own store and creates it empty at boot.
 
 `POST /api/global/ready` `{ author_email?, author_name? }` →
-`{ accepted, global_setup, company, service, commit, files }`. Admin only (`403`) and idempotent; it
-reads the files and commits them itself — nothing may mark itself ready. A layer that is not ready
-answers `409 { accepted: false, missing_files, reasons, next }`.
+`{ accepted, company, service, commit, files }` — accept a company layer an admin chose to write.
+Admin only (`403`) and idempotent; it reads the files and commits them itself, authored by the
+admin — nothing may mark itself accepted. A layer that is not complete answers
+`409 { accepted: false, missing_files, reasons, next }`. It gates nothing.
 
 ## Scaffolds
 

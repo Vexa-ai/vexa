@@ -62,7 +62,8 @@ class Settings(BaseSettings):
     default_template: str = "default"  # light ready-to-go scaffold (README = onboarding-dashboard); override with VEXA_DEFAULT_TEMPLATE=finos for the FINOS KG seed
     # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
     # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
-    # A host path / repo dir. Dispatch fails closed while empty or invalid: _global is mandatory.
+    # A host path / repo dir, or EMPTY = the in-store `<workspaces_dir>/_global`, created empty at boot
+    # (founder ruling 2026-10-08: `_global` may be empty). A configured path that is invalid fails closed.
     # A live MOUNT (updating this ONE repo propagates to all agents next turn), not a copy-once seed.
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).

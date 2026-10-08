@@ -82,8 +82,8 @@
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
       "class": "defaulted",
-      "default": "(required for agent dispatch)",
-      "description": "host path / repo dir of the mandatory GLOBAL SYSTEM workspace (_global), first in EVERY worker stack \u2014 behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Missing or invalid configuration fails dispatch closed",
+      "default": "(unset \u2014 the in-store <VEXA_WORKSPACES_DIR>/_global, created empty at boot)",
+      "description": "host path / repo dir of the GLOBAL SYSTEM workspace (_global), first in EVERY worker stack \u2014 behaviour/skills/tools (AMENDMENT 4). Optional: unset means agent-api's own in-store _global, created empty if absent (founder ruling 2026-10-08: _global may be empty). A live mount: updating this one repo propagates to all agents next turn. A configured path that is missing or not a directory fails dispatch closed",
       "targets": [
         "compose",
         "helm"

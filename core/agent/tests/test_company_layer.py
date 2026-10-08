@@ -1,20 +1,14 @@
-"""The company-layer gate, on agent-api's side.
+"""The company layer on agent-api's side — OPTIONAL since founder ruling 2026-10-08.
 
-Founder ruling, 2026-09-02: a Vexa whose admin has not written the thin company layer serves
-nobody. The first build of that checked at SIGN-IN, and a session minted before the gate existed
-walked straight past it — observed live the same day: an old cookie got the whole terminal, a chat,
-and an agent turn on an instance that could not say which company it worked for.
+*"let's remove global setup at all so that there is no need to setup global at all - let it be
+empty with no data - it's fine."* This reverses the 2026-09-02 ruling that a Vexa whose admin had
+not written the company layer served nobody. These tests hold the new shape:
 
-A door check is not a gate. These tests hold the shape that replaced it:
-
-  * the refusal happens per REQUEST, so an already-issued credential is not a way through;
-  * `/api/global/*` is deliberately open, because a gate that blocks the only way to open it is a
-    deadlock rather than a gate;
-  * a request with no subject is not judged (the internal tier is gated on the secret instead);
-  * a VIRGIN instance refuses nobody — the next sign-in is the claim;
-  * and a DEGRADED read is *unknown*, never *missing*. `instance_state` answers missing when it
-    cannot reach admin-api, which is right for anything that SENDS and wrong here: the consequence
-    would be locking every user out of a working instance because one probe timed out.
+  * no request is refused for want of a company layer — a non-admin on an instance whose `_global`
+    is empty (or missing entirely) is served like anyone else;
+  * `_global` itself is an empty directory agent-api creates in its own store, idempotently, when no
+    out-of-store path is configured — so a fresh stack dispatches with no configuration;
+  * the optional acceptance verb still verifies and commits what an admin chose to write.
 """
 from __future__ import annotations
 
@@ -33,66 +27,23 @@ def client() -> TestClient:
     return TestClient(create_app(Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity())))
 
 
-COMPLETED = {"admin_exists": True, "global_setup": "completed", "company": "Acme GmbH"}
-GATED = {"admin_exists": True, "global_setup": "missing", "company": None}
-VIRGIN = {"admin_exists": False, "global_setup": "missing", "company": None}
-DEGRADED = {"admin_exists": True, "global_setup": "missing", "company": None, "degraded": True}
-
-
-@pytest.fixture()
-def gate(monkeypatch):
-    """Drive the gate directly: these tests are about the DECISION, not about HTTP to admin-api."""
-    state = {"value": COMPLETED, "admins": set()}
-    monkeypatch.setattr(global_layer, "instance_state", lambda settings, force=False: state["value"])
-    monkeypatch.setattr(global_layer, "is_admin", lambda settings, subject: str(subject) in state["admins"])
-    return state
-
-
-def test_a_non_admin_is_refused_on_every_api_route_while_the_layer_is_missing(client, gate):
-    """The point of the middleware: an EXISTING credential is not a way past the gate."""
-    gate["value"] = GATED
-    gate["admins"] = {"7"}
+def test_a_non_admin_is_served_while_the_company_layer_is_unwritten(client, monkeypatch):
+    """The removed middleware answered 403 here. Nothing asks admin-api about `_global` any more."""
+    monkeypatch.setattr(global_layer, "is_admin", lambda settings, subject: False)
     r = client.get("/api/workspace/tree", headers={"X-User-Id": "42"})
-    assert r.status_code == 403
-    assert r.json()["detail"] == "This Vexa is being set up by its administrator."
-    assert r.json()["global_setup"] == "missing"
+    assert r.status_code != 403
+    assert "being set up" not in r.text
 
 
-def test_the_admin_is_not_refused(client, gate):
-    gate["value"] = GATED
-    gate["admins"] = {"42"}
-    assert client.get("/api/workspace/tree", headers={"X-User-Id": "42"}).status_code != 403
+def test_the_gate_vocabulary_is_gone():
+    """No reader of the old gate value survives to be re-wired by accident."""
+    for name in ("instance_state", "mark_ready", "GATE_SENTENCE", "COMPLETED", "MISSING"):
+        assert not hasattr(global_layer, name), name
 
 
-def test_the_gate_route_stays_open_or_the_gate_is_a_deadlock(client, gate):
-    """`/api/global/*` is the state the wizard polls and the verb that lifts the gate. Blocking it
-    would leave the only person who can open the gate looking at a screen that never changes."""
-    gate["value"] = GATED
-    gate["admins"] = {"7"}
-    assert client.get("/api/global/state", headers={"X-User-Id": "42"}).status_code != 403
-
-
-def test_a_virgin_instance_refuses_nobody(client, gate):
-    """No admin yet means the next sign-in IS the claim. Refusing here makes a fresh install
-    unclaimable — a deadlock, not a gate."""
-    gate["value"] = VIRGIN
-    gate["admins"] = set()
-    assert client.get("/api/workspace/tree", headers={"X-User-Id": "42"}).status_code != 403
-
-
-def test_a_degraded_read_is_unknown_not_missing(client, gate):
-    """`instance_state` fails CLOSED for callers that send. This one must not: an unreachable
-    admin-api would otherwise lock every user out of a working instance, and a deployment with no
-    admin-api configured at all would lock them out permanently."""
-    gate["value"] = DEGRADED
-    gate["admins"] = set()
-    assert client.get("/api/workspace/tree", headers={"X-User-Id": "42"}).status_code != 403
-
-
-def test_a_completed_layer_gates_nothing(client, gate):
-    gate["value"] = COMPLETED
-    gate["admins"] = set()
-    assert client.get("/api/workspace/tree", headers={"X-User-Id": "42"}).status_code != 403
+def test_the_state_route_is_gone(client):
+    """`/api/global/state` existed for the setup wizard's poll and the gate's refusal copy."""
+    assert client.get("/api/global/state", headers={"X-User-Id": "42"}).status_code == 404
 
 
 def test_the_five_files_and_the_readme_rule(tmp_path):
@@ -197,8 +148,9 @@ def test_an_in_store_global_under_another_name_is_refused(tmp_path):
 
 
 def test_a_missing_or_non_directory_global_fails_before_spawn(tmp_path):
-    """Never auto-create, and never bind a file. Docker auto-creating the missing directory is what
-    made the phantom store; agent-api refusing first is what stops it reaching docker at all."""
+    """Never auto-create a CONFIGURED path other than the in-store `_global`, and never bind a file.
+    Docker auto-creating the missing directory is what made the phantom store; agent-api refusing
+    first is what stops it reaching docker at all."""
     import pytest as _pytest
     from control_plane.system_mounts import global_mount
     with _pytest.raises(RuntimeError, match="does not exist"):
@@ -207,3 +159,56 @@ def test_a_missing_or_non_directory_global_fails_before_spawn(tmp_path):
     f.write_text("x")
     with _pytest.raises(RuntimeError, match="not a directory"):
         global_mount(_settings(tmp_path, f), str(tmp_path))
+
+
+# ── `_global` EXISTS EMPTY, WITH NO CONFIGURATION (founder ruling 2026-10-08) ──────────────────
+
+def test_unconfigured_global_is_the_in_store_directory_created_empty(tmp_path):
+    """A fresh stack sets nothing and still dispatches: `_global` is agent-api's own, in its store,
+    created empty, and rides the store bind like any other workspace."""
+    from control_plane.system_mounts import GLOBAL_SLUG, global_mount
+    m = global_mount(_settings(tmp_path, ""), str(tmp_path))
+    assert (tmp_path / GLOBAL_SLUG).is_dir()
+    assert list((tmp_path / GLOBAL_SLUG).iterdir()) == []      # empty is fine
+    assert "source" not in m and m["path"] == f"{tmp_path}/{GLOBAL_SLUG}" and m["write"] is False
+    # idempotent — a second dispatch neither fails nor touches what is there
+    (tmp_path / GLOBAL_SLUG / "README.md").write_text("# Acme\n\nAcme sells widgets.\n")
+    global_mount(_settings(tmp_path, ""), str(tmp_path))
+    assert (tmp_path / GLOBAL_SLUG / "README.md").read_text().startswith("# Acme")
+
+
+def test_a_configured_in_store_global_that_is_missing_is_created(tmp_path):
+    """`VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=<store>/_global` names agent-api's own store, so a missing
+    directory there is created rather than refused."""
+    from control_plane.system_mounts import GLOBAL_SLUG, global_mount
+    m = global_mount(_settings(tmp_path, tmp_path / GLOBAL_SLUG), str(tmp_path))
+    assert (tmp_path / GLOBAL_SLUG).is_dir() and "source" not in m
+
+
+def test_an_empty_global_FILE_left_by_a_bind_mountpoint_is_replaced(tmp_path):
+    """The compose file used to bind `/dev/null` over `/workspaces/_global`; docker created that
+    mountpoint inside the named volume as an EMPTY FILE, which outlived the bind and made the
+    directory impossible to create. An empty regular file there is that residue and nothing else."""
+    from control_plane.system_mounts import GLOBAL_SLUG, ensure_global_dir
+    (tmp_path / GLOBAL_SLUG).write_text("")
+    assert ensure_global_dir(tmp_path).is_dir()
+
+
+def test_a_non_empty_global_FILE_is_somebodys_data_and_is_left_alone(tmp_path):
+    import pytest as _pytest
+    from control_plane.system_mounts import GLOBAL_SLUG, ensure_global_dir
+    (tmp_path / GLOBAL_SLUG).write_text("not ours")
+    with _pytest.raises(FileExistsError):
+        ensure_global_dir(tmp_path)
+    assert (tmp_path / GLOBAL_SLUG).read_text() == "not ours"
+
+
+def test_an_unwritten_placeholder_never_reaches_a_turn_as_organisation_context(tmp_path):
+    """With `_global` allowed to stay unwritten, the seed's "# Company" README would otherwise be
+    loaded into every turn as the employer's name. Empty or placeholder-only reads as no context."""
+    from worker.engine import global_context_preamble
+    mounts = [{"slug": "_global", "path": str(tmp_path), "role": "global", "write": False}]
+    (tmp_path / "README.md").write_text("# Company\n\n<!-- vexa:unwritten — fill me -->\n")
+    assert "# Company" not in global_context_preamble(mounts)
+    (tmp_path / "README.md").write_text("# Acme GmbH\n\nAcme GmbH sells widgets.\n")
+    assert "Acme GmbH sells widgets." in global_context_preamble(mounts)

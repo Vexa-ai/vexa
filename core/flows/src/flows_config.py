@@ -247,7 +247,6 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "pack and starts without it reacts to none of that pack's events, silently, for as long "
         "as nobody looks."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
-    "VEXA_FLOWS_INSTANCE_GATE": ("capability", None, "forces the instance gate open or shut, for the rig."),
     "VEXA_FLOWS_USER_KEY_TTL_S": (
         "defaulted", "900",
         "how long a minted gateway token lives AND how long this process reuses it. One 20-person "

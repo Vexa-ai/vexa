@@ -71,18 +71,10 @@ once per process; a caller sending both is answered on the new one.
 NEVER accepts code — steps are reviewed Python in the image; this API composes them (the n8n line
 we do not cross).
 
-THE INSTANCE GATE cuts across this surface in three different ways, and the difference is the
-point (see `flows_integrations/instance_gate.py`):
-
-  * the two INTAKES (`POST /events`, `POST /events/batch`) still ADMIT while the gate is up — a
-    fact that happened, happened, and dropping it at the door would lose it forever. The loop
-    parks the reaction; the RESPONSE says so, because a fact that looks accepted and produces
-    nothing is indistinguishable from a broken product.
-  * the two OPERATOR VERBS (`POST /flows`, `POST /flows/{name}/{v}/{action}`) REFUSE with 409:
-    they configure the machine, and configuring it before it knows who it works for is precisely
-    what the gate exists to prevent.
-  * READING (`GET /flows`, `GET /reactions`) stays open. An admin must be able to see the machine
-    they are about to configure."""
+There is NO instance gate on this surface (founder ruling 2026-10-08: "let's remove global setup
+at all so that there is no need to setup global at all - let it be empty with no data - it's
+fine"). The intakes no longer park facts and the operator verbs no longer refuse while `_global` is
+unwritten; the company layer is optional."""
 from __future__ import annotations
 
 import hmac
@@ -104,7 +96,6 @@ from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, ret
 import flows_config  # noqa: E402
 import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
-from flows_integrations import instance_gate  # noqa: E402
 from flows_steps.common import (db_url, internal_secret,  # noqa: E402
                                 require_internal_secret, setting)
 from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noqa: E402
@@ -522,35 +513,6 @@ def health():
             "flows": len(vocab.flows), "steps": len(vocab.steps)}
 
 
-def _refuse_if_gated(verb: str) -> None:
-    """409 while the company layer is missing — for the verbs that CHANGE the machine.
-
-    409 rather than 403 on purpose: this is not "you may not", it is "not in this state, yet".
-    The detail names the verb as well as the gate, because the operator who meets it is usually
-    holding a script that made three calls and needs to know WHICH one stopped.
-    """
-    if instance_gate.company_layer_ready():
-        return
-    raise HTTPException(status_code=409, detail=(
-        f"{verb} is refused: the company layer is not set up. {instance_gate.SETUP_SENTENCE}"))
-
-
-def _with_gate(payload: dict) -> dict:
-    """Tell an intake caller their fact was PARKED, not acted on.
-
-    Silence here is the defect. Admission returns 202 either way — the reaction row exists, the
-    dedup key is burned, everything the caller can observe says it worked — and then nothing
-    happens for as long as setup takes. One field and one sentence turn an invisible delay into a
-    stated one. The key is absent entirely when the gate is down: a caller should never have to
-    parse `"gate": "completed"` to learn that things are normal.
-    """
-    if instance_gate.company_layer_ready():
-        return payload
-    return {**payload, "gate": "missing",
-            "note": ("Admitted and PARKED — no step runs until the instance admin commits the "
-                     f"company layer. Nothing is lost. {instance_gate.SETUP_SENTENCE}")}
-
-
 class FlowSubmission(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     on_event: str = Field(min_length=1, max_length=120)
@@ -619,7 +581,6 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
     draft for `POST /flows/{name}/{version}/activate` later.
 
     Operator-gated: this door reads the deployment's own operator key, never the caller's."""
-    _refuse_if_gated("flows_submit")
     missing = [s for s in sub.steps if s not in vocab.steps]
     if missing:
         raise HTTPException(status_code=400,
@@ -724,8 +685,8 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     refs = {**ev.refs, "admitted_by": actor}
     n = admit(db, vocab, clock, source_event_id=ev.source_event_id,
               event_type=ev.event_type, subject_refs=refs)
-    return _with_gate({"event_type": ev.event_type, "source_event_id": ev.source_event_id,
-                       "admitted_by": actor, "reactions_created": n, "duplicate": n == 0})
+    return {"event_type": ev.event_type, "source_event_id": ev.source_event_id,
+            "admitted_by": actor, "reactions_created": n, "duplicate": n == 0}
 
 
 class SeedRow(BaseModel):
@@ -799,7 +760,7 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
     log = {"admitted_by": actor, "submitted": len(batch.meetings),
            "admitted": admitted, "duplicates": dupes,
            "failed": sum(1 for r in out if "error" in r)}
-    return _with_gate({**log, "meetings": out})
+    return {**log, "meetings": out}
 
 
 @app.post("/flows/{name}/{version}/{action}", dependencies=[Depends(auth)])
@@ -815,7 +776,6 @@ def set_flow_status(name: str, version: int, action: str):
     door reads the deployment's own operator key, never the caller's."""
     if action not in ("activate", "retire"):
         raise HTTPException(status_code=404, detail="activate | retire")
-    _refuse_if_gated(f"flows_{action}")
     st = "active" if action == "activate" else "retired"
     rows = db.execute("UPDATE flow_version SET status=:s WHERE name=:n AND version=:v RETURNING name",
                       {"s": st, "n": name, "v": version})
@@ -914,9 +874,7 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     back, 30 forward) because half of what decision 31 asks for is in the future. `limit` keeps the
     events NEAREST NOW, not the oldest rows the engine still holds.
 
-    Read-only: it admits nothing, signals nothing and writes nothing. It therefore stays open while
-    the instance gate is up, exactly like `GET /flows` and `GET /reactions` — an admin must be able
-    to see what the machine has done.
+    Read-only: it admits nothing, signals nothing and writes nothing.
 
     `meetings=false` drops the gateway hop and answers from this database alone — the offline shape,
     used by the proof and by any caller that cannot reach the gateway.

@@ -85,7 +85,7 @@ def test_two_meeting_reports_alone_are_a_pile_not_a_warm_desk(catalog, env):
 
 def test_blank_admin_refuses_on_a_claimed_instance_which_is_the_live_answer(catalog, env):
     """The live run's `blank-admin` failure is this refusal, and it is CORRECT: the dogfood stack
-    has an admin and a committed company layer. The state asserts that precondition; it never
+    has an admin. The state asserts that precondition; it never
     creates it, because creating it means deleting every person on the stack."""
     res = rehearse("blank-admin", "admin@rehearse.test", doors=StubDoors(blank=False),
                    catalog=catalog, env=env)

@@ -358,8 +358,9 @@ services:
       # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
-      # into every worker (behaviour/skills/tools). This path is required for agent dispatch; REF pins it
-      # to a branch/tag/sha for safe rollout, empty = HEAD.
+      # into every worker (behaviour/skills/tools). OPTIONAL: empty = the in-store /workspaces/_global,
+      # created empty at boot; set it only to manage `_global` as a separate host repo OUTSIDE the
+      # store. REF pins it to a branch/tag/sha for safe rollout, empty = HEAD.
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
       - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
@@ -421,10 +422,13 @@ services:
       # unset, same convention as the runtime's probe mount.
       - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
-      # _global org tier at its HOST path — the control plane's exists() check runs here —
-      # AND at /workspaces/_global so the terminal's workspace-file API can read the org page.
+      # _global org tier. UNSET (the default) it lives in the agent-workspaces volume at
+      # /workspaces/_global, which agent-api creates EMPTY at boot — nothing to configure (founder
+      # ruling 2026-10-08: `_global` may be empty). There is deliberately NO bind onto
+      # /workspaces/_global: binding /dev/null there made docker leave an empty `_global` FILE in
+      # the volume, which then blocked the directory. Only an operator-supplied OUT-OF-STORE path is
+      # bound, at its own host path, where the control plane's exists() check runs.
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global2}:ro
-      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:/workspaces/_global:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s

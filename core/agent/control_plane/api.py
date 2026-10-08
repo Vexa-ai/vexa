@@ -193,58 +193,10 @@ def create_app(
         logger.warning("workspace-id migration could not run: %s: %s", type(exc).__name__, exc)
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
 
-    # ── THE COMPANY-LAYER GATE, ENFORCED PER REQUEST ────────────────────────────────────────────
-    # Founder ruling, 2026-09-02: a Vexa with no company layer serves nobody. That was first built
-    # as a check at SIGN-IN — and a session minted before the gate existed walked straight past it,
-    # observed live on 2026-09-02: an old cookie got the whole terminal, a chat, and an agent turn
-    # on an instance that could not say which company it worked for. A door check is not a gate; it
-    # is a greeting. The gate belongs where the WORK happens, on every request, because the client
-    # is presentation and the client can be stale, cached, forged or simply already open.
-    #
-    # WHO GETS THROUGH while the layer is missing: the instance admin, and nobody else. Two
-    # deliberate holes, both narrow:
-    #   * `/api/global/*` — the state the wizard polls and the verb that lifts the gate. A gate
-    #     that blocks the only way to open it is a deadlock.
-    #   * requests with NO subject header — the internal tier (`/api/admin/*` and friends), which
-    #     is gated on X-Internal-Secret instead and has no user to judge.
-    # And when NO admin exists yet the gate does not refuse at all: on a virgin instance the next
-    # sign-in is the claim, so refusing here would make a fresh install unclaimable.
-    #
-    # This is the FAIL-CLOSED half of the pair. The terminal deliberately fails OPEN on an
-    # unreachable probe so a transient fault cannot brick sign-in on a working instance; it can
-    # afford to precisely because this middleware holds, so a browser that renders anyway can still
-    # do nothing.
-    # `/api/version` joins them (decision 39): the swap script and an open browser tab both poll
-    # it to find out what is serving, and neither has a subject. Gating it would answer 403 to
-    # the one question whose whole purpose is answerable from outside, before anyone signs in.
-    _GATE_OPEN_PREFIXES = ("/api/global/", "/api/version")
-
-    @app.middleware("http")
-    async def _company_layer_gate(request: Request, call_next):
-        path = request.url.path
-        if path.startswith("/api/") and not path.startswith(_GATE_OPEN_PREFIXES):
-            subject = request.headers.get("x-user-id") or (
-                settings.agent_default_subject if settings is not None else "")
-            if subject:
-                gate = global_layer.instance_state(settings)
-                # A DEGRADED read is "unknown", never "missing". `instance_state` answers missing
-                # when it cannot reach admin-api — right for anything that SENDS, wrong here, where
-                # the consequence is locking every user out of a working instance because one probe
-                # timed out (and, in a deployment with no admin-api configured at all, locking them
-                # out permanently). Refuse only on a POSITIVE read. The closed half of the pair
-                # lives where the damage is: the flows engine parks rather than mails, and the
-                # operator verbs refuse, both fail-closed.
-                if (not gate.get("degraded")
-                        and gate.get("global_setup") != global_layer.COMPLETED
-                        and gate.get("admin_exists")
-                        and not global_layer.is_admin(settings, str(subject))):
-                    return JSONResponse(status_code=403, content={
-                        "detail": global_layer.GATE_SENTENCE,
-                        "global_setup": global_layer.MISSING,
-                        "why": ("This instance has not been set up yet. Only its administrator can "
-                                "use it until the company layer is written."),
-                    })
-        return await call_next(request)
+    # There is NO company-layer gate here (founder ruling 2026-10-08: "let's remove global setup at
+    # all so that there is no need to setup global at all - let it be empty with no data - it's
+    # fine"). The per-request middleware that refused non-admins while `_global` was unwritten (the
+    # 2026-09-02 ruling) is gone: every authenticated subject is served whatever `_global` holds.
 
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
@@ -986,11 +938,9 @@ def create_app(
 
 
 
-    # ── the COMPANY LAYER gate (PRD §9 decision 17; founder 2026-09-02) ──────────────────────────
-    # A fresh instance serves nobody until an admin has written the thin company layer into
-    # `_global`. agent-api is where the verification belongs because agent-api is the only service
-    # that can SEE the store; admin-api holds the resulting value, and every service reads it from
-    # there. Two verbs: look, and accept.
+    # ── the COMPANY LAYER (optional; founder ruling 2026-10-08) ─────────────────────────────────
+    # `_global` may stay empty. When an admin chooses to write the thin company layer, agent-api is
+    # where its acceptance belongs, because agent-api is the only service that can SEE the store.
 
     def _global_store() -> Path:
         """The WRITABLE `_global` on this host. Two candidates because the deployment mounts the
@@ -1147,6 +1097,21 @@ def _build_production_app() -> FastAPI:
     from control_plane import transcription_watcher
     transcription_watcher.start(settings.redis_url, dispatcher, app.state.live_meetings)
 
+    # `_global` EXISTS FROM THE FIRST BOOT, EMPTY IF NOTHING ELSE (founder ruling 2026-10-08: "let it
+    # be empty with no data - it's fine"). With no out-of-store path configured, the organisation
+    # tier lives in this service's own store and is created here, so a fresh stack dispatches chat
+    # with no configuration at all. An operator's out-of-store path is theirs: it is never created,
+    # and the boot writes below go to it rather than growing a second `_global` in the store.
+    _gconf = (settings.global_system_workspace_path or "").strip()
+    _gdir = Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG
+    if not _gconf or Path(_gconf).resolve() == _gdir.resolve():
+        try:
+            system_mounts.ensure_global_dir(settings.workspaces_dir)
+        except Exception as exc:  # noqa: BLE001
+            print(f"organisation tier: could not create {_gdir}: {exc}", flush=True)
+    else:
+        _gdir = Path(_gconf)
+
     # THE PRESET LIBRARY IS TOPPED UP BEFORE THE REPO IS INITIALISED, so a fresh instance's very
     # first commit carries the presets this build ships rather than acquiring them as an untracked
     # afterthought. Additive: a file already in `_global/asks/` is the admin's and is never touched.
@@ -1160,7 +1125,7 @@ def _build_production_app() -> FastAPI:
         # configures logging at all. The top-up changed what every agent here reads; `docker logs`
         # has to show it.
         print(preset_library.summary(
-            preset_library.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)),
+            preset_library.top_up(_gdir)),
             flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"preset library: could not be topped up here: {exc}", flush=True)
@@ -1172,7 +1137,7 @@ def _build_production_app() -> FastAPI:
     # an untracked afterthought.
     try:
         print(global_seed.summary(
-            global_seed.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)),
+            global_seed.top_up(_gdir)),
             flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"organisation tier: could not be seeded here: {exc}", flush=True)
@@ -1183,7 +1148,7 @@ def _build_production_app() -> FastAPI:
     # deployment behaves. Best-effort: a store that is read-only here (the host-path mirror) is a
     # legitimate deployment shape, and it must not stop the service from booting.
     try:
-        global_layer.ensure_repo(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+        global_layer.ensure_repo(_gdir)
     except Exception as exc:  # noqa: BLE001
         logger.info("the organisation tier is not a git repo here and could not be made one: %s", exc)
 
@@ -1195,7 +1160,7 @@ def _build_production_app() -> FastAPI:
     from control_plane import flow_pages_watch
     try:
         app.state.flow_pages_watch = flow_pages_watch.start(
-            Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+            _gdir)
     except Exception as exc:  # noqa: BLE001
         app.state.flow_pages_watch = None
         logger.info("flow pages are not being watched here: %s", exc)
